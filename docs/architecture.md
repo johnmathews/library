@@ -109,9 +109,10 @@ hashed, individually revocable.
 | REST API + search + thumbnails | W7 | **done** — see [api.md](api.md) |
 | Auth | W8 | **done** — see [api.md](api.md) §1.9 |
 | Frontend foundation (design system) | W9 | **done** — see [frontend.md](frontend.md) |
-| Frontend screens | W10–W11 | pending |
+| Frontend: list, search, upload | W10 | **done** — see [frontend.md](frontend.md) §1.4–1.6; Playwright e2e in CI |
+| Frontend: document detail + editing | W11 | pending |
 | Consume watcher | W12 | pending |
-| MCP server | W13 | pending |
+| MCP server | W13 | **done** — see [mcp.md](mcp.md) |
 | Email-in | W14 | pending |
 | paperless-ngx importer | W15 | pending |
 | Mobile/PWA polish | W16 | pending |

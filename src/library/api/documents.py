@@ -3,17 +3,8 @@
 Authentication is enforced at include level in app.py (session cookie or
 bearer token); see docs/api.md §1.9.
 
-Search design notes (see docs/api.md §1.3.3)
---------------------------------------------
-- ``q`` runs ``websearch_to_tsquery`` against both generated tsvector
-  columns (``dutch`` and ``english`` configs), OR-combined; the rank is
-  ``greatest`` of the two ``ts_rank`` values so a document matching
-  strongly in either language surfaces.
-- Snippets come from ``ts_headline`` over ``ocr_text`` using whichever
-  config produced the higher rank, capped by ``_HEADLINE_OPTIONS``. The
-  default ``<b>``/``</b>`` markers are kept; the OCR text is NOT
-  HTML-escaped, so clients must render snippets as text and interpret only
-  the ``<b>`` markers.
+Search semantics live in ``library.search`` (shared with the MCP server);
+see docs/api.md §1.3.3 for the user-facing description.
 """
 
 from datetime import UTC, date, datetime
@@ -22,8 +13,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import case, cast, func, or_, select
-from sqlalchemy.dialects.postgresql import REGCONFIG
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.auth.deps import current_user
@@ -38,7 +28,6 @@ from library.models import (
     DocumentStatus,
     IngestionEvent,
     Kind,
-    Tag,
     User,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
@@ -53,17 +42,11 @@ from library.schemas import (
     SenderOut,
     TagOut,
 )
+from library.search import DocumentFilters, build_document_query
 from library.storage import derived_path, path_for
 from library.thumbnails import THUMBNAIL_NAME
 
 router: APIRouter = APIRouter(tags=["documents"])
-
-# ts_headline options: fragment mode, short fragments, default <b>/</b>
-# markers. The headline source (OCR text) is not HTML-escaped — documented
-# in docs/api.md; the frontend renders snippets as text.
-_HEADLINE_OPTIONS: str = (
-    'MaxFragments=2, MaxWords=12, MinWords=4, ShortWord=2, FragmentDelimiter=" … "'
-)
 
 # PATCH body field -> name recorded in extra["user_edited_fields"] (the
 # storage-level names the W6 extraction contract checks).
@@ -180,65 +163,24 @@ async def list_documents(
     Without `q`, results are ordered by document_date (newest first, unknown
     dates last), then created_at. With `q`, by search rank.
     """
-    conditions: list[Any] = [Document.deleted_at.is_(None)]
-    if kind is not None:
-        conditions.append(Document.kind.has(Kind.slug == kind))
-    if sender_id is not None:
-        conditions.append(Document.sender_id == sender_id)
-    for slug in tag or []:
-        conditions.append(Document.tags.any(Tag.slug == slug))
-    if language is not None:
-        conditions.append(Document.language == language)
-    if status_filter is not None:
-        conditions.append(Document.status == status_filter)
-    if date_from is not None:
-        conditions.append(Document.document_date >= date_from)
-    if date_to is not None:
-        conditions.append(Document.document_date <= date_to)
-    if source is not None:
-        conditions.append(Document.source == source)
+    query = build_document_query(
+        q,
+        DocumentFilters(
+            kind_slug=kind,
+            sender_id=sender_id,
+            tag_slugs=tuple(tag or []),
+            language=language,
+            status=status_filter,
+            date_from=date_from,
+            date_to=date_to,
+            source=source,
+        ),
+    )
 
-    if q:
-        dutch = cast("dutch", REGCONFIG)
-        english = cast("english", REGCONFIG)
-        tsq_nl = func.websearch_to_tsquery(dutch, q)
-        tsq_en = func.websearch_to_tsquery(english, q)
-        rank_nl = func.ts_rank(Document.search_vector_nl, tsq_nl)
-        rank_en = func.ts_rank(Document.search_vector_en, tsq_en)
-        conditions.append(
-            or_(
-                Document.search_vector_nl.bool_op("@@")(tsq_nl),
-                Document.search_vector_en.bool_op("@@")(tsq_en),
-            )
-        )
-        rank = func.greatest(rank_nl, rank_en).label("rank")
-        ocr_source = func.coalesce(Document.ocr_text, "")
-        snippet = case(
-            (rank_nl >= rank_en, func.ts_headline(dutch, ocr_source, tsq_nl, _HEADLINE_OPTIONS)),
-            else_=func.ts_headline(english, ocr_source, tsq_en, _HEADLINE_OPTIONS),
-        ).label("snippet")
-        statement = (
-            select(Document, rank, snippet)
-            .where(*conditions)
-            .order_by(rank.desc(), Document.created_at.desc(), Document.id.desc())
-        )
-    else:
-        statement = (
-            select(Document)
-            .where(*conditions)
-            .order_by(
-                Document.document_date.desc().nulls_last(),
-                Document.created_at.desc(),
-                Document.id.desc(),
-            )
-        )
+    total = (await session.execute(query.count)).scalar_one()
+    result = await session.execute(query.statement.limit(limit).offset(offset))
 
-    total = (
-        await session.execute(select(func.count()).select_from(Document).where(*conditions))
-    ).scalar_one()
-    result = await session.execute(statement.limit(limit).offset(offset))
-
-    if q:
+    if query.has_rank:
         items = [
             DocumentListItem(**_list_item_fields(document), snippet=snippet_value, rank=rank_value)
             for document, rank_value, snippet_value in result.all()

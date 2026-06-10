@@ -53,7 +53,7 @@ async def _seed_document(
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
             document = Document(
-                sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                sha256=fields.pop("sha256", hashlib.sha256(marker.encode()).hexdigest()),
                 mime_type=fields.pop("mime_type", "application/pdf"),
                 source=fields.pop("source", DocumentSource.UPLOAD),
                 status=fields.pop("status", DocumentStatus.INDEXED),

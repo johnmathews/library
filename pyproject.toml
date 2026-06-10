@@ -26,6 +26,7 @@ dependencies = [
     "anthropic>=0.109.1",
     "pwdlib[argon2]>=0.2",
     "typer>=0.15",
+    "fastmcp>=3.4.2",
 ]
 
 [dependency-groups]

@@ -9,6 +9,7 @@ import library
 from library.api import auth, documents, jobs
 from library.auth.deps import csrf_protect, current_user
 from library.jobs import job_app
+from library.mcp_server import create_mcp_http_app
 
 API_DESCRIPTION = """\
 Self-hosted document archive. Upload scans and files, let OCR and Claude
@@ -48,15 +49,20 @@ OPENAPI_TAGS: list[dict[str, str]] = [
 ]
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Open the Procrastinate connection for the app's lifetime so defer() works."""
-    async with job_app.open_async():
-        yield
-
-
 def create_app() -> FastAPI:
     """Build and return the Library FastAPI application."""
+    # Built per app instance: the MCP ASGI app's session manager is created
+    # and torn down by its lifespan, which we run inside our own so the
+    # mounted /mcp transport shares the application's lifetime.
+    mcp_http = create_mcp_http_app()
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        """Open the Procrastinate connection (so defer() works) and run the
+        mounted MCP app's lifespan (its Streamable HTTP session manager)."""
+        async with job_app.open_async(), mcp_http.lifespan(mcp_http):
+            yield
+
     app = FastAPI(
         title="Library",
         version=library.__version__,
@@ -83,5 +89,10 @@ def create_app() -> FastAPI:
     def healthz() -> dict[str, str]:
         """Container healthcheck: no auth, no database access."""
         return {"status": "ok", "version": library.__version__}
+
+    # MCP server (W13): bearer-token-authenticated tools at /mcp/ — see
+    # docs/mcp.md. Auth is enforced inside the mounted app (FastMCP bearer
+    # middleware running our token verifier), not by the /api dependencies.
+    app.mount("/mcp", mcp_http)
 
     return app
