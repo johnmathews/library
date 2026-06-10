@@ -2,11 +2,12 @@
 
 For every PDF in the samples directory this script:
 
-- runs text-layer extraction (pypdfium2) and records the route the router
-  would choose (``text-layer`` vs ``ocr``, per ``text_layer_min_chars_per_page``);
-- classifies each page as image-backed (a single image covering >= 50% of the
-  page area: a scan or a scan-app export with an embedded OCR text layer)
-  or vector/born-digital;
+- runs the PRODUCTION page analysis (``library.ocr.analysis``: text layer +
+  image-backed-page classification — a single image covering >= 50% of the
+  page area marks a scan page; mostly such pages marks a scan-like doc) and
+  records both the legacy route (text-layer if chars/page clears the
+  threshold) and the route the scan-aware router now chooses
+  (``text-layer`` / ``tesseract-redo`` / ``tesseract``);
 - on documents routed to OCR: runs the production Tesseract path (OCRmyPDF
   with the exact production flag set, then the TSV confidence probe) AND the
   photo path (300 dpi rasterize -> OpenCV preprocess -> RapidOCR), both
@@ -46,15 +47,15 @@ from typing import Any
 
 import img2pdf
 import pypdfium2 as pdfium
-import pypdfium2.raw as pdfium_raw
 
 from library.config import Settings
 from library.ocr import photo, tesseract
+from library.ocr.analysis import PdfAnalysis, analyze_pdf
 from library.ocr.base import OcrResult
+from library.ocr.raster import render_page
+from library.ocr.router import RETRY_MIN_TEXT_RATIO
 
 EXCERPT_CHARS: int = 240
-IMAGE_PAGE_AREA_FRACTION: float = 0.5
-SCAN_LIKE_PAGE_FRACTION: float = 0.5
 RASTER_DPI: int = 300
 
 
@@ -86,7 +87,8 @@ class SampleResult:
     min_page_chars: int
     max_page_chars: int
     text_layer_excerpt: str
-    route: str  # "text-layer" | "ocr"
+    route: str  # legacy route: "text-layer" | "ocr"
+    new_route: str  # scan-aware route: "text-layer" | "tesseract-redo" | "tesseract"
     ocr_forced: bool
     tesseract_run: EngineRun | None
     photo_run: EngineRun | None
@@ -94,34 +96,14 @@ class SampleResult:
     gate_reason: str | None
 
 
-def page_text_and_image_stats(pdf_path: Path) -> tuple[list[int], int, str]:
-    """Per-page text-layer char counts, image-backed page count, full text."""
-    counts: list[int] = []
-    parts: list[str] = []
-    image_backed = 0
-    document = pdfium.PdfDocument(str(pdf_path))
-    try:
-        for index in range(len(document)):
-            page = document[index]
-            width, height = page.get_size()
-            text_page = page.get_textpage()
-            try:
-                text = (text_page.get_text_bounded() or "").strip()
-            finally:
-                text_page.close()
-            counts.append(len(text))
-            parts.append(text)
-            threshold = IMAGE_PAGE_AREA_FRACTION * width * height
-            for obj in page.get_objects(max_depth=2):
-                if obj.type != pdfium_raw.FPDF_PAGEOBJ_IMAGE:
-                    continue
-                left, bottom, right, top = obj.get_bounds()
-                if (right - left) * (top - bottom) >= threshold:
-                    image_backed += 1
-                    break
-    finally:
-        document.close()
-    return counts, image_backed, "\n\n".join(parts).strip()
+def new_router_route(analysis: PdfAnalysis, settings: Settings) -> str:
+    """The route library.ocr.router now chooses (scan-aware, W5)."""
+    has_text_layer = (
+        analysis.pages > 0 and analysis.chars_per_page >= settings.text_layer_min_chars_per_page
+    )
+    if has_text_layer and not analysis.scan_like:
+        return "text-layer"
+    return "tesseract-redo" if analysis.text else "tesseract"
 
 
 def rasterize_to_image_pdf(pdf_path: Path, target: Path, dpi: int = RASTER_DPI) -> None:
@@ -130,7 +112,7 @@ def rasterize_to_image_pdf(pdf_path: Path, target: Path, dpi: int = RASTER_DPI) 
     document = pdfium.PdfDocument(str(pdf_path))
     try:
         for index in range(len(document)):
-            image = document[index].render(scale=dpi / 72).to_pil()
+            image = render_page(document[index], dpi=dpi)
             buffer = BytesIO()
             image.convert("RGB").save(buffer, format="JPEG", quality=90)
             jpegs.append(buffer.getvalue())
@@ -171,19 +153,28 @@ def run_engine(name: str, func: Callable[..., OcrResult], *args: Any, **kwargs: 
 def gate_decision(
     tesseract_run: EngineRun, photo_run: EngineRun, threshold: float
 ) -> tuple[str, str]:
-    """Replicate router._tesseract_with_gate: which engine wins and why."""
+    """Replicate router._tesseract_with_gate: which engine wins and why.
+
+    W5 rule: confidences are never compared across engines (incomparable
+    scales); a triggered retry is kept only when it read at least
+    RETRY_MIN_TEXT_RATIO x Tesseract's character count.
+    """
     t_conf = tesseract_run.confidence
     if t_conf is not None and t_conf >= threshold:
         return "tesseract", f"tesseract conf {t_conf:.1f} >= threshold {threshold:.1f}"
-    p_conf = photo_run.confidence if photo_run.confidence is not None else -1.0
-    t_eff = t_conf if t_conf is not None else -1.0
-    if p_conf > t_eff:
-        return "rapidocr", f"retry won: rapidocr {p_conf:.1f} > tesseract {t_eff:.1f}"
-    return "tesseract", f"retry lost: rapidocr {p_conf:.1f} <= tesseract {t_eff:.1f}"
+    if photo_run.chars >= RETRY_MIN_TEXT_RATIO * tesseract_run.chars:
+        return "rapidocr", (
+            f"retry kept: {photo_run.chars} chars >= "
+            f"{RETRY_MIN_TEXT_RATIO:.1f} x {tesseract_run.chars}"
+        )
+    return "tesseract", (
+        f"retry rejected: {photo_run.chars} chars < "
+        f"{RETRY_MIN_TEXT_RATIO:.1f} x {tesseract_run.chars}"
+    )
 
 
 def run_ocr_paths(
-    pdf_path: Path, settings: Settings, *, strip_text_layer: bool
+    pdf_path: Path, settings: Settings, *, strip_text_layer: bool, redo: bool
 ) -> tuple[EngineRun, EngineRun]:
     """Run the production Tesseract path and the photo path on one document."""
     with tempfile.TemporaryDirectory(prefix="ocr-bench-") as workdir:
@@ -192,8 +183,14 @@ def run_ocr_paths(
         if strip_text_layer:
             source = work / "image-only.pdf"
             rasterize_to_image_pdf(pdf_path, source)
+            redo = False  # the stripped copy has no text layer left to redo
         tesseract_run = run_engine(
-            "tesseract", tesseract.ocr_pdf, source, work, languages=settings.ocr_languages
+            "tesseract",
+            tesseract.ocr_pdf,
+            source,
+            work,
+            languages=settings.ocr_languages,
+            redo=redo,
         )
         photo_run = run_engine("rapidocr", photo.ocr_pdf_pages, source)
     return tesseract_run, photo_run
@@ -204,15 +201,15 @@ def bench_document(
 ) -> SampleResult:
     """Measure one document through every applicable path."""
     start = time.perf_counter()
-    page_chars, image_backed, full_text = page_text_and_image_stats(pdf_path)
+    analysis = analyze_pdf(pdf_path)
     text_layer_seconds = time.perf_counter() - start
-    pages = len(page_chars)
-    total_chars = sum(page_chars)
-    chars_per_page = total_chars / pages if pages else 0.0
-    scan_like = pages > 0 and image_backed / pages >= SCAN_LIKE_PAGE_FRACTION
+    pages = analysis.pages
+    chars_per_page = analysis.chars_per_page
+    scan_like = analysis.scan_like
 
     routed_text_layer = pages > 0 and chars_per_page >= settings.text_layer_min_chars_per_page
     route = "text-layer" if routed_text_layer else "ocr"
+    new_route = new_router_route(analysis, settings)
     forced = routed_text_layer and scan_like and force_scans
 
     tesseract_run: EngineRun | None = None
@@ -220,7 +217,9 @@ def bench_document(
     gate_pick: str | None = None
     gate_reason: str | None = None
     if route == "ocr" or forced:
-        tesseract_run, photo_run = run_ocr_paths(pdf_path, settings, strip_text_layer=forced)
+        tesseract_run, photo_run = run_ocr_paths(
+            pdf_path, settings, strip_text_layer=forced, redo=bool(analysis.text)
+        )
         gate_pick, gate_reason = gate_decision(
             tesseract_run, photo_run, settings.ocr_confidence_threshold
         )
@@ -229,15 +228,16 @@ def bench_document(
         index=index,
         filename=pdf_path.name,
         pages=pages,
-        image_backed_pages=image_backed,
+        image_backed_pages=analysis.image_backed_pages,
         scan_like=scan_like,
         text_layer_seconds=text_layer_seconds,
-        text_layer_chars=total_chars,
+        text_layer_chars=sum(analysis.page_chars),
         chars_per_page=chars_per_page,
-        min_page_chars=min(page_chars, default=0),
-        max_page_chars=max(page_chars, default=0),
-        text_layer_excerpt=excerpt(full_text),
+        min_page_chars=min(analysis.page_chars, default=0),
+        max_page_chars=max(analysis.page_chars, default=0),
+        text_layer_excerpt=excerpt(analysis.text),
         route=route,
+        new_route=new_route,
         ocr_forced=forced,
         tesseract_run=tesseract_run,
         photo_run=photo_run,
@@ -278,16 +278,18 @@ def render_markdown(results: list[SampleResult], settings: Settings) -> str:
     lines.append("## Per-sample results (anonymized)")
     lines.append("")
     lines.append(
-        "| sample | pages | image-backed pages | text-layer chars/page | route | OCR forced |"
+        "| sample | pages | image-backed pages | text-layer chars/page | legacy route |"
+        " new route | OCR forced |"
         " tess conf | tess chars | tess s | rapidocr conf | rapidocr chars | rapidocr s |"
         " gate pick |"
     )
-    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|")
+    lines.append("|---|---|---|---|---|---|---|---|---|---|---|---|---|---|")
     for r in results:
         t, p = r.tesseract_run, r.photo_run
         lines.append(
             f"| sample-{r.index:02d} | {r.pages} | {r.image_backed_pages} "
-            f"| {r.chars_per_page:.0f} | {r.route} | {'yes' if r.ocr_forced else 'no'} "
+            f"| {r.chars_per_page:.0f} | {r.route} | {r.new_route} "
+            f"| {'yes' if r.ocr_forced else 'no'} "
             f"| {fmt(t.confidence) if t else '—'} | {t.chars if t else '—'} "
             f"| {fmt(t.seconds) if t else '—'} "
             f"| {fmt(p.confidence) if p else '—'} | {p.chars if p else '—'} "
@@ -314,13 +316,19 @@ def render_markdown(results: list[SampleResult], settings: Settings) -> str:
     lines.append("## Aggregates")
     lines.append("")
     lines.append(
-        f"- Documents: {len(results)} ({len(text_results)} routed text-layer, "
-        f"{len(results) - len(text_results)} routed OCR; OCR paths measured on "
+        f"- Documents: {len(results)} ({len(text_results)} routed text-layer by the legacy "
+        f"router, {len(results) - len(text_results)} routed OCR; OCR paths measured on "
         f"{len(ocr_results)} docs including forced scans)"
     )
     lines.append(
         f"- Scan-like docs (mostly image-backed pages with embedded text layer): "
         f"{sum(1 for r in results if r.scan_like)}"
+    )
+    new_routes = [r.new_route for r in results]
+    lines.append(
+        f"- Scan-aware router choices: {new_routes.count('text-layer')}x text-layer, "
+        f"{new_routes.count('tesseract-redo')}x tesseract-redo, "
+        f"{new_routes.count('tesseract')}x tesseract"
     )
     lines.append(f"- Text-layer extraction seconds: {describe(text_times)}")
     lines.append(f"- Tesseract path seconds: {describe(tess_times)}")
@@ -376,7 +384,8 @@ def print_full_table(results: list[SampleResult]) -> None:
         print(
             f"  pages={r.pages} image_backed={r.image_backed_pages} scan_like={r.scan_like} "
             f"text_layer_chars={r.text_layer_chars} chars/page={r.chars_per_page:.0f} "
-            f"(min={r.min_page_chars} max={r.max_page_chars}) route={r.route} "
+            f"(min={r.min_page_chars} max={r.max_page_chars}) legacy_route={r.route} "
+            f"new_route={r.new_route} "
             f"forced={r.ocr_forced} text_layer_s={r.text_layer_seconds:.2f}"
         )
         print(f"  text-layer excerpt: {r.text_layer_excerpt!r}")

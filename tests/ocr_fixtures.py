@@ -53,3 +53,41 @@ def make_image(path: Path, *, text: str = "Factuur 2026 rekening 12345") -> Path
     image = render_text_image(text)
     image.save(path, dpi=(300, 300))
     return path
+
+
+def make_scanlike_pdf(
+    path: Path,
+    *,
+    lines: list[str] | None = None,
+    pages: int = 1,
+    image_pages: int | None = None,
+) -> Path:
+    """A scan-app-style PDF: full-page raster image PLUS an embedded text layer.
+
+    This is the shape of an iOS Notes scan export (Apple embeds its own OCR
+    text over the page image). Built with fpdf2: each "scanned" page draws a
+    page-covering image and then writes the text lines on top — pypdfium2
+    sees both a page-dominating image object and an extractable text layer.
+    ``image_pages`` limits how many pages get the full-page image (the rest
+    are text-only), for mixed-document fixtures; default: all pages.
+    """
+    if lines is None:
+        lines = ["Factuur 2026 over de maand januari, rekening NL12RABO0123456789."] * 3
+    image = Image.new("L", (1240, 1754), color=250)
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    image_page_count = pages if image_pages is None else image_pages
+
+    pdf = FPDF(unit="pt", format=(595, 842))
+    pdf.set_auto_page_break(False)
+    for index in range(pages):
+        pdf.add_page()
+        if index < image_page_count:
+            buffer.seek(0)
+            pdf.image(buffer, x=0, y=0, w=595, h=842)
+        pdf.set_font("helvetica", size=12)
+        pdf.set_xy(36, 36)
+        for line in lines:
+            pdf.cell(text=line, new_x="LMARGIN", new_y="NEXT")
+    path.write_bytes(bytes(pdf.output()))
+    return path

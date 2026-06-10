@@ -25,6 +25,7 @@ import numpy as np
 import pypdfium2 as pdfium
 
 from library.ocr.base import OcrResult
+from library.ocr.raster import render_page
 
 if TYPE_CHECKING:
     from rapidocr import RapidOCR
@@ -78,7 +79,7 @@ def ocr_pdf_pages(pdf_path: Path) -> OcrResult:
     try:
         pages = len(document)
         for index in range(pages):
-            pil_image = document[index].render(scale=RASTER_DPI / 72).to_pil()
+            pil_image = render_page(document[index], dpi=RASTER_DPI)
             array = cv2.cvtColor(np.asarray(pil_image.convert("RGB")), cv2.COLOR_RGB2BGR)
             text, confidence = _ocr_array(array)
             if text:

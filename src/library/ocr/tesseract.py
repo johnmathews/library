@@ -26,6 +26,7 @@ import pypdfium2 as pdfium
 from PIL import Image
 
 from library.ocr.base import OcrResult
+from library.ocr.raster import render_page
 
 logger = logging.getLogger(__name__)
 
@@ -41,8 +42,29 @@ class TesseractError(RuntimeError):
     """OCRmyPDF (or the tesseract probe) failed."""
 
 
-def ocr_pdf(pdf_path: Path, derived: Path, *, languages: str) -> OcrResult:
-    """OCR a PDF with OCRmyPDF; write searchable.pdf + ocr.txt into ``derived``."""
+def _mode_flags(redo: bool) -> list[str]:
+    """OCRmyPDF flags for the processing mode.
+
+    ``--redo-ocr`` (for scan-like PDFs that already carry an embedded OCR
+    text layer, e.g. iOS Notes exports) is rejected by ocrmypdf 17.x when
+    combined with ``--deskew``, ``--clean-final`` or ``--remove-background``
+    (its documented conflict set), so the redo set drops ``--deskew``.
+    Plain ``--clean`` only affects the image fed to Tesseract and remains
+    allowed. Losing deskew is fine for the redo targets: scan-app exports
+    are already deskewed and cropped by the app.
+    """
+    if redo:
+        return ["--redo-ocr"]
+    return ["--deskew", "--skip-text"]
+
+
+def ocr_pdf(pdf_path: Path, derived: Path, *, languages: str, redo: bool = False) -> OcrResult:
+    """OCR a PDF with OCRmyPDF; write searchable.pdf + ocr.txt into ``derived``.
+
+    With ``redo=True`` existing (low-quality) OCR text is replaced via
+    ``--redo-ocr``; the default ``--skip-text`` mode would silently skip
+    every page that already has any text.
+    """
     searchable = derived / SEARCHABLE_PDF_NAME
     sidecar = derived / SIDECAR_NAME
     command = [
@@ -52,11 +74,10 @@ def ocr_pdf(pdf_path: Path, derived: Path, *, languages: str) -> OcrResult:
         "-l",
         languages,
         "--rotate-pages",
-        "--deskew",
         "--clean",
         "--oversample",
         "300",
-        "--skip-text",
+        *_mode_flags(redo),
         "--sidecar",
         str(sidecar),
         str(pdf_path),
@@ -123,7 +144,7 @@ def mean_word_confidence(
         sample = min(len(document), max_pages)
         with tempfile.TemporaryDirectory(prefix="ocr-conf-") as workdir:
             for index in range(sample):
-                image = document[index].render(scale=dpi / 72).to_pil()
+                image = render_page(document[index], dpi=dpi)
                 page_png = Path(workdir) / f"page-{index}.png"
                 image.save(page_png)
                 completed = subprocess.run(

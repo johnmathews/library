@@ -186,29 +186,67 @@ three engines**, selected by input type, with a confidence gate.
 run_ocr(document, original_path, derived_dir) -> OcrResult
   │
   ├─ text/plain ───────────► passthrough read              engine="text"
-  ├─ application/pdf
-  │    ├─ has text layer? (pypdfium2; avg chars/page ≥
+  ├─ application/pdf ──────► analyze_pdf (library.ocr.analysis)
+  │    ├─ text layer (avg chars/page ≥
   │    │  LIBRARY_TEXT_LAYER_MIN_CHARS_PER_PAGE, default 50)
-  │    │     └─ yes ──────► direct extraction, no OCR      engine="text-layer"
-  │    └─ no ─────────────► Tesseract path + confidence gate
+  │    │  AND not scan-like ► direct extraction, no OCR    engine="text-layer"
+  │    └─ scan-like, or too little text
+  │         ─► Tesseract path + confidence gate
+  │            (--redo-ocr when any embedded text exists)
+  │            └─ on OCRmyPDF/Tesseract FAILURE with a usable
+  │               text layer ► embedded text   engine="text-layer-fallback"
   ├─ image/tiff ──────────► convert to PDF (img2pdf, Pillow fallback)
   │                          ─► Tesseract path + confidence gate
   ├─ image/jpeg, image/png ► photo path                    engine="rapidocr"
   └─ image/heic, image/heif ► photo path on the derived converted.jpg
 ```
 
-`OcrResult` (`library.ocr.base`) carries `text`, `confidence` (0–100 or
-`None`), `searchable_pdf` (path or `None`), `engine`, and `pages`. An
-`OcrEngine` Protocol documents the engine call shape for future
-implementations.
+`OcrResult` (`library.ocr.base`) carries `text`, `confidence` (0–100 on
+the producing engine's own scale, or `None`), `searchable_pdf` (path or
+`None`), `engine`, `pages`, and `gate` (both engines' confidences when
+the confidence gate retried; `None` otherwise). An `OcrEngine` Protocol
+documents the engine call shape for future implementations.
+
+### Scan detection (`library.ocr.analysis`)
+
+The W5 benchmark ([260610-ocr-benchmark.md](benchmarks/260610-ocr-benchmark.md))
+found that iOS Notes scan exports — the primary input type — carry an
+embedded Apple-OCR text layer of mediocre quality, so "has a text layer"
+alone cannot decide the route. `analyze_pdf` makes one pass over the PDF
+and classifies:
+
+- a page is **image-backed** when a single raster image covers ≥ 50% of
+  the page area;
+- a document is **scan-like** when ≥ 50% of its pages are image-backed.
+
+Scan-like PDFs are always OCRed, even when they carry a text layer; the
+embedded text is only used as a fallback if OCR itself fails (engine
+`text-layer-fallback` — mediocre text beats failing the document). A
+born-digital report with a few embedded scan pages stays below the 50%
+page fraction and keeps the text-layer route. The benchmark validated
+both directions on the real corpus (10/10 scans detected, 6/6
+born-digital documents untouched).
 
 ### Tesseract path (`library.ocr.tesseract`)
 
 Runs **OCRmyPDF** as a subprocess (`python -m ocrmypdf`) with
-`-l {LIBRARY_OCR_LANGUAGES} --rotate-pages --deskew --clean
---oversample 300 --skip-text --sidecar`. Output artifacts in the
-document's derived dir: `searchable.pdf` (PDF/A with a text layer) and
-`ocr.txt` (the sidecar text, which becomes `ocr_text`).
+`-l {LIBRARY_OCR_LANGUAGES} --rotate-pages --clean --oversample 300
+--sidecar` plus a mode flag set:
+
+- **default** (`redo=False`): `--deskew --skip-text` — image-only input,
+  nothing to re-OCR;
+- **redo** (`redo=True`, chosen by the router when the PDF has any
+  embedded text): `--redo-ocr` — replaces existing (invisible) OCR text
+  instead of skipping pages that have text. OCRmyPDF 17.x rejects
+  `--redo-ocr` combined with `--deskew`, `--clean-final` or
+  `--remove-background`, so the redo set drops `--deskew`; that is fine
+  for its targets (scan-app exports are already deskewed and cropped by
+  the app), and plain `--clean` still applies to the image fed to
+  Tesseract.
+
+Output artifacts in the document's derived dir: `searchable.pdf` (PDF/A
+with a text layer) and `ocr.txt` (the sidecar text, which becomes
+`ocr_text`).
 
 OCRmyPDF does not report word confidence, so a separate **confidence
 probe** runs after it: up to 3 pages of the *produced* `searchable.pdf`
@@ -241,10 +279,18 @@ image works offline after the first run.
 If the Tesseract path's mean word confidence is below
 `LIBRARY_OCR_CONFIDENCE_THRESHOLD` (default 65.0) — or no words were
 found at all — the router rasterizes the PDF pages at 300 dpi and
-retries them through the photo path, keeping whichever result has the
-higher confidence. The `searchable.pdf` artifact from the Tesseract run
-is kept either way (it is still the right viewing artifact; only
-`ocr_text`/`ocr_confidence` come from the winning engine).
+retries them through the photo path. Tesseract word confidence and
+RapidOCR box confidence are **not comparable** (the W5 benchmark measured
+RapidOCR near-constant at 97–99 regardless of quality), so the winner is
+decided by text yield, never by cross-engine confidence: the retry is
+kept iff it produced at least 0.8× Tesseract's character count
+(`RETRY_MIN_TEXT_RATIO`), otherwise Tesseract's result stands. Both raw
+confidences are recorded in `OcrResult.gate` (and the `ocr_completed`
+event detail); the retained `confidence` stays on the chosen engine's
+own scale, with `engine` naming which. The `searchable.pdf` artifact
+from the Tesseract run is kept either way (it is still the right viewing
+artifact; only `ocr_text`/`ocr_confidence` come from the winning
+engine).
 
 ### Persistence
 
@@ -405,7 +451,7 @@ Append-only audit trail in `ingestion_events`:
 | `received` | ingest | `{filename, size, mime_type, source}` |
 | `duplicate_upload` | ingest | `{filename, source}` |
 | `status_changed` | pipeline | `{from, to}` |
-| `ocr_completed` | OCR stage | `{engine, confidence, pages, characters}` |
+| `ocr_completed` | OCR stage | `{engine, confidence, pages, characters}`; plus `gate: {tesseract_confidence, rapidocr_confidence}` when the confidence gate retried |
 | `ocr_failed` | OCR stage | `{error}` |
 | `extraction_completed` | extraction stage | `{model, prompt_version, confidence, input_tokens, output_tokens, cost_usd, escalated, input_mode}` |
 | `extraction_skipped` | extraction stage | `{reason, ...}` — `disabled`, `missing_api_key`, `budget`, `input_unusable`, `file_too_large` |
@@ -421,7 +467,7 @@ Append-only audit trail in `ingestion_events`:
 | `LIBRARY_DATABASE_URL` | (see `config.py`) | Database + job queue (translated for psycopg) |
 | `LIBRARY_OCR_LANGUAGES` | `nld+eng` | Tesseract language pack(s) (`-l` value) |
 | `LIBRARY_OCR_CONFIDENCE_THRESHOLD` | `65.0` | Below this mean word confidence, retry via the photo path |
-| `LIBRARY_TEXT_LAYER_MIN_CHARS_PER_PAGE` | `50` | Avg chars/page for a PDF to count as born-digital (skip OCR) |
+| `LIBRARY_TEXT_LAYER_MIN_CHARS_PER_PAGE` | `50` | Avg chars/page for a PDF's text layer to be usable (born-digital route when not scan-like; failure fallback otherwise) |
 | `LIBRARY_ANTHROPIC_API_KEY` | unset | Anthropic API key; extraction is skipped when absent |
 | `LIBRARY_EXTRACTION_ENABLED` | `true` | Master switch for the extraction stage |
 | `LIBRARY_EXTRACTION_MODEL` | `claude-haiku-4-5` | Primary extraction model |

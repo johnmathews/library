@@ -81,3 +81,54 @@ class TestOcrPdfFailure:
         source.write_bytes(b"%PDF-1.4")
         with pytest.raises(tesseract.TesseractError, match="boom"):
             tesseract.ocr_pdf(source, tmp_path, languages="eng")
+
+
+class TestOcrPdfFlagSets:
+    """ocrmypdf 17.x rejects --redo-ocr combined with --deskew, --clean-final
+    or --remove-background (its documented conflict set; plain --clean still
+    applies to the OCR input image), so the redo flag set must drop --deskew
+    while the default (--skip-text) set keeps it."""
+
+    def _captured_command(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *, redo: bool
+    ) -> list[str]:
+        import subprocess
+
+        commands: list[list[str]] = []
+        sidecar = tmp_path / "ocr.txt"
+
+        def fake_run(command: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+            commands.append(command)
+            sidecar.write_text("ocr text", encoding="utf-8")
+            return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+        monkeypatch.setattr(subprocess, "run", fake_run)
+        monkeypatch.setattr(tesseract, "pdf_page_count", lambda path: 1)
+        monkeypatch.setattr(tesseract, "mean_word_confidence", lambda path, **kwargs: 90.0)
+        source = tmp_path / "in.pdf"
+        source.write_bytes(b"%PDF-1.4")
+
+        result = tesseract.ocr_pdf(source, tmp_path, languages="eng", redo=redo)
+        assert result.text == "ocr text"
+        assert len(commands) == 1
+        return commands[0]
+
+    def test_default_mode_uses_skip_text_and_deskew(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        command = self._captured_command(tmp_path, monkeypatch, redo=False)
+        assert "--skip-text" in command
+        assert "--deskew" in command
+        assert "--clean" in command
+        assert "--redo-ocr" not in command
+
+    def test_redo_mode_drops_deskew_and_skip_text(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        command = self._captured_command(tmp_path, monkeypatch, redo=True)
+        assert "--redo-ocr" in command
+        assert "--skip-text" not in command
+        assert "--deskew" not in command  # incompatible with --redo-ocr
+        assert "--clean" in command  # input-image clean is still allowed
+        assert "--clean-final" not in command
+        assert "--remove-background" not in command

@@ -72,16 +72,24 @@ async def run_ocr(session: AsyncSession, document: Document) -> None:
     document.ocr_confidence = result.confidence
     document.page_count = result.pages
     document.searchable_pdf = result.searchable_pdf is not None
+    detail: dict[str, object] = {
+        "engine": result.engine,
+        "confidence": result.confidence,
+        "pages": result.pages,
+        "characters": len(result.text),
+    }
+    if result.gate is not None:
+        # The confidence gate retried via the photo path: record both raw
+        # confidences (incomparable scales; `engine` names the kept one).
+        detail["gate"] = {
+            "tesseract_confidence": result.gate.tesseract_confidence,
+            "rapidocr_confidence": result.gate.rapidocr_confidence,
+        }
     session.add(
         IngestionEvent(
             document_id=document.id,
             event="ocr_completed",
-            detail={
-                "engine": result.engine,
-                "confidence": result.confidence,
-                "pages": result.pages,
-                "characters": len(result.text),
-            },
+            detail=detail,
         )
     )
     await session.commit()

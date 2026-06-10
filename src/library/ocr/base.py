@@ -6,13 +6,30 @@ from typing import Protocol, runtime_checkable
 
 
 @dataclass(frozen=True, slots=True)
+class GateRetry:
+    """Both engines' confidences when the confidence gate triggered a retry.
+
+    Tesseract word confidence and RapidOCR box confidence are NOT comparable
+    (the W5 benchmark measured RapidOCR near-constant at 97-99 while
+    Tesseract spanned 83-95 on the same scans), so both raw values are
+    recorded for the audit trail instead of being compared against each
+    other. The kept engine is named by ``OcrResult.engine``.
+    """
+
+    tesseract_confidence: float | None
+    rapidocr_confidence: float | None
+
+
+@dataclass(frozen=True, slots=True)
 class OcrResult:
     """Outcome of running OCR (or text extraction) on one document.
 
-    ``confidence`` is on a 0-100 scale (Tesseract's native word-confidence
-    scale; RapidOCR's 0-1 scores are multiplied by 100 so the confidence
-    gate compares like with like) or ``None`` when the engine has no
-    confidence notion (text layer, plain text) or found no words.
+    ``confidence`` is on the producing engine's own 0-100 scale (Tesseract
+    mean word confidence, or RapidOCR mean box score x100); ``engine`` names
+    which scale applies. It is ``None`` when the engine has no confidence
+    notion (text layer, plain text) or found no words. ``gate`` is set only
+    when the confidence gate ran a photo-path retry, and carries both
+    engines' raw confidences.
     """
 
     text: str
@@ -20,6 +37,7 @@ class OcrResult:
     searchable_pdf: Path | None
     engine: str
     pages: int | None
+    gate: GateRetry | None = None
 
 
 @runtime_checkable
