@@ -104,10 +104,10 @@ hashed, individually revocable.
 | DB schema + migrations | W2 | **done** |
 | Storage + ingestion + queue | W3 | **done** — see [ingestion.md](ingestion.md) |
 | OCR pipeline | W4 | **done** — see [ingestion.md](ingestion.md), "OCR" section |
-| OCR benchmark (real samples) | W5 | pending |
+| OCR benchmark (real samples) | W5 | **done** — see [benchmarks/260610-ocr-benchmark.md](benchmarks/260610-ocr-benchmark.md); scan-aware routing + gate fix landed |
 | Claude metadata extraction | W6 | **done** — see [ingestion.md](ingestion.md), "Extraction" section |
 | REST API + search + thumbnails | W7 | **done** — see [api.md](api.md) |
-| Auth | W8 | pending |
+| Auth | W8 | **done** — see [api.md](api.md) §1.9 |
 | Frontend foundation (design system) | W9 | pending |
 | Frontend screens | W10–W11 | pending |
 | Consume watcher | W12 | pending |

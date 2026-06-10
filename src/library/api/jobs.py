@@ -1,6 +1,6 @@
 """Job-queue visibility endpoint (reads Procrastinate's tables directly).
 
-NO AUTHENTICATION YET — auth arrives in W8.
+Authentication is enforced at include level in app.py; see docs/api.md §1.9.
 """
 
 from typing import Annotated

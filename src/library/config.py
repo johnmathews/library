@@ -16,6 +16,9 @@ class Settings(BaseSettings):
     data_dir: Path = Path("/data")
     environment: str = "production"
     max_upload_bytes: int = 100 * 1024 * 1024
+    # Auth (see docs/api.md §1.9).
+    session_ttl_days: int = 30
+    cookie_secure: bool = True
     # OCR (see docs/ingestion.md, "OCR" section).
     ocr_languages: str = "nld+eng"
     ocr_confidence_threshold: float = 65.0

@@ -1,7 +1,7 @@
 """Documents REST API: upload, list/search, detail, edit, delete, files.
 
-NO AUTHENTICATION YET — auth arrives in W8. Do not expose beyond a trusted
-network until then.
+Authentication is enforced at include level in app.py (session cookie or
+bearer token); see docs/api.md §1.9.
 
 Search design notes (see docs/api.md §1.3.3)
 --------------------------------------------
@@ -26,6 +26,7 @@ from sqlalchemy import case, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
 from library.extraction.apply import get_or_create_tag, upsert_sender
@@ -38,6 +39,7 @@ from library.models import (
     IngestionEvent,
     Kind,
     Tag,
+    User,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
 from library.schemas import (
@@ -84,6 +86,7 @@ async def upload_document(
     file: UploadFile,
     response: Response,
     session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(current_user)],
 ) -> DocumentUploadResponse:
     """Ingest one uploaded file; 201 for a new document, 200 for a duplicate."""
     max_bytes = get_settings().max_upload_bytes
@@ -101,6 +104,7 @@ async def upload_document(
             filename=file.filename,
             mime=file.content_type,
             source=DocumentSource.UPLOAD,
+            uploader_id=user.id,
         )
     except UnsupportedMimeTypeError as exc:
         raise HTTPException(

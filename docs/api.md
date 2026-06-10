@@ -7,17 +7,25 @@ do is available to scripts, shortcuts, and other tools over plain HTTP.
 Interactive OpenAPI documentation is served at `/docs` (schema at
 `/openapi.json`).
 
-> **No authentication yet.** Auth (sessions + bearer tokens) arrives in
-> W8. Until then, do not expose the API beyond a trusted network.
-
 All endpoints live under the `/api` prefix and exchange JSON unless noted.
 Decimal money values (`amount_total`) are serialized as JSON **strings**
 (e.g. `"123.45"`) to preserve precision.
+
+**Every `/api` endpoint requires authentication** (session cookie or
+bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
+(container healthcheck, no database access). Unauthenticated requests get
+`401` with the generic body `{"detail": "not authenticated"}`.
 
 ## 1.1 Endpoint summary
 
 | Method | Path | Purpose |
 |--------|------|---------|
+| POST   | `/api/auth/login` | Log in; sets session + CSRF cookies (no auth required) |
+| POST   | `/api/auth/logout` | Log out; revokes the session, clears cookies |
+| GET    | `/api/auth/me` | The authenticated user |
+| GET    | `/api/auth/tokens` | List your API tokens (never their secrets) |
+| POST   | `/api/auth/tokens` | Create an API token; secret shown **once** |
+| DELETE | `/api/auth/tokens/{id}` | Revoke one of your API tokens |
 | POST   | `/api/documents` | Upload a file for ingestion |
 | GET    | `/api/documents` | List / search documents |
 | GET    | `/api/documents/{id}` | Full document detail |
@@ -38,7 +46,8 @@ validation problem (FastAPI detail body), `409`/`413`/`415` on upload (see
 Multipart upload (`file` field). `201` with `{id, sha256, status,
 duplicate}` for a new document, `200` for duplicate content (pointing at
 the existing document), `409` if the content matches a soft-deleted
-document, `413` over the size limit, `415` unsupported type. Full
+document, `413` over the size limit, `415` unsupported type. The
+authenticated user is recorded as the document's uploader. Full
 ingestion semantics are documented in [ingestion.md](ingestion.md).
 
 ## 1.3 List and search — `GET /api/documents`
@@ -171,3 +180,92 @@ undeleting means clearing `deleted_at` manually in the database.
 Most recent background jobs (newest first) from the Procrastinate queue:
 `[{id, status, task_name, attempts, scheduled_at, document_id}, …]`.
 `limit` 1–500, default 50.
+
+## 1.9 Authentication
+
+Two interchangeable credentials, checked by a single dependency on every
+`/api` route:
+
+1. **Browser session cookie** — set by `POST /api/auth/login`.
+2. **Bearer API token** — `Authorization: Bearer library_…`, for scripts,
+   shortcuts, and the MCP server.
+
+When an `Authorization: Bearer` header is present it is authoritative: the
+token is validated and cookies are ignored.
+
+Passwords are hashed with **Argon2id** (pwdlib). Accounts are managed from
+the host with the bundled CLI — there is no signup endpoint:
+
+```console
+library user add anna --display-name "Anna"   # prompts for password
+library user passwd anna
+library user disable anna                      # also revokes all sessions/tokens
+library user list
+```
+
+### 1.9.1 Sessions — `POST /api/auth/login`
+
+JSON body `{"username": "...", "password": "..."}`. On success, `200` with
+`{id, username, display_name}` and two cookies:
+
+| Cookie | Flags | Purpose |
+|--------|-------|---------|
+| `library_session` | `HttpOnly; Secure; SameSite=Lax; Path=/` | Opaque 256-bit session token; only its SHA-256 hash is stored server-side |
+| `library_csrftoken` | `Secure; SameSite=Lax; Path=/` (readable by JS) | CSRF double-submit value |
+
+Wrong username, wrong password, and disabled accounts all return the same
+generic `401` (`{"detail": "invalid credentials"}`) — no account
+enumeration. The `Secure` flag follows the `LIBRARY_COOKIE_SECURE` setting
+(default `true`; set `false` only for plain-HTTP dev).
+
+Sessions live in Postgres and expire after `LIBRARY_SESSION_TTL_DAYS`
+(default 30) of inactivity, with **sliding expiry**: any authenticated use
+pushes the expiry forward (the refresh is write-throttled to at most once
+per ~5 minutes). `POST /api/auth/logout` deletes the session row — the
+cookie is dead server-side immediately — and clears both cookies.
+
+`GET /api/auth/me` returns `{id, username, display_name}` for the
+authenticated user (either credential).
+
+### 1.9.2 CSRF (cookie requests only)
+
+State-changing requests (`POST`/`PATCH`/`PUT`/`DELETE`) authenticated by
+the **session cookie** must echo the CSRF cookie in a header:
+
+```
+X-CSRF-Token: <value of the library_csrftoken cookie>
+```
+
+Missing or mismatched header → `403`. Exempt: `GET`/`HEAD`/`OPTIONS`,
+requests carrying an `Authorization: Bearer` header, and
+`POST /api/auth/login` itself.
+
+### 1.9.3 API tokens
+
+`POST /api/auth/tokens` with `{"name": "ios-shortcut"}` returns `201`:
+
+```json
+{"id": 4, "name": "ios-shortcut", "token": "library_3q2…", "created_at": "…"}
+```
+
+**The `token` secret is shown exactly once.** Only its SHA-256 hash is
+stored; it cannot be retrieved again — lose it, revoke it, make a new one.
+`GET /api/auth/tokens` lists your tokens as
+`[{id, name, created_at, last_used_at, revoked_at}, …]` (never secrets;
+`last_used_at` updates are throttled to ~5-minute granularity).
+`DELETE /api/auth/tokens/{id}` revokes the token (sets `revoked_at`;
+takes effect immediately) and returns `204`; tokens belonging to other
+users `404`. Tokens do not expire — revocation is the lifecycle.
+
+Usage:
+
+```console
+curl -H "Authorization: Bearer library_3q2…" \
+  "https://library.example.org/api/documents?q=rekening"
+
+curl -H "Authorization: Bearer library_3q2…" \
+  -F "file=@scan.pdf" https://library.example.org/api/documents
+```
+
+Bearer requests are CSRF-exempt (the header cannot be set cross-site).
+Revoked or unknown tokens, and tokens of disabled users, get `401`.

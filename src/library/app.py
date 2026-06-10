@@ -3,10 +3,11 @@
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 
 import library
-from library.api import documents, jobs
+from library.api import auth, documents, jobs
+from library.auth.deps import csrf_protect, current_user
 from library.jobs import job_app
 
 API_DESCRIPTION = """\
@@ -18,11 +19,20 @@ The REST API is a first-class product surface — everything the web app can
 do is available here. See `docs/api.md` in the repository for the narrative
 documentation.
 
-**No authentication yet** (arrives in W8): do not expose beyond a trusted
-network.
+Every `/api` endpoint except `POST /api/auth/login` requires authentication:
+a session cookie (browsers) or an `Authorization: Bearer library_…` API
+token (scripts, MCP). Cookie-authenticated state changes also need the
+`X-CSRF-Token` header. See `docs/api.md` §1.9.
 """
 
 OPENAPI_TAGS: list[dict[str, str]] = [
+    {
+        "name": "auth",
+        "description": (
+            "Login/logout (cookie sessions), the current user, and API-token "
+            "management. Accounts are created with the `library user` CLI."
+        ),
+    },
     {
         "name": "documents",
         "description": (
@@ -55,10 +65,19 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    api_router = APIRouter(prefix="/api")
+    # Auth gate + CSRF for the whole /api surface, attached at include level
+    # so future routers are protected by default. current_user runs first:
+    # anonymous requests get 401, not a confusing CSRF 403.
+    api_router = APIRouter(
+        prefix="/api", dependencies=[Depends(current_user), Depends(csrf_protect)]
+    )
     api_router.include_router(documents.router)
     api_router.include_router(jobs.router)
+    api_router.include_router(auth.router)
     app.include_router(api_router)
+    # Login is the only unauthenticated /api route (and is CSRF-exempt: the
+    # session doesn't exist yet, and the password itself proves intent).
+    app.include_router(auth.login_router, prefix="/api")
 
     @app.get("/healthz")
     def healthz() -> dict[str, str]:

@@ -1,7 +1,9 @@
 """Shared test fixtures for the Library backend."""
 
 import asyncio
+import uuid
 from collections.abc import AsyncIterator, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -17,11 +19,23 @@ from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
 
 from library.app import create_app
+from library.auth.deps import CSRF_COOKIE, CSRF_HEADER
+from library.auth.passwords import hash_password
 from library.config import get_settings
 from library.db import get_session
 from library.jobs import job_app, procrastinate_conninfo
+from library.models import User
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+
+
+@dataclass(frozen=True)
+class AuthUser:
+    """Credentials of a user created directly in the test database."""
+
+    id: int
+    username: str
+    password: str
 
 
 @pytest.fixture
@@ -103,6 +117,9 @@ def api_app(
     """
     monkeypatch.setenv("LIBRARY_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("LIBRARY_DATABASE_URL", api_database_url)
+    # TestClient speaks plain http://testserver; Secure cookies would never
+    # be sent back, so tests run with the dev override.
+    monkeypatch.setenv("LIBRARY_COOKIE_SECURE", "false")
     get_settings.cache_clear()
     application = create_app()
 
@@ -133,13 +150,74 @@ async def job_connector() -> AsyncIterator[InMemoryConnector]:
             yield connector
 
 
-@pytest.fixture
-def api_client(api_app: FastAPI, api_database_url: str) -> Iterator[TestClient]:
-    """HTTP client against api_app with a real Procrastinate connector.
+async def _insert_user(
+    database_url: str, username: str, password: str, *, is_active: bool = True
+) -> int:
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            user = User(
+                username=username, password_hash=hash_password(password), is_active=is_active
+            )
+            session.add(user)
+            await session.commit()
+            return user.id
+    finally:
+        await engine.dispose()
 
-    Deferred jobs land in the test database's procrastinate_jobs table, so
-    tests can assert on real queue rows.
+
+def create_user(
+    database_url: str,
+    username: str | None = None,
+    password: str = "correct horse battery staple",
+    *,
+    is_active: bool = True,
+) -> AuthUser:
+    """Insert a user (random unique username by default) from sync test code."""
+    name = username or f"user-{uuid.uuid4().hex[:12]}"
+    user_id = asyncio.run(_insert_user(database_url, name, password, is_active=is_active))
+    return AuthUser(id=user_id, username=name, password=password)
+
+
+@pytest.fixture
+def auth_user(api_database_url: str) -> AuthUser:
+    """A fresh active user in the API test database."""
+    return create_user(api_database_url)
+
+
+def login(client: TestClient, user: AuthUser) -> None:
+    """Log the client in as the given user and arm it for CSRF checks.
+
+    Sets the ``X-CSRF-Token`` default header from the ``library_csrftoken``
+    cookie so state-changing requests pass the double-submit check without
+    per-test ceremony.
     """
+    response = client.post(
+        "/api/auth/login", json={"username": user.username, "password": user.password}
+    )
+    assert response.status_code == 200, response.text
+    client.headers[CSRF_HEADER] = client.cookies[CSRF_COOKIE]
+
+
+@pytest.fixture
+def api_client(
+    api_app: FastAPI, api_database_url: str, auth_user: AuthUser
+) -> Iterator[TestClient]:
+    """Authenticated HTTP client against api_app with a real Procrastinate connector.
+
+    Logged in as ``auth_user`` via the session cookie, with the CSRF header
+    pre-set. Deferred jobs land in the test database's procrastinate_jobs
+    table, so tests can assert on real queue rows.
+    """
+    connector = PsycopgConnector(conninfo=procrastinate_conninfo(api_database_url))
+    with job_app.replace_connector(connector), TestClient(api_app) as test_client:
+        login(test_client, auth_user)
+        yield test_client
+
+
+@pytest.fixture
+def anon_client(api_app: FastAPI, api_database_url: str) -> Iterator[TestClient]:
+    """Unauthenticated HTTP client against api_app (same wiring as api_client)."""
     connector = PsycopgConnector(conninfo=procrastinate_conninfo(api_database_url))
     with job_app.replace_connector(connector), TestClient(api_app) as test_client:
         yield test_client

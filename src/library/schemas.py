@@ -140,6 +140,46 @@ class DocumentUpdate(BaseModel):
     expiry_date: date | None = None
 
 
+class LoginRequest(BaseModel):
+    """Body of POST /api/auth/login."""
+
+    username: str
+    password: str
+
+
+class UserOut(BaseModel):
+    """The authenticated user (login response and GET /api/auth/me)."""
+
+    id: int
+    username: str
+    display_name: str
+
+
+class TokenCreateRequest(BaseModel):
+    """Body of POST /api/auth/tokens."""
+
+    name: Annotated[str, StringConstraints(min_length=1, max_length=255)]
+
+
+class TokenCreatedResponse(BaseModel):
+    """201 body of POST /api/auth/tokens — the only time the secret appears."""
+
+    id: int
+    name: str
+    token: str = Field(description="The bearer secret. Shown once; store it now.")
+    created_at: datetime
+
+
+class TokenInfo(BaseModel):
+    """One row of GET /api/auth/tokens; never contains secrets or hashes."""
+
+    id: int
+    name: str
+    created_at: datetime
+    last_used_at: datetime | None
+    revoked_at: datetime | None
+
+
 class JobInfo(BaseModel):
     """One row from the procrastinate_jobs table, as exposed by GET /api/jobs."""
 
