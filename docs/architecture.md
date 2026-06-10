@@ -108,7 +108,7 @@ hashed, individually revocable.
 | Claude metadata extraction | W6 | **done** — see [ingestion.md](ingestion.md), "Extraction" section |
 | REST API + search + thumbnails | W7 | **done** — see [api.md](api.md) |
 | Auth | W8 | **done** — see [api.md](api.md) §1.9 |
-| Frontend foundation (design system) | W9 | pending |
+| Frontend foundation (design system) | W9 | **done** — see [frontend.md](frontend.md) |
 | Frontend screens | W10–W11 | pending |
 | Consume watcher | W12 | pending |
 | MCP server | W13 | pending |

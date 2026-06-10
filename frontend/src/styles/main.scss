@@ -1,0 +1,113 @@
+// Library — GOV.UK Frontend (v6, MIT) with licence-restricted assets removed.
+//
+// The GDS Transport typeface and all crown imagery are licensed for use on
+// gov.uk services only, so they must never be bundled, served or referenced:
+//
+//   - `$govuk-font-family` is set to self-hosted Inter (@fontsource/inter,
+//     imported in `src/main.ts`). `$govuk-include-default-font-face: false`
+//     keeps the GDS Transport @font-face declarations (and their font URLs)
+//     out of the compiled CSS.
+//   - Components are pulled in individually instead of via the all-in-one
+//     `govuk-frontend/dist/govuk` index, because the footer component's CSS
+//     references `govuk-crest.svg` (royal crest). The footer and header
+//     crown markup are replaced by our own minimal masthead/footer below.
+//
+// `scripts/check-assets.mjs` asserts the production bundle stays clean.
+
+@use "govuk-frontend/dist/govuk/base" with (
+  $govuk-font-family: (
+    "Inter",
+    arial,
+    sans-serif,
+  ),
+  $govuk-include-default-font-face: false,
+  $govuk-global-styles: true
+);
+
+@use "govuk-frontend/dist/govuk/core";
+@use "govuk-frontend/dist/govuk/objects";
+
+// Components used by the app shell and the src/components/govuk wrappers.
+// The footer component is deliberately absent (crest imagery, see above).
+@use "govuk-frontend/dist/govuk/components/back-link";
+@use "govuk-frontend/dist/govuk/components/button";
+@use "govuk-frontend/dist/govuk/components/checkboxes";
+@use "govuk-frontend/dist/govuk/components/date-input";
+@use "govuk-frontend/dist/govuk/components/details";
+@use "govuk-frontend/dist/govuk/components/error-message";
+@use "govuk-frontend/dist/govuk/components/error-summary";
+@use "govuk-frontend/dist/govuk/components/fieldset";
+@use "govuk-frontend/dist/govuk/components/file-upload";
+@use "govuk-frontend/dist/govuk/components/hint";
+@use "govuk-frontend/dist/govuk/components/input";
+@use "govuk-frontend/dist/govuk/components/inset-text";
+@use "govuk-frontend/dist/govuk/components/label";
+@use "govuk-frontend/dist/govuk/components/notification-banner";
+@use "govuk-frontend/dist/govuk/components/pagination";
+@use "govuk-frontend/dist/govuk/components/panel";
+@use "govuk-frontend/dist/govuk/components/phase-banner";
+@use "govuk-frontend/dist/govuk/components/radios";
+@use "govuk-frontend/dist/govuk/components/select";
+@use "govuk-frontend/dist/govuk/components/service-navigation";
+@use "govuk-frontend/dist/govuk/components/skip-link";
+@use "govuk-frontend/dist/govuk/components/summary-list";
+@use "govuk-frontend/dist/govuk/components/table";
+@use "govuk-frontend/dist/govuk/components/tag";
+@use "govuk-frontend/dist/govuk/components/textarea";
+
+@use "govuk-frontend/dist/govuk/utilities";
+@use "govuk-frontend/dist/govuk/overrides";
+
+// --- App shell ------------------------------------------------------------
+
+// Text-only masthead (replaces govuk-header, which carries the crown
+// logotype markup on gov.uk; the bar itself is plain CSS).
+.app-masthead {
+  border-bottom: base.govuk-spacing(2) solid base.govuk-functional-colour(brand);
+  background-color: base.govuk-colour("black");
+  color: base.govuk-colour("white");
+}
+
+.app-masthead__container {
+  display: flex;
+  align-items: center;
+  min-height: 50px;
+  padding: base.govuk-spacing(2) 0;
+}
+
+.app-masthead__link {
+  @include base.govuk-font($size: 24, $weight: bold);
+  text-decoration: none;
+
+  &:link,
+  &:visited,
+  &:hover,
+  &:active {
+    color: base.govuk-colour("white");
+  }
+
+  &:hover {
+    text-decoration: underline;
+    text-decoration-thickness: 3px;
+    text-underline-offset: 0.1578em;
+  }
+
+  &:focus {
+    @include base.govuk-focused-text;
+  }
+}
+
+// Minimal footer (the govuk-frontend footer component is not imported
+// because its CSS references the royal crest).
+.app-footer {
+  margin-top: base.govuk-spacing(9);
+  border-top: 1px solid base.govuk-functional-colour(border);
+  padding: base.govuk-spacing(4) 0;
+  background-color: base.govuk-functional-colour(surface-background);
+}
+
+.app-footer__text {
+  @include base.govuk-font($size: 16);
+  margin: 0;
+  color: base.govuk-functional-colour(secondary-text);
+}
