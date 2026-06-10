@@ -1,0 +1,55 @@
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: library
+      POSTGRES_PASSWORD: library
+      POSTGRES_DB: library
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U library"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      LIBRARY_DATABASE_URL: postgresql+asyncpg://library:library@db:5432/library
+    volumes:
+      - library_data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    healthcheck:
+      # curl/wget are not present in slim images; use the stdlib instead.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  worker:
+    build: .
+    # TODO(W3): replace with the real worker entrypoint.
+    command: ["sleep", "infinity"]
+    environment:
+      LIBRARY_DATABASE_URL: postgresql+asyncpg://library:library@db:5432/library
+    volumes:
+      - library_data:/data
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+  library_data:
