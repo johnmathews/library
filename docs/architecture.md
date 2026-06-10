@@ -102,7 +102,7 @@ hashed, individually revocable.
 |------|------|--------|
 | Scaffold, CI, Docker skeleton | W1 | **done** |
 | DB schema + migrations | W2 | **done** |
-| Storage + ingestion + queue | W3 | pending |
+| Storage + ingestion + queue | W3 | **done** — see [ingestion.md](ingestion.md) |
 | OCR pipeline | W4 | pending |
 | OCR benchmark (real samples) | W5 | pending |
 | Claude metadata extraction | W6 | pending |

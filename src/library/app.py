@@ -1,16 +1,29 @@
 """FastAPI application factory for the Library backend."""
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
 from fastapi import APIRouter, FastAPI
 
 import library
+from library.api import documents, jobs
+from library.jobs import job_app
 
-# All application endpoints live under /api; later work units add routes here.
-api_router: APIRouter = APIRouter(prefix="/api")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """Open the Procrastinate connection for the app's lifetime so defer() works."""
+    async with job_app.open_async():
+        yield
 
 
 def create_app() -> FastAPI:
     """Build and return the Library FastAPI application."""
-    app = FastAPI(title="Library", version=library.__version__)
+    app = FastAPI(title="Library", version=library.__version__, lifespan=lifespan)
+
+    api_router = APIRouter(prefix="/api")
+    api_router.include_router(documents.router)
+    api_router.include_router(jobs.router)
     app.include_router(api_router)
 
     @app.get("/healthz")

@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://library:library@db:5432/library"
     data_dir: Path = Path("/data")
     environment: str = "production"
+    max_upload_bytes: int = 100 * 1024 * 1024
 
 
 @lru_cache
