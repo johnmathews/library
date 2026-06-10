@@ -217,6 +217,12 @@ describe('GovDetails', () => {
     expect(wrapper.find('details.govuk-details').exists()).toBe(true)
     expect(wrapper.find('.govuk-details__summary-text').text()).toBe('Help')
     expect(wrapper.find('.govuk-details__text').text()).toBe('More info')
+    expect(wrapper.find('details').attributes('open')).toBeUndefined()
+  })
+
+  it('renders initially expanded when open is set', () => {
+    const wrapper = mount(GovDetails, { props: { summary: 'Help', open: true } })
+    expect(wrapper.find('details').attributes('open')).toBeDefined()
   })
 })
 

@@ -4,14 +4,24 @@ import {
   type RouteLocationNormalized,
   type RouteRecordRaw,
 } from 'vue-router'
-import HomeView from '../views/HomeView.vue'
+import DocumentListView from '../views/DocumentListView.vue'
 import { useAuthStore } from '@/stores/auth'
 
 export const routes: RouteRecordRaw[] = [
   {
     path: '/',
     name: 'documents',
-    component: HomeView,
+    component: DocumentListView,
+  },
+  {
+    path: '/documents/:id',
+    name: 'document-detail',
+    component: () => import('../views/DocumentDetailView.vue'),
+  },
+  {
+    path: '/upload',
+    name: 'upload',
+    component: () => import('../views/UploadView.vue'),
   },
   {
     path: '/login',

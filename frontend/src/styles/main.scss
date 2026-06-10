@@ -111,3 +111,113 @@
   margin: 0;
   color: base.govuk-functional-colour(secondary-text);
 }
+
+// --- Document list ----------------------------------------------------------
+// GOV.UK-style search results: thumbnail + body per row; stays a single
+// column on mobile because the thumbnail is fixed-width and the body fluid.
+
+.app-doc-list__item {
+  display: flex;
+  gap: base.govuk-spacing(3);
+  padding: base.govuk-spacing(3) 0;
+  border-bottom: 1px solid base.govuk-functional-colour(border);
+
+  &:first-child {
+    border-top: 1px solid base.govuk-functional-colour(border);
+  }
+}
+
+.app-doc-list__thumbnail {
+  flex: 0 0 60px;
+
+  img {
+    display: block;
+    width: 60px;
+    height: auto;
+    border: 1px solid base.govuk-functional-colour(border);
+  }
+}
+
+.app-doc-list__thumbnail-fallback {
+  @include base.govuk-font($size: 16, $weight: bold);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 60px;
+  height: 80px;
+  border: 1px solid base.govuk-functional-colour(border);
+  background-color: base.govuk-functional-colour(surface-background);
+  color: base.govuk-functional-colour(secondary-text);
+}
+
+.app-doc-list__body {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.app-doc-list__title {
+  margin-bottom: base.govuk-spacing(1);
+  overflow-wrap: anywhere;
+}
+
+.app-doc-list__meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: base.govuk-spacing(2);
+  margin-bottom: base.govuk-spacing(1);
+}
+
+.app-doc-list__sender,
+.app-doc-list__date {
+  color: base.govuk-functional-colour(secondary-text);
+}
+
+.app-doc-list__snippet {
+  margin-bottom: 0;
+  color: base.govuk-functional-colour(secondary-text);
+}
+
+// --- Upload page ------------------------------------------------------------
+
+.app-upload-list__item {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: base.govuk-spacing(2);
+  padding: base.govuk-spacing(2) 0;
+  border-bottom: 1px solid base.govuk-functional-colour(border);
+}
+
+.app-upload-list__name {
+  overflow-wrap: anywhere;
+}
+
+// Progress bar — GOV.UK has no progress component; this app extension uses
+// the design system's colours and spacing (documented in docs/frontend.md).
+.app-progress {
+  display: flex;
+  align-items: center;
+  gap: base.govuk-spacing(2);
+  min-width: 160px;
+  flex: 1 1 160px;
+}
+
+.app-progress__track {
+  flex: 1 1 auto;
+  height: base.govuk-spacing(3);
+  border: 2px solid base.govuk-colour("black");
+  background-color: base.govuk-colour("white");
+}
+
+.app-progress__fill {
+  height: 100%;
+  background-color: base.govuk-colour("blue");
+  transition: width 0.2s ease;
+}
+
+.app-progress__count {
+  @include base.govuk-font($size: 16, $tabular: true);
+  min-width: 3.5em;
+  text-align: right;
+}

@@ -18,8 +18,8 @@ export class ApiError extends Error {
   }
 }
 
-const CSRF_COOKIE = 'library_csrftoken'
-const CSRF_HEADER = 'X-CSRF-Token'
+export const CSRF_COOKIE = 'library_csrftoken'
+export const CSRF_HEADER = 'X-CSRF-Token'
 const SAFE_METHODS = new Set(['GET', 'HEAD', 'OPTIONS'])
 
 /** Read a cookie value by name; null when absent. */

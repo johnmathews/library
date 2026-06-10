@@ -1,0 +1,170 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { documentQueryString, listDocuments, uploadDocument } from '../documents'
+import { ApiError } from '../client'
+
+describe('documentQueryString', () => {
+  it('serialises scalar filters and repeats tag', () => {
+    const qs = documentQueryString({
+      q: 'rekening',
+      kind: 'invoice',
+      tag: ['energie', 'wonen'],
+      limit: 25,
+      offset: 50,
+    })
+    const params = new URLSearchParams(qs)
+    expect(params.get('q')).toBe('rekening')
+    expect(params.get('kind')).toBe('invoice')
+    expect(params.getAll('tag')).toEqual(['energie', 'wonen'])
+    expect(params.get('limit')).toBe('25')
+    expect(params.get('offset')).toBe('50')
+  })
+
+  it('omits undefined and empty values', () => {
+    expect(documentQueryString({ q: '', kind: undefined })).toBe('')
+  })
+})
+
+describe('listDocuments', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+  })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('GETs /api/documents with the filter query string', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ items: [], total: 0, limit: 25, offset: 0 }), { status: 200 }),
+    )
+    await listDocuments({ q: 'rekening', kind: 'invoice', limit: 25, offset: 0 })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe('/api/documents?q=rekening&kind=invoice&limit=25&offset=0')
+  })
+})
+
+/** Minimal scriptable XMLHttpRequest double. */
+class FakeXHR {
+  static instances: FakeXHR[] = []
+
+  method = ''
+  url = ''
+  status = 0
+  responseText = ''
+  headers: Record<string, string> = {}
+  sentBody: unknown = null
+
+  private listeners: Record<string, (event: ProgressEvent) => void> = {}
+  upload = {
+    addEventListener: (type: string, callback: (event: ProgressEvent) => void): void => {
+      this.listeners[`upload:${type}`] = callback
+    },
+  }
+
+  constructor() {
+    FakeXHR.instances.push(this)
+  }
+
+  open(method: string, url: string): void {
+    this.method = method
+    this.url = url
+  }
+
+  setRequestHeader(name: string, value: string): void {
+    this.headers[name] = value
+  }
+
+  addEventListener(type: string, callback: (event: ProgressEvent) => void): void {
+    this.listeners[type] = callback
+  }
+
+  send(body: unknown): void {
+    this.sentBody = body
+  }
+
+  emitUploadProgress(loaded: number, total: number): void {
+    this.listeners['upload:progress']?.({
+      lengthComputable: true,
+      loaded,
+      total,
+    } as ProgressEvent)
+  }
+
+  respond(status: number, body: unknown): void {
+    this.status = status
+    this.responseText = JSON.stringify(body)
+    this.listeners['load']?.(new ProgressEvent('load'))
+  }
+
+  failNetwork(): void {
+    this.listeners['error']?.(new ProgressEvent('error'))
+  }
+}
+
+describe('uploadDocument', () => {
+  beforeEach(() => {
+    FakeXHR.instances = []
+    vi.stubGlobal('XMLHttpRequest', FakeXHR)
+    document.cookie = 'library_csrftoken=csrf-123'
+  })
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    document.cookie = 'library_csrftoken=; expires=Thu, 01 Jan 1970 00:00:00 GMT'
+  })
+
+  function makeFile(): File {
+    return new File(['%PDF-1.4 test'], 'scan.pdf', { type: 'application/pdf' })
+  }
+
+  it('POSTs multipart form data with the CSRF header and reports progress', async () => {
+    const progress: number[] = []
+    const promise = uploadDocument(makeFile(), (fraction) => progress.push(fraction))
+    const xhr = FakeXHR.instances[0]!
+
+    expect(xhr.method).toBe('POST')
+    expect(xhr.url).toBe('/api/documents')
+    expect(xhr.headers['X-CSRF-Token']).toBe('csrf-123')
+    expect(xhr.sentBody).toBeInstanceOf(FormData)
+    expect((xhr.sentBody as FormData).get('file')).toBeInstanceOf(File)
+
+    xhr.emitUploadProgress(50, 100)
+    xhr.respond(201, { id: 7, sha256: 'abc', status: 'received', duplicate: false })
+
+    await expect(promise).resolves.toEqual({
+      id: 7,
+      sha256: 'abc',
+      status: 'received',
+      duplicate: false,
+    })
+    expect(progress).toEqual([0.5, 1])
+  })
+
+  it('resolves duplicates (200) with duplicate: true', async () => {
+    const promise = uploadDocument(makeFile())
+    FakeXHR.instances[0]!.respond(200, {
+      id: 3,
+      sha256: 'abc',
+      status: 'indexed',
+      duplicate: true,
+    })
+    await expect(promise).resolves.toMatchObject({ id: 3, duplicate: true })
+  })
+
+  it('rejects 415 with an ApiError carrying the backend detail', async () => {
+    const promise = uploadDocument(makeFile())
+    FakeXHR.instances[0]!.respond(415, { detail: 'unsupported media type text/csv' })
+    await expect(promise).rejects.toMatchObject({
+      status: 415,
+      detail: 'unsupported media type text/csv',
+    })
+    await expect(promise).rejects.toBeInstanceOf(ApiError)
+  })
+
+  it('rejects network failures with ApiError status 0', async () => {
+    const promise = uploadDocument(makeFile())
+    FakeXHR.instances[0]!.failNetwork()
+    await expect(promise).rejects.toMatchObject({ status: 0 })
+  })
+})

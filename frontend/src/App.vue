@@ -18,7 +18,12 @@ useGovukComponent(skipLink, SkipLink)
 const navItems = computed<ServiceNavigationItem[]>(() => {
   if (!auth.isAuthenticated) return []
   return [
-    { text: 'Documents', to: '/', active: route.name === 'documents' },
+    {
+      text: 'Documents',
+      to: '/',
+      active: route.name === 'documents' || route.name === 'document-detail',
+    },
+    { text: 'Upload', to: '/upload', active: route.name === 'upload' },
     { text: 'Sign out' },
   ]
 })

@@ -1,0 +1,9 @@
+# Compose override for e2e runs (CI and local):
+#   docker compose -f docker-compose.yml -f frontend/e2e/compose.e2e.yml up -d --build db migrate api worker
+#
+# The stack is reached over plain HTTP (vite preview proxy), so the session
+# cookie must not carry the Secure flag or the browser will drop it.
+services:
+  api:
+    environment:
+      LIBRARY_COOKIE_SECURE: "false"
