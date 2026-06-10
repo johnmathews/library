@@ -1,0 +1,9 @@
+.claude/worktrees/
+.env
+__pycache__/
+*.pyc
+.venv/
+node_modules/
+dist/
+htmlcov/
+.coverage
