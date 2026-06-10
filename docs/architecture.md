@@ -101,7 +101,7 @@ hashed, individually revocable.
 | Area | Unit | Status |
 |------|------|--------|
 | Scaffold, CI, Docker skeleton | W1 | **done** |
-| DB schema + migrations | W2 | pending |
+| DB schema + migrations | W2 | **done** |
 | Storage + ingestion + queue | W3 | pending |
 | OCR pipeline | W4 | pending |
 | OCR benchmark (real samples) | W5 | pending |
