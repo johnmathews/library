@@ -13,6 +13,8 @@ const props = defineProps<{
   spellcheck?: boolean
   widthClass?: string
   labelIsPageHeading?: boolean
+  /** id of a `<datalist>` for native autocomplete suggestions. */
+  list?: string
 }>()
 
 const model = defineModel<string>({ default: '' })
@@ -45,6 +47,7 @@ const describedBy = computed(() => {
       :autocomplete="props.autocomplete"
       :inputmode="props.inputmode"
       :spellcheck="props.spellcheck"
+      :list="props.list"
       :aria-describedby="describedBy"
     />
   </div>

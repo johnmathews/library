@@ -7,18 +7,18 @@
  * applied on submit. Snippets are rendered through `renderSnippet` — see
  * docs/api.md §1.3.3 for why they must never hit v-html unescaped.
  */
-import { computed, reactive, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQuery, type LocationQueryRaw } from 'vue-router'
 import GovButton from '@/components/govuk/GovButton.vue'
 import GovDateInput from '@/components/govuk/GovDateInput.vue'
 import GovDetails from '@/components/govuk/GovDetails.vue'
 import GovInput from '@/components/govuk/GovInput.vue'
+import GovNotificationBanner from '@/components/govuk/GovNotificationBanner.vue'
 import GovPagination from '@/components/govuk/GovPagination.vue'
 import GovSelect from '@/components/govuk/GovSelect.vue'
 import GovTag from '@/components/govuk/GovTag.vue'
 import type { SelectItem } from '@/components/govuk'
 import {
-  DOCUMENT_KINDS,
   DOCUMENT_LANGUAGES,
   listDocuments,
   thumbnailUrl,
@@ -26,12 +26,24 @@ import {
   type DocumentLanguage,
   type DocumentListItem,
 } from '@/api/documents'
+import {
+  listKinds,
+  listSenders,
+  listTags,
+  type KindOption,
+  type SenderOption,
+  type TagOption,
+} from '@/api/taxonomy'
 import { renderSnippet } from '@/utils/snippet'
+import { useFlashStore } from '@/stores/flash'
 
 const PAGE_SIZE = 25
 
 const route = useRoute()
 const router = useRouter()
+
+// One-shot banner from an action that redirected here (e.g. delete).
+const flashMessage = ref(useFlashStore().consume())
 
 // --- Applied state (the URL is the source of truth) -----------------------
 
@@ -43,6 +55,8 @@ function queryString(query: LocationQuery, key: string): string {
 const applied = computed(() => ({
   q: queryString(route.query, 'q'),
   kind: queryString(route.query, 'kind'),
+  senderId: queryString(route.query, 'sender_id'),
+  tag: queryString(route.query, 'tag'),
   language: queryString(route.query, 'language'),
   dateFrom: queryString(route.query, 'date_from'),
   dateTo: queryString(route.query, 'date_to'),
@@ -51,7 +65,12 @@ const applied = computed(() => ({
 
 const isFiltered = computed(() => {
   const a = applied.value
-  return Boolean(a.q || a.kind || a.language || a.dateFrom || a.dateTo)
+  return Boolean(a.q || a.kind || a.senderId || a.tag || a.language || a.dateFrom || a.dateTo)
+})
+
+const hasFilterApplied = computed(() => {
+  const a = applied.value
+  return Boolean(a.kind || a.senderId || a.tag || a.language || a.dateFrom || a.dateTo)
 })
 
 // --- Draft form state ------------------------------------------------------
@@ -59,15 +78,42 @@ const isFiltered = computed(() => {
 const draft = reactive({
   q: '',
   kind: '',
+  senderId: '',
+  tag: '',
   language: '',
   dateFrom: null as string | null,
   dateTo: null as string | null,
 })
 
-const kindItems: SelectItem[] = [
+// Filter options come from the taxonomy endpoints (docs/api.md §1.8.2);
+// fetched once, best-effort (without them the selects just offer "All …").
+const kinds = ref<KindOption[]>([])
+const senders = ref<SenderOption[]>([])
+const tags = ref<TagOption[]>([])
+
+onMounted(async () => {
+  const [kindResult, senderResult, tagResult] = await Promise.allSettled([
+    listKinds(),
+    listSenders(),
+    listTags(),
+  ])
+  if (kindResult.status === 'fulfilled') kinds.value = kindResult.value
+  if (senderResult.status === 'fulfilled') senders.value = senderResult.value
+  if (tagResult.status === 'fulfilled') tags.value = tagResult.value
+})
+
+const kindItems = computed<SelectItem[]>(() => [
   { value: '', text: 'All kinds' },
-  ...DOCUMENT_KINDS.map((kind) => ({ value: kind.slug, text: kind.name })),
-]
+  ...kinds.value.map((kind) => ({ value: kind.slug, text: kind.name })),
+])
+const senderItems = computed<SelectItem[]>(() => [
+  { value: '', text: 'All senders' },
+  ...senders.value.map((sender) => ({ value: String(sender.id), text: sender.name })),
+])
+const tagItems = computed<SelectItem[]>(() => [
+  { value: '', text: 'All tags' },
+  ...tags.value.map((tag) => ({ value: tag.slug, text: tag.name })),
+])
 const languageItems: SelectItem[] = [
   { value: '', text: 'All languages' },
   ...DOCUMENT_LANGUAGES.map((language) => ({ value: language.value, text: language.text })),
@@ -80,6 +126,8 @@ function applyFilters(): void {
 function clearFilters(): void {
   draft.q = ''
   draft.kind = ''
+  draft.senderId = ''
+  draft.tag = ''
   draft.language = ''
   draft.dateFrom = null
   draft.dateTo = null
@@ -95,6 +143,8 @@ function buildQuery(overrides: { page: number }): LocationQueryRaw {
   const query: LocationQueryRaw = {}
   if (draft.q.trim()) query.q = draft.q.trim()
   if (draft.kind) query.kind = draft.kind
+  if (draft.senderId) query.sender_id = draft.senderId
+  if (draft.tag) query.tag = draft.tag
   if (draft.language) query.language = draft.language
   if (draft.dateFrom) query.date_from = draft.dateFrom
   if (draft.dateTo) query.date_to = draft.dateTo
@@ -118,6 +168,8 @@ watch(
     // Re-sync the draft so back/forward/refresh restore the form.
     draft.q = state.q
     draft.kind = state.kind
+    draft.senderId = state.senderId
+    draft.tag = state.tag
     draft.language = state.language
     draft.dateFrom = state.dateFrom || null
     draft.dateTo = state.dateTo || null
@@ -126,9 +178,12 @@ watch(
     abortController = new AbortController()
     loading.value = true
     loadError.value = null
+    const senderId = Number.parseInt(state.senderId, 10)
     const filters: DocumentFilters = {
       q: state.q || undefined,
       kind: state.kind || undefined,
+      sender_id: Number.isInteger(senderId) ? senderId : undefined,
+      tag: state.tag ? [state.tag] : undefined,
       language: (state.language || undefined) as DocumentLanguage | undefined,
       date_from: state.dateFrom || undefined,
       date_to: state.dateTo || undefined,
@@ -180,6 +235,10 @@ function fileTypeLabel(item: DocumentListItem): string {
 </script>
 
 <template>
+  <GovNotificationBanner v-if="flashMessage" variant="success" data-testid="flash-banner">
+    <p class="govuk-notification-banner__heading">{{ flashMessage }}</p>
+  </GovNotificationBanner>
+
   <h1 class="govuk-heading-xl">Documents</h1>
 
   <div class="govuk-grid-row">
@@ -196,8 +255,15 @@ function fileTypeLabel(item: DocumentListItem): string {
         />
         <GovButton type="submit">Search</GovButton>
 
-        <GovDetails summary="Filter results" :open="Boolean(applied.kind || applied.language || applied.dateFrom || applied.dateTo)">
+        <GovDetails summary="Filter results" :open="hasFilterApplied">
           <GovSelect id="filter-kind" v-model="draft.kind" label="Kind" :items="kindItems" />
+          <GovSelect
+            id="filter-sender"
+            v-model="draft.senderId"
+            label="Sender"
+            :items="senderItems"
+          />
+          <GovSelect id="filter-tag" v-model="draft.tag" label="Tag" :items="tagItems" />
           <GovSelect
             id="filter-language"
             v-model="draft.language"
@@ -254,7 +320,13 @@ function fileTypeLabel(item: DocumentListItem): string {
               <h2 class="govuk-heading-s app-doc-list__title">
                 <RouterLink
                   class="govuk-link"
-                  :to="{ name: 'document-detail', params: { id: item.id } }"
+                  :to="{
+                    name: 'document-detail',
+                    params: { id: item.id },
+                    // Carry the search into the detail page so the OCR text
+                    // view can highlight the matches.
+                    query: applied.q ? { highlight: applied.q } : {},
+                  }"
                 >
                   {{ item.title ?? 'Untitled document' }}
                 </RouterLink>

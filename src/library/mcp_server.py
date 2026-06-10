@@ -26,6 +26,7 @@ import base64
 import binascii
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
@@ -41,6 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 import library
+from library import taxonomy
 from library.auth.service import validate_api_token
 from library.config import get_settings
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
@@ -50,9 +52,6 @@ from library.models import (
     DocumentSource,
     IngestionEvent,
     Kind,
-    Sender,
-    Tag,
-    document_tags,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
 from library.search import DocumentFilters, build_document_query
@@ -425,23 +424,9 @@ async def list_kinds() -> dict[str, Any]:
 
     Use the returned slugs as the `kind` filter of search_documents.
     """
-    statement = (
-        select(Kind.slug, Kind.name, func.count(Document.id))
-        .join(
-            Document,
-            (Document.kind_id == Kind.id) & Document.deleted_at.is_(None),
-            isouter=True,
-        )
-        .group_by(Kind.id)
-        .order_by(Kind.slug)
-    )
     async with _session() as session:
-        rows = (await session.execute(statement)).all()
-    return {
-        "kinds": [
-            {"slug": slug, "name": name, "document_count": count} for slug, name, count in rows
-        ]
-    }
+        kinds = await taxonomy.list_kinds(session)
+    return {"kinds": [asdict(kind) for kind in kinds]}
 
 
 @mcp.tool
@@ -451,24 +436,9 @@ async def list_senders() -> dict[str, Any]:
     Use the returned names with the `sender` filter of search_documents
     (case-insensitive substring match).
     """
-    statement = (
-        select(Sender.id, Sender.name, func.count(Document.id))
-        .join(
-            Document,
-            (Document.sender_id == Sender.id) & Document.deleted_at.is_(None),
-            isouter=True,
-        )
-        .group_by(Sender.id)
-        .order_by(Sender.name)
-    )
     async with _session() as session:
-        rows = (await session.execute(statement)).all()
-    return {
-        "senders": [
-            {"id": sender_id, "name": name, "document_count": count}
-            for sender_id, name, count in rows
-        ]
-    }
+        senders = await taxonomy.list_senders(session)
+    return {"senders": [asdict(sender) for sender in senders]}
 
 
 @mcp.tool
@@ -477,24 +447,9 @@ async def list_tags() -> dict[str, Any]:
 
     Use the returned slugs as the `tag` filter of search_documents.
     """
-    statement = (
-        select(Tag.slug, Tag.name, func.count(Document.id))
-        .join(document_tags, document_tags.c.tag_id == Tag.id, isouter=True)
-        .join(
-            Document,
-            (Document.id == document_tags.c.document_id) & Document.deleted_at.is_(None),
-            isouter=True,
-        )
-        .group_by(Tag.id)
-        .order_by(Tag.slug)
-    )
     async with _session() as session:
-        rows = (await session.execute(statement)).all()
-    return {
-        "tags": [
-            {"slug": slug, "name": name, "document_count": count} for slug, name, count in rows
-        ]
-    }
+        tags = await taxonomy.list_tags(session)
+    return {"tags": [asdict(tag) for tag in tags]}
 
 
 @mcp.tool

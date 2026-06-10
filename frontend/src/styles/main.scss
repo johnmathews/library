@@ -54,6 +54,7 @@
 @use "govuk-frontend/dist/govuk/components/table";
 @use "govuk-frontend/dist/govuk/components/tag";
 @use "govuk-frontend/dist/govuk/components/textarea";
+@use "govuk-frontend/dist/govuk/components/warning-text";
 
 @use "govuk-frontend/dist/govuk/utilities";
 @use "govuk-frontend/dist/govuk/overrides";
@@ -176,6 +177,49 @@
 .app-doc-list__snippet {
   margin-bottom: 0;
   color: base.govuk-functional-colour(secondary-text);
+}
+
+// --- Document detail ----------------------------------------------------------
+
+// A <button> that looks and reads like a GOV.UK link — used for the
+// summary-list "Change" actions, which toggle an inline editor rather
+// than navigate (the govuk-link class supplies colours/underline/focus).
+.app-link-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  font: inherit;
+}
+
+.app-preview__image {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  border: 1px solid base.govuk-functional-colour(border);
+}
+
+// Browser-native PDF viewer; 70vh keeps the metadata column reachable
+// without scrolling past a full-page viewer on desktop.
+.app-preview__frame {
+  display: block;
+  width: 100%;
+  height: 70vh;
+  border: 1px solid base.govuk-functional-colour(border);
+}
+
+.app-ocr-text {
+  @include base.govuk-font($size: 16);
+  max-height: 24em;
+  overflow: auto;
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+// The detail title can be a long OCR-derived string with no spaces.
+.app-detail-title {
+  overflow-wrap: anywhere;
 }
 
 // --- Upload page ------------------------------------------------------------

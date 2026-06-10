@@ -21,6 +21,7 @@ from library.config import get_settings
 from library.db import get_session
 from library.extraction.apply import get_or_create_tag, upsert_sender
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
+from library.jobs import extract_document
 from library.models import (
     Document,
     DocumentLanguage,
@@ -37,6 +38,7 @@ from library.schemas import (
     DocumentListResponse,
     DocumentUpdate,
     DocumentUploadResponse,
+    ExtractionQueuedResponse,
     IngestionEventOut,
     KindOut,
     SenderOut,
@@ -300,6 +302,29 @@ async def delete_document(
     document.deleted_at = datetime.now(UTC)
     session.add(IngestionEvent(document_id=document.id, event="deleted", detail={}))
     await session.commit()
+
+
+@router.post(
+    "/documents/{document_id}/extract",
+    response_model=ExtractionQueuedResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Queue metadata re-extraction",
+    responses={404: {"description": "Unknown or deleted document"}},
+)
+async def queue_extraction(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ExtractionQueuedResponse:
+    """Defer the W6 extraction task for this document and return immediately.
+
+    Works on documents in any state (including already indexed); the run
+    honours ``extra["user_edited_fields"]`` and never removes tags. Track
+    the outcome via the document's ``extraction`` provenance and audit
+    events (GET detail) or GET /api/jobs.
+    """
+    document = await _get_document_or_404(session, document_id)
+    job_id = await extract_document.defer_async(document_id=document.id)
+    return ExtractionQueuedResponse(queued=True, job_id=job_id)
 
 
 @router.get(

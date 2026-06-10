@@ -91,6 +91,10 @@ Props loosely follow the GOV.UK nunjucks macro options (`label`, `hint`,
 | `GovBackLink` | no | RouterLink or `<a>` |
 | `GovDateInput` | no | 3-field GOV.UK date pattern; v-model is an ISO `YYYY-MM-DD` string or `null` |
 
+`GovInput` also takes a `list` prop (the id of a `<datalist>`) for
+native autocomplete suggestions — used by the detail page's sender
+editor.
+
 JS-backed components use `useGovukComponent(rootRef, ComponentClass)`:
 instantiates in `onMounted` guarded by `isSupported()`, clears the
 `data-<module>-init` marker on unmount (v6 components have no
@@ -138,35 +142,89 @@ Contract: [api.md](api.md) §1.9.
 
 Typed API layer: `src/api/documents.ts` mirrors the backend schemas
 (`DocumentListItem`, `DocumentListResponse`, `DocumentDetail`,
-`DocumentFilters` including repeatable `tag`, `UploadResult`, `JobInfo`)
-and wraps `GET/POST /api/documents`, `GET /api/documents/{id}` and
-`GET /api/jobs`. Uploads go through `XMLHttpRequest` (fetch has no upload
-progress events); 200/201 resolve, 409/413/415/network reject with
-`ApiError`. The 11 seeded kinds are duplicated as `DOCUMENT_KINDS`
-because **there is no taxonomy list endpoint yet** — senders and tags
-therefore have no filter UI (see Known gaps below).
+`DocumentFilters` including repeatable `tag`, `DocumentUpdate`,
+`UploadResult`, `JobInfo`) and wraps `GET/POST /api/documents`,
+`GET/PATCH/DELETE /api/documents/{id}` and
+`POST /api/documents/{id}/extract` plus `GET /api/jobs` and the
+download-URL helpers. Uploads go through `XMLHttpRequest` (fetch has no
+upload progress events); 200/201 resolve, 409/413/415/network reject
+with `ApiError`. `src/api/taxonomy.ts` wraps the taxonomy list endpoints
+(`GET /api/kinds|senders|tags`, docs/api.md §1.8.2), which feed the list
+filters and the detail page's edit inputs — the former `DOCUMENT_KINDS`
+hardcode is gone.
 
 ### 1.4.1 Documents list — `/` (`DocumentListView`)
 
 GOV.UK-style search results: per row a thumbnail
 (`/api/documents/{id}/thumbnail`, with a file-type placeholder when
 `has_thumbnail` is false or the image 404s), title linking to
-`/documents/:id`, kind and language tags, sender, document date, and —
-when searching — the `ts_headline` snippet. Search box (`q`, websearch
-syntax) plus a collapsible filter panel (kind, language, date range using
-`GovDateInput`); `GovPagination` drives `limit`/`offset` (25 per page).
+`/documents/:id` (carrying the active search as `?highlight=` so the
+detail page can mark matches in the OCR text), kind and language tags,
+sender, document date, and — when searching — the `ts_headline` snippet.
+Search box (`q`, websearch syntax) plus a collapsible filter panel
+(kind, sender and tag selects fed by the taxonomy endpoints, language,
+date range using `GovDateInput`); `GovPagination` drives
+`limit`/`offset` (25 per page). A one-shot success banner (Pinia
+`useFlashStore`) confirms actions that redirect here, e.g. deletion.
 
 All applied state lives in the **URL query**
-(`?q=…&kind=…&language=…&date_from=…&date_to=…&page=…`), so back/forward
-and refresh restore both the form and the results. Two distinct empty
-states: an empty library (inset text linking to `/upload`) vs. a search
-with no matches (inset text offering to clear filters).
+(`?q=…&kind=…&sender_id=…&tag=…&language=…&date_from=…&date_to=…&page=…`),
+so back/forward and refresh restore both the form and the results. Two
+distinct empty states: an empty library (inset text linking to
+`/upload`) vs. a search with no matches (inset text offering to clear
+filters).
 
-### 1.4.2 Document detail stub — `/documents/:id` (`DocumentDetailView`)
+### 1.4.2 Document detail — `/documents/:id` (`DocumentDetailView`)
 
-Minimal W10 placeholder: title, a four-row summary list (status, kind,
-sender, date) and a back link. W11 replaces it with preview, metadata
-editing, downloads and delete.
+Two-column on desktop (preview left two-thirds, metadata right
+one-third), stacked on mobile/iPad-portrait via the GOV.UK grid.
+
+**Preview.** Images render as an `<img>` of the original. PDFs render in
+an `<iframe>` using the **browser-native PDF viewer** — the searchable
+PDF when the pipeline produced one (its text layer makes in-viewer
+selection/search work), the original otherwise — plus an "open in a new
+tab" link for browsers with inline PDF viewing disabled. This is a
+deliberate choice over pdf.js: every modern browser ships a PDF viewer,
+and a pdf.js integration would add a heavyweight dependency for no gain
+at family scale. Other types get a fallback panel with a download link.
+
+**Metadata editing.** A GOV.UK summary list with a per-row "Change"
+action and an **inline reveal**: Change swaps the value cell for the
+right input (GovInput for title, GovSelect for kind — options from
+`GET /api/kinds` — and language, GovInput + `<datalist>` from
+`GET /api/senders` for sender, GovDateInput for the three dates,
+GovTextarea for summary, amount + 3-letter currency inputs) with
+Save/Cancel. A full one-thing-per-page flow would be heavy for
+single-field edits. Tags are edited as a **comma-separated GovInput**
+for now — a deliberate simplification over a token/multi-select widget;
+slugs are split, trimmed and sent as the full-replacement `tags` list.
+Save PATCHes **only that row's field(s)** and replaces local state with
+the server response (no optimistic updates); success shows a green
+notification banner, a 422 shows a GOV.UK error summary linking to the
+input and keeps the editor open. Empty rows display a dash. Status, OCR
+confidence and source are read-only rows; extraction provenance (model,
+confidence, when) sits in a GovDetails.
+
+**Actions.** Download links for the original and (when present) the
+searchable PDF; "Re-run extraction" POSTs `/api/documents/{id}/extract`,
+shows an "Extraction queued" banner and polls the detail endpoint until
+the extraction provenance changes (provenance JSON + count of
+`extraction_*` audit events) or 60 s passes; Delete navigates to the
+confirmation page.
+
+**OCR text.** A "View extracted text" GovDetails with the raw OCR text
+in a scrollable `<pre>`. When the page is reached from a search result
+(`?highlight=`), occurrences are wrapped in `<mark>` by
+`renderHighlighted` (see §1.5) and the details element starts open.
+
+### 1.4.2.1 Delete confirmation — `/documents/:id/delete` (`DocumentDeleteView`)
+
+GOV.UK pattern: destructive actions get a real **confirmation page**
+with its own URL — warning text naming the document, an explicit
+"Yes, delete this document" warning button (sends `DELETE`, CSRF header
+included by `apiFetch`), and a Cancel link back to the detail page —
+never a JS modal. On success the user is redirected to the list with a
+one-shot success banner (flash store).
 
 ### 1.4.3 Upload — `/upload` (`UploadView`)
 
@@ -192,10 +250,9 @@ border, tabular-numbers percentage) and exposes `role="progressbar"` with
 
 ### 1.4.4 Known gaps
 
-- No `GET /api/senders` / `GET /api/tags` (or kinds) list endpoints exist,
-  so the list view cannot offer sender/tag filter options and the kind
-  options are a hardcoded copy of the migration's seed data. When taxonomy
-  endpoints land, replace `DOCUMENT_KINDS` and add the two filters.
+- Tag editing is a comma-separated text input, and the tag filter is a
+  single-select (the API supports ANDed multi-tag filtering) — a richer
+  tag widget is future polish (W16).
 
 ## 1.5 Snippet safety
 
@@ -209,22 +266,34 @@ HTML-escape it — a scanned document can contain literal HTML
 2. converts only the exact sequences `&lt;b&gt;` / `&lt;/b&gt;` back into
    real `<b>` / `</b>` elements.
 
-The result is the **only** string ever bound with `v-html` (one
-annotated site in `DocumentListView`). `src/utils/__tests__/snippet.spec.ts`
-proves script tags, event-handler attributes and attribute-smuggling
-through the markers are all neutralised. Never bind a raw snippet —
-add new render sites only via `renderSnippet`.
+`renderHighlighted(text, query)` follows the same contract for the
+detail page's OCR-text view: every character of the input is escaped,
+then occurrences of the (regex-escaped) query terms are wrapped in
+`<mark>` — websearch operators (`OR`, `-exclusions`, quotes) are
+stripped from the terms first.
+
+These are the **only** strings ever bound with `v-html` (two annotated
+sites: the list snippet and the detail OCR text).
+`src/utils/__tests__/snippet.spec.ts` proves script tags, event-handler
+attributes, attribute-smuggling through the markers, and
+markup-smuggling through the query are all neutralised. Never bind raw
+OCR-derived text — add new render sites only via these helpers.
 
 ## 1.6 End-to-end tests (Playwright)
 
-`frontend/e2e/library.spec.ts` runs the W10 acceptance against the
+`frontend/e2e/library.spec.ts` runs the W10 + W11 acceptance against the
 **real stack**: sign in → upload `e2e/fixtures/library-fixture.pdf` (a
 checked-in one-page PDF whose text layer contains Dutch words, including
 "rekeningen") → wait for `Indexed` (or the duplicate banner on re-runs)
 → see it in the list → search the stem `rekening` and assert a
-highlighted snippet. Claude extraction is not required: assertions rely
-only on the OCR/text-layer pipeline, never on extracted metadata, so the
-suite passes without an Anthropic API key.
+highlighted snippet. The W11 test then creates a throwaway text document
+with **unique content** via the API (deleting the shared PDF fixture
+would break the other project's duplicate-upload path with a 409),
+opens it from the list, edits the title through Change → Save (banner +
+persistence across reload), and deletes it via the confirmation page
+(banner on the list, detail then 404s). Claude extraction is not
+required: assertions rely only on the OCR/text-layer pipeline, never on
+extracted metadata, so the suite passes without an Anthropic API key.
 
 Two projects only (W16 widens the matrix): `chromium` (desktop) and
 `mobile-webkit` (iPhone 14 device descriptor pinned to the 375px
@@ -257,11 +326,16 @@ the `e2e` job of `.github/workflows/ci.yml` (user `e2e`, password
 
 - `npm run test:unit -- --run` — component markup/behaviour specs
   (error-summary focus, conditional reveals, date-input ISO emission,
-  FileUpload init), API client CSRF behaviour, documents API (query
-  serialisation, XHR upload incl. progress/duplicate/415/network), snippet
-  XSS contract, auth store, router guard, login view flows, document list
-  (rows, empty states, URL-synced filters, pagination, snippet rendering)
-  and upload view (progress, polling, duplicate banner, error summary,
+  FileUpload init), API client CSRF behaviour, documents + taxonomy API
+  (query serialisation, XHR upload incl. progress/duplicate/415/network),
+  snippet + highlight XSS contracts, auth store, router guard, login view
+  flows, document list (rows, empty states, URL-synced filters incl.
+  sender/tag, taxonomy-fed options, highlight links, flash banner,
+  pagination, snippet rendering), document detail (summary rows with
+  dashes, per-field PATCH + banner, fetched kind options, sender
+  datalist, 422 error summary, preview selection, OCR highlighting,
+  re-extraction polling stop condition), delete confirmation flow, and
+  upload view (progress, polling, duplicate banner, error summary,
   multi-file independence).
 - `npm run lint`, `npm run type-check`.
 - `npm run build && npm run check:assets` — licensing gate (§1.2.1).

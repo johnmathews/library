@@ -98,6 +98,34 @@ export interface DocumentFilters {
   offset?: number
 }
 
+/**
+ * PATCH /api/documents/{id} body. Only fields present in the object are
+ * changed; `null` clears nullable fields; `tags` is a full-replacement
+ * slug list (`[]` clears). Edit one field per request — the backend
+ * locks every field it sees against re-extraction (docs/api.md §1.5).
+ */
+export interface DocumentUpdate {
+  title?: string | null
+  summary?: string | null
+  document_date?: string | null
+  kind_slug?: string | null
+  /** Sender name; upserted case-insensitively. */
+  sender?: string | null
+  tags?: string[]
+  language?: DocumentLanguage
+  /** Decimal as string to preserve precision. */
+  amount_total?: string | null
+  currency?: string | null
+  due_date?: string | null
+  expiry_date?: string | null
+}
+
+/** 202 body of POST /api/documents/{id}/extract. */
+export interface ExtractionQueued {
+  queued: boolean
+  job_id: number
+}
+
 /** Body of POST /api/documents (201 created, 200 duplicate). */
 export interface UploadResult {
   id: number
@@ -115,25 +143,6 @@ export interface JobInfo {
   scheduled_at: string | null
   document_id: number | null
 }
-
-/**
- * The 11 seeded document kinds (migrations/versions/0001, SEED_KINDS).
- * There is no taxonomy list endpoint yet, so the filter options are
- * duplicated here; keep in sync with the migration.
- */
-export const DOCUMENT_KINDS: readonly KindRef[] = [
-  { slug: 'invoice', name: 'Invoice' },
-  { slug: 'receipt', name: 'Receipt' },
-  { slug: 'certificate', name: 'Certificate' },
-  { slug: 'utility-bill', name: 'Utility bill' },
-  { slug: 'parking-ticket', name: 'Parking ticket' },
-  { slug: 'warranty', name: 'Warranty' },
-  { slug: 'manual', name: 'Manual' },
-  { slug: 'letter', name: 'Letter' },
-  { slug: 'contract', name: 'Contract' },
-  { slug: 'ticket', name: 'Ticket' },
-  { slug: 'other', name: 'Other' },
-] as const
 
 export const DOCUMENT_LANGUAGES: readonly { value: DocumentLanguage; text: string }[] = [
   { value: 'nld', text: 'Dutch' },
@@ -170,6 +179,21 @@ export function getDocument(id: number, signal?: AbortSignal): Promise<DocumentD
   return apiFetch<DocumentDetail>(`/api/documents/${id}`, { signal })
 }
 
+/** PATCH /api/documents/{id} — partial metadata edit; returns the new detail. */
+export function updateDocument(id: number, patch: DocumentUpdate): Promise<DocumentDetail> {
+  return apiFetch<DocumentDetail>(`/api/documents/${id}`, { method: 'PATCH', body: patch })
+}
+
+/** DELETE /api/documents/{id} — soft delete (204). */
+export function deleteDocument(id: number): Promise<void> {
+  return apiFetch<void>(`/api/documents/${id}`, { method: 'DELETE' })
+}
+
+/** POST /api/documents/{id}/extract — queue metadata re-extraction (202). */
+export function requestExtraction(id: number): Promise<ExtractionQueued> {
+  return apiFetch<ExtractionQueued>(`/api/documents/${id}/extract`, { method: 'POST' })
+}
+
 /** GET /api/jobs — recent background jobs, newest first. */
 export function listJobs(limit?: number): Promise<JobInfo[]> {
   return apiFetch<JobInfo[]>('/api/jobs', { query: { limit } })
@@ -178,6 +202,16 @@ export function listJobs(limit?: number): Promise<JobInfo[]> {
 /** URL of a document's first-page thumbnail (404 until generated). */
 export function thumbnailUrl(id: number): string {
   return `/api/documents/${id}/thumbnail`
+}
+
+/** URL of the stored original (Content-Disposition: attachment). */
+export function originalUrl(id: number): string {
+  return `/api/documents/${id}/original`
+}
+
+/** URL of the OCR searchable PDF (404 when the document has none). */
+export function searchablePdfUrl(id: number): string {
+  return `/api/documents/${id}/searchable.pdf`
 }
 
 /**

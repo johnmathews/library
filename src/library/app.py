@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import APIRouter, Depends, FastAPI
 
 import library
-from library.api import auth, documents, jobs
+from library.api import auth, documents, jobs, taxonomy
 from library.auth.deps import csrf_protect, current_user
 from library.jobs import job_app
 from library.mcp_server import create_mcp_http_app
@@ -39,6 +39,13 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "description": (
             "Upload, search, read, edit, and soft-delete documents; download "
             "originals, searchable PDFs, and thumbnails."
+        ),
+    },
+    {
+        "name": "taxonomy",
+        "description": (
+            "Kinds, senders, and tags with document counts — the valid values "
+            "for the document list filters and metadata edits."
         ),
     },
     {
@@ -78,6 +85,7 @@ def create_app() -> FastAPI:
         prefix="/api", dependencies=[Depends(current_user), Depends(csrf_protect)]
     )
     api_router.include_router(documents.router)
+    api_router.include_router(taxonomy.router)
     api_router.include_router(jobs.router)
     api_router.include_router(auth.router)
     app.include_router(api_router)

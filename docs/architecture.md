@@ -110,8 +110,8 @@ hashed, individually revocable.
 | Auth | W8 | **done** — see [api.md](api.md) §1.9 |
 | Frontend foundation (design system) | W9 | **done** — see [frontend.md](frontend.md) |
 | Frontend: list, search, upload | W10 | **done** — see [frontend.md](frontend.md) §1.4–1.6; Playwright e2e in CI |
-| Frontend: document detail + editing | W11 | pending |
-| Consume watcher | W12 | pending |
+| Frontend: document detail + editing | W11 | **done** — see [frontend.md](frontend.md) §1.4.2; added `GET /api/kinds\|senders\|tags` + `POST /api/documents/{id}/extract` ([api.md](api.md) §1.8.1–1.8.2) |
+| Consume watcher | W12 | **done** — see [ingestion.md](ingestion.md), "Consume folder" section |
 | MCP server | W13 | **done** — see [mcp.md](mcp.md) |
 | Email-in | W14 | pending |
 | paperless-ngx importer | W15 | pending |

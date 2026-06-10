@@ -31,9 +31,13 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/documents/{id}` | Full document detail |
 | PATCH  | `/api/documents/{id}` | Edit metadata |
 | DELETE | `/api/documents/{id}` | Soft-delete |
+| POST   | `/api/documents/{id}/extract` | Queue metadata re-extraction |
 | GET    | `/api/documents/{id}/original` | Download the original file |
 | GET    | `/api/documents/{id}/searchable.pdf` | Download the OCR searchable PDF |
 | GET    | `/api/documents/{id}/thumbnail` | First-page WebP thumbnail |
+| GET    | `/api/kinds` | Document kinds with counts |
+| GET    | `/api/senders` | Senders with counts |
+| GET    | `/api/tags` | Tags with counts |
 | GET    | `/api/jobs` | Recent background jobs |
 
 Soft-deleted documents return **404** from every per-document endpoint and
@@ -180,6 +184,33 @@ undeleting means clearing `deleted_at` manually in the database.
 Most recent background jobs (newest first) from the Procrastinate queue:
 `[{id, status, task_name, attempts, scheduled_at, document_id}, …]`.
 `limit` 1–500, default 50.
+
+## 1.8.1 Re-extraction — `POST /api/documents/{id}/extract`
+
+Queues the W6 metadata-extraction task for one document and returns
+**`202`** with `{"queued": true, "job_id": <procrastinate job id>}` —
+the work happens in the background worker. Works on documents in any
+state (including already `indexed`); the run honours
+`extra["user_edited_fields"]` (user edits are never overwritten) and
+never removes tags. `404` for unknown or deleted documents. Track the
+outcome via the document's `extraction` provenance block and
+`extraction_*` audit events (GET detail, 1.4) or `GET /api/jobs`.
+Extraction can also be *skipped* (disabled, missing API key, daily
+budget reached) — that is recorded as an `extraction_skipped` event,
+not an error.
+
+## 1.8.2 Taxonomy — `GET /api/kinds`, `/api/senders`, `/api/tags`
+
+Plain JSON arrays for filter options and edit forms; the same data the
+MCP `list_*` tools return (one shared service, `library.taxonomy`).
+Counts exclude soft-deleted documents; zero-count entries are included.
+
+- `GET /api/kinds` → `[{slug, name, document_count}, …]`, ordered by
+  slug. Kinds are the fixed seeded set.
+- `GET /api/senders` → `[{id, name, document_count}, …]`, ordered by
+  name.
+- `GET /api/tags` → `[{slug, name, document_count}, …]`, ordered by
+  name.
 
 ## 1.9 Authentication
 

@@ -140,6 +140,13 @@ class DocumentUpdate(BaseModel):
     expiry_date: date | None = None
 
 
+class ExtractionQueuedResponse(BaseModel):
+    """202 body of POST /api/documents/{id}/extract."""
+
+    queued: bool
+    job_id: int = Field(description="The Procrastinate job id (see GET /api/jobs).")
+
+
 class LoginRequest(BaseModel):
     """Body of POST /api/auth/login."""
 

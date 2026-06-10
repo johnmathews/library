@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { escapeHtml, renderSnippet } from '../snippet'
+import { escapeHtml, renderHighlighted, renderSnippet } from '../snippet'
 
 describe('escapeHtml', () => {
   it('escapes all five HTML-special characters', () => {
@@ -47,5 +47,54 @@ describe('renderSnippet', () => {
     expect(container.querySelector('script')).toBeNull()
     expect(container.querySelectorAll('b')).toHaveLength(1)
     expect((window as unknown as Record<string, unknown>).__pwned).toBeUndefined()
+  })
+})
+
+describe('renderHighlighted', () => {
+  it('wraps case-insensitive term occurrences in <mark>', () => {
+    expect(renderHighlighted('De Rekening en de rekeningen.', 'rekening')).toBe(
+      'De <mark>Rekening</mark> en de <mark>rekening</mark>en.',
+    )
+  })
+
+  it('highlights every term of a multi-word query, ignoring operators', () => {
+    const html = renderHighlighted('factuur of invoice', 'factuur OR invoice')
+    expect(html).toBe('<mark>factuur</mark> of <mark>invoice</mark>')
+  })
+
+  it('strips quotes and exclusion dashes from terms', () => {
+    expect(renderHighlighted('energie contract', '"energie contract" -concept')).toContain(
+      '<mark>energie</mark> <mark>contract</mark>',
+    )
+  })
+
+  it('escapes HTML in the text — including inside matches', () => {
+    const html = renderHighlighted('<script>alert(1)</script> rekening', 'rekening')
+    expect(html).toBe('&lt;script&gt;alert(1)&lt;/script&gt; <mark>rekening</mark>')
+    expect(html).not.toContain('<script')
+  })
+
+  it('does not let a query smuggle markup or regex syntax in', () => {
+    // The query itself is escaped for regex and the matched text segment is
+    // HTML-escaped, so a malicious query cannot produce executable content.
+    const html = renderHighlighted('x <img src=x onerror=alert(1)> y', '<img')
+    expect(html).toBe('x <mark>&lt;img</mark> src=x onerror=alert(1)&gt; y')
+    expect(html).not.toContain('<img')
+  })
+
+  it('returns plain escaped text for an empty or all-operator query', () => {
+    expect(renderHighlighted('a & b', '')).toBe('a &amp; b')
+    expect(renderHighlighted('a & b', 'OR -')).toBe('a &amp; b')
+  })
+
+  it('produces no executable content when injected into the DOM', () => {
+    const container = document.createElement('div')
+    container.innerHTML = renderHighlighted(
+      '<script>window.__pwned2 = true</script> rekening',
+      'rekening',
+    )
+    expect(container.querySelector('script')).toBeNull()
+    expect(container.querySelectorAll('mark')).toHaveLength(1)
+    expect((window as unknown as Record<string, unknown>).__pwned2).toBeUndefined()
   })
 })

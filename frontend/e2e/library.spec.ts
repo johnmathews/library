@@ -1,7 +1,9 @@
 /**
- * W10 acceptance e2e: sign in → upload a PDF fixture → wait for the
+ * W10 + W11 acceptance e2e: sign in → upload a PDF fixture → wait for the
  * pipeline to index it → find it in the list → full-text search by a
- * Dutch stem. Runs in two projects (desktop Chromium, 375px WebKit).
+ * Dutch stem; then the detail page — open from the list, edit the title
+ * via the summary-list Change flow, delete via the confirmation page.
+ * Runs in two projects (desktop Chromium, 375px WebKit).
  *
  * Requires the real stack (docker compose db/migrate/api/worker + the
  * built frontend behind `vite preview`'s /api proxy) and an `e2e` user;
@@ -84,10 +86,59 @@ test('sign in, upload a PDF, see it indexed, listed and searchable', async ({ pa
   await expect(page.getByTestId('empty-results')).toBeVisible()
 })
 
-test('document detail stub opens from the list', async ({ page }) => {
+test('detail: open from list, edit title, delete via confirmation page', async ({
+  page,
+}, testInfo) => {
   await signIn(page)
+
+  // Create a throwaway document with UNIQUE content via the API (the
+  // browser context's session cookie + CSRF cookie authenticate the call).
+  // Unique bytes per project/run keep the W10 duplicate-upload path of the
+  // other project intact — deleting the shared PDF fixture here would turn
+  // its re-upload into a 409 deleted-duplicate error.
+  const marker = `w11-${testInfo.project.name}-${Date.now()}`
+  const csrf = (await page.context().cookies()).find((c) => c.name === 'library_csrftoken')
+  const response = await page.request.post('/api/documents', {
+    headers: { 'X-CSRF-Token': csrf!.value },
+    multipart: {
+      file: {
+        name: `${marker}.txt`,
+        mimeType: 'text/plain',
+        buffer: Buffer.from(`Testdocument ${marker} over rekeningen en facturen.`),
+      },
+    },
+  })
+  expect(response.status()).toBe(201)
+  const { id } = (await response.json()) as { id: number }
+
+  // Newest document (no document_date, latest created_at) → first list row.
+  await page.goto('/')
   await page.locator('.app-doc-list__title a').first().click()
-  await expect(page).toHaveURL(/\/documents\/\d+/)
+  await expect(page).toHaveURL(new RegExp(`/documents/${id}$`))
   await expect(page.getByText('Status', { exact: true })).toBeVisible()
-  await expect(page.getByRole('link', { name: 'Back to documents' })).toBeVisible()
+
+  // Edit the title through the summary-list Change → Save flow.
+  const newTitle = `Titel ${marker}`
+  await page.getByRole('button', { name: 'Change title' }).click()
+  await page.locator('#edit-title').fill(newTitle)
+  await page.getByRole('button', { name: 'Save', exact: true }).click()
+  await expect(page.getByTestId('detail-banner')).toContainText('Title updated')
+  await expect(page.getByRole('heading', { level: 1, name: newTitle })).toBeVisible()
+
+  // The edit persisted: still there after a full reload.
+  await page.reload()
+  await expect(page.getByRole('heading', { level: 1, name: newTitle })).toBeVisible()
+
+  // Delete goes through a confirmation PAGE (no JS modal).
+  await page.getByTestId('delete-link').click()
+  await expect(page).toHaveURL(new RegExp(`/documents/${id}/delete$`))
+  await expect(page.getByRole('heading', { name: /Are you sure/ })).toBeVisible()
+  await page.getByTestId('confirm-delete').click()
+
+  // Redirected to the list with a success banner; the document is gone.
+  await expect(page).toHaveURL(/\/$/)
+  await expect(page.getByTestId('flash-banner')).toContainText('has been deleted')
+  await expect(page.locator('.app-doc-list__title a', { hasText: newTitle })).toHaveCount(0)
+  await page.goto(`/documents/${id}`)
+  await expect(page.getByRole('heading', { name: 'Document not found' })).toBeVisible()
 })

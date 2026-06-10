@@ -19,6 +19,13 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/DocumentDetailView.vue'),
   },
   {
+    // GOV.UK pattern: destructive actions get a confirmation PAGE with its
+    // own URL (back-button friendly), never a JS-only modal.
+    path: '/documents/:id/delete',
+    name: 'document-delete',
+    component: () => import('../views/DocumentDeleteView.vue'),
+  },
+  {
     path: '/upload',
     name: 'upload',
     component: () => import('../views/UploadView.vue'),

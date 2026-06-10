@@ -516,6 +516,37 @@ def test_delete_soft_deletes_and_404s_everywhere(
         assert request().status_code == 404
 
 
+# --- Re-extraction -------------------------------------------------------------
+
+
+def test_extract_queues_job_and_returns_202(api_client: TestClient, api_database_url: str) -> None:
+    document_id = seed_document(api_database_url, "w11-extract", title="Te verversen")
+
+    response = api_client.post(f"/api/documents/{document_id}/extract")
+    assert response.status_code == 202, response.text
+    body = response.json()
+    assert body["queued"] is True
+    assert isinstance(body["job_id"], int)
+
+    rows = fetch_all(
+        api_database_url,
+        "SELECT task_name, (args ->> 'document_id')::bigint FROM procrastinate_jobs "
+        "WHERE id = :job_id",
+        job_id=body["job_id"],
+    )
+    assert rows == [("library.jobs.extract_document", document_id)]
+
+
+def test_extract_unknown_or_deleted_document_404(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    assert api_client.post("/api/documents/987654321/extract").status_code == 404
+
+    document_id = seed_document(api_database_url, "w11-extract-deleted")
+    assert api_client.delete(f"/api/documents/{document_id}").status_code == 204
+    assert api_client.post(f"/api/documents/{document_id}/extract").status_code == 404
+
+
 # --- Downloads and thumbnail --------------------------------------------------
 
 
