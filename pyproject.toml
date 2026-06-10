@@ -23,6 +23,7 @@ dependencies = [
     "opencv-python-headless>=4.13.0.92",
     "rapidocr>=3.8.2",
     "onnxruntime>=1.26.0",
+    "anthropic>=0.109.1",
 ]
 
 [dependency-groups]

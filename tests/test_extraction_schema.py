@@ -1,0 +1,111 @@
+"""Tests for the ExtractedMetadata structured-output schema."""
+
+from datetime import date
+from typing import Any
+
+import pytest
+from pydantic import ValidationError
+
+from library.extraction.schema import KIND_SLUGS, MAX_TAGS, ExtractedMetadata
+
+
+def payload(**overrides: Any) -> dict[str, Any]:
+    base: dict[str, Any] = {
+        "kind_slug": "invoice",
+        "sender_name": "Eneco",
+        "title": "Energierekening mei 2026",
+        "summary": "Maandfactuur voor energie. Te betalen voor 1 juli 2026.",
+        "document_date": "2026-05-15",
+        "amount_total": "123.45",
+        "currency": "EUR",
+        "due_date": "2026-07-01",
+        "expiry_date": None,
+        "language": "nld",
+        "tags": ["energie", "wonen"],
+        "confidence": "high",
+        "reasoning_note": None,
+    }
+    base.update(overrides)
+    return base
+
+
+def test_valid_payload_parses_with_real_dates() -> None:
+    metadata = ExtractedMetadata.model_validate(payload())
+    assert metadata.kind_slug == "invoice"
+    assert metadata.document_date == date(2026, 5, 15)
+    assert metadata.due_date == date(2026, 7, 1)
+    assert metadata.expiry_date is None
+    assert metadata.amount_total == "123.45"
+    assert metadata.currency == "EUR"
+
+
+def test_all_seeded_kind_slugs_accepted() -> None:
+    for slug in KIND_SLUGS:
+        assert ExtractedMetadata.model_validate(payload(kind_slug=slug)).kind_slug == slug
+
+
+def test_unknown_kind_slug_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ExtractedMetadata.model_validate(payload(kind_slug="tax-return"))
+
+
+def test_unknown_confidence_and_language_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ExtractedMetadata.model_validate(payload(confidence="very-high"))
+    with pytest.raises(ValidationError):
+        ExtractedMetadata.model_validate(payload(language="deu"))
+
+
+def test_placeholder_date_strings_become_none() -> None:
+    for value in ("", "  ", "unknown", "None", "n/a", "-"):
+        metadata = ExtractedMetadata.model_validate(payload(document_date=value))
+        assert metadata.document_date is None
+
+
+def test_date_with_surrounding_whitespace_parses() -> None:
+    metadata = ExtractedMetadata.model_validate(payload(document_date=" 2026-05-15 "))
+    assert metadata.document_date == date(2026, 5, 15)
+
+
+def test_malformed_date_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ExtractedMetadata.model_validate(payload(document_date="2026-13-45"))
+
+
+def test_extra_fields_rejected() -> None:
+    with pytest.raises(ValidationError):
+        ExtractedMetadata.model_validate(payload(invented_field="boom"))
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("123.45", "123.45"),
+        (" 1234.56 ", "1234.56"),
+        ("€ 12,50", "12.50"),
+        ("1.234,56", "1234.56"),
+        ("1,234.56", "1234.56"),
+        ("garbage", None),
+        (None, None),
+    ],
+)
+def test_amount_parsed_defensively(raw: str | None, expected: str | None) -> None:
+    metadata = ExtractedMetadata.model_validate(payload(amount_total=raw))
+    assert metadata.amount_total == expected
+
+
+def test_currency_normalised_or_dropped() -> None:
+    assert ExtractedMetadata.model_validate(payload(currency=" eur ")).currency == "EUR"
+    assert ExtractedMetadata.model_validate(payload(currency="euros")).currency is None
+
+
+def test_tags_normalised_deduplicated_and_capped() -> None:
+    raw = ["Tax", "  Energie Rekening ", "tax", *[f"tag-{i}" for i in range(10)]]
+    metadata = ExtractedMetadata.model_validate(payload(tags=raw))
+    assert metadata.tags[:2] == ["tax", "energie-rekening"]
+    assert len(metadata.tags) == MAX_TAGS
+    assert len(set(metadata.tags)) == MAX_TAGS
+
+
+def test_blank_sender_becomes_none() -> None:
+    assert ExtractedMetadata.model_validate(payload(sender_name="   ")).sender_name is None

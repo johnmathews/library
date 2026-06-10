@@ -3,7 +3,8 @@
 How a file becomes a Document: upload → content-addressed storage →
 database row → background job → status lifecycle. This document covers
 storage layout, MIME handling, HEIC conversion, the upload API, the
-Procrastinate job queue, and the OCR stage (W4).
+Procrastinate job queue, the OCR stage (W4), and the Claude metadata
+extraction stage (W6).
 
 > **No authentication yet.** The endpoints below are unauthenticated
 > until W8 lands. Do not expose the API beyond a trusted network.
@@ -150,8 +151,8 @@ Decisions:
 
 - Transitions: `received → ocr → extract → indexed`, one commit and one
   `status_changed` ingestion event (`detail: {"from": …, "to": …}`) per
-  transition. Entering `ocr` runs the OCR stage (below); `extract` is
-  still a no-op hook for W6.
+  transition. Entering `ocr` runs the OCR stage (below); entering
+  `extract` runs Claude metadata extraction (see "Extraction").
 - Stage hooks are `async def run_ocr(session, document)` /
   `run_extraction(session, document)` in `library.jobs`. The OCR work
   itself is CPU-bound and subprocess-heavy, so it runs in a thread via
@@ -244,6 +245,124 @@ ingestion event with `{engine, confidence, pages, characters}` — the
 in that event. On error it appends `ocr_failed` with the error message
 and re-raises (so the standard `failed` handling also applies).
 
+## Extraction (`library.extraction`)
+
+The `extract` pipeline stage turns OCR text into structured metadata
+with Claude (decision 3 in the improvement plan): kind, sender, title,
+summary, dates, total amount + currency, language, suggested tags. The
+guiding invariant is that **extraction is best-effort**: whatever
+happens here — API failure, unusable input, budget exhausted, feature
+disabled — the document still reaches `indexed` and stays searchable by
+its OCR text. Only the pipeline machinery itself can fail a document.
+
+### Models and structured outputs
+
+`client.messages.parse()` (async SDK, structured outputs GA) is called
+with the Pydantic schema `library.extraction.schema.ExtractedMetadata`;
+the SDK converts the model to a JSON schema (with
+`additionalProperties: false`) and returns a validated instance via
+`response.parsed_output`. The SDK retries 429/5xx itself.
+
+- **Primary model:** `claude-haiku-4-5` ($1/$5 per MTok).
+- **Escalation:** if the parsed result reports `confidence: "low"`, or
+  the response fails to parse/validate, the document is retried **once**
+  on `claude-sonnet-4-6` ($3/$15 per MTok). The escalated result is used
+  even if its confidence is also low (there is nothing better to do).
+
+### Schema (`library.extraction.schema.ExtractedMetadata`)
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `kind_slug` | enum | The 11 seeded kind slugs (`invoice` … `other`); enforced by the JSON schema, so the model cannot invent kinds. |
+| `sender_name` | `str \| None` | Canonical short organisation/person name. |
+| `title`, `summary` | `str` | In the document's own language; summary ≤ 2 sentences (prompt-enforced — string length constraints are not supported in structured-output schemas). |
+| `document_date`, `due_date`, `expiry_date` | `date \| None` | Wire format is an ISO `YYYY-MM-DD` string; a before-validator trims it and maps empty/placeholder values to `None`, so sloppy-but-harmless output degrades to "no date" while a truly malformed date raises (and triggers escalation). |
+| `amount_total` | `str \| None` | Decimal string, parsed defensively (currency symbols stripped, `12,50` → `12.50`); unparseable values become `None` rather than failing the document. Converted to `Decimal` when applied. |
+| `currency` | `str \| None` | ISO 4217; anything that is not three letters becomes `None`. |
+| `language` | enum | `nld` / `eng` / `mixed` / `unknown`. |
+| `tags` | `list[str]` | Normalised to lowercase slugs, deduplicated, capped at 8 client-side (array length constraints are also unsupported in the schema). |
+| `confidence` | enum | `high` / `medium` / `low` — `low` triggers escalation. |
+| `reasoning_note` | `str \| None` | One-line note when something needed judgement. |
+
+Numeric min/max, string-length, and array-length constraints are not
+supported by structured outputs, so everything of that shape is either
+prompt-instructed or normalised by validators.
+
+### Input selection
+
+- **Normal case:** the user message is the document's `ocr_text`,
+  truncated to 8,000 characters (≈ 2–3k tokens — plenty for metadata,
+  caps spend on huge documents).
+- **Garbage/empty OCR** (stripped text < 20 chars) and the original is
+  a PDF or image: the original file is sent directly as a base64
+  `document` (PDF) or `image` content block. HEIC/HEIF uses the derived
+  `converted.jpg` (Claude does not accept HEIC). Files over 5 MB are
+  not sent — extraction is skipped gracefully (`reason:
+  "file_too_large"`). TIFF and text without usable OCR text are skipped
+  with `reason: "input_unusable"`.
+
+### Prompt
+
+A versioned system prompt (`PROMPT_VERSION` in
+`library.extraction.extractor`) describes Library, the kinds taxonomy,
+and the Dutch+English household-paperwork domain, and instructs concise
+title/summary **in the document's language**. The prompt version, model
+and token usage of every run are stored on the document
+(`extra["extraction"]`) and in the audit trail, so a future prompt
+change can identify documents extracted with an older prompt.
+
+### Applying results (`library.extraction.apply`)
+
+On success:
+
+- **Sender** is upserted by case-insensitive name match (create if new).
+- **Kind** is resolved by slug to the seeded `kinds` row.
+- **Tags** are get-or-created by slug and merged into the document's
+  tag set (never removed).
+- Scalar fields (`title`, `summary`, dates, `amount_total`, `currency`,
+  `language`) are set; `None` extraction values never null out existing
+  data, and `language` is only set when not `unknown`.
+- `extra["extraction"]` records `{prompt_version, model, confidence,
+  input_tokens, output_tokens, cost_usd, escalated, input_mode,
+  fields_set, reasoning_note}`.
+
+**User edits win.** Re-extraction overwrites previous *extraction*
+values but never user-edited ones: any field name listed in
+`extra["user_edited_fields"]` (populated by the metadata-editing
+surfaces of W7/W11) is skipped, and `fields_set` records which fields
+the extractor actually wrote.
+
+### Re-running extraction
+
+`library.jobs.extract_document(document_id)` is a Procrastinate task
+that re-runs extraction for one document (e.g. after a prompt upgrade),
+independent of pipeline status. It is idempotent in the sense above:
+extraction-owned fields are overwritten, user-edited fields and
+existing tags are preserved.
+
+```python
+from library.jobs import extract_document
+await extract_document.defer_async(document_id=123)
+```
+
+### Failure, skip, and cost handling
+
+| Condition | Event | Document |
+| --- | --- | --- |
+| `LIBRARY_EXTRACTION_ENABLED=false` | `extraction_skipped` `{reason: "disabled"}` | continues to `indexed` |
+| No `LIBRARY_ANTHROPIC_API_KEY` | `extraction_skipped` `{reason: "missing_api_key"}` | continues to `indexed` |
+| Daily budget spent | `extraction_skipped` `{reason: "budget", spent_usd, budget_usd}` | continues to `indexed` |
+| Unusable/oversized input | `extraction_skipped` `{reason: "input_unusable" \| "file_too_large"}` | continues to `indexed` |
+| API error after SDK retries, double parse failure | `extraction_failed` `{error, prompt_version}` | continues to `indexed` |
+| Success | `extraction_completed` `{model, prompt_version, confidence, input_tokens, output_tokens, cost_usd, escalated, input_mode}` | metadata populated |
+
+**Cost guard:** every completed call stores its estimated cost
+(`cost_usd`, from the pricing constants above) in the event detail.
+Before each extraction, one query sums today's `cost_usd` across
+`ingestion_events`; at or over `LIBRARY_EXTRACTION_DAILY_BUDGET_USD`
+(default 5.0) extraction is skipped with `reason: "budget"` until the
+next UTC day.
+
 ## HTTP API
 
 ### `POST /api/documents`
@@ -277,6 +396,9 @@ Append-only audit trail in `ingestion_events`:
 | `status_changed` | pipeline | `{from, to}` |
 | `ocr_completed` | OCR stage | `{engine, confidence, pages, characters}` |
 | `ocr_failed` | OCR stage | `{error}` |
+| `extraction_completed` | extraction stage | `{model, prompt_version, confidence, input_tokens, output_tokens, cost_usd, escalated, input_mode}` |
+| `extraction_skipped` | extraction stage | `{reason, ...}` — `disabled`, `missing_api_key`, `budget`, `input_unusable`, `file_too_large` |
+| `extraction_failed` | extraction stage | `{error, prompt_version}` |
 | `failed` | pipeline | `{error, status}` |
 
 ## Configuration
@@ -289,3 +411,8 @@ Append-only audit trail in `ingestion_events`:
 | `LIBRARY_OCR_LANGUAGES` | `nld+eng` | Tesseract language pack(s) (`-l` value) |
 | `LIBRARY_OCR_CONFIDENCE_THRESHOLD` | `65.0` | Below this mean word confidence, retry via the photo path |
 | `LIBRARY_TEXT_LAYER_MIN_CHARS_PER_PAGE` | `50` | Avg chars/page for a PDF to count as born-digital (skip OCR) |
+| `LIBRARY_ANTHROPIC_API_KEY` | unset | Anthropic API key; extraction is skipped when absent |
+| `LIBRARY_EXTRACTION_ENABLED` | `true` | Master switch for the extraction stage |
+| `LIBRARY_EXTRACTION_MODEL` | `claude-haiku-4-5` | Primary extraction model |
+| `LIBRARY_EXTRACTION_ESCALATION_MODEL` | `claude-sonnet-4-6` | Retry model on low confidence / parse failure |
+| `LIBRARY_EXTRACTION_DAILY_BUDGET_USD` | `5.0` | Estimated daily API spend cap; over budget → skip with `reason: "budget"` |

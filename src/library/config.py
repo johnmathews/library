@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 
+from pydantic import SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,6 +20,12 @@ class Settings(BaseSettings):
     ocr_languages: str = "nld+eng"
     ocr_confidence_threshold: float = 65.0
     text_layer_min_chars_per_page: int = 50
+    # Claude metadata extraction (see docs/ingestion.md, "Extraction" section).
+    anthropic_api_key: SecretStr | None = None
+    extraction_enabled: bool = True
+    extraction_model: str = "claude-haiku-4-5"
+    extraction_escalation_model: str = "claude-sonnet-4-6"
+    extraction_daily_budget_usd: float = 5.0
 
 
 @lru_cache

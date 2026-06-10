@@ -2,8 +2,8 @@
 
 The pipeline advances a document through ``received -> ocr -> extract ->
 indexed`` recording an ingestion event per transition. The OCR stage (W4)
-runs the routed engines from ``library.ocr``; extraction (W6) is still a
-no-op hook.
+runs the routed engines from ``library.ocr``; the extract stage (W6) runs
+Claude metadata extraction from ``library.extraction``.
 """
 
 import asyncio
@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from library.config import get_settings
 from library.db import get_sessionmaker
+from library.extraction.apply import apply_extraction
 from library.models import Document, DocumentStatus, IngestionEvent
 from library.ocr import router as ocr_router
 from library.storage import derived_dir, path_for
@@ -94,7 +95,13 @@ async def run_ocr(session: AsyncSession, document: Document) -> None:
 
 
 async def run_extraction(session: AsyncSession, document: Document) -> None:
-    """Extraction hook — W6 replaces this no-op with LLM metadata extraction."""
+    """Extraction stage: Claude metadata extraction (best-effort, never raises).
+
+    Skips/failures are recorded as ingestion events and the pipeline
+    continues — extraction must not stop a document from reaching
+    ``indexed`` (it stays searchable by OCR text either way).
+    """
+    await apply_extraction(session, document, get_settings())
 
 
 async def _run_stage_hook(
@@ -158,3 +165,19 @@ async def advance_pipeline(
 async def process_document(document_id: int) -> None:
     """Background task: run the processing pipeline for one document."""
     await advance_pipeline(get_sessionmaker(), document_id)
+
+
+@job_app.task(name="library.jobs.extract_document")
+async def extract_document(document_id: int) -> None:
+    """Background task: (re-)run metadata extraction for one document.
+
+    Deferred manually (e.g. after a prompt upgrade) — independent of the
+    pipeline status, so it also works on already-indexed documents.
+    Re-extraction overwrites extraction-owned fields but honours
+    ``extra["user_edited_fields"]`` and never removes tags.
+    """
+    async with get_sessionmaker()() as session:
+        document = await session.get(Document, document_id)
+        if document is None:
+            raise ValueError(f"document {document_id} not found")
+        await apply_extraction(session, document, get_settings())

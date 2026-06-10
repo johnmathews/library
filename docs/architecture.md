@@ -105,7 +105,7 @@ hashed, individually revocable.
 | Storage + ingestion + queue | W3 | **done** — see [ingestion.md](ingestion.md) |
 | OCR pipeline | W4 | **done** — see [ingestion.md](ingestion.md), "OCR" section |
 | OCR benchmark (real samples) | W5 | pending |
-| Claude metadata extraction | W6 | pending |
+| Claude metadata extraction | W6 | **done** — see [ingestion.md](ingestion.md), "Extraction" section |
 | REST API + search + thumbnails | W7 | pending |
 | Auth | W8 | pending |
 | Frontend foundation (design system) | W9 | pending |
