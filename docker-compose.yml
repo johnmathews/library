@@ -57,6 +57,12 @@ services:
     environment:
       LIBRARY_DATABASE_URL: postgresql+asyncpg://library:library@db:5432/library
       LIBRARY_DATA_DIR: /data
+      # Consume folder watcher: files dropped here are ingested automatically.
+      # Lives inside the /data volume; in production bind-mount your
+      # Syncthing-synced scan folder over it (and set
+      # LIBRARY_CONSUME_FORCE_POLLING=true if that mount is NFS/SMB).
+      # See docs/ingestion.md, "Consume folder".
+      LIBRARY_CONSUME_DIR: /data/consume
     volumes:
       - library_data:/data
     depends_on:

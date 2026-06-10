@@ -3,8 +3,8 @@
 How a file becomes a Document: upload → content-addressed storage →
 database row → background job → status lifecycle. This document covers
 storage layout, MIME handling, HEIC conversion, the upload API, the
-Procrastinate job queue, the OCR stage (W4), and the Claude metadata
-extraction stage (W6).
+Procrastinate job queue, the OCR stage (W4), the Claude metadata
+extraction stage (W6), and the consume folder watcher (W12).
 
 > **No authentication yet.** The endpoints below are unauthenticated
 > until W8 lands. Do not expose the API beyond a trusted network.
@@ -420,6 +420,111 @@ Before each extraction, one query sums today's `cost_usd` across
 (default 5.0) extraction is skipped with `reason: "budget"` until the
 next UTC day.
 
+## Consume folder (`library.consume`, W12)
+
+A watched drop directory: anything placed there is ingested through the
+same `ingest_file` service as an upload (`source=consume`, no uploader).
+This is the primary scanner flow — iOS Notes scan exports land in a
+Syncthing-synced folder that is (or is mounted at) the consume dir.
+
+The watcher runs **inside the worker process**: when
+`LIBRARY_CONSUME_DIR` is set, `python -m library.worker` starts a
+`ConsumeWatcher` task alongside the Procrastinate worker (same event
+loop, clean shutdown together). Unset (the default) the feature is off
+and the worker behaves exactly as before.
+
+### Flow
+
+```
+file appears in {LIBRARY_CONSUME_DIR}
+  │
+  ├─ candidate? (supported extension; not a dotfile / Syncthing temp /
+  │   *.part; not under consumed/ or failed/) ── no ─► ignored entirely
+  ├─ stability wait: size+mtime must be unchanged for
+  │   LIBRARY_CONSUME_STABILITY_S (re-sampled until stable, up to a
+  │   5-minute cap) ── still changing at the cap ─► skipped; retried on
+  │   the next filesystem event (or the next startup sweep)
+  ├─ ingest_file(content, filename, source=consume)
+  │    ├─ new document ─► row + "received" event + process_document job
+  │    └─ duplicate    ─► "duplicate_upload" event on the existing row
+  ├─ success (incl. duplicate) ─► move to consumed/YYYY/MM/  (or unlink
+  │   when LIBRARY_CONSUME_ON_SUCCESS=delete)
+  └─ rejected (unsupported MIME, oversize, soft-deleted duplicate)
+      ─► move to failed/ + warning log
+```
+
+Details and decisions:
+
+- **Stability before ingest.** iOS Notes/Syncthing copies arrive
+  incrementally. The watcher samples `(size, mtime)` and only ingests
+  once two samples `LIBRARY_CONSUME_STABILITY_S` apart match. A file
+  still growing after ~5 minutes is **skipped, not force-ingested**:
+  ingesting a partial copy would store truncated bytes under their own
+  content hash (a junk document that dedup can never repair, since the
+  complete file hashes differently). Skipping is safe — the writer's
+  next write emits another event, and the startup sweep catches
+  anything that completed while nobody was watching.
+- **Startup sweep.** Before watching, the watcher recursively processes
+  every candidate file already present — files dropped while the worker
+  was down are not lost.
+- **Single-flight.** An in-flight set keyed on path makes duplicate
+  events for the same file (watchfiles emits add *and* modify during a
+  copy) result in one ingest. Events arriving for a path already being
+  processed are dropped; the stability wait inside the in-flight
+  processing observes any further writes anyway.
+- **Ignored names.** Dotfiles (any path component starting with `.`,
+  which covers Syncthing's `.syncthing.<name>.tmp` temps), Syncthing's
+  legacy `~syncthing~<name>.tmp` pattern, `*.part` partial downloads,
+  and everything under the `consumed/` and `failed/` subdirectories.
+  Syncthing writes to a temp name and renames into place, so the
+  finished file appears atomically as a single `added` event.
+- **Duplicates are consumed.** A file whose content already exists gets
+  a `duplicate_upload` event on the existing document and is archived
+  like a success — the document is in the library, so the drop is done.
+- **Failures.** Unsupported MIME, content over
+  `LIBRARY_MAX_UPLOAD_BYTES`, or a soft-deleted-duplicate collision
+  move the file to `failed/` with a warning log. No ingestion event is
+  written — these paths never create a document row, and
+  `ingestion_events.document_id` is non-nullable, so the `failed/` dir
+  plus the log *is* the audit trail. Transient errors (database down,
+  I/O) do **not** go to `failed/`: the file stays in place and is
+  retried on a later event or the next sweep.
+- **Per-file isolation.** All per-file exceptions are caught and logged
+  inside the watcher loop; nothing a dropped file does can take down
+  the Procrastinate worker sharing the process.
+
+### Archive layout
+
+Successful files are moved (same filesystem, `os.replace`) to
+`{consume_dir}/consumed/YYYY/MM/<original name>` — year/month of
+consumption, so the archive stays browsable and Syncthing keeps syncing
+it back to the devices that dropped the files. Failures go to
+`{consume_dir}/failed/<original name>`. Name collisions get a numeric
+suffix (`scan-1.pdf`). Set `LIBRARY_CONSUME_ON_SUCCESS=delete` to
+unlink instead of archiving.
+
+### Supported extensions
+
+`.pdf .jpg .jpeg .png .heic .heif .tif .tiff .txt` (case-insensitive).
+Anything else is ignored in place — extensionless or unknown files are
+*not* moved to `failed/`, because Syncthing folders routinely contain
+foreign files (e.g. `.stfolder`) that are not ours to touch. Content
+validation still happens at ingest: a `.pdf` that is not actually a PDF
+is rejected by MIME sniffing and lands in `failed/`.
+
+### Syncthing / NAS notes
+
+- The compose worker sets `LIBRARY_CONSUME_DIR=/data/consume` inside
+  the shared `/data` volume. In production, bind-mount your
+  Syncthing-synced folder over it (e.g.
+  `- /srv/syncthing/scans:/data/consume`).
+- **inotify does not cross NFS/SMB.** If the consume dir is a network
+  mount (NAS export, SMB share), file events never reach the container —
+  set `LIBRARY_CONSUME_FORCE_POLLING=true` so watchfiles polls instead
+  (`LIBRARY_CONSUME_POLL_INTERVAL_S` controls the poll cadence). A
+  local bind mount synced by a Syncthing *on the same host* does not
+  need polling.
+
 ## HTTP API
 
 ### `POST /api/documents`
@@ -473,3 +578,8 @@ Append-only audit trail in `ingestion_events`:
 | `LIBRARY_EXTRACTION_MODEL` | `claude-haiku-4-5` | Primary extraction model |
 | `LIBRARY_EXTRACTION_ESCALATION_MODEL` | `claude-sonnet-4-6` | Retry model on low confidence / parse failure |
 | `LIBRARY_EXTRACTION_DAILY_BUDGET_USD` | `5.0` | Estimated daily API spend cap; over budget → skip with `reason: "budget"` |
+| `LIBRARY_CONSUME_DIR` | unset | Consume folder to watch; unset disables the watcher |
+| `LIBRARY_CONSUME_FORCE_POLLING` | `false` | Poll instead of inotify — required for NFS/SMB-mounted consume dirs |
+| `LIBRARY_CONSUME_POLL_INTERVAL_S` | `2.0` | Poll cadence when force-polling |
+| `LIBRARY_CONSUME_STABILITY_S` | `3.0` | A file's size+mtime must be unchanged this long before ingest |
+| `LIBRARY_CONSUME_ON_SUCCESS` | `archive` | `archive` → move to `consumed/YYYY/MM/`; `delete` → unlink |

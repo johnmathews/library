@@ -27,6 +27,7 @@ dependencies = [
     "pwdlib[argon2]>=0.2",
     "typer>=0.15",
     "fastmcp>=3.4.2",
+    "watchfiles>=1.2.0",
 ]
 
 [dependency-groups]
