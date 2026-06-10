@@ -15,6 +15,10 @@ class Settings(BaseSettings):
     data_dir: Path = Path("/data")
     environment: str = "production"
     max_upload_bytes: int = 100 * 1024 * 1024
+    # OCR (see docs/ingestion.md, "OCR" section).
+    ocr_languages: str = "nld+eng"
+    ocr_confidence_threshold: float = 65.0
+    text_layer_min_chars_per_page: int = 50
 
 
 @lru_cache

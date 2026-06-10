@@ -17,6 +17,12 @@ dependencies = [
     "python-multipart>=0.0.32",
     "procrastinate>=3.8.1",
     "psycopg[binary]>=3.2",
+    "ocrmypdf>=17.5.0",
+    "pypdfium2>=5.9.0",
+    "img2pdf>=0.6.3",
+    "opencv-python-headless>=4.13.0.92",
+    "rapidocr>=3.8.2",
+    "onnxruntime>=1.26.0",
 ]
 
 [dependency-groups]
@@ -32,6 +38,13 @@ dev = [
 [build-system]
 requires = ["uv_build>=0.9.0,<0.10.0"]
 build-backend = "uv_build"
+
+[tool.uv]
+# rapidocr declares a hard dependency on opencv-python (the GUI build, which
+# needs libGL at runtime); we ship opencv-python-headless instead. The
+# impossible marker removes the GUI build from the resolution everywhere;
+# both packages provide the same `cv2` module.
+override-dependencies = ["opencv-python ; sys_platform == 'never'"]
 
 [tool.ruff]
 line-length = 100
@@ -55,6 +68,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: tests that need Docker (ephemeral Postgres via testcontainers)",
+    "slow_ocr: real OCR engine runs (tesseract/ocrmypdf binaries, RapidOCR model download)",
 ]
 
 [tool.coverage.run]

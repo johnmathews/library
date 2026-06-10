@@ -15,6 +15,10 @@ pillow_heif.register_heif_opener()
 
 HEIC_MIME_TYPES: frozenset[str] = frozenset({"image/heic", "image/heif"})
 JPEG_QUALITY: int = 90
+# Name of the derived JPEG artifact written for HEIC originals; consumed by
+# downstream steps (OCR photo path, thumbnails). Lives here (not ingest.py)
+# so the OCR router can import it without a circular import via jobs.
+CONVERTED_JPEG_NAME: str = "converted.jpg"
 
 
 class NormalizedImage(NamedTuple):

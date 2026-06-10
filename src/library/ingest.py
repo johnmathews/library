@@ -13,7 +13,7 @@ import filetype
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.images import HEIC_MIME_TYPES, normalize_image
+from library.images import CONVERTED_JPEG_NAME, HEIC_MIME_TYPES, normalize_image
 from library.jobs import process_document
 from library.models import Document, DocumentSource, IngestionEvent
 from library.storage import derived_dir, store
@@ -39,8 +39,6 @@ _MIME_ALIASES: dict[str, str] = {
     "image/tif": "image/tiff",
     "text/plain; charset=utf-8": "text/plain",
 }
-
-CONVERTED_JPEG_NAME: str = "converted.jpg"
 
 
 class IngestError(Exception):

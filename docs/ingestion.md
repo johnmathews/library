@@ -2,8 +2,8 @@
 
 How a file becomes a Document: upload → content-addressed storage →
 database row → background job → status lifecycle. This document covers
-the W3 implementation: storage layout, MIME handling, HEIC conversion,
-the upload API, and the Procrastinate job queue.
+storage layout, MIME handling, HEIC conversion, the upload API, the
+Procrastinate job queue, and the OCR stage (W4).
 
 > **No authentication yet.** The endpoints below are unauthenticated
 > until W8 lands. Do not expose the API beyond a trusted network.
@@ -146,22 +146,103 @@ Decisions:
   programmatically (this is the `worker` service command in
   docker-compose).
 
-### `process_document(document_id)` — pipeline skeleton
-
-W3 ships the lifecycle skeleton; real OCR (W4) and extraction (W6)
-plug into the clearly named hooks `run_ocr(document)` and
-`run_extraction(document)`, which currently no-op.
+### `process_document(document_id)` — pipeline
 
 - Transitions: `received → ocr → extract → indexed`, one commit and one
   `status_changed` ingestion event (`detail: {"from": …, "to": …}`) per
-  transition.
+  transition. Entering `ocr` runs the OCR stage (below); `extract` is
+  still a no-op hook for W6.
+- Stage hooks are `async def run_ocr(session, document)` /
+  `run_extraction(session, document)` in `library.jobs`. The OCR work
+  itself is CPU-bound and subprocess-heavy, so it runs in a thread via
+  `asyncio.to_thread`, keeping the async worker responsive.
 - Re-runs are idempotent: the pipeline resumes from the document's
   current status; an already-`indexed` (or `failed`) document is left
   untouched.
 - Any exception marks the document `failed`, records a `failed` event
   with `{"error": …, "status": <status it failed in>}`, and re-raises so
   Procrastinate also marks the job failed. No automatic retries are
-  configured in W3.
+  configured yet.
+
+## OCR (`library.ocr`)
+
+Tesseract alone is not good enough (see the inception decisions: great
+on clean scans, collapses on phone photos), so OCR is a **router over
+three engines**, selected by input type, with a confidence gate.
+
+```
+run_ocr(document, original_path, derived_dir) -> OcrResult
+  │
+  ├─ text/plain ───────────► passthrough read              engine="text"
+  ├─ application/pdf
+  │    ├─ has text layer? (pypdfium2; avg chars/page ≥
+  │    │  LIBRARY_TEXT_LAYER_MIN_CHARS_PER_PAGE, default 50)
+  │    │     └─ yes ──────► direct extraction, no OCR      engine="text-layer"
+  │    └─ no ─────────────► Tesseract path + confidence gate
+  ├─ image/tiff ──────────► convert to PDF (img2pdf, Pillow fallback)
+  │                          ─► Tesseract path + confidence gate
+  ├─ image/jpeg, image/png ► photo path                    engine="rapidocr"
+  └─ image/heic, image/heif ► photo path on the derived converted.jpg
+```
+
+`OcrResult` (`library.ocr.base`) carries `text`, `confidence` (0–100 or
+`None`), `searchable_pdf` (path or `None`), `engine`, and `pages`. An
+`OcrEngine` Protocol documents the engine call shape for future
+implementations.
+
+### Tesseract path (`library.ocr.tesseract`)
+
+Runs **OCRmyPDF** as a subprocess (`python -m ocrmypdf`) with
+`-l {LIBRARY_OCR_LANGUAGES} --rotate-pages --deskew --clean
+--oversample 300 --skip-text --sidecar`. Output artifacts in the
+document's derived dir: `searchable.pdf` (PDF/A with a text layer) and
+`ocr.txt` (the sidecar text, which becomes `ocr_text`).
+
+OCRmyPDF does not report word confidence, so a separate **confidence
+probe** runs after it: up to 3 pages of the *produced* `searchable.pdf`
+(i.e. after rotation/deskew, what Tesseract effectively saw) are
+rasterized at 300 dpi with pypdfium2 and fed to `tesseract … tsv`; the
+mean of per-word `conf` values (level-5 rows, conf ≥ 0, non-blank text)
+is the document confidence. Subprocess + TSV was chosen over pytesseract
+because it is the same thing with one fewer dependency.
+
+System binaries required on this path: `tesseract` (+ `nld`/`eng`
+tessdata), `ghostscript` (PDF/A output), `unpaper` (`--clean`). They are
+installed in the runtime Docker image and in CI.
+
+### Photo path (`library.ocr.photo`)
+
+For camera shots (and the HEIC-derived JPEG). OpenCV preprocessing:
+grayscale → page contour detection (largest 4-point contour covering
+≥ 30% of the frame) → 4-point perspective transform when found → CLAHE
+contrast enhancement. Then **RapidOCR** (PP-OCRv5 `latin` recognition
+model — covers Dutch+English in one model — on ONNX Runtime, CPU).
+Boxes are sorted by (top-y, left-x) for reading order; text is joined
+line-per-box; confidence is the mean of per-box scores scaled to 0–100.
+This path produces no searchable PDF (`searchable_pdf=None`).
+
+RapidOCR downloads its models on first use and caches them; the worker
+image works offline after the first run.
+
+### Confidence gate
+
+If the Tesseract path's mean word confidence is below
+`LIBRARY_OCR_CONFIDENCE_THRESHOLD` (default 65.0) — or no words were
+found at all — the router rasterizes the PDF pages at 300 dpi and
+retries them through the photo path, keeping whichever result has the
+higher confidence. The `searchable.pdf` artifact from the Tesseract run
+is kept either way (it is still the right viewing artifact; only
+`ocr_text`/`ocr_confidence` come from the winning engine).
+
+### Persistence
+
+The `run_ocr` job hook stores the result on the document: `ocr_text`,
+`ocr_confidence`, `page_count`, and `searchable_pdf` (boolean: the
+artifact exists in the derived dir). It appends an `ocr_completed`
+ingestion event with `{engine, confidence, pages, characters}` — the
+"born-digital PDF skipped OCR" assertion is `engine == "text-layer"`
+in that event. On error it appends `ocr_failed` with the error message
+and re-raises (so the standard `failed` handling also applies).
 
 ## HTTP API
 
@@ -194,6 +275,8 @@ Append-only audit trail in `ingestion_events`:
 | `received` | ingest | `{filename, size, mime_type, source}` |
 | `duplicate_upload` | ingest | `{filename, source}` |
 | `status_changed` | pipeline | `{from, to}` |
+| `ocr_completed` | OCR stage | `{engine, confidence, pages, characters}` |
+| `ocr_failed` | OCR stage | `{error}` |
 | `failed` | pipeline | `{error, status}` |
 
 ## Configuration
@@ -203,3 +286,6 @@ Append-only audit trail in `ingestion_events`:
 | `LIBRARY_DATA_DIR` | `/data` | Root of `originals/` and `derived/` |
 | `LIBRARY_MAX_UPLOAD_BYTES` | `104857600` (100 MB) | Upload size cap |
 | `LIBRARY_DATABASE_URL` | (see `config.py`) | Database + job queue (translated for psycopg) |
+| `LIBRARY_OCR_LANGUAGES` | `nld+eng` | Tesseract language pack(s) (`-l` value) |
+| `LIBRARY_OCR_CONFIDENCE_THRESHOLD` | `65.0` | Below this mean word confidence, retry via the photo path |
+| `LIBRARY_TEXT_LAYER_MIN_CHARS_PER_PAGE` | `50` | Avg chars/page for a PDF to count as born-digital (skip OCR) |

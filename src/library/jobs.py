@@ -1,11 +1,12 @@
 """Procrastinate job queue wiring and the document-processing pipeline.
 
-The pipeline in W3 is a skeleton: it advances a document through
-``received -> ocr -> extract -> indexed`` recording an ingestion event per
-transition. Real OCR (W4) and extraction (W6) plug into the ``run_ocr`` /
-``run_extraction`` hooks, which currently no-op.
+The pipeline advances a document through ``received -> ocr -> extract ->
+indexed`` recording an ingestion event per transition. The OCR stage (W4)
+runs the routed engines from ``library.ocr``; extraction (W6) is still a
+no-op hook.
 """
 
+import asyncio
 import logging
 
 from procrastinate import App, PsycopgConnector
@@ -14,6 +15,8 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from library.config import get_settings
 from library.db import get_sessionmaker
 from library.models import Document, DocumentStatus, IngestionEvent
+from library.ocr import router as ocr_router
+from library.storage import derived_dir, path_for
 
 logger = logging.getLogger(__name__)
 
@@ -39,20 +42,69 @@ job_app: App = App(
 )
 
 
-def run_ocr(document: Document) -> None:
-    """OCR hook — W4 replaces this no-op with the real routed OCR engines."""
+async def run_ocr(session: AsyncSession, document: Document) -> None:
+    """OCR stage: route to the right engine, persist results, record an event.
+
+    The routed OCR work is CPU-bound and subprocess-heavy, so it runs in a
+    thread (``asyncio.to_thread``) to keep the async worker responsive. On
+    success the document gains ``ocr_text``/``ocr_confidence``/``page_count``/
+    ``searchable_pdf`` and an ``ocr_completed`` event; on failure an
+    ``ocr_failed`` event is committed and the error re-raised (the pipeline's
+    generic failure handling then marks the document failed).
+    """
+    original_path = path_for(document.sha256)
+    derived = derived_dir(document.sha256)
+    try:
+        result = await asyncio.to_thread(ocr_router.run_ocr, document, original_path, derived)
+    except Exception as exc:
+        session.add(
+            IngestionEvent(
+                document_id=document.id,
+                event="ocr_failed",
+                detail={"error": str(exc)},
+            )
+        )
+        await session.commit()
+        raise
+    document.ocr_text = result.text or None
+    document.ocr_confidence = result.confidence
+    document.page_count = result.pages
+    document.searchable_pdf = result.searchable_pdf is not None
+    session.add(
+        IngestionEvent(
+            document_id=document.id,
+            event="ocr_completed",
+            detail={
+                "engine": result.engine,
+                "confidence": result.confidence,
+                "pages": result.pages,
+                "characters": len(result.text),
+            },
+        )
+    )
+    await session.commit()
+    logger.info(
+        "OCR completed for document %s: engine=%s confidence=%s pages=%s chars=%s",
+        document.id,
+        result.engine,
+        result.confidence,
+        result.pages,
+        len(result.text),
+    )
 
 
-def run_extraction(document: Document) -> None:
+async def run_extraction(session: AsyncSession, document: Document) -> None:
     """Extraction hook — W6 replaces this no-op with LLM metadata extraction."""
 
 
-def _run_stage_hook(document: Document, status: DocumentStatus) -> None:
+async def _run_stage_hook(
+    session: AsyncSession, document: Document, status: DocumentStatus
+) -> None:
     """Run the work associated with having entered the given status."""
     if status is DocumentStatus.OCR:
-        run_ocr(document)
+        await run_ocr(session, document)
     elif status is DocumentStatus.EXTRACT:
-        run_extraction(document)
+        await run_extraction(session, document)
 
 
 async def advance_pipeline(
@@ -85,7 +137,7 @@ async def advance_pipeline(
                     )
                 )
                 await session.commit()
-                _run_stage_hook(document, document.status)
+                await _run_stage_hook(session, document, document.status)
         except Exception as exc:
             await session.rollback()
             failed_in = document.status

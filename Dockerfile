@@ -27,6 +27,19 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --- Runtime stage: slim image, non-root user ---
 FROM python:3.13-slim
 
+# OCR system dependencies (per OCRmyPDF docs): tesseract + nld/eng tessdata,
+# ghostscript (PDF/A output), unpaper (--clean), pngquant (--optimize >= 2).
+# OpenCV is the headless build, so no GUI/libGL packages are needed.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        tesseract-ocr \
+        tesseract-ocr-nld \
+        tesseract-ocr-eng \
+        ghostscript \
+        unpaper \
+        pngquant \
+    && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --system app && useradd --system --gid app --create-home app \
     && mkdir -p /data && chown app:app /data
 
