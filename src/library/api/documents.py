@@ -1,27 +1,78 @@
-"""Document upload endpoint.
+"""Documents REST API: upload, list/search, detail, edit, delete, files.
 
 NO AUTHENTICATION YET — auth arrives in W8. Do not expose beyond a trusted
 network until then.
+
+Search design notes (see docs/api.md §1.3.3)
+--------------------------------------------
+- ``q`` runs ``websearch_to_tsquery`` against both generated tsvector
+  columns (``dutch`` and ``english`` configs), OR-combined; the rank is
+  ``greatest`` of the two ``ts_rank`` values so a document matching
+  strongly in either language surfaces.
+- Snippets come from ``ts_headline`` over ``ocr_text`` using whichever
+  config produced the higher rank, capped by ``_HEADLINE_OPTIONS``. The
+  default ``<b>``/``</b>`` markers are kept; the OCR text is NOT
+  HTML-escaped, so clients must render snippets as text and interpret only
+  the ``<b>`` markers.
 """
 
-from typing import Annotated
+from datetime import UTC, date, datetime
+from pathlib import Path
+from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, Response, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import FileResponse
+from sqlalchemy import case, cast, func, or_, select
+from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import get_settings
 from library.db import get_session
+from library.extraction.apply import get_or_create_tag, upsert_sender
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
-from library.models import DocumentSource
-from library.schemas import DocumentUploadResponse
+from library.models import (
+    Document,
+    DocumentLanguage,
+    DocumentSource,
+    DocumentStatus,
+    IngestionEvent,
+    Kind,
+    Tag,
+)
+from library.ocr.tesseract import SEARCHABLE_PDF_NAME
+from library.schemas import (
+    DocumentDetail,
+    DocumentListItem,
+    DocumentListResponse,
+    DocumentUpdate,
+    DocumentUploadResponse,
+    IngestionEventOut,
+    KindOut,
+    SenderOut,
+    TagOut,
+)
+from library.storage import derived_path, path_for
+from library.thumbnails import THUMBNAIL_NAME
 
 router: APIRouter = APIRouter(tags=["documents"])
+
+# ts_headline options: fragment mode, short fragments, default <b>/</b>
+# markers. The headline source (OCR text) is not HTML-escaped — documented
+# in docs/api.md; the frontend renders snippets as text.
+_HEADLINE_OPTIONS: str = (
+    'MaxFragments=2, MaxWords=12, MinWords=4, ShortWord=2, FragmentDelimiter=" … "'
+)
+
+# PATCH body field -> name recorded in extra["user_edited_fields"] (the
+# storage-level names the W6 extraction contract checks).
+_EDITED_FIELD_NAMES: dict[str, str] = {"kind_slug": "kind_id", "sender": "sender_id"}
 
 
 @router.post(
     "/documents",
     response_model=DocumentUploadResponse,
     status_code=status.HTTP_201_CREATED,
+    summary="Upload a document",
     responses={
         200: {"description": "Duplicate of an existing document (no resource created)"},
         409: {"description": "Content matches a soft-deleted document"},
@@ -67,4 +118,365 @@ async def upload_document(
         sha256=result.document.sha256,
         status=result.document.status,
         duplicate=result.duplicate,
+    )
+
+
+@router.get(
+    "/documents",
+    response_model=DocumentListResponse,
+    summary="List and search documents",
+)
+async def list_documents(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    q: Annotated[
+        str | None,
+        Query(
+            description=(
+                "Full-text search in websearch syntax (quoted phrases, OR, "
+                "-exclusion), stemmed in both Dutch and English. Adds "
+                "`snippet` and `rank` to each item and orders by rank."
+            ),
+            openapi_examples={
+                "dutch_stem": {
+                    "summary": "Dutch stemming",
+                    "description": "Finds documents containing 'rekeningen'.",
+                    "value": "rekening",
+                },
+                "phrase": {
+                    "summary": "Exact phrase",
+                    "value": '"energierekening mei"',
+                },
+                "boolean": {
+                    "summary": "Either term, excluding one",
+                    "value": "factuur OR invoice -concept",
+                },
+            },
+        ),
+    ] = None,
+    kind: Annotated[str | None, Query(description="Kind slug, e.g. `invoice`.")] = None,
+    sender_id: Annotated[int | None, Query()] = None,
+    tag: Annotated[
+        list[str] | None,
+        Query(description="Tag slug; repeat the parameter to require all of them (AND)."),
+    ] = None,
+    language: Annotated[DocumentLanguage | None, Query()] = None,
+    status_filter: Annotated[DocumentStatus | None, Query(alias="status")] = None,
+    date_from: Annotated[
+        date | None, Query(description="Inclusive lower bound on document_date.")
+    ] = None,
+    date_to: Annotated[
+        date | None, Query(description="Inclusive upper bound on document_date.")
+    ] = None,
+    source: Annotated[DocumentSource | None, Query()] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> DocumentListResponse:
+    """Paginated document list; all filters AND-compose, including with `q`.
+
+    Without `q`, results are ordered by document_date (newest first, unknown
+    dates last), then created_at. With `q`, by search rank.
+    """
+    conditions: list[Any] = [Document.deleted_at.is_(None)]
+    if kind is not None:
+        conditions.append(Document.kind.has(Kind.slug == kind))
+    if sender_id is not None:
+        conditions.append(Document.sender_id == sender_id)
+    for slug in tag or []:
+        conditions.append(Document.tags.any(Tag.slug == slug))
+    if language is not None:
+        conditions.append(Document.language == language)
+    if status_filter is not None:
+        conditions.append(Document.status == status_filter)
+    if date_from is not None:
+        conditions.append(Document.document_date >= date_from)
+    if date_to is not None:
+        conditions.append(Document.document_date <= date_to)
+    if source is not None:
+        conditions.append(Document.source == source)
+
+    if q:
+        dutch = cast("dutch", REGCONFIG)
+        english = cast("english", REGCONFIG)
+        tsq_nl = func.websearch_to_tsquery(dutch, q)
+        tsq_en = func.websearch_to_tsquery(english, q)
+        rank_nl = func.ts_rank(Document.search_vector_nl, tsq_nl)
+        rank_en = func.ts_rank(Document.search_vector_en, tsq_en)
+        conditions.append(
+            or_(
+                Document.search_vector_nl.bool_op("@@")(tsq_nl),
+                Document.search_vector_en.bool_op("@@")(tsq_en),
+            )
+        )
+        rank = func.greatest(rank_nl, rank_en).label("rank")
+        ocr_source = func.coalesce(Document.ocr_text, "")
+        snippet = case(
+            (rank_nl >= rank_en, func.ts_headline(dutch, ocr_source, tsq_nl, _HEADLINE_OPTIONS)),
+            else_=func.ts_headline(english, ocr_source, tsq_en, _HEADLINE_OPTIONS),
+        ).label("snippet")
+        statement = (
+            select(Document, rank, snippet)
+            .where(*conditions)
+            .order_by(rank.desc(), Document.created_at.desc(), Document.id.desc())
+        )
+    else:
+        statement = (
+            select(Document)
+            .where(*conditions)
+            .order_by(
+                Document.document_date.desc().nulls_last(),
+                Document.created_at.desc(),
+                Document.id.desc(),
+            )
+        )
+
+    total = (
+        await session.execute(select(func.count()).select_from(Document).where(*conditions))
+    ).scalar_one()
+    result = await session.execute(statement.limit(limit).offset(offset))
+
+    if q:
+        items = [
+            DocumentListItem(**_list_item_fields(document), snippet=snippet_value, rank=rank_value)
+            for document, rank_value, snippet_value in result.all()
+        ]
+    else:
+        items = [
+            DocumentListItem(**_list_item_fields(document)) for document in result.scalars().all()
+        ]
+    return DocumentListResponse(items=items, total=total, limit=limit, offset=offset)
+
+
+@router.get(
+    "/documents/{document_id}",
+    response_model=DocumentDetail,
+    summary="Document detail",
+    responses={404: {"description": "Unknown or deleted document"}},
+)
+async def get_document(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> DocumentDetail:
+    """Full metadata, OCR text, extraction provenance, and the audit trail."""
+    document = await _get_document_or_404(session, document_id)
+    return _detail(document)
+
+
+@router.patch(
+    "/documents/{document_id}",
+    response_model=DocumentDetail,
+    summary="Edit document metadata",
+    responses={
+        404: {"description": "Unknown or deleted document"},
+        422: {"description": "Unknown kind slug or invalid field value"},
+    },
+)
+async def update_document(
+    document_id: int,
+    payload: DocumentUpdate,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> DocumentDetail:
+    """Apply a partial metadata edit; only fields present in the body change.
+
+    Edited fields are appended to ``extra["user_edited_fields"]`` so
+    re-extraction never overwrites them, and a ``user_edited`` ingestion
+    event records the change.
+    """
+    document = await _get_document_or_404(session, document_id)
+    provided = payload.model_dump(exclude_unset=True)
+    if not provided:
+        return _detail(document)
+
+    edited: list[str] = []
+    if "kind_slug" in provided:
+        slug = provided.pop("kind_slug")
+        if slug is None:
+            document.kind_id = None
+        else:
+            kind = (
+                await session.execute(select(Kind).where(Kind.slug == slug))
+            ).scalar_one_or_none()
+            if kind is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail=f"unknown kind slug: {slug!r}",
+                )
+            document.kind_id = kind.id
+        edited.append(_EDITED_FIELD_NAMES["kind_slug"])
+    if "sender" in provided:
+        name = provided.pop("sender")
+        document.sender_id = None if name is None else (await upsert_sender(session, name)).id
+        edited.append(_EDITED_FIELD_NAMES["sender"])
+    if "tags" in provided:
+        slugs = provided.pop("tags")
+        if slugs is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="tags cannot be null; send [] to clear them",
+            )
+        document.tags = [await get_or_create_tag(session, slug) for slug in dict.fromkeys(slugs)]
+        edited.append("tags")
+    if provided.get("language", "") is None:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="language cannot be null",
+        )
+    for field, value in provided.items():
+        setattr(document, field, value)
+        edited.append(field)
+
+    user_edited = list(document.extra.get("user_edited_fields", []))
+    user_edited.extend(name for name in edited if name not in user_edited)
+    document.extra = {**document.extra, "user_edited_fields": user_edited}
+    session.add(
+        IngestionEvent(document_id=document.id, event="user_edited", detail={"fields": edited})
+    )
+    await session.commit()
+    await session.refresh(document, ["kind", "sender", "tags", "events"])
+    return _detail(document)
+
+
+@router.delete(
+    "/documents/{document_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Soft-delete a document",
+    responses={404: {"description": "Unknown or already deleted document"}},
+)
+async def delete_document(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    """Set ``deleted_at`` and record a ``deleted`` event; the row and file stay.
+
+    Deleted documents 404 on every endpoint. Restore is out of scope for
+    now (clear ``deleted_at`` in the database).
+    """
+    document = await _get_document_or_404(session, document_id)
+    document.deleted_at = datetime.now(UTC)
+    session.add(IngestionEvent(document_id=document.id, event="deleted", detail={}))
+    await session.commit()
+
+
+@router.get(
+    "/documents/{document_id}/original",
+    response_class=FileResponse,
+    summary="Download the original file",
+    responses={404: {"description": "Unknown or deleted document, or file missing"}},
+)
+async def download_original(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> FileResponse:
+    """The stored original, with its real content type and original filename."""
+    document = await _get_document_or_404(session, document_id)
+    path = path_for(document.sha256)
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="original file missing from storage"
+        )
+    return FileResponse(
+        path,
+        media_type=document.mime_type,
+        filename=document.original_filename or f"document-{document.id}",
+    )
+
+
+@router.get(
+    "/documents/{document_id}/searchable.pdf",
+    response_class=FileResponse,
+    summary="Download the searchable PDF",
+    responses={404: {"description": "No searchable PDF for this document"}},
+)
+async def download_searchable_pdf(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> FileResponse:
+    """The OCR-produced searchable PDF; 404 when the document has none."""
+    document = await _get_document_or_404(session, document_id)
+    path = derived_path(document.sha256) / SEARCHABLE_PDF_NAME
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="no searchable PDF for this document"
+        )
+    stem = (
+        Path(document.original_filename).stem
+        if document.original_filename
+        else f"document-{document.id}"
+    )
+    return FileResponse(path, media_type="application/pdf", filename=f"{stem}-searchable.pdf")
+
+
+@router.get(
+    "/documents/{document_id}/thumbnail",
+    response_class=FileResponse,
+    summary="First-page thumbnail (WebP)",
+    responses={404: {"description": "No thumbnail (not generated yet, or text-only)"}},
+)
+async def get_thumbnail(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> FileResponse:
+    """The ~480px-wide first-page WebP rendered by the background worker."""
+    document = await _get_document_or_404(session, document_id)
+    path = derived_path(document.sha256) / THUMBNAIL_NAME
+    if not path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="no thumbnail for this document"
+        )
+    return FileResponse(path, media_type="image/webp")
+
+
+async def _get_document_or_404(session: AsyncSession, document_id: int) -> Document:
+    """The document, or 404 if it does not exist or is soft-deleted."""
+    document = await session.get(Document, document_id)
+    if document is None or document.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
+    return document
+
+
+def _list_item_fields(document: Document) -> dict[str, Any]:
+    """The DocumentListItem field values shared by list and detail responses."""
+    return {
+        "id": document.id,
+        "title": document.title,
+        "summary": document.summary,
+        "kind": (
+            KindOut(slug=document.kind.slug, name=document.kind.name) if document.kind else None
+        ),
+        "sender": (
+            SenderOut(id=document.sender.id, name=document.sender.name) if document.sender else None
+        ),
+        "tags": [
+            TagOut(slug=tag.slug, name=tag.name)
+            for tag in sorted(document.tags, key=lambda tag: tag.slug)
+        ],
+        "document_date": document.document_date,
+        "language": document.language,
+        "status": document.status,
+        "mime_type": document.mime_type,
+        "page_count": document.page_count,
+        "created_at": document.created_at,
+        "has_searchable_pdf": document.searchable_pdf,
+        "has_thumbnail": (derived_path(document.sha256) / THUMBNAIL_NAME).is_file(),
+    }
+
+
+def _detail(document: Document) -> DocumentDetail:
+    """Build the detail response; exposes extraction provenance, not raw extra."""
+    return DocumentDetail(
+        **_list_item_fields(document),
+        ocr_text=document.ocr_text,
+        ocr_confidence=document.ocr_confidence,
+        amount_total=document.amount_total,
+        currency=document.currency,
+        due_date=document.due_date,
+        expiry_date=document.expiry_date,
+        source=document.source,
+        original_filename=document.original_filename,
+        sha256=document.sha256,
+        extraction=document.extra.get("extraction"),
+        user_edited_fields=list(document.extra.get("user_edited_fields", [])),
+        events=[
+            IngestionEventOut(event=event.event, detail=event.detail, created_at=event.created_at)
+            for event in sorted(document.events, key=lambda event: event.id)
+        ],
     )

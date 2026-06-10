@@ -165,6 +165,17 @@ Decisions:
   Procrastinate also marks the job failed. No automatic retries are
   configured yet.
 
+### `generate_thumbnail(document_id)` — first-page thumbnail (W7)
+
+Deferred by the pipeline immediately after the OCR stage succeeds (it
+needs nothing from extraction, so it runs in parallel with that stage).
+Renders page 1 — pypdfium2 for PDFs, Pillow for images, HEIC via the
+derived `converted.jpg` — to a ~480 px wide WebP at
+`derived/<sha>/thumb.webp` and records a `thumbnail_generated` (or
+`thumbnail_skipped`, e.g. for `text/plain`) event. The file's existence
+is the only thumbnail marker; `GET /api/documents/{id}/thumbnail` serves
+it (see [api.md](api.md)).
+
 ## OCR (`library.ocr`)
 
 Tesseract alone is not good enough (see the inception decisions: great

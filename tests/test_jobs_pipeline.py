@@ -102,6 +102,7 @@ async def get_status_and_events(
 async def test_pipeline_reaches_indexed_with_events(
     session_factory: async_sessionmaker[AsyncSession],
     fake_router: OcrResult,
+    job_connector: InMemoryConnector,
 ) -> None:
     document_id = await make_document(session_factory, "pipeline-happy")
 
@@ -120,6 +121,7 @@ async def test_pipeline_reaches_indexed_with_events(
 async def test_pipeline_is_idempotent_when_already_indexed(
     session_factory: async_sessionmaker[AsyncSession],
     fake_router: OcrResult,
+    job_connector: InMemoryConnector,
 ) -> None:
     document_id = await make_document(session_factory, "pipeline-idempotent")
     await advance_pipeline(session_factory, document_id)
@@ -134,6 +136,7 @@ async def test_pipeline_is_idempotent_when_already_indexed(
 async def test_ocr_stage_persists_results_and_event(
     session_factory: async_sessionmaker[AsyncSession],
     fake_router: OcrResult,
+    job_connector: InMemoryConnector,
 ) -> None:
     document_id = await make_document(session_factory, "pipeline-ocr-persist")
 
@@ -156,6 +159,23 @@ async def test_ocr_stage_persists_results_and_event(
         "pages": 2,
         "characters": len("OCR says hello"),
     }
+
+
+async def test_pipeline_defers_thumbnail_job_after_ocr(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+) -> None:
+    document_id = await make_document(session_factory, "pipeline-thumb-defer")
+
+    await advance_pipeline(session_factory, document_id)
+
+    thumbnail_jobs = [
+        job
+        for job in job_connector.jobs.values()
+        if job["task_name"] == "library.jobs.generate_thumbnail"
+    ]
+    assert [job["args"] for job in thumbnail_jobs] == [{"document_id": document_id}]
 
 
 async def test_ocr_stage_failure_records_ocr_failed_event(

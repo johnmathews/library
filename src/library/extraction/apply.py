@@ -40,7 +40,7 @@ async def todays_spend_usd(session: AsyncSession) -> float:
     return float((await session.execute(statement)).scalar_one())
 
 
-async def _upsert_sender(session: AsyncSession, name: str) -> Sender:
+async def upsert_sender(session: AsyncSession, name: str) -> Sender:
     """Find a sender by case-insensitive name match, creating it if new."""
     cleaned = name.strip()
     existing = (
@@ -54,7 +54,7 @@ async def _upsert_sender(session: AsyncSession, name: str) -> Sender:
     return sender
 
 
-async def _get_or_create_tag(session: AsyncSession, slug: str) -> Tag:
+async def get_or_create_tag(session: AsyncSession, slug: str) -> Tag:
     existing = (await session.execute(select(Tag).where(Tag.slug == slug))).scalar_one_or_none()
     if existing is not None:
         return existing
@@ -97,7 +97,7 @@ async def _apply_outcome(
 
     if settable("sender_id", metadata.sender_name):
         assert metadata.sender_name is not None
-        document.sender_id = (await _upsert_sender(session, metadata.sender_name)).id
+        document.sender_id = (await upsert_sender(session, metadata.sender_name)).id
         fields_set.append("sender_id")
 
     scalar_values: dict[str, object | None] = {
@@ -123,7 +123,7 @@ async def _apply_outcome(
         merged = False
         for slug in metadata.tags:
             if slug not in existing_slugs:
-                document.tags.append(await _get_or_create_tag(session, slug))
+                document.tags.append(await get_or_create_tag(session, slug))
                 merged = True
         if merged:
             fields_set.append("tags")

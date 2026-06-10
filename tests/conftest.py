@@ -120,6 +120,20 @@ def api_app(
 
 
 @pytest.fixture
+async def job_connector() -> AsyncIterator[InMemoryConnector]:
+    """An open in-memory Procrastinate connector.
+
+    Needed by tests that drive pipeline code directly (``advance_pipeline``
+    defers the thumbnail job after OCR); deferred jobs can be inspected via
+    ``connector.jobs``.
+    """
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        async with job_app.open_async():
+            yield connector
+
+
+@pytest.fixture
 def api_client(api_app: FastAPI, api_database_url: str) -> Iterator[TestClient]:
     """HTTP client against api_app with a real Procrastinate connector.
 

@@ -330,6 +330,7 @@ async def test_reextraction_overwrites_previous_extraction_values(
 async def test_extraction_failure_still_reaches_indexed(
     session_factory: async_sessionmaker[AsyncSession],
     fake_router: OcrResult,
+    job_connector: InMemoryConnector,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("LIBRARY_ANTHROPIC_API_KEY", "test-key")
@@ -355,6 +356,7 @@ async def test_extraction_failure_still_reaches_indexed(
 async def test_extraction_skipped_without_api_key_and_document_indexed(
     session_factory: async_sessionmaker[AsyncSession],
     fake_router: OcrResult,
+    job_connector: InMemoryConnector,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("LIBRARY_ANTHROPIC_API_KEY", raising=False)

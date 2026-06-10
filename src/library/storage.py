@@ -46,11 +46,20 @@ def path_for(sha256: str, *, data_dir: Path | None = None) -> Path:
     return root / "originals" / digest[0:2] / digest[2:4] / digest
 
 
-def derived_dir(sha256: str, *, data_dir: Path | None = None) -> Path:
-    """Create (if needed) and return the derived-artifacts directory for a document."""
+def derived_path(sha256: str, *, data_dir: Path | None = None) -> Path:
+    """The derived-artifacts directory of a document (whether or not it exists).
+
+    Read paths (e.g. "does this document have a thumbnail?") use this to
+    avoid creating empty directories as a side effect.
+    """
     digest = _validate_sha256(sha256)
     root = _resolve_data_dir(data_dir)
-    directory = root / "derived" / digest[0:2] / digest[2:4] / digest
+    return root / "derived" / digest[0:2] / digest[2:4] / digest
+
+
+def derived_dir(sha256: str, *, data_dir: Path | None = None) -> Path:
+    """Create (if needed) and return the derived-artifacts directory for a document."""
+    directory = derived_path(sha256, data_dir=data_dir)
     directory.mkdir(parents=True, exist_ok=True)
     return directory
 

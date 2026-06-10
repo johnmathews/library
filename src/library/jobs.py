@@ -12,6 +12,7 @@ import logging
 from procrastinate import App, PsycopgConnector
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
+from library import thumbnails
 from library.config import get_settings
 from library.db import get_sessionmaker
 from library.extraction.apply import apply_extraction
@@ -110,6 +111,10 @@ async def _run_stage_hook(
     """Run the work associated with having entered the given status."""
     if status is DocumentStatus.OCR:
         await run_ocr(session, document)
+        # Thumbnail rendering needs nothing from extraction (and the HEIC
+        # conversion already exists from ingest), so once OCR has finished
+        # it runs as a separate job, in parallel with the extract stage.
+        await generate_thumbnail.defer_async(document_id=document.id)
     elif status is DocumentStatus.EXTRACT:
         await run_extraction(session, document)
 
@@ -165,6 +170,46 @@ async def advance_pipeline(
 async def process_document(document_id: int) -> None:
     """Background task: run the processing pipeline for one document."""
     await advance_pipeline(get_sessionmaker(), document_id)
+
+
+async def run_generate_thumbnail(
+    session_factory: async_sessionmaker[AsyncSession], document_id: int
+) -> None:
+    """Render the first-page WebP thumbnail for a document and record an event.
+
+    The artifact lands at ``derived/<sha>/thumb.webp``; its existence is the
+    only thumbnail marker (no database column). Types without a visual
+    (plain text) record a ``thumbnail_skipped`` event instead.
+    """
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        if document is None:
+            raise ValueError(f"document {document_id} not found")
+        target = await asyncio.to_thread(
+            thumbnails.render_thumbnail,
+            document.mime_type,
+            path_for(document.sha256),
+            derived_dir(document.sha256),
+        )
+        if target is None:
+            event = "thumbnail_skipped"
+            detail = {"reason": "unsupported_mime", "mime_type": document.mime_type}
+        else:
+            event = "thumbnail_generated"
+            detail = {"artifact": target.name}
+        session.add(IngestionEvent(document_id=document.id, event=event, detail=detail))
+        await session.commit()
+        logger.info("thumbnail %s for document %s", event, document_id)
+
+
+@job_app.task(name="library.jobs.generate_thumbnail")
+async def generate_thumbnail(document_id: int) -> None:
+    """Background task: render the first-page thumbnail for one document.
+
+    Deferred by the pipeline after OCR completes; safe to re-run (the
+    artifact is simply rewritten).
+    """
+    await run_generate_thumbnail(get_sessionmaker(), document_id)
 
 
 @job_app.task(name="library.jobs.extract_document")

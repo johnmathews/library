@@ -106,7 +106,7 @@ hashed, individually revocable.
 | OCR pipeline | W4 | **done** — see [ingestion.md](ingestion.md), "OCR" section |
 | OCR benchmark (real samples) | W5 | pending |
 | Claude metadata extraction | W6 | **done** — see [ingestion.md](ingestion.md), "Extraction" section |
-| REST API + search + thumbnails | W7 | pending |
+| REST API + search + thumbnails | W7 | **done** — see [api.md](api.md) |
 | Auth | W8 | pending |
 | Frontend foundation (design system) | W9 | pending |
 | Frontend screens | W10–W11 | pending |
