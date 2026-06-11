@@ -4,6 +4,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import DocumentListView from '../DocumentListView.vue'
 import type { DocumentListItem } from '@/api/documents'
+import { resetTaxonomyOptionsForTests } from '@/composables/taxonomyOptions'
 import { useFlashStore } from '@/stores/flash'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -57,6 +58,7 @@ describe('DocumentListView', () => {
   let listResponse: () => Response
 
   beforeEach(async () => {
+    resetTaxonomyOptionsForTests()
     listResponse = () => jsonResponse(listBody([]))
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
@@ -100,37 +102,49 @@ describe('DocumentListView', () => {
       .filter((url) => url.startsWith('/api/documents'))
   }
 
-  it('renders document rows with title link, kind tag, sender, date and language', async () => {
+  function taxonomyUrls(): string[] {
+    return fetchMock.mock.calls
+      .map((call) => String(call[0]))
+      .filter((url) => /^\/api\/(kinds|senders|tags)$/.test(url))
+  }
+
+  it('renders tiles in the dashboard grid with title link, tags, sender and date', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()
 
-    const row = w.find('.app-doc-list__item')
-    expect(row.exists()).toBe(true)
-    const titleLink = row.find('.app-doc-list__title a')
+    expect(w.find('ul.app-doc-grid').exists()).toBe(true)
+    const tile = w.find('.app-doc-card')
+    expect(tile.exists()).toBe(true)
+    // Exactly ONE anchor per tile (stretched-link pattern).
+    expect(tile.findAll('a')).toHaveLength(1)
+    const titleLink = tile.find('.app-doc-card__title a')
     expect(titleLink.text()).toBe('Energierekening mei 2026')
     expect(titleLink.attributes('href')).toBe('/documents/12')
-    expect(row.find('.govuk-tag--blue').text()).toBe('Invoice')
-    expect(row.find('.app-doc-list__sender').text()).toBe('Eneco')
-    expect(row.find('.app-doc-list__date').text()).toBe('15 May 2026')
-    expect(row.find('.govuk-tag--grey').text()).toBe('Dutch')
-    expect(row.find('img').attributes('src')).toBe('/api/documents/12/thumbnail')
+    expect(titleLink.classes()).toContain('govuk-link')
+    expect(tile.find('.govuk-tag--blue').text()).toBe('Invoice')
+    expect(tile.find('.govuk-tag--grey').text()).toBe('Dutch')
+    expect(tile.find('.app-doc-card__sender').text()).toBe('Eneco')
+    expect(tile.find('.app-doc-card__date').text()).toBe('15 May 2026')
+    expect(tile.find('.app-doc-card__thumbnail img').attributes('src')).toBe(
+      '/api/documents/12/thumbnail',
+    )
     expect(w.find('[data-testid="result-count"]').text()).toBe('1 document')
   })
 
   it('falls back to an untitled label and a placeholder thumbnail', async () => {
     listResponse = () => jsonResponse(listBody([makeItem({ title: null, has_thumbnail: false })]))
     const w = await mountView()
-    expect(w.find('.app-doc-list__title a').text()).toBe('Untitled document')
-    expect(w.find('.app-doc-list__thumbnail img').exists()).toBe(false)
-    expect(w.find('.app-doc-list__thumbnail-fallback').text()).toBe('PDF')
+    expect(w.find('.app-doc-card__title a').text()).toBe('Untitled document')
+    expect(w.find('.app-doc-card__thumbnail img').exists()).toBe(false)
+    expect(w.find('.app-doc-card__thumbnail-fallback').text()).toBe('PDF')
   })
 
   it('swaps a broken thumbnail for the placeholder on image error', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()
-    await w.find('.app-doc-list__thumbnail img').trigger('error')
-    expect(w.find('.app-doc-list__thumbnail img').exists()).toBe(false)
-    expect(w.find('.app-doc-list__thumbnail-fallback').exists()).toBe(true)
+    await w.find('.app-doc-card__thumbnail img').trigger('error')
+    expect(w.find('.app-doc-card__thumbnail img').exists()).toBe(false)
+    expect(w.find('.app-doc-card__thumbnail-fallback').exists()).toBe(true)
   })
 
   it('shows the empty-library state without filters', async () => {
@@ -148,17 +162,16 @@ describe('DocumentListView', () => {
     expect(w.find('[data-testid="empty-library"]').exists()).toBe(false)
   })
 
-  it('submitting a search updates the URL and refetches with q', async () => {
-    const w = await mountView()
+  it('fetches with the URL query parameters applied', async () => {
+    await router.push('/?q=rekening&kind=invoice&sender_id=3&tag=energie&page=2')
+    await mountView()
 
-    await w.find('#search').setValue('rekening')
-    await w.find('form[role="search"]').trigger('submit')
-    await flushPromises()
-
-    expect(router.currentRoute.value.query.q).toBe('rekening')
     const last = new URL(documentUrls().at(-1)!, 'http://test')
     expect(last.searchParams.get('q')).toBe('rekening')
-    expect(last.searchParams.get('offset')).toBe('0')
+    expect(last.searchParams.get('kind')).toBe('invoice')
+    expect(last.searchParams.get('sender_id')).toBe('3')
+    expect(last.searchParams.getAll('tag')).toEqual(['energie'])
+    expect(last.searchParams.get('offset')).toBe('25')
   })
 
   it('renders snippets via renderSnippet: <b> kept, script neutralised', async () => {
@@ -171,7 +184,7 @@ describe('DocumentListView', () => {
     await router.push('/?q=rekening')
     const w = await mountView()
 
-    const snippet = w.find('.app-doc-list__snippet')
+    const snippet = w.find('.app-doc-card__snippet')
     expect(snippet.findAll('b')).toHaveLength(1)
     expect(snippet.find('b').text()).toBe('rekening')
     expect(snippet.element.querySelector('script')).toBeNull()
@@ -182,72 +195,49 @@ describe('DocumentListView', () => {
     listResponse = () => jsonResponse(listBody([makeItem({ snippet: '<b>rekening</b>' })]))
     await router.push('/?q=rekening')
     const w = await mountView()
-    expect(w.find('.app-doc-list__title a').attributes('href')).toBe(
+    expect(w.find('.app-doc-card__title a').attributes('href')).toBe(
       '/documents/12?highlight=rekening',
     )
   })
 
-  it('builds the kind filter options from GET /api/kinds', async () => {
+  it('shows no filter summary when nothing is filtered', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()
-    const options = w.find('#filter-kind').findAll('option')
-    expect(options.map((option) => option.text())).toEqual(['All kinds', 'Invoice', 'Receipt'])
+    expect(w.find('[data-testid="filter-summary"]').exists()).toBe(false)
+    // No taxonomy fetch either: names are only needed for active filters.
+    expect(taxonomyUrls()).toEqual([])
   })
 
-  it('applies kind/language/date filters to the URL and the request', async () => {
+  it('summarises active filters with names resolved from the taxonomy', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    await router.push(
+      '/?q=rekening&kind=invoice&sender_id=3&tag=energie&language=nld&date_from=2026-05-01&date_to=2026-05-31',
+    )
     const w = await mountView()
 
-    await w.find('#filter-kind').setValue('invoice')
-    await w.find('#filter-language').setValue('nld')
-    await w.find('#filter-date-from-day').setValue('1')
-    await w.find('#filter-date-from-month').setValue('5')
-    await w.find('#filter-date-from-year').setValue('2026')
-    await w.find('form[role="search"]').trigger('submit')
+    const summary = w.find('[data-testid="filter-summary"]')
+    expect(summary.text()).toContain('search “rekening”')
+    expect(summary.text()).toContain('kind Invoice')
+    expect(summary.text()).toContain('sender Eneco')
+    expect(summary.text()).toContain('tag Energie')
+    expect(summary.text()).toContain('language Dutch')
+    expect(summary.text()).toContain('dated from 1 May 2026')
+    expect(summary.text()).toContain('dated to 31 May 2026')
+  })
+
+  it('clears all filters from the summary link and refetches unfiltered', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    await router.push('/?q=rekening&kind=invoice')
+    const w = await mountView()
+
+    await w.find('[data-testid="clear-filters"]').trigger('click')
     await flushPromises()
 
-    expect(router.currentRoute.value.query).toMatchObject({
-      kind: 'invoice',
-      language: 'nld',
-      date_from: '2026-05-01',
-    })
+    expect(router.currentRoute.value.query).toEqual({})
     const last = new URL(documentUrls().at(-1)!, 'http://test')
-    expect(last.searchParams.get('kind')).toBe('invoice')
-    expect(last.searchParams.get('language')).toBe('nld')
-    expect(last.searchParams.get('date_from')).toBe('2026-05-01')
-  })
-
-  it('applies sender and tag filters from the taxonomy endpoints', async () => {
-    const w = await mountView()
-
-    const senderOptions = w.find('#filter-sender').findAll('option')
-    expect(senderOptions.map((option) => option.text())).toEqual(['All senders', 'Eneco'])
-    const tagOptions = w.find('#filter-tag').findAll('option')
-    expect(tagOptions.map((option) => option.text())).toEqual(['All tags', 'Energie'])
-
-    await w.find('#filter-sender').setValue('3')
-    await w.find('#filter-tag').setValue('energie')
-    await w.find('form[role="search"]').trigger('submit')
-    await flushPromises()
-
-    expect(router.currentRoute.value.query).toMatchObject({ sender_id: '3', tag: 'energie' })
-    const last = new URL(documentUrls().at(-1)!, 'http://test')
-    expect(last.searchParams.get('sender_id')).toBe('3')
-    expect(last.searchParams.getAll('tag')).toEqual(['energie'])
-  })
-
-  it('restores form state and request parameters from the URL', async () => {
-    await router.push('/?q=rekening&kind=invoice&sender_id=3&tag=energie&page=2')
-    const w = await mountView()
-
-    expect((w.find('#search').element as HTMLInputElement).value).toBe('rekening')
-    expect((w.find('#filter-kind').element as HTMLSelectElement).value).toBe('invoice')
-    expect((w.find('#filter-sender').element as HTMLSelectElement).value).toBe('3')
-    expect((w.find('#filter-tag').element as HTMLSelectElement).value).toBe('energie')
-    const last = new URL(documentUrls().at(-1)!, 'http://test')
-    expect(last.searchParams.get('q')).toBe('rekening')
-    expect(last.searchParams.get('kind')).toBe('invoice')
-    expect(last.searchParams.get('sender_id')).toBe('3')
-    expect(last.searchParams.getAll('tag')).toEqual(['energie'])
-    expect(last.searchParams.get('offset')).toBe('25')
+    expect(last.searchParams.get('q')).toBeNull()
+    expect(last.searchParams.get('kind')).toBeNull()
+    expect(w.find('[data-testid="filter-summary"]').exists()).toBe(false)
   })
 
   it('paginates: 60 results make 3 pages and page links update offset', async () => {
@@ -262,6 +252,21 @@ describe('DocumentListView', () => {
     expect(router.currentRoute.value.query.page).toBe('2')
     const last = new URL(documentUrls().at(-1)!, 'http://test')
     expect(last.searchParams.get('offset')).toBe('25')
+  })
+
+  it('keeps the active filters in the URL when changing page', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()], 60))
+    await router.push('/?q=rekening&kind=invoice')
+    const w = await mountView()
+
+    await w.find('.govuk-pagination a[aria-label="Page 2"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query).toMatchObject({
+      q: 'rekening',
+      kind: 'invoice',
+      page: '2',
+    })
   })
 
   it('shows a load error message when the API fails', async () => {

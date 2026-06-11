@@ -4,6 +4,7 @@ import { RouterView, useRoute, useRouter } from 'vue-router'
 import { SkipLink } from 'govuk-frontend'
 import GovServiceNavigation from '@/components/govuk/GovServiceNavigation.vue'
 import GovTag from '@/components/govuk/GovTag.vue'
+import SearchModal from '@/components/SearchModal.vue'
 import { useGovukComponent } from '@/components/govuk'
 import type { ServiceNavigationItem } from '@/components/govuk'
 import { useAuthStore } from '@/stores/auth'
@@ -15,6 +16,8 @@ const auth = useAuthStore()
 const skipLink = ref<HTMLElement | null>(null)
 useGovukComponent(skipLink, SkipLink)
 
+const searchModal = ref<InstanceType<typeof SearchModal> | null>(null)
+
 const navItems = computed<ServiceNavigationItem[]>(() => {
   if (!auth.isAuthenticated) return []
   return [
@@ -23,12 +26,19 @@ const navItems = computed<ServiceNavigationItem[]>(() => {
       to: '/',
       active: route.name === 'documents' || route.name === 'document-detail',
     },
+    // Opens the search dialog (no navigation): a button item, announced
+    // as opening a dialog via aria-haspopup.
+    { text: 'Search', button: true, ariaHasPopup: 'dialog' },
     { text: 'Upload', to: '/upload', active: route.name === 'upload' },
     { text: 'Sign out' },
   ]
 })
 
 async function onNavSelect(item: ServiceNavigationItem): Promise<void> {
+  if (item.text === 'Search') {
+    searchModal.value?.open()
+    return
+  }
   if (item.text === 'Sign out') {
     await auth.logout()
     await router.push({ name: 'login' })
@@ -50,6 +60,7 @@ async function onNavSelect(item: ServiceNavigationItem): Promise<void> {
   </header>
 
   <GovServiceNavigation v-if="navItems.length" :items="navItems" @select="onNavSelect" />
+  <SearchModal v-if="auth.isAuthenticated" ref="searchModal" />
 
   <div class="govuk-width-container">
     <div class="govuk-phase-banner">

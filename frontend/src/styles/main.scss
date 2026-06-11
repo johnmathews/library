@@ -151,64 +151,99 @@ $app-wide-page-width: 1280px;
   color: base.govuk-functional-colour(secondary-text);
 }
 
-// --- Document list ----------------------------------------------------------
-// GOV.UK-style search results: thumbnail + body per row; stays a single
-// column on mobile because the thumbnail is fixed-width and the body fluid.
+// --- Documents dashboard grid -------------------------------------------------
+// App extension (documented in docs/frontend.md §1.2.6): GOV.UK's grid
+// classes lay out page columns, not card grids, so the dashboard uses a
+// plain CSS grid with GOV.UK breakpoints — 1 column on mobile (<641px),
+// 2 from the tablet breakpoint, 3 from desktop (769px), 4 from the app's
+// wide-desktop breakpoint (≥1400px, see §1.2.5 above).
 
-.app-doc-list__item {
+.app-doc-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: base.govuk-spacing(4);
+  margin-bottom: base.govuk-spacing(6);
+
+  @media #{base.govuk-from-breakpoint(tablet)} {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  @media #{base.govuk-from-breakpoint(desktop)} {
+    grid-template-columns: repeat(3, 1fr);
+  }
+
+  @media (min-width: $app-wide-breakpoint) {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}
+
+// A document tile, built from GOV.UK primitives. The whole tile is one
+// ≥44px touch target: its single anchor (the title link) is stretched over
+// the card by the ::after overlay below — exactly one <a> per tile, so
+// screen readers hear one link, not a link-per-element.
+.app-doc-card {
+  position: relative;
   display: flex;
-  gap: base.govuk-spacing(3);
-  padding: base.govuk-spacing(3) 0;
-  border-bottom: 1px solid base.govuk-functional-colour(border);
+  flex-direction: column;
+  margin: 0;
+  border: 1px solid base.govuk-functional-colour(border);
+  background-color: base.govuk-colour("white");
 
-  &:first-child {
-    border-top: 1px solid base.govuk-functional-colour(border);
+  // GOV.UK yellow/black focus drawn around the WHOLE tile when the
+  // stretched link receives focus (the link text itself also keeps the
+  // standard govuk-link focused-text style).
+  &:focus-within {
+    outline: base.$govuk-focus-width solid base.$govuk-focus-colour;
+    outline-offset: 0;
+    box-shadow: 0 base.$govuk-focus-width 0 base.govuk-colour("black");
   }
 }
 
-.app-doc-list__thumbnail {
-  flex: 0 0 60px;
-
-  img {
-    display: block;
-    width: 60px;
-    height: auto;
-    border: 1px solid base.govuk-functional-colour(border);
-  }
-}
-
-.app-doc-list__thumbnail-fallback {
-  @include base.govuk-font($size: 16, $weight: bold);
+// Fixed 4:3 media area; object-fit: contain letterboxes any page shape
+// against a light grey background.
+.app-doc-card__thumbnail {
   display: flex;
   align-items: center;
   justify-content: center;
-  width: 60px;
-  height: 80px;
-  border: 1px solid base.govuk-functional-colour(border);
+  aspect-ratio: 4 / 3;
+  overflow: hidden;
+  border-bottom: 1px solid base.govuk-functional-colour(border);
   background-color: base.govuk-functional-colour(surface-background);
-  color: base.govuk-functional-colour(secondary-text);
-}
 
-.app-doc-list__body {
-  flex: 1 1 auto;
-  min-width: 0;
-}
-
-.app-doc-list__title {
-  margin-bottom: base.govuk-spacing(1);
-  overflow-wrap: anywhere;
-
-  // The row's only link: pad the hit area to ≥44px without moving layout
-  // (the line box is ~25px). The overlap below only covers non-interactive
-  // tags/metadata, so no adjacent target is shadowed.
-  .govuk-link {
-    display: inline-block;
-    padding-block: base.govuk-spacing(2);
-    margin-block: -#{base.govuk-spacing(2)};
+  img {
+    width: 100%;
+    height: 100%;
+    object-fit: contain;
   }
 }
 
-.app-doc-list__meta {
+.app-doc-card__thumbnail-fallback {
+  @include base.govuk-font($size: 19, $weight: bold);
+  color: base.govuk-functional-colour(secondary-text);
+}
+
+.app-doc-card__body {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: base.govuk-spacing(3);
+}
+
+.app-doc-card__title {
+  margin-bottom: base.govuk-spacing(1);
+  overflow-wrap: anywhere;
+
+  // Stretched-link pattern: the tile's one anchor grows an invisible
+  // overlay covering the positioned ancestor (.app-doc-card), making the
+  // full card clickable. Everything else in the card is non-interactive,
+  // so nothing is shadowed.
+  .govuk-link::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+  }
+}
+
+.app-doc-card__meta {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -216,13 +251,19 @@ $app-wide-page-width: 1280px;
   margin-bottom: base.govuk-spacing(1);
 }
 
-.app-doc-list__sender,
-.app-doc-list__date {
+.app-doc-card__sender,
+.app-doc-card__date {
   color: base.govuk-functional-colour(secondary-text);
 }
 
-.app-doc-list__snippet {
+.app-doc-card__snippet {
   margin-bottom: 0;
+  color: base.govuk-functional-colour(secondary-text);
+}
+
+// Active-filter summary line above the grid (plain GOV.UK body text, no
+// chip widgetry): "Filtered by …, … · Clear filters".
+.app-filter-summary {
   color: base.govuk-functional-colour(secondary-text);
 }
 
@@ -234,6 +275,55 @@ $app-wide-page-width: 1280px;
   display: inline-block;
   padding-block: base.govuk-spacing(2);
   margin-block: -#{base.govuk-spacing(2)};
+}
+
+// --- Service-navigation button item -------------------------------------------
+// App extension (docs/frontend.md §1.2.7): the nav's "Search" item opens a
+// dialog instead of navigating, so it must be a <button>. It shares the
+// govuk-service-navigation__link class for layout, but the GOV.UK link
+// mixins only style :link/:visited — this restyles the button to match,
+// the same recipe as the component's own mobile menu toggle.
+.app-nav-button {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: base.govuk-functional-colour(link);
+  font: inherit;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+    @include base.govuk-link-hover-decoration;
+  }
+
+  &:focus {
+    @include base.govuk-focused-text;
+  }
+}
+
+// --- Search modal --------------------------------------------------------------
+// App extension (docs/frontend.md §1.2.7): GOV.UK has no modal component.
+// Built on the native <dialog> (showModal()): focus containment, ESC and
+// ::backdrop come from the platform; the styling below is just a white
+// GOV.UK-bordered panel. Centred with a max width on desktop, effectively
+// full-width and scrollable on small screens.
+.app-modal {
+  width: min(640px, calc(100vw - #{base.govuk-spacing(6)}));
+  max-height: calc(100vh - #{base.govuk-spacing(6)});
+  margin: auto; // centre in the viewport (explicit; UA default for dialogs)
+  padding: base.govuk-spacing(6);
+  border: base.$govuk-focus-width solid base.govuk-colour("black");
+  background-color: base.govuk-colour("white");
+  overflow-y: auto;
+
+  &::backdrop {
+    // govuk black at 60% — dims the page like GOV.UK's old modal prototypes.
+    background-color: rgba(11, 12, 12, 0.6);
+  }
+}
+
+.app-modal__hint {
+  margin-bottom: 0;
 }
 
 // --- Document detail ----------------------------------------------------------

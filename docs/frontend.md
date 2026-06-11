@@ -90,7 +90,7 @@ Props loosely follow the GOV.UK nunjucks macro options (`label`, `hint`,
 | `GovTag` | no | `colour` modifier |
 | `GovPagination` | no | emits `change(page)`; GOV.UK condensed page list |
 | `GovNotificationBanner` | yes (`NotificationBanner`) | `variant="success"` renders `role="alert"` and is focused on mount |
-| `GovServiceNavigation` | yes (`ServiceNavigation`) | mobile menu toggle; RouterLink items + action items (emit `select`) |
+| `GovServiceNavigation` | yes (`ServiceNavigation`) | mobile menu toggle; RouterLink items + action items and `button: true` items (emit `select`; §1.2.7) |
 | `GovFileUpload` | yes (`FileUpload`) | v6.2 enhanced drop-zone; v-model is `File[] \| null` |
 | `GovPanel` | no | confirmation panel |
 | `GovDetails` | no | native `<details>` |
@@ -149,6 +149,60 @@ metadata at 1280px). Narrow form pages (login) remain constrained by
 their own grid columns. `e2e/responsive.spec.ts` regression-checks the
 widened container at 1920×1080 on the chromium project (§1.6).
 
+### 1.2.6 Dashboard tile grid
+
+The documents page (§1.4.1) lays its results out as a **grid of tiles**.
+GOV.UK's grid classes (`govuk-grid-row`/`govuk-grid-column-*`) compose
+page columns, not card grids — there is no GOV.UK card component — so
+`app-doc-grid`/`app-doc-card` in `main.scss` are an app extension built
+from design-system primitives only (govuk colours, spacing, type scale,
+tags, links):
+
+- **Columns** follow GOV.UK breakpoints plus the app's wide breakpoint:
+  1 column below 641px (mobile), 2 from `tablet` (641px), 3 from
+  `desktop` (769px), 4 from 1400px (§1.2.5). Plain CSS grid,
+  `gap: govuk-spacing(4)`.
+- **Tile anatomy:** a fixed 4:3 thumbnail area (`object-fit: contain`
+  over a light grey `surface-background`, file-type placeholder when no
+  thumbnail), the title as a `govuk-link`, kind/language `govuk-tag`s,
+  sender + date in `govuk-body-s`, and the search snippet when a query
+  is active.
+- **One anchor per tile (stretched link):** the title link's `::after`
+  overlay covers the positioned card, making the whole tile one ≥44px
+  touch target while screen readers hear exactly one link. Focus is
+  drawn around the **whole tile** in GOV.UK yellow/black
+  (`:focus-within` outline in `$govuk-focus-colour` plus a black bottom
+  shadow); the title text additionally keeps the standard focused-text
+  style.
+
+### 1.2.7 Search modal and the navbar Search button
+
+GOV.UK deliberately has **no modal component** (its guidance prefers
+full pages — which this app follows for destructive actions, §1.4.2.1).
+The search-and-filter form is the one place a modal earns its keep: it
+is non-destructive, pre-filled from the URL, and opening a separate page
+just to type a query would cost more than it saves. Two extensions:
+
+- **`SearchModal.vue`** is built on the native `<dialog>` element via
+  `showModal()` — focus containment, ESC-to-close and `::backdrop` come
+  from the platform, so no focus-trap library or ARIA plumbing is
+  needed beyond `aria-labelledby` (native modal dialogs already expose
+  `role="dialog"` and implicit `aria-modal`). Styling (`app-modal`) is
+  a white panel with a GOV.UK black border, max-width 640px, centred,
+  scrollable and effectively full-width on small screens; the backdrop
+  is govuk black at 60%. Focus returns to the opener explicitly on
+  `close` (deterministic across engines). Pressing **`/`** anywhere
+  outside a form field opens it.
+- **`app-nav-button`**: the navbar "Search" item must be a `<button>`
+  (it opens a dialog, it does not navigate), but GOV.UK's service
+  navigation only documents `<a>` items and its link mixins style
+  `:link`/`:visited` only. The button shares the
+  `govuk-service-navigation__link` class for placement and is restyled
+  to match the links — same recipe as the component's own mobile menu
+  toggle. A11y: `aria-haspopup="dialog"` announces the popup; per the
+  ARIA Authoring Practices, `aria-expanded` belongs to disclosure
+  widgets, not modal dialogs, so it is deliberately absent.
+
 ## 1.3 Auth integration
 
 Contract: [api.md](api.md) §1.9.
@@ -190,26 +244,46 @@ with `ApiError`. `src/api/taxonomy.ts` wraps the taxonomy list endpoints
 filters and the detail page's edit inputs — the former `DOCUMENT_KINDS`
 hardcode is gone.
 
-### 1.4.1 Documents list — `/` (`DocumentListView`)
+### 1.4.1 Documents dashboard — `/` (`DocumentListView`)
 
-GOV.UK-style search results: per row a thumbnail
+A **dashboard grid of document tiles** using the full content width
+(grid extension: §1.2.6). Each tile: 4:3 thumbnail
 (`/api/documents/{id}/thumbnail`, with a file-type placeholder when
 `has_thumbnail` is false or the image 404s), title linking to
-`/documents/:id` (carrying the active search as `?highlight=` so the
+`/documents/:id` (the whole tile clickable via the stretched-link
+pattern; the link carries the active search as `?highlight=` so the
 detail page can mark matches in the OCR text), kind and language tags,
-sender, document date, and — when searching — the `ts_headline` snippet.
-Search box (`q`, websearch syntax) plus a collapsible filter panel
-(kind, sender and tag selects fed by the taxonomy endpoints, language,
-date range using `GovDateInput`); `GovPagination` drives
-`limit`/`offset` (25 per page). A one-shot success banner (Pinia
-`useFlashStore`) confirms actions that redirect here, e.g. deletion.
+sender, document date, and — when searching — the `ts_headline`
+snippet. Above the grid: the "N documents" count and, when a query or
+filter is active, a plain filter summary line ("Filtered by search
+“rekening”, kind Invoice, … · Clear filters") that resolves kind/
+sender/tag values to names through the shared taxonomy cache
+(`src/composables/taxonomyOptions.ts`, fetched lazily and only when
+needed). `GovPagination` drives `limit`/`offset` (25 per page). A
+one-shot success banner (Pinia `useFlashStore`) confirms actions that
+redirect here, e.g. deletion.
 
-All applied state lives in the **URL query**
+Searching and filtering happen in the **navbar search modal**
+(§1.4.1.1) — the view itself has no form; it only reads the URL. All
+applied state lives in the **URL query**
 (`?q=…&kind=…&sender_id=…&tag=…&language=…&date_from=…&date_to=…&page=…`),
-so back/forward and refresh restore both the form and the results. Two
-distinct empty states: an empty library (inset text linking to
-`/upload`) vs. a search with no matches (inset text offering to clear
-filters).
+so back/forward and refresh restore the results. Two distinct empty
+states: an empty library (inset text linking to `/upload`) vs. a search
+with no matches (inset text offering to clear filters).
+
+### 1.4.1.1 Search modal (`SearchModal.vue`)
+
+Opened from the service navigation's **Search** button (between
+Documents and Upload; `aria-haspopup="dialog"`) or by pressing `/`
+anywhere outside a form field. A native `<dialog>` (§1.2.7) containing
+the query `GovInput` (websearch syntax hint), kind/sender/tag selects
+fed lazily from the taxonomy endpoints (cached app-wide), language
+select, and `GovDateInput` from/to — plus Search (primary), Clear
+(secondary, empties the fields) and Cancel (link-styled button, closes).
+Opening pre-fills the form from the current route query so an active
+search can be edited; submitting pushes the query to the documents
+route (which is URL-synced and refetches) and closes; focus returns to
+the opener on close.
 
 ### 1.4.2 Document detail — `/documents/:id` (`DocumentDetailView`)
 
@@ -329,22 +403,26 @@ Two spec files run against the **real stack**:
 horizontal overflow on `/login`, `/` and `/upload` — re-checked at the
 320px floor on the mobile project — the service navigation reachable
 on every viewport, behind the Menu toggle below the GOV.UK 641px tablet
-breakpoint, inline above it, and — on the chromium project at
-1920×1080 — the wide-desktop extension (§1.2.5): the main content
-container wider than 1100px with no horizontal overflow).
+breakpoint, inline above it; the dashboard grid's computed column count
+per viewport — 1 at 375px, 2 on iPad portrait (656px), 3 on the 1280px
+desktop — and, on the chromium project at 1920×1080, the wide-desktop extension
+(§1.2.5): the main content container wider than 1100px, the grid 4-up,
+no horizontal overflow).
 
 `library.spec.ts`: sign in → upload `e2e/fixtures/library-fixture.pdf` (a
 checked-in one-page PDF whose text layer contains Dutch words, including
 "rekeningen") → wait for `Indexed` (or the duplicate banner on re-runs)
-→ see it in the list → search the stem `rekening` and assert a
-highlighted snippet. The W11 test then creates a throwaway text document
-with **unique content** via the API (deleting the shared PDF fixture
-would break the other project's duplicate-upload path with a 409),
-opens it from the list, edits the title through Change → Save (banner +
-persistence across reload), and deletes it via the confirmation page
-(banner on the list, detail then 404s). Claude extraction is not
-required: assertions rely only on the OCR/text-layer pipeline, never on
-extracted metadata, so the suite passes without an Anthropic API key.
+→ see its tile on the dashboard grid → search the stem `rekening`
+through the navbar search modal and assert a highlighted snippet on the
+matching tile (the no-results state is exercised the same way). The W11
+test then creates a throwaway text document with **unique content** via
+the API (deleting the shared PDF fixture would break the other project's
+duplicate-upload path with a 409), opens it from its tile, edits the
+title through Change → Save (banner + persistence across reload), and
+deletes it via the confirmation page (banner on the list, detail then
+404s). Claude extraction is not required: assertions rely only on the
+OCR/text-layer pipeline, never on extracted metadata, so the suite
+passes without an Anthropic API key.
 
 Three projects — the W16 cross-device matrix, all running both spec
 files: `chromium` (desktop), `mobile-webkit` (iPhone 14 device
@@ -381,9 +459,14 @@ the `e2e` job of `.github/workflows/ci.yml` (user `e2e`, password
   FileUpload init), API client CSRF behaviour, documents + taxonomy API
   (query serialisation, XHR upload incl. progress/duplicate/415/network),
   snippet + highlight XSS contracts, auth store, router guard, login view
-  flows, document list (rows, empty states, URL-synced filters incl.
-  sender/tag, taxonomy-fed options, highlight links, flash banner,
-  pagination, snippet rendering), document detail (summary rows with
+  flows, app shell (nav order with the Search button between Documents
+  and Upload, modal opening, signed-out state), search modal (open/
+  prefill/submit/clear/cancel, lazy cached taxonomy, focus return, the
+  `/` shortcut — jsdom ships no `showModal()`/`close()`, so the specs
+  stub a happy-path approximation), documents dashboard (tile grid,
+  single stretched link per tile, empty states, URL-driven requests,
+  filter summary + clear, highlight links, flash banner, pagination,
+  snippet rendering), document detail (summary rows with
   dashes, per-field PATCH + banner, fetched kind options, sender
   datalist, 422 error summary, preview selection, OCR highlighting,
   re-extraction polling stop condition), delete confirmation flow,
@@ -439,8 +522,9 @@ container, so the first launch from the icon requires one sign-in.)
   `app-footer`) with `env(safe-area-inset-left/right)` and the footer
   with `env(safe-area-inset-bottom)` for the home indicator.
 - Touch targets are ≥44px (Apple HIG): GOV.UK buttons, form controls and
-  pagination items (45×45px) are already compliant; the custom targets —
-  masthead "Library" link, document-list title links, upload-row "View"
+  pagination items (45×45px) are already compliant; document tiles are
+  fully clickable (stretched link, §1.2.6) so far larger than 44px; the
+  remaining custom targets — masthead "Library" link, upload-row "View"
   links, standalone links (`app-standalone-link`: clear-filters,
   open-PDF, download links) and the summary-list "Change" buttons
   (`app-link-button`) — get a padded hit area via
@@ -473,6 +557,7 @@ mobile-done, walk this on real hardware against the deployed instance
    `/login`, `/`, `/upload`, a document detail page, in either
    orientation.
 6. **Touch**: pagination, the summary-list "Change" actions and the
-   list-row title links are comfortably tappable; iPad portrait shows
-   the inline navigation (no Menu toggle), iPhone shows the Menu toggle
-   and it opens/navigates.
+   dashboard tiles (fully clickable) are comfortably tappable; iPad
+   portrait shows the inline navigation (no Menu toggle), iPhone shows
+   the Menu toggle and it opens/navigates; the navbar Search button
+   opens the modal and the modal is scrollable and full-width.

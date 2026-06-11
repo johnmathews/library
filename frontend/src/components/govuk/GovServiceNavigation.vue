@@ -64,6 +64,23 @@ function onActionClick(event: Event, item: ServiceNavigationItem): void {
                 </strong>
                 <template v-else>{{ item.text }}</template>
               </RouterLink>
+              <!--
+                Button items: same place and classes as the nav links, but a
+                real <button> because they open a dialog instead of navigating
+                (a11y: aria-haspopup="dialog" announces the popup; per the ARIA
+                APG, aria-expanded is for disclosure widgets, not modal
+                dialogs). The link mixins only style :link/:visited, so the
+                app-nav-button extension restyles the button to match.
+              -->
+              <button
+                v-else-if="item.button"
+                type="button"
+                class="govuk-service-navigation__link app-nav-button"
+                :aria-haspopup="item.ariaHasPopup"
+                @click="emit('select', item)"
+              >
+                {{ item.text }}
+              </button>
               <a
                 v-else
                 class="govuk-service-navigation__link"

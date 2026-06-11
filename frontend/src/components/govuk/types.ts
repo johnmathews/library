@@ -36,10 +36,20 @@ export interface SummaryListRow {
   actions?: SummaryListAction[]
 }
 
-/** Navigation item for GovServiceNavigation. `to` renders a RouterLink. */
+/**
+ * Navigation item for GovServiceNavigation. `to` renders a RouterLink;
+ * `button: true` renders a real `<button>` styled like the nav links
+ * (app extension `app-nav-button` — for items that open a dialog rather
+ * than navigate, e.g. Search). Buttons and plain `<a>` action items
+ * both emit `select`.
+ */
 export interface ServiceNavigationItem {
   text: string
   to?: string
   href?: string
   active?: boolean
+  /** Render a `<button type="button">` instead of a link. */
+  button?: boolean
+  /** `aria-haspopup` for button items that open a popup (e.g. 'dialog'). */
+  ariaHasPopup?: 'dialog' | 'menu' | 'listbox' | 'tree' | 'grid' | 'true'
 }

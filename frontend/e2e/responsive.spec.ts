@@ -8,7 +8,11 @@
  *   - the mobile project re-checks overflow at the 320px floor;
  *   - the chromium project re-checks at 1920×1080 that the wide-desktop
  *     width extension (main.scss, docs/frontend.md §1.2.5) widens the
- *     content container past GOV.UK's 960px default without overflow.
+ *     content container past GOV.UK's 960px default without overflow,
+ *     and that the dashboard grid reaches its 4-column wide layout;
+ *   - the dashboard document grid (app-doc-grid, docs/frontend.md §1.2.6)
+ *     renders the expected column count per viewport: 1 at 375px,
+ *     2 on iPad portrait (656px, tablet band) and 3 on the 1280px desktop.
  *
  * Same contract as library.spec.ts: requires the real stack and the `e2e`
  * user; skips itself entirely when E2E_BASE_URL is unset.
@@ -90,6 +94,38 @@ test('wide desktops get the widened content container', async ({ page }, testInf
     `at 1920px the main content container must exceed 1100px, got ${containerWidth}`,
   ).toBeGreaterThan(1100)
   await expectNoHorizontalOverflow(page, '/ @1920')
+
+  // Above the 1400px app breakpoint the dashboard grid goes 4-up
+  // (library.spec.ts ran first in this project, so documents exist).
+  expect(await gridColumnCount(page)).toBe(4)
+})
+
+/** Computed column count of the dashboard grid (0 when no grid). */
+async function gridColumnCount(page: Page): Promise<number> {
+  const grid = page.locator('.app-doc-grid')
+  if ((await grid.count()) === 0) return 0
+  return grid.evaluate(
+    (element) => getComputedStyle(element).gridTemplateColumns.split(' ').length,
+  )
+}
+
+test('the dashboard grid has the expected column count per viewport', async ({
+  page,
+}, testInfo) => {
+  await signIn(page) // lands on / (documents)
+
+  // library.spec.ts runs first within each project, so the library holds
+  // at least the uploaded PDF fixture and the grid is present.
+  const expected = {
+    chromium: 3, // 1280px default viewport: desktop, below the 1400px wide breakpoint
+    'mobile-webkit': 1, // 375px: single column
+    'tablet-webkit': 2, // iPad (gen 11) portrait is 656px: tablet band (641–768px)
+  }[testInfo.project.name]
+  expect(expected, `unknown project ${testInfo.project.name}`).toBeDefined()
+
+  await expect(page.locator('.app-doc-card').first()).toBeVisible()
+  expect(await gridColumnCount(page)).toBe(expected)
+  await expectNoHorizontalOverflow(page, `/ grid (${testInfo.project.name})`)
 })
 
 test('service navigation is reachable on every viewport', async ({ page }, testInfo) => {

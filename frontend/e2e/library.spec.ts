@@ -1,10 +1,11 @@
 /**
  * W10 + W11 acceptance e2e: sign in → upload a PDF fixture → wait for the
- * pipeline to index it → find it in the list → full-text search by a
- * Dutch stem; then the detail page — open from the list, edit the title
- * via the summary-list Change flow, delete via the confirmation page.
- * Runs in all three matrix projects (desktop Chromium, 375px WebKit,
- * iPad-portrait WebKit) — see playwright.config.ts.
+ * pipeline to index it → find its tile on the dashboard grid → full-text
+ * search by a Dutch stem through the navbar search modal; then the detail
+ * page — open from a tile, edit the title via the summary-list Change
+ * flow, delete via the confirmation page. Runs in all three matrix
+ * projects (desktop Chromium, 375px WebKit, iPad-portrait WebKit) — see
+ * playwright.config.ts.
  *
  * Requires the real stack (docker compose db/migrate/api/worker + the
  * built frontend behind `vite preview`'s /api proxy) and an `e2e` user;
@@ -49,6 +50,30 @@ async function openUploadPage(page: Page): Promise<void> {
   await expect(page.getByRole('heading', { name: 'Upload documents' })).toBeVisible()
 }
 
+/**
+ * Search through the navbar's Search button (mobile: via Menu) and its
+ * modal: fill the query, submit, and wait for the dialog to close. The
+ * nav button is scoped to the service navigation because the modal's
+ * submit button carries the same accessible name.
+ */
+async function searchFor(page: Page, query: string): Promise<void> {
+  const navSearch = page
+    .locator('.govuk-service-navigation')
+    .getByRole('button', { name: 'Search', exact: true })
+  // Mobile: the nav list collapses behind the Menu toggle. Only toggle when
+  // the Search button is hidden — the menu stays open after a previous use,
+  // and toggling again would close it.
+  if (!(await navSearch.isVisible())) {
+    await page.getByRole('button', { name: 'Menu' }).click()
+  }
+  await navSearch.click()
+  const modal = page.getByTestId('search-modal')
+  await expect(modal).toBeVisible()
+  await modal.locator('#search').fill(query)
+  await modal.getByRole('button', { name: 'Search', exact: true }).click()
+  await expect(modal).toBeHidden()
+}
+
 test('sign in, upload a PDF, see it indexed, listed and searchable', async ({ page }) => {
   await signIn(page)
   await openUploadPage(page)
@@ -65,25 +90,25 @@ test('sign in, upload a PDF, see it indexed, listed and searchable', async ({ pa
   const duplicate = page.getByText('already in your library')
   await expect(indexed.or(duplicate).first()).toBeVisible({ timeout: 150_000 })
 
-  // The document appears in the list (poll by reloading; thumbnails and
-  // search vector are written by background jobs).
+  // The document appears as a tile on the dashboard grid (poll by
+  // reloading; thumbnails and search vector are written by background jobs).
   await page.goto('/')
   await expect(async () => {
     await page.reload()
-    await expect(page.locator('.app-doc-list__item').first()).toBeVisible({ timeout: 2_000 })
+    await expect(page.locator('.app-doc-card').first()).toBeVisible({ timeout: 2_000 })
   }).toPass({ timeout: 60_000 })
 
-  // Dutch stemming: the fixture contains "rekeningen", search the stem.
-  await page.locator('#search').fill('rekening')
-  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  // Dutch stemming: the fixture contains "rekeningen", search the stem
+  // through the navbar search modal.
+  await searchFor(page, 'rekening')
   await expect(page).toHaveURL(/q=rekening/)
-  await expect(page.locator('.app-doc-list__item').first()).toBeVisible()
+  await expect(page.locator('.app-doc-card').first()).toBeVisible()
   // ts_headline snippet with the match highlighted as a real <b> element.
-  await expect(page.locator('.app-doc-list__snippet b').first()).toContainText(/rekening/i)
+  await expect(page.locator('.app-doc-card__snippet b').first()).toContainText(/rekening/i)
 
-  // A nonsense query shows the no-results state, not the empty library.
-  await page.locator('#search').fill('kwijxzylqq')
-  await page.getByRole('button', { name: 'Search', exact: true }).click()
+  // A nonsense query (also via the modal) shows the no-results state,
+  // not the empty library.
+  await searchFor(page, 'kwijxzylqq')
   await expect(page.getByTestId('empty-results')).toBeVisible()
 })
 
@@ -112,9 +137,9 @@ test('detail: open from list, edit title, delete via confirmation page', async (
   expect(response.status()).toBe(201)
   const { id } = (await response.json()) as { id: number }
 
-  // Newest document (no document_date, latest created_at) → first list row.
+  // Newest document (no document_date, latest created_at) → first tile.
   await page.goto('/')
-  await page.locator('.app-doc-list__title a').first().click()
+  await page.locator('.app-doc-card__title a').first().click()
   await expect(page).toHaveURL(new RegExp(`/documents/${id}$`))
   await expect(page.getByText('Status', { exact: true })).toBeVisible()
 
@@ -139,7 +164,7 @@ test('detail: open from list, edit title, delete via confirmation page', async (
   // Redirected to the list with a success banner; the document is gone.
   await expect(page).toHaveURL(/\/$/)
   await expect(page.getByTestId('flash-banner')).toContainText('has been deleted')
-  await expect(page.locator('.app-doc-list__title a', { hasText: newTitle })).toHaveCount(0)
+  await expect(page.locator('.app-doc-card__title a', { hasText: newTitle })).toHaveCount(0)
   await page.goto(`/documents/${id}`)
   await expect(page.getByRole('heading', { name: 'Document not found' })).toBeVisible()
 })
