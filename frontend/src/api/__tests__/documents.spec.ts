@@ -1,5 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { documentQueryString, listDocuments, uploadDocument } from '../documents'
+import {
+  documentQueryString,
+  listDocuments,
+  originalUrl,
+  searchablePdfUrl,
+  thumbnailUrl,
+  uploadDocument,
+} from '../documents'
 import { ApiError } from '../client'
 
 describe('documentQueryString', () => {
@@ -21,6 +28,22 @@ describe('documentQueryString', () => {
 
   it('omits undefined and empty values', () => {
     expect(documentQueryString({ q: '', kind: undefined })).toBe('')
+  })
+})
+
+describe('file URL helpers', () => {
+  it('build attachment (download) URLs by default', () => {
+    expect(originalUrl(12)).toBe('/api/documents/12/original')
+    expect(searchablePdfUrl(12)).toBe('/api/documents/12/searchable.pdf')
+    expect(thumbnailUrl(12)).toBe('/api/documents/12/thumbnail')
+  })
+
+  it('append ?disposition=inline for in-browser rendering', () => {
+    expect(originalUrl(12, { inline: true })).toBe('/api/documents/12/original?disposition=inline')
+    expect(searchablePdfUrl(12, { inline: true })).toBe(
+      '/api/documents/12/searchable.pdf?disposition=inline',
+    )
+    expect(originalUrl(12, { inline: false })).toBe('/api/documents/12/original')
   })
 })
 

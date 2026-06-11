@@ -589,6 +589,67 @@ def test_download_searchable_pdf(api_client: TestClient, api_database_url: str) 
     assert api_client.get(f"/api/documents/{without_pdf}/searchable.pdf").status_code == 404
 
 
+def test_download_original_inline_disposition(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`?disposition=inline` serves inline (for the detail-page preview) but
+    keeps the filename so a user-initiated save still gets the right name."""
+    content = b"%PDF-1.4 w-disposition-original"
+    store(content)
+    document_id = seed_document(
+        api_database_url, content.decode(), original_filename="factuur-juni.pdf"
+    )
+
+    response = api_client.get(f"/api/documents/{document_id}/original?disposition=inline")
+    assert response.status_code == 200
+    disposition = response.headers["content-disposition"]
+    assert disposition.startswith("inline") and "factuur-juni.pdf" in disposition
+    assert "attachment" not in disposition
+
+    # Explicit attachment and the default behave identically.
+    for url in (
+        f"/api/documents/{document_id}/original?disposition=attachment",
+        f"/api/documents/{document_id}/original",
+    ):
+        response = api_client.get(url)
+        assert response.status_code == 200
+        assert response.headers["content-disposition"].startswith("attachment")
+
+    assert (
+        api_client.get(f"/api/documents/{document_id}/original?disposition=bogus").status_code
+        == 422
+    )
+
+
+def test_download_searchable_pdf_inline_disposition(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    pdf = b"%PDF-1.4 w-disposition-searchable"
+    document_id = seed_document(
+        api_database_url,
+        "w-disposition-searchable",
+        original_filename="scan.pdf",
+        searchable_pdf=True,
+    )
+    sha = hashlib.sha256(b"w-disposition-searchable").hexdigest()
+    (derived_dir(sha) / "searchable.pdf").write_bytes(pdf)
+
+    response = api_client.get(f"/api/documents/{document_id}/searchable.pdf?disposition=inline")
+    assert response.status_code == 200
+    disposition = response.headers["content-disposition"]
+    assert disposition.startswith("inline") and "scan-searchable.pdf" in disposition
+
+    response = api_client.get(f"/api/documents/{document_id}/searchable.pdf")
+    assert response.headers["content-disposition"].startswith("attachment")
+
+    assert (
+        api_client.get(
+            f"/api/documents/{document_id}/searchable.pdf?disposition=download"
+        ).status_code
+        == 422
+    )
+
+
 def test_thumbnail_endpoint_serves_webp_and_marks_presence(
     api_client: TestClient, api_database_url: str
 ) -> None:

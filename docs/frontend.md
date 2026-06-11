@@ -122,6 +122,33 @@ instantiates in `onMounted` guarded by `isSupported()`, clears the
 4. Export from `index.ts`, add a Vitest spec asserting the load-bearing
    classes/ARIA, and run `npm run build && npm run check:assets`.
 
+### 1.2.5 Wide-desktop width extension
+
+GOV.UK caps `govuk-width-container` at `$govuk-page-width` (960px) —
+right for gov.uk's text-led pages, but this app's documents list and the
+detail page's two-thirds preview pane swim in whitespace on large
+monitors. `src/styles/main.scss` raises the container to **1280px from a
+1400px viewport up** as a documented app extension:
+
+```scss
+@media (min-width: 1400px) {
+  .govuk-width-container { max-width: 1280px; }
+}
+```
+
+A media-query override was chosen **instead of setting
+`$govuk-page-width` on the Sass module**: the Sass setting would widen
+the container at every viewport from ~990px up, silently changing
+GOV.UK's documented responsive behaviour (breakpoints, margins, the
+960px column) on ordinary laptops; the override leaves everything below
+1400px byte-for-byte untouched. It applies to all width containers
+(masthead, service navigation, main content, footer), so the bars stay
+aligned with the content column, and the grid's percentage-based
+two-thirds/one-third split scales with it (~853px preview / ~427px
+metadata at 1280px). Narrow form pages (login) remain constrained by
+their own grid columns. `e2e/responsive.spec.ts` regression-checks the
+widened container at 1920×1080 on the chromium project (§1.6).
+
 ## 1.3 Auth integration
 
 Contract: [api.md](api.md) §1.9.
@@ -152,7 +179,11 @@ Typed API layer: `src/api/documents.ts` mirrors the backend schemas
 `UploadResult`, `JobInfo`) and wraps `GET/POST /api/documents`,
 `GET/PATCH/DELETE /api/documents/{id}` and
 `POST /api/documents/{id}/extract` plus `GET /api/jobs` and the
-download-URL helpers. Uploads go through `XMLHttpRequest` (fetch has no
+file-URL helpers — `thumbnailUrl(id)`, and `originalUrl(id, options?)` /
+`searchablePdfUrl(id, options?)`, whose optional `{ inline?: boolean }`
+appends `?disposition=inline` for in-browser rendering (the detail
+page's previews; docs/api.md §1.7) while the default stays the
+attachment download. Uploads go through `XMLHttpRequest` (fetch has no
 upload progress events); 200/201 resolve, 409/413/415/network reject
 with `ApiError`. `src/api/taxonomy.ts` wraps the taxonomy list endpoints
 (`GET /api/kinds|senders|tags`, docs/api.md §1.8.2), which feed the list
@@ -193,6 +224,11 @@ tab" link for browsers with inline PDF viewing disabled. This is a
 deliberate choice over pdf.js: every modern browser ships a PDF viewer,
 and a pdf.js integration would add a heavyweight dependency for no gain
 at family scale. Other types get a fallback panel with a download link.
+The iframe/img sources (and the open-in-new-tab link) request
+`?disposition=inline` (docs/api.md §1.7) — the endpoints' attachment
+default renders nothing inside an `<iframe>`/`<img>` and triggers a
+download instead; the Actions download links keep the attachment
+default.
 
 **Metadata editing.** A GOV.UK summary list with a per-row "Change"
 action and an **inline reveal**: Change swaps the value cell for the
@@ -291,9 +327,11 @@ Two spec files run against the **real stack**:
 `frontend/e2e/library.spec.ts` (the W10 + W11 acceptance) and
 `frontend/e2e/responsive.spec.ts` (the W16 viewport regression: no
 horizontal overflow on `/login`, `/` and `/upload` — re-checked at the
-320px floor on the mobile project — and the service navigation reachable
+320px floor on the mobile project — the service navigation reachable
 on every viewport, behind the Menu toggle below the GOV.UK 641px tablet
-breakpoint, inline above it).
+breakpoint, inline above it, and — on the chromium project at
+1920×1080 — the wide-desktop extension (§1.2.5): the main content
+container wider than 1100px with no horizontal overflow).
 
 `library.spec.ts`: sign in → upload `e2e/fixtures/library-fixture.pdf` (a
 checked-in one-page PDF whose text layer contains Dutch words, including

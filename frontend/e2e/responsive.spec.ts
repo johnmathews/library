@@ -5,7 +5,10 @@
  *   - no horizontal overflow on /login, / (documents) and /upload;
  *   - the service navigation is reachable: behind the Menu toggle below the
  *     GOV.UK tablet breakpoint (641px), inline above it;
- *   - the mobile project re-checks overflow at the 320px floor.
+ *   - the mobile project re-checks overflow at the 320px floor;
+ *   - the chromium project re-checks at 1920×1080 that the wide-desktop
+ *     width extension (main.scss, docs/frontend.md §1.2.5) widens the
+ *     content container past GOV.UK's 960px default without overflow.
  *
  * Same contract as library.spec.ts: requires the real stack and the `e2e`
  * user; skips itself entirely when E2E_BASE_URL is unset.
@@ -68,6 +71,25 @@ test('no horizontal overflow at the 320px floor', async ({ page }, testInfo) => 
   await page.goto('/upload')
   await expect(page.getByRole('heading', { name: 'Upload documents' })).toBeVisible()
   await expectNoHorizontalOverflow(page, '/upload @320')
+})
+
+test('wide desktops get the widened content container', async ({ page }, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'wide-desktop layout is checked once, on the desktop project')
+  await page.setViewportSize({ width: 1920, height: 1080 })
+
+  await signIn(page) // lands on / (documents)
+  const containerWidth = await page.evaluate(
+    () =>
+      document
+        .querySelector('main#main-content')
+        ?.closest('.govuk-width-container')
+        ?.getBoundingClientRect().width ?? 0,
+  )
+  expect(
+    containerWidth,
+    `at 1920px the main content container must exceed 1100px, got ${containerWidth}`,
+  ).toBeGreaterThan(1100)
+  await expectNoHorizontalOverflow(page, '/ @1920')
 })
 
 test('service navigation is reachable on every viewport', async ({ page }, testInfo) => {

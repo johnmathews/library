@@ -365,12 +365,14 @@ const preview = computed<'image' | 'pdf' | 'none'>(() => {
 })
 
 /** Preview the searchable PDF when the pipeline produced one (it has a
- * text layer, so in-viewer text selection/search works), else the original. */
+ * text layer, so in-viewer text selection/search works), else the original.
+ * Inline disposition: the attachment default would blank the iframe and
+ * trigger a download instead of rendering. */
 const pdfPreviewUrl = computed(() =>
   doc.value
     ? doc.value.has_searchable_pdf
-      ? searchablePdfUrl(doc.value.id)
-      : originalUrl(doc.value.id)
+      ? searchablePdfUrl(doc.value.id, { inline: true })
+      : originalUrl(doc.value.id, { inline: true })
     : '',
 )
 
@@ -428,10 +430,12 @@ watch(
 
     <div class="govuk-grid-row">
       <div class="govuk-grid-column-two-thirds">
+        <!-- Inline disposition: Firefox refuses to render <img> responses
+             served as attachment, and other browsers would download them. -->
         <img
           v-if="preview === 'image'"
           class="app-preview__image"
-          :src="originalUrl(doc.id)"
+          :src="originalUrl(doc.id, { inline: true })"
           :alt="`Preview of ${doc.title ?? 'this document'}`"
           data-testid="preview-image"
         />

@@ -61,6 +61,27 @@
 
 // --- App shell ------------------------------------------------------------
 
+// Wide-desktop width extension (documented in docs/frontend.md §1.2.5).
+//
+// GOV.UK caps `govuk-width-container` at $govuk-page-width (960px) — right
+// for gov.uk's text-led pages, but this app's documents list and the detail
+// page's two-thirds preview pane benefit from the extra room on large
+// monitors. A media-query override is deliberately used instead of setting
+// `$govuk-page-width` on the Sass module: the Sass setting would widen the
+// container at *every* viewport from ~990px up, changing GOV.UK's documented
+// responsive behaviour, whereas this override leaves everything below the
+// new breakpoint byte-for-byte untouched. It applies to all width containers
+// (masthead, service navigation, main, footer), keeping the bars aligned
+// with the content column.
+$app-wide-breakpoint: 1400px;
+$app-wide-page-width: 1280px;
+
+@media (min-width: $app-wide-breakpoint) {
+  .govuk-width-container {
+    max-width: $app-wide-page-width;
+  }
+}
+
 // Notched iPhones: index.html sets `viewport-fit=cover`, so the full-bleed
 // bars must pad their content out of the sensor housing (landscape) and the
 // home indicator (footer). govuk-width-container handles the content column;

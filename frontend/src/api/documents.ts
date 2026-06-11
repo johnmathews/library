@@ -204,14 +204,29 @@ export function thumbnailUrl(id: number): string {
   return `/api/documents/${id}/thumbnail`
 }
 
-/** URL of the stored original (Content-Disposition: attachment). */
-export function originalUrl(id: number): string {
-  return `/api/documents/${id}/original`
+/**
+ * Options for the file URL helpers. `inline: true` appends
+ * `?disposition=inline` so the browser renders the file (detail-page
+ * iframe/img previews); the default is the backend's
+ * `Content-Disposition: attachment`, which downloads — an attachment
+ * response inside an iframe/img shows nothing and triggers a download.
+ */
+export interface FileUrlOptions {
+  inline?: boolean
+}
+
+function fileUrl(path: string, options?: FileUrlOptions): string {
+  return options?.inline ? `${path}?disposition=inline` : path
+}
+
+/** URL of the stored original (attachment by default; see FileUrlOptions). */
+export function originalUrl(id: number, options?: FileUrlOptions): string {
+  return fileUrl(`/api/documents/${id}/original`, options)
 }
 
 /** URL of the OCR searchable PDF (404 when the document has none). */
-export function searchablePdfUrl(id: number): string {
-  return `/api/documents/${id}/searchable.pdf`
+export function searchablePdfUrl(id: number, options?: FileUrlOptions): string {
+  return fileUrl(`/api/documents/${id}/searchable.pdf`, options)
 }
 
 /**

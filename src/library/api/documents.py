@@ -9,7 +9,7 @@ see docs/api.md §1.3.3 for the user-facing description.
 
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
@@ -53,6 +53,14 @@ router: APIRouter = APIRouter(tags=["documents"])
 # PATCH body field -> name recorded in extra["user_edited_fields"] (the
 # storage-level names the W6 extraction contract checks).
 _EDITED_FIELD_NAMES: dict[str, str] = {"kind_slug": "kind_id", "sender": "sender_id"}
+
+# ?disposition= on the file endpoints: `attachment` (default) downloads,
+# `inline` lets the detail page embed the file in an <iframe>/<img>.
+# Anything else fails validation with a 422.
+DispositionParam = Annotated[
+    Literal["inline", "attachment"],
+    Query(description="`inline` to render in the browser, `attachment` (default) to download."),
+]
 
 
 @router.post(
@@ -336,8 +344,14 @@ async def queue_extraction(
 async def download_original(
     document_id: int,
     session: Annotated[AsyncSession, Depends(get_session)],
+    disposition: DispositionParam = "attachment",
 ) -> FileResponse:
-    """The stored original, with its real content type and original filename."""
+    """The stored original, with its real content type and original filename.
+
+    ``?disposition=inline`` serves ``Content-Disposition: inline`` (keeping
+    the filename) so the detail page can embed it; the default stays
+    ``attachment`` for download links.
+    """
     document = await _get_document_or_404(session, document_id)
     path = path_for(document.sha256)
     if not path.is_file():
@@ -348,6 +362,7 @@ async def download_original(
         path,
         media_type=document.mime_type,
         filename=document.original_filename or f"document-{document.id}",
+        content_disposition_type=disposition,
     )
 
 
@@ -360,8 +375,13 @@ async def download_original(
 async def download_searchable_pdf(
     document_id: int,
     session: Annotated[AsyncSession, Depends(get_session)],
+    disposition: DispositionParam = "attachment",
 ) -> FileResponse:
-    """The OCR-produced searchable PDF; 404 when the document has none."""
+    """The OCR-produced searchable PDF; 404 when the document has none.
+
+    ``?disposition=inline`` serves it for in-browser viewing (the detail
+    page's iframe preview); the default stays ``attachment``.
+    """
     document = await _get_document_or_404(session, document_id)
     path = derived_path(document.sha256) / SEARCHABLE_PDF_NAME
     if not path.is_file():
@@ -373,7 +393,12 @@ async def download_searchable_pdf(
         if document.original_filename
         else f"document-{document.id}"
     )
-    return FileResponse(path, media_type="application/pdf", filename=f"{stem}-searchable.pdf")
+    return FileResponse(
+        path,
+        media_type="application/pdf",
+        filename=f"{stem}-searchable.pdf",
+        content_disposition_type=disposition,
+    )
 
 
 @router.get(

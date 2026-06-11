@@ -213,13 +213,15 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="detail-banner"]').exists()).toBe(false)
   })
 
-  it('previews the searchable PDF in an iframe with an open-in-new-tab link', async () => {
+  it('previews the searchable PDF inline in an iframe with an open-in-new-tab link', async () => {
     const w = await mountView()
+    // disposition=inline: an attachment response would blank the iframe and
+    // trigger a download instead of rendering the PDF.
     expect(w.find('[data-testid="preview-pdf"]').attributes('src')).toBe(
-      '/api/documents/12/searchable.pdf',
+      '/api/documents/12/searchable.pdf?disposition=inline',
     )
     expect(w.find('a[target="_blank"]').attributes('href')).toBe(
-      '/api/documents/12/searchable.pdf',
+      '/api/documents/12/searchable.pdf?disposition=inline',
     )
   })
 
@@ -227,19 +229,24 @@ describe('DocumentDetailView', () => {
     detail = makeDetail({ has_searchable_pdf: false })
     let w = await mountView()
     expect(w.find('[data-testid="preview-pdf"]').attributes('src')).toBe(
-      '/api/documents/12/original',
+      '/api/documents/12/original?disposition=inline',
     )
     w.unmount()
 
     detail = makeDetail({ mime_type: 'text/plain', has_searchable_pdf: false })
     w = await mountView()
     expect(w.find('[data-testid="preview-fallback"]').exists()).toBe(true)
+    // The fallback's download link keeps the attachment default.
+    expect(w.find('[data-testid="preview-fallback"] a').attributes('href')).toBe(
+      '/api/documents/12/original',
+    )
 
     detail = makeDetail({ mime_type: 'image/jpeg', has_searchable_pdf: false })
     wrapper?.unmount()
     w = await mountView()
+    // Inline: Firefox refuses to render <img> sources served as attachment.
     expect(w.find('[data-testid="preview-image"]').attributes('src')).toBe(
-      '/api/documents/12/original',
+      '/api/documents/12/original?disposition=inline',
     )
   })
 
@@ -280,6 +287,7 @@ describe('DocumentDetailView', () => {
 
   it('shows downloads and the delete link routing to the confirmation page', async () => {
     const w = await mountView()
+    // Download links keep the attachment default — no disposition param.
     expect(w.find('[data-testid="download-original"]').attributes('href')).toBe(
       '/api/documents/12/original',
     )
