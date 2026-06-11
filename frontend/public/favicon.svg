@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <!--
+    Library "L." monogram. Drawn by hand from plain rectangles so it embeds
+    no typeface (the GOV.UK transport face is licence-restricted; Inter is
+    not needed for three rects) and nothing resembling the crown or crest.
+    Black/white per the GOV.UK-derived palette (govuk-colour black/white).
+  -->
+  <rect width="512" height="512" fill="#0b0c0c"/>
+  <g fill="#ffffff">
+    <rect x="148" y="128" width="56" height="256"/>
+    <rect x="148" y="328" width="136" height="56"/>
+    <rect x="308" y="328" width="56" height="56"/>
+  </g>
+</svg>

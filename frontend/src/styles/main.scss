@@ -61,6 +61,17 @@
 
 // --- App shell ------------------------------------------------------------
 
+// Notched iPhones: index.html sets `viewport-fit=cover`, so the full-bleed
+// bars must pad their content out of the sensor housing (landscape) and the
+// home indicator (footer). govuk-width-container handles the content column;
+// these env() paddings only protect the bars' own edges.
+.app-masthead,
+.app-footer,
+.govuk-service-navigation {
+  padding-right: env(safe-area-inset-right);
+  padding-left: env(safe-area-inset-left);
+}
+
 // Text-only masthead (replaces govuk-header, which carries the crown
 // logotype markup on gov.uk; the bar itself is plain CSS).
 .app-masthead {
@@ -78,6 +89,10 @@
 
 .app-masthead__link {
   @include base.govuk-font($size: 24, $weight: bold);
+  // ≥44px effective touch target (Apple HIG): the text alone is ~30px tall.
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
   text-decoration: none;
 
   &:link,
@@ -103,7 +118,9 @@
 .app-footer {
   margin-top: base.govuk-spacing(9);
   border-top: 1px solid base.govuk-functional-colour(border);
-  padding: base.govuk-spacing(4) 0;
+  padding-top: base.govuk-spacing(4);
+  // Clear the iPhone home indicator when the footer sits at the viewport edge.
+  padding-bottom: calc(#{base.govuk-spacing(4)} + env(safe-area-inset-bottom));
   background-color: base.govuk-functional-colour(surface-background);
 }
 
@@ -159,6 +176,15 @@
 .app-doc-list__title {
   margin-bottom: base.govuk-spacing(1);
   overflow-wrap: anywhere;
+
+  // The row's only link: pad the hit area to ≥44px without moving layout
+  // (the line box is ~25px). The overlap below only covers non-interactive
+  // tags/metadata, so no adjacent target is shadowed.
+  .govuk-link {
+    display: inline-block;
+    padding-block: base.govuk-spacing(2);
+    margin-block: -#{base.govuk-spacing(2)};
+  }
 }
 
 .app-doc-list__meta {
@@ -179,17 +205,31 @@
   color: base.govuk-functional-colour(secondary-text);
 }
 
+// A standalone link-styled control sitting in its own block (not inline in
+// a sentence): pad the hit area to ≥44px without moving layout, exactly as
+// the doc-list title links do. Used for the list view's "Clear filters"
+// link and the detail page's open-PDF/download links.
+.app-standalone-link {
+  display: inline-block;
+  padding-block: base.govuk-spacing(2);
+  margin-block: -#{base.govuk-spacing(2)};
+}
+
 // --- Document detail ----------------------------------------------------------
 
 // A <button> that looks and reads like a GOV.UK link — used for the
 // summary-list "Change" actions, which toggle an inline editor rather
 // than navigate (the govuk-link class supplies colours/underline/focus).
+// padding-block/margin-block: ≥44px touch target without moving layout
+// (the summary-list value cell next to it is not interactive).
 .app-link-button {
   padding: 0;
   border: 0;
   background: none;
   cursor: pointer;
   font: inherit;
+  padding-block: base.govuk-spacing(2);
+  margin-block: -#{base.govuk-spacing(2)};
 }
 
 .app-preview__image {
@@ -235,6 +275,14 @@
 
 .app-upload-list__name {
   overflow-wrap: anywhere;
+}
+
+// "View <file>" link in an upload row: ≥44px effective touch target
+// (visually unchanged; the row is vertically padded anyway).
+.app-upload-list__link {
+  display: inline-block;
+  padding-block: base.govuk-spacing(2);
+  margin-block: -#{base.govuk-spacing(2)};
 }
 
 // Progress bar — GOV.UK has no progress component; this app extension uses

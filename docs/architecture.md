@@ -113,7 +113,7 @@ hashed, individually revocable.
 | Frontend: document detail + editing | W11 | **done** — see [frontend.md](frontend.md) §1.4.2; added `GET /api/kinds\|senders\|tags` + `POST /api/documents/{id}/extract` ([api.md](api.md) §1.8.1–1.8.2) |
 | Consume watcher | W12 | **done** — see [ingestion.md](ingestion.md), "Consume folder" section |
 | MCP server | W13 | **done** — see [mcp.md](mcp.md) |
-| Email-in | W14 | pending |
-| paperless-ngx importer | W15 | pending |
-| Mobile/PWA polish | W16 | pending |
+| Email-in | W14 | **done** — see [ingestion.md](ingestion.md), "Email-in" section |
+| paperless-ngx importer | W15 | **done** — see [migration.md](migration.md) |
+| Mobile/PWA polish | W16 | **done** — see [frontend.md](frontend.md) §1.8 (manifest + monogram icons, safe areas, ≥44px touch targets, 3-project Playwright matrix, on-device checklist) |
 | Deployment hardening + full docs | W17 | pending |

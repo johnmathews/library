@@ -6,16 +6,17 @@ import { defineConfig, devices } from '@playwright/test'
  * test` is a no-op without the stack — see docs/frontend.md §1.5 for the
  * full local recipe.
  *
- * Two projects only (W16 widens the matrix): desktop Chromium and a
- * 375px-wide mobile WebKit pass (iPhone 14 device descriptor, width pinned
- * to the 375px acceptance viewport).
+ * Three projects (the W16 cross-device matrix), all running the same specs:
+ * desktop Chromium, a 375px mobile WebKit pass (iPhone 14 descriptor, width
+ * pinned to the 375px acceptance viewport), and a portrait iPad WebKit pass
+ * (iPad (gen 11) descriptor — the registry has no gen 10).
  */
 export default defineConfig({
   testDir: './e2e',
   timeout: 180_000,
   expect: { timeout: 15_000 },
-  // The two projects share one backend: run them serially so the second
-  // project deterministically hits the duplicate-upload path.
+  // The projects share one backend: run them serially so the later projects
+  // deterministically hit the duplicate-upload path.
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
@@ -35,6 +36,10 @@ export default defineConfig({
         ...devices['iPhone 14'],
         viewport: { width: 375, height: 667 }, // acceptance: usable at 375px
       },
+    },
+    {
+      name: 'tablet-webkit',
+      use: { ...devices['iPad (gen 11)'] }, // portrait
     },
   ],
 })

@@ -5,6 +5,8 @@
     "module": "preserve",
     "moduleResolution": "bundler",
     "noEmit": true,
+    // DOM lib: page.evaluate() callbacks execute in the browser.
+    "lib": ["es2023", "dom"],
     "types": ["node"],
     "tsBuildInfoFile": "../node_modules/.tmp/tsconfig.e2e.tsbuildinfo"
   }

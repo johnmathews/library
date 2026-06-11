@@ -3,7 +3,8 @@
  * pipeline to index it → find it in the list → full-text search by a
  * Dutch stem; then the detail page — open from the list, edit the title
  * via the summary-list Change flow, delete via the confirmation page.
- * Runs in two projects (desktop Chromium, 375px WebKit).
+ * Runs in all three matrix projects (desktop Chromium, 375px WebKit,
+ * iPad-portrait WebKit) — see playwright.config.ts.
  *
  * Requires the real stack (docker compose db/migrate/api/worker + the
  * built frontend behind `vite preview`'s /api proxy) and an `e2e` user;
@@ -58,7 +59,7 @@ test('sign in, upload a PDF, see it indexed, listed and searchable', async ({ pa
   await page.getByRole('button', { name: 'Upload', exact: true }).click()
 
   // First project uploads fresh content (progress → processing → indexed);
-  // the second hits the duplicate path for the same bytes — both are
+  // the later projects hit the duplicate path for the same bytes — both are
   // correct outcomes and both leave the document in the library.
   const indexed = page.locator('[data-testid="upload-list"]').getByText('Indexed', { exact: true })
   const duplicate = page.getByText('already in your library')

@@ -252,7 +252,7 @@ border, tabular-numbers percentage) and exposes `role="progressbar"` with
 
 - Tag editing is a comma-separated text input, and the tag filter is a
   single-select (the API supports ANDed multi-tag filtering) — a richer
-  tag widget is future polish (W16).
+  tag widget is future polish.
 
 ## 1.5 Snippet safety
 
@@ -281,8 +281,15 @@ OCR-derived text — add new render sites only via these helpers.
 
 ## 1.6 End-to-end tests (Playwright)
 
-`frontend/e2e/library.spec.ts` runs the W10 + W11 acceptance against the
-**real stack**: sign in → upload `e2e/fixtures/library-fixture.pdf` (a
+Two spec files run against the **real stack**:
+`frontend/e2e/library.spec.ts` (the W10 + W11 acceptance) and
+`frontend/e2e/responsive.spec.ts` (the W16 viewport regression: no
+horizontal overflow on `/login`, `/` and `/upload` — re-checked at the
+320px floor on the mobile project — and the service navigation reachable
+on every viewport, behind the Menu toggle below the GOV.UK 641px tablet
+breakpoint, inline above it).
+
+`library.spec.ts`: sign in → upload `e2e/fixtures/library-fixture.pdf` (a
 checked-in one-page PDF whose text layer contains Dutch words, including
 "rekeningen") → wait for `Indexed` (or the duplicate banner on re-runs)
 → see it in the list → search the stem `rekening` and assert a
@@ -295,10 +302,11 @@ persistence across reload), and deletes it via the confirmation page
 required: assertions rely only on the OCR/text-layer pipeline, never on
 extracted metadata, so the suite passes without an Anthropic API key.
 
-Two projects only (W16 widens the matrix): `chromium` (desktop) and
-`mobile-webkit` (iPhone 14 device descriptor pinned to the 375px
-acceptance viewport). They run serially against one backend; the second
-project re-uploads the same bytes and exercises the duplicate path.
+Three projects — the W16 cross-device matrix, all running both spec
+files: `chromium` (desktop), `mobile-webkit` (iPhone 14 device
+descriptor pinned to the 375px acceptance viewport) and `tablet-webkit`
+(iPad portrait). They run serially against one backend; the later
+projects re-upload the same bytes and exercise the duplicate path.
 
 The suite **skips itself** when `E2E_BASE_URL` is unset, so
 `npx playwright test` is a no-op without the stack and `npm run
@@ -334,9 +342,93 @@ the `e2e` job of `.github/workflows/ci.yml` (user `e2e`, password
   pagination, snippet rendering), document detail (summary rows with
   dashes, per-field PATCH + banner, fetched kind options, sender
   datalist, 422 error summary, preview selection, OCR highlighting,
-  re-extraction polling stop condition), delete confirmation flow, and
+  re-extraction polling stop condition), delete confirmation flow,
   upload view (progress, polling, duplicate banner, error summary,
-  multi-file independence).
+  multi-file independence), and the PWA wiring
+  (`src/__tests__/pwa.spec.ts`: manifest linked/parseable/complete,
+  icons exist, theme colours consistent, `viewport-fit=cover` kept —
+  see §1.8).
 - `npm run lint`, `npm run type-check`.
 - `npm run build && npm run check:assets` — licensing gate (§1.2.1).
 - `npm run test:e2e` — Playwright against the real stack (§1.6).
+
+## 1.8 Mobile and PWA (W16)
+
+The app is installable from the browser ("Add to Home Screen") so it
+behaves like a scanning app on a phone, without a service worker — the
+backend is the source of truth and offline caching of private documents
+is deliberately out of scope.
+
+Wiring (all asserted by `src/__tests__/pwa.spec.ts`):
+
+- `public/manifest.webmanifest`, linked from `index.html`; `name`/
+  `short_name` "Library", `start_url`/`scope`/`id` `/`.
+- Icons are a hand-drawn black/white **"L." monogram** built from plain
+  rectangles (`public/favicon.svg` is the source): no typeface is
+  embedded and nothing resembles the crown/crest — `npm run
+  check:assets` guards the bundle. Shipped as `icons/icon-192.png`,
+  `icons/icon-512.png`, `icons/icon-512-maskable.png` (glyph inside the
+  central safe zone), `apple-touch-icon.png` (180px) and `favicon.ico`.
+- `theme_color` `#0b0c0c` = the masthead's `govuk-colour("black")`, and
+  the `<meta name="theme-color">` in `index.html` matches it;
+  `background_color` is white like the page body.
+
+### 1.8.1 Display mode: `minimal-ui`, not `standalone`
+
+The single most important journey on a phone is `/upload` →
+`<input type="file">` → **camera or photo library**. iOS Safari in
+`standalone` display mode has a history of file-input/camera quirks
+(getUserMedia and file-capture regressions in standalone web apps across
+several iOS releases), and standalone also hides the browser's
+back/forward/reload affordances, which this multi-page-feeling app
+relies on. `minimal-ui` keeps a minimal browser chrome — URL bar and
+navigation stay available, the camera/photo-library sheet behaves
+exactly as in Safari — while still being installable with its own icon.
+(On iOS, cookies in home-screen web apps live in a container separate
+from Safari's; the session cookie's 30-day lifetime applies per
+container, so the first launch from the icon requires one sign-in.)
+
+### 1.8.2 Safe areas and touch targets
+
+- `index.html` sets `viewport-fit=cover`; `main.scss` pads the
+  full-bleed bars (`app-masthead`, `govuk-service-navigation`,
+  `app-footer`) with `env(safe-area-inset-left/right)` and the footer
+  with `env(safe-area-inset-bottom)` for the home indicator.
+- Touch targets are ≥44px (Apple HIG): GOV.UK buttons, form controls and
+  pagination items (45×45px) are already compliant; the custom targets —
+  masthead "Library" link, document-list title links, upload-row "View"
+  links, standalone links (`app-standalone-link`: clear-filters,
+  open-PDF, download links) and the summary-list "Change" buttons
+  (`app-link-button`) — get a padded hit area via
+  `padding-block`/negative `margin-block` so layout does not move.
+- No horizontal scrolling down to the 320px floor (long OCR-derived
+  strings are broken with `overflow-wrap: anywhere`); enforced by
+  `e2e/responsive.spec.ts` (§1.6).
+
+### 1.8.3 On-device checklist (real iPhone / iPad)
+
+Automated coverage ends at WebKit emulation; before calling a release
+mobile-done, walk this on real hardware against the deployed instance
+(HTTPS — the session cookie is `Secure` outside the e2e override):
+
+1. **Add to Home Screen** (Safari share sheet): the icon is the black
+   "L." monogram, the label is "Library", and launching from the icon
+   opens `/` with minimal browser chrome (URL bar present, no Safari
+   tab bar).
+2. **Sign in from the icon launch**, close the app, relaunch from the
+   icon: still signed in (cookie persists in the web-app container;
+   30-day lifetime).
+3. **Camera capture**: `/upload` → "Choose files" → Take Photo →
+   photograph a paper letter → upload reaches `indexed` and the OCR text
+   is plausible.
+4. **Photo library**: same flow via Photo Library, multi-select two
+   images → two independent progress bars, both indexed.
+5. **Safe areas**: on a notched iPhone, rotate to landscape — masthead
+   and service-navigation text clears the sensor housing; portrait —
+   footer text clears the home indicator. No horizontal scroll on
+   `/login`, `/`, `/upload`, a document detail page, in either
+   orientation.
+6. **Touch**: pagination, the summary-list "Change" actions and the
+   list-row title links are comfortably tappable; iPad portrait shows
+   the inline navigation (no Menu toggle), iPhone shows the Menu toggle
+   and it opens/navigates.

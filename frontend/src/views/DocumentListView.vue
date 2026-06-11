@@ -274,7 +274,9 @@ function fileTypeLabel(item: DocumentListItem): string {
           <GovDateInput id="filter-date-to" v-model="draft.dateTo" legend="Dated to" />
           <GovButton type="submit">Apply filters</GovButton>
           <p class="govuk-body">
-            <a href="#" class="govuk-link" @click.prevent="clearFilters">Clear filters</a>
+            <a href="#" class="govuk-link app-standalone-link" @click.prevent="clearFilters"
+              >Clear filters</a
+            >
           </p>
         </GovDetails>
       </form>

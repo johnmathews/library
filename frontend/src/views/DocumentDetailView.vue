@@ -444,7 +444,12 @@ watch(
             data-testid="preview-pdf"
           ></iframe>
           <p class="govuk-body">
-            <a class="govuk-link" :href="pdfPreviewUrl" target="_blank" rel="noopener">
+            <a
+              class="govuk-link app-standalone-link"
+              :href="pdfPreviewUrl"
+              target="_blank"
+              rel="noopener"
+            >
               Open the PDF in a new tab
             </a>
           </p>
@@ -614,12 +619,20 @@ watch(
 
         <h2 class="govuk-heading-m">Actions</h2>
         <p class="govuk-body">
-          <a class="govuk-link" :href="originalUrl(doc.id)" data-testid="download-original">
+          <a
+            class="govuk-link app-standalone-link"
+            :href="originalUrl(doc.id)"
+            data-testid="download-original"
+          >
             Download the original file
           </a>
         </p>
         <p v-if="doc.has_searchable_pdf" class="govuk-body">
-          <a class="govuk-link" :href="searchablePdfUrl(doc.id)" data-testid="download-searchable">
+          <a
+            class="govuk-link app-standalone-link"
+            :href="searchablePdfUrl(doc.id)"
+            data-testid="download-searchable"
+          >
             Download the searchable PDF
           </a>
         </p>
