@@ -38,8 +38,8 @@ Always start with a dry run. It fetches and maps everything (taxonomies
 plus every document page) but downloads nothing and writes nothing — the
 database is only read, to detect already-imported documents — and prints
 the mapping summary: how many documents would import, and the kind /
-sender / tag distributions so you can sanity-check the mapping before
-committing.
+sender / storage-path / tag distributions so you can sanity-check the
+mapping before committing.
 
 ```console
 $ library import paperless --url http://paperless.lan:8000 --token <token> --dry-run
@@ -52,6 +52,10 @@ paperless import (dry run — nothing was written)
   kinds:
     invoice: 612
     receipt: 401
+    ...
+  storage paths:
+    Family: 1102
+    Atlas Consulting Expenses: 741
     ...
 ```
 
@@ -88,6 +92,7 @@ Downloads run with small concurrency (4); trashed documents
 | `correspondent` | `sender` (created by name, case-insensitive match) |
 | `document_type` | `kind` via a name table (English + Dutch synonyms, e.g. *Factuur* → `invoice`); unmapped types → `other` plus a `paperless:<type>` tag |
 | `tags` | tags (slugified, display name kept); any tag with `is_inbox_tag` adds the `needs-review` tag |
+| `storage_path` | a plain tag — `slugify(name)`, **no prefix** (e.g. *Atlas Consulting Expenses* → `atlas-consulting-expenses`), display name kept; raw name also in `extra["paperless"]["storage_path"]`. Null storage path → no tag, no key; a stale storage-path id is logged and skipped |
 | custom field, monetary (`"EUR123.45"`) | first one → `amount_total` + `currency` (bare numbers use the field's `default_currency`); raw value also kept in `extra` |
 | custom field, select | option **label** (resolved from `extra_data.select_options`) in `extra["paperless"]["custom_fields"]` |
 | custom field, documentlink | `extra["paperless"]["linked_documents"]`, remapped to Library document ids in a second pass after all documents exist |
@@ -152,8 +157,11 @@ reads from paperless).
   original plan suggested for the backfill discount — the standard
   per-document `extract_document` job keeps one code path and respects
   the daily budget; at family scale the difference is cents.
-- paperless **owners/permissions, storage paths, saved views and
-  workflows** are not migrated (Library has no equivalents).
+- paperless **owners/permissions, saved views and workflows** are not
+  migrated (Library has no equivalents). Storage paths *are* carried
+  over — as plain tags plus `extra["paperless"]["storage_path"]` (see
+  the mapping table) — but the path *templates* themselves are not:
+  Library's content-addressed storage has no configurable layout.
 - ASN and notes survive only inside `extra["paperless"]`, not as
   first-class fields.
 - A paperless document whose bytes match a **soft-deleted** Library

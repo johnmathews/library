@@ -33,7 +33,13 @@ from typer.testing import CliRunner
 from library.cli import app as cli_app
 from library.config import Settings, get_settings
 from library.importer.client import ChecksumMismatchError, PaperlessClient
-from library.importer.mapper import Taxonomies, map_document, parse_created, parse_monetary
+from library.importer.mapper import (
+    TagSpec,
+    Taxonomies,
+    map_document,
+    parse_created,
+    parse_monetary,
+)
 from library.importer.runner import ImportFailure, ImportReport, format_report, run_import
 from library.ingest import ingest_file
 from library.jobs import job_app
@@ -59,6 +65,7 @@ class FakePaperless:
         self.correspondents: list[dict[str, Any]] = []
         self.document_types: list[dict[str, Any]] = []
         self.custom_fields: list[dict[str, Any]] = []
+        self.storage_paths: list[dict[str, Any]] = []
         self.documents: list[dict[str, Any]] = []
         self.originals: dict[int, bytes] = {}
         # id -> how many further downloads should return corrupted bytes
@@ -78,6 +85,7 @@ class FakePaperless:
             "original_file_name": f"doc-{doc_id}.pdf",
             "correspondent": None,
             "document_type": None,
+            "storage_path": None,
             "tags": [],
             "custom_fields": [],
             "notes": [],
@@ -119,6 +127,7 @@ class FakePaperless:
             "/api/correspondents/": self.correspondents,
             "/api/document_types/": self.document_types,
             "/api/custom_fields/": self.custom_fields,
+            "/api/storage_paths/": self.storage_paths,
             "/api/documents/": self.documents,
         }
         if path in listings:
@@ -253,6 +262,43 @@ def test_map_document_known_dutch_type_maps_to_kind() -> None:
     assert mapped.tags == []  # no provenance tag for a mapped type
 
 
+def _storage_path_taxonomies() -> Taxonomies:
+    return Taxonomies.from_lists(
+        tags=[],
+        correspondents=[],
+        document_types=[],
+        custom_fields=[],
+        storage_paths=[{"id": 5, "name": "Atlas Consulting Expenses"}],
+    )
+
+
+def test_map_document_storage_path_becomes_plain_tag_and_extra() -> None:
+    mapped = map_document({"id": 1, "storage_path": 5}, _storage_path_taxonomies())
+    # Plain slug, no `paperless:` prefix (matches the manual backfill).
+    assert mapped.tags == [
+        TagSpec(slug="atlas-consulting-expenses", name="Atlas Consulting Expenses")
+    ]
+    assert mapped.storage_path_name == "Atlas Consulting Expenses"
+    assert mapped.extra["storage_path"] == "Atlas Consulting Expenses"
+
+
+def test_map_document_without_storage_path_adds_nothing() -> None:
+    for doc in ({"id": 1}, {"id": 1, "storage_path": None}):
+        mapped = map_document(doc, _storage_path_taxonomies())
+        assert mapped.tags == []
+        assert mapped.storage_path_name is None
+        assert "storage_path" not in mapped.extra  # no null written
+
+
+def test_map_document_unknown_storage_path_id_is_skipped() -> None:
+    # Stale foreign key (storage path deleted between fetches): no crash,
+    # no tag, no extra entry.
+    mapped = map_document({"id": 1, "storage_path": 999}, _storage_path_taxonomies())
+    assert mapped.tags == []
+    assert mapped.storage_path_name is None
+    assert "storage_path" not in mapped.extra
+
+
 # ---------------------------------------------------------------------------
 # Client (MockTransport, no database)
 
@@ -362,6 +408,7 @@ async def test_import_maps_metadata_reuses_content_and_remaps_links(
     ]
     fake.correspondents = [{"id": 7, "name": "Eneco"}]
     fake.document_types = [{"id": 3, "name": "Factuur"}]
+    fake.storage_paths = [{"id": 4, "name": "Family"}]
     fake.custom_fields = [
         {"id": 1, "name": "Amount", "data_type": "monetary", "extra_data": {}},
         {
@@ -380,6 +427,7 @@ async def test_import_maps_metadata_reuses_content_and_remaps_links(
         content="Geachte heer, uw factuur voor maart.",
         correspondent=7,
         document_type=3,
+        storage_path=4,
         tags=[1, 2],
         custom_fields=[
             {"field": 1, "value": "EUR123.45"},
@@ -402,7 +450,10 @@ async def test_import_maps_metadata_reuses_content_and_remaps_links(
     assert document.document_date == date(2024, 3, 15)
     assert document.kind is not None and document.kind.slug == "invoice"
     assert document.sender is not None and document.sender.name == "Eneco"
-    assert {tag.slug for tag in document.tags} == {"taxes-2024", "inbox", "needs-review"}
+    # Storage path -> plain (unprefixed) tag, alongside the paperless tags.
+    assert {tag.slug for tag in document.tags} == {"taxes-2024", "inbox", "needs-review", "family"}
+    family_tag = next(tag for tag in document.tags if tag.slug == "family")
+    assert family_tag.name == "Family"
     assert document.amount_total == Decimal("123.45")
     assert document.currency == "EUR"
     # paperless OCR text is reused: immediately indexed, no OCR job.
@@ -417,6 +468,8 @@ async def test_import_maps_metadata_reuses_content_and_remaps_links(
     paperless_extra = document.extra["paperless"]
     assert paperless_extra["batch_id"] == report.batch_id
     assert paperless_extra["asn"] == 42
+    assert paperless_extra["storage_path"] == "Family"
+    assert report.storage_path_counts == Counter({"Family": 1, "(none)": 1})
     assert paperless_extra["custom_fields"]["Status"] == "Paid"
     assert paperless_extra["custom_fields"]["Amount"] == "EUR123.45"
     assert paperless_extra["notes"] == [
@@ -628,7 +681,8 @@ async def test_dry_run_writes_nothing_and_reports_mapping(
 ) -> None:
     fake = FakePaperless()
     fake.document_types = [{"id": 1, "name": "Receipt"}]
-    live = fake.add_document(make_pdf(), title="Live", document_type=1, content="x")
+    fake.storage_paths = [{"id": 2, "name": "Atlas Consulting Expenses"}]
+    live = fake.add_document(make_pdf(), title="Live", document_type=1, storage_path=2, content="x")
     fake.add_document(make_pdf(), deleted_at="2024-05-01T00:00:00Z")
 
     report = await do_import(session_factory, fake, dry_run=True)
@@ -638,6 +692,7 @@ async def test_dry_run_writes_nothing_and_reports_mapping(
     assert report.skipped_trashed == 1
     assert report.imported == 0
     assert report.kind_counts["receipt"] == 1
+    assert report.storage_path_counts == Counter({"Atlas Consulting Expenses": 1})
     # Zero writes: no documents, no downloads, no jobs.
     assert await document_by_paperless_id(session_factory, live["id"]) is None
     assert sum(fake.download_counts.values()) == 0
@@ -646,6 +701,8 @@ async def test_dry_run_writes_nothing_and_reports_mapping(
     assert "dry run" in summary
     assert "would import:       1" in summary
     assert "receipt: 1" in summary
+    assert "storage paths:" in summary
+    assert "Atlas Consulting Expenses: 1" in summary
 
     # After a real import, a dry run detects the existing documents.
     await do_import(session_factory, fake)

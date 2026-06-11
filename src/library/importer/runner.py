@@ -77,6 +77,7 @@ class ImportReport:
     failed: list[ImportFailure] = field(default_factory=list)
     kind_counts: Counter[str] = field(default_factory=Counter)
     sender_counts: Counter[str] = field(default_factory=Counter)
+    storage_path_counts: Counter[str] = field(default_factory=Counter)
     tag_counts: Counter[str] = field(default_factory=Counter)
 
 
@@ -99,6 +100,7 @@ def format_report(report: ImportReport) -> str:
     for label, counter in (
         ("kinds", report.kind_counts),
         ("senders", report.sender_counts),
+        ("storage paths", report.storage_path_counts),
         ("tags", report.tag_counts),
     ):
         if counter:
@@ -128,6 +130,7 @@ async def _existing_by_paperless_id(session: AsyncSession, paperless_id: int) ->
 def _tally(report: ImportReport, mapped: MappedDocument) -> None:
     report.kind_counts[mapped.kind_slug or "(none)"] += 1
     report.sender_counts[mapped.sender_name or "(none)"] += 1
+    report.storage_path_counts[mapped.storage_path_name or "(none)"] += 1
     for tag in mapped.tags:
         report.tag_counts[tag.slug] += 1
 
@@ -380,6 +383,7 @@ async def run_import(
         await client.list_correspondents(),
         await client.list_document_types(),
         await client.list_custom_fields(),
+        await client.list_storage_paths(),
     )
     semaphore = asyncio.Semaphore(DOWNLOAD_CONCURRENCY)
     id_map: dict[int, int] = {}  # paperless id -> Library document id

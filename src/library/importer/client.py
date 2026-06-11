@@ -102,6 +102,9 @@ class PaperlessClient:
     async def list_custom_fields(self) -> list[dict[str, Any]]:
         return [item async for item in self.paginate("/api/custom_fields/")]
 
+    async def list_storage_paths(self) -> list[dict[str, Any]]:
+        return [item async for item in self.paginate("/api/storage_paths/")]
+
     def iter_documents(
         self, *, page_size: int = DEFAULT_PAGE_SIZE
     ) -> AsyncIterator[dict[str, Any]]:

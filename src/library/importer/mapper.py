@@ -5,11 +5,14 @@ mapped values (sender upsert, kind lookup, tag creation) against the
 database. Mapping rules are documented in docs/migration.md.
 """
 
+import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 NEEDS_REVIEW_TAG_SLUG: str = "needs-review"
 
@@ -126,6 +129,7 @@ class Taxonomies:
     correspondents: dict[int, dict[str, Any]]
     document_types: dict[int, dict[str, Any]]
     custom_fields: dict[int, dict[str, Any]]
+    storage_paths: dict[int, dict[str, Any]] = field(default_factory=dict)
 
     @classmethod
     def from_lists(
@@ -134,12 +138,14 @@ class Taxonomies:
         correspondents: list[dict[str, Any]],
         document_types: list[dict[str, Any]],
         custom_fields: list[dict[str, Any]],
+        storage_paths: list[dict[str, Any]] | None = None,
     ) -> "Taxonomies":
         return cls(
             tags={item["id"]: item for item in tags},
             correspondents={item["id"]: item for item in correspondents},
             document_types={item["id"]: item for item in document_types},
             custom_fields={item["id"]: item for item in custom_fields},
+            storage_paths={item["id"]: item for item in storage_paths or []},
         )
 
 
@@ -155,6 +161,7 @@ class MappedDocument:
     original_filename: str | None
     sender_name: str | None
     kind_slug: str | None  # None = no document type in paperless; leave to extraction
+    storage_path_name: str | None = None  # raw paperless storage-path name
     tags: list[TagSpec] = field(default_factory=list)
     amount_total: Decimal | None = None
     currency: str | None = None
@@ -236,6 +243,26 @@ def map_document(doc: dict[str, Any], taxonomies: Taxonomies) -> MappedDocument:
     correspondent = taxonomies.correspondents.get(doc.get("correspondent"))  # type: ignore[arg-type]
     sender_name = correspondent["name"] if correspondent else None
 
+    # Storage path -> plain tag (no `paperless:` prefix): in this paperless
+    # instance storage paths encode the personal/business split, which is
+    # exactly what Library tags are for.
+    storage_path_name: str | None = None
+    storage_path_id = doc.get("storage_path")
+    if storage_path_id is not None:
+        storage_path = taxonomies.storage_paths.get(storage_path_id)
+        if storage_path is None:
+            # Stale foreign key (path deleted between fetches): skip quietly.
+            logger.warning(
+                "paperless document %s references unknown storage path %s; skipping",
+                doc["id"],
+                storage_path_id,
+            )
+        else:
+            storage_path_name = storage_path["name"]
+            slug = slugify(storage_path_name)
+            if slug:
+                tags.append(TagSpec(slug=slug, name=storage_path_name))
+
     values, links, amount, currency = _map_custom_fields(doc.get("custom_fields") or [], taxonomies)
 
     extra: dict[str, Any] = {"id": doc["id"]}
@@ -245,6 +272,8 @@ def map_document(doc: dict[str, Any], taxonomies: Taxonomies) -> MappedDocument:
         extra["asn"] = doc["archive_serial_number"]
     if doc_type is not None:
         extra["document_type"] = doc_type["name"]
+    if storage_path_name is not None:  # null/missing: no key at all
+        extra["storage_path"] = storage_path_name
     notes = [
         {"note": note.get("note"), "created": note.get("created")}
         for note in doc.get("notes") or []
@@ -270,6 +299,7 @@ def map_document(doc: dict[str, Any], taxonomies: Taxonomies) -> MappedDocument:
         original_filename=doc.get("original_file_name"),
         sender_name=sender_name,
         kind_slug=kind_slug,
+        storage_path_name=storage_path_name,
         tags=unique_tags,
         amount_total=amount,
         currency=currency,
