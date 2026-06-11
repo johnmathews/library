@@ -2,12 +2,16 @@
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from pathlib import Path
 
-from fastapi import APIRouter, Depends, FastAPI
+from fastapi import APIRouter, Depends, FastAPI, HTTPException
+from fastapi.responses import FileResponse, Response
+from fastapi.staticfiles import StaticFiles
 
 import library
 from library.api import auth, documents, jobs, taxonomy
 from library.auth.deps import csrf_protect, current_user
+from library.config import get_settings
 from library.jobs import job_app
 from library.mcp_server import create_mcp_http_app
 
@@ -56,6 +60,47 @@ OPENAPI_TAGS: list[dict[str, str]] = [
 ]
 
 
+# Path heads that belong to the backend, never the SPA. A request for an
+# unknown path under these gets the normal JSON 404, not index.html.
+_BACKEND_PREFIXES = frozenset({"api", "mcp", "healthz", "docs", "redoc", "openapi.json"})
+
+
+class HashedStaticFiles(StaticFiles):
+    """Vite's content-hashed bundles under /assets never change: cache forever."""
+
+    def file_response(self, *args: object, **kwargs: object) -> Response:
+        response = super().file_response(*args, **kwargs)  # type: ignore[arg-type]
+        response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+        return response
+
+
+def _mount_spa(app: FastAPI, dist: Path) -> None:
+    """Serve the built Vue SPA (production mode — see docs/deployment.md §1.3).
+
+    /assets (content-hashed) is served immutable; every other non-backend
+    path serves the real file when one exists (manifest, icons, favicon)
+    and falls back to index.html (no-cache, so deploys take effect) for
+    client-side routes like /documents/42.
+    """
+    dist = dist.resolve()
+    index_file = dist / "index.html"
+    app.mount("/assets", HashedStaticFiles(directory=dist / "assets"), name="spa-assets")
+
+    @app.get("/{path:path}", include_in_schema=False)
+    async def spa(path: str) -> FileResponse:
+        head = path.split("/", 1)[0]
+        if head in _BACKEND_PREFIXES:
+            raise HTTPException(status_code=404, detail="Not Found")
+        candidate = (dist / path).resolve() if path else None
+        if (
+            candidate is not None
+            and candidate.is_relative_to(dist)  # no traversal out of dist
+            and candidate.is_file()
+        ):
+            return FileResponse(candidate)
+        return FileResponse(index_file, headers={"Cache-Control": "no-cache"})
+
+
 def create_app() -> FastAPI:
     """Build and return the Library FastAPI application."""
     # Built per app instance: the MCP ASGI app's session manager is created
@@ -102,5 +147,13 @@ def create_app() -> FastAPI:
     # docs/mcp.md. Auth is enforced inside the mounted app (FastMCP bearer
     # middleware running our token verifier), not by the /api dependencies.
     app.mount("/mcp", mcp_http)
+
+    # Production frontend (W17): when a built SPA is present (the Docker
+    # image bakes it into /app/frontend/dist), serve it from this process.
+    # Registered last, so every /api, /mcp, /healthz and /docs route above
+    # wins; without a build (dev: Vite proxies /api) nothing is mounted.
+    dist = get_settings().frontend_dist
+    if (dist / "index.html").is_file():
+        _mount_spa(app, dist)
 
     return app

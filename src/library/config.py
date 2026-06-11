@@ -17,6 +17,12 @@ class Settings(BaseSettings):
     data_dir: Path = Path("/data")
     environment: str = "production"
     max_upload_bytes: int = 100 * 1024 * 1024
+    # Built Vue SPA (docs/deployment.md §1.3). Relative to the working
+    # directory: resolves to the baked-in build in the Docker image (/app/
+    # frontend/dist) and to the local build in a checkout. If the directory
+    # has no index.html the API simply does not serve a frontend (dev mode:
+    # the Vite dev server proxies /api instead).
+    frontend_dist: Path = Path("frontend/dist")
     # Auth (see docs/api.md §1.9).
     session_ttl_days: int = 30
     cookie_secure: bool = True

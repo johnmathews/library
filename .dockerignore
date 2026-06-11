@@ -9,7 +9,12 @@ __pycache__
 htmlcov
 dist
 node_modules
-frontend
+# The frontend sources ARE part of the build context (the Dockerfile's
+# frontend stage builds the SPA); only build outputs and caches stay out.
+frontend/node_modules
+frontend/dist
+frontend/test-results
+frontend/playwright-report
 docs
 journal
 tests
@@ -18,5 +23,6 @@ docker-compose.yml
 Dockerfile
 .dockerignore
 .env
+.env.example
 .claude
 .engineering-team

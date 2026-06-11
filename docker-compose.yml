@@ -1,6 +1,22 @@
+# Library — production-shaped compose file (see docs/deployment.md).
+#
+# Configuration comes from a `.env` file next to this file (copy
+# `.env.example`); every value has a working default, so `docker compose up`
+# works without one. Memory limits are sized for a modest Proxmox LXC
+# (~4 GB) — tune them to your container.
+#
+# Named volumes:
+#   pgdata        Postgres data directory (all metadata, users, job queue)
+#   library_data  /data — content-addressed originals + derived artifacts
+# Both need backing up; see docs/deployment.md §1.6.
+
 services:
   db:
-    image: postgres:17-alpine
+    # Pinned minor version: upgrade deliberately (pg_dump/restore or
+    # pg_upgrade between majors), not on `compose pull`.
+    image: postgres:17.5-alpine
+    restart: unless-stopped
+    mem_limit: 1g
     environment:
       POSTGRES_USER: library
       POSTGRES_PASSWORD: library
@@ -13,11 +29,15 @@ services:
       timeout: 5s
       retries: 10
 
+  # One-shot: runs alembic migrations, then exits. api/worker wait for it.
   migrate:
     build: .
     command: ["alembic", "upgrade", "head"]
+    env_file:
+      - path: .env
+        required: false
     environment:
-      LIBRARY_DATABASE_URL: postgresql+asyncpg://library:library@db:5432/library
+      LIBRARY_DATABASE_URL: ${LIBRARY_DATABASE_URL:-postgresql+asyncpg://library:library@db:5432/library}
     depends_on:
       db:
         condition: service_healthy
@@ -25,11 +45,19 @@ services:
 
   api:
     build: .
+    restart: unless-stopped
+    mem_limit: 512m
     ports:
       - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      LIBRARY_DATABASE_URL: postgresql+asyncpg://library:library@db:5432/library
+      LIBRARY_DATABASE_URL: ${LIBRARY_DATABASE_URL:-postgresql+asyncpg://library:library@db:5432/library}
       LIBRARY_DATA_DIR: /data
+      # Secure cookies (the default) require HTTPS via a reverse proxy.
+      # Set LIBRARY_COOKIE_SECURE=false in .env only for plain-HTTP testing.
+      LIBRARY_COOKIE_SECURE: ${LIBRARY_COOKIE_SECURE:-true}
     volumes:
       - library_data:/data
     depends_on:
@@ -54,15 +82,22 @@ services:
   worker:
     build: .
     command: ["python", "-m", "library.worker"]
+    restart: unless-stopped
+    # OCR (tesseract/ghostscript subprocesses, RapidOCR ONNX inference)
+    # peaks well above the API's footprint.
+    mem_limit: 2g
+    env_file:
+      - path: .env
+        required: false
     environment:
-      LIBRARY_DATABASE_URL: postgresql+asyncpg://library:library@db:5432/library
+      LIBRARY_DATABASE_URL: ${LIBRARY_DATABASE_URL:-postgresql+asyncpg://library:library@db:5432/library}
       LIBRARY_DATA_DIR: /data
       # Consume folder watcher: files dropped here are ingested automatically.
       # Lives inside the /data volume; in production bind-mount your
       # Syncthing-synced scan folder over it (and set
       # LIBRARY_CONSUME_FORCE_POLLING=true if that mount is NFS/SMB).
       # See docs/ingestion.md, "Consume folder".
-      LIBRARY_CONSUME_DIR: /data/consume
+      LIBRARY_CONSUME_DIR: ${LIBRARY_CONSUME_DIR:-/data/consume}
     volumes:
       - library_data:/data
     depends_on:
@@ -70,6 +105,20 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+    healthcheck:
+      # The worker serves no HTTP; healthy = the app imports and the
+      # database (which carries the job queue) is reachable.
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import psycopg; from library.config import get_settings; from library.jobs import procrastinate_conninfo; psycopg.connect(procrastinate_conninfo(get_settings().database_url), connect_timeout=5).close()",
+        ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
 volumes:
   pgdata:

@@ -16,8 +16,14 @@ services.
 | Typeface | Inter, self-hosted via `@fontsource/inter` |
 | Tests | Vitest 4 + @vue/test-utils, jsdom |
 
-Everything lives in `frontend/`. `npm run dev` proxies `/api` and
-`/healthz` to the backend on `localhost:8000` (see `vite.config.ts`).
+Everything lives in `frontend/`. Two serving modes:
+
+- **Dev:** `npm run dev` — Vite on `:5173`, proxying `/api` and
+  `/healthz` to the backend on `localhost:8000` (see `vite.config.ts`).
+- **Production:** the Docker image builds the SPA (`node:22-slim` stage)
+  and the FastAPI process serves `frontend/dist` itself — hashed
+  `/assets` immutable, everything else falling back to `index.html` —
+  see [deployment.md](deployment.md) §1.3. No separate web server.
 
 ## 1.2 Design-system approach
 

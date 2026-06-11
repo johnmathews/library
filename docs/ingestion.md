@@ -4,10 +4,11 @@ How a file becomes a Document: upload → content-addressed storage →
 database row → background job → status lifecycle. This document covers
 storage layout, MIME handling, HEIC conversion, the upload API, the
 Procrastinate job queue, the OCR stage (W4), the Claude metadata
-extraction stage (W6), and the consume folder watcher (W12).
+extraction stage (W6), the consume folder watcher (W12), and email-in
+ingestion (W14).
 
-> **No authentication yet.** The endpoints below are unauthenticated
-> until W8 lands. Do not expose the API beyond a trusted network.
+> **Authentication.** Every endpoint below requires a session cookie or
+> bearer API token — see [api.md §1.9](api.md).
 
 ## Flow overview
 
@@ -617,8 +618,8 @@ Multipart upload, field name `file`.
 
 ### `GET /api/jobs?limit=N`
 
-Reads the `procrastinate_jobs` table directly (no auth — see banner):
-returns the most recent jobs as
+Reads the `procrastinate_jobs` table directly: returns the most recent
+jobs as
 `[{id, status, task_name, attempts, scheduled_at, document_id}]`,
 with `document_id` pulled from the job's JSON args when present.
 `limit` defaults to 50 (max 500).
@@ -640,6 +641,9 @@ Append-only audit trail in `ingestion_events`:
 | `failed` | pipeline | `{error, status}` |
 
 ## Configuration
+
+Ingestion-related settings (the full environment reference, covering
+every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 
 | Env var | Default | Used for |
 | --- | --- | --- |

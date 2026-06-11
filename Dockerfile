@@ -1,6 +1,18 @@
-# Library backend image.
+# Library image: FastAPI backend + the built Vue frontend.
 # The same image serves both the `api` and `worker` services; docker-compose
 # overrides the command for the worker.
+
+# --- Frontend stage: build the Vue SPA ---
+FROM node:22-slim AS frontend
+
+WORKDIR /frontend
+
+COPY frontend/package.json frontend/package-lock.json ./
+RUN npm ci
+
+COPY frontend/ ./
+# `npm run build` type-checks (vue-tsc) and builds (vite) into dist/.
+RUN npm run build
 
 # --- Build stage: install dependencies and the project with uv ---
 FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
@@ -44,6 +56,9 @@ RUN groupadd --system app && useradd --system --gid app --create-home app \
     && mkdir -p /data && chown app:app /data
 
 COPY --from=builder --chown=app:app /app /app
+# The built SPA; served by the API process itself (library.app._mount_spa,
+# found via the LIBRARY_FRONTEND_DIST default `frontend/dist` under /app).
+COPY --from=frontend --chown=app:app /frontend/dist /app/frontend/dist
 
 ENV PATH="/app/.venv/bin:$PATH"
 

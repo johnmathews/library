@@ -1,6 +1,6 @@
 # 1. Architecture
 
-**Status:** active. **Last updated:** 2026-06-10.
+**Status:** active. **Last updated:** 2026-06-11.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design and tracks which parts exist. The full
@@ -30,7 +30,10 @@ Three containers, one Postgres database, one shared data volume:
 
 - **api** — FastAPI app. Serves the REST API under `/api`, the MCP server
   mounted at `/mcp` (FastMCP, streamable HTTP), and `/healthz`. In
-  production it also serves the built Vue frontend.
+  production it also serves the built Vue frontend (baked into the image;
+  hashed assets cached immutable, SPA fallback to `index.html` — see
+  [deployment.md](deployment.md) §1.3). In dev the Vite server proxies
+  `/api` instead.
 - **worker** — same image, different entrypoint: a Procrastinate worker
   consuming jobs from Postgres (OCR, metadata extraction, thumbnails),
   plus the consume-folder watcher and periodic email poll. No Redis —
@@ -116,4 +119,4 @@ hashed, individually revocable.
 | Email-in | W14 | **done** — see [ingestion.md](ingestion.md), "Email-in" section |
 | paperless-ngx importer | W15 | **done** — see [migration.md](migration.md) |
 | Mobile/PWA polish | W16 | **done** — see [frontend.md](frontend.md) §1.8 (manifest + monogram icons, safe areas, ≥44px touch targets, 3-project Playwright matrix, on-device checklist) |
-| Deployment hardening + full docs | W17 | pending |
+| Deployment hardening + full docs | W17 | **done** — see [deployment.md](deployment.md); compose smoke job in CI; v0.1.0 ([CHANGELOG](../CHANGELOG.md)) |
