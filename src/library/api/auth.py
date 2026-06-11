@@ -92,8 +92,11 @@ async def logout(
     raw = request.cookies.get(SESSION_COOKIE)
     if raw:
         await revoke_session(db, raw)
-    response.delete_cookie(SESSION_COOKIE, path="/")
-    response.delete_cookie(CSRF_COOKIE, path="/")
+    settings = get_settings()
+    response.delete_cookie(
+        SESSION_COOKIE, path="/", httponly=True, secure=settings.cookie_secure, samesite="lax"
+    )
+    response.delete_cookie(CSRF_COOKIE, path="/", secure=settings.cookie_secure, samesite="lax")
 
 
 @router.get("/auth/me", response_model=UserOut, summary="The authenticated user")

@@ -199,7 +199,7 @@ async def test_attachment_creates_document_and_moves_message(
     name = f"invoice-{uuid.uuid4().hex[:8]}.pdf"
     message_id = f"<{uuid.uuid4().hex}@example.com>"
     raw = make_raw_mail(
-        from_addr="John Mathews <mthwsjc@gmail.com>",
+        from_addr="Jane Voorbeeld <jane@example.org>",
         subject="Energy invoice",
         message_id=message_id,
         attachments=[(name, make_pdf(), "application", "pdf")],
@@ -217,7 +217,7 @@ async def test_attachment_creates_document_and_moves_message(
     events = await events_for(session_factory, document.id, "received")
     assert len(events) == 1
     assert events[0].detail["source"] == "email"
-    assert events[0].detail["email_from"] == "mthwsjc@gmail.com"
+    assert events[0].detail["email_from"] == "jane@example.org"
     assert events[0].detail["email_subject"] == "Energy invoice"
     assert events[0].detail["email_message_id"] == message_id
     # Processing was enqueued through the normal pipeline.

@@ -122,7 +122,16 @@ async def _run_stage_hook(
         # Thumbnail rendering needs nothing from extraction (and the HEIC
         # conversion already exists from ingest), so once OCR has finished
         # it runs as a separate job, in parallel with the extract stage.
-        await generate_thumbnail.defer_async(document_id=document.id)
+        # Best-effort: OCR results are already committed, and a transient
+        # queue error here must not strand the document in ``failed``.
+        try:
+            await generate_thumbnail.defer_async(document_id=document.id)
+        except Exception:
+            logger.warning(
+                "could not queue thumbnail for document %s; continuing",
+                document.id,
+                exc_info=True,
+            )
     elif status is DocumentStatus.EXTRACT:
         await run_extraction(session, document)
 

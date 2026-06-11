@@ -242,3 +242,26 @@ async def test_process_document_task_registered_and_deferrable() -> None:
         job = next(iter(connector.jobs.values()))
         assert job["task_name"] == "library.jobs.process_document"
         assert job["args"] == {"document_id": 42}
+
+
+async def test_thumbnail_defer_failure_does_not_fail_document(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A transient queue error after successful OCR must not strand the
+    document in ``failed`` — the thumbnail is a best-effort derivation."""
+
+    async def explode(**kwargs: object) -> None:
+        raise ConnectionError("transient queue blip")
+
+    monkeypatch.setattr(jobs.generate_thumbnail, "defer_async", explode)
+    document_id = await make_document(session_factory, "pipeline-thumb-defer-fail")
+
+    await advance_pipeline(session_factory, document_id)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.status is DocumentStatus.INDEXED
