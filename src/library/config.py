@@ -2,10 +2,10 @@
 
 from functools import lru_cache
 from pathlib import Path
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import SecretStr
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import SecretStr, field_validator
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -36,6 +36,29 @@ class Settings(BaseSettings):
     consume_poll_interval_s: float = 2.0
     consume_stability_s: float = 3.0
     consume_on_success: Literal["archive", "delete"] = "archive"
+    # Email-in ingestion (see docs/ingestion.md, "Email-in" section).
+    email_host: str | None = None  # unset = poller off
+    email_port: int = 993
+    email_username: SecretStr | None = None
+    email_password: SecretStr | None = None
+    email_folder: str = "INBOX"
+    email_processed_folder: str = "Library/Processed"
+    email_poll_minutes: int = 10
+    # Comma-separated in the env; empty = accept mail from any sender.
+    email_allowed_senders: Annotated[list[str], NoDecode] = []
+    # paperless-ngx importer (see docs/migration.md).
+    paperless_url: str | None = None
+    paperless_token: SecretStr | None = None
+
+    @field_validator("email_allowed_senders", mode="before")
+    @classmethod
+    def _split_allowed_senders(cls, value: object) -> object:
+        """Parse the comma-separated env value; normalise addresses to lowercase."""
+        if isinstance(value, str):
+            value = value.split(",")
+        if isinstance(value, list):
+            return [str(item).strip().lower() for item in value if str(item).strip()]
+        return value
 
 
 @lru_cache

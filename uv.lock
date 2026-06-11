@@ -902,6 +902,15 @@ wheels = [
 ]
 
 [[package]]
+name = "imap-tools"
+version = "1.13.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/f7/cb/76d8697739439be6dd0261db5a27c945fb6a43e054f2d2e90283be502058/imap_tools-1.13.0.tar.gz", hash = "sha256:0da0d72c921a724cba09b959bad9bfaf60bca537a697e69a076fdf607ef5775c", size = 47683, upload-time = "2026-05-12T07:14:54.488Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/a8/0f58c13d2660d5fc8f808ce8b46828d2941752ec21e4015bde99c08b37d7/imap_tools-1.13.0-py3-none-any.whl", hash = "sha256:656c37beba22ab2929b73c07d0ca397ae8805b670d390b1127723e3335244e6d", size = 35849, upload-time = "2026-05-12T07:14:52.669Z" },
+]
+
+[[package]]
 name = "img2pdf"
 version = "0.6.3"
 source = { registry = "https://pypi.org/simple" }
@@ -1110,6 +1119,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "fastmcp" },
     { name = "filetype" },
+    { name = "imap-tools" },
     { name = "img2pdf" },
     { name = "ocrmypdf" },
     { name = "onnxruntime" },
@@ -1147,6 +1157,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastmcp", specifier = ">=3.4.2" },
     { name = "filetype", specifier = ">=1.2.0" },
+    { name = "imap-tools", specifier = ">=1.13.0" },
     { name = "img2pdf", specifier = ">=0.6.3" },
     { name = "ocrmypdf", specifier = ">=17.5.0" },
     { name = "onnxruntime", specifier = ">=1.26.0" },

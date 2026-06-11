@@ -99,6 +99,8 @@ async def ingest_file(
     mime: str | None = None,
     source: DocumentSource,
     uploader_id: int | None = None,
+    extra_event_detail: dict[str, object] | None = None,
+    defer_processing: bool = True,
 ) -> IngestResult:
     """Validate, store, register, and enqueue processing for one file.
 
@@ -106,6 +108,16 @@ async def ingest_file(
     DeletedDuplicateError when the content matches a soft-deleted document.
     Returns ``duplicate=True`` (with the existing document, no new file or
     row) when a non-deleted document already has this content.
+
+    ``extra_event_detail`` lets a channel attach provenance to the recorded
+    ``received``/``duplicate_upload`` event (e.g. email sender/subject/
+    message-id — see ``library.email_ingest``); keys are merged into the
+    standard detail dict.
+
+    ``defer_processing=False`` skips queueing the standard pipeline job; a
+    caller that pre-fills pipeline outputs (the paperless importer reuses
+    paperless's OCR text) takes over status handling and job deferral
+    itself (see ``library.importer.runner``).
     """
     detected = detect_mime(content, mime)
     if detected not in ALLOWED_MIME_TYPES:
@@ -123,7 +135,11 @@ async def ingest_file(
             IngestionEvent(
                 document_id=existing.id,
                 event="duplicate_upload",
-                detail={"filename": filename, "source": source.value},
+                detail={
+                    "filename": filename,
+                    "source": source.value,
+                    **(extra_event_detail or {}),
+                },
             )
         )
         await session.commit()
@@ -157,13 +173,15 @@ async def ingest_file(
                 "size": len(content),
                 "mime_type": detected,
                 "source": source.value,
+                **(extra_event_detail or {}),
             },
         )
     )
     # Commit before deferring: Procrastinate defers over its own connection,
     # so a job deferred first could be picked up before the row is visible.
     await session.commit()
-    await process_document.defer_async(document_id=document.id)
+    if defer_processing:
+        await process_document.defer_async(document_id=document.id)
     logger.info(
         "ingested document %s (sha256 %s, %s, created=%s)",
         document.id,

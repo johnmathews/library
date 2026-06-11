@@ -525,6 +525,82 @@ is rejected by MIME sniffing and lands in `failed/`.
   local bind mount synced by a Syncthing *on the same host* does not
   need polling.
 
+## Email-in (`library.email_ingest`, W14)
+
+A periodic Procrastinate task (`library.jobs.poll_email_inbox`) polls an
+IMAP mailbox and ingests every supported attachment through the same
+`ingest_file` service as an upload (`source=email`, no uploader). The
+feature is off until `LIBRARY_EMAIL_HOST` is set — the schedule still
+ticks (cron built from `LIBRARY_EMAIL_POLL_MINUTES`, default
+`*/10 * * * *`), but the task returns immediately.
+
+### Flow
+
+```
+poll_email_inbox fires (every LIBRARY_EMAIL_POLL_MINUTES minutes)
+  │
+  ├─ LIBRARY_EMAIL_HOST unset ─► instant no-op
+  ├─ connect (IMAP over TLS, port 993) and select LIBRARY_EMAIL_FOLDER;
+  │   create LIBRARY_EMAIL_PROCESSED_FOLDER if missing
+  └─ for every message in the folder (ALL, seen flags untouched):
+       ├─ sender not in LIBRARY_EMAIL_ALLOWED_SENDERS (when non-empty)
+       │   ─► skipped; left in place (visible to the operator)
+       ├─ per attachment: sniff MIME; if in the allowed set and within
+       │   LIBRARY_MAX_UPLOAD_BYTES ─► ingest_file(source=email) — new
+       │   document or `duplicate_upload` on the existing one; anything
+       │   else is skipped with a log line
+       ├─ move the message to LIBRARY_EMAIL_PROCESSED_FOLDER (also for
+       │   body-only mails — v1 ingests attachments only)
+       └─ any per-message error ─► logged, message left in place for
+           the next poll; the run continues with the next message
+```
+
+Details and decisions:
+
+- **Idempotency is folder-based.** The move to the processed folder is
+  what stops a message being scanned twice — not the IMAP seen flag,
+  which a human reading the same mailbox would clobber. Content dedup
+  in `ingest_file` (sha256) backs this up: if the same attachment
+  arrives in a different mail, the existing document gets a
+  `duplicate_upload` event and the new mail is still filed away.
+- **Sender hint for extraction/audit.** The recorded
+  `received`/`duplicate_upload` event carries `email_from`,
+  `email_subject`, and `email_message_id` alongside the standard keys
+  (via `ingest_file`'s `extra_event_detail` parameter).
+- **Allowlist.** `LIBRARY_EMAIL_ALLOWED_SENDERS` is comma-separated and
+  case-insensitive; empty (default) accepts mail from anyone, so set it
+  whenever the address is guessable. Rejected mail stays in the inbox
+  (it would otherwise vanish silently on a sender typo) — expect a
+  warning log per poll until it is dealt with.
+- **Attachments only (v1).** Body-only mails create no document; they
+  are still moved to the processed folder. HTML-to-PDF of mail bodies
+  was considered and deferred (improvement plan §1.3.14).
+- **Sync IMAP off the worker loop.** imap-tools is synchronous; the
+  poll runs in a thread (`asyncio.to_thread`) while each ingest call is
+  marshalled back onto the worker's event loop, so the database session
+  and job-queue connector stay on their home loop.
+
+### Provider setup
+
+| Provider | Host | Notes |
+| --- | --- | --- |
+| Gmail | `imap.gmail.com` | Requires 2-Step Verification + an **app password** (myaccount.google.com → Security → App passwords); the account password will not work. IMAP must be enabled in Gmail settings. Folder names are labels — `Library/Processed` shows up as a nested label. |
+| Fastmail | `imap.fastmail.com` | App password required (Settings → Privacy & Security → Integrations). |
+| Outlook.com | `outlook.office365.com` | App password with 2FA; plain passwords are being phased out for IMAP. |
+| Self-hosted (Dovecot etc.) | your host | Any account works; consider a dedicated `library@` address so the allowlist and folder layout stay clean. |
+
+A dedicated mailbox (or a plus-address like `john+library@…` filtered
+into its own folder set as `LIBRARY_EMAIL_FOLDER`) keeps the poller away
+from personal mail. Example:
+
+```sh
+LIBRARY_EMAIL_HOST=imap.gmail.com
+LIBRARY_EMAIL_USERNAME=library.intake@gmail.com
+LIBRARY_EMAIL_PASSWORD=abcd efgh ijkl mnop   # Gmail app password
+LIBRARY_EMAIL_ALLOWED_SENDERS=mthwsjc@gmail.com,partner@example.com
+LIBRARY_EMAIL_POLL_MINUTES=10
+```
+
 ## HTTP API
 
 ### `POST /api/documents`
@@ -553,8 +629,8 @@ Append-only audit trail in `ingestion_events`:
 
 | event | written by | detail |
 | --- | --- | --- |
-| `received` | ingest | `{filename, size, mime_type, source}` |
-| `duplicate_upload` | ingest | `{filename, source}` |
+| `received` | ingest | `{filename, size, mime_type, source}`; email adds `{email_from, email_subject, email_message_id}` |
+| `duplicate_upload` | ingest | `{filename, source}`; email adds the same `email_*` keys |
 | `status_changed` | pipeline | `{from, to}` |
 | `ocr_completed` | OCR stage | `{engine, confidence, pages, characters}`; plus `gate: {tesseract_confidence, rapidocr_confidence}` when the confidence gate retried |
 | `ocr_failed` | OCR stage | `{error}` |
@@ -583,3 +659,11 @@ Append-only audit trail in `ingestion_events`:
 | `LIBRARY_CONSUME_POLL_INTERVAL_S` | `2.0` | Poll cadence when force-polling |
 | `LIBRARY_CONSUME_STABILITY_S` | `3.0` | A file's size+mtime must be unchanged this long before ingest |
 | `LIBRARY_CONSUME_ON_SUCCESS` | `archive` | `archive` → move to `consumed/YYYY/MM/`; `delete` → unlink |
+| `LIBRARY_EMAIL_HOST` | unset | IMAP host; unset disables the email poller |
+| `LIBRARY_EMAIL_PORT` | `993` | IMAP TLS port |
+| `LIBRARY_EMAIL_USERNAME` | unset | Mailbox login |
+| `LIBRARY_EMAIL_PASSWORD` | unset | Mailbox password (use an app password — see provider table) |
+| `LIBRARY_EMAIL_FOLDER` | `INBOX` | Folder polled for new mail |
+| `LIBRARY_EMAIL_PROCESSED_FOLDER` | `Library/Processed` | Where handled messages are moved (created if missing) |
+| `LIBRARY_EMAIL_POLL_MINUTES` | `10` | Poll cadence (cron step; clamped to 1–59) |
+| `LIBRARY_EMAIL_ALLOWED_SENDERS` | empty | Comma-separated sender allowlist; empty accepts anyone |

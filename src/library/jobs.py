@@ -234,3 +234,34 @@ async def extract_document(document_id: int) -> None:
         if document is None:
             raise ValueError(f"document {document_id} not found")
         await apply_extraction(session, document, get_settings())
+
+
+def email_poll_cron(minutes: int) -> str:
+    """Cron expression for the email poller: every ``minutes`` minutes.
+
+    Cron steps live in the minute field (0-59), so the value is clamped
+    to 1-59; longer intervals are not worth a second schedule shape for
+    a mailbox poll.
+    """
+    return f"*/{min(max(minutes, 1), 59)} * * * *"
+
+
+@job_app.periodic(cron=email_poll_cron(get_settings().email_poll_minutes))
+@job_app.task(name="library.jobs.poll_email_inbox")
+async def poll_email_inbox(timestamp: int) -> None:
+    """Periodic task: poll the IMAP inbox for attachment documents (W14).
+
+    Instant no-op while ``LIBRARY_EMAIL_HOST`` is unset (the schedule
+    still ticks; the task just returns). The synchronous IMAP work runs
+    in a thread via ``poll_mailbox_async`` so the worker loop stays
+    responsive.
+    """
+    settings = get_settings()
+    if settings.email_host is None:
+        return
+    # Imported lazily: email_ingest imports library.ingest, which imports
+    # this module for process_document — a top-level import would cycle.
+    from library.email_ingest import poll_mailbox_async
+
+    summary = await poll_mailbox_async(settings, get_sessionmaker())
+    logger.info("email poll (scheduled for %s): %s", timestamp, summary)
