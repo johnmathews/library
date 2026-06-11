@@ -41,6 +41,18 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
   serves the built frontend); images published to
   `ghcr.io/johnmathews/library`
 
+### Naming: there is no separate frontend container
+
+One container — called `api` in this repo's compose file and
+**`library-webserver`** in the production stack — serves *three* things
+on one port: the compiled Vue web app, the REST API (`/api`), and the
+MCP server (`/mcp`). "Webserver" names its **role** (the HTTP-facing
+half of the app, alongside `worker` and `db`), not a feature list: the
+SPA is just static files FastAPI serves same-origin, which is what keeps
+cookie auth simple and CORS nonexistent. So when looking for "the
+frontend", "the API", or "the MCP server" — they are all the same
+container.
+
 ## Quickstart (production)
 
 Follow [`docs/deployment.md`](docs/deployment.md) — clone, `cp

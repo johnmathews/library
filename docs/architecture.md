@@ -34,6 +34,13 @@ Three containers, one Postgres database, one shared data volume:
   hashed assets cached immutable, SPA fallback to `index.html` — see
   [deployment.md](deployment.md) §1.3). In dev the Vite server proxies
   `/api` instead.
+
+  > **Naming note.** This service is deployed as **`library-webserver`**
+  > on the home server (matching the `paperless-webserver` convention of
+  > that stack). There is no separate frontend container and no separate
+  > MCP container: the web app, REST API and MCP server are one process
+  > on one port. "Webserver" describes the role — the HTTP-facing half
+  > of the app, beside `worker` and `db` — not what it speaks.
 - **worker** — same image, different entrypoint: a Procrastinate worker
   consuming jobs from Postgres (OCR, metadata extraction, thumbnails),
   plus the consume-folder watcher and periodic email poll. No Redis —

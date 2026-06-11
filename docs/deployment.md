@@ -19,6 +19,17 @@ restart policies, healthchecks and memory limits are already in it):
 | `api` | same image | FastAPI: `/api`, `/mcp`, `/healthz`, and the built web app at `/` |
 | `worker` | same image | OCR, Claude extraction, thumbnails, consume-folder watcher, email poller |
 
+> **Naming note — read this if you're looking for the frontend.** There
+> is no frontend container, no separate REST container, and no separate
+> MCP container. The `api` service (deployed on the home server as
+> **`library-webserver`**, following that stack's `paperless-webserver`
+> convention) serves all three on one port: the compiled Vue app as
+> static files, the REST API under `/api`, and the MCP server under
+> `/mcp`. "Webserver" names the role — the HTTP-facing half of the app,
+> beside `worker` and `db` — not the protocol list. Rationale in
+> [architecture.md](architecture.md) §1.1 and §1.3 below (same-origin
+> cookies, no CORS, one versioned artifact).
+
 One image serves api and worker; the frontend is compiled into it (see
 1.3). Two named volumes hold all state: `pgdata` (Postgres) and
 `library_data` (`/data`: content-addressed originals + derived
