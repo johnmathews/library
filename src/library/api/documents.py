@@ -62,6 +62,33 @@ DispositionParam = Annotated[
     Query(description="`inline` to render in the browser, `attachment` (default) to download."),
 ]
 
+# Defense in depth for inline rendering: only types a browser displays
+# without executing anything. The ingest allowlist already keeps active
+# content (HTML/SVG/XML) out of the store, but the XSS boundary must not
+# depend on a single upstream check — anything outside this set is
+# silently downgraded to attachment.
+INLINE_SAFE_MIME_TYPES = frozenset(
+    {"application/pdf", "image/jpeg", "image/png", "image/webp", "image/gif"}
+)
+
+
+def _file_response(path: Path, *, media_type: str, filename: str, disposition: str) -> FileResponse:
+    """FileResponse with the inline allowlist and hardening headers applied."""
+    if disposition == "inline" and media_type not in INLINE_SAFE_MIME_TYPES:
+        disposition = "attachment"
+    return FileResponse(
+        path,
+        media_type=media_type,
+        filename=filename,
+        content_disposition_type=disposition,
+        headers={
+            "X-Content-Type-Options": "nosniff",
+            # Even if something renderable slipped through, it executes
+            # nothing and has no origin powers inside the preview iframe.
+            "Content-Security-Policy": "sandbox",
+        },
+    )
+
 
 @router.post(
     "/documents",
@@ -358,11 +385,11 @@ async def download_original(
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="original file missing from storage"
         )
-    return FileResponse(
+    return _file_response(
         path,
         media_type=document.mime_type,
         filename=document.original_filename or f"document-{document.id}",
-        content_disposition_type=disposition,
+        disposition=disposition,
     )
 
 
@@ -393,11 +420,11 @@ async def download_searchable_pdf(
         if document.original_filename
         else f"document-{document.id}"
     )
-    return FileResponse(
+    return _file_response(
         path,
         media_type="application/pdf",
         filename=f"{stem}-searchable.pdf",
-        content_disposition_type=disposition,
+        disposition=disposition,
     )
 
 

@@ -691,3 +691,36 @@ def test_openapi_is_curated(client: TestClient) -> None:
         "/api/documents/{document_id}/thumbnail",
     }
     assert expected_paths <= set(schema["paths"])
+
+
+def test_inline_disposition_restricted_to_render_safe_types(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Defense in depth: ``?disposition=inline`` is honoured only for MIME
+    types a browser can render without executing anything (PDF + raster
+    images). Anything else — even though the ingest allowlist already
+    blocks active content — is downgraded to attachment, and every file
+    response carries nosniff + a sandboxing CSP."""
+    content = b"plain text but imagine it were html"
+    store(content)
+    document_id = seed_document(
+        api_database_url,
+        content.decode(),
+        mime_type="text/plain",
+        original_filename="notes.txt",
+    )
+
+    response = api_client.get(f"/api/documents/{document_id}/original?disposition=inline")
+    assert response.status_code == 200
+    assert response.headers["content-disposition"].startswith("attachment")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-security-policy"] == "sandbox"
+
+    # PDF stays inline-capable and carries the same hardening headers.
+    pdf = b"%PDF-1.4 inline-allowlist-check"
+    store(pdf)
+    pdf_id = seed_document(api_database_url, pdf.decode(), original_filename="ok.pdf")
+    response = api_client.get(f"/api/documents/{pdf_id}/original?disposition=inline")
+    assert response.headers["content-disposition"].startswith("inline")
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert response.headers["content-security-policy"] == "sandbox"
