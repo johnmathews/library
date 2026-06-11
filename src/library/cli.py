@@ -1,4 +1,4 @@
-"""`library` — account management CLI (typer).
+"""`library` — administration CLI (typer): accounts and imports.
 
 There is deliberately no signup endpoint: users of this family-scale
 archive are created from the host. Each command opens a fresh async
@@ -18,13 +18,20 @@ from sqlalchemy.pool import NullPool
 from library.auth.passwords import hash_password
 from library.auth.service import revoke_all_credentials
 from library.config import get_settings
+from library.importer.client import PaperlessClient
+from library.importer.runner import ImportReport, format_report, run_import
+from library.jobs import job_app
 from library.models import User
 
 app: typer.Typer = typer.Typer(
-    no_args_is_help=True, help="Library administration (account management)."
+    no_args_is_help=True, help="Library administration (accounts, imports)."
 )
 user_app: typer.Typer = typer.Typer(no_args_is_help=True, help="Manage user accounts.")
 app.add_typer(user_app, name="user")
+import_app: typer.Typer = typer.Typer(
+    no_args_is_help=True, help="Import documents from external systems."
+)
+app.add_typer(import_app, name="import")
 
 
 def _run[T](operation: Callable[[AsyncSession], Awaitable[T]]) -> T:
@@ -139,6 +146,55 @@ def user_list() -> None:
         typer.echo(
             f"{user.id}\t{user.username}{display}\t{state}\tcreated {user.created_at:%Y-%m-%d}"
         )
+
+
+@import_app.command("paperless")
+def import_paperless(
+    url: str | None = typer.Option(
+        None, "--url", help="paperless-ngx base URL (default: $LIBRARY_PAPERLESS_URL)."
+    ),
+    token: str | None = typer.Option(
+        None, "--token", help="paperless-ngx API token (default: $LIBRARY_PAPERLESS_TOKEN)."
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Fetch and map everything; write nothing, print the summary."
+    ),
+    no_extract: bool = typer.Option(
+        False, "--no-extract", help="Do not queue Claude extraction for imported documents."
+    ),
+    limit: int | None = typer.Option(
+        None, "--limit", min=1, help="Only consider the first N documents."
+    ),
+) -> None:
+    """Import every document from a paperless-ngx instance (see docs/migration.md).
+
+    Idempotent: re-runs skip documents already imported (by paperless id or
+    by content hash). Run with --dry-run first.
+    """
+    settings = get_settings()
+    base_url = url or settings.paperless_url
+    secret = token or (
+        settings.paperless_token.get_secret_value() if settings.paperless_token else None
+    )
+    if not base_url or not secret:
+        typer.echo(
+            "error: paperless URL and token required "
+            "(--url/--token or LIBRARY_PAPERLESS_URL/LIBRARY_PAPERLESS_TOKEN)"
+        )
+        raise typer.Exit(code=1)
+
+    async def operation(session: AsyncSession) -> ImportReport:
+        # Deferring follow-up jobs (extraction, thumbnails, pipeline) needs
+        # the Procrastinate app open.
+        async with job_app.open_async(), PaperlessClient(base_url, secret) as client:
+            return await run_import(
+                session, client, dry_run=dry_run, no_extract=no_extract, limit=limit
+            )
+
+    report = _run(operation)
+    typer.echo(format_report(report))
+    if report.failed:
+        raise typer.Exit(code=1)
 
 
 def main() -> None:
