@@ -93,3 +93,47 @@ auth/session/CSRF flow were untouched; tests were the regression gate.
 - `docs/frontend.md` rewritten for the Mosaic architecture.
 - Old GOV.UK doc archived to `docs/archive/frontend-govuk.md` with a superseded
   header (per the docs convention — kept for its decision record).
+
+## Post-merge hardening (2026-06-14)
+
+The unit suite and per-phase reviews were green, but **e2e went red on `main`**
+after the local merge — the branch (`mosaic-reskin`) matched neither the `main`
+nor `eng-**` push-trigger filter and no PR was opened, so the e2e gate never ran
+until the merge landed. Reproduced locally against the real stack (Docker
+backend + `vite preview` + Playwright) and fixed three reskin regressions the
+unit tests couldn't catch:
+
+- **Heading copy** the acceptance suite asserts: `LoginView` page heading was
+  renamed `Sign in` → `Library` (restored; kept `Library` as a small brand
+  wordmark) and `UploadView` `Upload documents` → `Upload` (restored). A pure
+  reskin should never have changed user-facing text.
+- **Dashboard grid breakpoints.** The `.app-doc-grid` rule died with
+  `main.scss`; Tailwind `xl:grid-cols-4` gave 4 columns at 1280px where the W16
+  contract requires 3. Re-added `.app-doc-grid` to `utility-patterns.css` with
+  the original breakpoints (1 / 2@641 / 3@769 / 4@1400).
+- **e2e helper bug** (mine): `openUploadPage` gated the mobile sidebar reveal on
+  the upload link's visibility, but a transform-offscreen link still reports
+  visible to Playwright — gate on the header hamburger instead.
+
+Lesson: unit specs assert behaviour/markup, not heading copy or responsive
+column counts — exactly the gap e2e exists to catch. Added unit-speed guards
+(page-heading assertions in the Upload/List/Settings specs) so that class of
+regression fails in milliseconds, not only in the 6-minute e2e matrix.
+
+### CI improvements
+
+- **Gate every branch.** `push` now triggers on `["**"]` (was `main` + `eng-**`)
+  with a `cancel-in-progress` concurrency group, so feature work is e2e-gated
+  before it reaches `main`.
+- **Docker layer cache.** `e2e` and `compose-smoke` build the backend image via
+  `docker buildx bake` reading a shared gha cache (`scope=library-image`) that
+  the `docker` job writes (`mode=max`), instead of an uncached
+  `compose up --build` each run. Cache/name miss falls back to a rebuild —
+  slower, never broken. Plus a Playwright-browser cache.
+- **Coverage surfaced and gated.** Frontend coverage was previously not measured
+  at all; added `@vitest/coverage-v8` + config + a `test:coverage` script.
+  Backend coverage was computed but buried in the log. Both now write a table to
+  the job summary, upload an HTML artifact, and post a sticky PR comment
+  (`marocchino/sticky-pull-request-comment`). Gates: backend `fail_under = 85`
+  (currently ~95%); frontend lines/statements/functions ≥ 85, branches ≥ 75
+  (branch coverage runs structurally lower).
