@@ -21,6 +21,15 @@ export default mergeConfig(
           'src/main.ts',
           'src/**/*.d.ts',
         ],
+        // Coverage gate: `vitest run --coverage` exits non-zero below these.
+        // Branches sit lower (every ||, ?., default param and error path
+        // counts) so they carry a justified carve-out; the rest gate at 85%.
+        thresholds: {
+          lines: 85,
+          statements: 85,
+          functions: 85,
+          branches: 75,
+        },
       },
     },
   }),

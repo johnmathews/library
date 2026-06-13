@@ -213,7 +213,13 @@ the toggle. The user's choice is persisted by `useDark` (localStorage).
 - `npm run test:unit` — Vitest component/behaviour specs (`ThemeToggle` dark
   toggle, `AppSidebar` nav, `AppHeader` search/hamburger emits, the `App*` form
   components incl. error-summary focus, conditional reveals, date-input ISO
-  emission), plus the unchanged API-client/store/router/view specs.
+  emission), plus the unchanged API-client/store/router/view specs. Every view
+  spec also asserts its page heading — the unit-speed guard for the
+  acceptance-contract copy (`Sign in`, `Upload documents`, `Documents`, …).
+- `npm run test:coverage` — Vitest with V8 coverage. Gated in CI:
+  lines/statements/functions ≥ 85%, branches ≥ 75% (branches run structurally
+  lower). CI surfaces the report on the run summary, as an HTML artifact, and
+  as a sticky PR comment.
 - `npm run type-check` (`vue-tsc`), `npm run lint` (ESLint).
 - `npm run build && npm run check:assets` — `scripts/check-assets.mjs` was
   **repurposed** from a GOV.UK-licensing gate into a **govuk-residue gate**: it

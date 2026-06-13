@@ -82,3 +82,9 @@ markers = [
 
 [tool.coverage.run]
 source = ["src/library"]
+
+[tool.coverage.report]
+# Coverage gate: `coverage report` exits non-zero below this, failing CI.
+# Backend currently sits at ~95%, so 85% leaves headroom without being slack.
+fail_under = 85
+show_missing = true
