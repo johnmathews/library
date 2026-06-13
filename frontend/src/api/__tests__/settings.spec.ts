@@ -23,7 +23,7 @@ describe('settings api', () => {
     vi.stubGlobal('fetch', fetchMock)
     const result = await updateSettings({ dashboard_fields: ['tags'] })
     expect(result).toEqual({ dashboard_fields: ['tags'] })
-    const [, init] = fetchMock.mock.calls[0]
+    const [, init] = fetchMock.mock.calls[0]!
     expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/settings')
     expect(init.method).toBe('PUT')
     expect(JSON.parse(init.body)).toEqual({ dashboard_fields: ['tags'] })
