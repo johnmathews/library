@@ -148,7 +148,7 @@ jobs:
         run: docker compose down -v
 
   docker:
-    needs: [backend, frontend, e2e]
+    needs: [backend, frontend, e2e, compose-smoke]
     runs-on: ubuntu-latest
     permissions:
       contents: read
