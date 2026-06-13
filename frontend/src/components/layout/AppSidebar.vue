@@ -56,7 +56,7 @@ watch(
 
 // close if ESC pressed
 const keyHandler = (event: KeyboardEvent) => {
-  if (!props.sidebarOpen || event.keyCode !== 27) return
+  if (!props.sidebarOpen || event.key !== 'Escape') return
   emit('close-sidebar')
 }
 
@@ -119,9 +119,6 @@ watch(
       <!-- Links -->
       <div class="space-y-8">
         <div>
-          <h2
-            class="text-m uppercase text-gray-600 dark:text-gray-300 font-semibold pl-3 lg:hidden lg:sidebar-expanded:block 2xl:block"
-          ></h2>
           <ul class="mt-3" @click="$emit('close-sidebar')">
             <!-- Documents link (home / `/`) -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/" custom>
