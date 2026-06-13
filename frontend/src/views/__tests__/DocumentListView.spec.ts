@@ -131,16 +131,16 @@ describe('DocumentListView', () => {
     const w = await mountView()
 
     expect(w.find('ul.app-doc-grid').exists()).toBe(true)
-    const tile = w.find('.app-doc-card')
+    const tile = w.find('[data-testid="doc-card"]')
     expect(tile.exists()).toBe(true)
-    // Exactly ONE anchor per tile (stretched-link pattern).
+    // Exactly ONE anchor per tile (the title link).
     expect(tile.findAll('a')).toHaveLength(1)
     const titleLink = tile.find('.app-doc-card__title a')
     expect(titleLink.text()).toBe('Energierekening mei 2026')
     expect(titleLink.attributes('href')).toBe('/documents/12')
-    expect(titleLink.classes()).toContain('govuk-link')
-    expect(tile.find('.govuk-tag--blue').text()).toBe('Invoice')
-    expect(tile.find('.govuk-tag--grey').text()).toBe('Dutch')
+    expect(titleLink.classes()).toContain('text-violet-600')
+    expect(tile.find('.app-doc-card__meta').text()).toContain('Invoice')
+    expect(tile.find('.app-doc-card__meta').text()).toContain('Dutch')
     expect(tile.find('.app-doc-card__sender').text()).toBe('Eneco')
     expect(tile.find('.app-doc-card__date').text()).toBe('15 May 2026')
     expect(tile.find('.app-doc-card__thumbnail img').attributes('src')).toBe(
@@ -262,9 +262,9 @@ describe('DocumentListView', () => {
     listResponse = () => jsonResponse(listBody([makeItem()], 60))
     const w = await mountView()
 
-    const pagination = w.find('.govuk-pagination')
+    const pagination = w.find('nav[aria-label="Pagination"]')
     expect(pagination.exists()).toBe(true)
-    await pagination.find('a[aria-label="Page 2"]').trigger('click')
+    await pagination.find('button[aria-label="Page 2"]').trigger('click')
     await flushPromises()
 
     expect(router.currentRoute.value.query.page).toBe('2')
@@ -277,7 +277,7 @@ describe('DocumentListView', () => {
     await router.push('/?q=rekening&kind=invoice')
     const w = await mountView()
 
-    await w.find('.govuk-pagination a[aria-label="Page 2"]').trigger('click')
+    await w.find('nav[aria-label="Pagination"] button[aria-label="Page 2"]').trigger('click')
     await flushPromises()
 
     expect(router.currentRoute.value.query).toMatchObject({
@@ -334,7 +334,7 @@ describe('DocumentListView', () => {
     // 6 tags, MAX 4 shown — the overflow counter must read "+2"
     expect(w.find('[data-testid="doc-tags"]').exists()).toBe(true)
     expect(w.find('[data-testid="doc-tags"]').text()).toContain('+2')
-    // Only 4 chips rendered
-    expect(w.findAll('[data-testid="doc-tags"] .govuk-tag')).toHaveLength(4)
+    // Only 4 chips rendered (AppBadge renders a rounded-full span per chip).
+    expect(w.findAll('[data-testid="doc-tags"] .rounded-full')).toHaveLength(4)
   })
 })
