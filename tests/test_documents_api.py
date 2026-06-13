@@ -670,6 +670,20 @@ def test_thumbnail_endpoint_serves_webp_and_marks_presence(
     assert by_id[without_thumb]["has_thumbnail"] is False
 
 
+# --- List item amount_total/currency -----------------------------------------
+
+
+def test_list_item_includes_amount(api_client: TestClient, api_database_url: str) -> None:
+    doc_id = seed_document(api_database_url, "w7-list-amount", tag_slugs=["w7-list-amount"])
+    resp = api_client.patch(
+        f"/api/documents/{doc_id}", json={"amount_total": "92.50", "currency": "EUR"}
+    )
+    assert resp.status_code == 200, resp.text
+    item = next(d for d in api_client.get("/api/documents").json()["items"] if d["id"] == doc_id)
+    assert Decimal(item["amount_total"]) == Decimal("92.50")
+    assert item["currency"] == "EUR"
+
+
 # --- OpenAPI surface ----------------------------------------------------------
 
 

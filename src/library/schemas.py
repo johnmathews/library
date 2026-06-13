@@ -69,6 +69,8 @@ class DocumentListItem(BaseModel):
     created_at: datetime
     has_searchable_pdf: bool
     has_thumbnail: bool
+    amount_total: Decimal | None = None
+    currency: str | None = None
     snippet: str | None = Field(
         default=None,
         description=(
@@ -96,8 +98,6 @@ class DocumentDetail(DocumentListItem):
 
     ocr_text: str | None
     ocr_confidence: float | None
-    amount_total: Decimal | None
-    currency: str | None
     due_date: date | None
     expiry_date: date | None
     source: DocumentSource

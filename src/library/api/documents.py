@@ -480,6 +480,8 @@ def _list_item_fields(document: Document) -> dict[str, Any]:
         "created_at": document.created_at,
         "has_searchable_pdf": document.searchable_pdf,
         "has_thumbnail": (derived_path(document.sha256) / THUMBNAIL_NAME).is_file(),
+        "amount_total": document.amount_total,
+        "currency": document.currency,
     }
 
 
@@ -489,8 +491,6 @@ def _detail(document: Document) -> DocumentDetail:
         **_list_item_fields(document),
         ocr_text=document.ocr_text,
         ocr_confidence=document.ocr_confidence,
-        amount_total=document.amount_total,
-        currency=document.currency,
         due_date=document.due_date,
         expiry_date=document.expiry_date,
         source=document.source,
