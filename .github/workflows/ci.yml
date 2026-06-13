@@ -11,7 +11,8 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v6
-      - uses: astral-sh/setup-uv@v8
+      # Full version: astral-sh/setup-uv publishes no floating `v8` major tag.
+      - uses: astral-sh/setup-uv@v8.2.0
         with:
           enable-cache: true
       - name: Install OCR system packages
