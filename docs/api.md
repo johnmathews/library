@@ -251,7 +251,7 @@ library user list
 ### 1.9.1 Sessions — `POST /api/auth/login`
 
 JSON body `{"username": "...", "password": "..."}`. On success, `200` with
-`{id, username, display_name}` and two cookies:
+`{id, username, display_name, preferences}` and two cookies:
 
 | Cookie | Flags | Purpose |
 |--------|-------|---------|

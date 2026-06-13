@@ -67,12 +67,15 @@ its value, determines which branch runs.
 were kept as the default. `amount` and `file_type` are off by default because
 they are null/redundant on the majority of documents in the target collection.
 
-**`DASHBOARD_FIELDS` as the single FE source of truth.** The canonical order
-is declared once in `src/api/settings.ts` and used both to build the checkbox
-list in `SettingsView` and to determine render order in `DocumentListView`.
-The user's saved set governs *which* fields appear; the canonical array
-governs the *order* in which they appear, so two users with the same selection
-see tiles in the same layout.
+**`DASHBOARD_FIELDS` as the single FE source of truth for the Settings page.**
+The canonical array is declared once in `src/api/settings.ts` and drives the
+checkbox list in `SettingsView` (field keys, display labels, and checkbox
+order). `DocumentListView` imports only the `DashboardField` *type* from that
+module — not the array. The tile render order is a separate fixed sequence
+hardcoded in `DocumentListView`'s template (kind → language → status →
+file_type, then sender → date → amount, then tags). The user's saved set
+governs *which* fields appear; the template order governs *how* they appear,
+so two users with the same selection see tiles in the same layout.
 
 ## Surface now visible for the first time
 

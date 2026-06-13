@@ -249,9 +249,12 @@ with `ApiError`. `src/api/taxonomy.ts` wraps the taxonomy list endpoints
 filters and the detail page's edit inputs — the former `DOCUMENT_KINDS`
 hardcode is gone. `src/api/settings.ts` wraps `GET/PUT /api/settings`
 and exports `DASHBOARD_FIELDS` — the canonical ordered list of selectable
-field descriptors (`{value, text}`) used by both `SettingsView` (checkbox
-labels) and `DocumentListView` (tile render order); it is the single FE
-source of truth for field names and ordering (api.md §1.10).
+field descriptors (`{value, text}`) used by `SettingsView` for checkbox
+labels and ordering; it is the single FE source of truth for the Settings
+page's field names and checkbox order (api.md §1.10). `DocumentListView`
+imports only the `DashboardField` *type* from `settings.ts`, not the array;
+the dashboard tile render order is a separate fixed order defined in
+`DocumentListView`'s template (see §1.4.1.2).
 
 ### 1.4.1 Documents dashboard — `/` (`DocumentListView`)
 
@@ -283,9 +286,10 @@ with no matches (inset text offering to clear filters).
 
 Which fields appear on a tile is controlled by the user's saved
 preferences (`auth.dashboardFields`), checked via a `shows(field)`
-helper. Fields render in the **fixed canonical order** defined by
-`DASHBOARD_FIELDS` in `src/api/settings.ts` — the user's selection
-governs presence, not order:
+helper. Fields render in the **fixed canonical order** hardcoded in
+`DocumentListView`'s template — the user's selection governs presence,
+not order. (`DASHBOARD_FIELDS` in `src/api/settings.ts` drives the
+Settings checkbox list; the tile order below is independent of it.)
 
 1. **kind** — blue `GovTag` (omitted if null)
 2. **language** — grey `GovTag` (omitted if `unknown`)
@@ -407,7 +411,8 @@ choose which metadata fields appear on the dashboard tiles.
 
 - **Checkboxes** — `GovCheckboxes` with `small` variant; items are built
   from `DASHBOARD_FIELDS` in `src/api/settings.ts` (the single FE source
-  of truth for both the labels and the tile render order). The model is
+  of truth for the checkbox labels and their order on the Settings page).
+  The model is
   seeded from `auth.dashboardFields` on mount so the current preferences
   are pre-selected.
 - **Save** — submits `PUT /api/settings` via `updateSettings()`. On
