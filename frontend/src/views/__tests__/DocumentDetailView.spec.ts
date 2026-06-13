@@ -114,7 +114,7 @@ describe('DocumentDetailView', () => {
   }
 
   function rowValue(w: VueWrapper, field: string): string {
-    return w.find(`[data-testid="row-${field}"] .govuk-summary-list__value`).text()
+    return w.find(`[data-testid="row-${field}"] [data-testid="row-value"]`).text()
   }
 
   function patchCalls(): { url: string; body: Record<string, unknown> }[] {
@@ -206,7 +206,7 @@ describe('DocumentDetailView', () => {
     await w.find('[data-testid="row-kind"] form').trigger('submit')
     await flushPromises()
 
-    const summary = w.find('.govuk-error-summary')
+    const summary = w.find('[data-testid="error-summary"]')
     expect(summary.exists()).toBe(true)
     expect(summary.text()).toContain('unknown kind slug')
     expect(w.find('#edit-kind').exists()).toBe(true)

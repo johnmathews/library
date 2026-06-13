@@ -1,7 +1,7 @@
 /**
  * W10 + W11 acceptance e2e: sign in → upload a PDF fixture → wait for the
  * pipeline to index it → find its tile on the dashboard grid → full-text
- * search by a Dutch stem through the navbar search modal; then the detail
+ * search by a Dutch stem through the header search modal; then the detail
  * page — open from a tile, edit the title via the summary-list Change
  * flow, delete via the confirmation page. Runs in all three matrix
  * projects (desktop Chromium, 375px WebKit, iPad-portrait WebKit) — see
@@ -40,33 +40,29 @@ async function signIn(page: Page): Promise<void> {
   await expect(page.getByRole('heading', { name: 'Documents', exact: true })).toBeVisible()
 }
 
-/** Open the Upload page through the service navigation (mobile: via Menu). */
+/**
+ * Open the Upload page through the Mosaic sidebar. On mobile the sidebar is
+ * translated offscreen and the header hamburger (aria-controls="sidebar")
+ * toggles it; on desktop it is always in flow. Reveal it first when the
+ * Upload link is hidden, then click the sidebar's Upload link.
+ */
 async function openUploadPage(page: Page): Promise<void> {
-  const menuToggle = page.getByRole('button', { name: 'Menu' })
-  if (await menuToggle.isVisible()) {
-    await menuToggle.click()
+  const uploadLink = page.getByTestId('sidebar-upload-link')
+  if (!(await uploadLink.isVisible())) {
+    await page.locator('button[aria-controls="sidebar"]').click()
   }
-  await page.getByRole('link', { name: 'Upload', exact: true }).click()
+  await uploadLink.click()
   await expect(page.getByRole('heading', { name: 'Upload documents' })).toBeVisible()
 }
 
 /**
- * Search through the navbar's Search button (mobile: via Menu) and its
- * modal: fill the query, submit, and wait for the dialog to close. The
- * nav button is scoped to the service navigation because the modal's
- * submit button carries the same accessible name.
+ * Search through the Mosaic header's search button and its modal: open the
+ * dialog, fill the query, submit, and wait for the dialog to close. The
+ * header search trigger is always visible (it is not collapsed behind a
+ * menu at any viewport), so no responsive toggling is needed.
  */
 async function searchFor(page: Page, query: string): Promise<void> {
-  const navSearch = page
-    .locator('.govuk-service-navigation')
-    .getByRole('button', { name: 'Search', exact: true })
-  // Mobile: the nav list collapses behind the Menu toggle. Only toggle when
-  // the Search button is hidden — the menu stays open after a previous use,
-  // and toggling again would close it.
-  if (!(await navSearch.isVisible())) {
-    await page.getByRole('button', { name: 'Menu' }).click()
-  }
-  await navSearch.click()
+  await page.getByTestId('header-search-button').click()
   const modal = page.getByTestId('search-modal')
   await expect(modal).toBeVisible()
   await modal.locator('#search').fill(query)
@@ -78,8 +74,8 @@ test('sign in, upload a PDF, see it indexed, listed and searchable', async ({ pa
   await signIn(page)
   await openUploadPage(page)
 
-  // The govuk-frontend FileUpload enhancement moves the id onto its visible
-  // drop-zone button and hides the real input — target the input directly.
+  // AppFileUpload renders a visible dashed drop-zone label wrapping a
+  // visually-hidden (sr-only) real file input — target the input directly.
   await page.locator('input[type="file"]').setInputFiles(FIXTURE)
   await page.getByRole('button', { name: 'Upload', exact: true }).click()
 
@@ -99,7 +95,7 @@ test('sign in, upload a PDF, see it indexed, listed and searchable', async ({ pa
   }).toPass({ timeout: 60_000 })
 
   // Dutch stemming: the fixture contains "rekeningen", search the stem
-  // through the navbar search modal.
+  // through the header search modal.
   await searchFor(page, 'rekening')
   await expect(page).toHaveURL(/q=rekening/)
   await expect(page.locator('.app-doc-card').first()).toBeVisible()
@@ -120,7 +116,7 @@ test('dashboard reflects metadata preferences', async ({ page }) => {
     await page.goto('/settings')
     await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 
-    // The GovCheckboxes component renders a real <label for="…">Correspondent</label>
+    // The AppCheckboxes component renders a real <label for="…">Correspondent</label>
     // bound to <input type="checkbox" value="sender">; getByLabel resolves that binding.
     const correspondentCheckbox = page.getByLabel('Correspondent')
     await correspondentCheckbox.uncheck()

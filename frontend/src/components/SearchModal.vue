@@ -14,11 +14,8 @@
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
-import GovButton from '@/components/govuk/GovButton.vue'
-import GovDateInput from '@/components/govuk/GovDateInput.vue'
-import GovInput from '@/components/govuk/GovInput.vue'
-import GovSelect from '@/components/govuk/GovSelect.vue'
-import type { SelectItem } from '@/components/govuk'
+import { AppButton, AppDateInput, AppInput, AppSelect } from '@/components/app'
+import type { SelectItem } from '@/components/app'
 import { DOCUMENT_LANGUAGES } from '@/api/documents'
 import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
 
@@ -141,52 +138,94 @@ defineExpose({ open })
 <template>
   <dialog
     ref="dialog"
-    class="app-modal"
+    class="app-search-modal bg-white dark:bg-gray-800 rounded-xl shadow-lg max-w-2xl w-full p-0 backdrop:bg-gray-900/30"
     aria-labelledby="search-modal-title"
     data-testid="search-modal"
     @close="onClose"
   >
-    <h2 id="search-modal-title" class="govuk-heading-m">Search your documents</h2>
+    <div class="p-5">
+      <h2
+        id="search-modal-title"
+        class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4"
+      >
+        Search your documents
+      </h2>
 
-    <form novalidate role="search" @submit.prevent="onSubmit">
-      <GovInput
-        id="search"
-        v-model="draft.q"
-        label="Search"
-        hint="For example, rekening or “energie contract”"
-        type="search"
-        inputmode="search"
-        :spellcheck="false"
-      />
+      <form novalidate role="search" class="space-y-4" @submit.prevent="onSubmit">
+        <div class="relative">
+          <svg
+            class="absolute left-3 top-9 w-4 h-4 text-gray-400 pointer-events-none"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="1.5"
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="m21 21-5.197-5.197m0 0A7.5 7.5 0 1 0 5.196 5.196a7.5 7.5 0 0 0 10.607 10.607Z"
+            />
+          </svg>
+          <AppInput
+            id="search"
+            v-model="draft.q"
+            label="Search"
+            hint="For example, rekening or “energie contract”"
+            type="search"
+            inputmode="search"
+            :spellcheck="false"
+            class="[&_input]:pl-9"
+          />
+        </div>
 
-      <GovSelect id="filter-kind" v-model="draft.kind" label="Kind" :items="kindItems" />
-      <GovSelect id="filter-sender" v-model="draft.senderId" label="Sender" :items="senderItems" />
-      <GovSelect id="filter-tag" v-model="draft.tag" label="Tag" :items="tagItems" />
-      <GovSelect
-        id="filter-language"
-        v-model="draft.language"
-        label="Language"
-        :items="languageItems"
-      />
-      <GovDateInput id="filter-date-from" v-model="draft.dateFrom" legend="Dated from" />
-      <GovDateInput id="filter-date-to" v-model="draft.dateTo" legend="Dated to" />
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <AppSelect id="filter-kind" v-model="draft.kind" label="Kind" :items="kindItems" />
+          <AppSelect
+            id="filter-sender"
+            v-model="draft.senderId"
+            label="Sender"
+            :items="senderItems"
+          />
+          <AppSelect id="filter-tag" v-model="draft.tag" label="Tag" :items="tagItems" />
+          <AppSelect
+            id="filter-language"
+            v-model="draft.language"
+            label="Language"
+            :items="languageItems"
+          />
+        </div>
 
-      <div class="govuk-button-group">
-        <GovButton type="submit">Search</GovButton>
-        <GovButton variant="secondary" type="button" data-testid="modal-clear" @click="clearFields">
-          Clear
-        </GovButton>
-        <button
-          type="button"
-          class="govuk-link app-link-button"
-          data-testid="modal-cancel"
-          @click="close"
-        >
-          Cancel
-        </button>
-      </div>
+        <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <AppDateInput id="filter-date-from" v-model="draft.dateFrom" legend="Dated from" />
+          <AppDateInput id="filter-date-to" v-model="draft.dateTo" legend="Dated to" />
+        </div>
 
-      <p class="govuk-hint app-modal__hint">Tip: press / anywhere to open this search.</p>
-    </form>
+        <div class="flex items-center gap-3 pt-2">
+          <AppButton type="submit">Search</AppButton>
+          <AppButton
+            variant="secondary"
+            type="button"
+            data-testid="modal-clear"
+            @click="clearFields"
+          >
+            Clear
+          </AppButton>
+          <button
+            type="button"
+            class="text-sm text-gray-500 dark:text-gray-400 underline ml-auto"
+            data-testid="modal-cancel"
+            @click="close"
+          >
+            Cancel
+          </button>
+        </div>
+
+        <p class="text-sm text-gray-500 dark:text-gray-400">
+          Tip: press / anywhere to open this search.
+        </p>
+      </form>
+    </div>
   </dialog>
 </template>

@@ -97,10 +97,11 @@ describe('DocumentDeleteView', () => {
   it('shows a warning naming the document, with confirm and cancel', async () => {
     const w = await mountView()
     expect(w.find('h1').text()).toContain('Are you sure')
-    expect(w.find('.govuk-warning-text').text()).toContain('Energierekening mei 2026')
+    expect(w.find('[data-testid="delete-warning"]').text()).toContain('Energierekening mei 2026')
     expect(w.find('[data-testid="confirm-delete"]').exists()).toBe(true)
     expect(w.find('[data-testid="cancel-delete"]').attributes('href')).toBe('/documents/12')
-    expect(w.find('.govuk-back-link').attributes('href')).toBe('/documents/12')
+    const backLink = w.findAll('a').find((a) => a.text().includes('Back to the document'))
+    expect(backLink?.attributes('href')).toBe('/documents/12')
   })
 
   it('confirm sends DELETE, sets the flash message and redirects to the list', async () => {
@@ -124,7 +125,7 @@ describe('DocumentDeleteView', () => {
     await flushPromises()
 
     expect(router.currentRoute.value.name).toBe('document-delete')
-    expect(w.find('.govuk-error-summary').text()).toContain('Could not delete the document')
+    expect(w.find('[role="alert"]').text()).toContain('Could not delete the document')
     expect(useFlashStore().message).toBeNull()
   })
 

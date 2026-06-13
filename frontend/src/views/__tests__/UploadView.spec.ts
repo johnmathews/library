@@ -78,14 +78,12 @@ describe('UploadView', () => {
       ],
     })
     await router.push('/upload')
-    document.body.classList.add('govuk-frontend-supported')
   })
 
   afterEach(() => {
     wrapper?.unmount()
     wrapper = undefined
     vi.unstubAllGlobals()
-    document.body.classList.remove('govuk-frontend-supported')
   })
 
   function mountView(): VueWrapper {
@@ -119,7 +117,7 @@ describe('UploadView', () => {
   it('shows an error when submitting without files', async () => {
     const w = mountView()
     await w.find('form').trigger('submit')
-    expect(w.find('.govuk-error-message').text()).toContain('Select at least one file')
+    expect(w.find('#file-upload-error').text()).toContain('Select at least one file')
   })
 
   it('shows upload progress from XHR progress events', async () => {
@@ -196,7 +194,7 @@ describe('UploadView', () => {
     FakeXHR.instances[0]!.respond(415, { detail: 'unsupported media type text/csv' })
     await flushPromises()
 
-    const summary = w.find('.govuk-error-summary')
+    const summary = w.find('[data-testid="error-summary"]')
     expect(summary.exists()).toBe(true)
     expect(summary.text()).toContain('notes.csv: this file type is not supported')
   })
@@ -210,7 +208,7 @@ describe('UploadView', () => {
     FakeXHR.instances[0]!.respond(413, { detail: 'file exceeds the limit' })
     await flushPromises()
 
-    expect(w.find('.govuk-error-summary').text()).toContain('huge.pdf: the file is too large')
+    expect(w.find('[data-testid="error-summary"]').text()).toContain('huge.pdf: the file is too large')
   })
 
   it('reports network failures', async () => {
@@ -222,7 +220,7 @@ describe('UploadView', () => {
     FakeXHR.instances[0]!.failNetwork()
     await flushPromises()
 
-    expect(w.find('.govuk-error-summary').text()).toContain('network problem')
+    expect(w.find('[data-testid="error-summary"]').text()).toContain('network problem')
   })
 
   it('processes multiple files independently', async () => {
@@ -246,6 +244,6 @@ describe('UploadView', () => {
       expect(w.find('[data-testid="success-banner"]').exists()).toBe(true)
     })
     expect(w.find('[data-testid="success-banner"]').text()).toContain('a.pdf')
-    expect(w.find('.govuk-error-summary').text()).toContain('b.csv')
+    expect(w.find('[data-testid="error-summary"]').text()).toContain('b.csv')
   })
 })

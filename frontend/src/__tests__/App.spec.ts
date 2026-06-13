@@ -20,6 +20,21 @@ beforeAll(() => {
       this.dispatchEvent(new Event('close'))
     }
   }
+  // AppSidebar reads window.matchMedia for its expand-by-default heuristic;
+  // jsdom does not provide it.
+  if (!window.matchMedia) {
+    window.matchMedia = (() => ({
+      matches: false,
+      media: '',
+      addEventListener() {},
+      removeEventListener() {},
+      addListener() {},
+      removeListener() {},
+      dispatchEvent() {
+        return false
+      },
+    })) as unknown as typeof window.matchMedia
+  }
 })
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -31,7 +46,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const Stub = { template: '<div />' }
 
-describe('App service navigation', () => {
+describe('App Mosaic shell', () => {
   const fetchMock = vi.fn()
   let router: Router
   let pinia: Pinia
@@ -39,6 +54,7 @@ describe('App service navigation', () => {
 
   beforeEach(async () => {
     resetTaxonomyOptionsForTests()
+    localStorage.clear()
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: unknown) => {
@@ -56,11 +72,9 @@ describe('App service navigation', () => {
         { path: '/', name: 'documents', component: Stub },
         { path: '/upload', name: 'upload', component: Stub },
         { path: '/settings', name: 'settings', component: Stub },
-        { path: '/login', name: 'login', component: Stub },
+        { path: '/login', name: 'login', component: Stub, meta: { public: true } },
       ],
     })
-    await router.push('/')
-    await router.isReady()
   })
 
   afterEach(() => {
@@ -69,46 +83,26 @@ describe('App service navigation', () => {
     vi.unstubAllGlobals()
   })
 
-  async function mountApp(): Promise<VueWrapper> {
+  it('renders no sidebar on a public route (login)', async () => {
+    await router.push('/login')
+    await router.isReady()
     wrapper = mount(App, { global: { plugins: [router, pinia] } })
+    await flushPromises()
+    expect(wrapper.find('#sidebar').exists()).toBe(false)
+  })
+
+  it('renders the Mosaic sidebar on a private route when authenticated', async () => {
+    await router.push('/')
+    await router.isReady()
     const auth = useAuthStore()
-    auth.user = { id: 1, username: 'e2e', display_name: 'E2E', preferences: { dashboard_fields: [] } }
-    await flushPromises()
-    return wrapper
-  }
-
-  it('places the Search button between Documents and Upload', async () => {
-    const w = await mountApp()
-
-    const items = w.findAll('.govuk-service-navigation__item .govuk-service-navigation__link')
-    expect(items.map((item) => item.text())).toEqual(['Documents', 'Search', 'Upload', 'Settings', 'Sign out'])
-
-    const search = items[1]!
-    expect(search.element.tagName).toBe('BUTTON')
-    expect(search.attributes('type')).toBe('button')
-    expect(search.attributes('aria-haspopup')).toBe('dialog')
-    expect(search.classes()).toContain('app-nav-button')
-  })
-
-  it('clicking the nav Search button opens the search modal', async () => {
-    const w = await mountApp()
-    const dialog = w.find('dialog[data-testid="search-modal"]')
-    expect(dialog.exists()).toBe(true)
-    expect(dialog.attributes('open')).toBeUndefined()
-
-    await w
-      .findAll('.govuk-service-navigation__link')
-      .find((item) => item.text() === 'Search')!
-      .trigger('click')
-    await flushPromises()
-
-    expect(dialog.attributes('open')).toBeDefined()
-  })
-
-  it('renders no navigation or search modal when signed out', async () => {
+    auth.user = {
+      id: 1,
+      username: 'e2e',
+      display_name: 'E2E',
+      preferences: { dashboard_fields: [] },
+    }
     wrapper = mount(App, { global: { plugins: [router, pinia] } })
     await flushPromises()
-    expect(wrapper.find('.govuk-service-navigation').exists()).toBe(false)
-    expect(wrapper.find('dialog').exists()).toBe(false)
+    expect(wrapper.find('#sidebar').exists()).toBe(true)
   })
 })

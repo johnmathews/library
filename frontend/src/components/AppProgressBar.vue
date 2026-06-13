@@ -16,17 +16,20 @@ const clamped = computed(() => Math.max(0, Math.min(100, Math.round(props.value)
 </script>
 
 <template>
-  <div class="app-progress">
+  <div class="flex items-center gap-2">
     <div
-      class="app-progress__track"
+      class="flex-1 bg-gray-200 dark:bg-gray-700/60 rounded-full h-2 overflow-hidden"
       role="progressbar"
       :aria-label="props.label"
       :aria-valuenow="clamped"
       aria-valuemin="0"
       aria-valuemax="100"
     >
-      <div class="app-progress__fill" :style="{ width: `${clamped}%` }"></div>
+      <div
+        class="bg-violet-500 h-full rounded-full transition-all"
+        :style="{ width: `${clamped}%` }"
+      ></div>
     </div>
-    <span class="app-progress__count" aria-hidden="true">{{ clamped }}%</span>
+    <span class="text-xs text-gray-500 tabular-nums" aria-hidden="true">{{ clamped }}%</span>
   </div>
 </template>

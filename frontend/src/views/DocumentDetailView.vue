@@ -18,16 +18,18 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
-import GovBackLink from '@/components/govuk/GovBackLink.vue'
-import GovButton from '@/components/govuk/GovButton.vue'
-import GovDateInput from '@/components/govuk/GovDateInput.vue'
-import GovDetails from '@/components/govuk/GovDetails.vue'
-import GovErrorSummary from '@/components/govuk/GovErrorSummary.vue'
-import GovInput from '@/components/govuk/GovInput.vue'
-import GovNotificationBanner from '@/components/govuk/GovNotificationBanner.vue'
-import GovSelect from '@/components/govuk/GovSelect.vue'
-import GovTextarea from '@/components/govuk/GovTextarea.vue'
-import type { ErrorSummaryItem, SelectItem } from '@/components/govuk'
+import {
+  AppBackLink,
+  AppBanner,
+  AppButton,
+  AppDateInput,
+  AppDetails,
+  AppErrorSummary,
+  AppInput,
+  AppSelect,
+  AppTextarea,
+} from '@/components/app'
+import type { ErrorSummaryItem, SelectItem } from '@/components/app'
 import {
   DOCUMENT_LANGUAGES,
   getDocument,
@@ -193,7 +195,7 @@ const errorItems = computed<ErrorSummaryItem[]>(() => {
 function editorInputId(field: EditableField): string {
   if (field === 'amount') return 'edit-amount'
   const id = `edit-${field.replaceAll('_', '-')}`
-  // GovDateInput puts the id on the container; its first field is -day.
+  // AppDateInput puts the id on the container; its first field is -day.
   return field.endsWith('date') ? `${id}-day` : id
 }
 
@@ -418,53 +420,65 @@ watch(
 </script>
 
 <template>
-  <GovBackLink to="/" text="Back to documents" />
+  <AppBackLink to="/" text="Back to documents" class="mb-4" />
 
   <template v-if="doc">
-    <GovNotificationBanner v-if="notice" :variant="notice.variant" data-testid="detail-banner">
-      <p class="govuk-notification-banner__heading">{{ notice.text }}</p>
-    </GovNotificationBanner>
-    <GovErrorSummary v-if="errorItems.length" :errors="errorItems" />
+    <AppBanner v-if="notice" :variant="notice.variant" data-testid="detail-banner" class="mb-6">
+      {{ notice.text }}
+    </AppBanner>
+    <AppErrorSummary v-if="errorItems.length" :errors="errorItems" data-testid="error-summary" />
 
-    <h1 class="govuk-heading-xl app-detail-title">{{ doc.title ?? 'Untitled document' }}</h1>
+    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-6 app-detail-title">
+      {{ doc.title ?? 'Untitled document' }}
+    </h1>
 
-    <div class="govuk-grid-row">
-      <div class="govuk-grid-column-two-thirds">
-        <!-- Inline disposition: Firefox refuses to render <img> responses
-             served as attachment, and other browsers would download them. -->
-        <img
-          v-if="preview === 'image'"
-          class="app-preview__image"
-          :src="originalUrl(doc.id, { inline: true })"
-          :alt="`Preview of ${doc.title ?? 'this document'}`"
-          data-testid="preview-image"
-        />
-        <template v-else-if="preview === 'pdf'">
-          <!-- Browser-native PDF viewing; see the component docblock. -->
-          <iframe
-            class="app-preview__frame"
-            :src="pdfPreviewUrl"
-            title="Document preview"
-            data-testid="preview-pdf"
-          ></iframe>
-          <p class="govuk-body">
-            <a
-              class="govuk-link app-standalone-link"
-              :href="pdfPreviewUrl"
-              target="_blank"
-              rel="noopener"
+    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div class="space-y-4">
+        <div
+          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 overflow-hidden"
+        >
+          <!-- Inline disposition: Firefox refuses to render <img> responses
+               served as attachment, and other browsers would download them. -->
+          <img
+            v-if="preview === 'image'"
+            class="w-full object-contain bg-gray-100 dark:bg-gray-900/40"
+            :src="originalUrl(doc.id, { inline: true })"
+            :alt="`Preview of ${doc.title ?? 'this document'}`"
+            data-testid="preview-image"
+          />
+          <template v-else-if="preview === 'pdf'">
+            <!-- Browser-native PDF viewing; see the component docblock. -->
+            <iframe
+              class="w-full h-[70vh] border-0"
+              :src="pdfPreviewUrl"
+              title="Document preview"
+              data-testid="preview-pdf"
+            ></iframe>
+            <p class="p-4 text-sm">
+              <a
+                class="text-violet-600 hover:underline"
+                :href="pdfPreviewUrl"
+                target="_blank"
+                rel="noopener"
+              >
+                Open the PDF in a new tab
+              </a>
+            </p>
+          </template>
+          <div
+            v-else
+            class="p-4 text-sm text-gray-500 dark:text-gray-400"
+            data-testid="preview-fallback"
+          >
+            No preview is available for this file type.
+            <a class="text-violet-600 hover:underline" :href="originalUrl(doc.id)"
+              >Download the original file</a
             >
-              Open the PDF in a new tab
-            </a>
-          </p>
-        </template>
-        <div v-else class="govuk-inset-text" data-testid="preview-fallback">
-          No preview is available for this file type.
-          <a class="govuk-link" :href="originalUrl(doc.id)">Download the original file</a> to view
-          it.
+            to view it.
+          </div>
         </div>
 
-        <GovDetails
+        <AppDetails
           v-if="doc.ocr_text"
           summary="View extracted text"
           :open="Boolean(highlight)"
@@ -473,200 +487,234 @@ watch(
           <!-- eslint-disable-next-line vue/no-v-html -- renderHighlighted escapes every input character; only its own <mark> wrappers survive (docs/api.md §1.3.3) -->
           <pre
             v-if="highlight"
-            class="app-ocr-text"
+            class="app-ocr-text whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300"
             data-testid="ocr-text"
             v-html="renderHighlighted(doc.ocr_text, highlight)"
           ></pre>
-          <pre v-else class="app-ocr-text" data-testid="ocr-text">{{ doc.ocr_text }}</pre>
-        </GovDetails>
+          <pre
+            v-else
+            class="app-ocr-text whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300"
+            data-testid="ocr-text"
+            >{{ doc.ocr_text }}</pre
+          >
+        </AppDetails>
       </div>
 
-      <div class="govuk-grid-column-one-third">
-        <h2 class="govuk-heading-m">Details</h2>
-        <dl class="govuk-summary-list app-detail-list">
-          <div
-            v-for="row in rowConfigs"
-            :key="row.field"
-            class="govuk-summary-list__row"
-            :class="{ 'govuk-summary-list__row--no-actions': editing === row.field }"
-            :data-testid="`row-${row.field}`"
-          >
-            <dt class="govuk-summary-list__key">{{ row.label }}</dt>
-            <dd class="govuk-summary-list__value">
-              <template v-if="editing !== row.field">{{ row.display(doc) ?? EMPTY }}</template>
-              <form v-else novalidate @submit.prevent="save(row)">
-                <GovInput
-                  v-if="row.field === 'title'"
-                  id="edit-title"
-                  v-model="editText"
-                  label="New title"
-                  :error-message="editError ?? undefined"
-                />
-                <GovTextarea
-                  v-else-if="row.field === 'summary'"
-                  id="edit-summary"
-                  v-model="editText"
-                  label="New summary"
-                  :rows="4"
-                  :error-message="editError ?? undefined"
-                />
-                <GovSelect
-                  v-else-if="row.field === 'kind'"
-                  id="edit-kind"
-                  v-model="editSelect"
-                  label="New kind"
-                  :items="kindItems"
-                  :error-message="editError ?? undefined"
-                />
-                <template v-else-if="row.field === 'sender'">
-                  <GovInput
-                    id="edit-sender"
+      <div class="space-y-6">
+        <div
+          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
+        >
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2">Details</h2>
+          <dl class="divide-y divide-gray-200 dark:divide-gray-700/60 app-detail-list">
+            <div
+              v-for="row in rowConfigs"
+              :key="row.field"
+              class="py-3"
+              :data-testid="`row-${row.field}`"
+            >
+              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">{{ row.label }}</dt>
+              <dd v-if="editing !== row.field" class="flex justify-between gap-4 items-start mt-1">
+                <span class="text-sm text-gray-800 dark:text-gray-100" data-testid="row-value">{{
+                  row.display(doc) ?? EMPTY
+                }}</span>
+                <button
+                  type="button"
+                  class="text-sm text-violet-600 hover:underline app-link-button shrink-0"
+                  @click="startEdit(row.field)"
+                >
+                  Change<span class="sr-only"> {{ row.label.toLowerCase() }}</span>
+                </button>
+              </dd>
+              <dd v-else class="mt-2">
+                <form class="space-y-3" novalidate @submit.prevent="save(row)">
+                  <AppInput
+                    v-if="row.field === 'title'"
+                    id="edit-title"
                     v-model="editText"
-                    label="New sender"
-                    hint="Start typing to see known senders"
-                    list="sender-options"
+                    label="New title"
                     :error-message="editError ?? undefined"
                   />
-                  <datalist id="sender-options">
-                    <option v-for="sender in senders" :key="sender.id" :value="sender.name" />
-                  </datalist>
-                </template>
-                <GovSelect
-                  v-else-if="row.field === 'language'"
-                  id="edit-language"
-                  v-model="editSelect"
-                  label="New language"
-                  :items="languageItems"
-                  :error-message="editError ?? undefined"
-                />
-                <GovInput
-                  v-else-if="row.field === 'tags'"
-                  id="edit-tags"
-                  v-model="editText"
-                  label="New tags"
-                  hint="Separate tags with commas"
-                  :error-message="editError ?? undefined"
-                />
-                <template v-else-if="row.field === 'amount'">
-                  <GovInput
-                    id="edit-amount"
+                  <AppTextarea
+                    v-else-if="row.field === 'summary'"
+                    id="edit-summary"
                     v-model="editText"
-                    label="New amount"
-                    inputmode="decimal"
-                    width-class="govuk-input--width-10"
+                    label="New summary"
+                    :rows="4"
                     :error-message="editError ?? undefined"
                   />
-                  <GovInput
-                    id="edit-currency"
-                    v-model="editCurrency"
-                    label="Currency"
-                    hint="3-letter code, like EUR"
-                    width-class="govuk-input--width-4"
+                  <AppSelect
+                    v-else-if="row.field === 'kind'"
+                    id="edit-kind"
+                    v-model="editSelect"
+                    label="New kind"
+                    :items="kindItems"
+                    :error-message="editError ?? undefined"
                   />
-                </template>
-                <GovDateInput
-                  v-else
-                  :id="`edit-${row.field.replaceAll('_', '-')}`"
-                  v-model="editDate"
-                  :legend="`New ${row.label.toLowerCase()}`"
-                  :error-message="editError ?? undefined"
-                />
-                <div class="govuk-button-group">
-                  <GovButton type="submit" :disabled="saving">Save</GovButton>
-                  <GovButton type="button" variant="secondary" @click="cancelEdit">
-                    Cancel
-                  </GovButton>
-                </div>
-              </form>
-            </dd>
-            <dd v-if="editing !== row.field" class="govuk-summary-list__actions">
-              <button type="button" class="govuk-link app-link-button" @click="startEdit(row.field)">
-                Change<span class="govuk-visually-hidden"> {{ row.label.toLowerCase() }}</span>
-              </button>
-            </dd>
-          </div>
-
-          <div class="govuk-summary-list__row govuk-summary-list__row--no-actions">
-            <dt class="govuk-summary-list__key">Status</dt>
-            <dd class="govuk-summary-list__value">{{ doc.status }}</dd>
-          </div>
-          <div class="govuk-summary-list__row govuk-summary-list__row--no-actions">
-            <dt class="govuk-summary-list__key">OCR confidence</dt>
-            <dd class="govuk-summary-list__value">
-              {{ doc.ocr_confidence === null ? EMPTY : `${Math.round(doc.ocr_confidence)}%` }}
-            </dd>
-          </div>
-          <div class="govuk-summary-list__row govuk-summary-list__row--no-actions">
-            <dt class="govuk-summary-list__key">Source</dt>
-            <dd class="govuk-summary-list__value">{{ sourceLabel(doc.source) }}</dd>
-          </div>
-        </dl>
-
-        <GovDetails v-if="doc.extraction" summary="Extraction details" data-testid="extraction-details">
-          <dl class="govuk-summary-list govuk-summary-list--no-border">
-            <div class="govuk-summary-list__row">
-              <dt class="govuk-summary-list__key">Model</dt>
-              <dd class="govuk-summary-list__value">{{ doc.extraction.model ?? EMPTY }}</dd>
+                  <template v-else-if="row.field === 'sender'">
+                    <AppInput
+                      id="edit-sender"
+                      v-model="editText"
+                      label="New sender"
+                      hint="Start typing to see known senders"
+                      list="sender-options"
+                      :error-message="editError ?? undefined"
+                    />
+                    <datalist id="sender-options">
+                      <option v-for="sender in senders" :key="sender.id" :value="sender.name" />
+                    </datalist>
+                  </template>
+                  <AppSelect
+                    v-else-if="row.field === 'language'"
+                    id="edit-language"
+                    v-model="editSelect"
+                    label="New language"
+                    :items="languageItems"
+                    :error-message="editError ?? undefined"
+                  />
+                  <AppInput
+                    v-else-if="row.field === 'tags'"
+                    id="edit-tags"
+                    v-model="editText"
+                    label="New tags"
+                    hint="Separate tags with commas"
+                    :error-message="editError ?? undefined"
+                  />
+                  <template v-else-if="row.field === 'amount'">
+                    <AppInput
+                      id="edit-amount"
+                      v-model="editText"
+                      label="New amount"
+                      inputmode="decimal"
+                      width-class="w-40"
+                      :error-message="editError ?? undefined"
+                    />
+                    <AppInput
+                      id="edit-currency"
+                      v-model="editCurrency"
+                      label="Currency"
+                      hint="3-letter code, like EUR"
+                      width-class="w-24"
+                    />
+                  </template>
+                  <AppDateInput
+                    v-else
+                    :id="`edit-${row.field.replaceAll('_', '-')}`"
+                    v-model="editDate"
+                    :legend="`New ${row.label.toLowerCase()}`"
+                    :error-message="editError ?? undefined"
+                  />
+                  <div class="flex gap-3">
+                    <AppButton type="submit" :disabled="saving">Save</AppButton>
+                    <AppButton type="button" variant="secondary" @click="cancelEdit">
+                      Cancel
+                    </AppButton>
+                  </div>
+                </form>
+              </dd>
             </div>
-            <div class="govuk-summary-list__row">
-              <dt class="govuk-summary-list__key">Confidence</dt>
-              <dd class="govuk-summary-list__value">{{ doc.extraction.confidence ?? EMPTY }}</dd>
+
+            <div class="py-3">
+              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Status</dt>
+              <dd class="text-sm text-gray-800 dark:text-gray-100 mt-1">{{ doc.status }}</dd>
             </div>
-            <div v-if="latestExtractionEvent" class="govuk-summary-list__row">
-              <dt class="govuk-summary-list__key">When</dt>
-              <dd class="govuk-summary-list__value">
-                {{ formatDateTime(latestExtractionEvent.created_at) }}
+            <div class="py-3">
+              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">OCR confidence</dt>
+              <dd class="text-sm text-gray-800 dark:text-gray-100 mt-1">
+                {{ doc.ocr_confidence === null ? EMPTY : `${Math.round(doc.ocr_confidence)}%` }}
+              </dd>
+            </div>
+            <div class="py-3">
+              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Source</dt>
+              <dd class="text-sm text-gray-800 dark:text-gray-100 mt-1">
+                {{ sourceLabel(doc.source) }}
               </dd>
             </div>
           </dl>
-        </GovDetails>
 
-        <h2 class="govuk-heading-m">Actions</h2>
-        <p class="govuk-body">
-          <a
-            class="govuk-link app-standalone-link"
-            :href="originalUrl(doc.id)"
-            data-testid="download-original"
+          <AppDetails
+            v-if="doc.extraction"
+            summary="Extraction details"
+            data-testid="extraction-details"
+            class="mt-4"
           >
-            Download the original file
-          </a>
-        </p>
-        <p v-if="doc.has_searchable_pdf" class="govuk-body">
-          <a
-            class="govuk-link app-standalone-link"
-            :href="searchablePdfUrl(doc.id)"
-            data-testid="download-searchable"
-          >
-            Download the searchable PDF
-          </a>
-        </p>
-        <GovButton
-          type="button"
-          variant="secondary"
-          :disabled="extracting"
-          data-testid="rerun-extraction"
-          @click="rerunExtraction"
+            <dl class="space-y-2">
+              <div class="flex justify-between gap-4">
+                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Model</dt>
+                <dd class="text-sm text-gray-800 dark:text-gray-100">
+                  {{ doc.extraction.model ?? EMPTY }}
+                </dd>
+              </div>
+              <div class="flex justify-between gap-4">
+                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Confidence</dt>
+                <dd class="text-sm text-gray-800 dark:text-gray-100">
+                  {{ doc.extraction.confidence ?? EMPTY }}
+                </dd>
+              </div>
+              <div v-if="latestExtractionEvent" class="flex justify-between gap-4">
+                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">When</dt>
+                <dd class="text-sm text-gray-800 dark:text-gray-100">
+                  {{ formatDateTime(latestExtractionEvent.created_at) }}
+                </dd>
+              </div>
+            </dl>
+          </AppDetails>
+        </div>
+
+        <div
+          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
         >
-          {{ extracting ? 'Extraction running…' : 'Re-run extraction' }}
-        </GovButton>
-        <p class="govuk-body">
-          <RouterLink
-            class="govuk-button govuk-button--warning"
-            :to="{ name: 'document-delete', params: { id: doc.id } }"
-            data-testid="delete-link"
-          >
-            Delete this document
-          </RouterLink>
-        </p>
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">Actions</h2>
+          <p class="text-sm mb-2">
+            <a
+              class="text-violet-600 hover:underline"
+              :href="originalUrl(doc.id)"
+              data-testid="download-original"
+            >
+              Download the original file
+            </a>
+          </p>
+          <p v-if="doc.has_searchable_pdf" class="text-sm mb-4">
+            <a
+              class="text-violet-600 hover:underline"
+              :href="searchablePdfUrl(doc.id)"
+              data-testid="download-searchable"
+            >
+              Download the searchable PDF
+            </a>
+          </p>
+          <div class="flex flex-wrap gap-3">
+            <AppButton
+              type="button"
+              variant="secondary"
+              :disabled="extracting"
+              data-testid="rerun-extraction"
+              @click="rerunExtraction"
+            >
+              {{ extracting ? 'Extraction running…' : 'Re-run extraction' }}
+            </AppButton>
+            <AppButton
+              variant="warning"
+              :to="`/documents/${doc.id}/delete`"
+              data-testid="delete-link"
+            >
+              Delete this document
+            </AppButton>
+          </div>
+        </div>
       </div>
     </div>
   </template>
 
   <template v-else-if="notFound">
-    <h1 class="govuk-heading-xl">Document not found</h1>
-    <p class="govuk-body">It may have been deleted, or the link is wrong.</p>
+    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">
+      Document not found
+    </h1>
+    <p class="text-gray-600 dark:text-gray-300">It may have been deleted, or the link is wrong.</p>
   </template>
-  <div v-else-if="loadError" class="govuk-inset-text">
+  <div
+    v-else-if="loadError"
+    class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-4 text-gray-600 dark:text-gray-300"
+  >
     Sorry, the document could not be loaded. Try again later.
   </div>
 </template>

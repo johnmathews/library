@@ -1,10 +1,8 @@
 <script setup lang="ts">
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import GovButton from '@/components/govuk/GovButton.vue'
-import GovErrorSummary from '@/components/govuk/GovErrorSummary.vue'
-import GovInput from '@/components/govuk/GovInput.vue'
-import type { ErrorSummaryItem } from '@/components/govuk'
+import { AppButton, AppErrorSummary, AppInput } from '@/components/app'
+import type { ErrorSummaryItem } from '@/components/app'
 import { ApiError } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 
@@ -62,32 +60,32 @@ async function onSubmit(): Promise<void> {
 </script>
 
 <template>
-  <div class="govuk-grid-row">
-    <div class="govuk-grid-column-two-thirds">
-      <GovErrorSummary v-if="summaryErrors.length" :errors="summaryErrors" />
+  <div class="min-h-[100dvh] flex items-center justify-center bg-gray-100 dark:bg-gray-900 px-4">
+    <div
+      class="w-full max-w-md bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-8"
+    >
+      <h1 class="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-6">Library</h1>
 
-      <h1 class="govuk-heading-xl">Sign in</h1>
+      <AppErrorSummary v-if="summaryErrors.length" :errors="summaryErrors" />
 
-      <form novalidate @submit.prevent="onSubmit">
-        <GovInput
+      <form class="space-y-4" novalidate @submit.prevent="onSubmit">
+        <AppInput
           id="username"
           v-model="username"
           label="Username"
           autocomplete="username"
           :spellcheck="false"
-          width-class="govuk-!-width-two-thirds"
           :error-message="fieldErrors.username"
         />
-        <GovInput
+        <AppInput
           id="password"
           v-model="password"
           label="Password"
           type="password"
           autocomplete="current-password"
-          width-class="govuk-!-width-two-thirds"
           :error-message="fieldErrors.password"
         />
-        <GovButton type="submit" :disabled="submitting">Sign in</GovButton>
+        <AppButton type="submit" class="w-full" :disabled="submitting">Sign in</AppButton>
       </form>
     </div>
   </div>

@@ -32,14 +32,12 @@ describe('LoginView', () => {
       ],
     })
     await router.push('/login')
-    document.body.classList.add('govuk-frontend-supported')
   })
 
   afterEach(() => {
     wrapper?.unmount()
     wrapper = undefined
     vi.unstubAllGlobals()
-    document.body.classList.remove('govuk-frontend-supported')
   })
 
   function mountView(): VueWrapper {
@@ -47,13 +45,13 @@ describe('LoginView', () => {
     return wrapper
   }
 
-  it('renders a GOV.UK sign-in form', () => {
+  it('renders a sign-in form', () => {
     const w = mountView()
-    expect(w.find('h1.govuk-heading-xl').text()).toBe('Sign in')
-    expect(w.find('input#username').classes()).toContain('govuk-input')
+    expect(w.find('h1').text()).toBe('Library')
+    expect(w.find('input#username').exists()).toBe(true)
     expect(w.find('input#password').attributes('type')).toBe('password')
-    expect(w.find('button.govuk-button').text()).toBe('Sign in')
-    expect(w.find('.govuk-error-summary').exists()).toBe(false)
+    expect(w.find('button[type="submit"]').text()).toBe('Sign in')
+    expect(w.find('[role="alert"]').exists()).toBe(false)
   })
 
   it('shows a focused error summary linking to fields when inputs are empty', async () => {
@@ -62,7 +60,7 @@ describe('LoginView', () => {
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    const summary = w.find('.govuk-error-summary')
+    const summary = w.find('[role="alert"]')
     expect(summary.exists()).toBe(true)
     expect(document.activeElement).toBe(summary.element)
 
@@ -81,7 +79,7 @@ describe('LoginView', () => {
     await w.find('form').trigger('submit')
     await flushPromises()
 
-    const summary = w.find('.govuk-error-summary')
+    const summary = w.find('[role="alert"]')
     expect(summary.text()).toContain('Enter a correct username and password')
     expect(summary.find('a').attributes('href')).toBe('#username')
     expect(document.activeElement).toBe(summary.element)

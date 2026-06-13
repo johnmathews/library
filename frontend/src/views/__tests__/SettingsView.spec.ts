@@ -26,7 +26,11 @@ describe('SettingsView', () => {
     fetchMock.mockResolvedValue(jsonResponse({ dashboard_fields: ['kind', 'tags'] }))
 
     const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
-    await wrapper.find('input[value="tags"]').setValue(true)
+    // Loads current prefs: 'kind' arrives pre-checked from the store.
+    expect(
+      (wrapper.find('input.form-checkbox[value="kind"]').element as HTMLInputElement).checked,
+    ).toBe(true)
+    await wrapper.find('input.form-checkbox[value="tags"]').setValue(true)
     await wrapper.find('form').trigger('submit.prevent')
     await flushPromises()
 
