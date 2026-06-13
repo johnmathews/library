@@ -215,7 +215,12 @@ Contract: [api.md](api.md) §1.9.
   { status, detail }` with the backend's `detail` normalised to a string.
 - `src/stores/auth.ts` — `useAuthStore`: `user`, `isAuthenticated`,
   `ensureLoaded()` (calls `GET /api/auth/me` once and caches; 401 →
-  `null`), `login()`, `logout()`.
+  `null`), `login()`, `logout()`, `dashboardFields` (computed: the
+  `dashboard_fields` array from the user's preferences, or `[]` while
+  unauthenticated), and `applyPreferences(preferences)` (replaces
+  `user.preferences` in place — called by `SettingsView` after a
+  successful `PUT /api/settings` so the dashboard reflects the new
+  choices without a page reload).
 - Router guard (`authGuard` in `src/router/index.ts`): non-public routes
   require a user; otherwise redirect to `/login?redirect=<fullPath>`.
   After login the view returns to the original target. Signed-in users
@@ -242,26 +247,29 @@ upload progress events); 200/201 resolve, 409/413/415/network reject
 with `ApiError`. `src/api/taxonomy.ts` wraps the taxonomy list endpoints
 (`GET /api/kinds|senders|tags`, docs/api.md §1.8.2), which feed the list
 filters and the detail page's edit inputs — the former `DOCUMENT_KINDS`
-hardcode is gone.
+hardcode is gone. `src/api/settings.ts` wraps `GET/PUT /api/settings`
+and exports `DASHBOARD_FIELDS` — the canonical ordered list of selectable
+field descriptors (`{value, text}`) used by both `SettingsView` (checkbox
+labels) and `DocumentListView` (tile render order); it is the single FE
+source of truth for field names and ordering (api.md §1.10).
 
 ### 1.4.1 Documents dashboard — `/` (`DocumentListView`)
 
 A **dashboard grid of document tiles** using the full content width
 (grid extension: §1.2.6). Each tile: 4:3 thumbnail
 (`/api/documents/{id}/thumbnail`, with a file-type placeholder when
-`has_thumbnail` is false or the image 404s), title linking to
-`/documents/:id` (the whole tile clickable via the stretched-link
-pattern; the link carries the active search as `?highlight=` so the
-detail page can mark matches in the OCR text), kind and language tags,
-sender, document date, and — when searching — the `ts_headline`
-snippet. Above the grid: the "N documents" count and, when a query or
-filter is active, a plain filter summary line ("Filtered by search
-“rekening”, kind Invoice, … · Clear filters") that resolves kind/
-sender/tag values to names through the shared taxonomy cache
-(`src/composables/taxonomyOptions.ts`, fetched lazily and only when
-needed). `GovPagination` drives `limit`/`offset` (25 per page). A
-one-shot success banner (Pinia `useFlashStore`) confirms actions that
-redirect here, e.g. deletion.
+`has_thumbnail` is false or the image 404s), the document title (always
+shown, linking to `/documents/:id` via the stretched-link pattern; the
+link carries the active search as `?highlight=` so the detail page can
+mark matches in the OCR text), and the **user-selected metadata fields**
+rendered in a fixed canonical order (see §1.4.1.2). Above the grid: the
+“N documents” count and, when a query or filter is active, a plain filter
+summary line (“Filtered by search “rekening”, kind Invoice, … · Clear
+filters”) that resolves kind/sender/tag values to names through the
+shared taxonomy cache (`src/composables/taxonomyOptions.ts`, fetched
+lazily and only when needed). `GovPagination` drives `limit`/`offset`
+(25 per page). A one-shot success banner (Pinia `useFlashStore`)
+confirms actions that redirect here, e.g. deletion.
 
 Searching and filtering happen in the **navbar search modal**
 (§1.4.1.1) — the view itself has no form; it only reads the URL. All
@@ -271,11 +279,39 @@ so back/forward and refresh restore the results. Two distinct empty
 states: an empty library (inset text linking to `/upload`) vs. a search
 with no matches (inset text offering to clear filters).
 
+### 1.4.1.2 Tile metadata rendering
+
+Which fields appear on a tile is controlled by the user's saved
+preferences (`auth.dashboardFields`), checked via a `shows(field)`
+helper. Fields render in the **fixed canonical order** defined by
+`DASHBOARD_FIELDS` in `src/api/settings.ts` — the user's selection
+governs presence, not order:
+
+1. **kind** — blue `GovTag` (omitted if null)
+2. **language** — grey `GovTag` (omitted if `unknown`)
+3. **status** — red `GovTag` for `failed`, yellow for any non-`indexed`
+   state (omitted when `indexed`)
+4. **file_type** — grey `GovTag` (PDF / Image / Text / File, derived from
+   `mime_type`)
+5. **sender** — plain text (omitted if null)
+6. **date** — formatted `document_date` (omitted if null)
+7. **amount** — `amount_total` formatted with `Intl.NumberFormat` using
+   `currency` when present; falls back to the raw decimal string; omitted
+   if `amount_total` is null
+8. **tags** — a separate row, shown only when the `tags` field is enabled
+   and the document has tags; capped at **4 chips** with a `+N` overflow
+   span for the remainder
+
+Fields 1–7 share one `<p class="govuk-body-s app-doc-card__meta">` line;
+tags are a second `<p class="govuk-body-s app-doc-card__tags">` line.
+The title and thumbnail are always shown regardless of preferences.
+
 ### 1.4.1.1 Search modal (`SearchModal.vue`)
 
 Opened from the service navigation's **Search** button (between
 Documents and Upload; `aria-haspopup="dialog"`) or by pressing `/`
-anywhere outside a form field. A native `<dialog>` (§1.2.7) containing
+anywhere outside a form field. The service navigation order is:
+Documents · Search · Upload · Settings. A native `<dialog>` (§1.2.7) containing
 the query `GovInput` (websearch syntax hint), kind/sender/tag selects
 fed lazily from the taxonomy endpoints (cached app-wide), language
 select, and `GovDateInput` from/to — plus Search (primary), Clear
@@ -364,11 +400,35 @@ design-system colours/spacing only (`govuk-colour("blue")` fill, black
 border, tabular-numbers percentage) and exposes `role="progressbar"` with
 `aria-valuenow`/`aria-label`.
 
-### 1.4.4 Known gaps
+### 1.4.4 Settings — `/settings` (`SettingsView`)
+
+A GOV.UK "select all that apply" checkboxes page that lets the user
+choose which metadata fields appear on the dashboard tiles.
+
+- **Checkboxes** — `GovCheckboxes` with `small` variant; items are built
+  from `DASHBOARD_FIELDS` in `src/api/settings.ts` (the single FE source
+  of truth for both the labels and the tile render order). The model is
+  seeded from `auth.dashboardFields` on mount so the current preferences
+  are pre-selected.
+- **Save** — submits `PUT /api/settings` via `updateSettings()`. On
+  success: `auth.applyPreferences(result)` updates the store (dashboard
+  tiles update immediately without reload), the checkbox model is
+  synced to the server-cleaned set, and a `GovNotificationBanner`
+  (success variant, `role="alert"`) confirms the save.
+- **Error** — any network or server failure shows a `GovErrorSummary`
+  and keeps the form open.
+
+The title ("Settings") and the "Settings" link in the service navigation
+are the entry points. Auth guard applies; unauthenticated users are
+redirected to `/login`.
+
+### 1.4.5 Known gaps
 
 - Tag editing is a comma-separated text input, and the tag filter is a
   single-select (the API supports ANDed multi-tag filtering) — a richer
   tag widget is future polish.
+- The settings page has no "reset to defaults" shortcut — clearing all
+  checkboxes and saving is the current path to an empty-tile state.
 
 ## 1.5 Snippet safety
 

@@ -1,6 +1,6 @@
 # 1. REST API
 
-**Status:** active. **Last updated:** 2026-06-10.
+**Status:** active. **Last updated:** 2026-06-13.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -39,6 +39,8 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/senders` | Senders with counts |
 | GET    | `/api/tags` | Tags with counts |
 | GET    | `/api/jobs` | Recent background jobs |
+| GET    | `/api/settings` | Your display preferences (dashboard fields) |
+| PUT    | `/api/settings` | Update your display preferences |
 
 Soft-deleted documents return **404** from every per-document endpoint and
 never appear in lists. Other error shapes: `404` unknown document, `422`
@@ -87,6 +89,7 @@ All filters compose (AND), including with `q`.
       "status": "indexed", "mime_type": "application/pdf",
       "page_count": 2, "created_at": "2026-06-10T12:00:00Z",
       "has_searchable_pdf": true, "has_thumbnail": true,
+      "amount_total": "123.45", "currency": "EUR",
       "snippet": "uw <b>rekening</b> voor mei … totaal",
       "rank": 0.31
     }
@@ -97,6 +100,10 @@ All filters compose (AND), including with `q`.
 
 `total` is the filtered count before pagination. `snippet` and `rank` are
 only present (non-null) when `q` is given. Tags are sorted by slug.
+`amount_total` (JSON string, preserves decimal precision) and `currency`
+(3-letter code) are `null` when not set on the document — they were
+previously detail-only fields and are now included in list items so
+dashboard tiles can display financial totals.
 
 ### 1.3.3 Search semantics
 
@@ -262,8 +269,11 @@ pushes the expiry forward (the refresh is write-throttled to at most once
 per ~5 minutes). `POST /api/auth/logout` deletes the session row — the
 cookie is dead server-side immediately — and clears both cookies.
 
-`GET /api/auth/me` returns `{id, username, display_name}` for the
-authenticated user (either credential).
+`GET /api/auth/me` returns `{id, username, display_name, preferences}` for
+the authenticated user (either credential). The login response (`POST
+/api/auth/login`) returns the same shape. `preferences` is
+`{"dashboard_fields": [...]}` — the resolved preference set (defaults
+filled; see 1.10).
 
 ### 1.9.2 CSRF (cookie requests only)
 
@@ -307,3 +317,52 @@ curl -H "Authorization: Bearer library_3q2…" \
 
 Bearer requests are CSRF-exempt (the header cannot be set cross-site).
 Revoked or unknown tokens, and tokens of disabled users, get `401`.
+
+## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`
+
+Per-user display preferences: which metadata fields appear on the
+dashboard tiles. Auth and CSRF rules are identical to the rest of `/api`
+(§1.9).
+
+### 1.10.1 `GET /api/settings`
+
+Returns the resolved preference set for the authenticated user. If the
+user has never saved preferences, the **default set** is returned (no
+`404` or empty body).
+
+```json
+{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"]}
+```
+
+### 1.10.2 `PUT /api/settings`
+
+Body: `{"dashboard_fields": [...]}`. Persists the list and returns the
+**cleaned** set (same shape as GET). Auth + CSRF apply.
+
+**Valid field keys** (the 8 selectable fields):
+
+| Key | What it controls on the tile |
+|-----|-------------------------------|
+| `kind` | Document type tag (blue) |
+| `sender` | Correspondent name |
+| `tags` | Document tags row (capped at 4 + "+N" overflow) |
+| `date` | Document date |
+| `language` | Language tag (grey) |
+| `status` | Status tag (red/yellow; only shown when non-indexed) |
+| `amount` | Financial total (`amount_total` + `currency`, formatted) |
+| `file_type` | Derived file type label (PDF / Image / Text / File) |
+
+**Default set** (what new users see): `kind`, `sender`, `tags`, `date`,
+`language`, `status`.
+
+**Tolerant validation.** Unknown keys in `dashboard_fields` are silently
+dropped — the server returns `200` with the cleaned set, never `422`.
+Duplicates are also removed. This means a hand-edited database row or a
+client sending a renamed field key can never break the dashboard.
+
+**Explicit empty list** is honoured: `{"dashboard_fields": []}` is valid
+and results in tiles showing only the title and thumbnail. The absent-key
+rule applies only on read (`GET` / login / `GET /api/auth/me`): if the
+`dashboard_fields` key is missing from the stored blob, defaults are
+filled in; if the key is present but the list is empty, the empty list
+is returned as-is.
