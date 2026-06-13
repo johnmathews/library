@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import library
-from library.api import auth, documents, jobs, taxonomy
+from library.api import auth, documents, jobs, settings, taxonomy
 from library.auth.deps import csrf_protect, current_user
 from library.config import get_settings
 from library.jobs import job_app
@@ -57,6 +57,7 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "description": "Visibility into the background processing queue (OCR, "
         "extraction, thumbnails).",
     },
+    {"name": "settings", "description": "Per-user display preferences."},
 ]
 
 
@@ -132,6 +133,7 @@ def create_app() -> FastAPI:
     api_router.include_router(documents.router)
     api_router.include_router(taxonomy.router)
     api_router.include_router(jobs.router)
+    api_router.include_router(settings.router)
     api_router.include_router(auth.router)
     app.include_router(api_router)
     # Login is the only unauthenticated /api route (and is CSRF-exempt: the
