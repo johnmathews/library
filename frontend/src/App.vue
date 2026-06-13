@@ -30,6 +30,7 @@ const navItems = computed<ServiceNavigationItem[]>(() => {
     // as opening a dialog via aria-haspopup.
     { text: 'Search', button: true, ariaHasPopup: 'dialog' },
     { text: 'Upload', to: '/upload', active: route.name === 'upload' },
+    { text: 'Settings', to: '/settings', active: route.name === 'settings' },
     { text: 'Sign out' },
   ]
 })

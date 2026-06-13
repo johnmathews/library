@@ -55,6 +55,7 @@ describe('App service navigation', () => {
       routes: [
         { path: '/', name: 'documents', component: Stub },
         { path: '/upload', name: 'upload', component: Stub },
+        { path: '/settings', name: 'settings', component: Stub },
         { path: '/login', name: 'login', component: Stub },
       ],
     })
@@ -80,7 +81,7 @@ describe('App service navigation', () => {
     const w = await mountApp()
 
     const items = w.findAll('.govuk-service-navigation__item .govuk-service-navigation__link')
-    expect(items.map((item) => item.text())).toEqual(['Documents', 'Search', 'Upload', 'Sign out'])
+    expect(items.map((item) => item.text())).toEqual(['Documents', 'Search', 'Upload', 'Settings', 'Sign out'])
 
     const search = items[1]!
     expect(search.element.tagName).toBe('BUTTON')
