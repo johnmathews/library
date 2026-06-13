@@ -138,7 +138,7 @@ defineExpose({ open })
 <template>
   <dialog
     ref="dialog"
-    class="app-search-modal bg-white dark:bg-gray-800 rounded-xl shadow-lg max-w-2xl w-full p-0 backdrop:bg-gray-900/30"
+    class="app-search-modal bg-white dark:bg-gray-800 shadow-lg p-0 backdrop:bg-gray-900/30"
     aria-labelledby="search-modal-title"
     data-testid="search-modal"
     @close="onClose"

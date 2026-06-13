@@ -172,3 +172,29 @@ input[type='search']::-webkit-search-results-decoration {
     grid-template-columns: repeat(4, 1fr);
   }
 }
+
+/*
+ * Search modal. It is a native <dialog> opened with showModal(), which the
+ * browser centres via `dialog { margin: auto }`. Tailwind Preflight resets
+ * `margin: 0` on every element, killing that centring (the dialog otherwise
+ * pins to the top-left). Reassert it here — this rule sits in the components
+ * layer, after Preflight's base reset, so it wins — and go full-screen on
+ * small viewports. (Width/radius live here, not as utilities, to avoid the
+ * utilities layer overriding the mobile overrides.)
+ */
+.app-search-modal {
+  margin: auto;
+  width: 100%;
+  max-width: 42rem; /* matches the former max-w-2xl */
+  border-radius: 0.75rem; /* rounded-xl */
+}
+
+@media (width < 640px) {
+  .app-search-modal {
+    width: 100%;
+    height: 100%;
+    max-width: none;
+    max-height: none;
+    border-radius: 0;
+  }
+}
