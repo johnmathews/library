@@ -3,13 +3,14 @@
  * (chromium desktop, mobile-webkit 375px, tablet-webkit iPad portrait):
  *
  *   - no horizontal overflow on /login, / (documents) and /upload;
- *   - the service navigation is reachable: behind the Menu toggle below the
- *     GOV.UK tablet breakpoint (641px), inline above it;
+ *   - the Mosaic sidebar is reachable: translated offscreen behind the
+ *     header hamburger below the Tailwind `lg` breakpoint (1024px), in
+ *     flow above it;
  *   - the mobile project re-checks overflow at the 320px floor;
  *   - the chromium project re-checks at 1920×1080 that the wide-desktop
- *     width extension (main.scss, docs/frontend.md §1.2.5) widens the
- *     content container past GOV.UK's 960px default without overflow,
- *     and that the dashboard grid reaches its 4-column wide layout;
+ *     content container (the max-w-[96rem] wrapper in DefaultLayout) is
+ *     wider than 1100px without overflow, and that the dashboard grid
+ *     reaches its 4-column wide layout;
  *   - the dashboard document grid (app-doc-grid, docs/frontend.md §1.2.6)
  *     renders the expected column count per viewport: 1 at 375px,
  *     2 on iPad portrait (656px, tablet band) and 3 on the 1280px desktop.
@@ -82,12 +83,12 @@ test('wide desktops get the widened content container', async ({ page }, testInf
   await page.setViewportSize({ width: 1920, height: 1080 })
 
   await signIn(page) // lands on / (documents)
+  // DefaultLayout wraps the routed view in a max-w-[96rem] container inside
+  // <main class="grow">; measure that wrapper (main's first child element).
   const containerWidth = await page.evaluate(
     () =>
-      document
-        .querySelector('main#main-content')
-        ?.closest('.govuk-width-container')
-        ?.getBoundingClientRect().width ?? 0,
+      document.querySelector('main')?.firstElementChild?.getBoundingClientRect()
+        .width ?? 0,
   )
   expect(
     containerWidth,
@@ -128,22 +129,33 @@ test('the dashboard grid has the expected column count per viewport', async ({
   await expectNoHorizontalOverflow(page, `/ grid (${testInfo.project.name})`)
 })
 
-test('service navigation is reachable on every viewport', async ({ page }, testInfo) => {
+/** Left edge x of #sidebar; negative when it is translated offscreen. */
+async function sidebarLeftEdge(page: Page): Promise<number> {
+  return page.locator('#sidebar').evaluate((el) => el.getBoundingClientRect().left)
+}
+
+test('the sidebar is reachable on every viewport', async ({ page }, testInfo) => {
   await signIn(page)
 
-  const menuToggle = page.getByRole('button', { name: 'Menu' })
-  const uploadLink = page.getByRole('link', { name: 'Upload', exact: true })
+  // The header hamburger toggles the sidebar; it is rendered lg:hidden, so it
+  // is present below the Tailwind lg breakpoint (1024px) and hidden above it.
+  const hamburger = page.locator('button[aria-controls="sidebar"]')
+  const uploadLink = page.getByTestId('sidebar-upload-link')
 
-  if (testInfo.project.name === 'mobile-webkit') {
-    // Below the GOV.UK tablet breakpoint the list collapses behind the toggle.
-    await expect(menuToggle).toBeVisible()
-    await expect(uploadLink).toBeHidden()
-    await menuToggle.click()
-    await expect(uploadLink).toBeVisible()
+  if (testInfo.project.name === 'chromium') {
+    // Desktop (1280px ≥ lg): sidebar sits in flow, no hamburger.
+    await expect(hamburger).toBeHidden()
+    expect(await sidebarLeftEdge(page), 'sidebar should be on-screen at lg+').toBeGreaterThanOrEqual(0)
   } else {
-    // Desktop and iPad portrait (≥641px): inline navigation, no toggle.
-    await expect(menuToggle).toBeHidden()
-    await expect(uploadLink).toBeVisible()
+    // mobile-webkit (375px) and tablet-webkit (656px) are both below lg, so the
+    // sidebar starts translated offscreen behind the hamburger.
+    await expect(hamburger).toBeVisible()
+    expect(await sidebarLeftEdge(page), 'sidebar should start offscreen below lg').toBeLessThan(0)
+    // Toggling the hamburger slides the sidebar into view (translate-x-0).
+    await hamburger.click()
+    await expect(async () => {
+      expect(await sidebarLeftEdge(page)).toBeGreaterThanOrEqual(0)
+    }).toPass()
   }
 
   await uploadLink.click()
