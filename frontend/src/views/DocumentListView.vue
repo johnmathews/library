@@ -26,11 +26,20 @@ import {
 import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { renderSnippet } from '@/utils/snippet'
 import { useFlashStore } from '@/stores/flash'
+import { useAuthStore } from '@/stores/auth'
+import type { DashboardField } from '@/api/settings'
 
 const PAGE_SIZE = 25
+const MAX_TAGS = 4
 
 const route = useRoute()
 const router = useRouter()
+
+const auth = useAuthStore()
+
+function shows(field: DashboardField): boolean {
+  return auth.dashboardFields.includes(field)
+}
 
 // One-shot banner from an action that redirected here (e.g. delete).
 const flashMessage = ref(useFlashStore().consume())
@@ -183,6 +192,21 @@ function fileTypeLabel(item: DocumentListItem): string {
   if (item.mime_type.startsWith('text/')) return 'Text'
   return 'File'
 }
+
+function formatAmount(item: DocumentListItem): string | null {
+  if (item.amount_total === null) return null
+  if (item.currency) {
+    try {
+      return new Intl.NumberFormat('en-GB', {
+        style: 'currency',
+        currency: item.currency,
+      }).format(Number(item.amount_total))
+    } catch {
+      return `${item.currency} ${item.amount_total}`
+    }
+  }
+  return item.amount_total
+}
 </script>
 
 <template>
@@ -259,15 +283,35 @@ function fileTypeLabel(item: DocumentListItem): string {
             </RouterLink>
           </h2>
           <p class="govuk-body-s app-doc-card__meta">
-            <GovTag v-if="item.kind" colour="blue">{{ item.kind.name }}</GovTag>
-            <GovTag v-if="item.language !== 'unknown'" colour="grey">
+            <GovTag v-if="shows('kind') && item.kind" colour="blue">{{ item.kind.name }}</GovTag>
+            <GovTag v-if="shows('language') && item.language !== 'unknown'" colour="grey">
               {{ languageName(item.language) }}
             </GovTag>
-            <GovTag v-if="item.status === 'failed'" colour="red">Failed</GovTag>
-            <GovTag v-else-if="item.status !== 'indexed'" colour="yellow">Processing</GovTag>
-            <span v-if="item.sender" class="app-doc-card__sender">{{ item.sender.name }}</span>
-            <span v-if="item.document_date" class="app-doc-card__date">
+            <template v-if="shows('status')">
+              <GovTag v-if="item.status === 'failed'" colour="red">Failed</GovTag>
+              <GovTag v-else-if="item.status !== 'indexed'" colour="yellow">Processing</GovTag>
+            </template>
+            <GovTag v-if="shows('file_type')" colour="grey">{{ fileTypeLabel(item) }}</GovTag>
+            <span v-if="shows('sender') && item.sender" class="app-doc-card__sender">
+              {{ item.sender.name }}
+            </span>
+            <span v-if="shows('date') && item.document_date" class="app-doc-card__date">
               {{ formatDate(item.document_date) }}
+            </span>
+            <span v-if="shows('amount') && formatAmount(item)" class="app-doc-card__amount">
+              {{ formatAmount(item) }}
+            </span>
+          </p>
+          <p
+            v-if="shows('tags') && item.tags.length"
+            class="govuk-body-s app-doc-card__tags"
+            data-testid="doc-tags"
+          >
+            <GovTag v-for="tag in item.tags.slice(0, MAX_TAGS)" :key="tag.slug" colour="grey">
+              {{ tag.name }}
+            </GovTag>
+            <span v-if="item.tags.length > MAX_TAGS" class="app-doc-card__tags-more">
+              +{{ item.tags.length - MAX_TAGS }}
             </span>
           </p>
           <!-- eslint-disable-next-line vue/no-v-html -- renderSnippet escapes everything except the ts_headline <b> markers (docs/api.md §1.3.3) -->

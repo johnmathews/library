@@ -252,8 +252,20 @@ $app-wide-page-width: 1280px;
 }
 
 .app-doc-card__sender,
-.app-doc-card__date {
+.app-doc-card__date,
+.app-doc-card__amount {
   color: base.govuk-functional-colour(secondary-text);
+}
+
+.app-doc-card__amount {
+  font-variant-numeric: tabular-nums;
+}
+
+.app-doc-card__tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: base.govuk-spacing(1);
+  margin-top: base.govuk-spacing(1);
 }
 
 .app-doc-card__snippet {

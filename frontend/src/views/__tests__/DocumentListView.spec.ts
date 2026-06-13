@@ -6,6 +6,7 @@ import DocumentListView from '../DocumentListView.vue'
 import type { DocumentListItem } from '@/api/documents'
 import { resetTaxonomyOptionsForTests } from '@/composables/taxonomyOptions'
 import { useFlashStore } from '@/stores/flash'
+import { useAuthStore } from '@/stores/auth'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -30,9 +31,22 @@ function makeItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
     created_at: '2026-06-10T12:00:00Z',
     has_searchable_pdf: true,
     has_thumbnail: true,
+    amount_total: null,
+    currency: null,
     snippet: null,
     rank: null,
     ...overrides,
+  }
+}
+
+/** Seed the active auth store with a user whose dashboard_fields match `fields`. */
+function seedPrefs(fields: string[]): void {
+  const auth = useAuthStore()
+  auth.user = {
+    id: 1,
+    username: 'a',
+    display_name: 'A',
+    preferences: { dashboard_fields: fields as never },
   }
 }
 
@@ -72,6 +86,9 @@ describe('DocumentListView', () => {
     })
     pinia = createPinia()
     setActivePinia(pinia)
+    // Seed a full default field set so that tests which assert kind/sender/date
+    // see those fields rendered without needing to configure prefs themselves.
+    seedPrefs(['kind', 'sender', 'tags', 'date', 'language', 'status', 'amount', 'file_type'])
     router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -281,5 +298,42 @@ describe('DocumentListView', () => {
     const banner = w.find('[data-testid="flash-banner"]')
     expect(banner.text()).toContain('has been deleted')
     expect(useFlashStore().message).toBeNull() // consumed: a refresh won't re-show it
+  })
+
+  it('renders only the toggled-on fields', async () => {
+    seedPrefs(['kind'])
+    listResponse = () =>
+      jsonResponse(
+        listBody([makeItem({ sender: { id: 3, name: 'Eneco' }, document_date: '2026-05-15' })]),
+      )
+    const w = await mountView()
+    expect(w.text()).toContain('Invoice')
+    expect(w.text()).not.toContain('Eneco')
+    expect(w.text()).not.toContain('15 May 2026')
+  })
+
+  it('caps tag chips with a +N overflow', async () => {
+    seedPrefs(['tags'])
+    listResponse = () =>
+      jsonResponse(
+        listBody([
+          makeItem({
+            tags: [
+              { slug: 'a', name: 'A' },
+              { slug: 'b', name: 'B' },
+              { slug: 'c', name: 'C' },
+              { slug: 'd', name: 'D' },
+              { slug: 'e', name: 'E' },
+              { slug: 'f', name: 'F' },
+            ],
+          }),
+        ]),
+      )
+    const w = await mountView()
+    // 6 tags, MAX 4 shown — the overflow counter must read "+2"
+    expect(w.find('[data-testid="doc-tags"]').exists()).toBe(true)
+    expect(w.find('[data-testid="doc-tags"]').text()).toContain('+2')
+    // Only 4 chips rendered
+    expect(w.findAll('[data-testid="doc-tags"] .govuk-tag')).toHaveLength(4)
   })
 })
