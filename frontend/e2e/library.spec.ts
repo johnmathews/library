@@ -41,17 +41,19 @@ async function signIn(page: Page): Promise<void> {
 }
 
 /**
- * Open the Upload page through the Mosaic sidebar. On mobile the sidebar is
- * translated offscreen and the header hamburger (aria-controls="sidebar")
- * toggles it; on desktop it is always in flow. Reveal it first when the
- * Upload link is hidden, then click the sidebar's Upload link.
+ * Open the Upload page through the Mosaic sidebar. Below the lg breakpoint the
+ * sidebar is translated offscreen behind the header hamburger
+ * (aria-controls="sidebar", rendered lg:hidden); above it the sidebar is in
+ * flow. Gate on the hamburger's visibility — an offscreen-translated sidebar
+ * link still reports as "visible" to Playwright, so reveal the sidebar via the
+ * hamburger whenever it is present, then click the Upload link.
  */
 async function openUploadPage(page: Page): Promise<void> {
-  const uploadLink = page.getByTestId('sidebar-upload-link')
-  if (!(await uploadLink.isVisible())) {
-    await page.locator('button[aria-controls="sidebar"]').click()
+  const hamburger = page.locator('button[aria-controls="sidebar"]')
+  if (await hamburger.isVisible()) {
+    await hamburger.click()
   }
-  await uploadLink.click()
+  await page.getByTestId('sidebar-upload-link').click()
   await expect(page.getByRole('heading', { name: 'Upload documents' })).toBeVisible()
 }
 

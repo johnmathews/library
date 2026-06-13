@@ -166,7 +166,7 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
 
 <template>
   <div class="max-w-2xl">
-    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Upload</h1>
+    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Upload documents</h1>
     <p class="text-gray-500 dark:text-gray-400 mb-6">
       Add documents to your library. PDFs and photos are accepted.
     </p>

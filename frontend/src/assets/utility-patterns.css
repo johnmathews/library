@@ -140,3 +140,35 @@ input[type='search']::-webkit-search-results-decoration {
   -ms-overflow-style: none; /* IE and Edge */
   scrollbar-width: none; /* Firefox */
 }
+
+/*
+ * Dashboard document grid. The column count per viewport is a product
+ * acceptance contract (W16, covered by e2e/responsive.spec.ts): 1 column on
+ * mobile, 2 from the tablet breakpoint (641px), 3 from desktop (769px), and 4
+ * on wide displays (1400px). These are the original app breakpoints — they do
+ * not line up with Tailwind's defaults, so the grid is hand-rolled here rather
+ * than via grid-cols-* utilities.
+ */
+.app-doc-grid {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 1.5rem;
+}
+
+@media (min-width: 641px) {
+  .app-doc-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (min-width: 769px) {
+  .app-doc-grid {
+    grid-template-columns: repeat(3, 1fr);
+  }
+}
+
+@media (min-width: 1400px) {
+  .app-doc-grid {
+    grid-template-columns: repeat(4, 1fr);
+  }
+}

@@ -47,7 +47,7 @@ describe('LoginView', () => {
 
   it('renders a sign-in form', () => {
     const w = mountView()
-    expect(w.find('h1').text()).toBe('Library')
+    expect(w.find('h1').text()).toBe('Sign in')
     expect(w.find('input#username').exists()).toBe(true)
     expect(w.find('input#password').attributes('type')).toBe('password')
     expect(w.find('button[type="submit"]').text()).toBe('Sign in')

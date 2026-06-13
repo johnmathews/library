@@ -279,7 +279,7 @@ const amountLabels = computed<Map<number, string | null>>(() => {
 
     <ul
       v-if="items.length"
-      class="grid gap-6 grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 app-doc-grid"
+      class="app-doc-grid"
     >
       <li
         v-for="item in items"

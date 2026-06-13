@@ -64,7 +64,8 @@ async function onSubmit(): Promise<void> {
     <div
       class="w-full max-w-md bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-8"
     >
-      <h1 class="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-6">Library</h1>
+      <p class="text-sm font-semibold text-violet-500 mb-1">Library</p>
+      <h1 class="text-2xl font-bold text-gray-800 dark:text-gray-100 mb-6">Sign in</h1>
 
       <AppErrorSummary v-if="summaryErrors.length" :errors="summaryErrors" />
 
