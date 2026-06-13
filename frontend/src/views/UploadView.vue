@@ -14,11 +14,7 @@
  * camera and hide the library).
  */
 import { computed, onBeforeUnmount, reactive, ref } from 'vue'
-import GovButton from '@/components/govuk/GovButton.vue'
-import GovErrorSummary from '@/components/govuk/GovErrorSummary.vue'
-import GovFileUpload from '@/components/govuk/GovFileUpload.vue'
-import GovNotificationBanner from '@/components/govuk/GovNotificationBanner.vue'
-import GovTag from '@/components/govuk/GovTag.vue'
+import { AppBadge, AppBanner, AppButton, AppErrorSummary, AppFileUpload } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/govuk'
 import AppProgressBar from '@/components/AppProgressBar.vue'
 import { getDocument, uploadDocument } from '@/api/documents'
@@ -169,71 +165,87 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
 </script>
 
 <template>
-  <div class="govuk-grid-row">
-    <div class="govuk-grid-column-two-thirds">
-      <GovErrorSummary v-if="failures.length" :errors="failures" />
+  <div class="max-w-2xl">
+    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Upload</h1>
+    <p class="text-gray-500 dark:text-gray-400 mb-6">
+      Add documents to your library. PDFs and photos are accepted.
+    </p>
 
-      <GovNotificationBanner v-if="successes.length" variant="success" data-testid="success-banner">
-        <h3 class="govuk-notification-banner__heading">
-          {{ successes.length === 1 ? 'Document uploaded and indexed' : 'Documents uploaded and indexed' }}
-        </h3>
-        <p v-for="entry in successes" :key="entry.key" class="govuk-body">
-          <RouterLink
-            class="govuk-notification-banner__link"
-            :to="{ name: 'document-detail', params: { id: entry.documentId! } }"
-          >
-            {{ entry.name }}
-          </RouterLink>
-        </p>
-      </GovNotificationBanner>
+    <AppErrorSummary v-if="failures.length" :errors="failures" data-testid="error-summary" class="mb-6" />
 
-      <GovNotificationBanner v-if="duplicates.length" data-testid="duplicate-banner">
-        <p v-for="entry in duplicates" :key="entry.key" class="govuk-body">
-          {{ entry.name }} is already in your library.
-          <RouterLink
-            class="govuk-notification-banner__link"
-            :to="{ name: 'document-detail', params: { id: entry.documentId! } }"
-          >
-            View the document</RouterLink
-          >.
-        </p>
-      </GovNotificationBanner>
+    <AppBanner v-if="successes.length" variant="success" data-testid="success-banner" class="mb-6">
+      <h3 class="font-semibold mb-1">
+        {{ successes.length === 1 ? 'Document uploaded and indexed' : 'Documents uploaded and indexed' }}
+      </h3>
+      <p v-for="entry in successes" :key="entry.key">
+        <RouterLink
+          class="text-violet-600 dark:text-violet-400 underline"
+          :to="{ name: 'document-detail', params: { id: entry.documentId! } }"
+        >
+          {{ entry.name }}
+        </RouterLink>
+      </p>
+    </AppBanner>
 
-      <h1 class="govuk-heading-xl">Upload documents</h1>
+    <AppBanner v-if="duplicates.length" data-testid="duplicate-banner" class="mb-6">
+      <p v-for="entry in duplicates" :key="entry.key">
+        {{ entry.name }} is already in your library.
+        <RouterLink
+          class="text-violet-600 dark:text-violet-400 underline"
+          :to="{ name: 'document-detail', params: { id: entry.documentId! } }"
+        >
+          View the document</RouterLink
+        >.
+      </p>
+    </AppBanner>
 
-      <form novalidate @submit.prevent="onSubmit">
-        <GovFileUpload
-          id="file-upload"
-          v-model="selected"
-          label="Choose files"
-          hint="PDFs and photos, up to 100MB each. On a phone you can take a photo or pick one from your library."
-          multiple
-          accept="image/*,application/pdf"
-          :error-message="fileError ?? undefined"
+    <form
+      novalidate
+      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5 mb-6"
+      @submit.prevent="onSubmit"
+    >
+      <AppFileUpload
+        id="file-upload"
+        v-model="selected"
+        label="Choose files"
+        hint="PDFs and photos, up to 100MB each. On a phone you can take a photo or pick one from your library."
+        multiple
+        accept="image/*,application/pdf"
+        :error-message="fileError ?? undefined"
+      />
+      <AppButton type="submit" class="mt-4">Upload</AppButton>
+    </form>
+
+    <ul
+      v-if="entries.length"
+      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 divide-y divide-gray-200 dark:divide-gray-700/60"
+      data-testid="upload-list"
+    >
+      <li
+        v-for="entry in entries"
+        :key="entry.key"
+        class="flex items-center gap-3 px-4 py-3"
+      >
+        <span class="flex-1 min-w-0 truncate text-sm text-gray-800 dark:text-gray-100">{{
+          entry.name
+        }}</span>
+        <AppProgressBar
+          v-if="entry.phase === 'uploading'"
+          class="w-40"
+          :label="`Uploading ${entry.name}`"
+          :value="entry.progress"
         />
-        <GovButton type="submit">Upload</GovButton>
-      </form>
-
-      <ul v-if="entries.length" class="govuk-list app-upload-list" data-testid="upload-list">
-        <li v-for="entry in entries" :key="entry.key" class="app-upload-list__item">
-          <span class="app-upload-list__name">{{ entry.name }}</span>
-          <AppProgressBar
-            v-if="entry.phase === 'uploading'"
-            :label="`Uploading ${entry.name}`"
-            :value="entry.progress"
-          />
-          <GovTag v-else :colour="phaseLabel(entry.phase).colour">
-            {{ phaseLabel(entry.phase).text }}
-          </GovTag>
-          <RouterLink
-            v-if="entry.phase === 'indexed' && entry.documentId !== null"
-            class="govuk-link app-upload-list__link"
-            :to="{ name: 'document-detail', params: { id: entry.documentId } }"
-          >
-            View<span class="govuk-visually-hidden"> {{ entry.name }}</span>
-          </RouterLink>
-        </li>
-      </ul>
-    </div>
+        <AppBadge v-else :colour="phaseLabel(entry.phase).colour">
+          {{ phaseLabel(entry.phase).text }}
+        </AppBadge>
+        <RouterLink
+          v-if="entry.phase === 'indexed' && entry.documentId !== null"
+          class="text-sm text-violet-600 dark:text-violet-400 underline whitespace-nowrap"
+          :to="{ name: 'document-detail', params: { id: entry.documentId } }"
+        >
+          View<span class="sr-only"> {{ entry.name }}</span>
+        </RouterLink>
+      </li>
+    </ul>
   </div>
 </template>
