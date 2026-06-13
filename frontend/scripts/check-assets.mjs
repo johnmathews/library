@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 /**
- * Licensing gate: the GDS Transport typeface and crown/crest imagery are
- * licence-restricted to gov.uk services and must never appear in our build.
+ * Govuk-residue gate: the app has been reskinned from govuk-frontend to
+ * Mosaic/Tailwind. No govuk classes, the GDS Transport typeface, or
+ * crown/crest imagery should leak into the production build.
  *
  * Scans every file in dist/ and fails if:
- *   - a file NAME matches /transport|crown|crest|gds/i
- *   - a web font (.woff/.woff2/.ttf/.otf/.eot) is anything other than a
- *     self-hosted Inter file (inter-*)
+ *   - a file NAME matches /transport|crown|crest|govuk/i
  *   - a TEXT file (css/js/html/svg/json/map) CONTAINS "GDS Transport",
- *     "govuk-crest", a crown reference, or a url() pointing at GOV.UK's
- *     /assets/fonts|images/ paths
+ *     a "govuk-" class/identifier, or a "crown copyright" reference
  *
  * Usage: npm run check:assets   (after `npm run build`)
  */
@@ -31,15 +29,9 @@ if (!stats.isDirectory()) {
   process.exit(2)
 }
 
-const FORBIDDEN_NAME = /transport|crown|crest|gds/i
-const FONT_EXTENSIONS = new Set(['.woff', '.woff2', '.ttf', '.otf', '.eot'])
+const FORBIDDEN_NAME = /transport|crown|crest|govuk/i
 const TEXT_EXTENSIONS = new Set(['.css', '.js', '.mjs', '.html', '.svg', '.json', '.map', '.txt'])
-const FORBIDDEN_CONTENT = [
-  /GDS[ -]?Transport/i,
-  /govuk-crest/i,
-  /crown copyright logotype|govuk-logotype-crown|crown\.svg/i,
-  /url\([^)]*\/assets\/(?:fonts|images)\/(?:light|bold|govuk-)/i,
-]
+const FORBIDDEN_CONTENT = [/GDS[ -]?Transport/i, /govuk-/i, /crown copyright/i]
 
 /** @returns {string[]} all file paths under dir */
 function walk(dir) {
@@ -63,10 +55,6 @@ for (const file of files) {
     failures.push(`${rel}: file name matches forbidden pattern ${FORBIDDEN_NAME}`)
   }
 
-  if (FONT_EXTENSIONS.has(ext) && !/^inter-/i.test(basename(file))) {
-    failures.push(`${rel}: web font that is not a self-hosted Inter file`)
-  }
-
   if (TEXT_EXTENSIONS.has(ext)) {
     const content = readFileSync(file, 'utf8')
     for (const pattern of FORBIDDEN_CONTENT) {
@@ -78,11 +66,11 @@ for (const file of files) {
 }
 
 if (failures.length) {
-  console.error('check-assets: FAILED — licence-restricted GOV.UK assets detected:\n')
+  console.error('check-assets: FAILED — govuk residue detected in dist/:\n')
   for (const failure of failures) console.error(`  - ${failure}`)
   process.exit(1)
 }
 
 console.log(
-  `check-assets: OK — ${files.length} files in dist/ contain no GDS Transport or crown/crest assets.`,
+  `check-assets: OK — ${files.length} files in dist/ contain no govuk residue.`,
 )
