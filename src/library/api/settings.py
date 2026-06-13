@@ -34,4 +34,4 @@ async def put_settings(
         "dashboard_fields": [field.value for field in payload.dashboard_fields],
     }
     await db.commit()
-    return payload
+    return resolve_dashboard_preferences(user.preferences)

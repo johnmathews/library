@@ -371,4 +371,4 @@ def test_every_api_route_requires_auth(api_app: FastAPI, anon_client: TestClient
                 f"{method} {path} returned {response.status_code}, expected 401"
             )
             checked += 1
-    assert checked >= 12  # documents (8) + jobs + logout + me + tokens(3)
+    assert checked >= 14  # documents (8) + jobs + logout + me + tokens(3) + settings(2)
