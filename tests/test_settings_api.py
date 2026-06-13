@@ -1,9 +1,32 @@
+import asyncio
+import json
+
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from procrastinate import PsycopgConnector
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 from library.jobs import job_app, procrastinate_conninfo
-from tests.conftest import create_user, login
+from tests.conftest import AuthUser, create_user, fetch_all, login
+
+
+def _seed_raw_preferences(database_url: str, user_id: int, prefs: dict[str, object]) -> None:
+    """Write a raw preferences blob for one user, incl. keys the API can't set."""
+
+    async def _run() -> None:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                await conn.execute(
+                    text("UPDATE users SET preferences = CAST(:p AS jsonb) WHERE id = :id"),
+                    {"p": json.dumps(prefs), "id": user_id},
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_run())
 
 
 def test_get_settings_defaults(api_client: TestClient) -> None:
@@ -47,6 +70,24 @@ def test_settings_requires_auth(anon_client: TestClient) -> None:
 
 def test_settings_put_requires_auth(anon_client: TestClient) -> None:
     assert anon_client.put("/api/settings", json={"dashboard_fields": []}).status_code == 401
+
+
+def test_put_settings_preserves_other_preference_keys(
+    api_client: TestClient, auth_user: AuthUser, api_database_url: str
+) -> None:
+    # A future preference type already stored on the user. The API can't set
+    # this key, so seed it directly; PUT must not clobber it.
+    _seed_raw_preferences(api_database_url, auth_user.id, {"theme": "dark"})
+
+    put = api_client.put("/api/settings", json={"dashboard_fields": ["kind"]})
+    assert put.status_code == 200, put.text
+
+    rows = fetch_all(
+        api_database_url,
+        "SELECT preferences::text FROM users WHERE id = :id",
+        id=auth_user.id,
+    )
+    assert json.loads(rows[0][0]) == {"theme": "dark", "dashboard_fields": ["kind"]}
 
 
 def test_put_settings_isolated_per_user(

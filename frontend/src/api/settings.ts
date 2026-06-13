@@ -2,9 +2,11 @@
 import { apiFetch } from './client'
 
 /**
- * The selectable dashboard tile fields, in canonical render order. This
- * array is the single frontend source of truth for both the settings
- * checkboxes and the order fields appear on a tile.
+ * The selectable dashboard tile fields. This array is the single frontend
+ * source of truth for the Settings page's checkbox list — the field keys,
+ * their display labels, and the checkbox order. It does NOT define the
+ * dashboard tile render order: that order is fixed in DocumentListView's
+ * template, independent of this list.
  */
 export const DASHBOARD_FIELDS = [
   { value: 'kind', text: 'Document type' },

@@ -179,7 +179,12 @@ DEFAULT_DASHBOARD_FIELDS: Final[list[DashboardField]] = [
 
 
 class DashboardPreferences(BaseModel):
-    """Which metadata fields appear on the dashboard tiles, in render order."""
+    """Which metadata fields appear on the dashboard tiles (membership only).
+
+    The list is a set of fields to show, not an ordering: the tile render
+    order is fixed in the frontend (DocumentListView), independent of the
+    order stored here.
+    """
 
     dashboard_fields: list[DashboardField]
 
