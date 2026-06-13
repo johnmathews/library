@@ -200,6 +200,9 @@ function formatAmount(item: DocumentListItem): string | null {
       return new Intl.NumberFormat('en-GB', {
         style: 'currency',
         currency: item.currency,
+        // amount_total is a decimal STRING (backend preserves precision).
+        // Number() is safe for the bill/invoice magnitudes this app stores;
+        // it would lose precision only beyond ~15 significant digits.
       }).format(Number(item.amount_total))
     } catch {
       return `${item.currency} ${item.amount_total}`
@@ -207,6 +210,13 @@ function formatAmount(item: DocumentListItem): string | null {
   }
   return item.amount_total
 }
+
+// Format each amount once per items change (not twice per render per tile).
+const amountLabels = computed<Map<number, string | null>>(() => {
+  const labels = new Map<number, string | null>()
+  for (const item of items.value) labels.set(item.id, formatAmount(item))
+  return labels
+})
 </script>
 
 <template>
@@ -298,8 +308,8 @@ function formatAmount(item: DocumentListItem): string | null {
             <span v-if="shows('date') && item.document_date" class="app-doc-card__date">
               {{ formatDate(item.document_date) }}
             </span>
-            <span v-if="shows('amount') && formatAmount(item)" class="app-doc-card__amount">
-              {{ formatAmount(item) }}
+            <span v-if="shows('amount') && amountLabels.get(item.id)" class="app-doc-card__amount">
+              {{ amountLabels.get(item.id) }}
             </span>
           </p>
           <p

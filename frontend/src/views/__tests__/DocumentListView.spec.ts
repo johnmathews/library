@@ -4,6 +4,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import DocumentListView from '../DocumentListView.vue'
 import type { DocumentListItem } from '@/api/documents'
+import type { DashboardField } from '@/api/settings'
 import { resetTaxonomyOptionsForTests } from '@/composables/taxonomyOptions'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
@@ -40,13 +41,13 @@ function makeItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
 }
 
 /** Seed the active auth store with a user whose dashboard_fields match `fields`. */
-function seedPrefs(fields: string[]): void {
+function seedPrefs(fields: DashboardField[]): void {
   const auth = useAuthStore()
   auth.user = {
     id: 1,
     username: 'a',
     display_name: 'A',
-    preferences: { dashboard_fields: fields as never },
+    preferences: { dashboard_fields: fields },
   }
 }
 
@@ -308,8 +309,8 @@ describe('DocumentListView', () => {
       )
     const w = await mountView()
     expect(w.text()).toContain('Invoice')
-    expect(w.text()).not.toContain('Eneco')
-    expect(w.text()).not.toContain('15 May 2026')
+    expect(w.find('.app-doc-card__sender').exists()).toBe(false)
+    expect(w.find('.app-doc-card__date').exists()).toBe(false)
   })
 
   it('caps tag chips with a +N overflow', async () => {
