@@ -49,6 +49,8 @@ export interface DocumentListItem {
   created_at: string
   has_searchable_pdf: boolean
   has_thumbnail: boolean
+  amount_total: string | null
+  currency: string | null
   /**
    * Only non-null with `?q=`. ts_headline fragments with <b>/</b> markers
    * over raw (NOT HTML-escaped) OCR text — render via `renderSnippet`,
@@ -70,8 +72,6 @@ export interface DocumentListResponse {
 export interface DocumentDetail extends DocumentListItem {
   ocr_text: string | null
   ocr_confidence: number | null
-  amount_total: string | null
-  currency: string | null
   due_date: string | null
   expiry_date: string | null
   source: DocumentSource
