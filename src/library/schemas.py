@@ -6,9 +6,10 @@ See docs/api.md for the full surface description. ``Decimal`` fields
 
 from datetime import date, datetime
 from decimal import Decimal
+from enum import StrEnum
 from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, field_validator
 
 from library.models import DocumentLanguage, DocumentSource, DocumentStatus
 
@@ -154,12 +155,76 @@ class LoginRequest(BaseModel):
     password: str
 
 
+class DashboardField(StrEnum):
+    """A metadata field that can be shown on a dashboard tile."""
+
+    KIND = "kind"
+    SENDER = "sender"
+    TAGS = "tags"
+    DATE = "date"
+    LANGUAGE = "language"
+    STATUS = "status"
+    AMOUNT = "amount"
+    FILE_TYPE = "file_type"
+
+
+DEFAULT_DASHBOARD_FIELDS: list[DashboardField] = [
+    DashboardField.KIND,
+    DashboardField.SENDER,
+    DashboardField.TAGS,
+    DashboardField.DATE,
+    DashboardField.LANGUAGE,
+    DashboardField.STATUS,
+]
+
+
+class DashboardPreferences(BaseModel):
+    """Which metadata fields appear on the dashboard tiles, in render order."""
+
+    dashboard_fields: list[DashboardField]
+
+    @field_validator("dashboard_fields", mode="before")
+    @classmethod
+    def _clean(cls, value: object) -> list[str]:
+        """Keep only known field keys, de-duplicated, order preserved.
+
+        Tolerant on purpose: unknown/garbage values are dropped (never a
+        422 or 500), so a hand-edited row or a renamed field can't break
+        the dashboard.
+        """
+        if not isinstance(value, list):
+            return []
+        valid = {field.value for field in DashboardField}
+        seen: set[str] = set()
+        cleaned: list[str] = []
+        for item in value:
+            if isinstance(item, str) and item in valid and item not in seen:
+                seen.add(item)
+                cleaned.append(item)
+        return cleaned
+
+
+def resolve_dashboard_preferences(
+    preferences: dict[str, Any] | None,
+) -> DashboardPreferences:
+    """Resolve a user's stored ``preferences`` blob to display fields.
+
+    Absent ``dashboard_fields`` key -> the default set. An explicit (even
+    empty) list is honoured and cleaned.
+    """
+    blob = preferences or {}
+    if "dashboard_fields" not in blob:
+        return DashboardPreferences(dashboard_fields=DEFAULT_DASHBOARD_FIELDS)
+    return DashboardPreferences(dashboard_fields=blob["dashboard_fields"])
+
+
 class UserOut(BaseModel):
     """The authenticated user (login response and GET /api/auth/me)."""
 
     id: int
     username: str
     display_name: str
+    preferences: DashboardPreferences
 
 
 class TokenCreateRequest(BaseModel):

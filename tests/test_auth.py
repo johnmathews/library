@@ -136,11 +136,21 @@ def test_session_token_stored_hashed(
 
 def test_me_returns_current_user(api_client: TestClient, auth_user: AuthUser) -> None:
     body = api_client.get("/api/auth/me").json()
-    assert body == {
-        "id": auth_user.id,
-        "username": auth_user.username,
-        "display_name": body["display_name"],
-    }
+    assert body["id"] == auth_user.id
+    assert body["username"] == auth_user.username
+    assert "password" not in body and "password_hash" not in body
+
+
+def test_me_includes_default_preferences(api_client: TestClient) -> None:
+    body = api_client.get("/api/auth/me").json()
+    assert body["preferences"]["dashboard_fields"] == [
+        "kind",
+        "sender",
+        "tags",
+        "date",
+        "language",
+        "status",
+    ]
 
 
 def test_logout_deletes_session_and_clears_cookies(

@@ -29,6 +29,7 @@ from library.schemas import (
     TokenCreateRequest,
     TokenInfo,
     UserOut,
+    resolve_dashboard_preferences,
 )
 
 login_router: APIRouter = APIRouter(tags=["auth"])
@@ -36,7 +37,12 @@ router: APIRouter = APIRouter(tags=["auth"])
 
 
 def _user_out(user: User) -> UserOut:
-    return UserOut(id=user.id, username=user.username, display_name=user.display_name)
+    return UserOut(
+        id=user.id,
+        username=user.username,
+        display_name=user.display_name,
+        preferences=resolve_dashboard_preferences(user.preferences),
+    )
 
 
 def _set_cookie(response: Response, name: str, value: str, *, httponly: bool) -> None:
