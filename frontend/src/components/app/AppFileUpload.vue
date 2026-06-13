@@ -26,8 +26,10 @@ const describedBy = computed(() => {
   return ids.length ? ids.join(' ') : undefined
 })
 
-function setFiles(list: FileList | null): void {
-  model.value = list && list.length > 0 ? Array.from(list) : null
+function setFiles(list: FileList | File[] | null): void {
+  let files = list && list.length > 0 ? Array.from(list) : null
+  if (files && !props.multiple && files.length > 1) files = files.slice(0, 1)
+  model.value = files
 }
 
 function onChange(event: Event): void {
@@ -42,10 +44,7 @@ function onDrop(event: DragEvent): void {
 
 <template>
   <div>
-    <label
-      class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300"
-      :for="props.id"
-    >{{ props.label }}</label>
+    <p class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">{{ props.label }}</p>
     <p
       v-if="props.hint"
       :id="`${props.id}-hint`"

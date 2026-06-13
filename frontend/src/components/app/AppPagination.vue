@@ -45,12 +45,11 @@ const disabledBtn = 'opacity-50 cursor-not-allowed'
       type="button"
       :class="[btnBase, { [disabledBtn]: onFirst }]"
       :disabled="onFirst"
-      rel="prev"
       @click="goTo(props.page - 1)"
     >
       Previous<span class="sr-only"> page</span>
     </button>
-    <template v-for="(item, index) in items" :key="index">
+    <template v-for="(item, index) in items" :key="item.kind === 'page' ? 'p' + item.page : 'gap' + index">
       <span v-if="item.kind === 'ellipsis'" class="px-2 text-gray-400">&ctdot;</span>
       <button
         v-else
@@ -67,7 +66,6 @@ const disabledBtn = 'opacity-50 cursor-not-allowed'
       type="button"
       :class="[btnBase, { [disabledBtn]: onLast }]"
       :disabled="onLast"
-      rel="next"
       @click="goTo(props.page + 1)"
     >
       Next<span class="sr-only"> page</span>

@@ -11,7 +11,9 @@ describe('AppFileUpload', () => {
     const input = wrapper.find('input[type="file"]')
     expect(input.attributes('id')).toBe('upload')
     expect(input.attributes('aria-describedby')).toBe('upload-hint')
-    expect(wrapper.find('label[for="upload"]').text()).toBe('Upload a document')
+    // outer heading is now a <p>, not a <label>; the drop-zone <label for> is the only formal label
+    expect(wrapper.find('p').text()).toBe('Upload a document')
+    expect(wrapper.find('label[for="upload"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('Drop files or click to browse')
   })
 
@@ -44,6 +46,20 @@ describe('AppFileUpload', () => {
     })
 
     expect(wrapper.emitted('update:modelValue')!.at(-1)).toEqual([[file]])
+  })
+
+  it('drops two files with multiple:false → only first file set', async () => {
+    const wrapper = mount(AppFileUpload, { props: { id: 'upload', label: 'Upload', multiple: false } })
+    const fileA = new File(['a'], 'a.pdf', { type: 'application/pdf' })
+    const fileB = new File(['b'], 'b.pdf', { type: 'application/pdf' })
+
+    await wrapper.find('label.border-dashed').trigger('drop', {
+      dataTransfer: { files: [fileA, fileB] },
+    })
+
+    const emitted = (wrapper.emitted('update:modelValue')!.at(-1) as [File[]])[0]
+    expect(emitted).toHaveLength(1)
+    expect(emitted[0]!.name).toBe('a.pdf')
   })
 
   it('toggles the dragover ring state', async () => {
