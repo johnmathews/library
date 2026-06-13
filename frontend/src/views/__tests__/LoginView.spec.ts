@@ -90,7 +90,7 @@ describe('LoginView', () => {
   it('redirects to the original target after a successful login', async () => {
     await router.push('/login?redirect=/?page=3')
     fetchMock.mockResolvedValue(
-      jsonResponse({ id: 1, username: 'anna', display_name: 'Anna' }),
+      jsonResponse({ id: 1, username: 'anna', display_name: 'Anna', preferences: { dashboard_fields: [] } }),
     )
     const w = mountView()
 

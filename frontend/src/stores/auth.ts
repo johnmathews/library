@@ -1,16 +1,26 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { ApiError, apiFetch } from '@/api/client'
+import type { DashboardField, DashboardPreferences } from '@/api/settings'
 
 export interface User {
   id: number
   username: string
   display_name: string
+  preferences: DashboardPreferences
 }
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
   const isAuthenticated = computed(() => user.value !== null)
+
+  const dashboardFields = computed<DashboardField[]>(
+    () => user.value?.preferences?.dashboard_fields ?? [],
+  )
+
+  function applyPreferences(preferences: DashboardPreferences): void {
+    if (user.value) user.value.preferences = preferences
+  }
 
   let mePromise: Promise<User | null> | null = null
 
@@ -51,5 +61,5 @@ export const useAuthStore = defineStore('auth', () => {
     mePromise = Promise.resolve(null)
   }
 
-  return { user, isAuthenticated, ensureLoaded, login, logout }
+  return { user, isAuthenticated, dashboardFields, applyPreferences, ensureLoaded, login, logout }
 })

@@ -44,7 +44,7 @@ describe('authGuard', () => {
   })
 
   it('lets authenticated users through', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ id: 1, username: 'anna', display_name: 'Anna' }))
+    fetchMock.mockResolvedValue(jsonResponse({ id: 1, username: 'anna', display_name: 'Anna', preferences: { dashboard_fields: [] } }))
     const router = makeRouter()
 
     await router.push('/')
@@ -54,7 +54,7 @@ describe('authGuard', () => {
   })
 
   it('sends signed-in users away from the login page', async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ id: 1, username: 'anna', display_name: 'Anna' }))
+    fetchMock.mockResolvedValue(jsonResponse({ id: 1, username: 'anna', display_name: 'Anna', preferences: { dashboard_fields: [] } }))
     const router = makeRouter()
 
     await router.push('/login')

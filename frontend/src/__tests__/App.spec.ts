@@ -71,7 +71,7 @@ describe('App service navigation', () => {
   async function mountApp(): Promise<VueWrapper> {
     wrapper = mount(App, { global: { plugins: [router, pinia] } })
     const auth = useAuthStore()
-    auth.user = { id: 1, username: 'e2e', display_name: 'E2E' }
+    auth.user = { id: 1, username: 'e2e', display_name: 'E2E', preferences: { dashboard_fields: [] } }
     await flushPromises()
     return wrapper
   }

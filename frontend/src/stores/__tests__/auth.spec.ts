@@ -2,7 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createPinia, setActivePinia } from 'pinia'
 import { useAuthStore, type User } from '../auth'
 
-const me: User = { id: 1, username: 'anna', display_name: 'Anna' }
+const me: User = {
+  id: 1,
+  username: 'anna',
+  display_name: 'Anna',
+  preferences: { dashboard_fields: [] },
+}
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -87,5 +92,30 @@ describe('useAuthStore', () => {
     // and the cached "me" now resolves null without another request
     await expect(auth.ensureLoaded()).resolves.toBeNull()
     expect(fetchMock).toHaveBeenCalledTimes(2)
+  })
+
+  it('exposes dashboardFields from the loaded user', async () => {
+    const meWithFields: User = {
+      id: 1,
+      username: 'anna',
+      display_name: 'Anna',
+      preferences: { dashboard_fields: ['kind', 'tags'] },
+    }
+    fetchMock.mockResolvedValue(jsonResponse(meWithFields))
+    const store = useAuthStore()
+
+    await store.ensureLoaded()
+
+    expect(store.dashboardFields).toEqual(['kind', 'tags'])
+  })
+
+  it('applyPreferences updates the field set', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(me))
+    const store = useAuthStore()
+    await store.ensureLoaded()
+
+    store.applyPreferences({ dashboard_fields: ['amount'] })
+
+    expect(store.dashboardFields).toEqual(['amount'])
   })
 })
