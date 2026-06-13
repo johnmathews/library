@@ -1,4 +1,6 @@
 export { default as AppButton } from './AppButton.vue'
+export { default as AppCheckboxes } from './AppCheckboxes.vue'
 export { default as AppInput } from './AppInput.vue'
+export { default as AppRadios } from './AppRadios.vue'
 export { default as AppSelect } from './AppSelect.vue'
 export { default as AppTextarea } from './AppTextarea.vue'
