@@ -115,45 +115,46 @@ test('sign in, upload a PDF, see it indexed, listed and searchable', async ({ pa
 test('dashboard reflects metadata preferences', async ({ page }) => {
   await signIn(page)
 
-  // ── Phase 1: turn off the Correspondent field and save ──────────────────
-  await page.goto('/settings')
-  await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
+  try {
+    // ── Phase 1: turn off the Correspondent field and save ──────────────────
+    await page.goto('/settings')
+    await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 
-  // The GovCheckboxes component renders a real <label for="…">Correspondent</label>
-  // bound to <input type="checkbox" value="sender">; getByLabel resolves that binding.
-  const correspondentCheckbox = page.getByLabel('Correspondent')
-  await correspondentCheckbox.uncheck()
-  await page.getByRole('button', { name: 'Save changes' }).click()
-  await expect(page.getByText('Your settings have been saved.')).toBeVisible()
+    // The GovCheckboxes component renders a real <label for="…">Correspondent</label>
+    // bound to <input type="checkbox" value="sender">; getByLabel resolves that binding.
+    const correspondentCheckbox = page.getByLabel('Correspondent')
+    await correspondentCheckbox.uncheck()
+    await page.getByRole('button', { name: 'Save changes' }).click()
+    await expect(page.getByText('Your settings have been saved.')).toBeVisible()
 
-  // ── Phase 2: verify the preference persisted (reload the settings page) ─
-  // Reloading and asserting the checkbox is still unchecked proves the PUT
-  // reached the server and was stored — a more meaningful check than tile
-  // absence alone, because .app-doc-card__sender is only rendered when
-  // `item.sender` is set (v-if="shows('sender') && item.sender"), so it
-  // would be absent even with the field enabled if no documents have senders.
-  await page.goto('/settings')
-  await expect(page.getByLabel('Correspondent')).not.toBeChecked()
+    // ── Phase 2: verify the preference persisted (reload the settings page) ─
+    // Reloading and asserting the checkbox is still unchecked proves the PUT
+    // reached the server and was stored — a more meaningful check than tile
+    // absence alone, because .app-doc-card__sender is only rendered when
+    // `item.sender` is set (v-if="shows('sender') && item.sender"), so it
+    // would be absent even with the field enabled if no documents have senders.
+    await page.goto('/settings')
+    await expect(page.getByLabel('Correspondent')).not.toBeChecked()
 
-  // ── Phase 3: the dashboard renders no sender lines while field is off ────
-  await page.goto('/')
-  // If documents are present (uploaded by the preceding test), no tile should
-  // show a sender line. If the library is empty the count is trivially 0, which
-  // is still correct. The meaningful assertion is Phase 2 above.
-  await expect(page.locator('.app-doc-card__sender')).toHaveCount(0)
-
-  // ── Phase 4: restore state — re-enable Correspondent ────────────────────
-  // Settings are per-user and the e2e user is shared across all spec files.
-  // Re-enabling here keeps this test idempotent and prevents corrupting later
-  // tests (e.g. responsive.spec.ts) that may rely on default field visibility.
-  await page.goto('/settings')
-  const correspondentCheckboxRestored = page.getByLabel('Correspondent')
-  await correspondentCheckboxRestored.check()
-  await page.getByRole('button', { name: 'Save changes' }).click()
-  await expect(page.getByText('Your settings have been saved.')).toBeVisible()
-  // Confirm the restored state persisted.
-  await page.goto('/settings')
-  await expect(page.getByLabel('Correspondent')).toBeChecked()
+    // ── Phase 3: the dashboard renders no sender lines while field is off ────
+    await page.goto('/')
+    // If documents are present (uploaded by the preceding test), no tile should
+    // show a sender line. If the library is empty the count is trivially 0, which
+    // is still correct. The meaningful assertion is Phase 2 above.
+    await expect(page.locator('.app-doc-card__sender')).toHaveCount(0)
+  } finally {
+    // ── Restore state — re-enable Correspondent ──────────────────────────────
+    // Settings are per-user and the e2e user is shared across all spec files.
+    // Running this in finally ensures the restore happens even if an earlier
+    // assertion throws, preventing state corruption in subsequent specs.
+    await page.goto('/settings')
+    const correspondent = page.getByLabel('Correspondent')
+    if (!(await correspondent.isChecked())) {
+      await correspondent.check()
+      await page.getByRole('button', { name: 'Save changes' }).click()
+      await expect(page.getByText('Your settings have been saved.')).toBeVisible()
+    }
+  }
 })
 
 test('detail: open from list, edit title, delete via confirmation page', async ({
