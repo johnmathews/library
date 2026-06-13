@@ -7,7 +7,7 @@ from alembic import command
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from tests.conftest import alembic_config, create_database
+from tests.conftest import alembic_config, create_database, fetch_all
 
 pytestmark = pytest.mark.integration
 
@@ -99,3 +99,15 @@ def test_fts_indexes_exist(migrated_database_url: str) -> None:
     names = {str(name) for name in indexes}
     assert "ix_documents_search_vector_nl" in names
     assert "ix_documents_search_vector_en" in names
+
+
+def test_users_have_preferences_column(migrated_database_url: str) -> None:
+    rows = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = 'users' AND column_name = 'preferences'
+        """,
+    )
+    assert rows == [("preferences", "jsonb", "NO")]

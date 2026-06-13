@@ -103,6 +103,9 @@ class User(Base):
     display_name: Mapped[str] = mapped_column(String(255), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    preferences: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb"), default=dict
+    )
 
     sessions: Mapped[list["Session"]] = relationship(
         back_populates="user", cascade="all, delete-orphan", lazy="selectin"
