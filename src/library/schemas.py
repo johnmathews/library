@@ -7,7 +7,7 @@ See docs/api.md for the full surface description. ``Decimal`` fields
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Any
+from typing import Annotated, Any, Final
 
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
@@ -168,7 +168,7 @@ class DashboardField(StrEnum):
     FILE_TYPE = "file_type"
 
 
-DEFAULT_DASHBOARD_FIELDS: list[DashboardField] = [
+DEFAULT_DASHBOARD_FIELDS: Final[list[DashboardField]] = [
     DashboardField.KIND,
     DashboardField.SENDER,
     DashboardField.TAGS,
@@ -185,7 +185,7 @@ class DashboardPreferences(BaseModel):
 
     @field_validator("dashboard_fields", mode="before")
     @classmethod
-    def _clean(cls, value: object) -> list[str]:
+    def _clean(cls, value: object) -> list[DashboardField]:
         """Keep only known field keys, de-duplicated, order preserved.
 
         Tolerant on purpose: unknown/garbage values are dropped (never a
@@ -196,11 +196,11 @@ class DashboardPreferences(BaseModel):
             return []
         valid = {field.value for field in DashboardField}
         seen: set[str] = set()
-        cleaned: list[str] = []
+        cleaned: list[DashboardField] = []
         for item in value:
             if isinstance(item, str) and item in valid and item not in seen:
                 seen.add(item)
-                cleaned.append(item)
+                cleaned.append(DashboardField(item))
         return cleaned
 
 
