@@ -1,0 +1,82 @@
+<script setup lang="ts">
+import { onMounted, ref, watch } from 'vue'
+import type { ErrorSummaryItem } from '../govuk/types'
+
+// Replaces GovErrorSummary. GovErrorSummary preserved the `title`
+// (default 'There is a problem') and `errors: ErrorSummaryItem[]` props and
+// delegated accessibility to the govuk-frontend ErrorSummary module, which:
+//   1. focuses the summary on init,
+//   2. re-focuses it when the error list changes while mounted, and
+//   3. moves focus to the target field when an error link is activated.
+// govuk-frontend is not present on this Mosaic component, so that focus logic
+// is replicated verbatim in plain DOM below.
+const props = withDefaults(
+  defineProps<{
+    title?: string
+    errors: ErrorSummaryItem[]
+  }>(),
+  { title: 'There is a problem' },
+)
+
+const root = ref<HTMLElement | null>(null)
+
+// (1) Focus the summary on mount so screen readers announce the alert.
+onMounted(() => root.value?.focus())
+
+// (2) Re-focus when the error list changes while the summary stays mounted
+// (e.g. a second failed submit) so the alert is re-announced.
+watch(
+  () => props.errors,
+  () => root.value?.focus(),
+)
+
+// (3) Move focus to the field referenced by an error link's href fragment.
+// Mirrors govuk-frontend ErrorSummary.handleClick: resolve the fragment to an
+// element, make it focusable if it is not already, and focus it. If the
+// fragment points at an input wrapped by a label/legend, fall back to the
+// associated control when possible.
+function focusTarget(href: string): boolean {
+  const id = href.split('#')[1]
+  if (!id) return false
+  const target = document.getElementById(id)
+  if (!target) return false
+
+  const focusTarget = target as HTMLElement
+  if (!focusTarget.hasAttribute('tabindex')) {
+    focusTarget.setAttribute('tabindex', '-1')
+  }
+  focusTarget.scrollIntoView()
+  focusTarget.focus()
+  return true
+}
+
+function onLinkClick(event: MouseEvent, href?: string): void {
+  if (!href) return
+  if (focusTarget(href)) {
+    event.preventDefault()
+  }
+}
+</script>
+
+<template>
+  <div
+    ref="root"
+    role="alert"
+    tabindex="-1"
+    class="bg-red-50 dark:bg-red-500/10 border border-red-300 dark:border-red-500/30 rounded-lg p-4 mb-6"
+  >
+    <h2 class="text-red-800 dark:text-red-400 font-semibold mb-2">{{ props.title }}</h2>
+    <ul>
+      <li v-for="(error, index) in props.errors" :key="index">
+        <a
+          v-if="error.href"
+          :href="error.href"
+          class="text-red-700 dark:text-red-400 underline"
+          @click="onLinkClick($event, error.href)"
+          >{{ error.text }}</a
+        >
+        <template v-else>{{ error.text }}</template>
+      </li>
+    </ul>
+  </div>
+</template>
