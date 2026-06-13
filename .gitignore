@@ -11,3 +11,6 @@ samples/
 *.pem
 *.key
 credentials.json
+
+# CI coverage summary (generated)
+/coverage.md

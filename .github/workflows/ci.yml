@@ -17,6 +17,9 @@ concurrency:
 jobs:
   backend:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # update the sticky coverage comment on PRs
     steps:
       - uses: actions/checkout@v6
       # Full version: astral-sh/setup-uv publishes no floating `v8` major tag.
@@ -38,9 +41,32 @@ jobs:
         run: |
           uv run coverage run -m pytest
           uv run coverage report
+          # Surface the report on the run's summary page and in a file the
+          # PR-comment step can reuse.
+          {
+            echo '## Backend coverage'
+            echo
+            uv run coverage report --format=markdown
+          } | tee coverage.md >> "$GITHUB_STEP_SUMMARY"
+          uv run coverage html
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-coverage-html
+          path: htmlcov/
+      - name: Coverage PR comment
+        if: success() && github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: backend-coverage
+          path: coverage.md
 
   frontend:
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # update the sticky coverage comment on PRs
     defaults:
       run:
         working-directory: frontend
@@ -57,8 +83,25 @@ jobs:
         run: npm run lint
       - name: Type check
         run: npm run type-check
-      - name: Test
-        run: npm run test:unit -- --run
+      - name: Test with coverage
+        run: npm run test:coverage
+      - name: Coverage summary
+        if: always()
+        run: |
+          mkdir -p coverage
+          node scripts/coverage-summary.mjs | tee coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Coverage PR comment
+        if: success() && github.event_name == 'pull_request'
+        uses: marocchino/sticky-pull-request-comment@v2
+        with:
+          header: frontend-coverage
+          path: frontend/coverage/summary.md
+      - name: Upload coverage HTML
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: frontend-coverage-html
+          path: frontend/coverage/
       - name: Build
         run: npm run build
       - name: Check the build is free of GOV.UK residue
