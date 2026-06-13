@@ -10,8 +10,8 @@ jobs:
   backend:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
+      - uses: actions/checkout@v6
+      - uses: astral-sh/setup-uv@v8
         with:
           enable-cache: true
       - name: Install OCR system packages
@@ -36,8 +36,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -63,7 +63,7 @@ jobs:
       COMPOSE_FILE: docker-compose.yml:frontend/e2e/compose.e2e.yml
       E2E_BASE_URL: http://localhost:4173
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Start the backend stack
         run: docker compose up -d --build db migrate api worker
       - name: Wait for the API
@@ -72,7 +72,7 @@ jobs:
         run: |
           echo 'e2e-password-123' | docker compose exec -T api \
             library user add e2e --display-name "E2E" --password-stdin
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 22
           cache: npm
@@ -96,7 +96,7 @@ jobs:
         run: npm run test:e2e
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: playwright-report
           path: frontend/playwright-report/
@@ -117,7 +117,7 @@ jobs:
       # dropped by curl's cookie jar. Production keeps the default (true).
       LIBRARY_COOKIE_SECURE: "false"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Start the full stack
         run: docker compose up -d --build
       - name: Wait for the API
@@ -154,17 +154,17 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
       - name: Log in to GHCR
         if: github.ref == 'refs/heads/main'
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build (and push on main)
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           push: ${{ github.ref == 'refs/heads/main' }}
