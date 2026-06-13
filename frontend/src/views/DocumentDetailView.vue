@@ -29,7 +29,7 @@ import {
   AppSelect,
   AppTextarea,
 } from '@/components/app'
-import type { ErrorSummaryItem, SelectItem } from '@/components/govuk'
+import type { ErrorSummaryItem, SelectItem } from '@/components/app'
 import {
   DOCUMENT_LANGUAGES,
   getDocument,
@@ -195,7 +195,7 @@ const errorItems = computed<ErrorSummaryItem[]>(() => {
 function editorInputId(field: EditableField): string {
   if (field === 'amount') return 'edit-amount'
   const id = `edit-${field.replaceAll('_', '-')}`
-  // GovDateInput puts the id on the container; its first field is -day.
+  // AppDateInput puts the id on the container; its first field is -day.
   return field.endsWith('date') ? `${id}-day` : id
 }
 

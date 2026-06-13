@@ -78,14 +78,12 @@ describe('UploadView', () => {
       ],
     })
     await router.push('/upload')
-    document.body.classList.add('govuk-frontend-supported')
   })
 
   afterEach(() => {
     wrapper?.unmount()
     wrapper = undefined
     vi.unstubAllGlobals()
-    document.body.classList.remove('govuk-frontend-supported')
   })
 
   function mountView(): VueWrapper {

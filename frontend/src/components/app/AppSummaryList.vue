@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import type { SummaryListRow } from '../govuk/types'
+import type { SummaryListRow } from './types'
 
 // Replaces GovSummaryList. Preserves the `rows` prop (SummaryListRow[]) and
 // the optional `noBorder` flag, plus each row's optional `actions` link list

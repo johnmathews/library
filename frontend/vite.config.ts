@@ -15,10 +15,6 @@ export default defineConfig({
   resolve: {
     alias: {
       '@': fileURLToPath(new URL('./src', import.meta.url)),
-      // Phase 0 stub: govuk-frontend removed from node_modules; alias to a
-      // no-op shim so `npx vite build` succeeds while govuk Vue wrappers
-      // await replacement in later phases.
-      'govuk-frontend': fileURLToPath(new URL('./src/stubs/govuk-frontend.ts', import.meta.url)),
     },
   },
   server: {

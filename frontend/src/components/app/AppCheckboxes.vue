@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { ChoiceItem } from '../govuk/types'
+import type { ChoiceItem } from './types'
 
 // Conditional reveal wrappers are always rendered when `item.conditional` is
 // set; their visibility is toggled with v-show so typed input is preserved

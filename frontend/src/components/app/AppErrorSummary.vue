@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted, ref, watch } from 'vue'
-import type { ErrorSummaryItem } from '../govuk/types'
+import type { ErrorSummaryItem } from './types'
 
 // Replaces GovErrorSummary. GovErrorSummary preserved the `title`
 // (default 'There is a problem') and `errors: ErrorSummaryItem[]` props and

@@ -15,7 +15,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { AppButton, AppDateInput, AppInput, AppSelect } from '@/components/app'
-import type { SelectItem } from '@/components/govuk'
+import type { SelectItem } from '@/components/app'
 import { DOCUMENT_LANGUAGES } from '@/api/documents'
 import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
 

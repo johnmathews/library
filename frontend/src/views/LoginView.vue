@@ -2,7 +2,7 @@
 import { reactive, ref } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { AppButton, AppErrorSummary, AppInput } from '@/components/app'
-import type { ErrorSummaryItem } from '@/components/govuk'
+import type { ErrorSummaryItem } from '@/components/app'
 import { ApiError } from '@/api/client'
 import { useAuthStore } from '@/stores/auth'
 

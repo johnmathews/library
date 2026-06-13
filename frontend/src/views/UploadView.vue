@@ -15,7 +15,7 @@
  */
 import { computed, onBeforeUnmount, reactive, ref } from 'vue'
 import { AppBadge, AppBanner, AppButton, AppErrorSummary, AppFileUpload } from '@/components/app'
-import type { ErrorSummaryItem } from '@/components/govuk'
+import type { ErrorSummaryItem } from '@/components/app'
 import AppProgressBar from '@/components/AppProgressBar.vue'
 import { getDocument, uploadDocument } from '@/api/documents'
 import { ApiError } from '@/api/client'

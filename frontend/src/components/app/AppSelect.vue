@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import type { SelectItem } from '../govuk/types'
+import type { SelectItem } from './types'
 
 const props = defineProps<{
   id: string
