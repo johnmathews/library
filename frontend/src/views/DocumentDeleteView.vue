@@ -2,16 +2,14 @@
 /**
  * Delete confirmation page (route `/documents/:id/delete`).
  *
- * GOV.UK pattern: destructive actions get a real page with its own URL —
- * warning text, an explicit confirm button, and a cancel back-link — not
- * a JS modal. Confirming sends DELETE (apiFetch adds the CSRF header) and
- * redirects to the list with a success banner via the flash store.
+ * Destructive actions get a real page with its own URL — warning text, an
+ * explicit confirm button, and a cancel back-link — not a JS modal. Confirming
+ * sends DELETE (apiFetch adds the CSRF header) and redirects to the list with a
+ * success banner via the flash store.
  */
 import { computed, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import GovBackLink from '@/components/govuk/GovBackLink.vue'
-import GovButton from '@/components/govuk/GovButton.vue'
-import GovErrorSummary from '@/components/govuk/GovErrorSummary.vue'
+import { AppBackLink, AppButton, AppErrorSummary } from '@/components/app'
 import { deleteDocument, getDocument, type DocumentDetail } from '@/api/documents'
 import { ApiError } from '@/api/client'
 import { useFlashStore } from '@/stores/flash'
@@ -73,28 +71,28 @@ async function confirmDelete(): Promise<void> {
 </script>
 
 <template>
-  <GovBackLink :to="detailPath" text="Back to the document" />
+  <div class="max-w-xl mx-auto">
+    <div class="mb-4">
+      <AppBackLink :to="detailPath" text="Back to the document" />
+    </div>
 
-  <div class="govuk-grid-row">
-    <div class="govuk-grid-column-two-thirds">
-      <template v-if="doc">
-        <GovErrorSummary v-if="deleteError" :errors="[{ text: deleteError }]" />
+    <template v-if="doc">
+      <div
+        class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-red-200 dark:border-red-500/30 p-6"
+      >
+        <AppErrorSummary v-if="deleteError" :errors="[{ text: deleteError }]" />
 
-        <h1 class="govuk-heading-xl">
-          Are you sure you want to delete this document?
+        <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-4">
+          Are you sure you want to delete “{{ doc.title ?? 'Untitled document' }}”?
         </h1>
 
-        <div class="govuk-warning-text">
-          <span class="govuk-warning-text__icon" aria-hidden="true">!</span>
-          <strong class="govuk-warning-text__text">
-            <span class="govuk-visually-hidden">Warning</span>
-            “{{ doc.title ?? 'Untitled document' }}” will disappear from your library, search and
-            the API. This cannot be undone from the web app.
-          </strong>
-        </div>
+        <p class="text-red-600 dark:text-red-400 mb-6" data-testid="delete-warning">
+          “{{ doc.title ?? 'Untitled document' }}” will disappear from your library, search and the
+          API. This cannot be undone from the web app.
+        </p>
 
-        <div class="govuk-button-group">
-          <GovButton
+        <div class="flex flex-wrap items-center gap-3">
+          <AppButton
             type="button"
             variant="warning"
             :disabled="deleting"
@@ -102,20 +100,36 @@ async function confirmDelete(): Promise<void> {
             @click="confirmDelete"
           >
             Yes, delete this document
-          </GovButton>
-          <RouterLink class="govuk-link" :to="detailPath" data-testid="cancel-delete">
+          </AppButton>
+          <AppButton
+            type="button"
+            variant="secondary"
+            :to="detailPath"
+            data-testid="cancel-delete"
+          >
             Cancel
-          </RouterLink>
+          </AppButton>
         </div>
-      </template>
-
-      <template v-else-if="notFound">
-        <h1 class="govuk-heading-xl">Document not found</h1>
-        <p class="govuk-body">It may already have been deleted, or the link is wrong.</p>
-      </template>
-      <div v-else-if="loadError" class="govuk-inset-text">
-        Sorry, the document could not be loaded. Try again later.
       </div>
+    </template>
+
+    <template v-else-if="notFound">
+      <div
+        class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-6"
+      >
+        <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">
+          Document not found
+        </h1>
+        <p class="text-gray-500 dark:text-gray-400">
+          It may already have been deleted, or the link is wrong.
+        </p>
+      </div>
+    </template>
+    <div
+      v-else-if="loadError"
+      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-6 text-gray-500 dark:text-gray-400"
+    >
+      Sorry, the document could not be loaded. Try again later.
     </div>
   </div>
 </template>
