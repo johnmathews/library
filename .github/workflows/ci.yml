@@ -57,7 +57,7 @@ jobs:
           path: htmlcov/
       - name: Coverage PR comment
         if: success() && github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: backend-coverage
           path: coverage.md
@@ -92,7 +92,7 @@ jobs:
           node scripts/coverage-summary.mjs | tee coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Coverage PR comment
         if: success() && github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v2
+        uses: marocchino/sticky-pull-request-comment@v3
         with:
           header: frontend-coverage
           path: frontend/coverage/summary.md
@@ -122,7 +122,7 @@ jobs:
       # the loaded images and skips the build; on a cache/name miss it simply
       # rebuilds — slower, never broken.
       - name: Build the stack image (gha layer cache)
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@v7
         with:
           files: |
             docker-compose.yml
@@ -147,7 +147,7 @@ jobs:
         working-directory: frontend
         run: npm ci
       - name: Cache Playwright browsers
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
@@ -191,7 +191,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: docker/setup-buildx-action@v4
       - name: Build the stack image (gha layer cache)
-        uses: docker/bake-action@v6
+        uses: docker/bake-action@v7
         with:
           files: docker-compose.yml
           load: true
