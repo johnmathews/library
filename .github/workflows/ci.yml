@@ -2,9 +2,17 @@ name: CI
 
 on:
   push:
-    branches: [main, "eng-**"]
+    # Every branch, so feature work is gated by the full pipeline (incl. e2e)
+    # before it reaches main — not only after the merge lands.
+    branches: ["**"]
   pull_request:
   workflow_dispatch:
+
+# One in-flight run per ref; new pushes cancel the previous run so the
+# now-every-branch trigger doesn't stack up CI minutes.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
 
 jobs:
   backend:
@@ -53,7 +61,7 @@ jobs:
         run: npm run test:unit -- --run
       - name: Build
         run: npm run build
-      - name: Check no licence-restricted GOV.UK assets in build
+      - name: Check the build is free of GOV.UK residue
         run: npm run check:assets
 
   e2e:
@@ -65,8 +73,22 @@ jobs:
       E2E_BASE_URL: http://localhost:4173
     steps:
       - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      # Build the backend image via bake so it restores from the shared gha
+      # layer cache (populated by the `docker` job). `compose up` below finds
+      # the loaded images and skips the build; on a cache/name miss it simply
+      # rebuilds — slower, never broken.
+      - name: Build the stack image (gha layer cache)
+        uses: docker/bake-action@v6
+        with:
+          files: |
+            docker-compose.yml
+            frontend/e2e/compose.e2e.yml
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=library-image
       - name: Start the backend stack
-        run: docker compose up -d --build db migrate api worker
+        run: docker compose up -d db migrate api worker
       - name: Wait for the API
         run: timeout 180 bash -c 'until curl -fsS http://localhost:8000/healthz; do sleep 3; done'
       - name: Create the e2e user
@@ -81,6 +103,11 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
+      - name: Cache Playwright browsers
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
       - name: Install Playwright browsers
         working-directory: frontend
         run: npx playwright install --with-deps chromium webkit
@@ -119,8 +146,16 @@ jobs:
       LIBRARY_COOKIE_SECURE: "false"
     steps:
       - uses: actions/checkout@v6
+      - uses: docker/setup-buildx-action@v4
+      - name: Build the stack image (gha layer cache)
+        uses: docker/bake-action@v6
+        with:
+          files: docker-compose.yml
+          load: true
+          set: |
+            *.cache-from=type=gha,scope=library-image
       - name: Start the full stack
-        run: docker compose up -d --build
+        run: docker compose up -d
       - name: Wait for the API
         run: timeout 180 bash -c 'until curl -fsS http://localhost:8000/healthz; do sleep 3; done'
       - name: Wait for container healthchecks (api, worker, db)
@@ -172,5 +207,7 @@ jobs:
           tags: |
             ghcr.io/johnmathews/library:latest
             ghcr.io/johnmathews/library:${{ github.sha }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Shared scope: this job is the sole writer of the layer cache that
+          # the e2e and compose-smoke bake builds read from.
+          cache-from: type=gha,scope=library-image
+          cache-to: type=gha,scope=library-image,mode=max

@@ -20,6 +20,14 @@ describe('SettingsView', () => {
     fetchMock.mockReset()
   })
 
+  it('renders the page heading', () => {
+    const auth = useAuthStore()
+    auth.user = { id: 1, username: 'a', display_name: 'A', preferences: { dashboard_fields: ['kind'] } }
+    fetchMock.mockResolvedValue(jsonResponse({ dashboard_fields: ['kind'] }))
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+    expect(wrapper.find('h1').text()).toBe('Settings')
+  })
+
   it('saves the selected fields and shows a confirmation', async () => {
     const auth = useAuthStore()
     auth.user = { id: 1, username: 'a', display_name: 'A', preferences: { dashboard_fields: ['kind'] } }

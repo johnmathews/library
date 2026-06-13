@@ -130,6 +130,7 @@ describe('DocumentListView', () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()
 
+    expect(w.find('h1').text()).toBe('Documents')
     expect(w.find('ul.app-doc-grid').exists()).toBe(true)
     const tile = w.find('[data-testid="doc-card"]')
     expect(tile.exists()).toBe(true)

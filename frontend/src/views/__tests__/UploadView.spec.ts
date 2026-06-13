@@ -105,6 +105,11 @@ describe('UploadView', () => {
     return new File(['%PDF-1.4 test'], name, { type: 'application/pdf' })
   }
 
+  it('renders the page heading', () => {
+    const w = mountView()
+    expect(w.find('h1').text()).toBe('Upload documents')
+  })
+
   it('exposes a multi-file input accepting images and PDFs without capture', () => {
     const w = mountView()
     const input = w.find('input[type="file"]')
