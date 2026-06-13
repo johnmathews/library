@@ -11,6 +11,7 @@ const props = defineProps<{
   hint?: string
   errorMessage?: string
   small?: boolean
+  legendSize?: 'l' | 'm' | 's'
 }>()
 
 const model = defineModel<string[]>({ default: () => [] })
@@ -36,7 +37,10 @@ function isChecked(value: string): boolean {
 <template>
   <div class="govuk-form-group" :class="{ 'govuk-form-group--error': props.errorMessage }">
     <fieldset class="govuk-fieldset" :aria-describedby="describedBy">
-      <legend class="govuk-fieldset__legend">{{ props.legend }}</legend>
+      <legend
+        class="govuk-fieldset__legend"
+        :class="props.legendSize ? `govuk-fieldset__legend--${props.legendSize}` : undefined"
+      >{{ props.legend }}</legend>
       <div v-if="props.hint" :id="`${props.id}-hint`" class="govuk-hint">{{ props.hint }}</div>
       <p v-if="props.errorMessage" :id="`${props.id}-error`" class="govuk-error-message">
         <span class="govuk-visually-hidden">Error:</span> {{ props.errorMessage }}

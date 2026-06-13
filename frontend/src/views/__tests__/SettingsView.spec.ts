@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import SettingsView from '../SettingsView.vue'
@@ -10,6 +10,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 describe('SettingsView', () => {
   const fetchMock = vi.fn()
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
   beforeEach(() => {
     setActivePinia(createPinia())
     vi.stubGlobal('fetch', fetchMock)
