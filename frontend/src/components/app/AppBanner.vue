@@ -18,17 +18,18 @@ const variantClass = computed(() => (success.value ? 'border-green-500' : 'borde
 
 const root = ref<HTMLElement | null>(null)
 
-// Replicates GovNotificationBanner's announce-on-appear behaviour: the banner
-// focuses itself on mount (paired with tabindex="-1" so it is programmatically
-// focusable without entering the tab order).
-onMounted(() => root.value?.focus())
+// Replicates GovNotificationBanner's announce-on-appear behaviour: only the
+// success variant carries role="alert" and focuses itself on mount so it is
+// announced. The non-success "Important" banner is passive and must not steal
+// focus.
+onMounted(() => { if (success.value) root.value?.focus() })
 </script>
 
 <template>
   <div
     ref="root"
-    role="alert"
-    tabindex="-1"
+    :role="success ? 'alert' : undefined"
+    :tabindex="success ? -1 : undefined"
     class="bg-white dark:bg-gray-800 border-l-4 rounded-lg px-4 py-3 shadow-xs"
     :class="variantClass"
     aria-labelledby="app-banner-title"

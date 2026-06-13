@@ -32,21 +32,19 @@ watch(
 
 // (3) Move focus to the field referenced by an error link's href fragment.
 // Mirrors govuk-frontend ErrorSummary.handleClick: resolve the fragment to an
-// element, make it focusable if it is not already, and focus it. If the
-// fragment points at an input wrapped by a label/legend, fall back to the
-// associated control when possible.
+// element by id, make it programmatically focusable if it is not already, and
+// focus it.
 function focusTarget(href: string): boolean {
   const id = href.split('#')[1]
   if (!id) return false
-  const target = document.getElementById(id)
-  if (!target) return false
+  const el = document.getElementById(id)
+  if (!el) return false
 
-  const focusTarget = target as HTMLElement
-  if (!focusTarget.hasAttribute('tabindex')) {
-    focusTarget.setAttribute('tabindex', '-1')
+  if (!el.hasAttribute('tabindex')) {
+    el.setAttribute('tabindex', '-1')
   }
-  focusTarget.scrollIntoView()
-  focusTarget.focus()
+  el.scrollIntoView()
+  el.focus()
   return true
 }
 
