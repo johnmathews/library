@@ -2,8 +2,9 @@
 import { computed } from 'vue'
 import type { ChoiceItem } from '../govuk/types'
 
-// Conditional reveal handled reactively by Vue (v-if keyed by membership in
-// the model array), matching GovCheckboxes' Vue-owned reveal behaviour.
+// Conditional reveal wrappers are always rendered when `item.conditional` is
+// set; their visibility is toggled with v-show so typed input is preserved
+// across deselect/reselect.
 const props = defineProps<{
   id: string
   legend: string
@@ -57,7 +58,6 @@ function isChecked(value: string): boolean {
           :name="name"
           type="checkbox"
           :value="item.value"
-          :aria-expanded="item.conditional ? isChecked(item.value) : undefined"
           :aria-describedby="item.hint ? `${itemId(index)}-item-hint` : undefined"
         />
         <span>{{ item.text }}</span>
@@ -68,7 +68,8 @@ function isChecked(value: string): boolean {
         class="text-sm text-gray-500 dark:text-gray-400"
       >{{ item.hint }}</p>
       <div
-        v-if="item.conditional && isChecked(item.value)"
+        v-if="item.conditional"
+        v-show="isChecked(item.value)"
         :id="`conditional-${itemId(index)}`"
         class="pl-6"
       >

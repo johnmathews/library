@@ -31,4 +31,25 @@ describe('AppButton', () => {
     const wrapper = mount(AppButton, { props: { disabled: true }, slots: { default: 'X' } })
     expect(wrapper.get('button').attributes('disabled')).toBeDefined()
   })
+  it('preventDoubleClick swallows a second click within 1000ms', async () => {
+    const wrapper = mount(AppButton, {
+      props: { preventDoubleClick: true },
+      slots: { default: 'Save' },
+    })
+    const btn = wrapper.get('button')
+    await btn.trigger('click')
+    await btn.trigger('click')
+    expect(wrapper.emitted('click')).toHaveLength(1)
+  })
+  it('honors disabled on the <a> branch (aria-disabled + inert styling)', async () => {
+    const wrapper = mount(AppButton, {
+      props: { href: 'https://x', disabled: true },
+      slots: { default: 'Go' },
+    })
+    const a = wrapper.get('a')
+    expect(a.attributes('aria-disabled')).toBe('true')
+    expect(a.classes().join(' ')).toContain('pointer-events-none')
+    await a.trigger('click')
+    expect(wrapper.emitted('click')).toBeFalsy()
+  })
 })

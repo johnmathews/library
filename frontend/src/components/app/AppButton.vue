@@ -24,18 +24,42 @@ const variantClasses: Record<NonNullable<typeof props.variant>, string> = {
   inverse: 'bg-white text-violet-600 hover:bg-gray-100',
 }
 
-const classes = computed(() => ['btn', variantClasses[props.variant]])
+const classes = computed(() => [
+  'btn',
+  variantClasses[props.variant],
+  { 'pointer-events-none opacity-60': props.disabled },
+])
+
+let lastClick = 0
 
 function onClick(event: MouseEvent): void {
+  if (props.preventDoubleClick) {
+    const now = Date.now()
+    if (now - lastClick < 1000) return
+    lastClick = now
+  }
   emit('click', event)
 }
 </script>
 
 <template>
-  <RouterLink v-if="props.to" :to="props.to" :class="classes" @click="onClick">
+  <RouterLink
+    v-if="props.to"
+    :to="props.to"
+    :class="classes"
+    :aria-disabled="props.disabled || undefined"
+    @click="props.disabled ? $event.preventDefault() : onClick($event)"
+  >
     <slot />
   </RouterLink>
-  <a v-else-if="props.href" :href="props.href" role="button" :class="classes" @click="onClick">
+  <a
+    v-else-if="props.href"
+    :href="props.href"
+    role="button"
+    :class="classes"
+    :aria-disabled="props.disabled || undefined"
+    @click="props.disabled ? $event.preventDefault() : onClick($event)"
+  >
     <slot />
   </a>
   <button

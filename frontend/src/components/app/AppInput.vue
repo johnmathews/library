@@ -12,7 +12,6 @@ const props = defineProps<{
   inputmode?: 'text' | 'numeric' | 'decimal' | 'email' | 'tel' | 'search' | 'url'
   spellcheck?: boolean
   widthClass?: string
-  labelIsPageHeading?: boolean
   /** id of a `<datalist>` for native autocomplete suggestions. */
   list?: string
 }>()

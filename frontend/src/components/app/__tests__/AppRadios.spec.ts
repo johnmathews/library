@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import AppRadios from '../AppRadios.vue'
 
 const items = [
@@ -38,18 +38,22 @@ describe('AppRadios', () => {
       slots: { 'conditional-email': '<input id="email-address" />' },
     })
 
-    // Hidden until selected.
-    expect(wrapper.find('#conditional-contact').exists()).toBe(false)
+    // The conditional wrapper is always in the DOM; hidden (v-show) until selected.
+    expect(wrapper.find('#conditional-contact').exists()).toBe(true)
+    expect((wrapper.get('#conditional-contact').element as HTMLElement).style.display).toBe('none')
 
     await wrapper.find('input#contact').setValue(true)
+    await flushPromises()
 
     expect(wrapper.emitted('update:modelValue')!.at(-1)).toEqual(['email'])
-    expect(wrapper.find('#conditional-contact').exists()).toBe(true)
+    expect((wrapper.get('#conditional-contact').element as HTMLElement).style.display).not.toBe('none')
     expect(wrapper.find('#conditional-contact').find('#email-address').exists()).toBe(true)
-    expect(wrapper.find('input#contact').attributes('aria-expanded')).toBe('true')
 
+    // Deselecting keeps the wrapper in the DOM but hides it (state preserved).
     await wrapper.find('input#contact-2').setValue(true)
-    expect(wrapper.find('#conditional-contact').exists()).toBe(false)
+    await flushPromises()
+    expect(wrapper.find('#conditional-contact').exists()).toBe(true)
+    expect((wrapper.get('#conditional-contact').element as HTMLElement).style.display).toBe('none')
   })
 
   it('marks the group as errored', () => {
