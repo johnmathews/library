@@ -85,9 +85,35 @@ describe('SettingsView', () => {
     const [url, init] = fetchMock.mock.calls.at(-1)!
     expect(String(url)).toBe('/api/settings/appearance')
     expect(init.method).toBe('PUT')
-    expect(JSON.parse(init.body)).toEqual({ background_tone: 'slate' })
+    expect(JSON.parse(init.body)).toEqual({ background_tone: 'slate', tile_preview: 'full_width' })
     expect(wrapper.find('[data-testid="tone-slate"]').attributes('aria-checked')).toBe('true')
     expect(auth.backgroundTone).toBe('slate')
+  })
+
+  it('selecting a tile preview in the Appearance tab saves and applies it', async () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'a',
+      display_name: 'A',
+      preferences: { dashboard_fields: ['kind'], background_tone: 'neutral', tile_preview: 'full_width' },
+    }
+    fetchMock.mockResolvedValue(
+      jsonResponse({ dashboard_fields: ['kind'], background_tone: 'neutral', tile_preview: 'whole_page' }),
+    )
+
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+    await wrapper.find('[data-testid="tab-appearance-btn"]').trigger('click')
+    expect(wrapper.find('[data-testid="tile-full_width"]').attributes('aria-checked')).toBe('true')
+
+    await wrapper.find('[data-testid="tile-whole_page"]').trigger('click')
+    await flushPromises()
+
+    const [url, init] = fetchMock.mock.calls.at(-1)!
+    expect(String(url)).toBe('/api/settings/appearance')
+    expect(JSON.parse(init.body)).toEqual({ background_tone: 'neutral', tile_preview: 'whole_page' })
+    expect(wrapper.find('[data-testid="tile-whole_page"]').attributes('aria-checked')).toBe('true')
+    expect(auth.tilePreview).toBe('whole_page')
   })
 
   it('reverts the tone and shows an error when the appearance save fails', async () => {

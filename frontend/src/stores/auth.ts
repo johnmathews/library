@@ -3,8 +3,10 @@ import { defineStore } from 'pinia'
 import { ApiError, apiFetch } from '@/api/client'
 import {
   DEFAULT_BACKGROUND_TONE,
+  DEFAULT_TILE_PREVIEW,
   type BackgroundTone,
   type DashboardField,
+  type TilePreview,
   type UserPreferences,
 } from '@/api/settings'
 
@@ -27,6 +29,12 @@ export const useAuthStore = defineStore('auth', () => {
   // or a payload predates the preference. Drives <html data-canvas> via App.vue.
   const backgroundTone = computed<BackgroundTone>(
     () => user.value?.preferences?.background_tone ?? DEFAULT_BACKGROUND_TONE,
+  )
+
+  // How dashboard tiles render the first-page thumbnail. Defaults when the
+  // user is absent or a payload predates the preference.
+  const tilePreview = computed<TilePreview>(
+    () => user.value?.preferences?.tile_preview ?? DEFAULT_TILE_PREVIEW,
   )
 
   function applyPreferences(preferences: UserPreferences): void {
@@ -77,6 +85,7 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     dashboardFields,
     backgroundTone,
+    tilePreview,
     applyPreferences,
     ensureLoaded,
     login,

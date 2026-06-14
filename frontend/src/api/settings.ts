@@ -41,11 +41,27 @@ export type BackgroundTone = (typeof BACKGROUND_TONES)[number]['value']
 
 export const DEFAULT_BACKGROUND_TONE: BackgroundTone = 'neutral'
 
+/**
+ * How a dashboard tile renders the document's first-page thumbnail
+ * (Settings → Appearance). `full_width` fills the tile width and crops the
+ * lower part of the page; `whole_page` shows the entire first page letterboxed.
+ * `full_width` is the default (mirrors the backend's DEFAULT_TILE_PREVIEW).
+ */
+export const TILE_PREVIEWS = [
+  { value: 'full_width', text: 'Full width', hint: 'Fills the tile; crops the lower part of the page.' },
+  { value: 'whole_page', text: 'Whole page', hint: 'Shows the entire first page, letterboxed.' },
+] as const
+
+export type TilePreview = (typeof TILE_PREVIEWS)[number]['value']
+
+export const DEFAULT_TILE_PREVIEW: TilePreview = 'full_width'
+
 export interface UserPreferences {
   dashboard_fields: DashboardField[]
   // Optional on the client so older payloads (and test fixtures) without the
-  // key still type-check; consumers fall back to DEFAULT_BACKGROUND_TONE.
+  // key still type-check; consumers fall back to the defaults.
   background_tone?: BackgroundTone
+  tile_preview?: TilePreview
 }
 
 /** GET /api/settings — resolved display preferences. */
@@ -58,10 +74,13 @@ export function updateSettings(prefs: { dashboard_fields: DashboardField[] }): P
   return apiFetch<UserPreferences>('/api/settings', { method: 'PUT', body: prefs })
 }
 
-/** PUT /api/settings/appearance — persist the page-canvas tone. */
-export function updateAppearance(tone: BackgroundTone): Promise<UserPreferences> {
+/** PUT /api/settings/appearance — persist the page-canvas tone and tile preview. */
+export function updateAppearance(
+  tone: BackgroundTone,
+  tilePreview: TilePreview,
+): Promise<UserPreferences> {
   return apiFetch<UserPreferences>('/api/settings/appearance', {
     method: 'PUT',
-    body: { background_tone: tone },
+    body: { background_tone: tone, tile_preview: tilePreview },
   })
 }

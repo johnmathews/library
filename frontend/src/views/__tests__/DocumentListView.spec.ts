@@ -314,6 +314,24 @@ describe('DocumentListView', () => {
     expect(w.find('.app-doc-card__date').exists()).toBe(false)
   })
 
+  it('uses object-cover top crop for the full_width tile preview (default)', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    const img = w.find('.app-doc-card__thumbnail img')
+    expect(img.classes()).toContain('object-cover')
+    expect(img.classes()).toContain('object-top')
+    expect(img.classes()).not.toContain('object-contain')
+  })
+
+  it('uses object-contain for the whole_page tile preview', async () => {
+    useAuthStore().user!.preferences.tile_preview = 'whole_page'
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    const img = w.find('.app-doc-card__thumbnail img')
+    expect(img.classes()).toContain('object-contain')
+    expect(img.classes()).not.toContain('object-cover')
+  })
+
   it('caps tag chips with a +N overflow', async () => {
     seedPrefs(['tags'])
     listResponse = () =>

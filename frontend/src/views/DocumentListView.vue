@@ -39,6 +39,12 @@ function shows(field: DashboardField): boolean {
   return auth.dashboardFields.includes(field)
 }
 
+// Full-width mode fills the tile and crops the lower part of the page;
+// whole-page mode letterboxes the entire first page. Box height is unchanged.
+const thumbnailFitClass = computed<string>(() =>
+  auth.tilePreview === 'whole_page' ? 'object-contain' : 'object-cover object-top',
+)
+
 // One-shot banner from an action that redirected here (e.g. delete).
 const flashMessage = ref(useFlashStore().consume())
 
@@ -290,7 +296,7 @@ const amountLabels = computed<Map<number, string | null>>(() => {
         <div class="app-doc-card__thumbnail aspect-[4/3] bg-gray-100 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700/60 w-full flex items-center justify-center">
           <img
             v-if="item.has_thumbnail && !brokenThumbnails.has(item.id)"
-            class="aspect-[4/3] w-full object-contain"
+            :class="['aspect-[4/3] w-full', thumbnailFitClass]"
             :src="thumbnailUrl(item.id)"
             alt=""
             loading="lazy"

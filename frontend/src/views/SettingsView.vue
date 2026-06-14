@@ -13,10 +13,13 @@ import {
   BACKGROUND_TONES,
   DASHBOARD_FIELDS,
   DEFAULT_BACKGROUND_TONE,
+  DEFAULT_TILE_PREVIEW,
+  TILE_PREVIEWS,
   updateAppearance,
   updateSettings,
   type BackgroundTone,
   type DashboardField,
+  type TilePreview,
 } from '@/api/settings'
 import { useAuthStore } from '@/stores/auth'
 
@@ -68,12 +71,34 @@ async function selectTone(tone: BackgroundTone): Promise<void> {
   // instantly, before the round-trip resolves.
   if (auth.user) auth.applyPreferences({ ...auth.user.preferences, background_tone: tone })
   try {
-    const result = await updateAppearance(tone)
+    const result = await updateAppearance(tone, selectedTilePreview.value)
     auth.applyPreferences(result)
     selectedTone.value = result.background_tone ?? DEFAULT_BACKGROUND_TONE
   } catch {
     selectedTone.value = previous
     if (auth.user) auth.applyPreferences({ ...auth.user.preferences, background_tone: previous })
+    toneError.value = 'Sorry, your appearance preference could not be saved. Try again.'
+  }
+}
+
+// --- Appearance (document tile preview) -------------------------------------
+
+const selectedTilePreview = ref<TilePreview>(auth.tilePreview)
+
+async function selectTilePreview(mode: TilePreview): Promise<void> {
+  if (mode === selectedTilePreview.value) return
+  const previous = selectedTilePreview.value
+  selectedTilePreview.value = mode
+  toneError.value = null
+  // Optimistic: update the store now so the dashboard reflects it immediately.
+  if (auth.user) auth.applyPreferences({ ...auth.user.preferences, tile_preview: mode })
+  try {
+    const result = await updateAppearance(selectedTone.value, mode)
+    auth.applyPreferences(result)
+    selectedTilePreview.value = result.tile_preview ?? DEFAULT_TILE_PREVIEW
+  } catch {
+    selectedTilePreview.value = previous
+    if (auth.user) auth.applyPreferences({ ...auth.user.preferences, tile_preview: previous })
     toneError.value = 'Sorry, your appearance preference could not be saved. Try again.'
   }
 }
@@ -191,6 +216,38 @@ const tabClass = (active: boolean): string =>
               <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{
                 tone.text
               }}</span>
+            </button>
+          </div>
+        </fieldset>
+      </div>
+
+      <div :class="cardClass" class="mt-6">
+        <fieldset>
+          <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+            Document previews
+          </legend>
+          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            How each dashboard tile shows the document's first page. Saves to your account
+            automatically.
+          </p>
+          <div role="radiogroup" aria-label="Document previews" class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-5">
+            <button
+              v-for="mode in TILE_PREVIEWS"
+              :key="mode.value"
+              type="button"
+              role="radio"
+              :aria-checked="selectedTilePreview === mode.value"
+              :data-testid="`tile-${mode.value}`"
+              :class="[
+                'flex flex-col gap-1 rounded-lg border p-3 text-left transition cursor-pointer',
+                selectedTilePreview === mode.value
+                  ? 'border-violet-500 ring-2 ring-violet-500/30'
+                  : 'border-gray-200 dark:border-gray-700/60 hover:border-gray-300 dark:hover:border-gray-600',
+              ]"
+              @click="selectTilePreview(mode.value)"
+            >
+              <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ mode.text }}</span>
+              <span class="text-xs text-gray-500 dark:text-gray-400">{{ mode.hint }}</span>
             </button>
           </div>
         </fieldset>
