@@ -243,13 +243,22 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="preview-pdf"]').classes()).toContain('lg:block')
   })
 
-  it('keeps the iframe at all sizes for a PDF with no thumbnail', async () => {
-    detail = makeDetail({ has_thumbnail: false })
+  it('shows a clickable padlock for a PDF with no thumbnail (e.g. password-protected)', async () => {
+    // No thumbnail for a PDF ⇒ it could not be rendered (almost always
+    // password-protected). Mobile gets a padlock that opens the PDF; the
+    // desktop iframe stays (hidden below lg) so it can prompt inline.
+    detail = makeDetail({ has_thumbnail: false, has_searchable_pdf: false })
     const w = await mountView()
     expect(w.find('[data-testid="preview-pdf-image"]').exists()).toBe(false)
+    const locked = w.find('[data-testid="preview-pdf-locked"]')
+    expect(locked.exists()).toBe(true)
+    expect(locked.attributes('href')).toBe('/api/documents/12/original?disposition=inline')
+    expect(locked.attributes('target')).toBe('_blank')
+    expect(locked.classes()).toContain('lg:hidden')
+    expect(locked.find('svg').exists()).toBe(true) // padlock icon
     const iframe = w.find('[data-testid="preview-pdf"]')
-    expect(iframe.exists()).toBe(true)
-    expect(iframe.classes()).not.toContain('hidden')
+    expect(iframe.classes()).toContain('hidden')
+    expect(iframe.classes()).toContain('lg:block')
   })
 
   it('falls back to the original PDF and then to a no-preview panel', async () => {

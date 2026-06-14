@@ -462,8 +462,7 @@ watch(
             <!-- On small screens the browser-native PDF viewer renders wider
                  than the viewport and ignores #view=FitH (notably iOS Safari),
                  so show the fit-width first-page thumbnail there instead. The
-                 native <iframe> stays on lg+ (scroll/zoom/text-selection). Falls
-                 back to the iframe everywhere if there's no thumbnail. -->
+                 native <iframe> stays on lg+ (scroll/zoom/text-selection). -->
             <a
               v-if="doc.has_thumbnail"
               :href="pdfPreviewUrl"
@@ -479,10 +478,38 @@ watch(
                 data-testid="preview-pdf-image"
               />
             </a>
+            <!-- No thumbnail for a PDF means it couldn't be rendered — almost
+                 always password-protected. Show a clickable padlock that opens
+                 the PDF (the browser then prompts for the password). Mobile only;
+                 the desktop iframe can prompt inline. -->
+            <a
+              v-else
+              :href="pdfPreviewUrl"
+              target="_blank"
+              rel="noopener"
+              class="flex lg:hidden aspect-[3/4] w-full flex-col items-center justify-center gap-3 bg-gray-100 dark:bg-gray-900/40 p-6 text-center text-gray-400 dark:text-gray-500"
+              data-testid="preview-pdf-locked"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke-width="1.5"
+                stroke="currentColor"
+                class="w-12 h-12"
+                aria-hidden="true"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z"
+                />
+              </svg>
+              <span class="text-sm font-medium">Protected PDF — tap to open</span>
+            </a>
             <!-- Browser-native PDF viewing; see the component docblock. -->
             <iframe
-              class="w-full h-[70vh] border-0"
-              :class="{ 'hidden lg:block': doc.has_thumbnail }"
+              class="w-full h-[70vh] border-0 hidden lg:block"
               :src="pdfPreviewIframeUrl"
               title="Document preview"
               data-testid="preview-pdf"
