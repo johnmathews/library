@@ -118,7 +118,7 @@ jobs:
       - uses: actions/checkout@v6
       - uses: docker/setup-buildx-action@v4
       # Build the backend image via bake so it restores from the shared gha
-      # layer cache (populated by the `docker` job). `compose up` below finds
+      # layer cache (populated by the `build` job). `compose up` below finds
       # the loaded images and skips the build; on a cache/name miss it simply
       # rebuilds — slower, never broken.
       - name: Build the stack image (gha layer cache)
@@ -226,8 +226,14 @@ jobs:
         if: always()
         run: docker compose down -v
 
-  docker:
-    needs: [backend, frontend, e2e, compose-smoke]
+  # Build the published image once, early and in parallel with the test jobs,
+  # so it is ready to promote the instant the suite goes green — rather than
+  # gating a full build+push behind e2e. Pushes the immutable :sha tag on main
+  # (the rollback artifact and the source the promote step retags); on branches
+  # it skips the push and only warms the cache. This job is the sole writer of
+  # the `library-image` layer-cache scope that the e2e and compose-smoke bake
+  # builds read from.
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -242,15 +248,36 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
-      - name: Build (and push on main)
+      - name: Build (push :sha on main; warm the cache on branches)
         uses: docker/build-push-action@v7
         with:
           context: .
           push: ${{ github.ref == 'refs/heads/main' }}
-          tags: |
-            ghcr.io/johnmathews/library:latest
-            ghcr.io/johnmathews/library:${{ github.sha }}
-          # Shared scope: this job is the sole writer of the layer cache that
-          # the e2e and compose-smoke bake builds read from.
+          tags: ghcr.io/johnmathews/library:${{ github.sha }}
           cache-from: type=gha,scope=library-image
           cache-to: type=gha,scope=library-image,mode=max
+
+  # Promote the tested build to :latest — a registry-side retag of the :sha
+  # image (no rebuild, no pull, ~seconds), gated on the full green suite.
+  # :latest is what production deploys, so it only moves once backend, frontend,
+  # e2e and compose-smoke have all passed.
+  promote:
+    needs: [build, backend, frontend, e2e, compose-smoke]
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: docker/setup-buildx-action@v4
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Retag :sha as :latest
+        run: |
+          docker buildx imagetools create \
+            --tag ghcr.io/johnmathews/library:latest \
+            "ghcr.io/johnmathews/library:${GITHUB_SHA}"
