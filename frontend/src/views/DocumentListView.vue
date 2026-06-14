@@ -197,6 +197,13 @@ function fileTypeLabel(item: DocumentListItem): string {
   return 'File'
 }
 
+// A PDF with no thumbnail couldn't be rendered — almost always because it is
+// password-protected. The tile shows a padlock placeholder instead of a bare
+// "PDF" label (mirrors the detail-view padlock).
+function isLockedPdf(item: DocumentListItem): boolean {
+  return item.mime_type === 'application/pdf' && !item.has_thumbnail
+}
+
 function formatAmount(item: DocumentListItem): string | null {
   if (item.amount_total === null) return null
   if (item.currency) {
@@ -304,10 +311,28 @@ const amountLabels = computed<Map<number, string | null>>(() => {
           />
           <span
             v-else
-            class="app-doc-card__thumbnail-fallback text-sm font-medium text-gray-400 dark:text-gray-500"
+            class="app-doc-card__thumbnail-fallback flex flex-col items-center gap-2 text-sm font-medium text-gray-400 dark:text-gray-500"
             aria-hidden="true"
           >
-            {{ fileTypeLabel(item) }}
+            <template v-if="isLockedPdf(item)">
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke-width="1.5"
+                stroke="currentColor"
+                class="w-9 h-9"
+                data-testid="thumbnail-locked"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z"
+                />
+              </svg>
+              <span class="text-xs">Protected PDF</span>
+            </template>
+            <template v-else>{{ fileTypeLabel(item) }}</template>
           </span>
           <!-- Soften the hard cut where a full-width crop meets the white body:
                fade the bottom of the preview into the card body colour. Only in

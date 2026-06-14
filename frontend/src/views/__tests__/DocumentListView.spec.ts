@@ -169,7 +169,24 @@ describe('DocumentListView', () => {
     const w = await mountView()
     expect(w.find('.app-doc-card__title a').text()).toBe('Untitled document')
     expect(w.find('.app-doc-card__thumbnail img').exists()).toBe(false)
-    expect(w.find('.app-doc-card__thumbnail-fallback').text()).toBe('PDF')
+    // Default fixture is a PDF; with no thumbnail it renders the padlock placeholder.
+    expect(w.find('.app-doc-card__thumbnail-fallback').text()).toContain('Protected PDF')
+  })
+
+  it('shows a padlock placeholder for a PDF with no thumbnail (password-protected)', async () => {
+    listResponse = () =>
+      jsonResponse(listBody([makeItem({ has_thumbnail: false, mime_type: 'application/pdf' })]))
+    const w = await mountView()
+    expect(w.find('[data-testid="thumbnail-locked"]').exists()).toBe(true)
+    expect(w.find('.app-doc-card__thumbnail-fallback').text()).toContain('Protected PDF')
+  })
+
+  it('shows the plain file-type label for a non-PDF without a thumbnail', async () => {
+    listResponse = () =>
+      jsonResponse(listBody([makeItem({ has_thumbnail: false, mime_type: 'text/plain' })]))
+    const w = await mountView()
+    expect(w.find('[data-testid="thumbnail-locked"]').exists()).toBe(false)
+    expect(w.find('.app-doc-card__thumbnail-fallback').text()).toBe('Text')
   })
 
   it('swaps a broken thumbnail for the placeholder on image error', async () => {

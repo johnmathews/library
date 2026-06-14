@@ -52,6 +52,11 @@ recreate on the `paperless` LXC) before moving to the next.
    password; the desktop iframe stays (hidden below `lg`) since it can prompt
    inline.
 
+7. **Padlock on dashboard tiles too.** The same locked-PDF signal (`isLockedPdf`
+   = PDF + `!has_thumbnail`) now renders a padlock placeholder + "Protected PDF"
+   on the dashboard tile, replacing the bare "PDF" file-type label, for
+   consistency with the detail view (desktop and mobile).
+
 ## Notes
 
 - All changes are presentation-layer (Vue templates/classes); no API or schema
