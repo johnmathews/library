@@ -72,6 +72,15 @@ vocabulary that the `App*` components and views compose:
   `.form-checkbox`, `.form-radio`, `.form-multiselect`, `.form-switch` — the
   base + dark-mode styling for every field control.
 - **Typography helpers** (`.h1`–`.h4`) and `.no-scrollbar`.
+- **Dashboard tiles:** `.app-doc-grid` (the responsive 1/2/3/4-column document
+  grid — column count per viewport is the W16 acceptance contract) and
+  `.app-doc-card` (the elevated tile surface: rounded corners, a layered drop
+  shadow that lifts the white tile off the gray page, and a hover state that
+  raises it 3px and warms the border to violet). Dark mode swaps the shadow for
+  a gray-800-on-gray-900 surface plus border, since shadows don't read against
+  a near-black page; `prefers-reduced-motion` drops the lift. `.app-doc-card__*`
+  hooks (`__title`, `__thumbnail`, `__meta`, …) are an acceptance contract used
+  by `DocumentListView` and its tests.
 
 ## 1.3 The shell
 
@@ -182,7 +191,7 @@ modal.
 
 | View | Route | Notes |
 |------|-------|-------|
-| `DocumentListView` | `/` (`documents`) | Dashboard **grid of document tiles** (`bg-white dark:bg-gray-800 shadow-xs rounded-xl` cards); per-tile metadata is driven by the user's saved `dashboardFields` preference, rendered in a fixed canonical order; `AppPagination`; `AppBadge` tags; a one-shot flash `AppBanner`. All search/filter state lives in the URL query. |
+| `DocumentListView` | `/` (`documents`) | Dashboard **grid of document tiles** (elevated `.app-doc-card` surfaces — see §1.2); per-tile metadata is driven by the user's saved `dashboardFields` preference, rendered in a fixed canonical order; `AppPagination`; `AppBadge` tags; a one-shot flash `AppBanner`. All search/filter state lives in the URL query. |
 | `DocumentDetailView` | `/documents/:id` (`document-detail`) | Two-column on desktop: **metadata card on the left** — a key/value `dl` with inline per-row edit via `App*` inputs (PATCH only the edited field) — and the **preview pane on the right** (browser-native PDF `<iframe>` / `<img>`). Stacks on mobile, preview first. |
 | `DocumentDeleteView` | `/documents/:id/delete` (`document-delete`) | A confirmation page (its own URL, not a JS modal) with a destructive `AppButton` + `AppBackLink` cancel. |
 | `UploadView` | `/upload` (`upload`) | `AppFileUpload` drop-zone; each file uploads independently with its own `AppProgressBar`, then polls until `indexed`/`failed`; duplicate/error states via `AppBanner`/`AppErrorSummary`. |

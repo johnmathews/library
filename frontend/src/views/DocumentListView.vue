@@ -284,10 +284,10 @@ const amountLabels = computed<Map<number, string | null>>(() => {
       <li
         v-for="item in items"
         :key="item.id"
-        class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 overflow-hidden hover:shadow-md transition app-doc-card"
+        class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 overflow-hidden app-doc-card"
         data-testid="doc-card"
       >
-        <div class="app-doc-card__thumbnail aspect-[4/3] bg-gray-100 dark:bg-gray-900/40 w-full flex items-center justify-center">
+        <div class="app-doc-card__thumbnail aspect-[4/3] bg-gray-100 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700/60 w-full flex items-center justify-center">
           <img
             v-if="item.has_thumbnail && !brokenThumbnails.has(item.id)"
             class="aspect-[4/3] w-full object-contain"
@@ -304,10 +304,10 @@ const amountLabels = computed<Map<number, string | null>>(() => {
             {{ fileTypeLabel(item) }}
           </span>
         </div>
-        <div class="p-4 app-doc-card__body">
+        <div class="p-5 app-doc-card__body">
           <h2 class="app-doc-card__title mb-2">
             <RouterLink
-              class="text-violet-600 font-medium hover:underline"
+              class="text-violet-600 font-semibold hover:underline"
               :to="{
                 name: 'document-detail',
                 params: { id: item.id },
