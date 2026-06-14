@@ -293,7 +293,7 @@ const amountLabels = computed<Map<number, string | null>>(() => {
         class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 overflow-hidden app-doc-card"
         data-testid="doc-card"
       >
-        <div class="app-doc-card__thumbnail aspect-[4/3] bg-gray-100 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700/60 w-full flex items-center justify-center">
+        <div class="app-doc-card__thumbnail relative aspect-[4/3] bg-gray-100 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700/60 w-full flex items-center justify-center">
           <img
             v-if="item.has_thumbnail && !brokenThumbnails.has(item.id)"
             :class="['aspect-[4/3] w-full', thumbnailFitClass]"
@@ -309,6 +309,16 @@ const amountLabels = computed<Map<number, string | null>>(() => {
           >
             {{ fileTypeLabel(item) }}
           </span>
+          <!-- Soften the hard cut where a full-width crop meets the white body:
+               fade the bottom of the preview into the card body colour. Only in
+               full-width mode (the image bleeds to the edge) and over a real
+               thumbnail (the letterboxed/fallback states sit on the gray box). -->
+          <div
+            v-if="auth.tilePreview === 'full_width' && item.has_thumbnail && !brokenThumbnails.has(item.id)"
+            class="app-doc-card__thumbnail-fade pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-transparent to-white dark:to-gray-800"
+            aria-hidden="true"
+            data-testid="thumbnail-fade"
+          ></div>
         </div>
         <div class="p-5 app-doc-card__body">
           <h2 class="app-doc-card__title mb-2">

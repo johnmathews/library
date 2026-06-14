@@ -91,8 +91,10 @@ vocabulary that the `App*` components and views compose:
   `aspect-[4/3]`; how the (tall, A4) first-page image fits it is a per-user
   preference (`auth.tilePreview`): `full_width` (default) fills the width with
   `object-cover object-top` and crops the lower page, `whole_page` letterboxes
-  the full page with `object-contain`. See `TILE_PREVIEWS` in
-  `src/api/settings.ts` and `/api/settings/appearance` (api.md §1.10.3).
+  the full page with `object-contain`. In `full_width` mode a
+  `__thumbnail-fade` overlay (a `to-white dark:to-gray-800` bottom gradient)
+  softens the hard cut where the crop meets the card body. See `TILE_PREVIEWS`
+  in `src/api/settings.ts` and `/api/settings/appearance` (api.md §1.10.3).
 
 ## 1.3 The shell
 

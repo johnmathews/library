@@ -332,6 +332,25 @@ describe('DocumentListView', () => {
     expect(img.classes()).not.toContain('object-cover')
   })
 
+  it('fades the preview into the body for a full_width thumbnail', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    expect(w.find('[data-testid="thumbnail-fade"]').exists()).toBe(true)
+  })
+
+  it('omits the fade in whole_page mode (image is letterboxed, not bled to edge)', async () => {
+    useAuthStore().user!.preferences.tile_preview = 'whole_page'
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    expect(w.find('[data-testid="thumbnail-fade"]').exists()).toBe(false)
+  })
+
+  it('omits the fade when there is no thumbnail to fade', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem({ has_thumbnail: false })]))
+    const w = await mountView()
+    expect(w.find('[data-testid="thumbnail-fade"]').exists()).toBe(false)
+  })
+
   it('caps tag chips with a +N overflow', async () => {
     seedPrefs(['tags'])
     listResponse = () =>
