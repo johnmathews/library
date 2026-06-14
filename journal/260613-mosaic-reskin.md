@@ -137,3 +137,19 @@ regression fails in milliseconds, not only in the 6-minute e2e matrix.
   (`marocchino/sticky-pull-request-comment`). Gates: backend `fail_under = 85`
   (currently ~95%); frontend lines/statements/functions ≥ 85, branches ≥ 75
   (branch coverage runs structurally lower).
+
+### UI polish
+
+A few in-browser-verified tweaks after the reskin landed:
+
+- **Search modal centring.** The modal opened in the top-left. Root cause: the
+  native `<dialog>` (opened with `showModal()`) is centred by the UA
+  `dialog { margin: auto }`, but **Tailwind v4 Preflight resets `margin: 0` on
+  every element**, killing it — so the dialog pinned to the corner at its
+  `max-w-2xl` width. Fixed with an `.app-search-modal` rule (components layer,
+  so it beats Preflight) that reasserts `margin: auto`, and goes full-screen
+  below 640px. Worth remembering: Preflight's universal margin reset breaks any
+  UA-centred element.
+- **Sidebar nav labels** bumped `text-sm` → `text-base` for readability.
+- **Document detail layout** swapped to metadata-left / preview-right on desktop
+  via `order` utilities (mobile keeps preview-first).

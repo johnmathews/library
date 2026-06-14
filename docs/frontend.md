@@ -183,7 +183,7 @@ modal.
 | View | Route | Notes |
 |------|-------|-------|
 | `DocumentListView` | `/` (`documents`) | Dashboard **grid of document tiles** (`bg-white dark:bg-gray-800 shadow-xs rounded-xl` cards); per-tile metadata is driven by the user's saved `dashboardFields` preference, rendered in a fixed canonical order; `AppPagination`; `AppBadge` tags; a one-shot flash `AppBanner`. All search/filter state lives in the URL query. |
-| `DocumentDetailView` | `/documents/:id` (`document-detail`) | Two-column: preview pane (browser-native PDF `<iframe>` / `<img>`) + an `AppSummaryList` metadata card with inline per-row edit via `App*` inputs (PATCH only the edited field). |
+| `DocumentDetailView` | `/documents/:id` (`document-detail`) | Two-column on desktop: **metadata card on the left** — a key/value `dl` with inline per-row edit via `App*` inputs (PATCH only the edited field) — and the **preview pane on the right** (browser-native PDF `<iframe>` / `<img>`). Stacks on mobile, preview first. |
 | `DocumentDeleteView` | `/documents/:id/delete` (`document-delete`) | A confirmation page (its own URL, not a JS modal) with a destructive `AppButton` + `AppBackLink` cancel. |
 | `UploadView` | `/upload` (`upload`) | `AppFileUpload` drop-zone; each file uploads independently with its own `AppProgressBar`, then polls until `indexed`/`failed`; duplicate/error states via `AppBanner`/`AppErrorSummary`. |
 | `SettingsView` | `/settings` (`settings`) | A Mosaic settings card; `AppCheckboxes` for the dashboard-field toggles (items from `DASHBOARD_FIELDS` in `src/api/settings.ts`), save → `PUT /api/settings` → success `AppBanner`; error → `AppErrorSummary`. |
@@ -199,6 +199,10 @@ kind/sender/tag/language fed lazily from the cached taxonomy endpoints,
 `AppDateInput` from/to) from the current route query, and on submit pushes the
 query to the documents route. Native dialog semantics give focus containment,
 ESC-to-close and `::backdrop`; focus is handed back to the opener on close.
+Layout lives in `.app-search-modal` (`utility-patterns.css`): a centered
+`max-w-2xl` card on desktop, full-screen below 640px. It reasserts
+`margin: auto` because Tailwind Preflight zeroes the margin that the browser
+otherwise uses to centre a modal `<dialog>`.
 
 ## 1.6 Dark mode
 
