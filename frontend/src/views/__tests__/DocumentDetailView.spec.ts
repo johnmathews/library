@@ -232,7 +232,12 @@ describe('DocumentDetailView', () => {
     const img = w.find('[data-testid="preview-pdf-image"]')
     expect(img.exists()).toBe(true)
     expect(img.attributes('src')).toBe('/api/documents/12/thumbnail')
-    expect(img.classes()).toContain('lg:hidden') // hidden on desktop
+    // The thumbnail is wrapped in a link that opens the PDF (same as the text
+    // link), shown only below lg.
+    const link = w.find('[data-testid="preview-pdf-image-link"]')
+    expect(link.attributes('href')).toBe('/api/documents/12/searchable.pdf?disposition=inline')
+    expect(link.attributes('target')).toBe('_blank')
+    expect(link.classes()).toContain('lg:hidden')
     // The native iframe is kept but hidden below lg.
     expect(w.find('[data-testid="preview-pdf"]').classes()).toContain('hidden')
     expect(w.find('[data-testid="preview-pdf"]').classes()).toContain('lg:block')

@@ -437,13 +437,15 @@ watch(
     </AppBanner>
     <AppErrorSummary v-if="errorItems.length" :errors="errorItems" data-testid="error-summary" />
 
-    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-6 app-detail-title">
+    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-6 break-words app-detail-title">
       {{ doc.title ?? 'Untitled document' }}
     </h1>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Preview: right column on desktop (lg:order-2), first on mobile. -->
-      <div class="space-y-4 lg:order-2">
+      <!-- Preview: right column on desktop (lg:order-2), first on mobile.
+           min-w-0 lets this grid column shrink below its content's intrinsic
+           width so long tokens wrap instead of widening the page (iOS zoom). -->
+      <div class="min-w-0 space-y-4 lg:order-2">
         <div
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 overflow-hidden"
         >
@@ -462,13 +464,21 @@ watch(
                  so show the fit-width first-page thumbnail there instead. The
                  native <iframe> stays on lg+ (scroll/zoom/text-selection). Falls
                  back to the iframe everywhere if there's no thumbnail. -->
-            <img
+            <a
               v-if="doc.has_thumbnail"
-              class="w-full object-contain bg-gray-100 dark:bg-gray-900/40 lg:hidden"
-              :src="thumbnailUrl(doc.id)"
-              :alt="`First page of ${doc.title ?? 'this document'}`"
-              data-testid="preview-pdf-image"
-            />
+              :href="pdfPreviewUrl"
+              target="_blank"
+              rel="noopener"
+              class="block lg:hidden"
+              data-testid="preview-pdf-image-link"
+            >
+              <img
+                class="w-full object-contain bg-gray-100 dark:bg-gray-900/40"
+                :src="thumbnailUrl(doc.id)"
+                :alt="`First page of ${doc.title ?? 'this document'} — tap to open the PDF`"
+                data-testid="preview-pdf-image"
+              />
+            </a>
             <!-- Browser-native PDF viewing; see the component docblock. -->
             <iframe
               class="w-full h-[70vh] border-0"
@@ -510,21 +520,22 @@ watch(
           <!-- eslint-disable-next-line vue/no-v-html -- renderHighlighted escapes every input character; only its own <mark> wrappers survive (docs/api.md §1.3.3) -->
           <pre
             v-if="highlight"
-            class="app-ocr-text whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300"
+            class="app-ocr-text whitespace-pre-wrap break-words text-sm text-gray-700 dark:text-gray-300"
             data-testid="ocr-text"
             v-html="renderHighlighted(doc.ocr_text, highlight)"
           ></pre>
           <pre
             v-else
-            class="app-ocr-text whitespace-pre-wrap text-sm text-gray-700 dark:text-gray-300"
+            class="app-ocr-text whitespace-pre-wrap break-words text-sm text-gray-700 dark:text-gray-300"
             data-testid="ocr-text"
             >{{ doc.ocr_text }}</pre
           >
         </AppDetails>
       </div>
 
-      <!-- Metadata: left column on desktop (lg:order-1). -->
-      <div class="space-y-6 lg:order-1">
+      <!-- Metadata: left column on desktop (lg:order-1). min-w-0 (as above)
+           lets long metadata values wrap rather than widen the page. -->
+      <div class="min-w-0 space-y-6 lg:order-1">
         <div
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
         >
@@ -538,9 +549,11 @@ watch(
             >
               <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">{{ row.label }}</dt>
               <dd v-if="editing !== row.field" class="flex justify-between gap-4 items-start mt-1">
-                <span class="text-sm text-gray-800 dark:text-gray-100" data-testid="row-value">{{
-                  row.display(doc) ?? EMPTY
-                }}</span>
+                <span
+                  class="text-sm text-gray-800 dark:text-gray-100 min-w-0 break-words"
+                  data-testid="row-value"
+                  >{{ row.display(doc) ?? EMPTY }}</span
+                >
                 <button
                   type="button"
                   class="text-sm text-violet-600 hover:underline app-link-button shrink-0"
