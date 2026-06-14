@@ -1,7 +1,8 @@
 # Document tile preview mode — design
 
 **Date:** 2026-06-14
-**Status:** approved, pending implementation
+**Status:** shipped 2026-06-14 (see `journal/260614-tile-preview-mode.md` and
+`journal/260614-dashboard-mobile-ux-polish.md`).
 
 ## Problem
 
