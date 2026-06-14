@@ -30,6 +30,7 @@ async function handleSignOut() {
 
 <template>
   <header
+    id="app-header"
     class="sticky top-0 before:absolute before:inset-0 before:backdrop-blur-md max-lg:before:bg-white/90 dark:max-lg:before:bg-gray-800/90 before:-z-10 z-30 max-lg:shadow-xs lg:before:bg-gray-100/90 dark:lg:before:bg-gray-900/90"
   >
     <div class="px-4 sm:px-6 lg:px-8">
@@ -39,6 +40,7 @@ async function handleSignOut() {
         <!-- Left: hamburger (mobile) -->
         <div class="flex">
           <button
+            id="header-sidebar-toggle"
             class="text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 lg:hidden"
             aria-controls="sidebar"
             :aria-expanded="sidebarOpen"
@@ -61,6 +63,7 @@ async function handleSignOut() {
         <div class="flex items-center space-x-3">
           <!-- Search trigger -->
           <button
+            id="header-search-button"
             class="w-8 h-8 flex items-center justify-center bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700/50 rounded-full"
             data-testid="header-search-button"
             @click="$emit('open-search')"
@@ -85,8 +88,9 @@ async function handleSignOut() {
           <ThemeToggle />
 
           <!-- User menu -->
-          <div class="relative inline-flex">
+          <div id="header-user-menu" class="relative inline-flex">
             <button
+              id="header-user-menu-button"
               class="inline-flex items-center justify-center group"
               aria-haspopup="true"
               :aria-expanded="userMenuOpen"
@@ -115,6 +119,7 @@ async function handleSignOut() {
             >
               <div
                 v-show="userMenuOpen"
+                id="header-user-menu-dropdown"
                 class="origin-top-right z-10 absolute top-full min-w-44 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 py-1.5 rounded-lg shadow-lg overflow-hidden mt-1 right-0"
                 @focusin="userMenuOpen = true"
                 @focusout="userMenuOpen = false"

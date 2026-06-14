@@ -71,13 +71,14 @@ async function confirmDelete(): Promise<void> {
 </script>
 
 <template>
-  <div class="max-w-xl mx-auto">
+  <div id="delete-page" class="max-w-xl mx-auto">
     <div class="mb-4">
       <AppBackLink :to="detailPath" text="Back to the document" />
     </div>
 
     <template v-if="doc">
       <div
+        id="delete-confirm-card"
         class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-red-200 dark:border-red-500/30 p-6"
       >
         <AppErrorSummary v-if="deleteError" :errors="[{ text: deleteError }]" />

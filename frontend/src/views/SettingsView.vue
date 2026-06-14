@@ -115,11 +115,12 @@ const tabClass = (active: boolean): string =>
 </script>
 
 <template>
-  <div class="max-w-2xl">
+  <div id="settings-page" class="max-w-2xl">
     <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-4">Settings</h1>
 
-    <div role="tablist" class="flex gap-1 border-b border-gray-200 dark:border-gray-700/60 mb-6">
+    <div id="settings-tablist" role="tablist" class="flex gap-1 border-b border-gray-200 dark:border-gray-700/60 mb-6">
       <button
+        id="settings-tab-dashboard"
         role="tab"
         type="button"
         :aria-selected="tab === 'dashboard'"
@@ -131,6 +132,7 @@ const tabClass = (active: boolean): string =>
         Dashboard
       </button>
       <button
+        id="settings-tab-appearance"
         role="tab"
         type="button"
         :aria-selected="tab === 'appearance'"
@@ -144,7 +146,7 @@ const tabClass = (active: boolean): string =>
     </div>
 
     <!-- Dashboard tab -->
-    <section v-show="tab === 'dashboard'" role="tabpanel" data-testid="tab-dashboard">
+    <section id="settings-panel-dashboard" v-show="tab === 'dashboard'" role="tabpanel" data-testid="tab-dashboard">
       <AppErrorSummary
         v-if="errorMessage"
         :errors="[{ text: errorMessage }]"
@@ -157,7 +159,7 @@ const tabClass = (active: boolean): string =>
         </AppBanner>
       </div>
 
-      <div :class="cardClass">
+      <div id="settings-card-dashboard-fields" :class="cardClass">
         <form @submit.prevent="onSubmit">
           <AppCheckboxes
             id="dashboard-fields"
@@ -177,14 +179,14 @@ const tabClass = (active: boolean): string =>
     </section>
 
     <!-- Appearance tab -->
-    <section v-show="tab === 'appearance'" role="tabpanel" data-testid="tab-appearance">
+    <section id="settings-panel-appearance" v-show="tab === 'appearance'" role="tabpanel" data-testid="tab-appearance">
       <AppErrorSummary
         v-if="toneError"
         :errors="[{ text: toneError }]"
         data-testid="appearance-error"
       />
 
-      <div :class="cardClass">
+      <div id="settings-card-background" :class="cardClass">
         <fieldset>
           <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
             Page background
@@ -221,7 +223,7 @@ const tabClass = (active: boolean): string =>
         </fieldset>
       </div>
 
-      <div :class="cardClass" class="mt-6">
+      <div id="settings-card-tile-preview" :class="cardClass" class="mt-6">
         <fieldset>
           <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
             Document previews

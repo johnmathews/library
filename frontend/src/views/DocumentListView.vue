@@ -235,7 +235,7 @@ const amountLabels = computed<Map<number, string | null>>(() => {
     {{ flashMessage }}
   </AppBanner>
 
-  <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Documents</h1>
+  <h1 id="dashboard-title" class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Documents</h1>
 
   <div
     v-if="loadError"
@@ -292,11 +292,13 @@ const amountLabels = computed<Map<number, string | null>>(() => {
 
     <ul
       v-if="items.length"
+      id="dashboard-grid"
       class="app-doc-grid"
     >
       <li
         v-for="item in items"
         :key="item.id"
+        :id="`doc-card-${item.id}`"
         class="relative bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 overflow-hidden app-doc-card"
         data-testid="doc-card"
       >

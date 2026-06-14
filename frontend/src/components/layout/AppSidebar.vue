@@ -119,7 +119,7 @@ watch(
       <!-- Links -->
       <div class="space-y-8">
         <div>
-          <ul class="mt-3" @click="$emit('close-sidebar')">
+          <ul id="sidebar-nav" class="mt-3" @click="$emit('close-sidebar')">
             <!-- Documents link (home / `/`) -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/" custom>
               <li
@@ -269,6 +269,7 @@ watch(
       <div class="pt-3 hidden lg:inline-flex 2xl:hidden justify-end mt-auto">
         <div class="w-12 pl-4 pr-3 py-2">
           <button
+            id="sidebar-collapse-toggle"
             class="text-gray-400 hover:text-gray-500 dark:text-gray-500 dark:hover:text-gray-400"
             @click.prevent="sidebarExpanded = !sidebarExpanded"
           >

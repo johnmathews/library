@@ -165,7 +165,7 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
 </script>
 
 <template>
-  <div class="max-w-2xl">
+  <div id="upload-page" class="max-w-2xl">
     <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Upload documents</h1>
     <p class="text-gray-500 dark:text-gray-400 mb-6">
       Add documents to your library. PDFs and photos are accepted.
@@ -200,6 +200,7 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
     </AppBanner>
 
     <form
+      id="upload-form"
       novalidate
       class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5 mb-6"
       @submit.prevent="onSubmit"
@@ -218,6 +219,7 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
 
     <ul
       v-if="entries.length"
+      id="upload-list"
       class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 divide-y divide-gray-200 dark:divide-gray-700/60"
       data-testid="upload-list"
     >

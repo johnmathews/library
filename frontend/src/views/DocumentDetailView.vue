@@ -437,16 +437,17 @@ watch(
     </AppBanner>
     <AppErrorSummary v-if="errorItems.length" :errors="errorItems" data-testid="error-summary" />
 
-    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-6 break-words app-detail-title">
+    <h1 id="document-title" class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-6 break-words app-detail-title">
       {{ doc.title ?? 'Untitled document' }}
     </h1>
 
-    <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+    <div id="document-detail-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <!-- Preview: right column on desktop (lg:order-2), first on mobile.
            min-w-0 lets this grid column shrink below its content's intrinsic
            width so long tokens wrap instead of widening the page (iOS zoom). -->
-      <div class="min-w-0 space-y-4 lg:order-2">
+      <div id="document-preview-column" class="min-w-0 space-y-4 lg:order-2">
         <div
+          id="document-preview-card"
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 overflow-hidden"
         >
           <!-- Inline disposition: Firefox refuses to render <img> responses
@@ -540,6 +541,7 @@ watch(
 
         <AppDetails
           v-if="doc.ocr_text"
+          id="document-ocr-card"
           summary="View extracted text"
           :open="Boolean(highlight)"
           data-testid="ocr-details"
@@ -562,12 +564,13 @@ watch(
 
       <!-- Metadata: left column on desktop (lg:order-1). min-w-0 (as above)
            lets long metadata values wrap rather than widen the page. -->
-      <div class="min-w-0 space-y-6 lg:order-1">
+      <div id="document-metadata-column" class="min-w-0 space-y-6 lg:order-1">
         <div
+          id="document-details-card"
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
         >
           <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2">Details</h2>
-          <dl class="divide-y divide-gray-200 dark:divide-gray-700/60 app-detail-list">
+          <dl id="document-details-list" class="divide-y divide-gray-200 dark:divide-gray-700/60 app-detail-list">
             <div
               v-for="row in rowConfigs"
               :key="row.field"
@@ -697,6 +700,7 @@ watch(
 
           <AppDetails
             v-if="doc.extraction"
+            id="document-extraction-details"
             summary="Extraction details"
             data-testid="extraction-details"
             class="mt-4"
@@ -725,6 +729,7 @@ watch(
         </div>
 
         <div
+          id="document-actions-card"
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
         >
           <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">Actions</h2>

@@ -138,6 +138,7 @@ defineExpose({ open })
 <template>
   <dialog
     ref="dialog"
+    id="search-modal"
     class="app-search-modal bg-white dark:bg-gray-800 shadow-lg p-0 backdrop:bg-gray-900/30"
     aria-labelledby="search-modal-title"
     data-testid="search-modal"
@@ -151,7 +152,7 @@ defineExpose({ open })
         Search your documents
       </h2>
 
-      <form novalidate role="search" class="space-y-4" @submit.prevent="onSubmit">
+      <form id="search-form" novalidate role="search" class="space-y-4" @submit.prevent="onSubmit">
         <div class="relative">
           <svg
             class="absolute left-3 top-9 w-4 h-4 text-gray-400 pointer-events-none"

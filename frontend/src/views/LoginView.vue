@@ -60,8 +60,9 @@ async function onSubmit(): Promise<void> {
 </script>
 
 <template>
-  <div class="min-h-[100dvh] flex items-center justify-center bg-gray-100 dark:bg-gray-900 px-4">
+  <div id="login-page" class="min-h-[100dvh] flex items-center justify-center bg-gray-100 dark:bg-gray-900 px-4">
     <div
+      id="login-card"
       class="w-full max-w-md bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-8"
     >
       <p class="text-sm font-semibold text-violet-500 mb-1">Library</p>
@@ -69,7 +70,7 @@ async function onSubmit(): Promise<void> {
 
       <AppErrorSummary v-if="summaryErrors.length" :errors="summaryErrors" />
 
-      <form class="space-y-4" novalidate @submit.prevent="onSubmit">
+      <form id="login-form" class="space-y-4" novalidate @submit.prevent="onSubmit">
         <AppInput
           id="username"
           v-model="username"
