@@ -59,6 +59,48 @@ def test_put_appearance_unknown_tone_falls_back_to_default(api_client: TestClien
     assert put.json()["background_tone"] == "neutral"
 
 
+def test_get_settings_includes_default_tile_preview(api_client: TestClient) -> None:
+    assert api_client.get("/api/settings").json()["tile_preview"] == "full_width"
+
+
+def test_get_settings_resolves_unknown_tile_preview_to_default(
+    api_client: TestClient, auth_user: AuthUser, api_database_url: str
+) -> None:
+    _seed_raw_preferences(api_database_url, auth_user.id, {"tile_preview": "sideways"})
+    assert api_client.get("/api/settings").json()["tile_preview"] == "full_width"
+
+
+def test_put_appearance_round_trips_tile_preview(api_client: TestClient) -> None:
+    put = api_client.put(
+        "/api/settings/appearance",
+        json={"background_tone": "neutral", "tile_preview": "whole_page"},
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["tile_preview"] == "whole_page"
+    assert api_client.get("/api/settings").json()["tile_preview"] == "whole_page"
+
+
+def test_put_appearance_unknown_tile_preview_falls_back_to_default(
+    api_client: TestClient,
+) -> None:
+    put = api_client.put(
+        "/api/settings/appearance",
+        json={"background_tone": "neutral", "tile_preview": "diagonal"},
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["tile_preview"] == "full_width"
+
+
+def test_put_appearance_sets_both_tone_and_tile_preview(api_client: TestClient) -> None:
+    api_client.put(
+        "/api/settings/appearance",
+        json={"background_tone": "mist", "tile_preview": "whole_page"},
+    )
+    body = api_client.get("/api/settings").json()
+    assert body["background_tone"] == "mist"
+    assert body["tile_preview"] == "whole_page"
+
+
 def test_appearance_and_dashboard_fields_are_independent(api_client: TestClient) -> None:
     api_client.put("/api/settings", json={"dashboard_fields": ["amount"]})
     api_client.put("/api/settings/appearance", json={"background_tone": "mist"})

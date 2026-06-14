@@ -255,10 +255,35 @@ def _resolve_background_tone(blob: dict[str, Any]) -> BackgroundTone:
     return DEFAULT_BACKGROUND_TONE
 
 
+class TilePreview(StrEnum):
+    """How a dashboard tile renders the document's first-page thumbnail.
+
+    A4 pages are tall and narrow; the tile box is landscape. ``FULL_WIDTH``
+    fills the tile width and crops the lower part of the page (the default);
+    ``WHOLE_PAGE`` shows the entire first page letterboxed inside the box.
+    The frontend owns the actual CSS object-fit for each value.
+    """
+
+    FULL_WIDTH = "full_width"  # fill width, crop bottom — the default
+    WHOLE_PAGE = "whole_page"  # show the whole page, letterboxed
+
+
+DEFAULT_TILE_PREVIEW: Final[TilePreview] = TilePreview.FULL_WIDTH
+
+
+def _resolve_tile_preview(blob: dict[str, Any]) -> TilePreview:
+    """Pick the stored preview mode, falling back for absent/garbage values."""
+    raw = blob.get("tile_preview")
+    if isinstance(raw, str) and raw in {mode.value for mode in TilePreview}:
+        return TilePreview(raw)
+    return DEFAULT_TILE_PREVIEW
+
+
 class AppearancePreferences(BaseModel):
-    """Body of PUT /api/settings/appearance — the page-canvas tone."""
+    """Body of PUT /api/settings/appearance — page-canvas tone + tile preview."""
 
     background_tone: BackgroundTone
+    tile_preview: TilePreview = DEFAULT_TILE_PREVIEW
 
     @field_validator("background_tone", mode="before")
     @classmethod
@@ -267,6 +292,14 @@ class AppearancePreferences(BaseModel):
         if isinstance(value, str) and value in {tone.value for tone in BackgroundTone}:
             return BackgroundTone(value)
         return DEFAULT_BACKGROUND_TONE
+
+    @field_validator("tile_preview", mode="before")
+    @classmethod
+    def _default_unknown_tile_preview(cls, value: object) -> TilePreview:
+        """Coerce an unknown/garbage preview mode to the default (never a 422)."""
+        if isinstance(value, str) and value in {mode.value for mode in TilePreview}:
+            return TilePreview(value)
+        return DEFAULT_TILE_PREVIEW
 
 
 class UserPreferences(BaseModel):
@@ -279,6 +312,7 @@ class UserPreferences(BaseModel):
 
     dashboard_fields: list[DashboardField]
     background_tone: BackgroundTone
+    tile_preview: TilePreview
 
 
 def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
@@ -291,6 +325,7 @@ def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
     return UserPreferences(
         dashboard_fields=resolve_dashboard_preferences(blob).dashboard_fields,
         background_tone=_resolve_background_tone(blob),
+        tile_preview=_resolve_tile_preview(blob),
     )
 
 

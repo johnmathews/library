@@ -46,17 +46,18 @@ async def put_settings(
 @router.put(
     "/settings/appearance",
     response_model=UserPreferences,
-    summary="Update your page-canvas tone",
+    summary="Update your page-canvas tone and tile preview",
 )
 async def put_appearance(
     payload: AppearancePreferences,
     db: Annotated[AsyncSession, Depends(get_session)],
     user: Annotated[User, Depends(current_user)],
 ) -> UserPreferences:
-    """Persist the page-canvas tone. An unknown tone resolves to the default."""
+    """Persist the page-canvas tone + tile preview. Unknown values default."""
     user.preferences = {
         **(user.preferences or {}),
         "background_tone": payload.background_tone.value,
+        "tile_preview": payload.tile_preview.value,
     }
     await db.commit()
     return resolve_preferences(user.preferences)
