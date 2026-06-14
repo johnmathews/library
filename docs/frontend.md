@@ -87,7 +87,12 @@ vocabulary that the `App*` components and views compose:
   a gray-800-on-gray-900 surface plus border, since shadows don't read against
   a near-black page; `prefers-reduced-motion` drops the lift. `.app-doc-card__*`
   hooks (`__title`, `__thumbnail`, `__meta`, …) are an acceptance contract used
-  by `DocumentListView` and its tests.
+  by `DocumentListView` and its tests. The `__thumbnail` box keeps a fixed
+  `aspect-[4/3]`; how the (tall, A4) first-page image fits it is a per-user
+  preference (`auth.tilePreview`): `full_width` (default) fills the width with
+  `object-cover object-top` and crops the lower page, `whole_page` letterboxes
+  the full page with `object-contain`. See `TILE_PREVIEWS` in
+  `src/api/settings.ts` and `/api/settings/appearance` (api.md §1.10.3).
 
 ## 1.3 The shell
 
@@ -202,7 +207,7 @@ modal.
 | `DocumentDetailView` | `/documents/:id` (`document-detail`) | Two-column on desktop: **metadata card on the left** — a key/value `dl` with inline per-row edit via `App*` inputs (PATCH only the edited field) — and the **preview pane on the right** (browser-native PDF `<iframe>` / `<img>`). Stacks on mobile, preview first. |
 | `DocumentDeleteView` | `/documents/:id/delete` (`document-delete`) | A confirmation page (its own URL, not a JS modal) with a destructive `AppButton` + `AppBackLink` cancel. |
 | `UploadView` | `/upload` (`upload`) | `AppFileUpload` drop-zone; each file uploads independently with its own `AppProgressBar`, then polls until `indexed`/`failed`; duplicate/error states via `AppBanner`/`AppErrorSummary`. |
-| `SettingsView` | `/settings` (`settings`) | Tabbed settings (`role="tablist"`). **Dashboard** tab: `AppCheckboxes` for the dashboard-field toggles (items from `DASHBOARD_FIELDS`), explicit save → `PUT /api/settings`. **Appearance** tab: page-canvas tone swatches (`BACKGROUND_TONES`) that apply live and auto-save per click → `PUT /api/settings/appearance` (optimistic store update so the canvas repaints instantly; reverts on failure). Both surface success/error via `AppBanner`/`AppErrorSummary`. |
+| `SettingsView` | `/settings` (`settings`) | Tabbed settings (`role="tablist"`). **Dashboard** tab: `AppCheckboxes` for the dashboard-field toggles (items from `DASHBOARD_FIELDS`), explicit save → `PUT /api/settings`. **Appearance** tab: page-canvas tone swatches (`BACKGROUND_TONES`) **and** a document-tile preview choice (`TILE_PREVIEWS`: full-width top crop, the default, vs whole-page letterbox), both applying live and auto-saving per click → `PUT /api/settings/appearance` (optimistic store update so the canvas/tiles repaint instantly; reverts on failure). Both surface success/error via `AppBanner`/`AppErrorSummary`. |
 | `LoginView` | `/login` (`login`, `meta.public`) | **Bypasses the shell** — a centered `w-full max-w-md` Mosaic card on a `bg-gray-100 dark:bg-gray-900` background; `AppInput` + `AppButton` + `AppErrorSummary`. |
 
 ### Search modal (`src/components/SearchModal.vue`)
