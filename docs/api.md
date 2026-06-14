@@ -39,8 +39,9 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/senders` | Senders with counts |
 | GET    | `/api/tags` | Tags with counts |
 | GET    | `/api/jobs` | Recent background jobs |
-| GET    | `/api/settings` | Your display preferences (dashboard fields) |
-| PUT    | `/api/settings` | Update your display preferences |
+| GET    | `/api/settings` | Your display preferences (dashboard fields + page-canvas tone) |
+| PUT    | `/api/settings` | Update your dashboard fields |
+| PUT    | `/api/settings/appearance` | Update your page-canvas tone |
 
 Soft-deleted documents return **404** from every per-document endpoint and
 never appear in lists. Other error shapes: `404` unknown document, `422`
@@ -272,8 +273,8 @@ cookie is dead server-side immediately — and clears both cookies.
 `GET /api/auth/me` returns `{id, username, display_name, preferences}` for
 the authenticated user (either credential). The login response (`POST
 /api/auth/login`) returns the same shape. `preferences` is
-`{"dashboard_fields": [...]}` — the resolved preference set (defaults
-filled; see 1.10).
+`{"dashboard_fields": [...], "background_tone": "neutral"}` — the resolved
+preference set (defaults filled; see 1.10).
 
 ### 1.9.2 CSRF (cookie requests only)
 
@@ -318,11 +319,14 @@ curl -H "Authorization: Bearer library_3q2…" \
 Bearer requests are CSRF-exempt (the header cannot be set cross-site).
 Revoked or unknown tokens, and tokens of disabled users, get `401`.
 
-## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`
+## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`
 
 Per-user display preferences: which metadata fields appear on the
-dashboard tiles. Auth and CSRF rules are identical to the rest of `/api`
-(§1.9).
+dashboard tiles, and the page-canvas tone behind them. Auth and CSRF
+rules are identical to the rest of `/api` (§1.9). All preferences live in
+one JSONB `preferences` blob on the user row; writes are split per concern
+(fields vs appearance) so each Settings tab saves independently, and every
+write preserves the sibling keys.
 
 ### 1.10.1 `GET /api/settings`
 
@@ -331,13 +335,14 @@ user has never saved preferences, the **default set** is returned (no
 `404` or empty body).
 
 ```json
-{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"]}
+{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"], "background_tone": "neutral"}
 ```
 
 ### 1.10.2 `PUT /api/settings`
 
 Body: `{"dashboard_fields": [...]}`. Persists the list and returns the
-**cleaned** set (same shape as GET). Auth + CSRF apply.
+**full** resolved preference set (same shape as GET, incl. `background_tone`).
+Auth + CSRF apply.
 
 **Valid field keys** (the 8 selectable fields):
 
@@ -366,3 +371,20 @@ rule applies only on read (`GET` / login / `GET /api/auth/me`): if the
 `dashboard_fields` key is missing from the stored blob, defaults are
 filled in; if the key is present but the list is empty, the empty list
 is returned as-is.
+
+### 1.10.3 `PUT /api/settings/appearance`
+
+Body: `{"background_tone": "<tone>"}`. Persists the page-canvas tone and
+returns the full resolved preference set (same shape as GET). Auth + CSRF
+apply. The tone applies to the light-mode page background only — dark mode
+keeps its `gray-900` canvas.
+
+**Valid tones:** `neutral` (default — `gray-200`), `light` (`gray-100`,
+the original airier canvas), `soft`, `slate`, `sand`, `mist`. The token is
+a name, not a colour: the frontend (`assets/main.css`) owns the actual hex
+for each tone, so the palette can be retuned without a schema or data
+migration.
+
+**Tolerant validation.** An unknown tone resolves to `neutral` — `200`
+with the default, never `422` — matching `dashboard_fields`. On read, an
+absent `background_tone` key also resolves to `neutral`.

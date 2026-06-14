@@ -1,13 +1,18 @@
 import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { ApiError, apiFetch } from '@/api/client'
-import type { DashboardField, DashboardPreferences } from '@/api/settings'
+import {
+  DEFAULT_BACKGROUND_TONE,
+  type BackgroundTone,
+  type DashboardField,
+  type UserPreferences,
+} from '@/api/settings'
 
 export interface User {
   id: number
   username: string
   display_name: string
-  preferences: DashboardPreferences
+  preferences: UserPreferences
 }
 
 export const useAuthStore = defineStore('auth', () => {
@@ -18,7 +23,13 @@ export const useAuthStore = defineStore('auth', () => {
     () => user.value?.preferences?.dashboard_fields ?? [],
   )
 
-  function applyPreferences(preferences: DashboardPreferences): void {
+  // The page-canvas tone, defaulting when the user is absent (e.g. login page)
+  // or a payload predates the preference. Drives <html data-canvas> via App.vue.
+  const backgroundTone = computed<BackgroundTone>(
+    () => user.value?.preferences?.background_tone ?? DEFAULT_BACKGROUND_TONE,
+  )
+
+  function applyPreferences(preferences: UserPreferences): void {
     if (user.value) user.value.preferences = preferences
   }
 
@@ -61,5 +72,14 @@ export const useAuthStore = defineStore('auth', () => {
     mePromise = Promise.resolve(null)
   }
 
-  return { user, isAuthenticated, dashboardFields, applyPreferences, ensureLoaded, login, logout }
+  return {
+    user,
+    isAuthenticated,
+    dashboardFields,
+    backgroundTone,
+    applyPreferences,
+    ensureLoaded,
+    login,
+    logout,
+  }
 })

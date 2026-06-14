@@ -59,7 +59,14 @@ All design tokens are CSS-first. Two files in `src/assets/`, imported once from
   every `dark:` and `sidebar-expanded:` utility used across the app.
 - **Forms plugin:** `@plugin "@tailwindcss/forms" { strategy: base }`.
 - **Base layer:** Tailwind-v4 border-color compat shim, `font-inter` on `html`,
-  and the page background `body { @apply bg-gray-100 dark:bg-gray-900 … }`.
+  and the **page canvas**. The light-mode `body` background is a per-user
+  preference: `App.vue` sets `<html data-canvas="…">` from the stored tone, and
+  `:root[data-canvas='…']` tokens map each tone to `--app-canvas` (used by
+  `body { background-color: var(--app-canvas) }`). The default (no attribute) is
+  `gray-200`, so white document tiles read as elevated surfaces. Dark mode
+  ignores the tone (`.dark body` stays `gray-900`). Tones: `neutral` (default),
+  `light`, `soft`, `slate`, `sand`, `mist` — see `BACKGROUND_TONES` in
+  `src/api/settings.ts` and `/api/settings/appearance` (api.md §1.10.3).
 
 ### `src/assets/utility-patterns.css`
 
@@ -195,7 +202,7 @@ modal.
 | `DocumentDetailView` | `/documents/:id` (`document-detail`) | Two-column on desktop: **metadata card on the left** — a key/value `dl` with inline per-row edit via `App*` inputs (PATCH only the edited field) — and the **preview pane on the right** (browser-native PDF `<iframe>` / `<img>`). Stacks on mobile, preview first. |
 | `DocumentDeleteView` | `/documents/:id/delete` (`document-delete`) | A confirmation page (its own URL, not a JS modal) with a destructive `AppButton` + `AppBackLink` cancel. |
 | `UploadView` | `/upload` (`upload`) | `AppFileUpload` drop-zone; each file uploads independently with its own `AppProgressBar`, then polls until `indexed`/`failed`; duplicate/error states via `AppBanner`/`AppErrorSummary`. |
-| `SettingsView` | `/settings` (`settings`) | A Mosaic settings card; `AppCheckboxes` for the dashboard-field toggles (items from `DASHBOARD_FIELDS` in `src/api/settings.ts`), save → `PUT /api/settings` → success `AppBanner`; error → `AppErrorSummary`. |
+| `SettingsView` | `/settings` (`settings`) | Tabbed settings (`role="tablist"`). **Dashboard** tab: `AppCheckboxes` for the dashboard-field toggles (items from `DASHBOARD_FIELDS`), explicit save → `PUT /api/settings`. **Appearance** tab: page-canvas tone swatches (`BACKGROUND_TONES`) that apply live and auto-save per click → `PUT /api/settings/appearance` (optimistic store update so the canvas repaints instantly; reverts on failure). Both surface success/error via `AppBanner`/`AppErrorSummary`. |
 | `LoginView` | `/login` (`login`, `meta.public`) | **Bypasses the shell** — a centered `w-full max-w-md` Mosaic card on a `bg-gray-100 dark:bg-gray-900` background; `AppInput` + `AppButton` + `AppErrorSummary`. |
 
 ### Search modal (`src/components/SearchModal.vue`)

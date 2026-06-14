@@ -136,7 +136,41 @@
     @apply font-inter antialiased;
   }
 
+  /*
+   * Page canvas. The light-mode background is a per-user preference
+   * (Settings → Appearance): App.vue sets <html data-canvas="…"> from the
+   * stored tone, and the tokens below map each tone to a colour. The default
+   * (no attribute yet, e.g. first paint) is gray-200 — deep enough that the
+   * white document tiles read as elevated surfaces, not flush panels. Dark
+   * mode ignores the tone and keeps its near-black canvas.
+   */
+  :root {
+    --app-canvas: var(--color-gray-200);
+  }
+  :root[data-canvas='neutral'] {
+    --app-canvas: var(--color-gray-200);
+  }
+  :root[data-canvas='light'] {
+    --app-canvas: var(--color-gray-100);
+  }
+  :root[data-canvas='soft'] {
+    --app-canvas: #e9ebef;
+  }
+  :root[data-canvas='slate'] {
+    --app-canvas: #e9eaf2;
+  }
+  :root[data-canvas='sand'] {
+    --app-canvas: #efece6;
+  }
+  :root[data-canvas='mist'] {
+    --app-canvas: #e6edf0;
+  }
+
   body {
-    @apply bg-gray-100 dark:bg-gray-900 text-gray-600 dark:text-gray-400;
+    @apply text-gray-600 dark:text-gray-400;
+    background-color: var(--app-canvas);
+  }
+  .dark body {
+    background-color: var(--color-gray-900);
   }
 }

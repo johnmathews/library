@@ -41,6 +41,43 @@ def test_get_settings_defaults(api_client: TestClient) -> None:
     ]
 
 
+def test_get_settings_includes_default_background_tone(api_client: TestClient) -> None:
+    assert api_client.get("/api/settings").json()["background_tone"] == "neutral"
+
+
+def test_put_appearance_round_trips(api_client: TestClient) -> None:
+    put = api_client.put("/api/settings/appearance", json={"background_tone": "slate"})
+    assert put.status_code == 200, put.text
+    assert put.json()["background_tone"] == "slate"
+    assert api_client.get("/api/settings").json()["background_tone"] == "slate"
+    assert api_client.get("/api/auth/me").json()["preferences"]["background_tone"] == "slate"
+
+
+def test_put_appearance_unknown_tone_falls_back_to_default(api_client: TestClient) -> None:
+    put = api_client.put("/api/settings/appearance", json={"background_tone": "chartreuse"})
+    assert put.status_code == 200, put.text
+    assert put.json()["background_tone"] == "neutral"
+
+
+def test_appearance_and_dashboard_fields_are_independent(api_client: TestClient) -> None:
+    api_client.put("/api/settings", json={"dashboard_fields": ["amount"]})
+    api_client.put("/api/settings/appearance", json={"background_tone": "mist"})
+    # Each save preserves the other concern.
+    body = api_client.get("/api/settings").json()
+    assert body["dashboard_fields"] == ["amount"]
+    assert body["background_tone"] == "mist"
+    # And updating one again does not clobber the other.
+    api_client.put("/api/settings", json={"dashboard_fields": ["tags"]})
+    body = api_client.get("/api/settings").json()
+    assert body["dashboard_fields"] == ["tags"]
+    assert body["background_tone"] == "mist"
+
+
+def test_appearance_requires_auth(anon_client: TestClient) -> None:
+    resp = anon_client.put("/api/settings/appearance", json={"background_tone": "slate"})
+    assert resp.status_code == 401
+
+
 def test_put_settings_round_trips(api_client: TestClient) -> None:
     put = api_client.put("/api/settings", json={"dashboard_fields": ["amount", "tags"]})
     assert put.status_code == 200, put.text

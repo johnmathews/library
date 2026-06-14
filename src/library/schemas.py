@@ -223,13 +223,84 @@ def resolve_dashboard_preferences(
     return DashboardPreferences(dashboard_fields=blob["dashboard_fields"])
 
 
+class BackgroundTone(StrEnum):
+    """The page-canvas colour behind the dashboard tiles.
+
+    A named token, not a hex value: the frontend owns the actual colour for
+    each tone (assets/main.css), so the palette can be retuned without a
+    schema or data migration. Applies to light mode only — dark mode keeps
+    its near-black canvas regardless.
+    """
+
+    NEUTRAL = "neutral"  # gray-200 — the default; clear separation from white tiles
+    LIGHT = "light"  # gray-100 — the original, airier canvas
+    SOFT = "soft"  # a gentle step down from light
+    SLATE = "slate"  # cool, with a subtle violet undertone
+    SAND = "sand"  # warm neutral
+    MIST = "mist"  # cool blue-grey
+
+
+DEFAULT_BACKGROUND_TONE: Final[BackgroundTone] = BackgroundTone.NEUTRAL
+
+
+def _resolve_background_tone(blob: dict[str, Any]) -> BackgroundTone:
+    """Pick the stored tone, falling back to the default for absent/garbage.
+
+    Tolerant like ``DashboardPreferences._clean``: an unknown or hand-edited
+    value resolves to the default rather than raising.
+    """
+    raw = blob.get("background_tone")
+    if isinstance(raw, str) and raw in {tone.value for tone in BackgroundTone}:
+        return BackgroundTone(raw)
+    return DEFAULT_BACKGROUND_TONE
+
+
+class AppearancePreferences(BaseModel):
+    """Body of PUT /api/settings/appearance — the page-canvas tone."""
+
+    background_tone: BackgroundTone
+
+    @field_validator("background_tone", mode="before")
+    @classmethod
+    def _default_unknown(cls, value: object) -> BackgroundTone:
+        """Coerce an unknown/garbage tone to the default (never a 422)."""
+        if isinstance(value, str) and value in {tone.value for tone in BackgroundTone}:
+            return BackgroundTone(value)
+        return DEFAULT_BACKGROUND_TONE
+
+
+class UserPreferences(BaseModel):
+    """All resolved per-user display preferences (read model).
+
+    Returned by GET /api/settings and embedded in ``UserOut``. Writes are
+    split per concern (dashboard fields vs appearance) so each Settings tab
+    saves independently; this model is the union the client reads back.
+    """
+
+    dashboard_fields: list[DashboardField]
+    background_tone: BackgroundTone
+
+
+def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
+    """Resolve the stored ``preferences`` blob to the full read model.
+
+    Reuses :func:`resolve_dashboard_preferences` for field cleaning/defaults
+    and :func:`_resolve_background_tone` for the canvas tone.
+    """
+    blob = preferences or {}
+    return UserPreferences(
+        dashboard_fields=resolve_dashboard_preferences(blob).dashboard_fields,
+        background_tone=_resolve_background_tone(blob),
+    )
+
+
 class UserOut(BaseModel):
     """The authenticated user (login response and GET /api/auth/me)."""
 
     id: int
     username: str
     display_name: str
-    preferences: DashboardPreferences
+    preferences: UserPreferences
 
 
 class TokenCreateRequest(BaseModel):

@@ -44,6 +44,18 @@ Inter, dark-mode aware.
 - `docs/frontend.md` §1.2 + §1.5 updated.
 - `journal/260614-dashboard-tile-elevation.md` added.
 
-## 1.6 Status
+## 1.6 Work unit — W2: per-user page-canvas tone · DONE
+
+Follow-on from W1: white tiles still barely separated from the gray-100 page.
+Made the page canvas a per-user preference (default gray-200) instead of
+hard-coding it. Cloned the `dashboard_fields` preference pattern (JSONB, no
+migration). Backend: `BackgroundTone` enum + tolerant resolution, `UserPreferences`
+read model, new `PUT /api/settings/appearance`. Frontend: `<html data-canvas>`
+driven by the auth store, `main.css` tone tokens, tabbed Settings (Dashboard |
+Appearance) with live-applying auto-saving swatches. Backend 295/295, frontend
+172/172, lint/type/build green. Docs (api.md §1.10, frontend.md) + journal updated.
+Note: the app was already multi-user; no identity work needed.
+
+## 1.7 Status
 
 Complete. No follow-ups outstanding.

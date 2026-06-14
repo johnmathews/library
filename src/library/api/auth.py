@@ -29,7 +29,7 @@ from library.schemas import (
     TokenCreateRequest,
     TokenInfo,
     UserOut,
-    resolve_dashboard_preferences,
+    resolve_preferences,
 )
 
 login_router: APIRouter = APIRouter(tags=["auth"])
@@ -41,7 +41,7 @@ def _user_out(user: User) -> UserOut:
         id=user.id,
         username=user.username,
         display_name=user.display_name,
-        preferences=resolve_dashboard_preferences(user.preferences),
+        preferences=resolve_preferences(user.preferences),
     )
 
 
