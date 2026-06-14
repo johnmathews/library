@@ -227,6 +227,26 @@ describe('DocumentDetailView', () => {
     )
   })
 
+  it('shows a fit-width first-page thumbnail on mobile and keeps the iframe for lg+', async () => {
+    const w = await mountView()
+    const img = w.find('[data-testid="preview-pdf-image"]')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toBe('/api/documents/12/thumbnail')
+    expect(img.classes()).toContain('lg:hidden') // hidden on desktop
+    // The native iframe is kept but hidden below lg.
+    expect(w.find('[data-testid="preview-pdf"]').classes()).toContain('hidden')
+    expect(w.find('[data-testid="preview-pdf"]').classes()).toContain('lg:block')
+  })
+
+  it('keeps the iframe at all sizes for a PDF with no thumbnail', async () => {
+    detail = makeDetail({ has_thumbnail: false })
+    const w = await mountView()
+    expect(w.find('[data-testid="preview-pdf-image"]').exists()).toBe(false)
+    const iframe = w.find('[data-testid="preview-pdf"]')
+    expect(iframe.exists()).toBe(true)
+    expect(iframe.classes()).not.toContain('hidden')
+  })
+
   it('falls back to the original PDF and then to a no-preview panel', async () => {
     detail = makeDetail({ has_searchable_pdf: false })
     let w = await mountView()

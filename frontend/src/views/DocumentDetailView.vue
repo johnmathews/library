@@ -36,6 +36,7 @@ import {
   originalUrl,
   requestExtraction,
   searchablePdfUrl,
+  thumbnailUrl,
   updateDocument,
   type DocumentDetail,
   type DocumentLanguage,
@@ -456,9 +457,22 @@ watch(
             data-testid="preview-image"
           />
           <template v-else-if="preview === 'pdf'">
+            <!-- On small screens the browser-native PDF viewer renders wider
+                 than the viewport and ignores #view=FitH (notably iOS Safari),
+                 so show the fit-width first-page thumbnail there instead. The
+                 native <iframe> stays on lg+ (scroll/zoom/text-selection). Falls
+                 back to the iframe everywhere if there's no thumbnail. -->
+            <img
+              v-if="doc.has_thumbnail"
+              class="w-full object-contain bg-gray-100 dark:bg-gray-900/40 lg:hidden"
+              :src="thumbnailUrl(doc.id)"
+              :alt="`First page of ${doc.title ?? 'this document'}`"
+              data-testid="preview-pdf-image"
+            />
             <!-- Browser-native PDF viewing; see the component docblock. -->
             <iframe
               class="w-full h-[70vh] border-0"
+              :class="{ 'hidden lg:block': doc.has_thumbnail }"
               :src="pdfPreviewIframeUrl"
               title="Document preview"
               data-testid="preview-pdf"
