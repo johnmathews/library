@@ -2,8 +2,8 @@
 /**
  * Document detail page (route `/documents/:id`).
  *
- * Two-column on desktop (preview left, metadata right), stacked on
- * mobile/iPad-portrait via the GOV.UK grid. Metadata follows the GOV.UK
+ * Two-column on desktop (metadata left, preview right), stacked on
+ * mobile/iPad-portrait. Metadata follows the GOV.UK
  * summary-list "Change" pattern with an inline reveal per row (a full
  * one-thing-per-page flow would be heavy for single-field edits): the
  * row's Change button swaps the value cell for the right input with
@@ -433,7 +433,8 @@ watch(
     </h1>
 
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <div class="space-y-4">
+      <!-- Preview: right column on desktop (lg:order-2), first on mobile. -->
+      <div class="space-y-4 lg:order-2">
         <div
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 overflow-hidden"
         >
@@ -500,7 +501,8 @@ watch(
         </AppDetails>
       </div>
 
-      <div class="space-y-6">
+      <!-- Metadata: left column on desktop (lg:order-1). -->
+      <div class="space-y-6 lg:order-1">
         <div
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
         >
