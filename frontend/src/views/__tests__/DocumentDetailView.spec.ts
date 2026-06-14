@@ -217,8 +217,10 @@ describe('DocumentDetailView', () => {
     const w = await mountView()
     // disposition=inline: an attachment response would blank the iframe and
     // trigger a download instead of rendering the PDF.
+    // #view=FitH fits the page to the iframe width so a portrait page is not
+    // clipped on a narrow (mobile) viewport; the open-in-new-tab link stays plain.
     expect(w.find('[data-testid="preview-pdf"]').attributes('src')).toBe(
-      '/api/documents/12/searchable.pdf?disposition=inline',
+      '/api/documents/12/searchable.pdf?disposition=inline#view=FitH',
     )
     expect(w.find('a[target="_blank"]').attributes('href')).toBe(
       '/api/documents/12/searchable.pdf?disposition=inline',
@@ -229,7 +231,7 @@ describe('DocumentDetailView', () => {
     detail = makeDetail({ has_searchable_pdf: false })
     let w = await mountView()
     expect(w.find('[data-testid="preview-pdf"]').attributes('src')).toBe(
-      '/api/documents/12/original?disposition=inline',
+      '/api/documents/12/original?disposition=inline#view=FitH',
     )
     w.unmount()
 

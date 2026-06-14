@@ -378,6 +378,14 @@ const pdfPreviewUrl = computed(() =>
     : '',
 )
 
+/** Same PDF, but with the `#view=FitH` open parameter so the browser's native
+ * viewer fits the page to the iframe width — otherwise a portrait page renders
+ * wider than a narrow (mobile) viewport and the right edge is clipped. The
+ * plain `pdfPreviewUrl` (no fragment) is kept for the open-in-new-tab link. */
+const pdfPreviewIframeUrl = computed(() =>
+  pdfPreviewUrl.value ? `${pdfPreviewUrl.value}#view=FitH` : '',
+)
+
 const highlight = computed(() => {
   const value = route.query.highlight
   return typeof value === 'string' ? value : ''
@@ -451,7 +459,7 @@ watch(
             <!-- Browser-native PDF viewing; see the component docblock. -->
             <iframe
               class="w-full h-[70vh] border-0"
-              :src="pdfPreviewUrl"
+              :src="pdfPreviewIframeUrl"
               title="Document preview"
               data-testid="preview-pdf"
             ></iframe>

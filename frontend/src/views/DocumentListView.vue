@@ -290,7 +290,7 @@ const amountLabels = computed<Map<number, string | null>>(() => {
       <li
         v-for="item in items"
         :key="item.id"
-        class="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 overflow-hidden app-doc-card"
+        class="relative bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 overflow-hidden app-doc-card"
         data-testid="doc-card"
       >
         <div class="app-doc-card__thumbnail relative aspect-[4/3] bg-gray-100 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700/60 w-full flex items-center justify-center">
@@ -322,8 +322,11 @@ const amountLabels = computed<Map<number, string | null>>(() => {
         </div>
         <div class="p-5 app-doc-card__body">
           <h2 class="app-doc-card__title mb-2">
+            <!-- Stretched link: the `after:absolute after:inset-0` pseudo-element
+                 makes the whole `relative` card a click target for this single
+                 anchor (better on touch), without nesting extra links. -->
             <RouterLink
-              class="text-violet-600 font-semibold hover:underline"
+              class="text-violet-600 font-semibold hover:underline after:absolute after:inset-0 after:content-['']"
               :to="{
                 name: 'document-detail',
                 params: { id: item.id },

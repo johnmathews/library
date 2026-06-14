@@ -150,6 +150,20 @@ describe('DocumentListView', () => {
     expect(w.find('[data-testid="result-count"]').text()).toBe('1 document')
   })
 
+  it('makes the whole card clickable via a stretched title link', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    const tile = w.find('[data-testid="doc-card"]')
+    // The card is the positioning context; the single title anchor stretches
+    // over it (after:absolute after:inset-0) so a tap anywhere navigates.
+    expect(tile.classes()).toContain('relative')
+    const titleLink = tile.find('.app-doc-card__title a')
+    expect(titleLink.classes()).toContain('after:absolute')
+    expect(titleLink.classes()).toContain('after:inset-0')
+    // Still exactly one anchor — no nested links introduced.
+    expect(tile.findAll('a')).toHaveLength(1)
+  })
+
   it('falls back to an untitled label and a placeholder thumbnail', async () => {
     listResponse = () => jsonResponse(listBody([makeItem({ title: null, has_thumbnail: false })]))
     const w = await mountView()
