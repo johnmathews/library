@@ -1,0 +1,135 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import DocumentFilterBar from '../DocumentFilterBar.vue'
+import { resetTaxonomyOptionsForTests } from '@/composables/taxonomyOptions'
+import type { AppliedFilters } from '@/utils/documentQuery'
+
+const EMPTY: AppliedFilters = {
+  q: '',
+  kind: '',
+  senderId: '',
+  tags: [],
+  language: '',
+  status: '',
+  dateFrom: '',
+  dateTo: '',
+  page: 1,
+}
+
+function jsonResponse(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: { 'Content-Type': 'application/json' },
+  })
+}
+
+const KINDS = [{ slug: 'invoice', name: 'Invoice', document_count: 3 }]
+const SENDERS = [{ id: 3, name: 'Eneco', document_count: 3 }]
+const TAGS = [
+  { slug: 'energie', name: 'Energie', document_count: 2 },
+  { slug: 'wonen', name: 'Wonen', document_count: 1 },
+]
+
+function mountBar(applied: AppliedFilters = EMPTY): VueWrapper {
+  return mount(DocumentFilterBar, {
+    attachTo: document.body,
+    props: { applied },
+  })
+}
+
+describe('DocumentFilterBar', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    resetTaxonomyOptionsForTests()
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+    fetchMock.mockImplementation((input: unknown) => {
+      const url = String(input)
+      if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
+      if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
+      if (url === '/api/tags') return Promise.resolve(jsonResponse(TAGS))
+      return Promise.resolve(jsonResponse({ detail: `unexpected ${url}` }, 500))
+    })
+  })
+
+  afterEach(() => {
+    document.body.replaceChildren()
+    vi.unstubAllGlobals()
+    vi.useRealTimers()
+  })
+
+  it('initialises the search input from applied.q', () => {
+    const w = mountBar({ ...EMPTY, q: 'rekening' })
+    expect((w.get('[data-testid="filter-search"]').element as HTMLInputElement).value).toBe(
+      'rekening',
+    )
+  })
+
+  it('emits a debounced replace apply while typing', async () => {
+    vi.useFakeTimers()
+    const w = mountBar()
+    await w.get('[data-testid="filter-search"]').setValue('reken')
+    expect(w.emitted('apply')).toBeUndefined() // not yet — debounced
+    vi.advanceTimersByTime(300)
+    const [query, opts] = w.emitted('apply')![0] as [Record<string, unknown>, { replace: boolean }]
+    expect(query).toEqual({ q: 'reken' })
+    expect(opts).toEqual({ replace: true })
+  })
+
+  it('emits immediately (push) on Enter', async () => {
+    const w = mountBar()
+    await w.get('[data-testid="filter-search"]').setValue('reken')
+    await w.get('[data-testid="filter-search"]').trigger('keydown.enter')
+    const [query, opts] = w.emitted('apply')!.at(-1) as [
+      Record<string, unknown>,
+      { replace: boolean } | undefined,
+    ]
+    expect(query).toEqual({ q: 'reken' })
+    expect(opts?.replace).toBeFalsy()
+  })
+
+  it('selecting a kind emits a push apply with the kind slug', async () => {
+    const w = mountBar()
+    await flushPromises() // taxonomy load
+    await w.get('[data-testid="pill-kind"] [data-testid="filter-pill-button"]').trigger('click')
+    await w.get('[data-testid="kind-option-invoice"]').trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ kind: 'invoice' })
+  })
+
+  it('selecting multiple tags emits repeated tag', async () => {
+    const w = mountBar()
+    await flushPromises()
+    // Open the tag pill
+    await w.get('[data-testid="pill-tag"] [data-testid="filter-pill-button"]').trigger('click')
+    // AppCheckboxes renders first input with id="filter-tags"; the fieldset has no id.
+    // Target checkboxes within the tag pill panel instead.
+    await w.get('[data-testid="pill-tag"]').get('input[value="energie"]').setValue(true)
+    await w.get('[data-testid="pill-tag"]').get('input[value="wonen"]').setValue(true)
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ tag: ['energie', 'wonen'] })
+  })
+
+  it('renders a removable chip per active filter and emits apply without that filter on remove', async () => {
+    const w = mountBar({ ...EMPTY, q: 'rekening', kind: 'invoice' })
+    await flushPromises()
+    // chip-remove-* buttons also start with "chip-"; exclude them so we only
+    // count the chip container spans (chip-q, chip-kind).
+    const chips = w.findAll('[data-testid^="chip-"]:not([data-testid^="chip-remove-"])')
+    expect(chips.length).toBe(2)
+    await w.get('[data-testid="chip-remove-kind"]').trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ q: 'rekening' })
+  })
+
+  it('removing one tag keeps the others', async () => {
+    const w = mountBar({ ...EMPTY, tags: ['energie', 'wonen'] })
+    await flushPromises()
+    await w.get('[data-testid="chip-remove-tag-energie"]').trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ tag: ['wonen'] })
+  })
+
+  it('Clear all emits clear', async () => {
+    const w = mountBar({ ...EMPTY, q: 'rekening' })
+    await w.get('[data-testid="filter-clear-all"]').trigger('click')
+    expect(w.emitted('clear')).toHaveLength(1)
+  })
+})
