@@ -227,8 +227,9 @@ Layout lives in `.app-search-modal` (`utility-patterns.css`): a centered
 `margin: auto` because Tailwind Preflight zeroes the margin that the browser
 otherwise uses to centre a modal `<dialog>`.
 
-The modal is the intended filter surface on **small screens**, where the inline
-filter bar (below) is not shown.
+The inline filter bar (below) is visible at all screen sizes — its pill row
+wraps on narrow viewports. The modal remains available at any size (e.g. via
+the `/` shortcut) and writes the same URL query.
 
 ### Dashboard filter bar (`src/components/DocumentFilterBar.vue`)
 

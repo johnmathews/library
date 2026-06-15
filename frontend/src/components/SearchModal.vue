@@ -13,11 +13,12 @@
  * Focus returns to the element that opened the modal on close.
  */
 import { computed, onBeforeUnmount, onMounted, reactive, ref } from 'vue'
-import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { AppButton, AppDateInput, AppInput, AppSelect } from '@/components/app'
 import type { SelectItem } from '@/components/app'
 import { DOCUMENT_LANGUAGES } from '@/api/documents'
 import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
+import { parseDocumentQuery, buildDocumentQuery, type AppliedFilters } from '@/utils/documentQuery'
 
 const route = useRoute()
 const router = useRouter()
@@ -42,6 +43,13 @@ const draft = reactive({
   dateTo: null as string | null,
 })
 
+// Tracks what tags were present when the modal opened and what value the tag
+// field was pre-filled with. Used by onSubmit to detect whether the user
+// changed the tag field (so we know whether to keep the full multi-tag set or
+// use the user's new single-tag choice).
+let initialTags: string[] = []
+let prefilledTag = ''
+
 const kindItems = computed<SelectItem[]>(() => [
   { value: '', text: 'All kinds' },
   ...kinds.value.map((kind) => ({ value: kind.slug, text: kind.name })),
@@ -59,20 +67,25 @@ const languageItems: SelectItem[] = [
   ...DOCUMENT_LANGUAGES.map((language) => ({ value: language.value, text: language.text })),
 ]
 
-function queryString(key: string): string {
-  const value = route.query[key]
-  return typeof value === 'string' ? value : ''
-}
-
 /** Open the dialog, pre-filled from the current route query. */
 function open(): void {
-  draft.q = queryString('q')
-  draft.kind = queryString('kind')
-  draft.senderId = queryString('sender_id')
-  draft.tag = queryString('tag')
-  draft.language = queryString('language')
-  draft.dateFrom = queryString('date_from') || null
-  draft.dateTo = queryString('date_to') || null
+  const applied: AppliedFilters = parseDocumentQuery(route.query)
+
+  // Remember the original tags so onSubmit can preserve them when the user
+  // hasn't touched the tag field.
+  initialTags = applied.tags
+  // Pre-fill the single-tag select only when there is exactly one tag; with
+  // zero or multiple tags the field is left blank to avoid misrepresenting the
+  // active filter set.
+  prefilledTag = applied.tags.length === 1 ? (applied.tags[0] ?? '') : ''
+
+  draft.q = applied.q
+  draft.kind = applied.kind
+  draft.senderId = applied.senderId
+  draft.tag = prefilledTag
+  draft.language = applied.language
+  draft.dateFrom = applied.dateFrom || null
+  draft.dateTo = applied.dateTo || null
 
   // Lazy taxonomy fetch on first open; the cached refs feed the computeds.
   void ensureLoaded()
@@ -92,15 +105,28 @@ function onClose(): void {
 }
 
 function onSubmit(): void {
-  const query: LocationQueryRaw = {}
-  if (draft.q.trim()) query.q = draft.q.trim()
-  if (draft.kind) query.kind = draft.kind
-  if (draft.senderId) query.sender_id = draft.senderId
-  if (draft.tag) query.tag = draft.tag
-  if (draft.language) query.language = draft.language
-  if (draft.dateFrom) query.date_from = draft.dateFrom
-  if (draft.dateTo) query.date_to = draft.dateTo
-  void router.push({ name: 'documents', query })
+  const current: AppliedFilters = parseDocumentQuery(route.query)
+
+  // Determine the resulting tags without data loss:
+  // - If the user did NOT change the tag field (it still matches the pre-filled
+  //   value), keep initialTags unchanged (preserves multi-tag sets).
+  // - If the user changed the field, use their explicit choice.
+  const resolvedTags: string[] =
+    draft.tag === prefilledTag ? initialTags : draft.tag ? [draft.tag] : []
+
+  const next: AppliedFilters = {
+    q: draft.q.trim(),
+    kind: draft.kind,
+    senderId: draft.senderId,
+    tags: resolvedTags,
+    language: draft.language,
+    status: current.status, // preserved — modal doesn't manage it
+    dateFrom: draft.dateFrom ?? '',
+    dateTo: draft.dateTo ?? '',
+    page: 1, // a new search resets paging
+  }
+
+  void router.push({ name: 'documents', query: buildDocumentQuery(next) })
   close()
 }
 

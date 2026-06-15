@@ -232,4 +232,37 @@ describe('SearchModal', () => {
     await flushPromises()
     expect(w.find('dialog').attributes('open')).toBeDefined()
   })
+
+  it('preserves multiple tags and status when submitting after editing only the query', async () => {
+    await router.push('/?tag=energie&tag=wonen&status=indexed&kind=invoice')
+    const w = await mountModal()
+    exposed(w).open()
+    await flushPromises()
+
+    // user edits only the search text
+    await w.find('#search').setValue('rekening')
+    await w.find('form[role="search"]').trigger('submit')
+    await flushPromises()
+
+    const q = router.currentRoute.value.query
+    // both tags preserved (array), status preserved, kind preserved, q updated
+    expect(q.tag).toEqual(['energie', 'wonen'])
+    expect(q.status).toBe('indexed')
+    expect(q.kind).toBe('invoice')
+    expect(q.q).toBe('rekening')
+  })
+
+  it('replaces the tag set when the user picks a single tag in the modal', async () => {
+    await router.push('/?tag=energie&tag=wonen')
+    const w = await mountModal()
+    exposed(w).open()
+    await flushPromises()
+    // pre-fill is blank for multi-tag; user explicitly selects one
+    await w.find('#filter-tag').setValue('energie')
+    await w.find('form[role="search"]').trigger('submit')
+    await flushPromises()
+    // buildDocumentQuery always emits tag as an array (the documented contract);
+    // ['energie'] and 'energie' parse identically via parseDocumentQuery.
+    expect(router.currentRoute.value.query.tag).toEqual(['energie'])
+  })
 })
