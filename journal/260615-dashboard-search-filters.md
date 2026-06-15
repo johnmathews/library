@@ -80,6 +80,17 @@ the bar. Fixed by migrating the modal onto `parseDocumentQuery`/
 kept when the tag field is untouched, and `status` is always carried through.
 Redesigning the modal to add multi-tag UI was kept out of scope.
 
+## Follow-ups
+
+- **Mobile pill collapse:** below the `sm` breakpoint the pill row collapses
+  behind a "Filters" toggle (count badge) that expands the pills inline — chosen
+  over routing to the reduced modal so status/multi-tag stay available on mobile.
+- **Pill panel overflow (on-device bug):** the `FilterPill` dropdowns were
+  anchored `left-0`, so right-of-row pills (Date, Tag) opened rightward and
+  spilled off the screen edge on a phone. Fixed so a pill in the right half of
+  the viewport opens its panel leftward (right-aligned), with panels capped at
+  `max-w-[calc(100vw-1rem)]`.
+
 ## Process & delivery
 
 Built via subagent-driven development: each of the 7 planned tasks (plus the
