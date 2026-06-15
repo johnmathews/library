@@ -14,3 +14,6 @@ credentials.json
 
 # CI coverage summary (generated)
 /coverage.md
+
+# Visual brainstorming companion
+.superpowers/
