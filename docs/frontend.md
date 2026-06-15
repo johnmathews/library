@@ -227,6 +227,33 @@ Layout lives in `.app-search-modal` (`utility-patterns.css`): a centered
 `margin: auto` because Tailwind Preflight zeroes the margin that the browser
 otherwise uses to centre a modal `<dialog>`.
 
+The modal is the intended filter surface on **small screens**, where the inline
+filter bar (below) is not shown.
+
+### Dashboard filter bar (`src/components/DocumentFilterBar.vue`)
+
+An always-visible search-and-filter bar rendered by `DocumentListView` in the
+dashboard hero area (replacing the old plain-text "Filtered by …" summary line).
+The URL remains the single source of truth; all reading/writing of query
+parameters goes through `src/utils/documentQuery.ts` (`parseDocumentQuery` /
+`buildDocumentQuery` / `hasActiveFilters`), so the modal and the bar stay
+in sync automatically.
+
+- **Search input:** debounced 300 ms — typing pushes `?q=` via
+  `router.replace`; pressing Enter applies immediately via `router.push`.
+- **Filter pills:** Kind, Sender, Date range, Tag (multi-select —
+  `?tag=a&tag=b`), and a **More** pill covering Language + Status.
+- **Active-filter chips:** each applied filter renders as a removable chip
+  below the pill row; a **Clear all** button removes every active filter at
+  once.
+- **`FilterPill` primitive** (`src/components/app/FilterPill.vue`, exported
+  from `@/components/app`): a reusable controlled popover — rounded button +
+  slotted dropdown panel, `v-model:open`, closes on Escape or outside
+  mousedown.
+- **`status` filter** and **multi-tag** (`tags: string[]`) are new additions
+  to `AppliedFilters`; the `DOCUMENT_STATUSES` options array lives in
+  `src/api/documents.ts`.
+
 ## 1.6 Dark mode
 
 Dark mode is class-based (`.dark` on `<html>`, driven by `ThemeToggle` /
