@@ -144,6 +144,85 @@ const rowConfigs: RowConfig[] = [
   { field: 'summary', label: 'Summary', display: (d) => d.summary },
 ]
 
+/** Editable rows keyed by field, so the grouped layout can look each up. */
+const rowByField = Object.fromEntries(rowConfigs.map((row) => [row.field, row])) as Record<
+  EditableField,
+  RowConfig
+>
+
+/**
+ * Metadata is split into themed groups so different kinds of metadata read as
+ * visually distinct rather than one undifferentiated list. Each group carries an
+ * accent colour (used on its heading, left rail and a faint tint) and lays its
+ * fields out in a two-column grid to use the width and cut the vertical sprawl.
+ */
+type Accent = 'violet' | 'sky' | 'green' | 'yellow' | 'gray'
+
+interface FieldGroup {
+  key: string
+  label: string
+  accent: Accent
+  fields: EditableField[]
+}
+
+const fieldGroups: FieldGroup[] = [
+  { key: 'content', label: 'Content', accent: 'violet', fields: ['title', 'summary', 'tags'] },
+  { key: 'classification', label: 'Classification', accent: 'yellow', fields: ['kind', 'language'] },
+  {
+    key: 'parties',
+    label: 'Sender & dates',
+    accent: 'sky',
+    fields: ['sender', 'document_date', 'due_date', 'expiry_date'],
+  },
+  { key: 'financial', label: 'Financial', accent: 'green', fields: ['amount'] },
+]
+
+/** Fields that read better spanning the full width of the two-column grid. */
+const WIDE_FIELDS = new Set<EditableField>(['title', 'summary', 'tags', 'amount'])
+
+/** Static Tailwind class strings per accent (kept literal so the build's content
+ * scan keeps them). `border` is left-only so it never fights a shorthand. */
+const ACCENT: Record<Accent, { bar: string; text: string; border: string; bg: string }> = {
+  violet: {
+    bar: 'bg-violet-400 dark:bg-violet-500',
+    text: 'text-violet-700 dark:text-violet-300',
+    border: 'border-l-violet-400 dark:border-l-violet-500',
+    bg: 'bg-violet-50/50 dark:bg-violet-500/[0.06]',
+  },
+  sky: {
+    bar: 'bg-sky-400 dark:bg-sky-500',
+    text: 'text-sky-700 dark:text-sky-300',
+    border: 'border-l-sky-400 dark:border-l-sky-500',
+    bg: 'bg-sky-50/50 dark:bg-sky-500/[0.06]',
+  },
+  green: {
+    bar: 'bg-green-500 dark:bg-green-500',
+    text: 'text-green-700 dark:text-green-300',
+    border: 'border-l-green-500',
+    bg: 'bg-green-50/50 dark:bg-green-500/[0.06]',
+  },
+  yellow: {
+    bar: 'bg-yellow-400 dark:bg-yellow-500',
+    text: 'text-yellow-700 dark:text-yellow-400',
+    border: 'border-l-yellow-400 dark:border-l-yellow-500',
+    bg: 'bg-yellow-50/60 dark:bg-yellow-500/[0.06]',
+  },
+  gray: {
+    bar: 'bg-gray-300 dark:bg-gray-600',
+    text: 'text-gray-500 dark:text-gray-400',
+    border: 'border-l-gray-300 dark:border-l-gray-600',
+    bg: 'bg-gray-50/70 dark:bg-gray-900/20',
+  },
+}
+
+/** Status pill colour: green when fully processed, red on failure, neutral
+ * otherwise. */
+function statusAccent(status: string): string {
+  if (status === 'indexed') return 'bg-green-100 text-green-800 dark:bg-green-500/15 dark:text-green-300'
+  if (status === 'failed') return 'bg-red-100 text-red-800 dark:bg-red-500/15 dark:text-red-300'
+  return 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
+}
+
 const dateFormat = new Intl.DateTimeFormat('en-GB', {
   day: 'numeric',
   month: 'long',
@@ -418,6 +497,15 @@ const pdfPreviewIframeUrl = computed(() =>
   pdfPreviewUrl.value ? `${pdfPreviewUrl.value}#toolbar=0&navpanes=0&view=FitH` : '',
 )
 
+/** Firefox's built-in viewer ignores `#toolbar=0` and shows its own toolbar.
+ * There's no URL fragment that hides it, so on Firefox we nudge the iframe up
+ * behind an overflow-hidden wrapper to clip the toolbar off the top edge.
+ * Chrome/Edge honour the fragment and need no clip (clipping there would just
+ * eat document content). */
+const hidePdfToolbar = computed(
+  () => typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent),
+)
+
 /** Where the preview header's "Open" button points (open the inline preview in
  * a new tab): the PDF for PDFs, the original image for images. */
 const previewOpenUrl = computed(() => {
@@ -642,13 +730,18 @@ watch(
               </svg>
               <span class="text-sm font-medium">Protected PDF — tap to open</span>
             </a>
-            <!-- Browser-native PDF viewing; see the component docblock. -->
-            <iframe
-              class="w-full h-[70vh] border-0 hidden lg:block"
-              :src="pdfPreviewIframeUrl"
-              title="Document preview"
-              data-testid="preview-pdf"
-            ></iframe>
+            <!-- Browser-native PDF viewing; see the component docblock. The
+                 overflow-hidden wrapper lets us clip the viewer's own toolbar on
+                 Firefox (which ignores #toolbar=0) by nudging the iframe up. -->
+            <div class="hidden lg:block overflow-hidden">
+              <iframe
+                class="w-full border-0 hidden lg:block"
+                :class="hidePdfToolbar ? 'h-[calc(70vh+2.6rem)] -mt-[2.6rem]' : 'h-[70vh]'"
+                :src="pdfPreviewIframeUrl"
+                title="Document preview"
+                data-testid="preview-pdf"
+              ></iframe>
+            </div>
           </template>
           <div
             v-else
@@ -663,27 +756,31 @@ watch(
           </div>
         </div>
 
-        <AppDetails
+        <div
           v-if="doc.ocr_text"
           id="document-ocr-card"
-          summary="View extracted text"
-          :open="Boolean(highlight)"
-          data-testid="ocr-details"
+          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
         >
-          <!-- eslint-disable-next-line vue/no-v-html -- renderHighlighted escapes every input character; only its own <mark> wrappers survive (docs/api.md §1.3.3) -->
-          <pre
-            v-if="highlight"
-            class="app-ocr-text whitespace-pre-wrap break-words text-sm text-gray-700 dark:text-gray-300"
-            data-testid="ocr-text"
-            v-html="renderHighlighted(doc.ocr_text, highlight)"
-          ></pre>
-          <pre
-            v-else
-            class="app-ocr-text whitespace-pre-wrap break-words text-sm text-gray-700 dark:text-gray-300"
-            data-testid="ocr-text"
-            >{{ doc.ocr_text }}</pre
+          <AppDetails
+            summary="View extracted text"
+            :open="Boolean(highlight)"
+            data-testid="ocr-details"
           >
-        </AppDetails>
+            <!-- eslint-disable-next-line vue/no-v-html -- renderHighlighted escapes every input character; only its own <mark> wrappers survive (docs/api.md §1.3.3) -->
+            <pre
+              v-if="highlight"
+              class="app-ocr-text mt-1 max-h-[28rem] overflow-auto rounded-lg border border-gray-200 dark:border-gray-700/50 bg-gray-50 dark:bg-gray-900/50 p-4 font-mono text-sm leading-relaxed text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words"
+              data-testid="ocr-text"
+              v-html="renderHighlighted(doc.ocr_text, highlight)"
+            ></pre>
+            <pre
+              v-else
+              class="app-ocr-text mt-1 max-h-[28rem] overflow-auto rounded-lg border border-gray-200 dark:border-gray-700/50 bg-gray-50 dark:bg-gray-900/50 p-4 font-mono text-sm leading-relaxed text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words"
+              data-testid="ocr-text"
+              >{{ doc.ocr_text }}</pre
+            >
+          </AppDetails>
+        </div>
       </div>
 
       <!-- Metadata: left column on desktop (lg:order-1). min-w-0 (as above)
@@ -693,163 +790,217 @@ watch(
           id="document-details-card"
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
         >
-          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2">Details</h2>
-          <dl id="document-details-list" class="divide-y divide-gray-200 dark:divide-gray-700/60 app-detail-list">
-            <div
-              v-for="row in rowConfigs"
-              :key="row.field"
-              class="py-3"
-              :data-testid="`row-${row.field}`"
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Details</h2>
+
+          <div id="document-details-list" class="space-y-3">
+            <!-- One themed panel per metadata group: accent rail + tint + heading
+                 make each kind of metadata distinguishable at a glance, and the
+                 two-column grid uses the width instead of one tall column. -->
+            <section
+              v-for="group in fieldGroups"
+              :key="group.key"
+              class="rounded-lg border-l-4 px-4 py-3.5"
+              :class="[ACCENT[group.accent].border, ACCENT[group.accent].bg]"
             >
-              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">{{ row.label }}</dt>
-              <dd v-if="editing !== row.field" class="flex justify-between gap-4 items-start mt-1">
-                <span
-                  class="text-sm text-gray-800 dark:text-gray-100 min-w-0 break-words"
-                  data-testid="row-value"
-                  >{{ row.display(doc) ?? EMPTY }}</span
+              <div class="mb-3 flex items-center gap-2">
+                <span class="h-3.5 w-1 rounded-full" :class="ACCENT[group.accent].bar"></span>
+                <h3
+                  class="text-xs font-semibold uppercase tracking-wider"
+                  :class="ACCENT[group.accent].text"
                 >
-                <button
-                  type="button"
-                  class="text-sm text-violet-600 hover:underline app-link-button shrink-0"
-                  @click="startEdit(row.field)"
+                  {{ group.label }}
+                </h3>
+              </div>
+              <dl class="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                <div
+                  v-for="field in group.fields"
+                  :key="field"
+                  :data-testid="`row-${field}`"
+                  :class="WIDE_FIELDS.has(field) || editing === field ? 'sm:col-span-2' : ''"
                 >
-                  Change<span class="sr-only"> {{ row.label.toLowerCase() }}</span>
-                </button>
-              </dd>
-              <dd v-else class="mt-2">
-                <form class="space-y-3" novalidate @submit.prevent="save(row)">
-                  <AppInput
-                    v-if="row.field === 'title'"
-                    id="edit-title"
-                    v-model="editText"
-                    label="New title"
-                    :error-message="editError ?? undefined"
-                  />
-                  <AppTextarea
-                    v-else-if="row.field === 'summary'"
-                    id="edit-summary"
-                    v-model="editText"
-                    label="New summary"
-                    :rows="4"
-                    :error-message="editError ?? undefined"
-                  />
-                  <AppSelect
-                    v-else-if="row.field === 'kind'"
-                    id="edit-kind"
-                    v-model="editSelect"
-                    label="New kind"
-                    :items="kindItems"
-                    :error-message="editError ?? undefined"
-                  />
-                  <template v-else-if="row.field === 'sender'">
-                    <AppInput
-                      id="edit-sender"
-                      v-model="editText"
-                      label="New sender"
-                      hint="Start typing to see known senders"
-                      list="sender-options"
-                      :error-message="editError ?? undefined"
-                    />
-                    <datalist id="sender-options">
-                      <option v-for="sender in senders" :key="sender.id" :value="sender.name" />
-                    </datalist>
-                  </template>
-                  <AppSelect
-                    v-else-if="row.field === 'language'"
-                    id="edit-language"
-                    v-model="editSelect"
-                    label="New language"
-                    :items="languageItems"
-                    :error-message="editError ?? undefined"
-                  />
-                  <AppInput
-                    v-else-if="row.field === 'tags'"
-                    id="edit-tags"
-                    v-model="editText"
-                    label="New tags"
-                    hint="Separate tags with commas"
-                    :error-message="editError ?? undefined"
-                  />
-                  <template v-else-if="row.field === 'amount'">
-                    <AppInput
-                      id="edit-amount"
-                      v-model="editText"
-                      label="New amount"
-                      inputmode="decimal"
-                      width-class="w-40"
-                      :error-message="editError ?? undefined"
-                    />
-                    <AppInput
-                      id="edit-currency"
-                      v-model="editCurrency"
-                      label="Currency"
-                      hint="3-letter code, like EUR"
-                      width-class="w-24"
-                    />
-                  </template>
-                  <AppDateInput
-                    v-else
-                    :id="`edit-${row.field.replaceAll('_', '-')}`"
-                    v-model="editDate"
-                    :legend="`New ${row.label.toLowerCase()}`"
-                    :error-message="editError ?? undefined"
-                  />
-                  <div class="flex gap-3">
-                    <AppButton type="submit" :disabled="saving">Save</AppButton>
-                    <AppButton type="button" variant="secondary" @click="cancelEdit">
-                      Cancel
-                    </AppButton>
+                  <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                    {{ rowByField[field].label }}
+                  </dt>
+                  <div v-if="editing !== field" class="mt-1 flex items-start justify-between gap-3">
+                    <dd
+                      class="min-w-0 break-words leading-snug text-gray-800 dark:text-gray-100"
+                      :class="field === 'amount' ? 'text-2xl font-semibold tracking-tight' : 'text-base'"
+                      data-testid="row-value"
+                      >{{ rowByField[field].display(doc) ?? EMPTY }}</dd
+                    >
+                    <button
+                      type="button"
+                      class="mt-0.5 shrink-0 text-xs font-medium text-violet-600 hover:underline app-link-button"
+                      @click="startEdit(field)"
+                    >
+                      Change<span class="sr-only"> {{ rowByField[field].label.toLowerCase() }}</span>
+                    </button>
                   </div>
-                </form>
-              </dd>
-            </div>
+                  <dd v-else class="mt-2">
+                    <form class="space-y-3" novalidate @submit.prevent="save(rowByField[field])">
+                      <AppInput
+                        v-if="field === 'title'"
+                        id="edit-title"
+                        v-model="editText"
+                        label="New title"
+                        :error-message="editError ?? undefined"
+                      />
+                      <AppTextarea
+                        v-else-if="field === 'summary'"
+                        id="edit-summary"
+                        v-model="editText"
+                        label="New summary"
+                        :rows="4"
+                        :error-message="editError ?? undefined"
+                      />
+                      <AppSelect
+                        v-else-if="field === 'kind'"
+                        id="edit-kind"
+                        v-model="editSelect"
+                        label="New kind"
+                        :items="kindItems"
+                        :error-message="editError ?? undefined"
+                      />
+                      <template v-else-if="field === 'sender'">
+                        <AppInput
+                          id="edit-sender"
+                          v-model="editText"
+                          label="New sender"
+                          hint="Start typing to see known senders"
+                          list="sender-options"
+                          :error-message="editError ?? undefined"
+                        />
+                        <datalist id="sender-options">
+                          <option v-for="sender in senders" :key="sender.id" :value="sender.name" />
+                        </datalist>
+                      </template>
+                      <AppSelect
+                        v-else-if="field === 'language'"
+                        id="edit-language"
+                        v-model="editSelect"
+                        label="New language"
+                        :items="languageItems"
+                        :error-message="editError ?? undefined"
+                      />
+                      <AppInput
+                        v-else-if="field === 'tags'"
+                        id="edit-tags"
+                        v-model="editText"
+                        label="New tags"
+                        hint="Separate tags with commas"
+                        :error-message="editError ?? undefined"
+                      />
+                      <template v-else-if="field === 'amount'">
+                        <AppInput
+                          id="edit-amount"
+                          v-model="editText"
+                          label="New amount"
+                          inputmode="decimal"
+                          width-class="w-40"
+                          :error-message="editError ?? undefined"
+                        />
+                        <AppInput
+                          id="edit-currency"
+                          v-model="editCurrency"
+                          label="Currency"
+                          hint="3-letter code, like EUR"
+                          width-class="w-24"
+                        />
+                      </template>
+                      <AppDateInput
+                        v-else
+                        :id="`edit-${field.replaceAll('_', '-')}`"
+                        v-model="editDate"
+                        :legend="`New ${rowByField[field].label.toLowerCase()}`"
+                        :error-message="editError ?? undefined"
+                      />
+                      <div class="flex gap-3">
+                        <AppButton type="submit" :disabled="saving">Save</AppButton>
+                        <AppButton type="button" variant="secondary" @click="cancelEdit">
+                          Cancel
+                        </AppButton>
+                      </div>
+                    </form>
+                  </dd>
+                </div>
+              </dl>
+            </section>
 
-            <div class="py-3">
-              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Status</dt>
-              <dd class="text-sm text-gray-800 dark:text-gray-100 mt-1">{{ doc.status }}</dd>
-            </div>
-            <div class="py-3">
-              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">OCR confidence</dt>
-              <dd class="text-sm text-gray-800 dark:text-gray-100 mt-1">
-                {{ doc.ocr_confidence === null ? EMPTY : `${Math.round(doc.ocr_confidence)}%` }}
-              </dd>
-            </div>
-            <div class="py-3">
-              <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Source</dt>
-              <dd class="text-sm text-gray-800 dark:text-gray-100 mt-1">
-                {{ sourceLabel(doc.source) }}
-              </dd>
-            </div>
-          </dl>
+            <!-- System: read-only provenance, set apart with a neutral accent. -->
+            <section
+              class="rounded-lg border-l-4 px-4 py-3.5"
+              :class="[ACCENT.gray.border, ACCENT.gray.bg]"
+            >
+              <div class="mb-3 flex items-center gap-2">
+                <span class="h-3.5 w-1 rounded-full" :class="ACCENT.gray.bar"></span>
+                <h3
+                  class="text-xs font-semibold uppercase tracking-wider"
+                  :class="ACCENT.gray.text"
+                >
+                  System
+                </h3>
+              </div>
+              <dl class="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                <div>
+                  <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                    Status
+                  </dt>
+                  <dd class="mt-1.5">
+                    <span
+                      class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium capitalize"
+                      :class="statusAccent(doc.status)"
+                      >{{ doc.status }}</span
+                    >
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                    OCR confidence
+                  </dt>
+                  <dd class="mt-1 text-base text-gray-800 dark:text-gray-100">
+                    {{ doc.ocr_confidence === null ? EMPTY : `${Math.round(doc.ocr_confidence)}%` }}
+                  </dd>
+                </div>
+                <div>
+                  <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                    Source
+                  </dt>
+                  <dd class="mt-1 text-base text-gray-800 dark:text-gray-100">
+                    {{ sourceLabel(doc.source) }}
+                  </dd>
+                </div>
+              </dl>
 
-          <AppDetails
-            v-if="doc.extraction"
-            id="document-extraction-details"
-            summary="Extraction details"
-            data-testid="extraction-details"
-            class="mt-4"
-          >
-            <dl class="space-y-2">
-              <div class="flex justify-between gap-4">
-                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Model</dt>
-                <dd class="text-sm text-gray-800 dark:text-gray-100">
-                  {{ doc.extraction.model ?? EMPTY }}
-                </dd>
-              </div>
-              <div class="flex justify-between gap-4">
-                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Confidence</dt>
-                <dd class="text-sm text-gray-800 dark:text-gray-100">
-                  {{ doc.extraction.confidence ?? EMPTY }}
-                </dd>
-              </div>
-              <div v-if="latestExtractionEvent" class="flex justify-between gap-4">
-                <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">When</dt>
-                <dd class="text-sm text-gray-800 dark:text-gray-100">
-                  {{ formatDateTime(latestExtractionEvent.created_at) }}
-                </dd>
-              </div>
-            </dl>
-          </AppDetails>
+              <AppDetails
+                v-if="doc.extraction"
+                id="document-extraction-details"
+                summary="Extraction details"
+                data-testid="extraction-details"
+                class="mt-4"
+              >
+                <dl class="space-y-2">
+                  <div class="flex justify-between gap-4">
+                    <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Model</dt>
+                    <dd class="text-sm text-gray-800 dark:text-gray-100">
+                      {{ doc.extraction.model ?? EMPTY }}
+                    </dd>
+                  </div>
+                  <div class="flex justify-between gap-4">
+                    <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">Confidence</dt>
+                    <dd class="text-sm text-gray-800 dark:text-gray-100">
+                      {{ doc.extraction.confidence ?? EMPTY }}
+                    </dd>
+                  </div>
+                  <div v-if="latestExtractionEvent" class="flex justify-between gap-4">
+                    <dt class="text-sm font-medium text-gray-500 dark:text-gray-400">When</dt>
+                    <dd class="text-sm text-gray-800 dark:text-gray-100">
+                      {{ formatDateTime(latestExtractionEvent.created_at) }}
+                    </dd>
+                  </div>
+                </dl>
+              </AppDetails>
+            </section>
+          </div>
         </div>
 
         <div
