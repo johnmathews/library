@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
+  DOCUMENT_STATUSES,
   documentQueryString,
   listDocuments,
   originalUrl,
@@ -189,5 +190,18 @@ describe('uploadDocument', () => {
     const promise = uploadDocument(makeFile())
     FakeXHR.instances[0]!.failNetwork()
     await expect(promise).rejects.toMatchObject({ status: 0 })
+  })
+})
+
+describe('DOCUMENT_STATUSES', () => {
+  it('lists every document status with a human label', () => {
+    expect(DOCUMENT_STATUSES.map((s) => s.value)).toEqual([
+      'received',
+      'ocr',
+      'extract',
+      'indexed',
+      'failed',
+    ])
+    expect(DOCUMENT_STATUSES.find((s) => s.value === 'indexed')?.text).toBe('Indexed')
   })
 })

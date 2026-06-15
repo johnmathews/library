@@ -2,17 +2,20 @@
 /**
  * Documents dashboard: a responsive tile grid with pagination (route `/`).
  *
- * All applied state lives in the URL query (?q=…&kind=…&page=…) so back/
- * forward and refresh keep the view. The search form itself moved into the
- * navbar's SearchModal (components/SearchModal.vue), which pushes the same
- * URL query; this view only *reads* the query, fetches, and shows an
- * active-filter summary with a "Clear filters" escape hatch. Snippets are
- * rendered through `renderSnippet` — see docs/api.md §1.3.3 for why they
- * must never hit v-html unescaped.
+ * The hero renders DocumentFilterBar (components/DocumentFilterBar.vue), which
+ * owns the search input, the filter pills, and the removable active-filter
+ * chips. All applied state still lives in the URL query (?q=…&kind=…&tag=…&
+ * page=…) so back/forward and refresh keep the view. The bar emits the next
+ * query and this view applies it via `router.push` (or `router.replace` for
+ * debounced typing) and fetches. The navbar SearchModal
+ * (components/SearchModal.vue) still exists and writes the same URL query, so
+ * the two stay in sync. Snippets are rendered through `renderSnippet` — see
+ * docs/api.md §1.3.3 for why they must never hit v-html unescaped.
  */
 import { computed, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter, type LocationQuery, type LocationQueryRaw } from 'vue-router'
+import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { AppBadge, AppBanner, AppPagination } from '@/components/app'
+import DocumentFilterBar from '@/components/DocumentFilterBar.vue'
 import {
   DOCUMENT_LANGUAGES,
   listDocuments,
@@ -21,11 +24,15 @@ import {
   type DocumentLanguage,
   type DocumentListItem,
 } from '@/api/documents'
-import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { renderSnippet } from '@/utils/snippet'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import type { DashboardField } from '@/api/settings'
+import {
+  parseDocumentQuery,
+  buildDocumentQuery,
+  hasActiveFilters,
+} from '@/utils/documentQuery'
 
 const PAGE_SIZE = 25
 const MAX_TAGS = 4
@@ -50,80 +57,21 @@ const flashMessage = ref(useFlashStore().consume())
 
 // --- Applied state (the URL is the source of truth) -----------------------
 
-function queryString(query: LocationQuery, key: string): string {
-  const value = query[key]
-  return typeof value === 'string' ? value : ''
-}
-
-const applied = computed(() => ({
-  q: queryString(route.query, 'q'),
-  kind: queryString(route.query, 'kind'),
-  senderId: queryString(route.query, 'sender_id'),
-  tag: queryString(route.query, 'tag'),
-  language: queryString(route.query, 'language'),
-  dateFrom: queryString(route.query, 'date_from'),
-  dateTo: queryString(route.query, 'date_to'),
-  page: Math.max(1, Number.parseInt(queryString(route.query, 'page'), 10) || 1),
-}))
-
-const isFiltered = computed(() => {
-  const a = applied.value
-  return Boolean(a.q || a.kind || a.senderId || a.tag || a.language || a.dateFrom || a.dateTo)
-})
+const applied = computed(() => parseDocumentQuery(route.query))
+const isFiltered = computed(() => hasActiveFilters(applied.value))
 
 function clearFilters(): void {
   void router.push({ query: {} })
 }
 
+function applyFilterQuery(query: LocationQueryRaw, opts?: { replace?: boolean }): void {
+  if (opts?.replace) void router.replace({ query })
+  else void router.push({ query })
+}
+
 function goToPage(page: number): void {
-  void router.push({ query: buildQuery(page) })
+  void router.push({ query: buildDocumentQuery(applied.value, page) })
 }
-
-/** Rebuild the URL query from the applied state; omit empties and page 1. */
-function buildQuery(page: number): LocationQueryRaw {
-  const a = applied.value
-  const query: LocationQueryRaw = {}
-  if (a.q) query.q = a.q
-  if (a.kind) query.kind = a.kind
-  if (a.senderId) query.sender_id = a.senderId
-  if (a.tag) query.tag = a.tag
-  if (a.language) query.language = a.language
-  if (a.dateFrom) query.date_from = a.dateFrom
-  if (a.dateTo) query.date_to = a.dateTo
-  if (page > 1) query.page = String(page)
-  return query
-}
-
-// --- Active-filter summary ---------------------------------------------------
-
-// Resolve kind/sender/tag values to display names via the shared taxonomy
-// cache (also used by the search modal); raw slug/id until loaded or on
-// fetch failure. Loaded lazily — only when such a filter is active.
-const { kinds, senders, tags, ensureLoaded } = useTaxonomyOptions()
-
-watch(
-  () => Boolean(applied.value.kind || applied.value.senderId || applied.value.tag),
-  (needsNames) => {
-    if (needsNames) void ensureLoaded()
-  },
-  { immediate: true },
-)
-
-const filterSummary = computed<string[]>(() => {
-  const a = applied.value
-  const parts: string[] = []
-  if (a.q) parts.push(`search “${a.q}”`)
-  if (a.kind) parts.push(`kind ${kinds.value.find((k) => k.slug === a.kind)?.name ?? a.kind}`)
-  if (a.senderId) {
-    const name = senders.value.find((s) => String(s.id) === a.senderId)?.name
-    parts.push(`sender ${name ?? `#${a.senderId}`}`)
-  }
-  if (a.tag) parts.push(`tag ${tags.value.find((t) => t.slug === a.tag)?.name ?? a.tag}`)
-  if (a.language) parts.push(`language ${languageName(a.language as DocumentLanguage)}`)
-  if (a.dateFrom) parts.push(`dated from ${formatDate(a.dateFrom)}`)
-  if (a.dateTo) parts.push(`dated to ${formatDate(a.dateTo)}`)
-  return parts
-})
 
 // --- Fetching ---------------------------------------------------------------
 
@@ -147,8 +95,9 @@ watch(
       q: state.q || undefined,
       kind: state.kind || undefined,
       sender_id: Number.isInteger(senderId) ? senderId : undefined,
-      tag: state.tag ? [state.tag] : undefined,
+      tag: state.tags.length ? state.tags : undefined,
       language: (state.language || undefined) as DocumentLanguage | undefined,
+      status: (state.status || undefined) as DocumentListItem['status'] | undefined,
       date_from: state.dateFrom || undefined,
       date_to: state.dateTo || undefined,
       limit: PAGE_SIZE,
@@ -237,6 +186,8 @@ const amountLabels = computed<Map<number, string | null>>(() => {
 
   <h1 id="dashboard-title" class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Documents</h1>
 
+  <DocumentFilterBar :applied="applied" @apply="applyFilterQuery" @clear="clearFilters" />
+
   <div
     v-if="loadError"
     class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-4 text-gray-600 dark:text-gray-300"
@@ -246,21 +197,6 @@ const amountLabels = computed<Map<number, string | null>>(() => {
   </div>
 
   <template v-else-if="!loading">
-    <p
-      v-if="isFiltered"
-      class="text-sm text-gray-500 dark:text-gray-400 mb-4"
-      data-testid="filter-summary"
-    >
-      Filtered by {{ filterSummary.join(', ') }} ·
-      <a
-        href="#"
-        class="text-violet-600 hover:underline"
-        data-testid="clear-filters"
-        @click.prevent="clearFilters"
-        >Clear filters</a
-      >
-    </p>
-
     <p
       v-if="items.length"
       class="text-sm text-gray-500 dark:text-gray-400 mb-4"
@@ -342,7 +278,7 @@ const amountLabels = computed<Map<number, string | null>>(() => {
                thumbnail (the letterboxed/fallback states sit on the gray box). -->
           <div
             v-if="auth.tilePreview === 'full_width' && item.has_thumbnail && !brokenThumbnails.has(item.id)"
-            class="app-doc-card__thumbnail-fade pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-transparent to-white dark:to-gray-800"
+            class="app-doc-card__thumbnail-fade pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-gradient-to-b from-transparent to-white dark:to-gray-800"
             aria-hidden="true"
             data-testid="thumbnail-fade"
           ></div>
