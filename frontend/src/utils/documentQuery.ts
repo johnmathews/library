@@ -22,6 +22,7 @@ export interface AppliedFilters {
   page: number
 }
 
+/** Collapse a query value to a string; `null`, arrays and `undefined` become `''`. */
 function asString(value: LocationQuery[string] | undefined): string {
   return typeof value === 'string' ? value : ''
 }

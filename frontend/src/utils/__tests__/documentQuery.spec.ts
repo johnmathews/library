@@ -59,6 +59,14 @@ describe('parseDocumentQuery', () => {
     expect(parseDocumentQuery({ page: 'nonsense' }).page).toBe(1)
     expect(parseDocumentQuery({ page: '0' }).page).toBe(1)
   })
+
+  it('ignores null values in repeated tag params', () => {
+    expect(parseDocumentQuery({ tag: [null, 'energie'] }).tags).toEqual(['energie'])
+  })
+
+  it('treats a bare null query param as empty string', () => {
+    expect(parseDocumentQuery({ status: null }).status).toBe('')
+  })
 })
 
 describe('buildDocumentQuery', () => {
@@ -105,5 +113,6 @@ describe('hasActiveFilters', () => {
     expect(hasActiveFilters({ ...EMPTY, q: 'x' })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, tags: ['energie'] })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, status: 'failed' })).toBe(true)
+    expect(hasActiveFilters({ ...EMPTY, page: 5 })).toBe(false)
   })
 })
