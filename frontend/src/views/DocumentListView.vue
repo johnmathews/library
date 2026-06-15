@@ -11,8 +11,9 @@
  * must never hit v-html unescaped.
  */
 import { computed, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
+import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { AppBadge, AppBanner, AppPagination } from '@/components/app'
+import DocumentFilterBar from '@/components/DocumentFilterBar.vue'
 import {
   DOCUMENT_LANGUAGES,
   listDocuments,
@@ -21,7 +22,6 @@ import {
   type DocumentLanguage,
   type DocumentListItem,
 } from '@/api/documents'
-import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { renderSnippet } from '@/utils/snippet'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
@@ -62,43 +62,14 @@ function clearFilters(): void {
   void router.push({ query: {} })
 }
 
+function applyFilterQuery(query: LocationQueryRaw, opts?: { replace?: boolean }): void {
+  if (opts?.replace) void router.replace({ query })
+  else void router.push({ query })
+}
+
 function goToPage(page: number): void {
   void router.push({ query: buildDocumentQuery(applied.value, page) })
 }
-
-// --- Active-filter summary ---------------------------------------------------
-
-// Resolve kind/sender/tag values to display names via the shared taxonomy
-// cache (also used by the search modal); raw slug/id until loaded or on
-// fetch failure. Loaded lazily — only when such a filter is active.
-const { kinds, senders, tags, ensureLoaded } = useTaxonomyOptions()
-
-watch(
-  () => Boolean(applied.value.kind || applied.value.senderId || applied.value.tags.length),
-  (needsNames) => {
-    if (needsNames) void ensureLoaded()
-  },
-  { immediate: true },
-)
-
-const filterSummary = computed<string[]>(() => {
-  const a = applied.value
-  const parts: string[] = []
-  if (a.q) parts.push(`search “${a.q}”`)
-  if (a.kind) parts.push(`kind ${kinds.value.find((k) => k.slug === a.kind)?.name ?? a.kind}`)
-  if (a.senderId) {
-    const name = senders.value.find((s) => String(s.id) === a.senderId)?.name
-    parts.push(`sender ${name ?? `#${a.senderId}`}`)
-  }
-  for (const slug of a.tags) {
-    parts.push(`tag ${tags.value.find((t) => t.slug === slug)?.name ?? slug}`)
-  }
-  if (a.language) parts.push(`language ${languageName(a.language as DocumentLanguage)}`)
-  if (a.status) parts.push(`status ${a.status}`)
-  if (a.dateFrom) parts.push(`dated from ${formatDate(a.dateFrom)}`)
-  if (a.dateTo) parts.push(`dated to ${formatDate(a.dateTo)}`)
-  return parts
-})
 
 // --- Fetching ---------------------------------------------------------------
 
@@ -213,6 +184,8 @@ const amountLabels = computed<Map<number, string | null>>(() => {
 
   <h1 id="dashboard-title" class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Documents</h1>
 
+  <DocumentFilterBar :applied="applied" @apply="applyFilterQuery" @clear="clearFilters" />
+
   <div
     v-if="loadError"
     class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-4 text-gray-600 dark:text-gray-300"
@@ -222,21 +195,6 @@ const amountLabels = computed<Map<number, string | null>>(() => {
   </div>
 
   <template v-else-if="!loading">
-    <p
-      v-if="isFiltered"
-      class="text-sm text-gray-500 dark:text-gray-400 mb-4"
-      data-testid="filter-summary"
-    >
-      Filtered by {{ filterSummary.join(', ') }} ·
-      <a
-        href="#"
-        class="text-violet-600 hover:underline"
-        data-testid="clear-filters"
-        @click.prevent="clearFilters"
-        >Clear filters</a
-      >
-    </p>
-
     <p
       v-if="items.length"
       class="text-sm text-gray-500 dark:text-gray-400 mb-4"

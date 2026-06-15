@@ -120,12 +120,6 @@ describe('DocumentListView', () => {
       .filter((url) => url.startsWith('/api/documents'))
   }
 
-  function taxonomyUrls(): string[] {
-    return fetchMock.mock.calls
-      .map((call) => String(call[0]))
-      .filter((url) => /^\/api\/(kinds|senders|tags)$/.test(url))
-  }
-
   it('renders tiles in the dashboard grid with title link, tags, sender and date', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()
@@ -250,45 +244,18 @@ describe('DocumentListView', () => {
     )
   })
 
-  it('shows no filter summary when nothing is filtered', async () => {
+  it('renders no old text filter-summary element (the bar replaces it)', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()
-    expect(w.find('[data-testid="filter-summary"]').exists()).toBe(false)
-    // No taxonomy fetch either: names are only needed for active filters.
-    expect(taxonomyUrls()).toEqual([])
+    // The DocumentFilterBar replaces the old text-only filter-summary paragraph.
+    expect(w.find('[data-testid=”filter-summary”]').exists()).toBe(false)
   })
 
-  it('summarises active filters with names resolved from the taxonomy', async () => {
-    listResponse = () => jsonResponse(listBody([makeItem()]))
-    await router.push(
-      '/?q=rekening&kind=invoice&sender_id=3&tag=energie&language=nld&date_from=2026-05-01&date_to=2026-05-31',
-    )
-    const w = await mountView()
-
-    const summary = w.find('[data-testid="filter-summary"]')
-    expect(summary.text()).toContain('search “rekening”')
-    expect(summary.text()).toContain('kind Invoice')
-    expect(summary.text()).toContain('sender Eneco')
-    expect(summary.text()).toContain('tag Energie')
-    expect(summary.text()).toContain('language Dutch')
-    expect(summary.text()).toContain('dated from 1 May 2026')
-    expect(summary.text()).toContain('dated to 31 May 2026')
-  })
-
-  it('clears all filters from the summary link and refetches unfiltered', async () => {
-    listResponse = () => jsonResponse(listBody([makeItem()]))
-    await router.push('/?q=rekening&kind=invoice')
-    const w = await mountView()
-
-    await w.find('[data-testid="clear-filters"]').trigger('click')
-    await flushPromises()
-
-    expect(router.currentRoute.value.query).toEqual({})
-    const last = new URL(documentUrls().at(-1)!, 'http://test')
-    expect(last.searchParams.get('q')).toBeNull()
-    expect(last.searchParams.get('kind')).toBeNull()
-    expect(w.find('[data-testid="filter-summary"]').exists()).toBe(false)
-  })
+  // NOTE: “summarises active filters with names resolved from the taxonomy” and
+  // “clears all filters from the summary link and refetches unfiltered” were
+  // removed because the old text filter-summary / clear-filters link are
+  // intentionally replaced by DocumentFilterBar (chips + clear button).
+  // Active-filter chip rendering is covered in DocumentFilterBar.spec.ts.
 
   it('paginates: 60 results make 3 pages and page links update offset', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()], 60))
@@ -394,6 +361,21 @@ describe('DocumentListView', () => {
     const params = new URLSearchParams(listCall!.split('?')[1])
     expect(params.getAll('tag')).toEqual(['energie', 'wonen'])
     expect(params.get('status')).toBe('indexed')
+  })
+
+  it('renders the filter bar and applies its emitted query to the URL', async () => {
+    const w = await mountView()
+    await flushPromises()
+    const bar = w.findComponent({ name: 'DocumentFilterBar' })
+    expect(bar.exists()).toBe(true)
+
+    bar.vm.$emit('apply', { kind: 'invoice' }, {})
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ kind: 'invoice' })
+
+    bar.vm.$emit('clear')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({})
   })
 
   it('caps tag chips with a +N overflow', async () => {
