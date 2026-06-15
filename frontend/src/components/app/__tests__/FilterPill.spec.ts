@@ -23,7 +23,7 @@ describe('FilterPill', () => {
     const button = wrapper.get('[data-testid="filter-pill-button"]')
     expect(button.text()).toContain('Kind')
     expect(button.text()).toContain('Invoice')
-    expect(button.attributes('aria-pressed')).toBe('true')
+    expect(button.text()).toContain('(active)')
   })
 
   it('emits update:open when the button is clicked', async () => {
@@ -43,6 +43,9 @@ describe('FilterPill', () => {
     wrapper = mountPill({ open: true })
     await wrapper.get('[data-testid="filter-pill-button"]').trigger('keydown', { key: 'Escape' })
     expect(wrapper.emitted('update:open')?.at(-1)).toEqual([false])
+    expect(document.activeElement).toBe(
+      wrapper.get('[data-testid="filter-pill-button"]').element,
+    )
 
     document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     await wrapper.vm.$nextTick()

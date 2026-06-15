@@ -66,14 +66,13 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onOutsideMousedo
           : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700/60'
       "
       :aria-expanded="props.open"
-      :aria-pressed="props.active ? 'true' : 'false'"
-      aria-haspopup="true"
       @click="toggle"
     >
       <span class="font-medium">{{ props.label }}</span>
       <span v-if="props.active && props.valueLabel" class="text-gray-500 dark:text-gray-400"
         >: {{ props.valueLabel }}</span
       >
+      <span v-if="props.active" class="sr-only"> (active)</span>
       <svg class="h-3 w-3 fill-current opacity-70" viewBox="0 0 12 12" aria-hidden="true">
         <path d="M5.9 11.4L.5 6l1.4-1.4 4 4 4-4L11.3 6z" />
       </svg>
