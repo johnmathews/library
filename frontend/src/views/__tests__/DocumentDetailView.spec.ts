@@ -213,18 +213,58 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="detail-banner"]').exists()).toBe(false)
   })
 
-  it('previews the searchable PDF inline in an iframe with an open-in-new-tab link', async () => {
+  it('previews the searchable PDF inline in an iframe with the toolbar hidden', async () => {
     const w = await mountView()
     // disposition=inline: an attachment response would blank the iframe and
     // trigger a download instead of rendering the PDF.
-    // #view=FitH fits the page to the iframe width so a portrait page is not
-    // clipped on a narrow (mobile) viewport; the open-in-new-tab link stays plain.
+    // toolbar=0&navpanes=0 hides the native viewer chrome; view=FitH fits the
+    // page to the iframe width so a portrait page is not clipped on a narrow
+    // (mobile) viewport.
     expect(w.find('[data-testid="preview-pdf"]').attributes('src')).toBe(
-      '/api/documents/12/searchable.pdf?disposition=inline#view=FitH',
+      '/api/documents/12/searchable.pdf?disposition=inline#toolbar=0&navpanes=0&view=FitH',
     )
-    expect(w.find('a[target="_blank"]').attributes('href')).toBe(
-      '/api/documents/12/searchable.pdf?disposition=inline',
+  })
+
+  it('preview header opens the inline PDF in a new tab and downloads the searchable PDF', async () => {
+    const w = await mountView()
+    const open = w.find('[data-testid="preview-open"]')
+    expect(open.attributes('href')).toBe('/api/documents/12/searchable.pdf?disposition=inline')
+    expect(open.attributes('target')).toBe('_blank')
+    // Download is an attachment (no disposition param), preferring the searchable PDF.
+    expect(w.find('[data-testid="preview-download"]').attributes('href')).toBe(
+      '/api/documents/12/searchable.pdf',
     )
+  })
+
+  it('preview header download falls back to the original when there is no searchable PDF', async () => {
+    detail = makeDetail({ has_searchable_pdf: false })
+    const w = await mountView()
+    expect(w.find('[data-testid="preview-download"]').attributes('href')).toBe(
+      '/api/documents/12/original',
+    )
+  })
+
+  it('hero header shows the key stats and the title falls back to a placeholder', async () => {
+    detail = makeDetail({ title: null, amount_total: null })
+    const w = await mountView()
+    expect(w.find('h1').text()).toBe('Untitled document')
+    const stats = w.find('[data-testid="hero-stats"]').text()
+    expect(stats).toContain('Invoice') // kind
+    expect(stats).toContain('Eneco') // sender
+    expect(stats).toContain('15 May 2026') // document date
+    expect(stats).toContain('—') // amount is null
+  })
+
+  it('hero header renders each tag as a coloured badge', async () => {
+    detail = makeDetail({
+      tags: [
+        { slug: 'energie', name: 'Energie' },
+        { slug: 'wonen', name: 'Wonen' },
+      ],
+    })
+    const w = await mountView()
+    expect(w.findAll('[data-testid="hero-tags"] .rounded-full')).toHaveLength(2)
+    expect(w.find('[data-testid="hero-tags"]').text()).toContain('Energie')
   })
 
   it('shows a fit-width first-page thumbnail on mobile and keeps the iframe for lg+', async () => {
@@ -265,7 +305,7 @@ describe('DocumentDetailView', () => {
     detail = makeDetail({ has_searchable_pdf: false })
     let w = await mountView()
     expect(w.find('[data-testid="preview-pdf"]').attributes('src')).toBe(
-      '/api/documents/12/original?disposition=inline#view=FitH',
+      '/api/documents/12/original?disposition=inline#toolbar=0&navpanes=0&view=FitH',
     )
     w.unmount()
 

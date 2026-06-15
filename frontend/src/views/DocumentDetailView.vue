@@ -20,6 +20,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import {
   AppBackLink,
+  AppBadge,
   AppBanner,
   AppButton,
   AppDateInput,
@@ -168,6 +169,34 @@ function languageName(language: DocumentLanguage): string {
 function sourceLabel(source: string): string {
   return source.charAt(0).toUpperCase() + source.slice(1)
 }
+
+// --- Hero header (title + key stats + tags) -----------------------------------
+
+/** AppBadge colours that read as visually distinct in the Mosaic palette.
+ * A tag's colour is derived from its name so it stays stable across renders
+ * and pages without storing a colour on the tag itself. */
+const TAG_COLOURS = ['purple', 'blue', 'green', 'yellow', 'red', 'turquoise', 'pink'] as const
+
+function tagColour(name: string): (typeof TAG_COLOURS)[number] {
+  let hash = 0
+  for (let i = 0; i < name.length; i++) hash = (hash * 31 + name.charCodeAt(i)) >>> 0
+  return TAG_COLOURS[hash % TAG_COLOURS.length]!
+}
+
+/** The at-a-glance facts shown as a labelled stat row in the hero header.
+ * These mirror (read-only) the most important editable rows below; empty
+ * values render as the em-dash so the row layout stays stable. */
+const heroStats = computed<{ label: string; value: string }[]>(() => {
+  const d = doc.value
+  if (!d) return []
+  const amount = d.amount_total === null ? null : [d.amount_total, d.currency].filter(Boolean).join(' ')
+  return [
+    { label: 'Kind', value: d.kind?.name ?? EMPTY },
+    { label: 'Sender', value: d.sender?.name ?? EMPTY },
+    { label: 'Document date', value: formatDate(d.document_date) ?? EMPTY },
+    { label: 'Amount', value: amount ?? EMPTY },
+  ]
+})
 
 // --- Inline editing -----------------------------------------------------------
 
@@ -379,13 +408,31 @@ const pdfPreviewUrl = computed(() =>
     : '',
 )
 
-/** Same PDF, but with the `#view=FitH` open parameter so the browser's native
- * viewer fits the page to the iframe width — otherwise a portrait page renders
- * wider than a narrow (mobile) viewport and the right edge is clipped. The
- * plain `pdfPreviewUrl` (no fragment) is kept for the open-in-new-tab link. */
+/** Same PDF, but with native-viewer open parameters. `toolbar=0&navpanes=0`
+ * hides the viewer chrome (Chrome/Edge honour it; some Firefox builds ignore
+ * it — best effort, the page provides its own Open/Download buttons), and
+ * `view=FitH` fits the page to the iframe width so a portrait page is not
+ * clipped on a narrow (mobile) viewport. The plain `pdfPreviewUrl` (no
+ * fragment) is kept for the open-in-new-tab button. */
 const pdfPreviewIframeUrl = computed(() =>
-  pdfPreviewUrl.value ? `${pdfPreviewUrl.value}#view=FitH` : '',
+  pdfPreviewUrl.value ? `${pdfPreviewUrl.value}#toolbar=0&navpanes=0&view=FitH` : '',
 )
+
+/** Where the preview header's "Open" button points (open the inline preview in
+ * a new tab): the PDF for PDFs, the original image for images. */
+const previewOpenUrl = computed(() => {
+  if (!doc.value) return ''
+  if (preview.value === 'pdf') return pdfPreviewUrl.value
+  if (preview.value === 'image') return originalUrl(doc.value.id, { inline: true })
+  return ''
+})
+
+/** Where the preview header's "Download" button points (attachment download):
+ * the searchable PDF when present, otherwise the original file. */
+const previewDownloadUrl = computed(() => {
+  if (!doc.value) return ''
+  return doc.value.has_searchable_pdf ? searchablePdfUrl(doc.value.id) : originalUrl(doc.value.id)
+})
 
 const highlight = computed(() => {
   const value = route.query.highlight
@@ -437,9 +484,39 @@ watch(
     </AppBanner>
     <AppErrorSummary v-if="errorItems.length" :errors="errorItems" data-testid="error-summary" />
 
-    <h1 id="document-title" class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-6 break-words app-detail-title">
-      {{ doc.title ?? 'Untitled document' }}
-    </h1>
+    <div
+      id="document-hero"
+      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5 sm:p-6 mb-6"
+    >
+      <h1
+        id="document-title"
+        class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold break-words app-detail-title"
+      >
+        {{ doc.title ?? 'Untitled document' }}
+      </h1>
+      <dl
+        class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3"
+        data-testid="hero-stats"
+      >
+        <div v-for="stat in heroStats" :key="stat.label">
+          <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            {{ stat.label }}
+          </dt>
+          <dd class="mt-0.5 text-sm font-medium text-gray-800 dark:text-gray-100 break-words">
+            {{ stat.value }}
+          </dd>
+        </div>
+      </dl>
+      <div
+        v-if="doc.tags.length"
+        class="mt-5 flex flex-wrap gap-2"
+        data-testid="hero-tags"
+      >
+        <AppBadge v-for="tag in doc.tags" :key="tag.slug" :colour="tagColour(tag.name)">
+          {{ tag.name }}
+        </AppBadge>
+      </div>
+    </div>
 
     <div id="document-detail-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <!-- Preview: right column on desktop (lg:order-2), first on mobile.
@@ -450,6 +527,63 @@ watch(
           id="document-preview-card"
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 overflow-hidden"
         >
+          <!-- Preview header: keeps the document window itself clean (the native
+               PDF toolbar is hidden) while giving an unambiguous way to open the
+               file full-size or download it. -->
+          <div
+            v-if="preview !== 'none'"
+            class="flex items-center justify-between gap-3 border-b border-gray-200 dark:border-gray-700/60 px-4 py-2.5"
+          >
+            <span class="text-sm font-medium text-gray-500 dark:text-gray-400">Document</span>
+            <div class="flex items-center gap-2">
+              <a
+                :href="previewOpenUrl"
+                target="_blank"
+                rel="noopener"
+                class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
+                data-testid="preview-open"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke-width="1.5"
+                  stroke="currentColor"
+                  class="w-4 h-4"
+                  aria-hidden="true"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M13.5 6H5.25A2.25 2.25 0 0 0 3 8.25v10.5A2.25 2.25 0 0 0 5.25 21h10.5A2.25 2.25 0 0 0 18 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25"
+                  />
+                </svg>
+                Open
+              </a>
+              <a
+                :href="previewDownloadUrl"
+                class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
+                data-testid="preview-download"
+              >
+                <svg
+                  xmlns="http://www.w3.org/2000/svg"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  stroke-width="1.5"
+                  stroke="currentColor"
+                  class="w-4 h-4"
+                  aria-hidden="true"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"
+                  />
+                </svg>
+                Download
+              </a>
+            </div>
+          </div>
           <!-- Inline disposition: Firefox refuses to render <img> responses
                served as attachment, and other browsers would download them. -->
           <img
@@ -515,16 +649,6 @@ watch(
               title="Document preview"
               data-testid="preview-pdf"
             ></iframe>
-            <p class="p-4 text-sm">
-              <a
-                class="text-violet-600 hover:underline"
-                :href="pdfPreviewUrl"
-                target="_blank"
-                rel="noopener"
-              >
-                Open the PDF in a new tab
-              </a>
-            </p>
           </template>
           <div
             v-else
