@@ -378,6 +378,21 @@ describe('DocumentListView', () => {
     expect(router.currentRoute.value.query).toEqual({})
   })
 
+  it('uses router.replace when the bar requests a replace (debounced typing)', async () => {
+    await mountView()
+    await flushPromises()
+    const bar = wrapper!.findComponent({ name: 'DocumentFilterBar' })
+    const replaceSpy = vi.spyOn(router, 'replace')
+    const pushSpy = vi.spyOn(router, 'push')
+
+    bar.vm.$emit('apply', { q: 'hello' }, { replace: true })
+    await flushPromises()
+
+    expect(replaceSpy).toHaveBeenCalledWith({ query: { q: 'hello' } })
+    expect(pushSpy).not.toHaveBeenCalled()
+    expect(router.currentRoute.value.query).toEqual({ q: 'hello' })
+  })
+
   it('caps tag chips with a +N overflow', async () => {
     seedPrefs(['tags'])
     listResponse = () =>

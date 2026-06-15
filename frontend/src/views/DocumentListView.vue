@@ -2,13 +2,15 @@
 /**
  * Documents dashboard: a responsive tile grid with pagination (route `/`).
  *
- * All applied state lives in the URL query (?q=…&kind=…&page=…) so back/
- * forward and refresh keep the view. The search form itself moved into the
- * navbar's SearchModal (components/SearchModal.vue), which pushes the same
- * URL query; this view only *reads* the query, fetches, and shows an
- * active-filter summary with a "Clear filters" escape hatch. Snippets are
- * rendered through `renderSnippet` — see docs/api.md §1.3.3 for why they
- * must never hit v-html unescaped.
+ * The hero renders DocumentFilterBar (components/DocumentFilterBar.vue), which
+ * owns the search input, the filter pills, and the removable active-filter
+ * chips. All applied state still lives in the URL query (?q=…&kind=…&tag=…&
+ * page=…) so back/forward and refresh keep the view. The bar emits the next
+ * query and this view applies it via `router.push` (or `router.replace` for
+ * debounced typing) and fetches. The navbar SearchModal
+ * (components/SearchModal.vue) still exists and writes the same URL query, so
+ * the two stay in sync. Snippets are rendered through `renderSnippet` — see
+ * docs/api.md §1.3.3 for why they must never hit v-html unescaped.
  */
 import { computed, reactive, ref, watch } from 'vue'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
