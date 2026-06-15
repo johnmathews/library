@@ -1,7 +1,7 @@
 # Dashboard inline search & filters — design
 
 **Date:** 2026-06-15
-**Status:** draft
+**Status:** shipped 2026-06-15 (see `journal/260615-dashboard-search-filters.md`; implemented via `docs/superpowers/plans/2026-06-15-dashboard-search-filters.md`).
 
 ## Problem
 
