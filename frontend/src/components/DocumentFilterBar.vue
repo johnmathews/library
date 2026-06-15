@@ -91,6 +91,9 @@ function selectSender(id: string): void {
   emitWith({ senderId: id })
   openPill.value = null
 }
+// The "More" pill holds two independent choices (language + status), so —
+// unlike the single-choice Kind/Sender pills — selecting one does NOT close
+// the pill; the user can set both before dismissing it.
 function selectLanguage(value: string): void {
   emitWith({ language: value as DocumentLanguage })
 }
@@ -260,6 +263,16 @@ const statusOptions = DOCUMENT_STATUSES
         @update:open="setPillOpen('kind', $event)"
       >
         <ul class="max-h-64 overflow-auto text-sm">
+          <li>
+            <button
+              type="button"
+              data-testid="kind-option-any"
+              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
+              @click="selectKind('')"
+            >
+              All kinds
+            </button>
+          </li>
           <li v-for="k in kinds" :key="k.slug">
             <button
               type="button"
@@ -283,6 +296,16 @@ const statusOptions = DOCUMENT_STATUSES
         @update:open="setPillOpen('sender', $event)"
       >
         <ul class="max-h-64 overflow-auto text-sm">
+          <li>
+            <button
+              type="button"
+              data-testid="sender-option-any"
+              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
+              @click="selectSender('')"
+            >
+              All senders
+            </button>
+          </li>
           <li v-for="s in senders" :key="s.id">
             <button
               type="button"

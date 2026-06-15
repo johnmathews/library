@@ -132,4 +132,21 @@ describe('DocumentFilterBar', () => {
     await w.get('[data-testid="filter-clear-all"]').trigger('click')
     expect(w.emitted('clear')).toHaveLength(1)
   })
+
+  it('the clear-search button empties the input and emits q removed', async () => {
+    const w = mountBar({ ...EMPTY, q: 'rekening' })
+    await w.get('[data-testid="filter-search-clear"]').trigger('click')
+    expect((w.get('[data-testid="filter-search"]').element as HTMLInputElement).value).toBe('')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({})
+  })
+
+  it('resets to page 1 when a filter changes (emitted query has no page)', async () => {
+    const w = mountBar({ ...EMPTY, page: 3, kind: 'invoice' })
+    await flushPromises()
+    await w.get('[data-testid="pill-sender"] [data-testid="filter-pill-button"]').trigger('click')
+    await w.get('[data-testid="sender-option-3"]').trigger('click')
+    const query = w.emitted('apply')!.at(-1)![0] as Record<string, unknown>
+    expect(query.page).toBeUndefined()
+    expect(query).toEqual({ kind: 'invoice', sender_id: '3' })
+  })
 })
