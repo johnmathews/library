@@ -151,6 +151,14 @@ export const DOCUMENT_LANGUAGES: readonly { value: DocumentLanguage; text: strin
   { value: 'unknown', text: 'Unknown' },
 ] as const
 
+export const DOCUMENT_STATUSES: readonly { value: DocumentStatus; text: string }[] = [
+  { value: 'received', text: 'Received' },
+  { value: 'ocr', text: 'OCR' },
+  { value: 'extract', text: 'Extracting' },
+  { value: 'indexed', text: 'Indexed' },
+  { value: 'failed', text: 'Failed' },
+] as const
+
 /**
  * Serialise filters to a query string. Built by hand (not apiFetch's
  * `query` option) because `tag` repeats: ?tag=a&tag=b ANDs both.
