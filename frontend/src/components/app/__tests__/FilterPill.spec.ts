@@ -1,6 +1,20 @@
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { mount, type VueWrapper } from '@vue/test-utils'
 import FilterPill from '../FilterPill.vue'
+
+function stubRect(el: HTMLElement, left: number, width: number): void {
+  vi.spyOn(el, 'getBoundingClientRect').mockReturnValue({
+    left,
+    width,
+    right: left + width,
+    top: 0,
+    bottom: 0,
+    height: 0,
+    x: left,
+    y: 0,
+    toJSON: () => ({}),
+  } as DOMRect)
+}
 
 function mountPill(props: Record<string, unknown> = {}): VueWrapper {
   return mount(FilterPill, {
@@ -16,6 +30,7 @@ describe('FilterPill', () => {
     wrapper?.unmount()
     wrapper = undefined
     document.body.replaceChildren()
+    vi.restoreAllMocks()
   })
 
   it('shows the label, and the value label + active styling when active', () => {
@@ -50,5 +65,26 @@ describe('FilterPill', () => {
     document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
     await wrapper.vm.$nextTick()
     expect(wrapper.emitted('update:open')?.at(-1)).toEqual([false])
+  })
+
+  // jsdom reports innerWidth = 1024; centre past 512 is the "right half".
+  it('right-aligns the panel when the pill is in the right half of the viewport', async () => {
+    wrapper = mountPill({ open: false })
+    stubRect(wrapper.element as HTMLElement, 800, 80) // centre 840 > 512
+    await wrapper.setProps({ open: true })
+    await wrapper.vm.$nextTick()
+    const panel = wrapper.get('[data-testid="filter-pill-panel"]')
+    expect(panel.classes()).toContain('right-0')
+    expect(panel.classes()).not.toContain('left-0')
+  })
+
+  it('left-aligns the panel when the pill is in the left half of the viewport', async () => {
+    wrapper = mountPill({ open: false })
+    stubRect(wrapper.element as HTMLElement, 20, 80) // centre 60 < 512
+    await wrapper.setProps({ open: true })
+    await wrapper.vm.$nextTick()
+    const panel = wrapper.get('[data-testid="filter-pill-panel"]')
+    expect(panel.classes()).toContain('left-0')
+    expect(panel.classes()).not.toContain('right-0')
   })
 })

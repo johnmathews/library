@@ -5,7 +5,7 @@
  * filter bar keep only one pill open at a time. Closes on Escape (focus
  * returns to the button) and on outside mousedown. The panel content is a slot.
  */
-import { onBeforeUnmount, ref, watch } from 'vue'
+import { nextTick, onBeforeUnmount, ref, watch } from 'vue'
 
 const props = defineProps<{
   label: string
@@ -18,6 +18,17 @@ const emit = defineEmits<{ 'update:open': [boolean] }>()
 
 const root = ref<HTMLElement | null>(null)
 const button = ref<HTMLButtonElement | null>(null)
+
+// Panels anchor to the pill. A pill in the right half of the viewport opens its
+// panel leftward (right-aligned) so it can't spill off the right edge on narrow
+// screens; everything else opens rightward (left-aligned).
+const alignRight = ref(false)
+function updateAlignment(): void {
+  const el = root.value
+  if (!el) return
+  const rect = el.getBoundingClientRect()
+  alignRight.value = rect.left + rect.width / 2 > window.innerWidth / 2
+}
 
 function toggle(): void {
   emit('update:open', !props.open)
@@ -43,6 +54,8 @@ watch(
   () => props.open,
   (open) => {
     if (open) {
+      updateAlignment()
+      void nextTick(updateAlignment)
       document.addEventListener('mousedown', onOutsideMousedown)
     } else {
       document.removeEventListener('mousedown', onOutsideMousedown)
@@ -89,7 +102,8 @@ onBeforeUnmount(() => document.removeEventListener('mousedown', onOutsideMousedo
       <div
         v-if="props.open"
         data-testid="filter-pill-panel"
-        class="absolute left-0 top-full z-20 mt-1 min-w-56 rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700/60 dark:bg-gray-800"
+        class="absolute top-full z-20 mt-1 min-w-56 max-w-[calc(100vw-1rem)] rounded-lg border border-gray-200 bg-white p-3 shadow-lg dark:border-gray-700/60 dark:bg-gray-800"
+        :class="alignRight ? 'right-0' : 'left-0'"
       >
         <slot />
       </div>
