@@ -382,6 +382,20 @@ describe('DocumentListView', () => {
     expect(w.find('[data-testid="thumbnail-fade"]').exists()).toBe(false)
   })
 
+  it('sends repeated tag params and status from the URL to the API', async () => {
+    await router.push('/?tag=energie&tag=wonen&status=indexed')
+    await mountView()
+    await flushPromises()
+
+    const listCall = fetchMock.mock.calls
+      .map((c) => String(c[0]))
+      .find((url) => url.startsWith('/api/documents'))
+    expect(listCall).toBeDefined()
+    const params = new URLSearchParams(listCall!.split('?')[1])
+    expect(params.getAll('tag')).toEqual(['energie', 'wonen'])
+    expect(params.get('status')).toBe('indexed')
+  })
+
   it('caps tag chips with a +N overflow', async () => {
     seedPrefs(['tags'])
     listResponse = () =>

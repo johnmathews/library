@@ -11,7 +11,7 @@
  * must never hit v-html unescaped.
  */
 import { computed, reactive, ref, watch } from 'vue'
-import { useRoute, useRouter, type LocationQuery, type LocationQueryRaw } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { AppBadge, AppBanner, AppPagination } from '@/components/app'
 import {
   DOCUMENT_LANGUAGES,
@@ -26,6 +26,11 @@ import { renderSnippet } from '@/utils/snippet'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import type { DashboardField } from '@/api/settings'
+import {
+  parseDocumentQuery,
+  buildDocumentQuery,
+  hasActiveFilters,
+} from '@/utils/documentQuery'
 
 const PAGE_SIZE = 25
 const MAX_TAGS = 4
@@ -50,48 +55,15 @@ const flashMessage = ref(useFlashStore().consume())
 
 // --- Applied state (the URL is the source of truth) -----------------------
 
-function queryString(query: LocationQuery, key: string): string {
-  const value = query[key]
-  return typeof value === 'string' ? value : ''
-}
-
-const applied = computed(() => ({
-  q: queryString(route.query, 'q'),
-  kind: queryString(route.query, 'kind'),
-  senderId: queryString(route.query, 'sender_id'),
-  tag: queryString(route.query, 'tag'),
-  language: queryString(route.query, 'language'),
-  dateFrom: queryString(route.query, 'date_from'),
-  dateTo: queryString(route.query, 'date_to'),
-  page: Math.max(1, Number.parseInt(queryString(route.query, 'page'), 10) || 1),
-}))
-
-const isFiltered = computed(() => {
-  const a = applied.value
-  return Boolean(a.q || a.kind || a.senderId || a.tag || a.language || a.dateFrom || a.dateTo)
-})
+const applied = computed(() => parseDocumentQuery(route.query))
+const isFiltered = computed(() => hasActiveFilters(applied.value))
 
 function clearFilters(): void {
   void router.push({ query: {} })
 }
 
 function goToPage(page: number): void {
-  void router.push({ query: buildQuery(page) })
-}
-
-/** Rebuild the URL query from the applied state; omit empties and page 1. */
-function buildQuery(page: number): LocationQueryRaw {
-  const a = applied.value
-  const query: LocationQueryRaw = {}
-  if (a.q) query.q = a.q
-  if (a.kind) query.kind = a.kind
-  if (a.senderId) query.sender_id = a.senderId
-  if (a.tag) query.tag = a.tag
-  if (a.language) query.language = a.language
-  if (a.dateFrom) query.date_from = a.dateFrom
-  if (a.dateTo) query.date_to = a.dateTo
-  if (page > 1) query.page = String(page)
-  return query
+  void router.push({ query: buildDocumentQuery(applied.value, page) })
 }
 
 // --- Active-filter summary ---------------------------------------------------
@@ -102,7 +74,7 @@ function buildQuery(page: number): LocationQueryRaw {
 const { kinds, senders, tags, ensureLoaded } = useTaxonomyOptions()
 
 watch(
-  () => Boolean(applied.value.kind || applied.value.senderId || applied.value.tag),
+  () => Boolean(applied.value.kind || applied.value.senderId || applied.value.tags.length),
   (needsNames) => {
     if (needsNames) void ensureLoaded()
   },
@@ -118,8 +90,11 @@ const filterSummary = computed<string[]>(() => {
     const name = senders.value.find((s) => String(s.id) === a.senderId)?.name
     parts.push(`sender ${name ?? `#${a.senderId}`}`)
   }
-  if (a.tag) parts.push(`tag ${tags.value.find((t) => t.slug === a.tag)?.name ?? a.tag}`)
+  for (const slug of a.tags) {
+    parts.push(`tag ${tags.value.find((t) => t.slug === slug)?.name ?? slug}`)
+  }
   if (a.language) parts.push(`language ${languageName(a.language as DocumentLanguage)}`)
+  if (a.status) parts.push(`status ${a.status}`)
   if (a.dateFrom) parts.push(`dated from ${formatDate(a.dateFrom)}`)
   if (a.dateTo) parts.push(`dated to ${formatDate(a.dateTo)}`)
   return parts
@@ -147,8 +122,9 @@ watch(
       q: state.q || undefined,
       kind: state.kind || undefined,
       sender_id: Number.isInteger(senderId) ? senderId : undefined,
-      tag: state.tag ? [state.tag] : undefined,
+      tag: state.tags.length ? state.tags : undefined,
       language: (state.language || undefined) as DocumentLanguage | undefined,
+      status: (state.status || undefined) as DocumentListItem['status'] | undefined,
       date_from: state.dateFrom || undefined,
       date_to: state.dateTo || undefined,
       limit: PAGE_SIZE,
@@ -342,7 +318,7 @@ const amountLabels = computed<Map<number, string | null>>(() => {
                thumbnail (the letterboxed/fallback states sit on the gray box). -->
           <div
             v-if="auth.tilePreview === 'full_width' && item.has_thumbnail && !brokenThumbnails.has(item.id)"
-            class="app-doc-card__thumbnail-fade pointer-events-none absolute inset-x-0 bottom-0 h-8 bg-gradient-to-b from-transparent to-white dark:to-gray-800"
+            class="app-doc-card__thumbnail-fade pointer-events-none absolute inset-x-0 bottom-0 h-4 bg-gradient-to-b from-transparent to-white dark:to-gray-800"
             aria-hidden="true"
             data-testid="thumbnail-fade"
           ></div>
