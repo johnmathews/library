@@ -227,9 +227,11 @@ Layout lives in `.app-search-modal` (`utility-patterns.css`): a centered
 `margin: auto` because Tailwind Preflight zeroes the margin that the browser
 otherwise uses to centre a modal `<dialog>`.
 
-The inline filter bar (below) is visible at all screen sizes — its pill row
-wraps on narrow viewports. The modal remains available at any size (e.g. via
-the `/` shortcut) and writes the same URL query.
+The inline filter bar (below) is visible at all screen sizes. From the `sm`
+breakpoint up the pill row is always shown; below it the pills collapse behind a
+**Filters** toggle (with an active-filter count badge) that expands them inline,
+so status and multi-tag filtering stay available on mobile. The modal remains
+available at any size (e.g. via the `/` shortcut) and writes the same URL query.
 
 ### Dashboard filter bar (`src/components/DocumentFilterBar.vue`)
 
@@ -247,6 +249,9 @@ in sync automatically.
 - **Active-filter chips:** each applied filter renders as a removable chip
   below the pill row; a **Clear all** button removes every active filter at
   once.
+- **Mobile:** below `sm`, a **Filters** toggle (with a count badge) collapses
+  the pill row and expands it inline on tap; the search input and chips stay
+  visible at every width.
 - **`FilterPill` primitive** (`src/components/app/FilterPill.vue`, exported
   from `@/components/app`): a reusable controlled popover — rounded button +
   slotted dropdown panel, `v-model:open`, closes on Escape or outside

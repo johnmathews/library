@@ -16,8 +16,11 @@ considered three approaches: replacing the modal entirely (A), an always-visible
 inline bar (B), and a hybrid that keeps both. We went with the hybrid: the modal
 is unchanged and continues to work as before; the filter bar is additive. This
 avoids breaking the `/`-shortcut flow and avoids duplicating test coverage. The
-bar renders at all viewport sizes (its pill row wraps on narrow screens); an
-explicit collapse-to-button on mobile was deferred as a follow-up.
+bar renders at all viewport sizes. Below the `sm` breakpoint the pill row
+collapses behind a "Filters" toggle (with an active-filter count badge) that
+expands the pills inline — chosen over routing mobile users to the modal, since
+the modal is a reduced surface (no status, single-tag); the inline disclosure
+keeps full filter parity on mobile.
 
 ## URL as source of truth — shared `documentQuery` util
 
