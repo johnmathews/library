@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -253,7 +254,6 @@ async def run_ask(
             answer = _text_of(response.content)
             break
 
-        messages.append({"role": "assistant", "content": response.content})
         tool_results: list[dict[str, Any]] = []
         for block in response.content:
             if getattr(block, "type", None) != "tool_use":
@@ -267,12 +267,21 @@ async def run_ask(
                     "content": json.dumps(output, default=str),
                 }
             )
+        # stop_reason was tool_use but no tool_use blocks materialised: treat the
+        # text as the answer rather than sending an empty user turn (a 400).
+        if not tool_results:
+            answer = _text_of(response.content)
+            break
+        messages.append({"role": "assistant", "content": response.content})
         messages.append({"role": "user", "content": tool_results})
     else:
         logger.info("ask hit the tool-turn limit without a final answer")
 
     result.answer = answer or "I couldn't find an answer to that in the archive."
-    result.citations = await _citations_for(session, cited)
+    # Prefer the documents Claude actually cited inline (#id); fall back to the
+    # full retrieved set when the answer cited none explicitly.
+    mentioned = {int(match) for match in re.findall(r"#(\d+)", answer)} & cited
+    result.citations = await _citations_for(session, mentioned or cited)
     # De-duplicate tool names, preserving first-use order.
     result.used_tools = list(dict.fromkeys(used))
     return result

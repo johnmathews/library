@@ -175,21 +175,40 @@ async def _vector_candidates(
     query_embedding: Sequence[float],
     pool: int,
 ) -> tuple[list[int], dict[int, tuple[int, str]]]:
-    """Documents ranked by their nearest chunk, plus that chunk per document."""
+    """The ``pool`` nearest *documents* (by their closest chunk), with that chunk.
+
+    ``DISTINCT ON (document_id)`` collapses to one row per document — the
+    nearest chunk — *before* the limit, so ``pool`` counts documents, not
+    chunks (a single many-chunk document can't crowd out the candidate set).
+    """
     distance = DocumentChunk.embedding.cosine_distance(query_embedding).label("distance")
-    statement = (
-        select(DocumentChunk.document_id, DocumentChunk.chunk_index, DocumentChunk.text)
+    nearest_per_document = (
+        select(
+            DocumentChunk.document_id.label("document_id"),
+            DocumentChunk.chunk_index.label("chunk_index"),
+            DocumentChunk.text.label("text"),
+            distance,
+        )
         .join(Document, Document.id == DocumentChunk.document_id)
         .where(*conditions)
-        .order_by(distance.asc())
+        .order_by(DocumentChunk.document_id, distance.asc())
+        .distinct(DocumentChunk.document_id)
+        .subquery()
+    )
+    statement = (
+        select(
+            nearest_per_document.c.document_id,
+            nearest_per_document.c.chunk_index,
+            nearest_per_document.c.text,
+        )
+        .order_by(nearest_per_document.c.distance.asc())
         .limit(pool)
     )
     order: list[int] = []
     best_chunk: dict[int, tuple[int, str]] = {}
     for document_id, chunk_index, text in (await session.execute(statement)).all():
-        if document_id not in best_chunk:  # rows are distance-ordered: first = nearest
-            best_chunk[document_id] = (chunk_index, text)
-            order.append(document_id)
+        best_chunk[document_id] = (chunk_index, text)
+        order.append(document_id)
     return order, best_chunk
 
 

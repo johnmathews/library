@@ -149,6 +149,30 @@ async def test_hybrid_fuses_vector_and_fts(session: AsyncSession) -> None:
     assert ids[0] == fts_only  # appears in both retrievers → fused to the top
 
 
+async def test_many_chunk_document_does_not_crowd_out_others(session: AsyncSession) -> None:
+    """The candidate pool counts documents, not chunks: a doc with many near
+    chunks must not consume the whole pool and hide other documents."""
+    crowded = await seed_document(
+        session,
+        "crowded",
+        ocr_text="x",
+        chunks=[(f"chunk {i}", unit_vector(0)) for i in range(8)],
+    )
+    other = await seed_document(
+        session, "other", ocr_text="y", chunks=[("near too", unit_vector(1))]
+    )
+
+    # candidate_pool=2 would be fully consumed by the 8-chunk doc without
+    # per-document collapsing.
+    hits = await semantic_search(
+        session, query="", query_embedding=unit_vector(0), top_k=10, candidate_pool=2
+    )
+
+    ids = {hit.document.id for hit in hits}
+    assert crowded in ids
+    assert other in ids
+
+
 async def test_no_matches_returns_empty(session: AsyncSession) -> None:
     hits = await semantic_search(
         session, query="", query_embedding=unit_vector(0), top_k=5

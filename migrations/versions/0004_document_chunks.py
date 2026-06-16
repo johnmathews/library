@@ -65,4 +65,5 @@ def downgrade() -> None:
     op.drop_index("ix_document_chunks_embedding", table_name="document_chunks")
     op.drop_index("ix_document_chunks_document_id", table_name="document_chunks")
     op.drop_table("document_chunks")
-    op.execute("DROP EXTENSION IF EXISTS vector")
+    # Intentionally leave the `vector` extension in place: dropping it would
+    # fail (or surprise) if anything else in the database uses pgvector.
