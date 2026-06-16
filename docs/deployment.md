@@ -232,29 +232,68 @@ restore the pre-upgrade `pg_dump` if a downgrade must cross a migration.
 
 ### 1.7.1 Upgrading to semantic Ask (pgvector + embedder)
 
-The Ask release changes the `db` image from `postgres:17.5-alpine` to
-`pgvector/pgvector:pg17` and adds the `embedder` service. For an existing
-deployment:
+The Ask release swaps the `db` image to `pgvector/pgvector:pg17` and adds the
+`embedder` service. Steps (with the gotchas seen on the live `paperless` LXC —
+see 1.7.2 for that instance's exact shape):
 
-1. **Back up `pgdata` first** (`pg_dump`, see 1.6) — always, before any DB
-   image change.
-2. The image swap is **safe in place**: the original alpine cluster was
-   initialised with `C` collation, which is libc-independent, so moving the
-   data directory from the musl (alpine) image to the glibc (Debian) pgvector
-   image does not risk a collation-version index mismatch. No `REINDEX` is
-   needed. (The compose file sets `POSTGRES_INITDB_ARGS=--locale=C.UTF-8` so a
-   *fresh* cluster keeps the same byte-order collation.)
-3. `docker compose up -d --build` — the `migrate` job enables the `vector`
-   extension and creates `document_chunks` + `ask_logs`; the `embedder`
-   downloads bge-m3 (~2 GB) on first start.
-4. **Backfill embeddings** for documents indexed before this release:
+1. **Back up the DB first** — always, before any DB image change:
+   `docker exec <db> pg_dump -U library -Fc library > library-pre-ask.dump`.
+2. **Bump RAM** to ~6–8 GB (the embedder needs ~3 GB resident).
+3. **Edit the compose**: swap the `db` image; add the `embedder` service; add
+   `LIBRARY_EMBEDDING_SERVICE_URL` + a `depends_on: embedder` to api/worker.
+4. `docker compose pull && docker compose up -d` — the `migrate` job enables
+   the `vector` extension and creates `document_chunks` + `ask_logs`; the
+   `embedder` downloads bge-m3 (~2 GB) into its cache volume on first start.
+5. **Collation check (important).** If the *old* `db` image's glibc differs
+   from `pgvector/pgvector:pg17`'s (e.g. a newer `postgres:17` → the pgvector
+   image, which trails on an older Debian/glibc), the cluster logs
+   `WARNING: database "library" has a collation version mismatch`. Text indexes
+   were built under the old sort order — rebuild them:
+
+   ```console
+   docker exec <db> psql -U library -d library -c "REINDEX DATABASE library;"
+   docker exec <db> psql -U library -d library -c "ALTER DATABASE library REFRESH COLLATION VERSION;"
+   ```
+
+   (A *fresh* cluster avoids this entirely — the compose sets
+   `POSTGRES_INITDB_ARGS=--locale=C.UTF-8`, a libc-independent collation. This
+   only bites when reusing an existing pgdata across a glibc change.)
+6. **Embedder OOM guard.** TEI's default `--max-batch-tokens 16384` warmup
+   allocation can OOM-kill bge-m3 even at a 4 GB limit. The compose runs it with
+   `--max-batch-tokens 2048` and `mem_limit: 6g` — keep those (we embed
+   page-sized chunks, so 2048 is plenty). Symptom if it's too low:
+   `docker inspect <embedder> --format '{{.State.OOMKilled}}'` is `true` and the
+   container restart-loops right after "Warming up model".
+7. **Backfill embeddings** for documents indexed before this release:
 
    ```console
    docker compose exec api library backfill-embeddings
    ```
 
-   Idempotent and throttleable (`--limit N`); the worker processes the queue.
-   See [ask.md](ask.md) §1.5.
+   Idempotent and throttleable (`--limit N`); the worker embeds on CPU
+   (~6 min per ~100 docs). See [ask.md](ask.md) §1.5.
+8. **Ask answering needs an Anthropic key.** `POST /api/ask` returns `503`
+   without `LIBRARY_ANTHROPIC_API_KEY` (only the answer step calls Claude;
+   embedding/indexing is local). Retrieval works without it.
+
+### 1.7.2 The live `paperless` LXC instance
+
+The production instance does **not** use this repo's `docker-compose.yml` —
+it runs a custom compose that co-hosts paperless-ngx. Concrete details:
+
+1. **Access:** `ssh paperless` (root). Compose at `/srv/apps/docker-compose.yml`
+   (back it up before editing — `cp` to a `.bak-<ts>`); env in `/srv/apps/.env`.
+2. **Services:** `library-db` (pgvector, bind mount `/srv/apps/library/pgdata`),
+   `library-embedder` (cache bind mount `/srv/apps/library/embedder-cache`),
+   `library-migrate` (one-shot), `library-webserver` (`:8010`→8000),
+   `library-worker`. Images are `ghcr.io/johnmathews/library:latest`.
+3. **`.env` is regenerated externally** (Portainer) — durable env overrides go
+   in the service's `environment:` block in the compose file, **not** in `.env`.
+   So the Anthropic key for Ask must be set on `library-webserver`'s
+   `environment:`, not `.env`.
+4. **Deploy command** (routine code changes): `cd /srv/apps && docker compose
+   up -d --pull always library-migrate library-webserver library-worker`
+   (never `stop` the db; always include `library-migrate`).
 
 ## 1.8 Troubleshooting
 
