@@ -20,6 +20,7 @@ EXPECTED_TABLES: set[str] = {
     "tags",
     "document_tags",
     "documents",
+    "document_chunks",
     "ingestion_events",
 }
 
@@ -99,6 +100,25 @@ def test_fts_indexes_exist(migrated_database_url: str) -> None:
     names = {str(name) for name in indexes}
     assert "ix_documents_search_vector_nl" in names
     assert "ix_documents_search_vector_en" in names
+
+
+def test_vector_extension_enabled(migrated_database_url: str) -> None:
+    extensions = asyncio.run(
+        _fetch_scalars(migrated_database_url, "SELECT extname FROM pg_extension")
+    )
+    assert "vector" in {str(name) for name in extensions}
+
+
+def test_document_chunks_indexes_exist(migrated_database_url: str) -> None:
+    indexes = asyncio.run(
+        _fetch_scalars(
+            migrated_database_url,
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'document_chunks'",
+        )
+    )
+    names = {str(name) for name in indexes}
+    assert "ix_document_chunks_embedding" in names
+    assert "ix_document_chunks_document_id" in names
 
 
 def test_users_have_preferences_column(migrated_database_url: str) -> None:

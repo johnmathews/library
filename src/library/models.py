@@ -18,6 +18,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     CHAR,
     BigInteger,
@@ -41,6 +42,9 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
+
+# Dimensionality of the bge-m3 embeddings stored in ``document_chunks``.
+EMBEDDING_DIM: int = 1024
 
 NAMING_CONVENTION: dict[str, str] = {
     "ix": "ix_%(column_0_label)s",
@@ -272,10 +276,52 @@ class Document(Base):
     events: Mapped[list["IngestionEvent"]] = relationship(
         back_populates="document", cascade="all, delete-orphan", lazy="selectin"
     )
+    # Chunks carry large embedding vectors and are never wanted on a normal
+    # document load: rely on the DB-level ON DELETE CASCADE (passive_deletes)
+    # and query them explicitly. ``lazy="raise"`` turns any accidental implicit
+    # load into a loud error rather than a silent N+1 over embeddings.
+    chunks: Mapped[list["DocumentChunk"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="raise",
+    )
 
     __table_args__ = (
         Index("ix_documents_search_vector_nl", "search_vector_nl", postgresql_using="gin"),
         Index("ix_documents_search_vector_en", "search_vector_en", postgresql_using="gin"),
+    )
+
+
+class DocumentChunk(Base):
+    """A page-sized slice of a document's text plus its embedding vector.
+
+    One row per page (see ``embedding.chunker``); the embedding is a bge-m3
+    1024-dim vector used for semantic retrieval. An HNSW index over
+    ``embedding`` (cosine ops) backs approximate nearest-neighbour search.
+    """
+
+    __tablename__ = "document_chunks"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    page: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    document: Mapped[Document] = relationship(back_populates="chunks")
+
+    __table_args__ = (
+        Index(
+            "ix_document_chunks_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+            postgresql_with={"m": 16, "ef_construction": 200},
+        ),
     )
 
 

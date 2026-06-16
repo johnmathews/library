@@ -10,6 +10,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 
 from library.models import (
     Document,
+    DocumentChunk,
     DocumentSource,
     DocumentStatus,
     Kind,
@@ -23,6 +24,8 @@ SHA_A = "a" * 64
 SHA_B = "b" * 64
 SHA_C = "c" * 64
 SHA_D = "d" * 64
+SHA_E = "e" * 64
+SHA_F = "f" * 64
 
 
 @pytest.fixture
@@ -94,6 +97,46 @@ async def test_fts_dutch_stemming(session: AsyncSession) -> None:
         )
     )
     assert SHA_C in set(result.scalars())
+
+
+async def test_document_chunk_round_trip(session: AsyncSession) -> None:
+    """A DocumentChunk persists and reloads its 1024-dim embedding intact."""
+    document = Document(sha256=SHA_E, mime_type="application/pdf", source=DocumentSource.UPLOAD)
+    session.add(document)
+    await session.commit()
+
+    vector = [0.0] * 1024
+    vector[0] = 1.0
+    session.add(
+        DocumentChunk(document_id=document.id, page=1, text="travel allowance", embedding=vector)
+    )
+    await session.commit()
+    session.expunge_all()
+
+    loaded = (
+        await session.execute(select(DocumentChunk).where(DocumentChunk.document_id == document.id))
+    ).scalar_one()
+    assert loaded.page == 1
+    assert loaded.text == "travel allowance"
+    assert len(loaded.embedding) == 1024
+    assert float(loaded.embedding[0]) == pytest.approx(1.0)
+
+
+async def test_document_chunk_cascade_delete(session: AsyncSession) -> None:
+    """Deleting a document removes its chunks via the DB-level ON DELETE CASCADE."""
+    document = Document(sha256=SHA_F, mime_type="application/pdf", source=DocumentSource.UPLOAD)
+    session.add(document)
+    await session.commit()
+    session.add(DocumentChunk(document_id=document.id, page=1, text="x", embedding=[0.0] * 1024))
+    await session.commit()
+
+    await session.delete(document)
+    await session.commit()
+
+    remaining = (
+        await session.execute(select(DocumentChunk).where(DocumentChunk.document_id == document.id))
+    ).scalars().all()
+    assert remaining == []
 
 
 async def test_fts_english_stemming(session: AsyncSession) -> None:

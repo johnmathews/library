@@ -12,15 +12,20 @@
 
 services:
   db:
-    # Pinned minor version: upgrade deliberately (pg_dump/restore or
-    # pg_upgrade between majors), not on `compose pull`.
-    image: postgres:17.5-alpine
+    # Postgres 17 + pgvector (semantic search embeddings live in
+    # document_chunks). Pinned: upgrade deliberately, not on `compose pull`.
+    # C.UTF-8 keeps text ordering byte-wise and libc-independent — it matches
+    # the original alpine cluster's C collation, so reusing an existing pgdata
+    # volume under this image is safe (no glibc collation-version mismatch).
+    # Only applied on a FRESH volume; an existing cluster keeps its collation.
+    image: pgvector/pgvector:pg17
     restart: unless-stopped
     mem_limit: 1g
     environment:
       POSTGRES_USER: library
       POSTGRES_PASSWORD: library
       POSTGRES_DB: library
+      POSTGRES_INITDB_ARGS: "--locale=C.UTF-8"
     volumes:
       - pgdata:/var/lib/postgresql/data
     healthcheck:
@@ -28,6 +33,17 @@ services:
       interval: 5s
       timeout: 5s
       retries: 10
+
+  # Local embedding sidecar: serves bge-m3 (1024-dim) over HTTP for semantic
+  # search. CPU inference; downloads the model (~2 GB) into embedder_cache on
+  # first start. Memory-capped — budget for it on the host (docs/deployment.md).
+  embedder:
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    command: ["--model-id", "BAAI/bge-m3", "--auto-truncate"]
+    restart: unless-stopped
+    mem_limit: 3g
+    volumes:
+      - embedder_cache:/data
 
   # One-shot: runs alembic migrations, then exits. api/worker wait for it.
   migrate:
@@ -55,6 +71,7 @@ services:
     environment:
       LIBRARY_DATABASE_URL: ${LIBRARY_DATABASE_URL:-postgresql+asyncpg://library:library@db:5432/library}
       LIBRARY_DATA_DIR: /data
+      LIBRARY_EMBEDDING_SERVICE_URL: ${LIBRARY_EMBEDDING_SERVICE_URL:-http://embedder:80}
       # Secure cookies (the default) require HTTPS via a reverse proxy.
       # Set LIBRARY_COOKIE_SECURE=false in .env only for plain-HTTP testing.
       LIBRARY_COOKIE_SECURE: ${LIBRARY_COOKIE_SECURE:-true}
@@ -65,6 +82,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      embedder:
+        condition: service_started
     healthcheck:
       # curl/wget are not present in slim images; use the stdlib instead.
       test:
@@ -98,6 +117,7 @@ services:
       # LIBRARY_CONSUME_FORCE_POLLING=true if that mount is NFS/SMB).
       # See docs/ingestion.md, "Consume folder".
       LIBRARY_CONSUME_DIR: ${LIBRARY_CONSUME_DIR:-/data/consume}
+      LIBRARY_EMBEDDING_SERVICE_URL: ${LIBRARY_EMBEDDING_SERVICE_URL:-http://embedder:80}
     volumes:
       - library_data:/data
     depends_on:
@@ -105,6 +125,8 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
+      embedder:
+        condition: service_started
     healthcheck:
       # The worker serves no HTTP; healthy = the app imports and the
       # database (which carries the job queue) is reachable.
@@ -123,3 +145,4 @@ services:
 volumes:
   pgdata:
   library_data:
+  embedder_cache:
