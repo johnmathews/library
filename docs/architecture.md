@@ -1,6 +1,6 @@
 # 1. Architecture
 
-**Status:** active. **Last updated:** 2026-06-11.
+**Status:** active. **Last updated:** 2026-06-16.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design and tracks which parts exist. The full
@@ -10,7 +10,9 @@ journal in `journal/`.
 
 ## 1.1 System overview
 
-Three containers, one Postgres database, one shared data volume:
+Long-running services — `api`, `worker`, a Postgres (`db`) and a local
+`embedder` sidecar — plus a one-shot `migrate` job, over one shared data
+volume:
 
 ```
                 ┌────────────────────────────────────────┐
@@ -45,15 +47,20 @@ Three containers, one Postgres database, one shared data volume:
   consuming jobs from Postgres (OCR, metadata extraction, thumbnails),
   plus the consume-folder watcher and periodic email poll. No Redis —
   Procrastinate queues jobs in Postgres via LISTEN/NOTIFY.
-- **db** — PostgreSQL 17. Documents metadata, full-text search (generated
-  tsvector columns in both `dutch` and `english` configs), users/sessions/
-  API tokens, and the job queue.
+- **db** — PostgreSQL 17 with **pgvector**. Documents metadata, full-text
+  search (generated tsvector columns in both `dutch` and `english` configs),
+  chunk embeddings (`document_chunks`, HNSW), users/sessions/API tokens, and
+  the job queue.
+- **embedder** — a local [text-embeddings-inference](https://github.com/huggingface/text-embeddings-inference)
+  sidecar serving **bge-m3** (multilingual, 1024-dim) over HTTP. Used by the
+  `worker` (indexing) and the `api` (query-time `/ask`). Document text never
+  leaves the host for embedding. See [ask.md](ask.md).
 
 ## 1.2 Document pipeline
 
 Every ingested file follows the same lifecycle, recorded on the document
-row: `received → ocr → extract → indexed` (or `failed` at any stage, with
-the reason in `ingestion_events`).
+row: `received → ocr → extract → embed → indexed` (or `failed` at any
+stage, with the reason in `ingestion_events`).
 
 1. **Ingest** (any channel: web upload, consume folder, email, REST, MCP).
    The file is hashed (SHA-256) and stored content-addressed under
@@ -74,8 +81,14 @@ the reason in `ingestion_events`).
    Low-confidence documents escalate to Sonnet 4.6. Extraction is
    idempotent and re-runnable; a document whose extraction fails stays
    searchable by its OCR text.
-4. **Index** — metadata and text become searchable (Postgres FTS, both
-   Dutch and English stemming) and visible in the UI.
+4. **Embed** — the document's text is chunked and embedded (bge-m3, 1024-dim)
+   by the local `embedder` sidecar; vectors land in `document_chunks` (HNSW
+   index) for semantic retrieval. Best-effort: a document that fails to embed
+   still reaches `indexed` and stays searchable by full-text. See
+   [ask.md](ask.md).
+5. **Index** — metadata and text become searchable (Postgres FTS, both
+   Dutch and English stemming; semantic retrieval via `document_chunks`) and
+   visible in the UI.
 
 ## 1.3 Data model (summary)
 
@@ -84,15 +97,17 @@ language, amounts/expiry, `extra` JSONB for kind-specific fields, OCR text
 + confidence, uploader, source channel) with FKs to `senders` and `kinds`
 (seeded: invoice, receipt, certificate, utility bill, parking ticket,
 warranty, manual, letter, contract, ticket, other), many-to-many `tags`,
-append-only `ingestion_events` audit trail, and auth tables (`users`,
-`sessions`, `api_tokens`). Originals on disk are immutable; everything
-else is a re-derivable artifact.
+per-chunk embeddings (`document_chunks`, pgvector + HNSW), append-only
+`ingestion_events` audit trail, the `ask_logs` cost/provenance trail, and
+auth tables (`users`, `sessions`, `api_tokens`). Originals on disk are
+immutable; everything else (including embeddings) is a re-derivable artifact.
 
 ## 1.4 Interfaces
 
 - **REST API** (`/api`) — versioned, cookie- or bearer-authenticated,
   OpenAPI-documented. The full product surface: search, CRUD, downloads,
-  ingestion, job status.
+  ingestion, job status, and natural-language **Ask** (`POST /api/ask`, see
+  [ask.md](ask.md)).
 - **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens.
   Tools for searching, reading, and ingesting documents from LLM clients.
 - **Web app** — Vue 3 SPA following GOV.UK design principles (content
@@ -127,3 +142,4 @@ hashed, individually revocable.
 | paperless-ngx importer | W15 | **done** — see [migration.md](migration.md) |
 | Mobile/PWA polish | W16 | **done** — see [frontend.md](frontend.md) §1.8 (manifest + monogram icons, safe areas, ≥44px touch targets, 3-project Playwright matrix, on-device checklist) |
 | Deployment hardening + full docs | W17 | **done** — see [deployment.md](deployment.md); compose smoke job in CI; v0.1.0 ([CHANGELOG](../CHANGELOG.md)) |
+| Semantic Ask (pgvector, embedder, hybrid retrieval, `/api/ask`) | — | **done** — see [ask.md](ask.md) |

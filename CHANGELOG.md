@@ -4,6 +4,38 @@ All notable changes to Library are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+**Semantic Ask** — natural-language question answering over the archive
+(`/ask` in the web app, `POST /api/ask`). See [docs/ask.md](docs/ask.md).
+
+- Local embeddings: a new `embedder` sidecar (text-embeddings-inference
+  serving **bge-m3**, multilingual, 1024-dim) and a `document_chunks` table
+  (pgvector + HNSW). Document text never leaves the host for indexing.
+- New pipeline stage `embed` (`received → ocr → extract → embed → indexed`),
+  best-effort: a document that fails to embed still indexes. Word-window
+  chunking with overlap.
+- Hybrid retrieval: bilingual Postgres full-text search fused with vector
+  cosine k-NN via Reciprocal Rank Fusion.
+- Structured query path over extracted columns (distinct senders, summed
+  amounts by currency/sender/kind) for aggregation questions.
+- `POST /api/ask`: a Claude tool-use loop that picks semantic vs structured
+  retrieval and answers with citations; cost recorded per query in a new
+  `ask_logs` table (not budget-gated this release).
+- `library backfill-embeddings` CLI to index documents predating the embed
+  stage (idempotent).
+- Frontend Ask view with cited-answer cards and a sidebar link.
+
+### Changed
+
+- `db` image is now `pgvector/pgvector:pg17` (was `postgres:17.5-alpine`),
+  initialised with `C.UTF-8` so text ordering stays byte-wise and an existing
+  C-collation `pgdata` volume is reused safely. **The LXC now wants ~6–8 GB
+  RAM** for the embedder — see [docs/deployment.md](docs/deployment.md) §1.7.1
+  for the upgrade path.
+
 ## [0.1.0] — 2026-06-11
 
 First release: a complete, deployable self-hosted document archive.
