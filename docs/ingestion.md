@@ -28,7 +28,7 @@ POST /api/documents (multipart)
 
 worker (python -m library.worker)
   └─ process_document(document_id)
-       received ─► ocr ─► extract ─► indexed     (one ingestion_event per transition)
+       received ─► ocr ─► extract ─► embed ─► indexed   (one ingestion_event per transition)
                 └─ any error ─► failed (+ "failed" event with error detail)
 ```
 
@@ -150,10 +150,12 @@ Decisions:
 
 ### `process_document(document_id)` — pipeline
 
-- Transitions: `received → ocr → extract → indexed`, one commit and one
-  `status_changed` ingestion event (`detail: {"from": …, "to": …}`) per
-  transition. Entering `ocr` runs the OCR stage (below); entering
-  `extract` runs Claude metadata extraction (see "Extraction").
+- Transitions: `received → ocr → extract → embed → indexed`, one commit and
+  one `status_changed` ingestion event (`detail: {"from": …, "to": …}`) per
+  transition. Entering `ocr` runs the OCR stage (below); entering `extract`
+  runs Claude metadata extraction (see "Extraction"); entering `embed` chunks
+  the text and stores bge-m3 vectors for semantic search (best-effort — a
+  document that fails to embed still reaches `indexed`; see [ask.md](ask.md)).
 - Stage hooks are `async def run_ocr(session, document)` /
   `run_extraction(session, document)` in `library.jobs`. The OCR work
   itself is CPU-bound and subprocess-heavy, so it runs in a thread via

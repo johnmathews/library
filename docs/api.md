@@ -69,7 +69,7 @@ ingestion semantics are documented in [ingestion.md](ingestion.md).
 | `sender_id` | int | Sender id |
 | `tag` | string, repeatable | Tag slug; repeating the parameter ANDs them (`?tag=energie&tag=wonen` requires both) |
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown` |
-| `status` | enum | `received` / `ocr` / `extract` / `indexed` / `failed` |
+| `status` | enum | `received` / `ocr` / `extract` / `embed` / `indexed` / `failed` |
 | `date_from`, `date_to` | date | Inclusive bounds on `document_date` |
 | `source` | enum | `upload` / `consume` / `email` / `api` / `mcp` / `import` |
 | `limit` | int | Page size, default 25, max 100 |
