@@ -17,3 +17,6 @@ credentials.json
 
 # Visual brainstorming companion
 .superpowers/
+
+# engineering-team working area (run reports, plans, pointer) — scratch, not source
+.engineering-team/
