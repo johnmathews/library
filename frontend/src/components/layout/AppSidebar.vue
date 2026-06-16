@@ -212,6 +212,52 @@ watch(
               </li>
             </RouterLink>
 
+            <!-- Ask link -->
+            <RouterLink v-slot="{ href, navigate, isActive }" to="/ask" custom>
+              <li
+                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                :class="
+                  isActive &&
+                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                "
+              >
+                <a
+                  :href="href"
+                  class="block truncate transition"
+                  data-testid="sidebar-ask-link"
+                  :class="
+                    isActive
+                      ? 'text-gray-900 dark:text-white'
+                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                  "
+                  @click="navigate"
+                >
+                  <div class="flex items-center">
+                    <svg
+                      class="shrink-0 fill-current"
+                      :class="
+                        isActive
+                          ? 'text-violet-500'
+                          : 'text-gray-600 dark:text-gray-300'
+                      "
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                    >
+                      <path
+                        d="M8 0a8 8 0 0 0-7 11.9L0 16l4.1-1A8 8 0 1 0 8 0Zm0 12a1 1 0 1 1 0-2 1 1 0 0 1 0 2Zm1.3-4.2c-.3.2-.3.3-.3.5v.2H7v-.3c0-.9.4-1.4 1-1.8.5-.3.7-.5.7-.9 0-.5-.4-.8-1-.8-.5 0-.9.3-1 .8l-1.8-.3C5.1 3.9 6.3 3 8 3c1.8 0 3 1 3 2.4 0 1-.6 1.6-1.7 2.3Z"
+                      />
+                    </svg>
+                    <span
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      >Ask</span
+                    >
+                  </div>
+                </a>
+              </li>
+            </RouterLink>
+
             <!-- Settings link -->
             <RouterLink
               v-slot="{ href, navigate, isActive }"
