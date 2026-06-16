@@ -113,3 +113,34 @@ Rejected the "critical" #1 (see 1.4.2). Accepted minors (array_agg ordering,
 Conversational/multi-turn ask; cross-encoder re-ranking; exposing ask as an MCP
 tool; a daily-budget gate on ask cost; atomic "facts" extraction and an
 entity/timeline view (the discussion's §3.4/3.5).
+
+## 1.8 Production deployment (same day)
+
+Deployed to the live `paperless` LXC the same session. The live stack is a
+custom compose at `/srv/apps/docker-compose.yml` (co-hosting paperless-ngx),
+**not** the repo's — runbook now in [docs/deployment.md](../docs/deployment.md)
+§1.7.2. Procedure: `pg_dump -Fc` backup → edit compose (db image, embedder
+service, env/depends_on) → `compose pull && up -d` (migrate applied 0004/0005)
+→ `library backfill-embeddings` (105 docs, 377 chunks, ~6 min on CPU). Verified
+end-to-end: "do I have a travel allowance in my contract?" correctly found and
+quoted the (Dutch) contract clause for an English question.
+
+Three deployment gotchas — all now in the runbook + the deployment-topology memory:
+1. **glibc collation mismatch.** The old `postgres:17` was a *newer* glibc
+   (2.41) than `pgvector/pgvector:pg17` (2.36), so reusing pgdata logged a
+   collation-version mismatch (stale text-index sort order). Fixed with
+   `REINDEX DATABASE` + `ALTER DATABASE … REFRESH COLLATION VERSION`. (The
+   §1.7.1 draft had wrongly claimed "safe in place" on a musl→glibc assumption
+   that didn't hold for this instance.)
+2. **Embedder OOM.** TEI's default `--max-batch-tokens 16384` warmup OOM-killed
+   bge-m3 even at 4 GB (17 restart loops). Fixed with `--max-batch-tokens 2048`
+   + `mem_limit: 6g` — we embed page-sized chunks, so 2048 is plenty.
+3. **API key placement.** `/ask` answering (and Claude extraction) needs
+   `LIBRARY_ANTHROPIC_API_KEY`, which was unset. `.env` is regenerated
+   externally (Portainer), so the key had to go in the compose `environment:`
+   block of `library-webserver` + `library-worker`, not `.env`.
+
+Also closed four doc-accuracy gaps the build's W8 pass missed: three stale
+`received→ocr→extract→indexed` lifecycle references (api.md status enum,
+ingestion.md diagram + transitions) that predate the `embed` stage, and the
+`AskView` in frontend.md.
