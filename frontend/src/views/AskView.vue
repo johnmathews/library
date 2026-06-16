@@ -6,10 +6,13 @@
  * cited answer from POST /api/ask. While the request is in flight the submit
  * button is disabled and shows a progress label. Failures — most notably the
  * 503 "no API key configured" case — land in a GOV.UK error summary with a
- * friendly message. The answer renders as plain text above a list of
- * citation cards, each linking to the cited document's detail page.
+ * friendly message. The answer is Claude-authored markdown (bold, lists,
+ * inline citations like [#42]); it is rendered to sanitized HTML above a
+ * list of citation cards, each linking to the cited document's detail page.
  */
 import { computed, ref } from 'vue'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import { AppButton, AppErrorSummary, AppTextarea } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
 import { askQuestion, type AskResponse } from '@/api/ask'
@@ -28,6 +31,14 @@ const costLabel = computed(() => {
   const cost = result.value?.cost_usd
   if (cost === undefined) return null
   return `$${cost.toFixed(4)}`
+})
+
+// The answer is markdown from Claude; render it to HTML and sanitize before
+// v-html (it can echo document text, so we never trust it raw).
+const answerHtml = computed(() => {
+  const answer = result.value?.answer
+  if (!answer) return ''
+  return DOMPurify.sanitize(marked.parse(answer, { async: false }) as string)
 })
 
 async function onSubmit(): Promise<void> {
@@ -106,13 +117,14 @@ function friendlyError(error: unknown): string {
       data-testid="ask-result"
     >
       <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-2">Answer</h2>
-      <p
+      <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in answerHtml -->
+      <div
         id="ask-answer"
-        class="text-gray-800 dark:text-gray-100 whitespace-pre-wrap"
+        class="ask-answer text-gray-800 dark:text-gray-100"
         data-testid="ask-answer"
-      >
-        {{ result.answer }}
-      </p>
+        v-html="answerHtml"
+      />
+      <!-- eslint-enable vue/no-v-html -->
 
       <div v-if="result.citations.length" class="mt-5">
         <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Citations</h3>
@@ -150,3 +162,58 @@ function friendlyError(error: unknown): string {
     </section>
   </div>
 </template>
+
+<style scoped>
+/* The answer is rendered markdown (v-html). Tailwind's preflight strips
+   default styling from these elements, so restore readable prose spacing,
+   emphasis and lists for the answer body only. */
+.ask-answer :deep(p) {
+  margin-bottom: 0.75rem;
+}
+.ask-answer :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.ask-answer :deep(strong) {
+  font-weight: 600;
+}
+.ask-answer :deep(em) {
+  font-style: italic;
+}
+.ask-answer :deep(ul),
+.ask-answer :deep(ol) {
+  margin: 0.5rem 0 0.75rem;
+  padding-left: 1.5rem;
+}
+.ask-answer :deep(ul) {
+  list-style: disc;
+}
+.ask-answer :deep(ol) {
+  list-style: decimal;
+}
+.ask-answer :deep(li) {
+  margin-bottom: 0.25rem;
+}
+.ask-answer :deep(a) {
+  color: var(--color-violet-600, #7c3aed);
+  text-decoration: underline;
+}
+.dark .ask-answer :deep(a) {
+  color: var(--color-violet-400, #a78bfa);
+}
+.ask-answer :deep(code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875em;
+  padding: 0.1em 0.3em;
+  border-radius: 0.25rem;
+  background: rgb(0 0 0 / 0.06);
+}
+.dark .ask-answer :deep(code) {
+  background: rgb(255 255 255 / 0.08);
+}
+.ask-answer :deep(h1),
+.ask-answer :deep(h2),
+.ask-answer :deep(h3) {
+  font-weight: 600;
+  margin: 0.75rem 0 0.5rem;
+}
+</style>

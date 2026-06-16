@@ -90,6 +90,22 @@ describe('AskView', () => {
     expect(meta.text()).toContain('$0.0123')
   })
 
+  it('renders markdown in the answer as HTML', async () => {
+    askQuestionMock.mockResolvedValue(
+      sampleResponse({ answer: 'Your supplier was **PWN** [#67].\n\n- one\n- two' }),
+    )
+    const w = mountView()
+    await ask(w)
+    await flushPromises()
+
+    const answer = w.find('[data-testid="ask-answer"]')
+    // bold becomes <strong>, not literal asterisks
+    expect(answer.find('strong').text()).toBe('PWN')
+    expect(answer.html()).not.toContain('**PWN**')
+    // list items render
+    expect(answer.findAll('li')).toHaveLength(2)
+  })
+
   it('disables the button and shows progress while the request is pending', async () => {
     let resolve!: (value: AskResponse) => void
     askQuestionMock.mockReturnValue(
