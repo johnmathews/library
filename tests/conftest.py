@@ -29,6 +29,20 @@ from library.models import User
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture(autouse=True)
+def _embedding_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep the suite hermetic: embeddings off unless a test opts in.
+
+    The embedding stage reaches for a network sidecar; defaulting it off means
+    pipeline tests never make real HTTP calls. Tests exercising embedding set
+    ``LIBRARY_EMBEDDING_ENABLED=true`` and monkeypatch the embed call.
+    """
+    monkeypatch.setenv("LIBRARY_EMBEDDING_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @dataclass(frozen=True)
 class AuthUser:
     """Credentials of a user created directly in the test database."""
@@ -78,8 +92,17 @@ def create_database(admin_url: str, name: str) -> str:
 
 @pytest.fixture(scope="session")
 def postgres_container() -> Iterator[PostgresContainer]:
-    """A real ephemeral Postgres 17 for integration tests."""
-    with PostgresContainer("postgres:17-alpine", driver="asyncpg") as container:
+    """A real ephemeral Postgres 17 (with pgvector) for integration tests.
+
+    Pinned to ``C.UTF-8`` so text ordering is byte-wise — matching both the
+    existing production cluster (C collation) and Python's ``sorted``. The
+    Debian-based pgvector image would otherwise default to a glibc linguistic
+    collation and silently reorder taxonomy/sender listings. See docs/deployment.md.
+    """
+    container = PostgresContainer("pgvector/pgvector:pg17", driver="asyncpg").with_env(
+        "POSTGRES_INITDB_ARGS", "--locale=C.UTF-8"
+    )
+    with container:
         yield container
 
 

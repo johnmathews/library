@@ -36,6 +36,22 @@ class Settings(BaseSettings):
     extraction_model: str = "claude-haiku-4-5"
     extraction_escalation_model: str = "claude-sonnet-4-6"
     extraction_daily_budget_usd: float = 5.0
+    # Semantic search / embeddings (see docs/ask.md). The embedder is a local
+    # text-embeddings-inference sidecar serving bge-m3 (1024-dim); document
+    # text never leaves the host for indexing.
+    embedding_enabled: bool = True
+    embedding_service_url: str = "http://embedder:80"
+    embedding_model_name: str = "bge-m3"
+    embedding_batch_size: int = 32
+    embedding_timeout_s: float = 60.0
+    embedding_chunk_chars: int = 1800
+    embedding_chunk_overlap: int = 200
+    retrieve_top_k: int = 10
+    # Natural-language /ask answering (see docs/ask.md). Cost is recorded per
+    # ask in ask_logs but not gated in this release.
+    ask_model: str = "claude-sonnet-4-6"
+    ask_max_tool_turns: int = 4
+    ask_max_answer_tokens: int = 1024
     # Consume folder watcher (see docs/ingestion.md, "Consume folder" section).
     consume_dir: Path | None = None  # unset = watcher off
     consume_force_polling: bool = False  # required for NFS/SMB mounts (no inotify)

@@ -18,6 +18,7 @@ from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     CHAR,
     BigInteger,
@@ -42,6 +43,9 @@ from sqlalchemy import (
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
+# Dimensionality of the bge-m3 embeddings stored in ``document_chunks``.
+EMBEDDING_DIM: int = 1024
+
 NAMING_CONVENTION: dict[str, str] = {
     "ix": "ix_%(column_0_label)s",
     "uq": "uq_%(table_name)s_%(column_0_name)s",
@@ -64,6 +68,7 @@ class DocumentStatus(enum.StrEnum):
     RECEIVED = "received"
     OCR = "ocr"
     EXTRACT = "extract"
+    EMBED = "embed"
     INDEXED = "indexed"
     FAILED = "failed"
 
@@ -272,10 +277,54 @@ class Document(Base):
     events: Mapped[list["IngestionEvent"]] = relationship(
         back_populates="document", cascade="all, delete-orphan", lazy="selectin"
     )
+    # Chunks carry large embedding vectors and are never wanted on a normal
+    # document load: rely on the DB-level ON DELETE CASCADE (passive_deletes)
+    # and query them explicitly. ``lazy="raise"`` turns any accidental implicit
+    # load into a loud error rather than a silent N+1 over embeddings.
+    chunks: Mapped[list["DocumentChunk"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        passive_deletes=True,
+        lazy="raise",
+    )
 
     __table_args__ = (
         Index("ix_documents_search_vector_nl", "search_vector_nl", postgresql_using="gin"),
         Index("ix_documents_search_vector_en", "search_vector_en", postgresql_using="gin"),
+    )
+
+
+class DocumentChunk(Base):
+    """A page-sized slice of a document's text plus its embedding vector.
+
+    One row per chunk (see ``embedding.chunker``); ``chunk_index`` is the
+    1-based ordinal of the chunk within the document (OCR text carries no
+    reliable page boundaries, so this is a position, not a PDF page number).
+    The embedding is a bge-m3 1024-dim vector used for semantic retrieval; an
+    HNSW index over ``embedding`` (cosine ops) backs nearest-neighbour search.
+    """
+
+    __tablename__ = "document_chunks"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    chunk_index: Mapped[int] = mapped_column(Integer)
+    text: Mapped[str] = mapped_column(Text)
+    embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    document: Mapped[Document] = relationship(back_populates="chunks")
+
+    __table_args__ = (
+        Index(
+            "ix_document_chunks_embedding",
+            "embedding",
+            postgresql_using="hnsw",
+            postgresql_ops={"embedding": "vector_cosine_ops"},
+            postgresql_with={"m": 16, "ef_construction": 200},
+        ),
     )
 
 
@@ -293,3 +342,24 @@ class IngestionEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     document: Mapped[Document] = relationship(back_populates="events")
+
+
+class AskLog(Base):
+    """One natural-language /ask query: its answer cost and provenance.
+
+    Not tied to a single document (an ask spans the corpus), so this is a
+    standalone audit table rather than an ``ingestion_events`` row. Used for
+    cost visibility; ask is not budget-gated in this release.
+    """
+
+    __tablename__ = "ask_logs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    query: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(String(64))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    used_tools: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

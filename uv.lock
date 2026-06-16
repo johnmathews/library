@@ -1119,11 +1119,13 @@ dependencies = [
     { name = "fastapi" },
     { name = "fastmcp" },
     { name = "filetype" },
+    { name = "httpx" },
     { name = "imap-tools" },
     { name = "img2pdf" },
     { name = "ocrmypdf" },
     { name = "onnxruntime" },
     { name = "opencv-python-headless" },
+    { name = "pgvector" },
     { name = "pillow" },
     { name = "pillow-heif" },
     { name = "procrastinate" },
@@ -1157,11 +1159,13 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.115" },
     { name = "fastmcp", specifier = ">=3.4.2" },
     { name = "filetype", specifier = ">=1.2.0" },
+    { name = "httpx", specifier = ">=0.28" },
     { name = "imap-tools", specifier = ">=1.13.0" },
     { name = "img2pdf", specifier = ">=0.6.3" },
     { name = "ocrmypdf", specifier = ">=17.5.0" },
     { name = "onnxruntime", specifier = ">=1.26.0" },
     { name = "opencv-python-headless", specifier = ">=4.13.0.92" },
+    { name = "pgvector", specifier = ">=0.3.6" },
     { name = "pillow", specifier = ">=12.2.0" },
     { name = "pillow-heif", specifier = ">=1.4.0" },
     { name = "procrastinate", specifier = ">=3.8.1" },
@@ -1561,6 +1565,18 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/34/a4/5cec1112009f0439a5ca6afa8ace321f0ab2f48da3255b7a1c8953014670/pdfminer_six-20260107.tar.gz", hash = "sha256:96bfd431e3577a55a0efd25676968ca4ce8fd5b53f14565f85716ff363889602", size = 8512094, upload-time = "2026-01-07T13:29:12.937Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/20/8b/28c4eaec9d6b036a52cb44720408f26b1a143ca9bce76cc19e8f5de00ab4/pdfminer_six-20260107-py3-none-any.whl", hash = "sha256:366585ba97e80dffa8f00cebe303d2f381884d8637af4ce422f1df3ef38111a9", size = 6592252, upload-time = "2026-01-07T13:29:10.742Z" },
+]
+
+[[package]]
+name = "pgvector"
+version = "0.4.2"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/25/6c/6d8b4b03b958c02fa8687ec6063c49d952a189f8c91ebbe51e877dfab8f7/pgvector-0.4.2.tar.gz", hash = "sha256:322cac0c1dc5d41c9ecf782bd9991b7966685dee3a00bc873631391ed949513a", size = 31354, upload-time = "2025-12-05T01:07:17.87Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/26/6cee8a1ce8c43625ec561aff19df07f9776b7525d9002c86bceb3e0ac970/pgvector-0.4.2-py3-none-any.whl", hash = "sha256:549d45f7a18593783d5eec609ea1684a724ba8405c4cb182a0b2b08aeff04e08", size = 27441, upload-time = "2025-12-05T01:07:16.536Z" },
 ]
 
 [[package]]

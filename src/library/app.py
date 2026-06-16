@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import library
-from library.api import auth, documents, jobs, settings, taxonomy
+from library.api import ask, auth, documents, jobs, settings, taxonomy
 from library.auth.deps import csrf_protect, current_user
 from library.config import get_settings
 from library.jobs import job_app
@@ -58,6 +58,13 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "extraction, thumbnails).",
     },
     {"name": "settings", "description": "Per-user display preferences."},
+    {
+        "name": "ask",
+        "description": (
+            "Natural-language question answering over the archive: semantic "
+            "retrieval + structured aggregation, answered with citations."
+        ),
+    },
 ]
 
 
@@ -134,6 +141,7 @@ def create_app() -> FastAPI:
     api_router.include_router(taxonomy.router)
     api_router.include_router(jobs.router)
     api_router.include_router(settings.router)
+    api_router.include_router(ask.router)
     api_router.include_router(auth.router)
     app.include_router(api_router)
     # Login is the only unauthenticated /api route (and is CSRF-exempt: the

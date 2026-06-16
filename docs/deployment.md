@@ -8,16 +8,17 @@ Proxmox — but nothing below is Proxmox-specific.
 
 ## 1.1 What you are deploying
 
-Three long-running containers plus a one-shot migration job, defined in
+Four long-running containers plus a one-shot migration job, defined in
 the repository's single `docker-compose.yml` (it is production-shaped:
 restart policies, healthchecks and memory limits are already in it):
 
 | Service | Image | Role |
 |---------|-------|------|
-| `db` | `postgres:17.5-alpine` (pinned) | Metadata, full-text search, users/sessions, job queue |
+| `db` | `pgvector/pgvector:pg17` (pinned) | Metadata, full-text search, **chunk embeddings (pgvector)**, users/sessions, job queue |
+| `embedder` | `ghcr.io/huggingface/text-embeddings-inference:cpu-1.7` | Local bge-m3 embeddings for semantic Ask ([ask.md](ask.md)); downloads the model (~2 GB) into `embedder_cache` on first start |
 | `migrate` | built from `Dockerfile` | Runs `alembic upgrade head`, exits; the others wait for it |
 | `api` | same image | FastAPI: `/api`, `/mcp`, `/healthz`, and the built web app at `/` |
-| `worker` | same image | OCR, Claude extraction, thumbnails, consume-folder watcher, email poller |
+| `worker` | same image | OCR, Claude extraction, thumbnails, embedding, consume-folder watcher, email poller |
 
 > **Naming note — read this if you're looking for the frontend.** There
 > is no frontend container, no separate REST container, and no separate
@@ -31,14 +32,19 @@ restart policies, healthchecks and memory limits are already in it):
 > cookies, no CORS, one versioned artifact).
 
 One image serves api and worker; the frontend is compiled into it (see
-1.3). Two named volumes hold all state: `pgdata` (Postgres) and
-`library_data` (`/data`: content-addressed originals + derived
-artifacts). Memory limits in the compose file (api 512m, worker 2g for
-OCR peaks, db 1g) suit a ~4 GB LXC — tune `mem_limit` to your container.
+1.3). Three named volumes hold all state: `pgdata` (Postgres),
+`library_data` (`/data`: content-addressed originals + derived artifacts),
+and `embedder_cache` (the downloaded bge-m3 model). Memory limits in the
+compose file (api 512m, worker 2g for OCR peaks, db 1g, embedder 3g for
+bge-m3) now total ~6.5 GB: **size the LXC at 6–8 GB RAM** (the embedder is
+the new cost). If you don't need semantic Ask you can omit the `embedder`
+service and set `LIBRARY_EMBEDDING_ENABLED=false` to stay at ~4 GB.
 
 ## 1.2 Fresh-machine walkthrough (Proxmox LXC)
 
-1. **Container.** Create a Debian 12/13 LXC — 4 vCPU, 4 GB RAM, 32 GB+
+1. **Container.** Create a Debian 12/13 LXC — 4 vCPU, **6–8 GB RAM**
+   (the bge-m3 embedder needs ~3 GB; 4 GB is enough only with
+   `LIBRARY_EMBEDDING_ENABLED=false` and no `embedder` service), 32 GB+
    disk (documents live here; size for your archive). Docker-in-LXC
    needs nesting: set **Options → Features → nesting=1** (and
    `keyctl=1` for an unprivileged container). An unprivileged LXC with
@@ -223,6 +229,32 @@ deliberate dump/restore, not a pull.
 Roll back by checking out the previous tag/commit and `docker compose up
 -d --build` again — but note migrations are not automatically reversed;
 restore the pre-upgrade `pg_dump` if a downgrade must cross a migration.
+
+### 1.7.1 Upgrading to semantic Ask (pgvector + embedder)
+
+The Ask release changes the `db` image from `postgres:17.5-alpine` to
+`pgvector/pgvector:pg17` and adds the `embedder` service. For an existing
+deployment:
+
+1. **Back up `pgdata` first** (`pg_dump`, see 1.6) — always, before any DB
+   image change.
+2. The image swap is **safe in place**: the original alpine cluster was
+   initialised with `C` collation, which is libc-independent, so moving the
+   data directory from the musl (alpine) image to the glibc (Debian) pgvector
+   image does not risk a collation-version index mismatch. No `REINDEX` is
+   needed. (The compose file sets `POSTGRES_INITDB_ARGS=--locale=C.UTF-8` so a
+   *fresh* cluster keeps the same byte-order collation.)
+3. `docker compose up -d --build` — the `migrate` job enables the `vector`
+   extension and creates `document_chunks` + `ask_logs`; the `embedder`
+   downloads bge-m3 (~2 GB) on first start.
+4. **Backfill embeddings** for documents indexed before this release:
+
+   ```console
+   docker compose exec api library backfill-embeddings
+   ```
+
+   Idempotent and throttleable (`--limit N`); the worker processes the queue.
+   See [ask.md](ask.md) §1.5.
 
 ## 1.8 Troubleshooting
 

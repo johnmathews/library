@@ -26,6 +26,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/auth/tokens` | List your API tokens (never their secrets) |
 | POST   | `/api/auth/tokens` | Create an API token; secret shown **once** |
 | DELETE | `/api/auth/tokens/{id}` | Revoke one of your API tokens |
+| POST   | `/api/ask` | Ask a natural-language question; cited answer |
 | POST   | `/api/documents` | Upload a file for ingestion |
 | GET    | `/api/documents` | List / search documents |
 | GET    | `/api/documents/{id}` | Full document detail |
@@ -396,3 +397,34 @@ tile preview to `full_width` — `200` with the default, never `422` — matchin
 `dashboard_fields`. `tile_preview` is also optional in the body (defaults to
 `full_width`), so a client sending only `background_tone` still succeeds. On
 read, absent keys resolve to their defaults.
+
+## 1.11 Ask — `POST /api/ask`
+
+Answer a natural-language question about the archive, grounded in retrieved
+documents. The narrative — architecture, the two question classes, config and
+cost — is in [ask.md](ask.md); this is the wire contract.
+
+**Request:** `{"question": "<1..1000 chars>"}`. Auth + CSRF apply (it is a
+`POST`).
+
+**Response `200`:**
+
+```json
+{
+  "answer": "Yes — your contract grants a travel allowance of €0.21/km [#42].",
+  "citations": [{"document_id": 42, "title": "Employment contract"}],
+  "used_tools": ["semantic_search"],
+  "cost_usd": 0.0031
+}
+```
+
+- `answer` — prose, grounded only in retrieved documents; it says plainly when
+  the archive does not contain the answer (then `citations` is empty).
+- `citations` — the documents the answer relied on (id + title); link these to
+  `GET /api/documents/{id}`.
+- `used_tools` — which retrieval tools the engine invoked
+  (`semantic_search`, `query_documents`).
+- `cost_usd` — estimated answer cost (recorded in `ask_logs`, not gated).
+
+**Errors:** `503` when no Anthropic API key is configured (answering needs
+Claude); `422` when the question is empty or too long.
