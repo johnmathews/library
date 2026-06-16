@@ -22,6 +22,7 @@ EXPECTED_TABLES: set[str] = {
     "documents",
     "document_chunks",
     "ingestion_events",
+    "ask_logs",
 }
 
 PROCRASTINATE_TABLES: set[str] = {

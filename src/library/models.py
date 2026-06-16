@@ -342,3 +342,24 @@ class IngestionEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     document: Mapped[Document] = relationship(back_populates="events")
+
+
+class AskLog(Base):
+    """One natural-language /ask query: its answer cost and provenance.
+
+    Not tied to a single document (an ask spans the corpus), so this is a
+    standalone audit table rather than an ``ingestion_events`` row. Used for
+    cost visibility; ask is not budget-gated in this release.
+    """
+
+    __tablename__ = "ask_logs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    query: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(String(64))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0)
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
+    used_tools: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
