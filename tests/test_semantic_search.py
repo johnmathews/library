@@ -82,9 +82,7 @@ async def test_ranks_documents_by_vector_similarity(session: AsyncSession) -> No
         session, "far", ocr_text="beta", chunks=[("far chunk", unit_vector(100))]
     )
 
-    hits = await semantic_search(
-        session, query="", query_embedding=unit_vector(0), top_k=10
-    )
+    hits = await semantic_search(session, query="", query_embedding=unit_vector(0), top_k=10)
 
     ids = [hit.document.id for hit in hits]
     assert near in ids and far in ids
@@ -99,9 +97,7 @@ async def test_hit_carries_nearest_chunk_text(session: AsyncSession) -> None:
         chunks=[("the near one", unit_vector(0)), ("the far one", unit_vector(200))],
     )
 
-    hits = await semantic_search(
-        session, query="", query_embedding=unit_vector(0), top_k=5
-    )
+    hits = await semantic_search(session, query="", query_embedding=unit_vector(0), top_k=5)
 
     hit = next(hit for hit in hits if hit.document.id == document_id)
     assert hit.chunk_text == "the near one"
@@ -140,9 +136,7 @@ async def test_hybrid_fuses_vector_and_fts(session: AsyncSession) -> None:
         chunks=[("c", unit_vector(300))],
     )
 
-    hits = await semantic_search(
-        session, query="energy", query_embedding=unit_vector(0), top_k=10
-    )
+    hits = await semantic_search(session, query="energy", query_embedding=unit_vector(0), top_k=10)
 
     ids = [hit.document.id for hit in hits]
     assert set(ids) == {vector_only, fts_only}
@@ -174,7 +168,5 @@ async def test_many_chunk_document_does_not_crowd_out_others(session: AsyncSessi
 
 
 async def test_no_matches_returns_empty(session: AsyncSession) -> None:
-    hits = await semantic_search(
-        session, query="", query_embedding=unit_vector(0), top_k=5
-    )
+    hits = await semantic_search(session, query="", query_embedding=unit_vector(0), top_k=5)
     assert hits == []

@@ -112,9 +112,7 @@ async def list_documents(
     ]
 
 
-async def distinct_senders(
-    session: AsyncSession, *, filters: DocumentFilters
-) -> list[SenderGroup]:
+async def distinct_senders(session: AsyncSession, *, filters: DocumentFilters) -> list[SenderGroup]:
     """Distinct senders among matching documents, most documents first."""
     statement = (
         select(

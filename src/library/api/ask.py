@@ -62,9 +62,7 @@ async def ask(
         )
 
     async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as client:
-        result = await run_ask(
-            session, question=request.question, settings=settings, client=client
-        )
+        result = await run_ask(session, question=request.question, settings=settings, client=client)
 
     session.add(
         AskLog(

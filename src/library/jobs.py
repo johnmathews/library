@@ -157,9 +157,7 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
     await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
     for index, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True), start=1):
         session.add(
-            DocumentChunk(
-                document_id=document.id, chunk_index=index, text=chunk, embedding=vector
-            )
+            DocumentChunk(document_id=document.id, chunk_index=index, text=chunk, embedding=vector)
         )
     await _record_embed_event(
         session,

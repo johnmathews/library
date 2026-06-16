@@ -78,8 +78,7 @@ TOOLS: list[dict[str, Any]] = [
         "name": "query_documents",
         "description": (
             "Aggregate over structured metadata (sender, kind, document_date, "
-            "amount_total). Use for who/how-many/how-much/over-time questions. "
-            + _kind_hint()
+            "amount_total). Use for who/how-many/how-much/over-time questions. " + _kind_hint()
         ),
         "input_schema": {
             "type": "object",
@@ -161,9 +160,7 @@ async def _run_semantic_search(
                 "title": hit.document.title,
                 "sender": hit.document.sender.name if hit.document.sender else None,
                 "document_date": (
-                    hit.document.document_date.isoformat()
-                    if hit.document.document_date
-                    else None
+                    hit.document.document_date.isoformat() if hit.document.document_date else None
                 ),
                 "excerpt": hit.chunk_text,
             }
@@ -209,9 +206,7 @@ async def _citations_for(session: AsyncSession, cited: set[int]) -> list[AskCita
         return []
     rows = (
         await session.execute(
-            select(Document.id, Document.title)
-            .where(Document.id.in_(cited))
-            .order_by(Document.id)
+            select(Document.id, Document.title).where(Document.id.in_(cited)).order_by(Document.id)
         )
     ).all()
     return [AskCitation(document_id=document_id, title=title) for document_id, title in rows]

@@ -138,8 +138,14 @@ async def test_document_chunk_cascade_delete(session: AsyncSession) -> None:
     await session.commit()
 
     remaining = (
-        await session.execute(select(DocumentChunk).where(DocumentChunk.document_id == document.id))
-    ).scalars().all()
+        (
+            await session.execute(
+                select(DocumentChunk).where(DocumentChunk.document_id == document.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
     assert remaining == []
 
 

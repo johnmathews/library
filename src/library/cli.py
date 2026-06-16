@@ -219,9 +219,7 @@ def backfill_embeddings(
             Document.deleted_at.is_(None), Document.ocr_text.isnot(None)
         )
         if not include_existing:
-            statement = statement.where(
-                ~exists().where(DocumentChunk.document_id == Document.id)
-            )
+            statement = statement.where(~exists().where(DocumentChunk.document_id == Document.id))
         statement = statement.order_by(Document.id)
         if limit is not None:
             statement = statement.limit(limit)

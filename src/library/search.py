@@ -260,9 +260,7 @@ async def semantic_search(
     conditions = filter_conditions(filters)
     pool = candidate_pool if candidate_pool is not None else max(top_k * 5, 50)
 
-    vector_order, best_chunk = await _vector_candidates(
-        session, conditions, query_embedding, pool
-    )
+    vector_order, best_chunk = await _vector_candidates(session, conditions, query_embedding, pool)
     fts_order = await _fts_candidates(session, conditions, query, pool) if query.strip() else []
 
     scores: dict[int, float] = {}
