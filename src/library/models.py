@@ -68,6 +68,7 @@ class DocumentStatus(enum.StrEnum):
     RECEIVED = "received"
     OCR = "ocr"
     EXTRACT = "extract"
+    EMBED = "embed"
     INDEXED = "indexed"
     FAILED = "failed"
 
@@ -296,9 +297,11 @@ class Document(Base):
 class DocumentChunk(Base):
     """A page-sized slice of a document's text plus its embedding vector.
 
-    One row per page (see ``embedding.chunker``); the embedding is a bge-m3
-    1024-dim vector used for semantic retrieval. An HNSW index over
-    ``embedding`` (cosine ops) backs approximate nearest-neighbour search.
+    One row per chunk (see ``embedding.chunker``); ``chunk_index`` is the
+    1-based ordinal of the chunk within the document (OCR text carries no
+    reliable page boundaries, so this is a position, not a PDF page number).
+    The embedding is a bge-m3 1024-dim vector used for semantic retrieval; an
+    HNSW index over ``embedding`` (cosine ops) backs nearest-neighbour search.
     """
 
     __tablename__ = "document_chunks"
@@ -307,7 +310,7 @@ class DocumentChunk(Base):
     document_id: Mapped[int] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), index=True
     )
-    page: Mapped[int] = mapped_column(Integer)
+    chunk_index: Mapped[int] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

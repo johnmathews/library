@@ -108,7 +108,9 @@ async def test_document_chunk_round_trip(session: AsyncSession) -> None:
     vector = [0.0] * 1024
     vector[0] = 1.0
     session.add(
-        DocumentChunk(document_id=document.id, page=1, text="travel allowance", embedding=vector)
+        DocumentChunk(
+            document_id=document.id, chunk_index=1, text="travel allowance", embedding=vector
+        )
     )
     await session.commit()
     session.expunge_all()
@@ -116,7 +118,7 @@ async def test_document_chunk_round_trip(session: AsyncSession) -> None:
     loaded = (
         await session.execute(select(DocumentChunk).where(DocumentChunk.document_id == document.id))
     ).scalar_one()
-    assert loaded.page == 1
+    assert loaded.chunk_index == 1
     assert loaded.text == "travel allowance"
     assert len(loaded.embedding) == 1024
     assert float(loaded.embedding[0]) == pytest.approx(1.0)
@@ -127,7 +129,9 @@ async def test_document_chunk_cascade_delete(session: AsyncSession) -> None:
     document = Document(sha256=SHA_F, mime_type="application/pdf", source=DocumentSource.UPLOAD)
     session.add(document)
     await session.commit()
-    session.add(DocumentChunk(document_id=document.id, page=1, text="x", embedding=[0.0] * 1024))
+    session.add(
+        DocumentChunk(document_id=document.id, chunk_index=1, text="x", embedding=[0.0] * 1024)
+    )
     await session.commit()
 
     await session.delete(document)

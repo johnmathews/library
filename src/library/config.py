@@ -44,6 +44,8 @@ class Settings(BaseSettings):
     embedding_model_name: str = "bge-m3"
     embedding_batch_size: int = 32
     embedding_timeout_s: float = 60.0
+    embedding_chunk_chars: int = 1800
+    embedding_chunk_overlap: int = 200
     retrieve_top_k: int = 10
     # Consume folder watcher (see docs/ingestion.md, "Consume folder" section).
     consume_dir: Path | None = None  # unset = watcher off

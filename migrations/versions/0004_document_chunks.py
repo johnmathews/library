@@ -30,7 +30,7 @@ def upgrade() -> None:
         "document_chunks",
         sa.Column("id", sa.BigInteger(), nullable=False),
         sa.Column("document_id", sa.BigInteger(), nullable=False),
-        sa.Column("page", sa.Integer(), nullable=False),
+        sa.Column("chunk_index", sa.Integer(), nullable=False),
         sa.Column("text", sa.Text(), nullable=False),
         sa.Column("embedding", Vector(EMBEDDING_DIM), nullable=False),
         sa.Column(

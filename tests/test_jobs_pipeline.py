@@ -114,7 +114,8 @@ async def test_pipeline_reaches_indexed_with_events(
     assert [event[1] for event in transitions] == [
         {"from": "received", "to": "ocr"},
         {"from": "ocr", "to": "extract"},
-        {"from": "extract", "to": "indexed"},
+        {"from": "extract", "to": "embed"},
+        {"from": "embed", "to": "indexed"},
     ]
 
 
@@ -130,7 +131,7 @@ async def test_pipeline_is_idempotent_when_already_indexed(
     status, events = await get_status_and_events(session_factory, document_id)
     assert status == DocumentStatus.INDEXED
     # Re-running added no extra transition events.
-    assert len([event for event in events if event[0] == "status_changed"]) == 3
+    assert len([event for event in events if event[0] == "status_changed"]) == 4
 
 
 async def test_ocr_stage_persists_results_and_event(

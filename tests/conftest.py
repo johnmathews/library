@@ -29,6 +29,20 @@ from library.models import User
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture(autouse=True)
+def _embedding_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep the suite hermetic: embeddings off unless a test opts in.
+
+    The embedding stage reaches for a network sidecar; defaulting it off means
+    pipeline tests never make real HTTP calls. Tests exercising embedding set
+    ``LIBRARY_EMBEDDING_ENABLED=true`` and monkeypatch the embed call.
+    """
+    monkeypatch.setenv("LIBRARY_EMBEDDING_ENABLED", "false")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
 @dataclass(frozen=True)
 class AuthUser:
     """Credentials of a user created directly in the test database."""

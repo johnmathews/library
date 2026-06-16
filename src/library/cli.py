@@ -11,7 +11,7 @@ import sys
 from collections.abc import Awaitable, Callable
 
 import typer
-from sqlalchemy import select
+from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -20,8 +20,8 @@ from library.auth.service import revoke_all_credentials
 from library.config import get_settings
 from library.importer.client import PaperlessClient
 from library.importer.runner import ImportReport, format_report, run_import
-from library.jobs import job_app
-from library.models import User
+from library.jobs import embed_document, job_app
+from library.models import Document, DocumentChunk, User
 
 app: typer.Typer = typer.Typer(
     no_args_is_help=True, help="Library administration (accounts, imports)."
@@ -195,6 +195,44 @@ def import_paperless(
     typer.echo(format_report(report))
     if report.failed:
         raise typer.Exit(code=1)
+
+
+@app.command("backfill-embeddings")
+def backfill_embeddings(
+    limit: int | None = typer.Option(
+        None, "--limit", min=1, help="Only enqueue the first N documents."
+    ),
+    include_existing: bool = typer.Option(
+        False, "--include-existing", help="Re-embed documents that already have chunks."
+    ),
+) -> None:
+    """Queue embedding for documents that have OCR text but no chunks yet.
+
+    Backfills the semantic index for documents ingested before the embedding
+    stage existed. Idempotent — ``embed_document`` replaces a document's
+    chunks — so re-running is safe. The worker must be running to compute the
+    embeddings; this command only enqueues the jobs.
+    """
+
+    async def operation(session: AsyncSession) -> int:
+        statement = select(Document.id).where(
+            Document.deleted_at.is_(None), Document.ocr_text.isnot(None)
+        )
+        if not include_existing:
+            statement = statement.where(
+                ~exists().where(DocumentChunk.document_id == Document.id)
+            )
+        statement = statement.order_by(Document.id)
+        if limit is not None:
+            statement = statement.limit(limit)
+        document_ids = list((await session.execute(statement)).scalars().all())
+        async with job_app.open_async():
+            for document_id in document_ids:
+                await embed_document.defer_async(document_id=document_id)
+        return len(document_ids)
+
+    count = _run(operation)
+    typer.echo(f"queued embedding for {count} document(s)")
 
 
 def main() -> None:

@@ -1,20 +1,61 @@
 """Tests for the `library` account-management CLI (typer)."""
 
+import asyncio
 import uuid
 from collections.abc import Iterator
 
 import pytest
+from procrastinate.testing import InMemoryConnector
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 from typer.testing import CliRunner
 
 from library.auth.passwords import verify_password
 from library.cli import app
 from library.config import get_settings
+from library.jobs import job_app
+from library.models import Document, DocumentChunk, DocumentSource, DocumentStatus
 from tests.conftest import create_user, fetch_all
 from tests.test_auth import execute_sql
 
 pytestmark = pytest.mark.integration
 
 runner = CliRunner()
+
+
+def _seed_document(
+    database_url: str, marker: str, *, ocr_text: str | None, with_chunk: bool
+) -> int:
+    """Insert a document (optionally with one chunk) and return its id."""
+
+    async def _insert() -> int:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                document = Document(
+                    sha256=uuid.uuid4().hex * 2,
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    ocr_text=ocr_text,
+                    status=DocumentStatus.INDEXED,
+                )
+                session.add(document)
+                await session.commit()
+                if with_chunk:
+                    session.add(
+                        DocumentChunk(
+                            document_id=document.id,
+                            chunk_index=1,
+                            text="existing",
+                            embedding=[0.0] * 1024,
+                        )
+                    )
+                    await session.commit()
+                return document.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_insert())
 
 
 @pytest.fixture
@@ -130,3 +171,37 @@ def test_user_list_shows_users(cli_database_url: str) -> None:
     result = runner.invoke(app, ["user", "list"])
     assert result.exit_code == 0, result.output
     assert user.username in result.output
+
+
+def test_backfill_embeddings_enqueues_only_unindexed(cli_database_url: str) -> None:
+    needs = _seed_document(cli_database_url, "needs", ocr_text="real text", with_chunk=False)
+    no_text = _seed_document(cli_database_url, "no-text", ocr_text=None, with_chunk=False)
+    already = _seed_document(cli_database_url, "done", ocr_text="real text", with_chunk=True)
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill-embeddings"])
+    assert result.exit_code == 0, result.output
+
+    enqueued = {
+        job["args"]["document_id"]
+        for job in connector.jobs.values()
+        if job["task_name"] == "library.jobs.embed_document"
+    }
+    assert needs in enqueued
+    assert already not in enqueued  # already has chunks
+    assert no_text not in enqueued  # no OCR text to embed
+
+
+def test_backfill_embeddings_include_existing(cli_database_url: str) -> None:
+    already = _seed_document(cli_database_url, "again", ocr_text="real text", with_chunk=True)
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill-embeddings", "--include-existing"])
+    assert result.exit_code == 0, result.output
+    enqueued = {
+        job["args"]["document_id"]
+        for job in connector.jobs.values()
+        if job["task_name"] == "library.jobs.embed_document"
+    }
+    assert already in enqueued
