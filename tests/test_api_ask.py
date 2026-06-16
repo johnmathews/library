@@ -128,6 +128,14 @@ def _ask_logs_count(database_url: str) -> int:
 # --- Tests ------------------------------------------------------------------
 
 
+def test_system_prompt_includes_current_date() -> None:
+    """The model must resolve "last year" against today, not its training cutoff."""
+    prompt = ask_engine._system_prompt(date(2026, 6, 16))
+    assert "2026-06-16" in prompt
+    assert "The current year is 2026" in prompt
+    assert "\"last year\" means 2025" in prompt
+
+
 def test_ask_without_api_key_returns_503(api_client: TestClient) -> None:
     response = api_client.post("/api/ask", json={"question": "anything?"})
     assert response.status_code == 503

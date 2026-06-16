@@ -29,9 +29,12 @@ from library.structured_query import CONCEPT_TO_KIND, query_documents
 
 logger = logging.getLogger(__name__)
 
-ASK_SYSTEM_PROMPT: str = """\
+ASK_SYSTEM_PROMPT_TEMPLATE: str = """\
 You answer questions about a personal/family document archive (invoices,
 contracts, utility bills, letters, receipts in Dutch and English).
+
+Today's date is {today}. The current year is {year}. Resolve relative dates
+against today: "last year" means {last_year}, "this year" means {year}.
 
 Use the tools to find evidence, then answer:
 - semantic_search: find documents by content/meaning (e.g. "travel allowance
@@ -48,6 +51,16 @@ Rules:
 - Be concise and direct. Dutch terms may answer English questions and vice
   versa (e.g. "reiskostenvergoeding" = travel allowance).
 """
+
+
+def _system_prompt(today: date) -> str:
+    """Render the Ask system prompt with concrete dates so the model resolves
+    relative references ("last year") against the real current date."""
+    return ASK_SYSTEM_PROMPT_TEMPLATE.format(
+        today=today.isoformat(),
+        year=today.year,
+        last_year=today.year - 1,
+    )
 
 
 def _kind_hint() -> str:
@@ -229,13 +242,14 @@ async def run_ask(
     cited: set[int] = set()
     used: list[str] = []
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
+    system_prompt = _system_prompt(date.today())
 
     answer = ""
     for _ in range(max(1, settings.ask_max_tool_turns)):
         response = await client.messages.create(
             model=model,
             max_tokens=settings.ask_max_answer_tokens,
-            system=ASK_SYSTEM_PROMPT,
+            system=system_prompt,
             tools=TOOLS,
             messages=messages,
         )

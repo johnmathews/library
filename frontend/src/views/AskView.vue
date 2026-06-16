@@ -61,7 +61,7 @@ function friendlyError(error: unknown): string {
 </script>
 
 <template>
-  <div id="ask-page" class="max-w-2xl">
+  <div id="ask-page" class="max-w-3xl mx-auto">
     <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Ask</h1>
     <p class="text-gray-500 dark:text-gray-400 mb-6">
       Ask a question about your documents in plain language and get an answer with citations.
