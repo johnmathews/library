@@ -371,3 +371,92 @@ def test_ask_empty_corpus_is_honest(
     assert body["citations"] == []
     assert body["used_tools"] == []
     assert "does not appear" in body["answer"]
+
+
+# --- Engine unit tests (no DB, no HTTP) -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_ask_captures_turn_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """turn_messages records the user question, the tool dance, and the answer
+    as plain dicts suitable for replay/persistence."""
+    from typing import cast
+
+    from library.ask.engine import run_ask
+    from library.config import get_settings
+
+    async def fake_embed_query(
+        text_value: str, *, settings: Any, client: Any = None
+    ) -> list[float]:
+        return _unit_vector(0)
+
+    monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
+
+    async def fake_search(
+        session: Any, *, query: str, query_embedding: Any, top_k: int
+    ) -> list[Any]:
+        return []
+
+    monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+
+    client = _FakeAnthropic(
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[_ToolUseBlock(name="semantic_search", input={"query": "x"}, id="t1")],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="No matches.")],
+                usage=_Usage(8, 4),
+            ),
+        ]
+    )
+    settings = get_settings()
+    result = await run_ask(
+        cast(Any, None), question="anything?", settings=settings, client=cast(Any, client)
+    )
+
+    roles = [m["role"] for m in result.turn_messages]
+    assert roles == ["user", "assistant", "user", "assistant"]
+    # every block is a plain dict (JSON-serialisable), not an SDK/dataclass object
+    for message in result.turn_messages:
+        for block in message["content"] if isinstance(message["content"], list) else []:
+            assert isinstance(block, dict)
+
+
+@pytest.mark.asyncio
+async def test_run_ask_replays_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    """history_messages are prepended to the API call's messages, so prior
+    tool results are visible to the follow-up turn."""
+    from typing import cast
+
+    from library.ask.engine import run_ask
+    from library.config import get_settings
+
+    client = _FakeAnthropic(
+        [
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="2025 was Vattenfall.")],
+                usage=_Usage(5, 3),
+            )
+        ]
+    )
+    history = [
+        {"role": "user", "content": [{"type": "text", "text": "who in 2024?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Eneco [#1]."}]},
+    ]
+    settings = get_settings()
+    await run_ask(
+        cast(Any, None),
+        question="and 2025?",
+        settings=settings,
+        client=cast(Any, client),
+        history_messages=history,
+    )
+
+    sent = client.messages.calls[0]["messages"]
+    assert sent[0]["content"][0]["text"] == "who in 2024?"
+    assert sent[-1]["content"][-1]["text"] == "and 2025?"
