@@ -555,15 +555,25 @@ const pdfPreviewUrl = computed(() =>
     : '',
 )
 
+/** Positive integer page number from `?page=N` in the route query, or null. */
+const pageParam = computed<number | null>(() => {
+  const value = route.query.page
+  const n = Array.isArray(value) ? Number(value[0]) : Number(value)
+  return Number.isInteger(n) && n > 0 ? n : null
+})
+
 /** Same PDF, but with native-viewer open parameters. `toolbar=0&navpanes=0`
  * hides the viewer chrome (Chrome/Edge honour it; some Firefox builds ignore
  * it — best effort, the page provides its own Open/Download buttons), and
  * `view=FitH` fits the page to the iframe width so a portrait page is not
  * clipped on a narrow (mobile) viewport. The plain `pdfPreviewUrl` (no
- * fragment) is kept for the open-in-new-tab button. */
-const pdfPreviewIframeUrl = computed(() =>
-  pdfPreviewUrl.value ? `${pdfPreviewUrl.value}#toolbar=0&navpanes=0&view=FitH` : '',
-)
+ * fragment) is kept for the open-in-new-tab button. When `?page=N` is present
+ * the fragment also carries `&page=N` so the viewer opens on that page. */
+const pdfPreviewIframeUrl = computed(() => {
+  if (!pdfPreviewUrl.value) return ''
+  const page = pageParam.value ? `&page=${pageParam.value}` : ''
+  return `${pdfPreviewUrl.value}#toolbar=0&navpanes=0&view=FitH${page}`
+})
 
 /** Firefox's built-in viewer ignores `#toolbar=0` and shows its own toolbar.
  * There's no URL fragment that hides it, so on Firefox we nudge the iframe up

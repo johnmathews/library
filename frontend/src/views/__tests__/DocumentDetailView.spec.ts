@@ -430,6 +430,13 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="detail-banner"]').exists()).toBe(false)
   })
 
+  it('deep-links the PDF iframe to the page from the route query', async () => {
+    const w = await mountView('/documents/12?page=2')
+    const iframe = w.get('iframe')
+    expect(iframe.attributes('src')).toContain('&page=2')
+    expect(iframe.attributes('src')).toContain('#toolbar=0&navpanes=0&view=FitH&page=2')
+  })
+
   it('marks the document verified', async () => {
     const verifiedDetail = makeDetail({ review_status: 'verified' })
     // Stub verifyDocument via fetch: POST /api/documents/12/verify

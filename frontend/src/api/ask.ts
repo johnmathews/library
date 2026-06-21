@@ -11,6 +11,7 @@ import { apiFetch } from './client'
 export interface AskCitation {
   document_id: number
   title: string | null
+  page_number: number | null
 }
 
 /** Body of POST /api/ask. */

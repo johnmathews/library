@@ -136,11 +136,11 @@ function friendlyError(error: unknown): string {
           <li v-for="citation in result.citations" :key="citation.document_id">
             <RouterLink
               class="flex items-center justify-between gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
-              :to="{ name: 'document-detail', params: { id: citation.document_id } }"
+              :to="{ name: 'document-detail', params: { id: citation.document_id }, query: citation.page_number ? { page: citation.page_number } : {} }"
               data-testid="ask-citation"
             >
               <span class="min-w-0 truncate text-sm text-violet-600 dark:text-violet-400 underline">
-                {{ citation.title ?? 'Untitled' }}
+                {{ citation.title ?? 'Untitled' }}<span v-if="citation.page_number">, p. {{ citation.page_number }}</span>
               </span>
               <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400"
                 >#{{ citation.document_id }}</span
