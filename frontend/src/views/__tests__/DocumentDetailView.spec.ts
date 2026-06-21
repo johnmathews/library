@@ -40,6 +40,8 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     original_filename: 'rekening.pdf',
     sha256: 'abc123',
     extraction: null,
+    validation: null,
+    review_status: 'unreviewed',
     user_edited_fields: [],
     events: [],
     ...overrides,

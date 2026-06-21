@@ -36,6 +36,7 @@ function makeItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
     currency: null,
     snippet: null,
     rank: null,
+    review_status: 'unreviewed',
     ...overrides,
   }
 }

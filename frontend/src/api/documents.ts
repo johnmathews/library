@@ -11,6 +11,7 @@ import { ApiError, apiFetch, getCookie, CSRF_COOKIE, CSRF_HEADER } from './clien
 export type DocumentLanguage = 'nld' | 'eng' | 'mixed' | 'unknown'
 export type DocumentStatus = 'received' | 'ocr' | 'extract' | 'indexed' | 'failed'
 export type DocumentSource = 'upload' | 'consume' | 'email' | 'api' | 'mcp' | 'import'
+export type ReviewStatus = 'verified' | 'needs_review' | 'unreviewed'
 
 export interface KindRef {
   slug: string
@@ -51,6 +52,7 @@ export interface DocumentListItem {
   has_thumbnail: boolean
   amount_total: string | null
   currency: string | null
+  review_status: ReviewStatus
   /**
    * Only non-null with `?q=`. ts_headline fragments with <b>/</b> markers
    * over raw (NOT HTML-escaped) OCR text — render via `renderSnippet`,
@@ -78,6 +80,7 @@ export interface DocumentDetail extends DocumentListItem {
   original_filename: string | null
   sha256: string
   extraction: Record<string, unknown> | null
+  validation: Record<string, unknown> | null
   user_edited_fields: string[]
   events: IngestionEvent[]
 }
@@ -94,6 +97,7 @@ export interface DocumentFilters {
   date_from?: string
   date_to?: string
   source?: DocumentSource
+  review_status?: ReviewStatus
   limit?: number
   offset?: number
 }
@@ -200,6 +204,11 @@ export function deleteDocument(id: number): Promise<void> {
 /** POST /api/documents/{id}/extract — queue metadata re-extraction (202). */
 export function requestExtraction(id: number): Promise<ExtractionQueued> {
   return apiFetch<ExtractionQueued>(`/api/documents/${id}/extract`, { method: 'POST' })
+}
+
+/** POST /api/documents/{id}/verify — mark document as verified; returns updated detail. */
+export function verifyDocument(id: number): Promise<DocumentDetail> {
+  return apiFetch<DocumentDetail>(`/api/documents/${id}/verify`, { method: 'POST' })
 }
 
 /** GET /api/jobs — recent background jobs, newest first. */
