@@ -157,8 +157,7 @@ Decisions:
   Claude vision markdown generation (see "Markdown layer"); entering `embed` chunks
   the text and stores bge-m3 vectors for semantic search (best-effort — a
   document that fails to embed still reaches `indexed`; see [ask.md](ask.md)).
-- Stage hooks are `async def run_ocr(session, document)` /
-  `run_extraction(session, document)` in `library.jobs`. The OCR work
+- Stage hooks are `async def run_ocr(session, document)` / `run_extraction(session, document)` / `run_markdown(session, document)` / `run_embed(session, document)` in `library.jobs`. The OCR work
   itself is CPU-bound and subprocess-heavy, so it runs in a thread via
   `asyncio.to_thread`, keeping the async worker responsive.
 - Re-runs are idempotent: the pipeline resumes from the document's
