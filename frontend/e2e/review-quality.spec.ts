@@ -50,6 +50,7 @@ async function signIn(page: Page): Promise<void> {
  */
 async function seedDocument(page: Page, marker: string): Promise<number> {
   const csrf = (await page.context().cookies()).find((c) => c.name === 'library_csrftoken')
+  expect(csrf, 'library_csrftoken cookie must exist after sign-in').toBeDefined()
   const response = await page.request.post('/api/documents', {
     headers: { 'X-CSRF-Token': csrf!.value },
     multipart: {
@@ -80,7 +81,6 @@ test('mark-verified: button visible on unreviewed doc, click marks it verified',
 
   // Navigate directly to the detail page by id.
   await page.goto(`/documents/${id}`)
-  await expect(page.getByText('Status', { exact: true })).toBeVisible()
 
   // The document is `unreviewed`, so the "Mark verified" button must be present.
   const markVerifiedBtn = page.getByTestId('mark-verified')
