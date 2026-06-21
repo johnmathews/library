@@ -32,6 +32,7 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     Kind,
+    ReviewStatus,
     Sender,
     Tag,
 )
@@ -60,6 +61,7 @@ class DocumentFilters:
     source: DocumentSource | None = None
     date_from: date | None = None
     date_to: date | None = None
+    review_status: ReviewStatus | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +97,8 @@ def filter_conditions(filters: DocumentFilters) -> list[Any]:
         conditions.append(Document.language == filters.language)
     if filters.status is not None:
         conditions.append(Document.status == filters.status)
+    if filters.review_status is not None:
+        conditions.append(Document.review_status == filters.review_status)
     if filters.date_from is not None:
         conditions.append(Document.document_date >= filters.date_from)
     if filters.date_to is not None:

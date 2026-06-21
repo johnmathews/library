@@ -29,6 +29,7 @@ from library.models import (
     DocumentStatus,
     IngestionEvent,
     Kind,
+    ReviewStatus,
     User,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
@@ -237,6 +238,7 @@ async def list_documents(
     ] = None,
     language: Annotated[DocumentLanguage | None, Query()] = None,
     status_filter: Annotated[DocumentStatus | None, Query(alias="status")] = None,
+    review_status: Annotated[ReviewStatus | None, Query()] = None,
     date_from: Annotated[
         date | None, Query(description="Inclusive lower bound on document_date.")
     ] = None,
@@ -260,6 +262,7 @@ async def list_documents(
             tag_slugs=tuple(tag or []),
             language=language,
             status=status_filter,
+            review_status=review_status,
             date_from=date_from,
             date_to=date_to,
             source=source,
@@ -440,6 +443,25 @@ async def queue_extraction(
     return ExtractionQueuedResponse(queued=True, job_id=job_id)
 
 
+@router.post(
+    "/documents/{document_id}/verify",
+    response_model=DocumentDetail,
+    summary="Mark a document's metadata as reviewed/verified",
+    responses={404: {"description": "Unknown or deleted document"}},
+)
+async def verify_document(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> DocumentDetail:
+    """Set review_status=verified and record an audit event."""
+    document = await _get_document_or_404(session, document_id)
+    document.review_status = ReviewStatus.VERIFIED
+    session.add(IngestionEvent(document_id=document.id, event="review_verified", detail={}))
+    await session.commit()
+    await session.refresh(document)
+    return _detail(document)
+
+
 @router.get(
     "/documents/{document_id}/original",
     response_class=FileResponse,
@@ -558,6 +580,7 @@ def _list_item_fields(document: Document) -> dict[str, Any]:
         "created_at": document.created_at,
         "has_searchable_pdf": document.searchable_pdf,
         "has_thumbnail": (derived_path(document.sha256) / THUMBNAIL_NAME).is_file(),
+        "review_status": document.review_status,
         "amount_total": document.amount_total,
         "currency": document.currency,
     }
@@ -576,6 +599,7 @@ def _detail(document: Document) -> DocumentDetail:
         sha256=document.sha256,
         extraction=document.extra.get("extraction"),
         user_edited_fields=list(document.extra.get("user_edited_fields", [])),
+        validation=document.extra.get("validation"),
         events=[
             IngestionEventOut(event=event.event, detail=event.detail, created_at=event.created_at)
             for event in sorted(document.events, key=lambda event: event.id)

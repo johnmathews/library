@@ -29,6 +29,7 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     Kind,
+    ReviewStatus,
     Sender,
     Tag,
 )
@@ -780,3 +781,57 @@ def test_inline_disposition_restricted_to_render_safe_types(
     assert response.headers["content-disposition"].startswith("inline")
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["content-security-policy"] == "sandbox"
+
+
+# --- Review status -----------------------------------------------------------
+
+
+def test_list_filters_by_review_status(api_client: TestClient, api_database_url: str) -> None:
+    """?review_status=needs_review returns only docs with that status."""
+    needs_review_id = seed_document(
+        api_database_url,
+        "w6-review-needs",
+        tag_slugs=["w6-review-filter"],
+        review_status=ReviewStatus.NEEDS_REVIEW,
+    )
+    seed_document(
+        api_database_url,
+        "w6-review-unreviewed",
+        tag_slugs=["w6-review-filter"],
+        review_status=ReviewStatus.UNREVIEWED,
+    )
+
+    body = list_docs(api_client, tag="w6-review-filter", review_status="needs_review")
+    assert body["total"] == 1
+    (item,) = body["items"]
+    assert item["id"] == needs_review_id
+    assert item["review_status"] == "needs_review"
+
+
+def test_verify_endpoint_marks_verified(api_client: TestClient, api_database_url: str) -> None:
+    """POST /api/documents/{id}/verify sets review_status to 'verified'."""
+    document_id = seed_document(
+        api_database_url,
+        "w6-verify",
+        review_status=ReviewStatus.NEEDS_REVIEW,
+    )
+
+    response = api_client.post(f"/api/documents/{document_id}/verify")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["review_status"] == "verified"
+
+
+def test_detail_exposes_validation(api_client: TestClient, api_database_url: str) -> None:
+    """GET /api/documents/{id} exposes extra['validation'] under `validation`."""
+    validation_blob = {"score": 0.92, "flags": ["amount_mismatch"], "checked_at": "2026-06-21"}
+    document_id = seed_document(
+        api_database_url,
+        "w6-detail-validation",
+        extra={"validation": validation_blob},
+    )
+
+    response = api_client.get(f"/api/documents/{document_id}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["validation"] == validation_blob

@@ -11,7 +11,7 @@ from typing import Annotated, Any, Final
 
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
-from library.models import DocumentLanguage, DocumentSource, DocumentStatus
+from library.models import DocumentLanguage, DocumentSource, DocumentStatus, ReviewStatus
 
 
 class DocumentUploadResponse(BaseModel):
@@ -69,6 +69,7 @@ class DocumentListItem(BaseModel):
     created_at: datetime
     has_searchable_pdf: bool
     has_thumbnail: bool
+    review_status: ReviewStatus
     amount_total: Decimal | None = None
     currency: str | None = None
     snippet: str | None = Field(
@@ -108,6 +109,9 @@ class DocumentDetail(DocumentListItem):
     )
     user_edited_fields: list[str] = Field(
         description="Fields locked by user edits; re-extraction never overwrites them."
+    )
+    validation: dict[str, Any] | None = Field(
+        default=None, description="Latest validation run: findings + provenance."
     )
     events: list[IngestionEventOut] = Field(description="Audit trail, oldest first.")
 
