@@ -55,7 +55,11 @@ def validate(
     text = document.ocr_text or ""
 
     # amount_grounding — amount set but its digits are absent from the text.
-    if document.amount_total is not None and text and not _amount_appears(document.amount_total, text):
+    if (
+        document.amount_total is not None
+        and text
+        and not _amount_appears(document.amount_total, text)
+    ):
         findings.append(
             Finding(
                 rule="amount_grounding",
@@ -69,24 +73,51 @@ def validate(
     doc_date = document.document_date
     if doc_date is not None:
         if doc_date > today:
-            findings.append(Finding("date_plausibility", "document_date", "warn", "document_date is in the future"))
+            findings.append(
+                Finding(
+                    "date_plausibility", "document_date", "warn", "document_date is in the future"
+                )
+            )
         elif doc_date < _MIN_PLAUSIBLE_DATE:
-            findings.append(Finding("date_plausibility", "document_date", "warn", "document_date is implausibly old"))
+            findings.append(
+                Finding(
+                    "date_plausibility", "document_date", "warn", "document_date is implausibly old"
+                )
+            )
         if document.due_date is not None and document.due_date < doc_date:
-            findings.append(Finding("date_plausibility", "due_date", "warn", "due_date is before document_date"))
+            findings.append(
+                Finding("date_plausibility", "due_date", "warn", "due_date is before document_date")
+            )
         if document.expiry_date is not None and document.expiry_date < doc_date:
-            findings.append(Finding("date_plausibility", "expiry_date", "warn", "expiry_date is before document_date"))
+            findings.append(
+                Finding(
+                    "date_plausibility",
+                    "expiry_date",
+                    "warn",
+                    "expiry_date is before document_date",
+                )
+            )
 
     # amount_currency_coupling — exactly one of amount/currency is set.
     if (document.amount_total is None) != (document.currency is None):
         findings.append(
-            Finding("amount_currency_coupling", "currency", "warn", "amount_total and currency must be set together")
+            Finding(
+                "amount_currency_coupling",
+                "currency",
+                "warn",
+                "amount_total and currency must be set together",
+            )
         )
 
     # ocr_confidence_gate — extraction built on low-confidence OCR.
     if document.ocr_confidence is not None and document.ocr_confidence < ocr_floor:
         findings.append(
-            Finding("ocr_confidence_gate", None, "warn", f"OCR confidence {document.ocr_confidence:.0f} below floor {ocr_floor:.0f}")
+            Finding(
+                "ocr_confidence_gate",
+                None,
+                "warn",
+                f"OCR confidence {document.ocr_confidence:.0f} below floor {ocr_floor:.0f}",
+            )
         )
 
     # empty_extraction — kind=other and nothing else learned.
@@ -96,7 +127,9 @@ def validate(
         and document.document_date is None
         and document.amount_total is None
     ):
-        findings.append(Finding("empty_extraction", None, "warn", "extraction produced no useful metadata"))
+        findings.append(
+            Finding("empty_extraction", None, "warn", "extraction produced no useful metadata")
+        )
 
     # self_reported_low — the model said it was unsure.
     extraction = document.extra.get("extraction") if isinstance(document.extra, dict) else None

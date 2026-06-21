@@ -34,42 +34,65 @@ def _rules(findings: list[Finding]) -> set[str]:
 
 def test_amount_grounded_in_text_does_not_fire() -> None:
     doc = _doc(amount_total=Decimal("12.00"), currency="EUR", ocr_text="Totaal € 12,00 voldaan")
-    assert "amount_grounding" not in _rules(validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY))
+    assert "amount_grounding" not in _rules(
+        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+    )
 
 
 def test_amount_absent_from_text_fires() -> None:
     doc = _doc(amount_total=Decimal("999.99"), currency="EUR", ocr_text="Totaal € 12,00 voldaan")
-    assert "amount_grounding" in _rules(validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY))
+    assert "amount_grounding" in _rules(
+        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+    )
 
 
 def test_future_document_date_fires() -> None:
     doc = _doc(document_date=date(2027, 1, 1))
-    assert "date_plausibility" in _rules(validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY))
+    assert "date_plausibility" in _rules(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_implausibly_old_document_date_fires() -> None:
+    doc = _doc(document_date=date(1980, 1, 1))
+    assert "date_plausibility" in _rules(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    )
 
 
 def test_due_before_document_date_fires() -> None:
     doc = _doc(document_date=date(2026, 5, 1), due_date=date(2026, 4, 1))
-    assert "date_plausibility" in _rules(validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY))
+    assert "date_plausibility" in _rules(
+        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+    )
 
 
 def test_amount_without_currency_fires() -> None:
     doc = _doc(amount_total=Decimal("10.00"), currency=None, ocr_text="10.00")
-    assert "amount_currency_coupling" in _rules(validate(doc, kind_slug="receipt", ocr_floor=FLOOR, today=TODAY))
+    assert "amount_currency_coupling" in _rules(
+        validate(doc, kind_slug="receipt", ocr_floor=FLOOR, today=TODAY)
+    )
 
 
 def test_low_ocr_confidence_fires() -> None:
     doc = _doc(ocr_confidence=30.0)
-    assert "ocr_confidence_gate" in _rules(validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY))
+    assert "ocr_confidence_gate" in _rules(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    )
 
 
 def test_empty_extraction_fires() -> None:
     doc = _doc()  # kind other, no sender, no date, no amount
-    assert "empty_extraction" in _rules(validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY))
+    assert "empty_extraction" in _rules(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    )
 
 
 def test_self_reported_low_confidence_fires() -> None:
     doc = _doc(extra={"extraction": {"confidence": "low"}})
-    assert "self_reported_low" in _rules(validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY))
+    assert "self_reported_low" in _rules(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    )
 
 
 def test_clean_document_has_no_findings() -> None:
