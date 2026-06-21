@@ -10,7 +10,7 @@ import asyncio
 import logging
 
 from procrastinate import App, PsycopgConnector
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from library import thumbnails
@@ -20,7 +20,7 @@ from library.embedding import EmbeddingError, embed_texts
 from library.embedding.chunker import chunk_text
 from library.extraction.apply import apply_extraction
 from library.markdown.apply import apply_markdown
-from library.models import Document, DocumentChunk, DocumentStatus, IngestionEvent
+from library.models import Document, DocumentChunk, DocumentPage, DocumentStatus, IngestionEvent
 from library.ocr import router as ocr_router
 from library.storage import derived_dir, path_for
 
@@ -144,35 +144,70 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
         await _record_embed_event(session, document, "embedding_skipped", {"reason": "disabled"})
         return
 
-    chunks = chunk_text(
-        document.ocr_text or "",
-        max_chars=settings.embedding_chunk_chars,
-        overlap=settings.embedding_chunk_overlap,
+    pages = (
+        (
+            await session.execute(
+                select(DocumentPage)
+                .where(DocumentPage.document_id == document.id)
+                .order_by(DocumentPage.page_number)
+            )
+        )
+        .scalars()
+        .all()
     )
-    if not chunks:
+
+    chunk_records: list[tuple[str, int | None]] = []
+    if pages:
+        for page in pages:
+            for piece in chunk_text(
+                page.markdown,
+                max_chars=settings.embedding_chunk_chars,
+                overlap=settings.embedding_chunk_overlap,
+            ):
+                chunk_records.append((piece, page.page_number))
+    else:
+        for piece in chunk_text(
+            document.ocr_text or "",
+            max_chars=settings.embedding_chunk_chars,
+            overlap=settings.embedding_chunk_overlap,
+        ):
+            chunk_records.append((piece, None))
+
+    if not chunk_records:
         await _record_embed_event(session, document, "embedding_skipped", {"reason": "no_text"})
         return
 
+    texts = [text for text, _ in chunk_records]
     try:
-        vectors = await embed_texts(chunks, settings=settings)
+        vectors = await embed_texts(texts, settings=settings)
     except EmbeddingError as exc:
         await _record_embed_event(
-            session, document, "embedding_failed", {"error": str(exc), "chunks": len(chunks)}
+            session, document, "embedding_failed", {"error": str(exc), "chunks": len(texts)}
         )
         return
 
     await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
-    for index, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True), start=1):
+    for index, ((text, page_number), vector) in enumerate(
+        zip(chunk_records, vectors, strict=True), start=1
+    ):
         session.add(
-            DocumentChunk(document_id=document.id, chunk_index=index, text=chunk, embedding=vector)
+            DocumentChunk(
+                document_id=document.id,
+                chunk_index=index,
+                page_number=page_number,
+                text=text,
+                embedding=vector,
+            )
         )
     await _record_embed_event(
         session,
         document,
         "embedded",
-        {"chunks": len(chunks), "model": settings.embedding_model_name},
+        {"chunks": len(texts), "model": settings.embedding_model_name, "page_aware": bool(pages)},
     )
-    logger.info("embedded document %s into %s chunks", document.id, len(chunks))
+    logger.info(
+        "embedded document %s into %s chunks (page_aware=%s)", document.id, len(texts), bool(pages)
+    )
 
 
 async def _run_stage_hook(
