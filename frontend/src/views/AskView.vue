@@ -25,6 +25,7 @@ import { AppButton, AppErrorSummary, AppTextarea } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
 import { askQuestion, getThread, type AskCitation } from '@/api/ask'
 import { ApiError } from '@/api/client'
+import ConversationSidebar from '@/components/ask/ConversationSidebar.vue'
 
 interface TurnVM {
   query: string
@@ -42,6 +43,7 @@ const loading = ref(false)
 const errorMessage = ref<string | null>(null)
 const turns = ref<TurnVM[]>([])
 const threadId = ref<number | null>(null)
+const sidebarRef = ref<InstanceType<typeof ConversationSidebar> | null>(null)
 
 const errors = computed<ErrorSummaryItem[]>(() =>
   errorMessage.value ? [{ text: errorMessage.value }] : [],
@@ -73,6 +75,7 @@ async function onSubmit(): Promise<void> {
   loading.value = true
   errorMessage.value = null
   const controller = new AbortController()
+  const wasNewThread = threadId.value === null
   try {
     const res = await askQuestion(trimmed, threadId.value ?? undefined, controller.signal)
     turns.value.push({
@@ -88,6 +91,10 @@ async function onSubmit(): Promise<void> {
     // browser history and sidebar can track this conversation.
     if (!route.params.threadId) {
       await router.replace({ name: 'ask-thread', params: { threadId: res.thread_id } })
+    }
+    // Refresh the sidebar when a new thread was just created.
+    if (wasNewThread) {
+      sidebarRef.value?.refresh()
     }
   } catch (error: unknown) {
     errorMessage.value = friendlyError(error)
@@ -145,7 +152,15 @@ defineExpose({ resetConversation })
 </script>
 
 <template>
-  <div id="ask-page" class="max-w-3xl mx-auto">
+  <div id="ask-page" class="max-w-6xl mx-auto flex gap-6 items-start">
+    <ConversationSidebar
+      ref="sidebarRef"
+      :active-thread-id="threadId"
+      @select="(id: number) => router.push({ name: 'ask-thread', params: { threadId: id } })"
+      @new="resetConversation"
+    />
+
+    <div class="flex-1 min-w-0">
     <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Ask</h1>
     <p class="text-gray-500 dark:text-gray-400 mb-6">
       Ask a question about your documents in plain language and get an answer with citations.
@@ -245,6 +260,7 @@ defineExpose({ resetConversation })
         {{ loading ? 'Asking…' : 'Ask' }}
       </AppButton>
     </form>
+    </div>
   </div>
 </template>
 
