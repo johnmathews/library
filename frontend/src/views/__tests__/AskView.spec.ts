@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import AskView from '../AskView.vue'
-import { askQuestion, getThread, type AskResponse } from '@/api/ask'
+import { askQuestion, getThread, listThreads, type AskResponse } from '@/api/ask'
 import { ApiError } from '@/api/client'
 
 vi.mock('@/api/ask', () => ({
@@ -38,6 +38,7 @@ describe('AskView', () => {
   beforeEach(async () => {
     askQuestionMock.mockReset()
     getThreadMock.mockReset()
+    vi.mocked(listThreads).mockResolvedValue([])
     router = createRouter({
       history: createMemoryHistory(),
       routes: [

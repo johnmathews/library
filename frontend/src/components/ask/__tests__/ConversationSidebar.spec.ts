@@ -36,5 +36,6 @@ describe('ConversationSidebar', () => {
     await flushPromises()
     expect(deleteThread).toHaveBeenCalledWith(1)
     expect(listThreads).toHaveBeenCalledTimes(2)
+    expect(w.emitted('new')).toBeTruthy()
   })
 })
