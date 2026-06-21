@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     extraction_validation_ocr_floor: float = 50.0
     extraction_judge_model: str = "claude-sonnet-4-6"
     extraction_judge_inline: bool = False  # reserved; judge is batch-only this phase
-    # Markdown layer (see docs/markdown.md).
+    # Markdown layer (see docs/ingestion.md, "Markdown layer" section).
     markdown_enabled: bool = True
     markdown_model: str = "claude-haiku-4-5"
     markdown_daily_budget_usd: float = 5.0

@@ -8,6 +8,41 @@ All notable changes to Library are documented here. The format follows
 
 ### Added
 
+**Markdown layer + page-aware citations** — Claude vision renders each
+document page as clean GitHub-flavored markdown, grounded on OCR text.
+See [docs/ingestion.md](docs/ingestion.md) "Markdown layer" and
+[docs/ask.md](docs/ask.md).
+
+- New pipeline stage `markdown` between `extract` and `embed`
+  (`received → ocr → extract → markdown → embed → indexed`). Best-effort,
+  identical contract to extraction: disabled, no API key, over budget,
+  unusable input, or API error all skip gracefully; the document still reaches
+  `indexed`.
+- Per-page rendering via `client.messages.parse()` (structured outputs,
+  `claude-haiku-4-5` default). Pages are rasterized with pypdfium2; scale is
+  bounded to avoid oversized bitmaps from large-point-dimension PDFs; Pillow
+  images are bounded by a ~40 MP pixel cap and `DecompressionBombError` is caught
+  — corrupt uploads cannot fail the pipeline.
+- New `document_pages` table (migration 0007, PK `(document_id, page_number)`)
+  stores per-page markdown. `document_chunks` gains a nullable `page_number`
+  column.
+- Page-aware embedding: `run_embed` now chunks each page's markdown when
+  `document_pages` exist, tagging every `DocumentChunk` with its `page_number`;
+  falls back to `ocr_text` chunking (`page_number = NULL`) when absent. The
+  `embedded` event gains `page_aware: bool`.
+- Separate daily budget guard (`LIBRARY_MARKDOWN_DAILY_BUDGET_USD`, default
+  $5.00 USD) scoped to `markdown_completed` events — independent of the
+  extraction budget.
+- `library backfill-markdown [--limit N] [--include-existing]` CLI to render
+  existing documents and re-embed page-aware.
+- `GET /api/documents/{id}/markdown` — assembled per-page markdown for the
+  detail-view markdown tab.
+- Ask citations now carry `page_number: int | None` (the page of the top
+  semantic hit). The web UI renders `Title, p. N` and deep-links the PDF
+  iframe via `#page=N` in the URL fragment. Aggregation citations (from
+  `query_documents`) always have `page_number = None`.
+- Six new `LIBRARY_MARKDOWN_*` settings (see `.env.example`).
+
 **Semantic Ask** — natural-language question answering over the archive
 (`/ask` in the web app, `POST /api/ask`). See [docs/ask.md](docs/ask.md).
 

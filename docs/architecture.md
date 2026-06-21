@@ -59,8 +59,8 @@ volume:
 ## 1.2 Document pipeline
 
 Every ingested file follows the same lifecycle, recorded on the document
-row: `received → ocr → extract → embed → indexed` (or `failed` at any
-stage, with the reason in `ingestion_events`).
+row: `received → ocr → extract → markdown → embed → indexed` (or `failed`
+at any stage, with the reason in `ingestion_events`).
 
 1. **Ingest** (any channel: web upload, consume folder, email, REST, MCP).
    The file is hashed (SHA-256) and stored content-addressed under
@@ -87,12 +87,22 @@ stage, with the reason in `ingestion_events`).
    eval harness (`library eval-extractions`) combines the corrections
    flywheel with an LLM-as-judge to produce per-field accuracy numbers;
    see [ingestion.md](ingestion.md) "Extraction quality".
-4. **Embed** — the document's text is chunked and embedded (bge-m3, 1024-dim)
+4. **Markdown** — Claude vision (Haiku 4.5 by default) rasterizes each
+   page and renders a clean GitHub-flavored markdown representation,
+   grounded on the OCR text. One `messages.parse()` call per page-image
+   batch; results are stored per page in `document_pages`. Best-effort,
+   exactly like extraction: disabled feature, missing API key, blown
+   budget, unusable input, or an API error all produce a skip/failed event
+   and the document continues to `embed`. See
+   [ingestion.md](ingestion.md) "Markdown layer".
+5. **Embed** — the document's text is chunked and embedded (bge-m3, 1024-dim)
    by the local `embedder` sidecar; vectors land in `document_chunks` (HNSW
-   index) for semantic retrieval. Best-effort: a document that fails to embed
-   still reaches `indexed` and stays searchable by full-text. See
-   [ask.md](ask.md).
-5. **Index** — metadata and text become searchable (Postgres FTS, both
+   index) for semantic retrieval. When `document_pages` exist the embed
+   stage chunks each page's markdown and tags every chunk with its
+   `page_number`; otherwise it falls back to `ocr_text` with
+   `page_number = NULL`. Best-effort: a document that fails to embed still
+   reaches `indexed` and stays searchable by full-text. See [ask.md](ask.md).
+6. **Index** — metadata and text become searchable (Postgres FTS, both
    Dutch and English stemming; semantic retrieval via `document_chunks`) and
    visible in the UI.
 
@@ -104,10 +114,13 @@ kind-specific fields plus `extra["validation"]` + `extra["corrections"]`,
 OCR text + confidence, uploader, source channel) with FKs to `senders` and `kinds`
 (seeded: invoice, receipt, certificate, utility bill, parking ticket,
 warranty, manual, letter, contract, ticket, other), many-to-many `tags`,
-per-chunk embeddings (`document_chunks`, pgvector + HNSW), append-only
-`ingestion_events` audit trail, the `ask_logs` cost/provenance trail, and
-auth tables (`users`, `sessions`, `api_tokens`). Originals on disk are
-immutable; everything else (including embeddings) is a re-derivable artifact.
+per-page markdown renderings (`document_pages`, PK `(document_id, page_number)`),
+per-chunk embeddings (`document_chunks`, pgvector + HNSW; each chunk carries
+`page_number` when generated from `document_pages`, `NULL` when falling back to
+`ocr_text`), append-only `ingestion_events` audit trail, the `ask_logs`
+cost/provenance trail, and auth tables (`users`, `sessions`, `api_tokens`).
+Originals on disk are immutable; everything else (including embeddings and page
+markdown) is a re-derivable artifact.
 
 ## 1.4 Interfaces
 
@@ -151,3 +164,4 @@ hashed, individually revocable.
 | Deployment hardening + full docs | W17 | **done** — see [deployment.md](deployment.md); compose smoke job in CI; v0.1.0 ([CHANGELOG](../CHANGELOG.md)) |
 | Semantic Ask (pgvector, embedder, hybrid retrieval, `/api/ask`) | — | **done** — see [ask.md](ask.md) |
 | Extraction quality (validation, review queue, eval harness) | — | **done** — see [ingestion.md](ingestion.md) "Extraction quality" and [api.md](api.md) §1.3/1.4/1.8.3 |
+| Markdown layer (vision per-page rendering, page-aware embed, page citations in Ask) | — | **done** — see [ingestion.md](ingestion.md) "Markdown layer" and [ask.md](ask.md) |
