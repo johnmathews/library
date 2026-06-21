@@ -170,3 +170,41 @@ async def test_many_chunk_document_does_not_crowd_out_others(session: AsyncSessi
 async def test_no_matches_returns_empty(session: AsyncSession) -> None:
     hits = await semantic_search(session, query="", query_embedding=unit_vector(0), top_k=5)
     assert hits == []
+
+
+async def test_semantic_hit_carries_page_number(session: AsyncSession) -> None:
+    """A chunk with page_number=N surfaces page_number==N on the SemanticHit."""
+    document_id = await seed_document(
+        session,
+        "page-number-doc",
+        ocr_text="solar invoice",
+        chunks=[("solar invoice", unit_vector(0))],
+    )
+    # Update the chunk to have a page_number (seed_document doesn't set it).
+    from sqlalchemy import update
+
+    await session.execute(
+        update(DocumentChunk).where(DocumentChunk.document_id == document_id).values(page_number=3)
+    )
+    await session.commit()
+
+    hits = await semantic_search(session, query="solar", query_embedding=unit_vector(0), top_k=5)
+
+    assert hits
+    hit = next(h for h in hits if h.document.id == document_id)
+    assert hit.page_number == 3
+
+
+async def test_semantic_hit_page_number_none_when_unset(session: AsyncSession) -> None:
+    """A chunk without page_number gives page_number==None on the SemanticHit."""
+    await seed_document(
+        session,
+        "no-page-doc",
+        ocr_text="energy bill",
+        chunks=[("energy bill", unit_vector(1))],
+    )
+
+    hits = await semantic_search(session, query="energy", query_embedding=unit_vector(1), top_k=5)
+
+    assert hits
+    assert hits[0].page_number is None

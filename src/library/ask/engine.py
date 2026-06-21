@@ -126,6 +126,7 @@ class AskCitation:
 
     document_id: int
     title: str | None
+    page_number: int | None = None
 
 
 @dataclass(slots=True)
@@ -151,7 +152,11 @@ def _parse_date(value: object) -> date | None:
 
 
 async def _run_semantic_search(
-    session: AsyncSession, settings: Settings, args: dict[str, Any], cited: set[int]
+    session: AsyncSession,
+    settings: Settings,
+    args: dict[str, Any],
+    cited: set[int],
+    pages: dict[int, int],
 ) -> dict[str, Any]:
     query = str(args.get("query", "")).strip()
     if not query:
@@ -167,6 +172,8 @@ async def _run_semantic_search(
     rows = []
     for hit in hits:
         cited.add(hit.document.id)
+        if hit.page_number is not None and hit.document.id not in pages:
+            pages[hit.document.id] = hit.page_number
         rows.append(
             {
                 "document_id": hit.document.id,
@@ -205,16 +212,23 @@ async def _run_query_documents(
 
 
 async def _dispatch_tool(
-    session: AsyncSession, settings: Settings, name: str, args: dict[str, Any], cited: set[int]
+    session: AsyncSession,
+    settings: Settings,
+    name: str,
+    args: dict[str, Any],
+    cited: set[int],
+    pages: dict[int, int],
 ) -> dict[str, Any]:
     if name == "semantic_search":
-        return await _run_semantic_search(session, settings, args, cited)
+        return await _run_semantic_search(session, settings, args, cited, pages)
     if name == "query_documents":
         return await _run_query_documents(session, args, cited)
     return {"error": f"unknown tool {name}"}
 
 
-async def _citations_for(session: AsyncSession, cited: set[int]) -> list[AskCitation]:
+async def _citations_for(
+    session: AsyncSession, cited: set[int], pages: dict[int, int]
+) -> list[AskCitation]:
     if not cited:
         return []
     rows = (
@@ -222,7 +236,9 @@ async def _citations_for(session: AsyncSession, cited: set[int]) -> list[AskCita
             select(Document.id, Document.title).where(Document.id.in_(cited)).order_by(Document.id)
         )
     ).all()
-    return [AskCitation(document_id=document_id, title=title) for document_id, title in rows]
+    return [
+        AskCitation(document_id=did, title=title, page_number=pages.get(did)) for did, title in rows
+    ]
 
 
 def _text_of(content: list[Any]) -> str:
@@ -240,6 +256,7 @@ async def run_ask(
     model = settings.ask_model
     result = AskResult(answer="", citations=[], used_tools=[], model=model)
     cited: set[int] = set()
+    pages: dict[int, int] = {}
     used: list[str] = []
     messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
     system_prompt = _system_prompt(date.today())
@@ -268,7 +285,9 @@ async def run_ask(
             if getattr(block, "type", None) != "tool_use":
                 continue
             used.append(block.name)
-            output = await _dispatch_tool(session, settings, block.name, dict(block.input), cited)
+            output = await _dispatch_tool(
+                session, settings, block.name, dict(block.input), cited, pages
+            )
             tool_results.append(
                 {
                     "type": "tool_result",
@@ -290,7 +309,7 @@ async def run_ask(
     # Prefer the documents Claude actually cited inline (#id); fall back to the
     # full retrieved set when the answer cited none explicitly.
     mentioned = {int(match) for match in re.findall(r"#(\d+)", answer)} & cited
-    result.citations = await _citations_for(session, mentioned or cited)
+    result.citations = await _citations_for(session, mentioned or cited, pages)
     # De-duplicate tool names, preserving first-use order.
     result.used_tools = list(dict.fromkeys(used))
     return result

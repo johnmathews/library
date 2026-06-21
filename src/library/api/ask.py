@@ -32,6 +32,7 @@ class Citation(BaseModel):
 
     document_id: int
     title: str | None
+    page_number: int | None = None
 
 
 class AskResponse(BaseModel):
@@ -80,7 +81,11 @@ async def ask(
     return AskResponse(
         answer=result.answer,
         citations=[
-            Citation(document_id=citation.document_id, title=citation.title)
+            Citation(
+                document_id=citation.document_id,
+                title=citation.title,
+                page_number=citation.page_number,
+            )
             for citation in result.citations
         ],
         used_tools=result.used_tools,

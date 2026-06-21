@@ -261,6 +261,92 @@ def test_ask_structured_answers_provider_question(
     assert len(body["citations"]) == 1
 
 
+def test_ask_citation_schema_has_page_number() -> None:
+    """The Citation response model must expose page_number for clients."""
+    from library.api.ask import Citation
+
+    assert "page_number" in Citation.model_fields
+
+
+def test_ask_semantic_citation_carries_page_number(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A semantic hit with page_number surfaces it in the API citation; an
+    aggregation-only citation gets None."""
+    from sqlalchemy import text as sa_text
+
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            sha = hashlib.sha256(b"page-number-ask").hexdigest()
+            vector_literal = (
+                "[" + ",".join("1" if i == 0 else "0" for i in range(EMBEDDING_DIM)) + "]"
+            )
+            document_id = connection.execute(
+                sa_text(
+                    "INSERT INTO documents (sha256, mime_type, status, source, ocr_text, title)"
+                    " VALUES (:sha, 'application/pdf', 'indexed', 'upload', :ocr, :title)"
+                    " RETURNING id"
+                ),
+                {"sha": sha, "ocr": "travel allowance clause", "title": "Contract 2025"},
+            ).scalar_one()
+            connection.execute(
+                sa_text(
+                    "INSERT INTO document_chunks"
+                    " (document_id, chunk_index, page_number, text, embedding)"
+                    " VALUES (:doc, 1, :page, :txt, CAST(:emb AS vector))"
+                ),
+                {
+                    "doc": document_id,
+                    "page": 7,
+                    "txt": "Article 7: travel allowance 0.21/km",
+                    "emb": vector_literal,
+                },
+            )
+    finally:
+        engine.dispose()
+
+    async def fake_embed_query(
+        text_value: str, *, settings: Any, client: Any = None
+    ) -> list[float]:
+        return _unit_vector(0)
+
+    monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="semantic_search",
+                        input={"query": "travel allowance"},
+                        id="t1",
+                    )
+                ],
+                usage=_Usage(100, 20),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"Yes, travel allowance [#{document_id}].")],
+                usage=_Usage(150, 30),
+            ),
+        ],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "travel allowance?"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    citations = body["citations"]
+    matched = [c for c in citations if c["document_id"] == document_id]
+    assert matched, f"document {document_id} not in citations {citations}"
+    assert matched[0]["page_number"] == 7
+
+
 def test_ask_empty_corpus_is_honest(
     api_client: TestClient,
     api_database_url: str,
