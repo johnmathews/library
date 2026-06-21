@@ -87,23 +87,16 @@ FLOOR = 50.0
 
 
 def _doc(**kwargs: object) -> Document:
-    """A bare Document with only the attributes a rule reads."""
-    defaults: dict[str, object] = {
-        "amount_total": None,
-        "currency": None,
-        "document_date": None,
-        "due_date": None,
-        "expiry_date": None,
-        "ocr_text": "",
-        "ocr_confidence": None,
-        "sender_id": None,
-        "extra": {},
-    }
+    """A transient Document carrying only the attributes a rule reads.
+
+    Built via the normal SQLAlchemy constructor (NOT __new__ + setattr):
+    mapped columns are data descriptors, so an instance-dict value set with
+    object.__setattr__ would be ignored on read. Unset scalar columns read
+    back as None on a transient instance, which is what the rules expect.
+    """
+    defaults: dict[str, object] = {"ocr_text": "", "extra": {}}
     defaults.update(kwargs)
-    doc = Document.__new__(Document)
-    for key, value in defaults.items():
-        object.__setattr__(doc, key, value)
-    return doc
+    return Document(**defaults)
 
 
 def _rules(findings: list[Finding]) -> set[str]:
@@ -1012,21 +1005,23 @@ from library.models import Document, DocumentSource
 
 
 def _doc() -> Document:
-    doc = Document.__new__(Document)
-    object.__setattr__(doc, "ocr_text", "Factuur Eneco totaal € 12,00")
-    object.__setattr__(doc, "title", "Eneco factuur")
-    object.__setattr__(doc, "amount_total", None)
-    object.__setattr__(doc, "currency", None)
-    object.__setattr__(doc, "document_date", None)
-    object.__setattr__(doc, "due_date", None)
-    object.__setattr__(doc, "expiry_date", None)
-    object.__setattr__(doc, "summary", "s")
-    object.__setattr__(doc, "language", None)
-    object.__setattr__(doc, "extra", {})
-    object.__setattr__(doc, "kind_id", None)
-    object.__setattr__(doc, "sender_id", None)
-    object.__setattr__(doc, "tags", [])
-    return doc
+    # Normal constructor: mapped columns are data descriptors, so __new__ +
+    # object.__setattr__ would not read back. tags is a relationship; pass [].
+    return Document(
+        ocr_text="Factuur Eneco totaal € 12,00",
+        title="Eneco factuur",
+        summary="s",
+        amount_total=None,
+        currency=None,
+        document_date=None,
+        due_date=None,
+        expiry_date=None,
+        language=None,
+        kind_id=None,
+        sender_id=None,
+        tags=[],
+        extra={},
+    )
 
 
 @pytest.mark.asyncio
@@ -1193,9 +1188,8 @@ from library.models import Document
 
 
 def _doc(extra: dict) -> Document:
-    doc = Document.__new__(Document)
-    object.__setattr__(doc, "extra", extra)
-    return doc
+    # Normal constructor (see Task 1 note on data descriptors).
+    return Document(extra=extra)
 
 
 def test_flywheel_accuracy_counts_corrected_as_wrong() -> None:
