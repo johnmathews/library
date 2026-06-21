@@ -19,6 +19,7 @@ from library.db import get_sessionmaker
 from library.embedding import EmbeddingError, embed_texts
 from library.embedding.chunker import chunk_text
 from library.extraction.apply import apply_extraction
+from library.markdown.apply import apply_markdown
 from library.models import Document, DocumentChunk, DocumentStatus, IngestionEvent
 from library.ocr import router as ocr_router
 from library.storage import derived_dir, path_for
@@ -29,7 +30,8 @@ logger = logging.getLogger(__name__)
 _NEXT_STATUS: dict[DocumentStatus, DocumentStatus] = {
     DocumentStatus.RECEIVED: DocumentStatus.OCR,
     DocumentStatus.OCR: DocumentStatus.EXTRACT,
-    DocumentStatus.EXTRACT: DocumentStatus.EMBED,
+    DocumentStatus.EXTRACT: DocumentStatus.MARKDOWN,
+    DocumentStatus.MARKDOWN: DocumentStatus.EMBED,
     DocumentStatus.EMBED: DocumentStatus.INDEXED,
 }
 
@@ -117,6 +119,11 @@ async def run_extraction(session: AsyncSession, document: Document) -> None:
     await apply_extraction(session, document, get_settings())
 
 
+async def run_markdown(session: AsyncSession, document: Document) -> None:
+    """Markdown stage: Claude vision per-page markdown (best-effort, never raises)."""
+    await apply_markdown(session, document, get_settings())
+
+
 async def _record_embed_event(
     session: AsyncSession, document: Document, event: str, detail: dict[str, object]
 ) -> None:
@@ -189,6 +196,8 @@ async def _run_stage_hook(
             )
     elif status is DocumentStatus.EXTRACT:
         await run_extraction(session, document)
+    elif status is DocumentStatus.MARKDOWN:
+        await run_markdown(session, document)
     elif status is DocumentStatus.EMBED:
         await run_embed(session, document)
 
@@ -314,6 +323,22 @@ async def embed_document(document_id: int) -> None:
         document = await session.get(Document, document_id)
         if document is None:
             raise ValueError(f"document {document_id} not found")
+        await run_embed(session, document)
+
+
+@job_app.task(name="library.jobs.markdown_document")
+async def markdown_document(document_id: int) -> None:
+    """Background task: (re-)generate markdown for one document, then re-embed.
+
+    Deferred by the backfill CLI (and after a prompt upgrade), independent of
+    pipeline status. Best-effort and idempotent (replaces a document's pages
+    and, via run_embed, its chunks).
+    """
+    async with get_sessionmaker()() as session:
+        document = await session.get(Document, document_id)
+        if document is None:
+            raise ValueError(f"document {document_id} not found")
+        await apply_markdown(session, document, get_settings())
         await run_embed(session, document)
 
 
