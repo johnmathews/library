@@ -54,6 +54,58 @@ router: APIRouter = APIRouter(tags=["documents"])
 # storage-level names the W6 extraction contract checks).
 _EDITED_FIELD_NAMES: dict[str, str] = {"kind_slug": "kind_id", "sender": "sender_id"}
 
+
+def _current_value(document: Document, name: str) -> Any:
+    """Read a storage-named field's current value off the document."""
+    if name == "kind_id":
+        return document.kind_id
+    if name == "sender_id":
+        return document.sender_id
+    if name == "tags":
+        return sorted(tag.slug for tag in document.tags)
+    return getattr(document, name, None)
+
+
+def _correction_records(
+    document: Document, originals: dict[str, Any], edited: list[str]
+) -> list[dict[str, Any]]:
+    """Build mining-ready correction records for the fields just edited.
+
+    ``originals`` maps storage field name -> value before the edit. Values are
+    JSON-stringified (dates/Decimals -> str) so the records survive in JSONB.
+    """
+    extraction = document.extra.get("extraction") or {}
+    text = document.ocr_text or ""
+
+    def jsonable(value: Any) -> Any:
+        return None if value is None else str(value)
+
+    def excerpt(value: Any) -> str:
+        needle = "" if value is None else str(value)
+        idx = text.find(needle) if needle else -1
+        if idx < 0:
+            return ""
+        start, end = max(0, idx - 40), min(len(text), idx + len(needle) + 40)
+        return text[start:end]
+
+    records: list[dict[str, Any]] = []
+    now = datetime.now(UTC).isoformat()
+    for name in edited:
+        new_value = _current_value(document, name)
+        records.append(
+            {
+                "field": name,
+                "original_value": jsonable(originals.get(name)),
+                "corrected_value": jsonable(new_value),
+                "source_excerpt": excerpt(originals.get(name)),
+                "prompt_version": extraction.get("prompt_version"),
+                "model": extraction.get("model"),
+                "corrected_at": now,
+            }
+        )
+    return records
+
+
 # ?disposition= on the file endpoints: `attachment` (default) downloads,
 # `inline` lets the detail page embed the file in an <iframe>/<img>.
 # Anything else fails validation with a 422.
@@ -269,6 +321,26 @@ async def update_document(
     if not provided:
         return _detail(document)
 
+    # Snapshot pre-edit values before any mutation so corrections are accurate.
+    originals: dict[str, Any] = {}
+    for body_field, storage in (("kind_slug", "kind_id"), ("sender", "sender_id")):
+        if body_field in provided:
+            originals[storage] = _current_value(document, storage)
+    if "tags" in provided:
+        originals["tags"] = _current_value(document, "tags")
+    for body_field in (
+        "title",
+        "summary",
+        "document_date",
+        "due_date",
+        "expiry_date",
+        "amount_total",
+        "currency",
+        "language",
+    ):
+        if body_field in provided:
+            originals[body_field] = _current_value(document, body_field)
+
     edited: list[str] = []
     if "kind_slug" in provided:
         slug = provided.pop("kind_slug")
@@ -309,7 +381,13 @@ async def update_document(
 
     user_edited = list(document.extra.get("user_edited_fields", []))
     user_edited.extend(name for name in edited if name not in user_edited)
-    document.extra = {**document.extra, "user_edited_fields": user_edited}
+    corrections = list(document.extra.get("corrections", []))
+    corrections.extend(_correction_records(document, originals, edited))
+    document.extra = {
+        **document.extra,
+        "user_edited_fields": user_edited,
+        "corrections": corrections,
+    }
     session.add(
         IngestionEvent(document_id=document.id, event="user_edited", detail={"fields": edited})
     )

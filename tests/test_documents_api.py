@@ -670,6 +670,48 @@ def test_thumbnail_endpoint_serves_webp_and_marks_presence(
     assert by_id[without_thumb]["has_thumbnail"] is False
 
 
+# --- Corrections flywheel ----------------------------------------------------
+
+
+def test_patch_records_correction(api_client: TestClient, api_database_url: str) -> None:
+    """PATCH appends a mining-ready correction record to extra['corrections']."""
+    extraction = {
+        "prompt_version": "v3",
+        "model": "claude-haiku-4-5",
+        "fields_set": ["amount_total"],
+    }
+    document_id = seed_document(
+        api_database_url,
+        "w7-correction",
+        amount_total=Decimal("99.99"),
+        extra={"extraction": extraction},
+    )
+
+    response = api_client.patch(
+        f"/api/documents/{document_id}",
+        json={"amount_total": "150.00"},
+    )
+    assert response.status_code == 200, response.text
+
+    # The API detail response does not expose raw extra; read via DB.
+    rows = fetch_all(
+        api_database_url,
+        "SELECT extra FROM documents WHERE id = :id",
+        id=document_id,
+    )
+    extra = rows[0][0]
+    corrections = extra.get("corrections", [])
+
+    assert len(corrections) == 1, corrections
+    rec = corrections[0]
+    assert rec["field"] == "amount_total"
+    assert rec["original_value"] == "99.99"
+    assert rec["corrected_value"] == "150.00"
+    assert rec["prompt_version"] == "v3"
+    assert rec["model"] == "claude-haiku-4-5"
+    assert rec["corrected_at"]  # ISO timestamp, non-empty
+
+
 # --- List item amount_total/currency -----------------------------------------
 
 
