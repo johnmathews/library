@@ -43,3 +43,9 @@ def test_markdown_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None
     settings = Settings(_env_file=None)
     assert settings.markdown_enabled is False
     assert settings.markdown_max_pages == 5
+
+
+def test_ask_history_turns_default() -> None:
+    from library.config import Settings
+
+    assert Settings().ask_history_turns == 3

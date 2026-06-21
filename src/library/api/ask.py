@@ -1,15 +1,16 @@
 """Natural-language /ask endpoint: answer questions about the archive.
 
 Runs the agentic tool-use loop in ``library.ask`` (Claude orchestrating
-semantic + structured retrieval) and records each ask's cost in ``ask_logs``.
+semantic + structured retrieval) and records each ask's cost in ``ask_turns``.
 Authentication is enforced at include level in app.py.
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 
 from anthropic import AsyncAnthropic
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.ask import run_ask
@@ -25,6 +26,7 @@ class AskRequest(BaseModel):
     """Body of POST /api/ask."""
 
     question: str = Field(min_length=1, max_length=1000, description="The question to answer.")
+    thread_id: int | None = Field(default=None, description="Continue an existing conversation.")
 
 
 class Citation(BaseModel):
@@ -42,6 +44,35 @@ class AskResponse(BaseModel):
     citations: list[Citation]
     used_tools: list[str]
     cost_usd: float
+    thread_id: int
+
+
+def _thread_title(question: str) -> str:
+    return question.strip()[:120]
+
+
+async def _history_messages(
+    session: AsyncSession, thread_id: int, turns: int
+) -> list[dict[str, Any]]:
+    """The last ``turns`` turns' message blocks, chronological, flattened."""
+    if turns <= 0:
+        return []
+    rows = (
+        (
+            await session.execute(
+                select(AskTurn.messages)
+                .where(AskTurn.thread_id == thread_id)
+                .order_by(AskTurn.created_at.desc(), AskTurn.id.desc())
+                .limit(turns)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    history: list[dict[str, Any]] = []
+    for turn_messages in reversed(rows):
+        history.extend(turn_messages)
+    return history
 
 
 @router.post("/ask", response_model=AskResponse, summary="Ask a question about your documents")
@@ -62,12 +93,26 @@ async def ask(
             status_code=503, detail="Ask is unavailable: no Anthropic API key configured."
         )
 
-    async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as client:
-        result = await run_ask(session, question=request.question, settings=settings, client=client)
+    if request.thread_id is None:
+        thread = AskThread(user_id=user.id, title=_thread_title(request.question))
+        session.add(thread)
+        await session.flush()
+    else:
+        thread = await session.get(AskThread, request.thread_id)
+        if thread is None or thread.user_id != user.id:
+            raise HTTPException(status_code=404, detail="Conversation not found.")
 
-    thread = AskThread(user_id=user.id, title=request.question.strip()[:120])
-    session.add(thread)
-    await session.flush()
+    history = await _history_messages(session, thread.id, settings.ask_history_turns)
+
+    async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as client:
+        result = await run_ask(
+            session,
+            question=request.question,
+            settings=settings,
+            client=client,
+            history_messages=history,
+        )
+
     session.add(
         AskTurn(
             thread_id=thread.id,
@@ -82,21 +127,19 @@ async def ask(
                 {"document_id": c.document_id, "title": c.title, "page_number": c.page_number}
                 for c in result.citations
             ],
-            messages=[],
+            messages=result.turn_messages,
         )
     )
+    thread.updated_at = func.now()
     await session.commit()
 
     return AskResponse(
         answer=result.answer,
         citations=[
-            Citation(
-                document_id=citation.document_id,
-                title=citation.title,
-                page_number=citation.page_number,
-            )
-            for citation in result.citations
+            Citation(document_id=c.document_id, title=c.title, page_number=c.page_number)
+            for c in result.citations
         ],
         used_tools=result.used_tools,
         cost_usd=result.cost_usd,
+        thread_id=thread.id,
     )

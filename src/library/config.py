@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     ask_model: str = "claude-sonnet-4-6"
     ask_max_tool_turns: int = 4
     ask_max_answer_tokens: int = 1024
+    ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.
     # Consume folder watcher (see docs/ingestion.md, "Consume folder" section).
     consume_dir: Path | None = None  # unset = watcher off
     consume_force_polling: bool = False  # required for NFS/SMB mounts (no inotify)

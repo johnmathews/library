@@ -125,6 +125,20 @@ def _ask_turns_count(database_url: str) -> int:
         engine.dispose()
 
 
+def _thread_turn_counts(database_url: str) -> list[tuple[int, int]]:
+    engine = create_engine(database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.connect() as connection:
+            return [
+                (int(tid), int(n))
+                for tid, n in connection.execute(
+                    text("SELECT thread_id, count(*) FROM ask_turns GROUP BY thread_id")
+                ).all()
+            ]
+    finally:
+        engine.dispose()
+
+
 # --- Tests ------------------------------------------------------------------
 
 
@@ -460,3 +474,77 @@ async def test_run_ask_replays_history(monkeypatch: pytest.MonkeyPatch) -> None:
     sent = client.messages.calls[0]["messages"]
     assert sent[0]["content"][0]["text"] == "who in 2024?"
     assert sent[-1]["content"][-1]["text"] == "and 2025?"
+
+
+# --- Thread persistence tests -----------------------------------------------
+
+
+def test_ask_creates_thread_and_returns_id(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="end_turn", content=[_TextBlock(text="No data.")], usage=_Usage(8, 3)
+            )
+        ],  # noqa: E501
+    )
+    response = api_client.post("/api/ask", json={"question": "Where are my tax returns?"})
+    assert response.status_code == 200, response.text
+    thread_id = response.json()["thread_id"]
+    assert isinstance(thread_id, int)
+    counts = _thread_turn_counts(api_database_url)
+    assert (thread_id, 1) in counts
+
+
+def test_ask_follow_up_replays_prior_turn(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_run_ask(  # type: ignore[no-untyped-def]
+        session: Any, *, question: str, settings: Any, client: Any, history_messages=None
+    ):
+        captured["history"] = history_messages
+        from library.ask.engine import AskResult
+
+        return AskResult(
+            answer="ok",
+            citations=[],
+            used_tools=[],
+            model=settings.ask_model,
+            turn_messages=[
+                {"role": "user", "content": [{"type": "text", "text": question}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+            ],
+        )
+
+    monkeypatch.setattr(ask_module, "run_ask", fake_run_ask)
+
+    first = api_client.post("/api/ask", json={"question": "who in 2024?"})
+    thread_id = first.json()["thread_id"]
+    api_client.post("/api/ask", json={"question": "and 2025?", "thread_id": thread_id})
+
+    assert captured["history"]  # second call received the first turn's messages
+    assert captured["history"][0]["content"][0]["text"] == "who in 2024?"
+
+
+def test_ask_foreign_thread_is_404(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_anthropic(
+        monkeypatch,
+        [_Response(stop_reason="end_turn", content=[_TextBlock(text="x")], usage=_Usage(1, 1))],
+    )
+    response = api_client.post("/api/ask", json={"question": "hi", "thread_id": 999999})
+    assert response.status_code == 404
