@@ -22,6 +22,7 @@ function sampleResponse(overrides: Partial<AskResponse> = {}): AskResponse {
     ],
     used_tools: ['search'],
     cost_usd: 0.0123,
+    thread_id: 1,
     ...overrides,
   }
 }
