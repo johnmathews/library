@@ -31,8 +31,8 @@ from library.extraction.judge import JudgeResult, judge
 from library.extraction.validation import derive_review_status, findings_to_payload, validate
 from library.importer.client import PaperlessClient
 from library.importer.runner import ImportReport, format_report, run_import
-from library.jobs import embed_document, job_app
-from library.models import Document, DocumentChunk, EvalRun, Kind, User
+from library.jobs import embed_document, job_app, markdown_document
+from library.models import Document, DocumentChunk, DocumentPage, EvalRun, Kind, User
 
 app: typer.Typer = typer.Typer(
     no_args_is_help=True, help="Library administration (accounts, imports)."
@@ -283,6 +283,40 @@ def backfill_validation(
 
     count = _run(operation)
     typer.echo(f"revalidated {count} document(s)")
+
+
+@app.command("backfill-markdown")
+def backfill_markdown(
+    limit: int | None = typer.Option(
+        None, "--limit", min=1, help="Only enqueue the first N documents."
+    ),
+    include_existing: bool = typer.Option(
+        False, "--include-existing", help="Re-render documents that already have pages."
+    ),
+) -> None:
+    """Queue markdown generation (and re-embed) for documents without pages.
+
+    Backfills the markdown layer for documents ingested before the markdown
+    stage existed. Idempotent — ``markdown_document`` replaces a document's
+    pages and chunks — so re-running is safe. The worker must be running to do
+    the work; this command only enqueues the jobs.
+    """
+
+    async def operation(session: AsyncSession) -> int:
+        statement = select(Document.id).where(Document.deleted_at.is_(None))
+        if not include_existing:
+            statement = statement.where(~exists().where(DocumentPage.document_id == Document.id))
+        statement = statement.order_by(Document.id)
+        if limit is not None:
+            statement = statement.limit(limit)
+        document_ids = list((await session.execute(statement)).scalars().all())
+        async with job_app.open_async():
+            for document_id in document_ids:
+                await markdown_document.defer_async(document_id=document_id)
+        return len(document_ids)
+
+    count = _run(operation)
+    typer.echo(f"queued markdown generation for {count} document(s)")
 
 
 @app.command("eval-extractions")
