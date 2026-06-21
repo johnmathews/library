@@ -420,7 +420,7 @@ Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
 |---|---|---|
 | `amount_grounding` | `amount_total` | Amount is set but its digit sequence is absent from `ocr_text` (normalised: strips currency symbols and separators, also checks the integer part) |
 | `date_plausibility` | `document_date`, `due_date`, `expiry_date` | `document_date` is in the future or before 1990-01-01; or `due_date`/`expiry_date` is before `document_date` |
-| `amount_currency_coupling` | `amount_total`, `currency` | Exactly one of amount/currency is set |
+| `amount_currency_coupling` | `currency` | Exactly one of amount/currency is set (the rule checks both fields; the finding's `field` attribute is `currency`) |
 | `ocr_confidence_gate` | (document) | `ocr_confidence` is below `LIBRARY_EXTRACTION_VALIDATION_OCR_FLOOR` (default 50.0) |
 | `empty_extraction` | (document) | Kind is `other` or unset **and** no sender, no `document_date`, and no `amount_total` |
 | `self_reported_low` | (document) | `extra["extraction"]["confidence"] == "low"` |
