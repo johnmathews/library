@@ -400,6 +400,6 @@ class EvalRun(Base):
     prompt_version: Mapped[str] = mapped_column(String(64))
     model: Mapped[str] = mapped_column(String(64))
     version_mix: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
-    sample_size: Mapped[int] = mapped_column(Integer, default=0)
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     per_field: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     overall: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))

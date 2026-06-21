@@ -39,7 +39,7 @@ def upgrade() -> None:
             nullable=False,
         ),
     )
-    op.create_index("ix_documents_review_status", "documents", ["review_status"])
+    op.create_index(op.f("ix_documents_review_status"), "documents", ["review_status"])
 
     op.create_table(
         "eval_runs",
@@ -77,5 +77,5 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     op.drop_table("eval_runs")
-    op.drop_index("ix_documents_review_status", table_name="documents")
+    op.drop_index(op.f("ix_documents_review_status"), table_name="documents")
     op.drop_column("documents", "review_status")
