@@ -3,7 +3,7 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import DocumentDetailView from '../DocumentDetailView.vue'
-import type { DocumentDetail } from '@/api/documents'
+import type { DocumentDetail, DocumentMarkdownResponse } from '@/api/documents'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -65,10 +65,14 @@ describe('DocumentDetailView', () => {
   let detail: DocumentDetail
   /** What PATCH returns; defaults to echoing `detail`. */
   let patchResponse: () => Response
+  /** What GET /api/documents/12/markdown returns; tests may override. */
+  let markdownResponse: () => Response
 
   beforeEach(async () => {
     detail = makeDetail()
     patchResponse = () => jsonResponse(detail)
+    markdownResponse = () =>
+      jsonResponse({ page_count: 1, pages: [{ page_number: 1, markdown: '# Invoice\n\nTotal: €123.45' }] } satisfies DocumentMarkdownResponse)
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
@@ -84,6 +88,9 @@ describe('DocumentDetailView', () => {
       }
       if (url === '/api/documents/12' && method === 'PATCH') {
         return Promise.resolve(patchResponse())
+      }
+      if (url === '/api/documents/12/markdown' && method === 'GET') {
+        return Promise.resolve(markdownResponse())
       }
       return Promise.resolve(jsonResponse({ detail: `unexpected ${method} ${url}` }, 500))
     })
@@ -461,5 +468,44 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="mark-verified"]').exists()).toBe(false)
     // Status text should reflect verified
     expect(w.text()).toContain('verified')
+  })
+
+  it('lazily fetches markdown on first reveal and renders page content', async () => {
+    const w = await mountView()
+
+    // Markdown section should exist but not have fetched yet (details is closed)
+    expect(w.find('[data-testid="markdown-details"]').exists()).toBe(true)
+    const markdownCalls = () =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/markdown'))
+    expect(markdownCalls()).toHaveLength(0)
+
+    // Trigger the toggle (reveal) — simulates the user opening the <details>
+    await w.find('[data-testid="markdown-details"]').trigger('toggle')
+    await flushPromises()
+
+    expect(markdownCalls()).toHaveLength(1)
+    // Page content should be rendered
+    expect(w.find('[data-testid="markdown-content"]').exists()).toBe(true)
+    expect(w.find('[data-testid="markdown-content"]').html()).toContain('Invoice')
+  })
+
+  it('does not re-fetch markdown if the section is toggled again', async () => {
+    const w = await mountView()
+    const details = w.find('[data-testid="markdown-details"]')
+    await details.trigger('toggle')
+    await flushPromises()
+    await details.trigger('toggle')
+    await flushPromises()
+    const markdownCalls = fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/markdown'))
+    expect(markdownCalls).toHaveLength(1)
+  })
+
+  it('shows the empty state when page_count is 0', async () => {
+    markdownResponse = () => jsonResponse({ page_count: 0, pages: [] } satisfies DocumentMarkdownResponse)
+    const w = await mountView()
+    await w.find('[data-testid="markdown-details"]').trigger('toggle')
+    await flushPromises()
+    expect(w.find('[data-testid="markdown-empty"]').exists()).toBe(true)
+    expect(w.find('[data-testid="markdown-content"]').exists()).toBe(false)
   })
 })

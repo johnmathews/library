@@ -234,6 +234,23 @@ export function listJobs(limit?: number): Promise<JobInfo[]> {
   return apiFetch<JobInfo[]>('/api/jobs', { query: { limit } })
 }
 
+/** One page returned by GET /api/documents/{id}/markdown. */
+export interface DocumentMarkdownPage {
+  page_number: number
+  markdown: string
+}
+
+/** Body of GET /api/documents/{id}/markdown. */
+export interface DocumentMarkdownResponse {
+  page_count: number
+  pages: DocumentMarkdownPage[]
+}
+
+/** GET /api/documents/{id}/markdown — assembled per-page markdown. */
+export function fetchDocumentMarkdown(id: number): Promise<DocumentMarkdownResponse> {
+  return apiFetch<DocumentMarkdownResponse>(`/api/documents/${id}/markdown`)
+}
+
 /** URL of a document's first-page thumbnail (404 until generated). */
 export function thumbnailUrl(id: number): string {
   return `/api/documents/${id}/thumbnail`
