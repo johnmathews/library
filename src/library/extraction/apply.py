@@ -23,7 +23,15 @@ from library.extraction.extractor import (
     ExtractionSkipped,
     extract,
 )
-from library.models import Document, DocumentLanguage, IngestionEvent, Kind, Sender, Tag
+from library.extraction.validation import derive_review_status, findings_to_payload, validate
+from library.models import (
+    Document,
+    DocumentLanguage,
+    IngestionEvent,
+    Kind,
+    Sender,
+    Tag,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -146,6 +154,35 @@ async def _apply_outcome(
     return fields_set
 
 
+async def _apply_validation(session: AsyncSession, document: Document, settings: Settings) -> None:
+    """Run deterministic validation and set review_status + extra["validation"].
+
+    Best-effort: a failure here must never propagate (extraction never fails a
+    document). Skips any field locked by the user is unnecessary — validation
+    reads the document's *current* values, whatever their provenance.
+    """
+    kind_slug: str | None = None
+    if document.kind_id is not None:
+        kind = await session.get(Kind, document.kind_id)
+        kind_slug = kind.slug if kind is not None else None
+
+    findings = validate(
+        document,
+        kind_slug=kind_slug,
+        ocr_floor=settings.extraction_validation_ocr_floor,
+        today=datetime.now(UTC).date(),
+    )
+    document.review_status = derive_review_status(findings)
+    document.extra = {
+        **document.extra,
+        "validation": {
+            "prompt_version": PROMPT_VERSION,
+            "findings": findings_to_payload(findings),
+            "validated_at": datetime.now(UTC).isoformat(),
+        },
+    }
+
+
 async def apply_extraction(session: AsyncSession, document: Document, settings: Settings) -> None:
     """Extract metadata for one document and persist the result.
 
@@ -200,6 +237,10 @@ async def apply_extraction(session: AsyncSession, document: Document, settings: 
         return
 
     fields_set = await _apply_outcome(session, document, outcome)
+    try:
+        await _apply_validation(session, document, settings)
+    except Exception:  # validation is best-effort; never fail the document
+        logger.exception("validation failed for document %s", document.id)
     await _record_event(
         session,
         document,

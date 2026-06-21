@@ -425,6 +425,117 @@ async def test_budget_exceeded_skips_extraction(
     assert skipped[0]["budget_usd"] == 5.0
 
 
+async def test_apply_sets_needs_review_on_flagged_extraction(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A future document_date makes the document needs_review with a finding."""
+    metadata = ExtractedMetadata(
+        kind_slug="invoice",
+        sender_name="Eneco",
+        title="t",
+        summary="s",
+        document_date=date(2099, 1, 1),
+        amount_total="10.00",
+        currency="EUR",
+        due_date=None,
+        expiry_date=None,
+        language="nld",
+        tags=[],
+        confidence="high",
+        reasoning_note=None,
+    )
+    outcome = ExtractionOutcome(
+        metadata=metadata,
+        model="claude-haiku-4-5",
+        prompt_version=PROMPT_VERSION,
+        input_mode="text",
+        escalated=False,
+        calls=[CallUsage("claude-haiku-4-5", 10, 10, 0.0)],
+    )
+
+    async def fake_extract(document, ocr_text, *, client, settings):
+        return outcome
+
+    monkeypatch.setattr(apply_module, "extract", fake_extract)
+
+    async with session_factory() as session:
+        doc = Document(
+            sha256="d" * 64,
+            mime_type="text/plain",
+            source=DocumentSource.UPLOAD,
+            ocr_text="Factuur Eneco totaal 10,00",
+            extra={},
+        )
+        session.add(doc)
+        await session.commit()
+        await apply_extraction(session, doc, settings)
+        await session.refresh(doc)
+
+    from library.models import ReviewStatus
+
+    assert doc.review_status is ReviewStatus.NEEDS_REVIEW
+    rules = {f["rule"] for f in doc.extra["validation"]["findings"]}
+    assert "date_plausibility" in rules
+
+
+async def test_apply_sets_unreviewed_on_clean_extraction(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    metadata = ExtractedMetadata(
+        kind_slug="invoice",
+        sender_name="Eneco",
+        title="t",
+        summary="s",
+        document_date=date(2026, 5, 1),
+        amount_total="10.00",
+        currency="EUR",
+        due_date=None,
+        expiry_date=None,
+        language="nld",
+        tags=[],
+        confidence="high",
+        reasoning_note=None,
+    )
+    outcome = ExtractionOutcome(
+        metadata=metadata,
+        model="claude-haiku-4-5",
+        prompt_version=PROMPT_VERSION,
+        input_mode="text",
+        escalated=False,
+        calls=[CallUsage("claude-haiku-4-5", 10, 10, 0.0)],
+    )
+
+    async def fake_extract(document, ocr_text, *, client, settings):
+        return outcome
+
+    monkeypatch.setattr(apply_module, "extract", fake_extract)
+
+    async with session_factory() as session:
+        doc = Document(
+            sha256="e" * 64,
+            mime_type="text/plain",
+            source=DocumentSource.UPLOAD,
+            ocr_text="Factuur Eneco totaal 10,00 EUR",
+            ocr_confidence=95.0,
+            extra={},
+        )
+        session.add(doc)
+        await session.commit()
+        await apply_extraction(session, doc, settings)
+        await session.refresh(doc)
+
+    from library.models import ReviewStatus
+
+    assert doc.review_status is ReviewStatus.UNREVIEWED
+    assert doc.extra["validation"]["findings"] == []
+
+
 async def test_extract_document_task_registered_and_deferrable() -> None:
     assert extract_document.name == "library.jobs.extract_document"
     connector = InMemoryConnector()
