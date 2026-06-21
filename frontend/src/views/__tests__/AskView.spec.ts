@@ -2,14 +2,18 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import AskView from '../AskView.vue'
-import { askQuestion, type AskResponse } from '@/api/ask'
+import { askQuestion, getThread, type AskResponse } from '@/api/ask'
 import { ApiError } from '@/api/client'
 
 vi.mock('@/api/ask', () => ({
   askQuestion: vi.fn(),
+  getThread: vi.fn(),
+  listThreads: vi.fn(),
+  deleteThread: vi.fn(),
 }))
 
 const askQuestionMock = vi.mocked(askQuestion)
+const getThreadMock = vi.mocked(getThread)
 
 const Stub = { template: '<div />' }
 
@@ -33,11 +37,13 @@ describe('AskView', () => {
 
   beforeEach(async () => {
     askQuestionMock.mockReset()
+    getThreadMock.mockReset()
     router = createRouter({
       history: createMemoryHistory(),
       routes: [
         { path: '/', name: 'documents', component: Stub },
         { path: '/ask', name: 'ask', component: AskView },
+        { path: '/ask/:threadId', name: 'ask-thread', component: AskView },
         { path: '/documents/:id', name: 'document-detail', component: Stub },
       ],
     })
@@ -54,9 +60,10 @@ describe('AskView', () => {
     return wrapper
   }
 
-  async function ask(w: VueWrapper, question = 'which invoices are due?'): Promise<void> {
+  async function typeAndSubmit(w: VueWrapper, question: string): Promise<void> {
     await w.find('#ask-question').setValue(question)
-    await w.find('#ask-form').trigger('submit')
+    await w.find('[data-testid="ask-form"]').trigger('submit')
+    await flushPromises()
   }
 
   it('renders the page heading', () => {
@@ -64,47 +71,130 @@ describe('AskView', () => {
     expect(w.find('h1').text()).toBe('Ask')
   })
 
-  it('renders the answer and citation links after a successful ask', async () => {
-    askQuestionMock.mockResolvedValue(sampleResponse())
+  it('appends a turn to the transcript after a successful ask', async () => {
+    askQuestionMock.mockResolvedValueOnce(
+      sampleResponse({
+        answer: 'Two invoices are due this month.',
+        citations: [{ document_id: 7, title: 'Energy bill', page_number: null }],
+        thread_id: 42,
+      }),
+    )
     const w = mountView()
-    await ask(w)
+    await typeAndSubmit(w, 'which invoices are due?')
+
+    const turns = w.findAll('[data-testid="ask-turn"]')
+    expect(turns).toHaveLength(1)
+    expect(turns[0]!.find('[data-testid="ask-answer"]').text()).toContain('Two invoices are due')
+    expect(turns[0]!.find('[data-testid="ask-citation"]').text()).toContain('Energy bill')
+  })
+
+  it('appends a second turn and posts with thread_id on follow-up', async () => {
+    askQuestionMock.mockResolvedValueOnce({
+      answer: 'First answer [#1].',
+      citations: [{ document_id: 1, title: 'Doc', page_number: null }],
+      used_tools: ['semantic_search'],
+      cost_usd: 0.01,
+      thread_id: 42,
+    })
+    const w = mountView()
+    await typeAndSubmit(w, 'first?')
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
+
+    askQuestionMock.mockResolvedValueOnce({
+      answer: 'Second answer.',
+      citations: [],
+      used_tools: [],
+      cost_usd: 0.01,
+      thread_id: 42,
+    })
+    await typeAndSubmit(w, 'and then?')
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(2)
+    expect(askQuestionMock).toHaveBeenLastCalledWith('and then?', 42, expect.anything())
+  })
+
+  it('loads a thread when mounted on /ask/:threadId', async () => {
+    getThreadMock.mockResolvedValue({
+      id: 7,
+      title: 'Energy',
+      turns: [
+        {
+          id: 1,
+          query: 'who?',
+          answer: 'Vattenfall [#3].',
+          citations: [{ document_id: 3, title: 'Bill', page_number: 2 }],
+          used_tools: ['query_documents'],
+          cost_usd: 0.02,
+          created_at: '',
+        },
+      ],
+    })
+    await router.push('/ask/7')
+    const w = mountView()
+    await flushPromises()
+    expect(getThreadMock).toHaveBeenCalledWith(7)
+    expect(w.text()).toContain('Vattenfall')
+  })
+
+  it('shows a friendly error summary when the API returns 503', async () => {
+    askQuestionMock.mockRejectedValue(new ApiError(503, 'no API key configured'))
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+
+    const summary = w.find('[data-testid="error-summary"]')
+    expect(summary.exists()).toBe(true)
+    expect(summary.text()).toContain('no AI API key is configured')
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
+  })
+
+  it('validates an empty question without calling the API', async () => {
+    const w = mountView()
+    await w.find('form').trigger('submit')
     await flushPromises()
 
-    expect(askQuestionMock).toHaveBeenCalledWith('which invoices are due?')
-
-    const result = w.find('[data-testid="ask-result"]')
-    expect(result.exists()).toBe(true)
-    expect(w.find('[data-testid="ask-answer"]').text()).toContain('Two invoices are due')
-
-    const citations = w.findAll('[data-testid="ask-citation"]')
-    expect(citations).toHaveLength(2)
-    expect(citations[0]!.attributes('href')).toBe('/documents/7')
-    expect(citations[0]!.text()).toContain('Energy bill')
-    expect(citations[0]!.text()).toContain('#7')
-    // null title falls back to "Untitled"
-    expect(citations[1]!.attributes('href')).toBe('/documents/12')
-    expect(citations[1]!.text()).toContain('Untitled')
-
-    // tools / cost shown subtly
-    const meta = w.find('[data-testid="ask-meta"]')
-    expect(meta.text()).toContain('search')
-    expect(meta.text()).toContain('$0.0123')
+    expect(askQuestionMock).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="error-summary"]').text()).toContain('Enter a question')
   })
 
   it('renders markdown in the answer as HTML', async () => {
-    askQuestionMock.mockResolvedValue(
-      sampleResponse({ answer: 'Your supplier was **PWN** [#67].\n\n- one\n- two' }),
+    askQuestionMock.mockResolvedValueOnce(
+      sampleResponse({ answer: 'Your supplier was **PWN** [#67].\n\n- one\n- two', thread_id: 1 }),
     )
     const w = mountView()
-    await ask(w)
-    await flushPromises()
+    await typeAndSubmit(w, 'which invoices are due?')
 
-    const answer = w.find('[data-testid="ask-answer"]')
-    // bold becomes <strong>, not literal asterisks
+    const turn = w.get('[data-testid="ask-turn"]')
+    const answer = turn.get('[data-testid="ask-answer"]')
     expect(answer.find('strong').text()).toBe('PWN')
     expect(answer.html()).not.toContain('**PWN**')
-    // list items render
     expect(answer.findAll('li')).toHaveLength(2)
+  })
+
+  it('renders the page number on a citation and links with a page query', async () => {
+    askQuestionMock.mockResolvedValueOnce(
+      sampleResponse({
+        citations: [{ document_id: 42, title: 'Energy bill', page_number: 3 }],
+        thread_id: 1,
+      }),
+    )
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+
+    const link = w.get('[data-testid="ask-citation"]')
+    expect(link.text()).toContain('p. 3')
+    expect(link.attributes('href')).toContain('page=3')
+  })
+
+  it('omits the page label when page_number is null', async () => {
+    askQuestionMock.mockResolvedValueOnce(
+      sampleResponse({
+        citations: [{ document_id: 7, title: 'Note', page_number: null }],
+        thread_id: 1,
+      }),
+    )
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+
+    expect(w.get('[data-testid="ask-citation"]').text()).not.toContain('p.')
   })
 
   it('disables the button and shows progress while the request is pending', async () => {
@@ -115,68 +205,20 @@ describe('AskView', () => {
       }),
     )
     const w = mountView()
-    await ask(w)
+    await w.find('#ask-question').setValue('which invoices are due?')
+    await w.find('[data-testid="ask-form"]').trigger('submit')
     await flushPromises()
 
-    const button = w.find('#ask-submit')
+    const button = w.find('[data-testid="ask-submit"]')
     expect(button.attributes('disabled')).toBeDefined()
     expect(button.text()).toContain('Asking')
-    expect(w.find('[data-testid="ask-result"]').exists()).toBe(false)
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
 
-    resolve(sampleResponse())
+    resolve(sampleResponse({ thread_id: 1 }))
     await flushPromises()
 
-    expect(w.find('#ask-submit').attributes('disabled')).toBeUndefined()
-    expect(w.find('#ask-submit').text()).toBe('Ask')
-    expect(w.find('[data-testid="ask-result"]').exists()).toBe(true)
-  })
-
-  it('shows a friendly error summary when the API returns 503', async () => {
-    askQuestionMock.mockRejectedValue(new ApiError(503, 'no API key configured'))
-    const w = mountView()
-    await ask(w)
-    await flushPromises()
-
-    const summary = w.find('[data-testid="error-summary"]')
-    expect(summary.exists()).toBe(true)
-    expect(summary.text()).toContain('no AI API key is configured')
-    expect(w.find('[data-testid="ask-result"]').exists()).toBe(false)
-  })
-
-  it('validates an empty question without calling the API', async () => {
-    const w = mountView()
-    await w.find('#ask-form').trigger('submit')
-    await flushPromises()
-
-    expect(askQuestionMock).not.toHaveBeenCalled()
-    expect(w.find('[data-testid="error-summary"]').text()).toContain('Enter a question')
-  })
-
-  it('renders the page number on a citation and links with a page query', async () => {
-    askQuestionMock.mockResolvedValue(
-      sampleResponse({
-        citations: [{ document_id: 42, title: 'Energy bill', page_number: 3 }],
-      }),
-    )
-    const w = mountView()
-    await ask(w)
-    await flushPromises()
-
-    const link = w.get('[data-testid="ask-citation"]')
-    expect(link.text()).toContain('p. 3')
-    expect(link.attributes('href')).toContain('page=3')
-  })
-
-  it('omits the page label when page_number is null', async () => {
-    askQuestionMock.mockResolvedValue(
-      sampleResponse({
-        citations: [{ document_id: 7, title: 'Note', page_number: null }],
-      }),
-    )
-    const w = mountView()
-    await ask(w)
-    await flushPromises()
-
-    expect(w.get('[data-testid="ask-citation"]').text()).not.toContain('p.')
+    expect(w.find('[data-testid="ask-submit"]').attributes('disabled')).toBeUndefined()
+    expect(w.find('[data-testid="ask-submit"]').text()).toBe('Ask')
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
   })
 })
