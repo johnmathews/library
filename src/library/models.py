@@ -326,10 +326,11 @@ class DocumentChunk(Base):
     """A page-sized slice of a document's text plus its embedding vector.
 
     One row per chunk (see ``embedding.chunker``); ``chunk_index`` is the
-    1-based ordinal of the chunk within the document (OCR text carries no
-    reliable page boundaries, so this is a position, not a PDF page number).
-    The embedding is a bge-m3 1024-dim vector used for semantic retrieval; an
-    HNSW index over ``embedding`` (cosine ops) backs nearest-neighbour search.
+    1-based ordinal of the chunk within the document. ``page_number`` (when
+    non-NULL) carries the true page provenance from the markdown layer; NULL
+    when the chunk came from the ocr_text fallback. The embedding is a bge-m3
+    1024-dim vector used for semantic retrieval; an HNSW index over
+    ``embedding`` (cosine ops) backs nearest-neighbour search.
     """
 
     __tablename__ = "document_chunks"

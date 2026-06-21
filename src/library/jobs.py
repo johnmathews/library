@@ -1,9 +1,11 @@
 """Procrastinate job queue wiring and the document-processing pipeline.
 
 The pipeline advances a document through ``received -> ocr -> extract ->
-indexed`` recording an ingestion event per transition. The OCR stage (W4)
-runs the routed engines from ``library.ocr``; the extract stage (W6) runs
-Claude metadata extraction from ``library.extraction``.
+markdown -> embed -> indexed``, recording an ingestion event per transition.
+The OCR stage (W4) runs the routed engines from ``library.ocr``; the extract
+stage (W6) runs Claude metadata extraction from ``library.extraction``; the
+markdown stage runs Claude-vision per-page markdown generation; the embed
+stage chunks the text and computes embeddings.
 """
 
 import asyncio
