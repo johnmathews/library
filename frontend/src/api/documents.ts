@@ -70,6 +70,20 @@ export interface DocumentListResponse {
   offset: number
 }
 
+/** One finding from the extraction validation step. */
+export interface ValidationFinding {
+  rule: string
+  /** Storage field name, e.g. `amount_total`, `currency`, `kind_id`, `sender_id`. */
+  field: string
+  severity: 'warn' | 'error'
+  message: string
+}
+
+/** Structured output from the validation step attached to a document. */
+export interface ValidationResult {
+  findings: ValidationFinding[]
+}
+
 /** Body of GET /api/documents/{id}. */
 export interface DocumentDetail extends DocumentListItem {
   ocr_text: string | null
@@ -80,7 +94,7 @@ export interface DocumentDetail extends DocumentListItem {
   original_filename: string | null
   sha256: string
   extraction: Record<string, unknown> | null
-  validation: Record<string, unknown> | null
+  validation: ValidationResult | null
   user_edited_fields: string[]
   events: IngestionEvent[]
 }

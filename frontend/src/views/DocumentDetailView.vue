@@ -39,9 +39,11 @@ import {
   searchablePdfUrl,
   thumbnailUrl,
   updateDocument,
+  verifyDocument,
   type DocumentDetail,
   type DocumentLanguage,
   type DocumentUpdate,
+  type ValidationFinding,
 } from '@/api/documents'
 import { listKinds, listSenders, type KindOption, type SenderOption } from '@/api/taxonomy'
 import { ApiError } from '@/api/client'
@@ -466,6 +468,58 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+// --- Validation findings ------------------------------------------------------
+
+/**
+ * Map from storage field name to UI field name so findings can be shown beside
+ * the right row. The backend uses `kind_id` and `sender_id`; the UI groups them
+ * as `kind` and `sender`.
+ */
+const STORAGE_TO_UI_FIELD: Record<string, string> = {
+  amount_total: 'amount',
+  currency: 'amount',
+  document_date: 'document_date',
+  due_date: 'due_date',
+  expiry_date: 'expiry_date',
+  title: 'title',
+  summary: 'summary',
+  kind_id: 'kind',
+  sender_id: 'sender',
+}
+
+/** Findings indexed by UI field name. */
+const findingsByField = computed<Record<string, ValidationFinding[]>>(() => {
+  const findings = doc.value?.validation?.findings
+  if (!findings?.length) return {}
+  const result: Record<string, ValidationFinding[]> = {}
+  for (const finding of findings) {
+    const uiField = STORAGE_TO_UI_FIELD[finding.field] ?? finding.field
+    ;(result[uiField] ??= []).push(finding)
+  }
+  return result
+})
+
+// --- Mark verified ------------------------------------------------------------
+
+const verifying = ref(false)
+
+async function markVerified(): Promise<void> {
+  if (!doc.value || verifying.value) return
+  verifying.value = true
+  actionError.value = null
+  try {
+    doc.value = await verifyDocument(doc.value.id)
+    notice.value = { variant: 'success', text: 'Document marked as verified.' }
+  } catch (error: unknown) {
+    actionError.value =
+      error instanceof ApiError && error.status !== 0
+        ? error.detail
+        : 'Could not mark verified — check your connection and try again'
+  } finally {
+    verifying.value = false
+  }
+}
+
 // --- Preview and OCR text -----------------------------------------------------
 
 const preview = computed<'image' | 'pdf' | 'none'>(() => {
@@ -818,8 +872,17 @@ watch(
                   :data-testid="`row-${field}`"
                   :class="WIDE_FIELDS.has(field) || editing === field ? 'sm:col-span-2' : ''"
                 >
-                  <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                  <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
                     {{ rowByField[field].label }}
+                    <template v-if="findingsByField[field]?.length">
+                      <AppBadge
+                        v-for="finding in findingsByField[field]"
+                        :key="finding.rule"
+                        colour="yellow"
+                        :title="finding.message"
+                        data-testid="validation-badge"
+                      >⚠</AppBadge>
+                    </template>
                   </dt>
                   <div v-if="editing !== field" class="mt-1 flex items-start justify-between gap-3">
                     <dd
@@ -1027,6 +1090,15 @@ watch(
             </a>
           </p>
           <div class="flex flex-wrap gap-3">
+            <AppButton
+              v-if="doc.review_status !== 'verified'"
+              type="button"
+              :disabled="verifying"
+              data-testid="mark-verified"
+              @click="markVerified"
+            >
+              {{ verifying ? 'Saving…' : 'Mark verified' }}
+            </AppButton>
             <AppButton
               type="button"
               variant="secondary"
