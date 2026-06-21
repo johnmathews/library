@@ -1,6 +1,6 @@
 # 1. Architecture
 
-**Status:** active. **Last updated:** 2026-06-16.
+**Status:** active. **Last updated:** 2026-06-22.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design and tracks which parts exist. The full
@@ -117,10 +117,13 @@ warranty, manual, letter, contract, ticket, other), many-to-many `tags`,
 per-page markdown renderings (`document_pages`, PK `(document_id, page_number)`),
 per-chunk embeddings (`document_chunks`, pgvector + HNSW; each chunk carries
 `page_number` when generated from `document_pages`, `NULL` when falling back to
-`ocr_text`), append-only `ingestion_events` audit trail, the `ask_logs`
-cost/provenance trail, and auth tables (`users`, `sessions`, `api_tokens`).
-Originals on disk are immutable; everything else (including embeddings and page
-markdown) is a re-derivable artifact.
+`ocr_text`), append-only `ingestion_events` audit trail, Ask conversation
+persistence (`ask_threads` — one conversation per owner; `ask_turns` — one
+Q&A turn per thread, storing cost/provenance and the serialized Anthropic
+message blocks used to replay prior tool results into follow-up questions), and
+auth tables (`users`, `sessions`, `api_tokens`). Originals on disk are
+immutable; everything else (including embeddings and page markdown) is a
+re-derivable artifact.
 
 ## 1.4 Interfaces
 
@@ -165,3 +168,4 @@ hashed, individually revocable.
 | Semantic Ask (pgvector, embedder, hybrid retrieval, `/api/ask`) | — | **done** — see [ask.md](ask.md) |
 | Extraction quality (validation, review queue, eval harness) | — | **done** — see [ingestion.md](ingestion.md) "Extraction quality" and [api.md](api.md) §1.3/1.4/1.8.3 |
 | Markdown layer (vision per-page rendering, page-aware embed, page citations in Ask) | — | **done** — see [ingestion.md](ingestion.md) "Markdown layer" and [ask.md](ask.md) |
+| Conversational Ask (multi-turn threads, history replay, prompt caching, chat UI) | — | **done** — see [ask.md](ask.md) §1.6 and [api.md](api.md) §1.11–1.12 |

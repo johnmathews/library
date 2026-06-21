@@ -27,6 +27,9 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | POST   | `/api/auth/tokens` | Create an API token; secret shown **once** |
 | DELETE | `/api/auth/tokens/{id}` | Revoke one of your API tokens |
 | POST   | `/api/ask` | Ask a natural-language question; cited answer |
+| GET    | `/api/ask/threads` | List your Ask conversations |
+| GET    | `/api/ask/threads/{id}` | Full thread detail (all turns) |
+| DELETE | `/api/ask/threads/{id}` | Delete a conversation and its turns |
 | POST   | `/api/documents` | Upload a file for ingestion |
 | GET    | `/api/documents` | List / search documents |
 | GET    | `/api/documents/{id}` | Full document detail |
@@ -420,30 +423,98 @@ read, absent keys resolve to their defaults.
 ## 1.11 Ask — `POST /api/ask`
 
 Answer a natural-language question about the archive, grounded in retrieved
-documents. The narrative — architecture, the two question classes, config and
-cost — is in [ask.md](ask.md); this is the wire contract.
+documents. The narrative — architecture, the two question classes, config, cost,
+and conversational threading — is in [ask.md](ask.md); this is the wire contract.
 
-**Request:** `{"question": "<1..1000 chars>"}`. Auth + CSRF apply (it is a
-`POST`).
+**Request:**
+
+```json
+{
+  "question": "<1..1000 chars>",
+  "thread_id": 42
+}
+```
+
+`thread_id` is optional. Omit it to start a new conversation; supply it to
+continue an existing one. Auth + CSRF apply (it is a `POST`).
 
 **Response `200`:**
 
 ```json
 {
   "answer": "Yes — your contract grants a travel allowance of €0.21/km [#42].",
-  "citations": [{"document_id": 42, "title": "Employment contract"}],
+  "citations": [
+    {"document_id": 42, "title": "Employment contract", "page_number": 3}
+  ],
   "used_tools": ["semantic_search"],
-  "cost_usd": 0.0031
+  "cost_usd": 0.0031,
+  "thread_id": 1
 }
 ```
 
 - `answer` — prose, grounded only in retrieved documents; it says plainly when
   the archive does not contain the answer (then `citations` is empty).
-- `citations` — the documents the answer relied on (id + title); link these to
-  `GET /api/documents/{id}`.
+- `citations` — documents the answer relied on (`document_id`, `title`,
+  `page_number`); link these to `GET /api/documents/{id}`.
 - `used_tools` — which retrieval tools the engine invoked
   (`semantic_search`, `query_documents`).
-- `cost_usd` — estimated answer cost (recorded in `ask_logs`, not gated).
+- `cost_usd` — estimated answer cost for this turn (recorded in `ask_turns`,
+  not gated; thread total = sum of its turns).
+- `thread_id` — the conversation thread this turn belongs to (new or existing).
 
-**Errors:** `503` when no Anthropic API key is configured (answering needs
-Claude); `422` when the question is empty or too long.
+**Errors:** `503` when no Anthropic API key is configured; `422` when the
+question is empty or too long; `404` when `thread_id` does not exist or belongs
+to another user.
+
+## 1.12 Ask threads
+
+Conversation threads persist server-side. All thread endpoints enforce
+ownership: a thread belonging to another user returns `404` (not `403`) to
+avoid disclosing thread existence.
+
+### `GET /api/ask/threads`
+
+List the authenticated user's conversations, newest-updated first.
+
+```json
+[
+  {
+    "id": 1,
+    "title": "Do I have a travel allowance in my job contract?",
+    "created_at": "2026-06-22T10:00:00Z",
+    "updated_at": "2026-06-22T10:05:00Z",
+    "turn_count": 3,
+    "total_cost_usd": 0.012
+  }
+]
+```
+
+### `GET /api/ask/threads/{id}`
+
+Full thread detail: metadata and every turn in chronological order.
+The raw replay `messages` blob is not returned to the client.
+
+```json
+{
+  "id": 1,
+  "title": "Do I have a travel allowance in my job contract?",
+  "turns": [
+    {
+      "id": 1,
+      "query": "Do I have a travel allowance in my job contract?",
+      "answer": "Yes — your contract grants …",
+      "citations": [{"document_id": 42, "title": "Employment contract", "page_number": 3}],
+      "used_tools": ["semantic_search"],
+      "cost_usd": 0.0031,
+      "created_at": "2026-06-22T10:00:00Z"
+    }
+  ]
+}
+```
+
+`404` if the thread does not exist or belongs to another user.
+
+### `DELETE /api/ask/threads/{id}`
+
+Delete a conversation. Cascades to all its turns. Returns `204` on success;
+`404` if the thread does not exist or belongs to another user.

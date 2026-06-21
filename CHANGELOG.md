@@ -8,6 +8,32 @@ All notable changes to Library are documented here. The format follows
 
 ### Added
 
+**Conversational Ask** — Ask is now multi-turn. Follow-up questions like
+*"what about last year?"* resolve against prior turns of the same conversation
+instead of being answered cold. See [docs/ask.md](docs/ask.md) §1.6 and
+[docs/api.md](docs/api.md) §1.11–1.12.
+
+- Persistent conversation threads stored server-side in two new tables:
+  `ask_threads` (one conversation, owner-scoped, titled from the first question)
+  and `ask_turns` (one Q&A turn — question, answer, citations, cost, and the
+  serialized Anthropic message blocks for replay).
+- `ask_logs` is dropped and subsumed by `ask_turns` (migration 0008). `ask_logs`
+  had no readers; existing rows are discarded.
+- History replay: the engine loads the last `LIBRARY_ASK_HISTORY_TURNS` (default
+  3) turns and prepends their message blocks (Q&A + tool results) into the
+  Claude call, so follow-ups can reason over earlier evidence without re-querying.
+- Prompt caching: the rehydrated history prefix and the static system+tools
+  definitions each carry an Anthropic `cache_control: ephemeral` breakpoint,
+  reducing cost and latency on follow-ups.
+- New `LIBRARY_ASK_HISTORY_TURNS` setting (default `3`); `0` disables history.
+- New thread CRUD endpoints: `GET /api/ask/threads`,
+  `GET /api/ask/threads/{id}`, `DELETE /api/ask/threads/{id}`.
+- `POST /api/ask` gains optional `thread_id` on request and returns `thread_id`
+  on response.
+- Chat UI: `AskView` is now a scrollable transcript, with a follow-up input and
+  a conversation sidebar (resume, delete, new conversation). Routes `/ask` and
+  `/ask/:threadId`.
+
 **Markdown layer + page-aware citations** — Claude vision renders each
 document page as clean GitHub-flavored markdown, grounded on OCR text.
 See [docs/ingestion.md](docs/ingestion.md) "Markdown layer" and
