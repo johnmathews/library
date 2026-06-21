@@ -37,6 +37,8 @@ class Settings(BaseSettings):
     extraction_escalation_model: str = "claude-sonnet-4-6"
     extraction_daily_budget_usd: float = 5.0
     extraction_validation_ocr_floor: float = 50.0
+    extraction_judge_model: str = "claude-sonnet-4-6"
+    extraction_judge_inline: bool = False  # reserved; judge is batch-only this phase
     # Semantic search / embeddings (see docs/ask.md). The embedder is a local
     # text-embeddings-inference sidecar serving bge-m3 (1024-dim); document
     # text never leaves the host for indexing.
