@@ -149,7 +149,7 @@ test('ask citation deep-links to the cited PDF page', async ({ page }, testInfo)
 
   // ── Ask a question ──────────────────────────────────────────────────────────
   await page.goto('/ask')
-  await page.getByTestId('ask-question').locator('textarea').fill(TEST_QUESTION)
+  await page.locator('#ask-question').fill(TEST_QUESTION)
   await page.getByTestId('ask-submit').click()
 
   // ── Assert the citation shows "p. 2" ───────────────────────────────────────
