@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 from typer.testing import CliRunner
 
+import library.cli as cli_module
 from library.auth.passwords import verify_password
 from library.cli import app
 from library.config import get_settings
+from library.extraction.judge import FieldVerdict, JudgeResult
 from library.jobs import job_app
 from library.models import Document, DocumentChunk, DocumentSource, DocumentStatus, ReviewStatus
 from tests.conftest import create_user, fetch_all
@@ -264,3 +266,80 @@ def test_backfill_validation_sets_review_status(cli_database_url: str) -> None:
     assert clean_status == ReviewStatus.UNREVIEWED
     assert isinstance(clean_extra, dict)
     assert "validation" in clean_extra
+
+
+def _seed_eval_documents(database_url: str) -> tuple[int, int]:
+    """Insert one reviewed doc (with corrections + fields_set) and one plain doc with OCR text.
+
+    Returns (reviewed_id, plain_id).
+    """
+
+    async def _insert() -> tuple[int, int]:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                reviewed = Document(
+                    sha256=uuid.uuid4().hex * 2,
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    ocr_text="Invoice from Acme Corp dated 2024-01-15 total 99.00 EUR",
+                    status=DocumentStatus.INDEXED,
+                    extra={
+                        "extraction": {
+                            "prompt_version": "v1",
+                            "model": "claude-3-5-sonnet-20241022",
+                            "fields_set": ["title", "amount_total"],
+                        },
+                        "corrections": [{"field": "amount_total", "old": "99.00", "new": "109.00"}],
+                    },
+                )
+                plain = Document(
+                    sha256=uuid.uuid4().hex * 2,
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    ocr_text="Receipt for office supplies 2024-02-20",
+                    status=DocumentStatus.INDEXED,
+                    extra={
+                        "extraction": {
+                            "prompt_version": "v1",
+                            "model": "claude-3-5-sonnet-20241022",
+                            "fields_set": ["title"],
+                        },
+                    },
+                )
+                session.add(reviewed)
+                session.add(plain)
+                await session.commit()
+                return reviewed.id, plain.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_insert())
+
+
+def test_eval_extractions_persists_run(
+    cli_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """eval-extractions --all inserts one EvalRun row with correct per_field and sample_size."""
+    _seed_eval_documents(cli_database_url)
+
+    # Stub the judge so no real Anthropic call is made. Both eligible docs have
+    # OCR text, so the stub will be called twice (once per doc).
+    async def _fake_judge(document: Document, *, client: object, settings: object) -> JudgeResult:
+        return JudgeResult(verdicts=[FieldVerdict(field="title", verdict="correct", note=None)])
+
+    monkeypatch.setenv("LIBRARY_ANTHROPIC_API_KEY", "sk-fake-key-for-testing")
+    get_settings.cache_clear()
+    monkeypatch.setattr(cli_module, "judge", _fake_judge)
+
+    result = runner.invoke(app, ["eval-extractions", "--all"])
+    assert result.exit_code == 0, result.output
+
+    rows = fetch_all(cli_database_url, "SELECT sample_size, per_field FROM eval_runs")
+    assert len(rows) == 1, f"Expected 1 eval_runs row, got {len(rows)}"
+    sample_size, per_field = rows[0]
+    # At least the two seeded docs (both have OCR text) must be judged. The
+    # shared api_database_url accumulates rows across tests, so the count can
+    # exceed 2 — assert a lower bound rather than an exact value.
+    assert sample_size >= 2
+    assert "title" in per_field

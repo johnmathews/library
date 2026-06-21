@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 
 import typer
+from anthropic import AsyncAnthropic
 from sqlalchemy import exists, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -19,11 +20,19 @@ from sqlalchemy.pool import NullPool
 from library.auth.passwords import hash_password
 from library.auth.service import revoke_all_credentials
 from library.config import get_settings
+from library.extraction.eval import (
+    combine,
+    flywheel_accuracy,
+    judge_agreement,
+    modal_version,
+    version_distribution,
+)
+from library.extraction.judge import JudgeResult, judge
 from library.extraction.validation import derive_review_status, findings_to_payload, validate
 from library.importer.client import PaperlessClient
 from library.importer.runner import ImportReport, format_report, run_import
 from library.jobs import embed_document, job_app
-from library.models import Document, DocumentChunk, Kind, User
+from library.models import Document, DocumentChunk, EvalRun, Kind, User
 
 app: typer.Typer = typer.Typer(
     no_args_is_help=True, help="Library administration (accounts, imports)."
@@ -274,6 +283,85 @@ def backfill_validation(
 
     count = _run(operation)
     typer.echo(f"revalidated {count} document(s)")
+
+
+@app.command("eval-extractions")
+def eval_extractions(
+    sample: int | None = typer.Option(
+        None, "--sample", min=1, help="Judge a head-slice of N documents."
+    ),
+    judge_all: bool = typer.Option(
+        False, "--all", help="Judge every eligible document (ignores --sample)."
+    ),
+) -> None:
+    """Score extraction quality (flywheel + LLM judge) and record an eval run.
+
+    Flywheel accuracy is computed over every document carrying corrections.
+    The judge runs over the sampled set (or all eligible documents with OCR
+    text) for coverage. One eval_runs row is written, pinned to the modal
+    prompt_version + model so runs are comparable over time.
+
+    Sampling is a deterministic head-slice (``eligible[:N]``). Random sampling
+    is a documented follow-up.
+    """
+    settings = get_settings()
+    if settings.anthropic_api_key is None:
+        typer.echo("error: LIBRARY_ANTHROPIC_API_KEY is required to run the judge")
+        raise typer.Exit(code=1)
+
+    async def operation(session: AsyncSession) -> EvalRun:
+        all_docs = list(
+            (
+                await session.execute(
+                    select(Document).where(Document.deleted_at.is_(None)).order_by(Document.id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        flywheel = flywheel_accuracy(all_docs)
+
+        eligible = [d for d in all_docs if (d.ocr_text or "").strip()]
+        if not judge_all and sample is not None:
+            eligible = eligible[:sample]
+
+        results: list[JudgeResult] = []
+        async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as client:
+            for document in eligible:
+                results.append(await judge(document, client=client, settings=settings))
+
+        agreement = judge_agreement(results)
+        per_field = combine(flywheel, agreement)
+        distribution = version_distribution(eligible or all_docs)
+        version, model = modal_version(distribution)
+        overall = {
+            "documents_total": len(all_docs),
+            "reviewed_total": sum(1 for d in all_docs if (d.extra or {}).get("corrections")),
+            "judged_total": len(results),
+        }
+        run = EvalRun(
+            prompt_version=version,
+            model=model,
+            version_mix=distribution,
+            sample_size=len(results),
+            per_field=per_field,
+            overall=overall,
+        )
+        session.add(run)
+        await session.commit()
+        await session.refresh(run)
+        return run
+
+    run = _run(operation)
+    typer.echo(
+        f"eval run #{run.id}"
+        f"  prompt={run.prompt_version} model={run.model} judged={run.sample_size}"
+    )
+    typer.echo(f"{'field':<18}{'flywheel':>12}{'judge':>12}{'n':>6}")
+    for field, scores in run.per_field.items():
+        fw = "-" if scores["flywheel_accuracy"] is None else f"{scores['flywheel_accuracy']:.0%}"
+        jg = "-" if scores["judge_agreement"] is None else f"{scores['judge_agreement']:.0%}"
+        typer.echo(f"{field:<18}{fw:>12}{jg:>12}{scores['n']:>6}")
 
 
 def main() -> None:
