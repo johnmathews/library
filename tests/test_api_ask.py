@@ -116,15 +116,6 @@ def _seed_document_with_chunk(
         engine.dispose()
 
 
-def _ask_turns_count(database_url: str) -> int:
-    engine = create_engine(database_url.replace("+asyncpg", "+psycopg"))
-    try:
-        with engine.connect() as connection:
-            return connection.execute(text("SELECT count(*) FROM ask_turns")).scalar_one()
-    finally:
-        engine.dispose()
-
-
 def _thread_turn_counts(database_url: str) -> list[tuple[int, int]]:
     engine = create_engine(database_url.replace("+asyncpg", "+psycopg"))
     try:
@@ -203,7 +194,7 @@ def test_ask_semantic_answers_with_citation(
     assert body["used_tools"] == ["semantic_search"]
     assert document_id in [citation["document_id"] for citation in body["citations"]]
     assert body["cost_usd"] > 0
-    assert _ask_turns_count(api_database_url) == 1
+    assert (body["thread_id"], 1) in _thread_turn_counts(api_database_url)
 
 
 def test_ask_structured_answers_provider_question(
@@ -491,7 +482,7 @@ def test_ask_creates_thread_and_returns_id(
             _Response(
                 stop_reason="end_turn", content=[_TextBlock(text="No data.")], usage=_Usage(8, 3)
             )
-        ],  # noqa: E501
+        ],
     )
     response = api_client.post("/api/ask", json={"question": "Where are my tax returns?"})
     assert response.status_code == 200, response.text
@@ -509,8 +500,13 @@ def test_ask_follow_up_replays_prior_turn(
 ) -> None:
     captured: dict[str, Any] = {}
 
-    async def fake_run_ask(  # type: ignore[no-untyped-def]
-        session: Any, *, question: str, settings: Any, client: Any, history_messages=None
+    async def fake_run_ask(
+        session: Any,
+        *,
+        question: str,
+        settings: Any,
+        client: Any,
+        history_messages: list[dict[str, Any]] | None = None,
     ):
         captured["history"] = history_messages
         from library.ask.engine import AskResult
@@ -540,11 +536,6 @@ def test_ask_foreign_thread_is_404(
     api_client: TestClient,
     api_database_url: str,
     with_api_key: None,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    _install_anthropic(
-        monkeypatch,
-        [_Response(stop_reason="end_turn", content=[_TextBlock(text="x")], usage=_Usage(1, 1))],
-    )
     response = api_client.post("/api/ask", json={"question": "hi", "thread_id": 999999})
     assert response.status_code == 404
