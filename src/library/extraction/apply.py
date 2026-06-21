@@ -157,9 +157,10 @@ async def _apply_outcome(
 async def _apply_validation(session: AsyncSession, document: Document, settings: Settings) -> None:
     """Run deterministic validation and set review_status + extra["validation"].
 
-    Best-effort: a failure here must never propagate (extraction never fails a
-    document). Skips any field locked by the user is unnecessary — validation
-    reads the document's *current* values, whatever their provenance.
+    Best-effort: the caller (``apply_extraction``) wraps this in a try/except so
+    any failure here never propagates and never fails the document.  There is no
+    need to skip user-locked fields — validation reads whatever the document's
+    current values are, regardless of their provenance.
     """
     kind_slug: str | None = None
     if document.kind_id is not None:

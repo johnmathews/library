@@ -711,6 +711,7 @@ def test_patch_records_correction(api_client: TestClient, api_database_url: str)
     assert rec["prompt_version"] == "v3"
     assert rec["model"] == "claude-haiku-4-5"
     assert rec["corrected_at"]  # ISO timestamp, non-empty
+    assert isinstance(rec["source_excerpt"], str)  # present; may be empty if field not in ocr_text
 
 
 # --- List item amount_total/currency -----------------------------------------

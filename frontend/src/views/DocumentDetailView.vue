@@ -493,10 +493,24 @@ const findingsByField = computed<Record<string, ValidationFinding[]>>(() => {
   if (!findings?.length) return {}
   const result: Record<string, ValidationFinding[]> = {}
   for (const finding of findings) {
+    if (finding.field === null || !(finding.field in STORAGE_TO_UI_FIELD)) continue
     const uiField = STORAGE_TO_UI_FIELD[finding.field] ?? finding.field
     ;(result[uiField] ??= []).push(finding)
   }
   return result
+})
+
+/**
+ * Document-level findings: those whose `field` is null, or whose `field` is
+ * not mapped to a rendered summary row (e.g. ocr_confidence_gate,
+ * empty_extraction, self_reported_low). Shown in a top-level warning banner.
+ */
+const documentLevelFindings = computed<ValidationFinding[]>(() => {
+  const findings = doc.value?.validation?.findings
+  if (!findings?.length) return []
+  return findings.filter(
+    (f) => f.field === null || !(f.field in STORAGE_TO_UI_FIELD),
+  )
 })
 
 // --- Mark verified ------------------------------------------------------------
@@ -625,6 +639,17 @@ watch(
       {{ notice.text }}
     </AppBanner>
     <AppErrorSummary v-if="errorItems.length" :errors="errorItems" data-testid="error-summary" />
+    <AppBanner
+      v-if="documentLevelFindings.length"
+      data-testid="validation-findings"
+      class="mb-6"
+    >
+      <ul class="list-disc list-inside space-y-1">
+        <li v-for="finding in documentLevelFindings" :key="finding.rule">
+          {{ finding.message }}
+        </li>
+      </ul>
+    </AppBanner>
 
     <div
       id="document-hero"

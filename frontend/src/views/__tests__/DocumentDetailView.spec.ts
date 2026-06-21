@@ -405,6 +405,31 @@ describe('DocumentDetailView', () => {
     expect(badge.attributes('title')).toContain('Amount could not be verified')
   })
 
+  it('renders document-level findings (field: null) in the validation-findings banner', async () => {
+    detail = makeDetail({
+      review_status: 'needs_review',
+      validation: {
+        findings: [
+          {
+            rule: 'empty_extraction',
+            field: null,
+            severity: 'warn',
+            message: 'extraction produced no useful metadata',
+          },
+        ],
+      },
+    })
+    const w = await mountView()
+    // Document-level findings must appear in the distinct validation-findings section.
+    const banner = w.find('[data-testid="validation-findings"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('extraction produced no useful metadata')
+    // Field-level badge section must NOT be triggered for this finding.
+    expect(w.findAll('[data-testid="validation-badge"]')).toHaveLength(0)
+    // The action-notice banner (detail-banner) must not be affected.
+    expect(w.find('[data-testid="detail-banner"]').exists()).toBe(false)
+  })
+
   it('marks the document verified', async () => {
     const verifiedDetail = makeDetail({ review_status: 'verified' })
     // Stub verifyDocument via fetch: POST /api/documents/12/verify

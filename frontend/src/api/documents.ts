@@ -73,8 +73,12 @@ export interface DocumentListResponse {
 /** One finding from the extraction validation step. */
 export interface ValidationFinding {
   rule: string
-  /** Storage field name, e.g. `amount_total`, `currency`, `kind_id`, `sender_id`. */
-  field: string
+  /**
+   * Storage field name, e.g. `amount_total`, `currency`, `kind_id`, `sender_id`.
+   * Null for document-level rules (e.g. `ocr_confidence_gate`, `empty_extraction`,
+   * `self_reported_low`) that are not tied to a single field.
+   */
+  field: string | null
   severity: 'warn' | 'error'
   message: string
 }
