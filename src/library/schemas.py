@@ -376,3 +376,17 @@ class JobInfo(BaseModel):
     attempts: int
     scheduled_at: datetime | None
     document_id: int | None
+
+
+class MarkdownPage(BaseModel):
+    """One page of a document's per-page markdown rendering."""
+
+    page_number: int
+    markdown: str
+
+
+class MarkdownResponse(BaseModel):
+    """Body of GET /api/documents/{id}/markdown."""
+
+    page_count: int
+    pages: list[MarkdownPage]

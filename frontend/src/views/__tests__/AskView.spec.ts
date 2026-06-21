@@ -17,8 +17,8 @@ function sampleResponse(overrides: Partial<AskResponse> = {}): AskResponse {
   return {
     answer: 'Two invoices are due this month.',
     citations: [
-      { document_id: 7, title: 'Energy bill' },
-      { document_id: 12, title: null },
+      { document_id: 7, title: 'Energy bill', page_number: null },
+      { document_id: 12, title: null, page_number: null },
     ],
     used_tools: ['search'],
     cost_usd: 0.0123,
@@ -149,5 +149,33 @@ describe('AskView', () => {
 
     expect(askQuestionMock).not.toHaveBeenCalled()
     expect(w.find('[data-testid="error-summary"]').text()).toContain('Enter a question')
+  })
+
+  it('renders the page number on a citation and links with a page query', async () => {
+    askQuestionMock.mockResolvedValue(
+      sampleResponse({
+        citations: [{ document_id: 42, title: 'Energy bill', page_number: 3 }],
+      }),
+    )
+    const w = mountView()
+    await ask(w)
+    await flushPromises()
+
+    const link = w.get('[data-testid="ask-citation"]')
+    expect(link.text()).toContain('p. 3')
+    expect(link.attributes('href')).toContain('page=3')
+  })
+
+  it('omits the page label when page_number is null', async () => {
+    askQuestionMock.mockResolvedValue(
+      sampleResponse({
+        citations: [{ document_id: 7, title: 'Note', page_number: null }],
+      }),
+    )
+    const w = mountView()
+    await ask(w)
+    await flushPromises()
+
+    expect(w.get('[data-testid="ask-citation"]').text()).not.toContain('p.')
   })
 })

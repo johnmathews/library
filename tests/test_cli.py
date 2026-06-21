@@ -17,7 +17,14 @@ from library.cli import app
 from library.config import get_settings
 from library.extraction.judge import FieldVerdict, JudgeResult
 from library.jobs import job_app
-from library.models import Document, DocumentChunk, DocumentSource, DocumentStatus, ReviewStatus
+from library.models import (
+    Document,
+    DocumentChunk,
+    DocumentPage,
+    DocumentSource,
+    DocumentStatus,
+    ReviewStatus,
+)
 from tests.conftest import create_user, fetch_all
 from tests.test_auth import execute_sql
 
@@ -27,9 +34,14 @@ runner = CliRunner()
 
 
 def _seed_document(
-    database_url: str, marker: str, *, ocr_text: str | None, with_chunk: bool
+    database_url: str,
+    marker: str,
+    *,
+    ocr_text: str | None,
+    with_chunk: bool,
+    with_page: bool = False,
 ) -> int:
-    """Insert a document (optionally with one chunk) and return its id."""
+    """Insert a document (optionally with one chunk and/or one page) and return its id."""
 
     async def _insert() -> int:
         engine = create_async_engine(database_url, poolclass=NullPool)
@@ -51,6 +63,16 @@ def _seed_document(
                             chunk_index=1,
                             text="existing",
                             embedding=[0.0] * 1024,
+                        )
+                    )
+                    await session.commit()
+                if with_page:
+                    session.add(
+                        DocumentPage(
+                            document_id=document.id,
+                            page_number=1,
+                            markdown="# Page 1",
+                            char_count=8,
                         )
                     )
                     await session.commit()
@@ -343,3 +365,39 @@ def test_eval_extractions_persists_run(
     # exceed 2 — assert a lower bound rather than an exact value.
     assert sample_size >= 2
     assert "title" in per_field
+
+
+def test_backfill_markdown_enqueues_documents_without_pages(cli_database_url: str) -> None:
+    needs = _seed_document(cli_database_url, "md-needs", ocr_text="some text", with_chunk=False)
+    already = _seed_document(
+        cli_database_url, "md-done", ocr_text="some text", with_chunk=False, with_page=True
+    )
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill-markdown"])
+    assert result.exit_code == 0, result.output
+
+    enqueued = {
+        job["args"]["document_id"]
+        for job in connector.jobs.values()
+        if job["task_name"] == "library.jobs.markdown_document"
+    }
+    assert needs in enqueued
+    assert already not in enqueued  # already has pages
+
+
+def test_backfill_markdown_include_existing(cli_database_url: str) -> None:
+    already = _seed_document(
+        cli_database_url, "md-again", ocr_text="some text", with_chunk=False, with_page=True
+    )
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill-markdown", "--include-existing"])
+    assert result.exit_code == 0, result.output
+    enqueued = {
+        job["args"]["document_id"]
+        for job in connector.jobs.values()
+        if job["task_name"] == "library.jobs.markdown_document"
+    }
+    assert already in enqueued

@@ -1,16 +1,18 @@
 """Procrastinate job queue wiring and the document-processing pipeline.
 
 The pipeline advances a document through ``received -> ocr -> extract ->
-indexed`` recording an ingestion event per transition. The OCR stage (W4)
-runs the routed engines from ``library.ocr``; the extract stage (W6) runs
-Claude metadata extraction from ``library.extraction``.
+markdown -> embed -> indexed``, recording an ingestion event per transition.
+The OCR stage (W4) runs the routed engines from ``library.ocr``; the extract
+stage (W6) runs Claude metadata extraction from ``library.extraction``; the
+markdown stage runs Claude-vision per-page markdown generation; the embed
+stage chunks the text and computes embeddings.
 """
 
 import asyncio
 import logging
 
 from procrastinate import App, PsycopgConnector
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from library import thumbnails
@@ -19,7 +21,8 @@ from library.db import get_sessionmaker
 from library.embedding import EmbeddingError, embed_texts
 from library.embedding.chunker import chunk_text
 from library.extraction.apply import apply_extraction
-from library.models import Document, DocumentChunk, DocumentStatus, IngestionEvent
+from library.markdown.apply import apply_markdown
+from library.models import Document, DocumentChunk, DocumentPage, DocumentStatus, IngestionEvent
 from library.ocr import router as ocr_router
 from library.storage import derived_dir, path_for
 
@@ -29,7 +32,8 @@ logger = logging.getLogger(__name__)
 _NEXT_STATUS: dict[DocumentStatus, DocumentStatus] = {
     DocumentStatus.RECEIVED: DocumentStatus.OCR,
     DocumentStatus.OCR: DocumentStatus.EXTRACT,
-    DocumentStatus.EXTRACT: DocumentStatus.EMBED,
+    DocumentStatus.EXTRACT: DocumentStatus.MARKDOWN,
+    DocumentStatus.MARKDOWN: DocumentStatus.EMBED,
     DocumentStatus.EMBED: DocumentStatus.INDEXED,
 }
 
@@ -117,6 +121,11 @@ async def run_extraction(session: AsyncSession, document: Document) -> None:
     await apply_extraction(session, document, get_settings())
 
 
+async def run_markdown(session: AsyncSession, document: Document) -> None:
+    """Markdown stage: Claude vision per-page markdown (best-effort, never raises)."""
+    await apply_markdown(session, document, get_settings())
+
+
 async def _record_embed_event(
     session: AsyncSession, document: Document, event: str, detail: dict[str, object]
 ) -> None:
@@ -137,35 +146,70 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
         await _record_embed_event(session, document, "embedding_skipped", {"reason": "disabled"})
         return
 
-    chunks = chunk_text(
-        document.ocr_text or "",
-        max_chars=settings.embedding_chunk_chars,
-        overlap=settings.embedding_chunk_overlap,
+    pages = (
+        (
+            await session.execute(
+                select(DocumentPage)
+                .where(DocumentPage.document_id == document.id)
+                .order_by(DocumentPage.page_number)
+            )
+        )
+        .scalars()
+        .all()
     )
-    if not chunks:
+
+    chunk_records: list[tuple[str, int | None]] = []
+    if pages:
+        for page in pages:
+            for piece in chunk_text(
+                page.markdown,
+                max_chars=settings.embedding_chunk_chars,
+                overlap=settings.embedding_chunk_overlap,
+            ):
+                chunk_records.append((piece, page.page_number))
+    else:
+        for piece in chunk_text(
+            document.ocr_text or "",
+            max_chars=settings.embedding_chunk_chars,
+            overlap=settings.embedding_chunk_overlap,
+        ):
+            chunk_records.append((piece, None))
+
+    if not chunk_records:
         await _record_embed_event(session, document, "embedding_skipped", {"reason": "no_text"})
         return
 
+    texts = [text for text, _ in chunk_records]
     try:
-        vectors = await embed_texts(chunks, settings=settings)
+        vectors = await embed_texts(texts, settings=settings)
     except EmbeddingError as exc:
         await _record_embed_event(
-            session, document, "embedding_failed", {"error": str(exc), "chunks": len(chunks)}
+            session, document, "embedding_failed", {"error": str(exc), "chunks": len(texts)}
         )
         return
 
     await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
-    for index, (chunk, vector) in enumerate(zip(chunks, vectors, strict=True), start=1):
+    for index, ((text, page_number), vector) in enumerate(
+        zip(chunk_records, vectors, strict=True), start=1
+    ):
         session.add(
-            DocumentChunk(document_id=document.id, chunk_index=index, text=chunk, embedding=vector)
+            DocumentChunk(
+                document_id=document.id,
+                chunk_index=index,
+                page_number=page_number,
+                text=text,
+                embedding=vector,
+            )
         )
     await _record_embed_event(
         session,
         document,
         "embedded",
-        {"chunks": len(chunks), "model": settings.embedding_model_name},
+        {"chunks": len(texts), "model": settings.embedding_model_name, "page_aware": bool(pages)},
     )
-    logger.info("embedded document %s into %s chunks", document.id, len(chunks))
+    logger.info(
+        "embedded document %s into %s chunks (page_aware=%s)", document.id, len(texts), bool(pages)
+    )
 
 
 async def _run_stage_hook(
@@ -189,6 +233,8 @@ async def _run_stage_hook(
             )
     elif status is DocumentStatus.EXTRACT:
         await run_extraction(session, document)
+    elif status is DocumentStatus.MARKDOWN:
+        await run_markdown(session, document)
     elif status is DocumentStatus.EMBED:
         await run_embed(session, document)
 
@@ -314,6 +360,22 @@ async def embed_document(document_id: int) -> None:
         document = await session.get(Document, document_id)
         if document is None:
             raise ValueError(f"document {document_id} not found")
+        await run_embed(session, document)
+
+
+@job_app.task(name="library.jobs.markdown_document")
+async def markdown_document(document_id: int) -> None:
+    """Background task: (re-)generate markdown for one document, then re-embed.
+
+    Deferred by the backfill CLI (and after a prompt upgrade), independent of
+    pipeline status. Best-effort and idempotent (replaces a document's pages
+    and, via run_embed, its chunks).
+    """
+    async with get_sessionmaker()() as session:
+        document = await session.get(Document, document_id)
+        if document is None:
+            raise ValueError(f"document {document_id} not found")
+        await apply_markdown(session, document, get_settings())
         await run_embed(session, document)
 
 

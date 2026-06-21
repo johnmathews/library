@@ -17,6 +17,8 @@
  * with the inline viewer disabled.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import { useRoute } from 'vue-router'
 import {
   AppBackLink,
@@ -33,6 +35,7 @@ import {
 import type { ErrorSummaryItem, SelectItem } from '@/components/app'
 import {
   DOCUMENT_LANGUAGES,
+  fetchDocumentMarkdown,
   getDocument,
   originalUrl,
   requestExtraction,
@@ -42,6 +45,7 @@ import {
   verifyDocument,
   type DocumentDetail,
   type DocumentLanguage,
+  type DocumentMarkdownResponse,
   type DocumentUpdate,
   type ValidationFinding,
 } from '@/api/documents'
@@ -555,15 +559,25 @@ const pdfPreviewUrl = computed(() =>
     : '',
 )
 
+/** Positive integer page number from `?page=N` in the route query, or null. */
+const pageParam = computed<number | null>(() => {
+  const value = route.query.page
+  const n = Array.isArray(value) ? Number(value[0]) : Number(value)
+  return Number.isInteger(n) && n > 0 ? n : null
+})
+
 /** Same PDF, but with native-viewer open parameters. `toolbar=0&navpanes=0`
  * hides the viewer chrome (Chrome/Edge honour it; some Firefox builds ignore
  * it — best effort, the page provides its own Open/Download buttons), and
  * `view=FitH` fits the page to the iframe width so a portrait page is not
  * clipped on a narrow (mobile) viewport. The plain `pdfPreviewUrl` (no
- * fragment) is kept for the open-in-new-tab button. */
-const pdfPreviewIframeUrl = computed(() =>
-  pdfPreviewUrl.value ? `${pdfPreviewUrl.value}#toolbar=0&navpanes=0&view=FitH` : '',
-)
+ * fragment) is kept for the open-in-new-tab button. When `?page=N` is present
+ * the fragment also carries `&page=N` so the viewer opens on that page. */
+const pdfPreviewIframeUrl = computed(() => {
+  if (!pdfPreviewUrl.value) return ''
+  const page = pageParam.value ? `&page=${pageParam.value}` : ''
+  return `${pdfPreviewUrl.value}#toolbar=0&navpanes=0&view=FitH${page}`
+})
 
 /** Firefox's built-in viewer ignores `#toolbar=0` and shows its own toolbar.
  * There's no URL fragment that hides it, so on Firefox we nudge the iframe up
@@ -602,6 +616,31 @@ const latestExtractionEvent = computed(() => {
   )
 })
 
+// --- Markdown section (lazy fetch on first reveal) ----------------------------
+
+const markdownData = ref<DocumentMarkdownResponse | null>(null)
+const markdownFetched = ref(false)
+const markdownLoading = ref(false)
+const markdownError = ref(false)
+
+function markdownPageHtml(md: string): string {
+  return DOMPurify.sanitize(marked.parse(md, { async: false }) as string)
+}
+
+async function onMarkdownReveal(): Promise<void> {
+  if (markdownFetched.value || !doc.value) return
+  markdownFetched.value = true
+  markdownLoading.value = true
+  markdownError.value = false
+  try {
+    markdownData.value = await fetchDocumentMarkdown(doc.value.id)
+  } catch {
+    markdownError.value = true
+  } finally {
+    markdownLoading.value = false
+  }
+}
+
 // --- Load on navigation (registered last: the handler runs immediately and
 // --- touches the edit/notice state declared above) ----------------------------
 
@@ -615,6 +654,9 @@ watch(
     cancelEdit()
     notice.value = null
     actionError.value = null
+    markdownData.value = null
+    markdownFetched.value = false
+    markdownError.value = false
     const numericId = Number(id)
     if (!Number.isInteger(numericId) || numericId < 1) {
       notFound.value = true
@@ -858,6 +900,49 @@ watch(
               data-testid="ocr-text"
               >{{ doc.ocr_text }}</pre
             >
+          </AppDetails>
+        </div>
+
+        <div
+          id="document-markdown-card"
+          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
+        >
+          <AppDetails
+            summary="View markdown"
+            data-testid="markdown-details"
+            @toggle="onMarkdownReveal"
+          >
+            <div v-if="markdownLoading" class="mt-2 text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-loading">
+              Loading…
+            </div>
+            <div v-else-if="markdownError" class="mt-2 text-sm text-red-600 dark:text-red-400" data-testid="markdown-error">
+              Could not load markdown — try again later.
+            </div>
+            <div v-else-if="markdownData && markdownData.page_count === 0" class="mt-2 text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-empty">
+              No markdown content is available for this document yet.
+            </div>
+            <template v-else-if="markdownData">
+              <div
+                v-for="page in markdownData.pages"
+                :key="page.page_number"
+                class="mt-3 first:mt-1"
+                data-testid="markdown-page"
+              >
+                <p
+                  v-if="markdownData.page_count > 1"
+                  class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
+                >
+                  Page {{ page.page_number }}
+                </p>
+                <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in markdownPageHtml -->
+                <div
+                  class="doc-markdown text-gray-800 dark:text-gray-100"
+                  data-testid="markdown-content"
+                  v-html="markdownPageHtml(page.markdown)"
+                />
+                <!-- eslint-enable vue/no-v-html -->
+              </div>
+            </template>
           </AppDetails>
         </div>
       </div>
@@ -1159,3 +1244,50 @@ watch(
     Sorry, the document could not be loaded. Try again later.
   </div>
 </template>
+
+<style scoped>
+/* Markdown rendered via v-html; restore readable prose spacing stripped by
+   Tailwind preflight (mirrors .ask-answer in AskView.vue). */
+.doc-markdown :deep(p) {
+  margin-bottom: 0.75rem;
+}
+.doc-markdown :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.doc-markdown :deep(strong) {
+  font-weight: 600;
+}
+.doc-markdown :deep(em) {
+  font-style: italic;
+}
+.doc-markdown :deep(ul),
+.doc-markdown :deep(ol) {
+  margin: 0.5rem 0 0.75rem;
+  padding-left: 1.5rem;
+}
+.doc-markdown :deep(ul) {
+  list-style: disc;
+}
+.doc-markdown :deep(ol) {
+  list-style: decimal;
+}
+.doc-markdown :deep(li) {
+  margin-bottom: 0.25rem;
+}
+.doc-markdown :deep(h1),
+.doc-markdown :deep(h2),
+.doc-markdown :deep(h3) {
+  font-weight: 600;
+  margin: 0.75rem 0 0.5rem;
+}
+.doc-markdown :deep(code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875em;
+  padding: 0.1em 0.3em;
+  border-radius: 0.25rem;
+  background: rgb(0 0 0 / 0.06);
+}
+.dark .doc-markdown :deep(code) {
+  background: rgb(255 255 255 / 0.08);
+}
+</style>

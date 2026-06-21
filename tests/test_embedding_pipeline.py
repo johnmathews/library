@@ -22,6 +22,7 @@ from library.models import (
     EMBEDDING_DIM,
     Document,
     DocumentChunk,
+    DocumentPage,
     DocumentSource,
     DocumentStatus,
     IngestionEvent,
@@ -130,7 +131,7 @@ async def test_run_embed_creates_chunks_and_event(
     assert [chunk.chunk_index for chunk in chunks] == list(range(1, len(chunks) + 1))
     assert all(len(chunk.embedding) == EMBEDDING_DIM for chunk in chunks)
     embedded = await events_for(session_factory, document_id, "embedded")
-    assert embedded == [{"chunks": len(chunks), "model": "bge-m3"}]
+    assert embedded == [{"chunks": len(chunks), "model": "bge-m3", "page_aware": False}]
 
 
 async def test_run_embed_is_idempotent(
@@ -241,3 +242,68 @@ async def test_embed_document_task_registered_and_deferrable() -> None:
         job = next(iter(connector.jobs.values()))
         assert job["task_name"] == "library.jobs.embed_document"
         assert job["args"] == {"document_id": 7}
+
+
+async def test_embed_tags_chunks_with_page_number(
+    session_factory: async_sessionmaker[AsyncSession],
+    enable_embedding: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(jobs, "embed_texts", _fake_embed_texts)
+    document_id = await make_document(session_factory, "embed-page-aware", ocr_text="fallback text")
+
+    async with session_factory() as session:
+        session.add_all(
+            [
+                DocumentPage(
+                    document_id=document_id,
+                    page_number=1,
+                    markdown="alpha " * 200,
+                    char_count=1200,
+                ),
+                DocumentPage(
+                    document_id=document_id,
+                    page_number=2,
+                    markdown="beta " * 200,
+                    char_count=1000,
+                ),
+            ]
+        )
+        await session.commit()
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await run_embed(session, document)
+
+    chunks = await chunks_for(session_factory, document_id)
+    assert chunks
+    assert {c.page_number for c in chunks} <= {1, 2}
+    assert [c.chunk_index for c in chunks] == list(range(1, len(chunks) + 1))
+
+    embedded = await events_for(session_factory, document_id, "embedded")
+    assert len(embedded) == 1
+    assert embedded[0]["page_aware"] is True
+
+
+async def test_embed_falls_back_to_ocr_text_when_no_pages(
+    session_factory: async_sessionmaker[AsyncSession],
+    enable_embedding: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(jobs, "embed_texts", _fake_embed_texts)
+    long_text = "word " * 500
+    document_id = await make_document(session_factory, "embed-ocr-fallback", ocr_text=long_text)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await run_embed(session, document)
+
+    chunks = await chunks_for(session_factory, document_id)
+    assert chunks
+    assert all(c.page_number is None for c in chunks)
+
+    embedded = await events_for(session_factory, document_id, "embedded")
+    assert len(embedded) == 1
+    assert embedded[0]["page_aware"] is False

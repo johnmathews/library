@@ -25,6 +25,7 @@ from library.jobs import extract_document
 from library.models import (
     Document,
     DocumentLanguage,
+    DocumentPage,
     DocumentSource,
     DocumentStatus,
     IngestionEvent,
@@ -42,6 +43,8 @@ from library.schemas import (
     ExtractionQueuedResponse,
     IngestionEventOut,
     KindOut,
+    MarkdownPage,
+    MarkdownResponse,
     SenderOut,
     TagOut,
 )
@@ -297,6 +300,33 @@ async def get_document(
     """Full metadata, OCR text, extraction provenance, and the audit trail."""
     document = await _get_document_or_404(session, document_id)
     return _detail(document)
+
+
+@router.get(
+    "/documents/{document_id}/markdown",
+    response_model=MarkdownResponse,
+    summary="Per-page markdown rendering of a document",
+    responses={404: {"description": "Unknown or deleted document"}},
+)
+async def get_document_markdown(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> MarkdownResponse:
+    """Assembled per-page markdown ordered by page number; empty when the document has none."""
+    await _get_document_or_404(session, document_id)
+    rows = (
+        (
+            await session.execute(
+                select(DocumentPage)
+                .where(DocumentPage.document_id == document_id)
+                .order_by(DocumentPage.page_number)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    pages = [MarkdownPage(page_number=row.page_number, markdown=row.markdown) for row in rows]
+    return MarkdownResponse(page_count=len(pages), pages=pages)
 
 
 @router.patch(

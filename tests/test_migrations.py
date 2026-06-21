@@ -21,6 +21,7 @@ EXPECTED_TABLES: set[str] = {
     "document_tags",
     "documents",
     "document_chunks",
+    "document_pages",
     "ingestion_events",
     "ask_logs",
 }
@@ -132,3 +133,15 @@ def test_users_have_preferences_column(migrated_database_url: str) -> None:
         """,
     )
     assert rows == [("preferences", "jsonb", "NO")]
+
+
+def test_document_chunks_have_page_number_column(migrated_database_url: str) -> None:
+    rows = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = 'document_chunks' AND column_name = 'page_number'
+        """,
+    )
+    assert rows == [("page_number", "integer", "YES")]

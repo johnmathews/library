@@ -42,6 +42,7 @@ async def todays_spend_usd(session: AsyncSession) -> float:
     statement = select(
         func.coalesce(func.sum(IngestionEvent.detail["cost_usd"].astext.cast(Numeric)), 0)
     ).where(
+        IngestionEvent.event == "extraction_completed",
         IngestionEvent.detail.has_key("cost_usd"),
         IngestionEvent.created_at >= start_of_day,
     )

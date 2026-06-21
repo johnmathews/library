@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   DOCUMENT_STATUSES,
   documentQueryString,
+  fetchDocumentMarkdown,
   listDocuments,
   originalUrl,
   searchablePdfUrl,
@@ -221,6 +222,39 @@ describe('uploadDocument', () => {
     const promise = uploadDocument(makeFile())
     FakeXHR.instances[0]!.failNetwork()
     await expect(promise).rejects.toMatchObject({ status: 0 })
+  })
+})
+
+describe('fetchDocumentMarkdown', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+  })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('calls the markdown endpoint and returns typed response', async () => {
+    const body = {
+      page_count: 1,
+      pages: [{ page_number: 1, markdown: '# Hello\n\nworld' }],
+    }
+    fetchMock.mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
+    const result = await fetchDocumentMarkdown(42)
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe('/api/documents/42/markdown')
+    expect(result.page_count).toBe(1)
+    expect(result.pages[0]!.page_number).toBe(1)
+    expect(result.pages[0]!.markdown).toBe('# Hello\n\nworld')
+  })
+
+  it('returns an empty page list when page_count is 0', async () => {
+    const body = { page_count: 0, pages: [] }
+    fetchMock.mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
+    const result = await fetchDocumentMarkdown(7)
+    expect(result.page_count).toBe(0)
+    expect(result.pages).toHaveLength(0)
   })
 })
 
