@@ -58,7 +58,7 @@ class Settings(BaseSettings):
     embedding_chunk_overlap: int = 200
     retrieve_top_k: int = 10
     # Natural-language /ask answering (see docs/ask.md). Cost is recorded per
-    # ask in ask_logs but not gated in this release.
+    # turn in ask_turns but not gated in this release.
     ask_model: str = "claude-sonnet-4-6"
     ask_max_tool_turns: int = 4
     ask_max_answer_tokens: int = 1024
