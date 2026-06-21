@@ -137,7 +137,6 @@ def _fake_result(pages: int = 2, cost: float = 0.001) -> MarkdownResult:
 
 async def test_disabled_records_skip(
     session_factory: async_sessionmaker[AsyncSession],
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """markdown_enabled=False → markdown_skipped event, no DocumentPage rows."""
     document_id = await make_document(session_factory, "md-apply-disabled")
@@ -369,9 +368,9 @@ async def test_renderer_raises_records_skip_not_failed(
 
     events = await get_events(session_factory, document_id)
     event_names = [ev for ev, _ in events]
-    # Document must get a skip or failed event (not just silence), never "markdown_completed".
+    # Document must get a skip event (not failed), never "markdown_completed".
     assert "markdown_completed" not in event_names
-    assert "markdown_skipped" in event_names or "markdown_failed" in event_names
+    assert "markdown_skipped" in event_names
 
     # No DocumentPage rows must have been written.
     async with session_factory() as session:
