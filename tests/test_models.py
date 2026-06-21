@@ -26,6 +26,7 @@ SHA_C = "c" * 64
 SHA_D = "d" * 64
 SHA_E = "e" * 64
 SHA_F = "f" * 64
+SHA_G = "0" * 64
 
 
 @pytest.fixture
@@ -168,3 +169,13 @@ async def test_fts_english_stemming(session: AsyncSession) -> None:
         )
     )
     assert SHA_D in set(result.scalars())
+
+
+async def test_document_defaults_to_unreviewed(session: AsyncSession) -> None:
+    from library.models import ReviewStatus
+
+    doc = Document(sha256=SHA_G, mime_type="text/plain", source=DocumentSource.UPLOAD)
+    session.add(doc)
+    await session.commit()
+    await session.refresh(doc)
+    assert doc.review_status is ReviewStatus.UNREVIEWED
