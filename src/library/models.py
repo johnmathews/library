@@ -93,6 +93,14 @@ class DocumentLanguage(enum.StrEnum):
     UNKNOWN = "unknown"
 
 
+class ReviewStatus(enum.StrEnum):
+    """Trust state of a document's extracted metadata."""
+
+    VERIFIED = "verified"
+    NEEDS_REVIEW = "needs_review"
+    UNREVIEWED = "unreviewed"
+
+
 class Base(DeclarativeBase):
     """Declarative base with deterministic constraint names for Alembic."""
 
