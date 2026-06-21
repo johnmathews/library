@@ -539,3 +539,75 @@ def test_ask_foreign_thread_is_404(
 ) -> None:
     response = api_client.post("/api/ask", json={"question": "hi", "thread_id": 999999})
     assert response.status_code == 404
+
+
+def test_thread_lifecycle_list_get_delete(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="Answer one.")],
+                usage=_Usage(10, 5),
+            )
+        ],
+    )
+    created = api_client.post("/api/ask", json={"question": "first question?"})
+    assert created.status_code == 200, created.text
+    thread_id = created.json()["thread_id"]
+
+    listing = api_client.get("/api/ask/threads")
+    assert listing.status_code == 200
+    summary = next(t for t in listing.json() if t["id"] == thread_id)
+    assert summary["title"] == "first question?"
+    assert summary["turn_count"] == 1
+    assert summary["total_cost_usd"] > 0
+
+    detail = api_client.get(f"/api/ask/threads/{thread_id}")
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["turns"][0]["query"] == "first question?"
+    assert body["turns"][0]["answer"] == "Answer one."
+
+    deleted = api_client.delete(f"/api/ask/threads/{thread_id}")
+    assert deleted.status_code == 204
+    assert api_client.get(f"/api/ask/threads/{thread_id}").status_code == 404
+
+
+def test_thread_get_foreign_user_is_404(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A thread owned by another user returns 404 for GET and DELETE."""
+    # Insert a thread row owned by a synthetic foreign user_id via raw SQL.
+    # This avoids the asyncio event-loop conflict that arises when create_user
+    # (which calls asyncio.run) is invoked inside an active TestClient context.
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as conn:
+            foreign_user_id: int = conn.execute(
+                text(
+                    "INSERT INTO users (username, password_hash, display_name, is_active)"
+                    " VALUES ('foreign-thread-owner', 'x', '', true) RETURNING id"
+                )
+            ).scalar_one()
+            foreign_thread_id: int = conn.execute(
+                text(
+                    "INSERT INTO ask_threads (user_id, title)"
+                    " VALUES (:uid, 'foreign thread') RETURNING id"
+                ),
+                {"uid": foreign_user_id},
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+    # api_client is logged in as its own user — it must NOT see the foreign thread.
+    assert api_client.get(f"/api/ask/threads/{foreign_thread_id}").status_code == 404
+    assert api_client.delete(f"/api/ask/threads/{foreign_thread_id}").status_code == 404

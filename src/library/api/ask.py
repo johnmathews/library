@@ -5,6 +5,7 @@ semantic + structured retrieval) and records each ask's cost in ``ask_turns``.
 Authentication is enforced at include level in app.py.
 """
 
+from datetime import datetime
 from typing import Annotated, Any
 
 from anthropic import AsyncAnthropic
@@ -45,6 +46,31 @@ class AskResponse(BaseModel):
     used_tools: list[str]
     cost_usd: float
     thread_id: int
+
+
+class ThreadSummary(BaseModel):
+    id: int
+    title: str
+    created_at: datetime
+    updated_at: datetime
+    turn_count: int
+    total_cost_usd: float
+
+
+class TurnView(BaseModel):
+    id: int
+    query: str
+    answer: str
+    citations: list[Citation]
+    used_tools: list[str]
+    cost_usd: float
+    created_at: datetime
+
+
+class ThreadDetail(BaseModel):
+    id: int
+    title: str
+    turns: list[TurnView]
 
 
 def _thread_title(question: str) -> str:
@@ -143,3 +169,91 @@ async def ask(
         cost_usd=result.cost_usd,
         thread_id=thread.id,
     )
+
+
+@router.get("/ask/threads", response_model=list[ThreadSummary], summary="List Ask conversations")
+async def list_threads(
+    user: Annotated[User, Depends(current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[ThreadSummary]:
+    rows = (
+        await session.execute(
+            select(
+                AskThread.id,
+                AskThread.title,
+                AskThread.created_at,
+                AskThread.updated_at,
+                func.count(AskTurn.id),
+                func.coalesce(func.sum(AskTurn.cost_usd), 0.0),
+            )
+            .outerjoin(AskTurn, AskTurn.thread_id == AskThread.id)
+            .where(AskThread.user_id == user.id)
+            .group_by(AskThread.id)
+            .order_by(AskThread.updated_at.desc())
+        )
+    ).all()
+    return [
+        ThreadSummary(
+            id=tid,
+            title=title,
+            created_at=created,
+            updated_at=updated,
+            turn_count=count,
+            total_cost_usd=float(cost),
+        )
+        for tid, title, created, updated, count, cost in rows
+    ]
+
+
+async def _owned_thread(session: AsyncSession, thread_id: int, user: User) -> AskThread:
+    thread: AskThread | None = await session.get(AskThread, thread_id)
+    if thread is None or thread.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return thread
+
+
+@router.get("/ask/threads/{thread_id}", response_model=ThreadDetail, summary="Get one conversation")
+async def get_thread(
+    thread_id: int,
+    user: Annotated[User, Depends(current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ThreadDetail:
+    thread: AskThread = await _owned_thread(session, thread_id, user)
+    turns = (
+        (
+            await session.execute(
+                select(AskTurn)
+                .where(AskTurn.thread_id == thread_id)
+                .order_by(AskTurn.created_at, AskTurn.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return ThreadDetail(
+        id=thread.id,
+        title=thread.title,
+        turns=[
+            TurnView(
+                id=t.id,
+                query=t.query,
+                answer=t.answer,
+                citations=[Citation(**c) for c in t.citations],
+                used_tools=list(t.used_tools.get("tools", [])),
+                cost_usd=t.cost_usd,
+                created_at=t.created_at,
+            )
+            for t in turns
+        ],
+    )
+
+
+@router.delete("/ask/threads/{thread_id}", status_code=204, summary="Delete a conversation")
+async def delete_thread(
+    thread_id: int,
+    user: Annotated[User, Depends(current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    thread: AskThread = await _owned_thread(session, thread_id, user)
+    await session.delete(thread)
+    await session.commit()
