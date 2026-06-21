@@ -16,7 +16,7 @@ from library.ask import run_ask
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
-from library.models import AskLog, User
+from library.models import AskThread, AskTurn, User
 
 router: APIRouter = APIRouter(tags=["ask"])
 
@@ -65,15 +65,24 @@ async def ask(
     async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as client:
         result = await run_ask(session, question=request.question, settings=settings, client=client)
 
+    thread = AskThread(user_id=user.id, title=request.question.strip()[:120])
+    session.add(thread)
+    await session.flush()
     session.add(
-        AskLog(
-            user_id=user.id,
+        AskTurn(
+            thread_id=thread.id,
             query=request.question,
+            answer=result.answer,
             model=result.model,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
             cost_usd=result.cost_usd,
             used_tools={"tools": result.used_tools},
+            citations=[
+                {"document_id": c.document_id, "title": c.title, "page_number": c.page_number}
+                for c in result.citations
+            ],
+            messages=[],
         )
     )
     await session.commit()

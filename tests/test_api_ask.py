@@ -116,11 +116,11 @@ def _seed_document_with_chunk(
         engine.dispose()
 
 
-def _ask_logs_count(database_url: str) -> int:
+def _ask_turns_count(database_url: str) -> int:
     engine = create_engine(database_url.replace("+asyncpg", "+psycopg"))
     try:
         with engine.connect() as connection:
-            return connection.execute(text("SELECT count(*) FROM ask_logs")).scalar_one()
+            return connection.execute(text("SELECT count(*) FROM ask_turns")).scalar_one()
     finally:
         engine.dispose()
 
@@ -189,7 +189,7 @@ def test_ask_semantic_answers_with_citation(
     assert body["used_tools"] == ["semantic_search"]
     assert document_id in [citation["document_id"] for citation in body["citations"]]
     assert body["cost_usd"] > 0
-    assert _ask_logs_count(api_database_url) == 1
+    assert _ask_turns_count(api_database_url) == 1
 
 
 def test_ask_structured_answers_provider_question(
