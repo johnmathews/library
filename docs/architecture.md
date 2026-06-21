@@ -80,7 +80,13 @@ stage, with the reason in `ingestion_events`).
    summary, document date, amounts, expiry, language, suggested tags.
    Low-confidence documents escalate to Sonnet 4.6. Extraction is
    idempotent and re-runnable; a document whose extraction fails stays
-   searchable by its OCR text.
+   searchable by its OCR text. As the final step inside `apply_extraction`,
+   deterministic validation rules run against the extracted values and OCR
+   text: they set `review_status` (`verified`/`needs_review`/`unreviewed`)
+   on the document row and write findings to `extra["validation"]`. A batch
+   eval harness (`library eval-extractions`) combines the corrections
+   flywheel with an LLM-as-judge to produce per-field accuracy numbers;
+   see [ingestion.md](ingestion.md) "Extraction quality".
 4. **Embed** — the document's text is chunked and embedded (bge-m3, 1024-dim)
    by the local `embedder` sidecar; vectors land in `document_chunks` (HNSW
    index) for semantic retrieval. Best-effort: a document that fails to embed
@@ -92,9 +98,10 @@ stage, with the reason in `ingestion_events`).
 
 ## 1.3 Data model (summary)
 
-`documents` (hash, mime, lifecycle status, title, summary, document_date,
-language, amounts/expiry, `extra` JSONB for kind-specific fields, OCR text
-+ confidence, uploader, source channel) with FKs to `senders` and `kinds`
+`documents` (hash, mime, lifecycle status, `review_status` enum, title,
+summary, document_date, language, amounts/expiry, `extra` JSONB for
+kind-specific fields plus `extra["validation"]` + `extra["corrections"]`,
+OCR text + confidence, uploader, source channel) with FKs to `senders` and `kinds`
 (seeded: invoice, receipt, certificate, utility bill, parking ticket,
 warranty, manual, letter, contract, ticket, other), many-to-many `tags`,
 per-chunk embeddings (`document_chunks`, pgvector + HNSW), append-only
@@ -143,3 +150,4 @@ hashed, individually revocable.
 | Mobile/PWA polish | W16 | **done** — see [frontend.md](frontend.md) §1.8 (manifest + monogram icons, safe areas, ≥44px touch targets, 3-project Playwright matrix, on-device checklist) |
 | Deployment hardening + full docs | W17 | **done** — see [deployment.md](deployment.md); compose smoke job in CI; v0.1.0 ([CHANGELOG](../CHANGELOG.md)) |
 | Semantic Ask (pgvector, embedder, hybrid retrieval, `/api/ask`) | — | **done** — see [ask.md](ask.md) |
+| Extraction quality (validation, review queue, eval harness) | — | **done** — see [ingestion.md](ingestion.md) "Extraction quality" and [api.md](api.md) §1.3/1.4/1.8.3 |

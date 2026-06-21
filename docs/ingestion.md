@@ -405,6 +405,116 @@ from library.jobs import extract_document
 await extract_document.defer_async(document_id=123)
 ```
 
+## Extraction quality (`library.extraction.validation`, `library.extraction.judge`)
+
+After the metadata is written, `apply_extraction` runs deterministic validation
+and (separately) supports a batch eval harness for aggregate accuracy measurement.
+
+### Validation rules
+
+Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
+`Finding(rule, field, severity, message)` dataclasses. All current findings have
+`severity="warn"`.
+
+| Rule | Field(s) | Fires when |
+|---|---|---|
+| `amount_grounding` | `amount_total` | Amount is set but its digit sequence is absent from `ocr_text` (normalised: strips currency symbols and separators, also checks the integer part) |
+| `date_plausibility` | `document_date`, `due_date`, `expiry_date` | `document_date` is in the future or before 1990-01-01; or `due_date`/`expiry_date` is before `document_date` |
+| `amount_currency_coupling` | `amount_total`, `currency` | Exactly one of amount/currency is set |
+| `ocr_confidence_gate` | (document) | `ocr_confidence` is below `LIBRARY_EXTRACTION_VALIDATION_OCR_FLOOR` (default 50.0) |
+| `empty_extraction` | (document) | Kind is `other` or unset **and** no sender, no `document_date`, and no `amount_total` |
+| `self_reported_low` | (document) | `extra["extraction"]["confidence"] == "low"` |
+
+**Date-grounding is explicitly out of scope** this phase — locale date-format
+matching is fiddly; revisit once the simpler rules prove out.
+
+### `review_status` lifecycle
+
+`documents.review_status` is a Postgres enum (`verified` / `needs_review` /
+`unreviewed`), added in **migration 0006** (default `unreviewed`, indexed).
+
+- Any finding ⇒ `needs_review`; no findings ⇒ `unreviewed`.
+- User action via `POST /api/documents/{id}/verify` ⇒ `verified`.
+- Re-extraction (or backfill) re-derives the status from fresh findings.
+
+### `extra["validation"]` shape
+
+Written by `_apply_validation` in `apply.py` as part of the extraction commit:
+
+```json
+{
+  "prompt_version": "v3",
+  "findings": [
+    {"rule": "amount_grounding", "field": "amount_total", "severity": "warn",
+     "message": "amount_total does not appear in the document text"}
+  ],
+  "validated_at": "2026-06-21T10:00:00Z"
+}
+```
+
+`findings` is an empty list when no rules fired. The `validation` key on the
+detail API response (`GET /api/documents/{id}`) exposes this blob directly.
+
+### `extra["corrections"]` shape
+
+Every field edited via `PATCH /api/documents/{id}` appends a record to
+`extra["corrections"]` (the corrections flywheel). This is both a ground-truth
+label source for the eval harness and a mining-ready shape for later few-shot
+improvement:
+
+```json
+{
+  "field": "amount_total",
+  "original_value": "120.00",
+  "corrected_value": "12.00",
+  "source_excerpt": "…Totaal € 12,00…",
+  "prompt_version": "v3",
+  "model": "claude-haiku-4-5",
+  "corrected_at": "2026-06-21T10:00:00Z"
+}
+```
+
+`source_excerpt` is a best-effort ±40-character window from `ocr_text` around
+the original value (empty string when not locatable — never blocks the edit).
+
+### Backfill
+
+To seed `review_status` for an existing corpus (the migration itself does not
+backfill — fast and reversible):
+
+```console
+library backfill-validation              # all non-deleted documents
+library backfill-validation --limit 100  # first 100 only (throttle)
+```
+
+Idempotent: re-running recomputes from current field values using the current
+rule set. Useful after deploying new validation rules.
+
+### Eval harness — `library eval-extractions`
+
+Combines two ground-truth sources to produce per-field accuracy numbers:
+
+- **Flywheel accuracy** — over every document with `extra["corrections"]`:
+  fields the extraction got right vs. total fields set.
+- **Judge agreement** — LLM-as-judge (`judge.py`) grades each sampled
+  document's extracted fields against its OCR text, returning
+  `correct`/`wrong`/`unsupported` per field. Runs on the configured judge model
+  (default `claude-sonnet-4-6`). **Batch-only** — never called from the live
+  pipeline.
+
+Results are printed as a per-field table and persisted to the `eval_runs` table
+(migration 0006) with `prompt_version`, `model`, `version_mix` (full
+prompt/model distribution so a mixed-version sample is visible, not misleading),
+`sample_size`, `per_field` (JSONB), and `overall`.
+
+```console
+library eval-extractions --sample 50   # judge 50 documents (deterministic head-slice)
+library eval-extractions --all          # judge all documents with OCR text
+```
+
+Sampling is currently a deterministic head-slice (`eligible[:N]`). Random
+seeded sampling is a documented follow-up.
+
 ### Failure, skip, and cost handling
 
 | Condition | Event | Document |
@@ -660,6 +770,9 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_EXTRACTION_MODEL` | `claude-haiku-4-5` | Primary extraction model |
 | `LIBRARY_EXTRACTION_ESCALATION_MODEL` | `claude-sonnet-4-6` | Retry model on low confidence / parse failure |
 | `LIBRARY_EXTRACTION_DAILY_BUDGET_USD` | `5.0` | Estimated daily API spend cap; over budget → skip with `reason: "budget"` |
+| `LIBRARY_EXTRACTION_VALIDATION_OCR_FLOOR` | `50.0` | OCR-confidence threshold for the `ocr_confidence_gate` validation rule |
+| `LIBRARY_EXTRACTION_JUDGE_MODEL` | `claude-sonnet-4-6` | Model used by `library eval-extractions` to judge extraction quality |
+| `LIBRARY_EXTRACTION_JUDGE_INLINE` | `false` | Reserved; per-extraction judging hook (batch-only this phase) |
 | `LIBRARY_CONSUME_DIR` | unset | Consume folder to watch; unset disables the watcher |
 | `LIBRARY_CONSUME_FORCE_POLLING` | `false` | Poll instead of inotify — required for NFS/SMB-mounted consume dirs |
 | `LIBRARY_CONSUME_POLL_INTERVAL_S` | `2.0` | Poll cadence when force-polling |
