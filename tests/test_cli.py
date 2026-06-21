@@ -1,6 +1,7 @@
 """Tests for the `library` account-management CLI (typer)."""
 
 import asyncio
+import datetime
 import uuid
 from collections.abc import Iterator
 
@@ -14,7 +15,7 @@ from library.auth.passwords import verify_password
 from library.cli import app
 from library.config import get_settings
 from library.jobs import job_app
-from library.models import Document, DocumentChunk, DocumentSource, DocumentStatus
+from library.models import Document, DocumentChunk, DocumentSource, DocumentStatus, ReviewStatus
 from tests.conftest import create_user, fetch_all
 from tests.test_auth import execute_sql
 
@@ -205,3 +206,61 @@ def test_backfill_embeddings_include_existing(cli_database_url: str) -> None:
         if job["task_name"] == "library.jobs.embed_document"
     }
     assert already in enqueued
+
+
+def _seed_validation_document(database_url: str, *, document_date: datetime.date | None) -> int:
+    """Insert a document with the given document_date and return its id."""
+
+    async def _insert() -> int:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                document = Document(
+                    sha256=uuid.uuid4().hex * 2,
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    ocr_text="some text",
+                    status=DocumentStatus.INDEXED,
+                    document_date=document_date,
+                )
+                session.add(document)
+                await session.commit()
+                return document.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_insert())
+
+
+def _fetch_review_status(database_url: str, document_id: int) -> tuple[str, object]:
+    """Return (review_status, extra) for the given document id."""
+    [(review_status, extra)] = fetch_all(
+        database_url,
+        "SELECT review_status, extra FROM documents WHERE id = :id",
+        id=document_id,
+    )
+    return review_status, extra
+
+
+def test_backfill_validation_sets_review_status(cli_database_url: str) -> None:
+    future_date = datetime.date.today() + datetime.timedelta(days=30)
+    future_doc = _seed_validation_document(cli_database_url, document_date=future_date)
+    # A past date avoids the date_plausibility finding; no other fields trigger rules.
+    past_date = datetime.date(2024, 1, 15)
+    clean_doc = _seed_validation_document(cli_database_url, document_date=past_date)
+
+    result = runner.invoke(app, ["backfill-validation"])
+
+    assert result.exit_code == 0, result.output
+    assert "revalidated" in result.output
+
+    future_status, future_extra = _fetch_review_status(cli_database_url, future_doc)
+    assert future_status == ReviewStatus.NEEDS_REVIEW
+    assert isinstance(future_extra, dict)
+    assert "validation" in future_extra
+    assert len(future_extra["validation"]["findings"]) > 0
+
+    clean_status, clean_extra = _fetch_review_status(cli_database_url, clean_doc)
+    assert clean_status == ReviewStatus.UNREVIEWED
+    assert isinstance(clean_extra, dict)
+    assert "validation" in clean_extra

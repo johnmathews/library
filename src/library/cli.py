@@ -9,6 +9,7 @@ loop-bound connection.
 import asyncio
 import sys
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 import typer
 from sqlalchemy import exists, select
@@ -18,10 +19,11 @@ from sqlalchemy.pool import NullPool
 from library.auth.passwords import hash_password
 from library.auth.service import revoke_all_credentials
 from library.config import get_settings
+from library.extraction.validation import derive_review_status, findings_to_payload, validate
 from library.importer.client import PaperlessClient
 from library.importer.runner import ImportReport, format_report, run_import
 from library.jobs import embed_document, job_app
-from library.models import Document, DocumentChunk, User
+from library.models import Document, DocumentChunk, Kind, User
 
 app: typer.Typer = typer.Typer(
     no_args_is_help=True, help="Library administration (accounts, imports)."
@@ -231,6 +233,47 @@ def backfill_embeddings(
 
     count = _run(operation)
     typer.echo(f"queued embedding for {count} document(s)")
+
+
+@app.command("backfill-validation")
+def backfill_validation(
+    limit: int | None = typer.Option(
+        None, "--limit", min=1, help="Only process the first N documents."
+    ),
+) -> None:
+    """Recompute review_status + validation findings for existing documents.
+
+    Idempotent: re-running recomputes from current field values. Use after
+    deploying new validation rules or to seed the queue on an existing corpus.
+    """
+    floor = get_settings().extraction_validation_ocr_floor
+
+    async def operation(session: AsyncSession) -> int:
+        statement = select(Document).where(Document.deleted_at.is_(None)).order_by(Document.id)
+        if limit is not None:
+            statement = statement.limit(limit)
+        documents = list((await session.execute(statement)).scalars().all())
+        today = datetime.now(UTC).date()
+        for document in documents:
+            kind_slug = None
+            if document.kind_id is not None:
+                kind = await session.get(Kind, document.kind_id)
+                kind_slug = kind.slug if kind is not None else None
+            findings = validate(document, kind_slug=kind_slug, ocr_floor=floor, today=today)
+            document.review_status = derive_review_status(findings)
+            document.extra = {
+                **document.extra,
+                "validation": {
+                    "prompt_version": "backfill",
+                    "findings": findings_to_payload(findings),
+                    "validated_at": datetime.now(UTC).isoformat(),
+                },
+            }
+        await session.commit()
+        return len(documents)
+
+    count = _run(operation)
+    typer.echo(f"revalidated {count} document(s)")
 
 
 def main() -> None:
