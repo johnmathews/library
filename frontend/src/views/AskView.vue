@@ -127,7 +127,7 @@ function resetConversation(): void {
 watch(
   () => route.params.threadId,
   (id) => {
-    if (id) {
+    if (id && Number(id) !== threadId.value) {
       loadThread(Number(id))
     }
   },

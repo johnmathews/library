@@ -89,6 +89,7 @@ describe('AskView', () => {
   })
 
   it('appends a second turn and posts with thread_id on follow-up', async () => {
+    getThreadMock.mockResolvedValue({ id: 42, title: '', turns: [] })
     askQuestionMock.mockResolvedValueOnce({
       answer: 'First answer [#1].',
       citations: [{ document_id: 1, title: 'Doc', page_number: null }],
