@@ -25,3 +25,21 @@ def test_env_prefix_override(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_get_settings_is_cached() -> None:
     get_settings.cache_clear()
     assert get_settings() is get_settings()
+
+
+def test_markdown_settings_defaults() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.markdown_enabled is True
+    assert settings.markdown_model == "claude-haiku-4-5"
+    assert settings.markdown_daily_budget_usd == 5.0
+    assert settings.markdown_max_pages == 20
+    assert settings.markdown_page_batch == 10
+    assert settings.markdown_image_long_side_px == 1600
+
+
+def test_markdown_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LIBRARY_MARKDOWN_ENABLED", "false")
+    monkeypatch.setenv("LIBRARY_MARKDOWN_MAX_PAGES", "5")
+    settings = Settings(_env_file=None)
+    assert settings.markdown_enabled is False
+    assert settings.markdown_max_pages == 5
