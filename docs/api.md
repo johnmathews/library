@@ -33,6 +33,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | PATCH  | `/api/documents/{id}` | Edit metadata |
 | DELETE | `/api/documents/{id}` | Soft-delete |
 | POST   | `/api/documents/{id}/extract` | Queue metadata re-extraction |
+| POST   | `/api/documents/{id}/verify` | Mark document metadata as verified |
 | GET    | `/api/documents/{id}/original` | Download the original file |
 | GET    | `/api/documents/{id}/searchable.pdf` | Download the OCR searchable PDF |
 | GET    | `/api/documents/{id}/thumbnail` | First-page WebP thumbnail |
@@ -71,6 +72,7 @@ ingestion semantics are documented in [ingestion.md](ingestion.md).
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown` |
 | `status` | enum | `received` / `ocr` / `extract` / `embed` / `indexed` / `failed` |
 | `date_from`, `date_to` | date | Inclusive bounds on `document_date` |
+| `review_status` | enum | `verified` / `needs_review` / `unreviewed` — filter by extraction-quality review state |
 | `source` | enum | `upload` / `consume` / `email` / `api` / `mcp` / `import` |
 | `limit` | int | Page size, default 25, max 100 |
 | `offset` | int | Rows to skip, default 0 |
@@ -88,7 +90,8 @@ All filters compose (AND), including with `q`.
       "sender": {"id": 3, "name": "Eneco"},
       "tags": [{"slug": "energie", "name": "Energie"}],
       "document_date": "2026-05-15", "language": "nld",
-      "status": "indexed", "mime_type": "application/pdf",
+      "status": "indexed", "review_status": "unreviewed",
+      "mime_type": "application/pdf",
       "page_count": 2, "created_at": "2026-06-10T12:00:00Z",
       "has_searchable_pdf": true, "has_thumbnail": true,
       "amount_total": "123.45", "currency": "EUR",
@@ -102,10 +105,11 @@ All filters compose (AND), including with `q`.
 
 `total` is the filtered count before pagination. `snippet` and `rank` are
 only present (non-null) when `q` is given. Tags are sorted by slug.
-`amount_total` (JSON string, preserves decimal precision) and `currency`
-(3-letter code) are `null` when not set on the document — they were
-previously detail-only fields and are now included in list items so
-dashboard tiles can display financial totals.
+`review_status` reflects extraction-quality validation: `unreviewed` (no
+issues found), `needs_review` (one or more validation findings), or
+`verified` (user confirmed the metadata is correct). `amount_total` (JSON
+string, preserves decimal precision) and `currency` (3-letter code) are
+`null` when not set on the document.
 
 ### 1.3.3 Search semantics
 
@@ -142,6 +146,11 @@ Everything in the list item, plus:
   `fields_set`, …), or `null` if extraction has not run. This is a
   deliberate subset: the raw `extra` JSONB column is not exposed
   wholesale.
+- `validation` — the latest deterministic-validation run:
+  `{prompt_version, findings: [{rule, field, severity, message}, …],
+  validated_at}`. `findings` is an empty list when no rules fired. `null`
+  if validation has not run yet. See [ingestion.md](ingestion.md)
+  "Extraction quality" for the rule table.
 - `user_edited_fields` — fields locked by user edits (see 1.5)
 - `events` — the full ingestion audit trail, oldest first:
   `[{event, detail, created_at}, …]`
@@ -215,7 +224,17 @@ Extraction can also be *skipped* (disabled, missing API key, daily
 budget reached) — that is recorded as an `extraction_skipped` event,
 not an error.
 
-## 1.8.2 Taxonomy — `GET /api/kinds`, `/api/senders`, `/api/tags`
+## 1.8.2 Mark verified — `POST /api/documents/{id}/verify`
+
+Sets `review_status = verified` and records a `review_verified` ingestion
+event. Returns the updated document detail (`200`). `404` for unknown or
+deleted documents. Auth + CSRF apply.
+
+Use this after reviewing a document's metadata in the detail view and
+confirming it is correct. The `review_status` can return to `needs_review`
+if extraction is re-run and new findings are produced.
+
+## 1.8.3 Taxonomy — `GET /api/kinds`, `/api/senders`, `/api/tags`
 
 Plain JSON arrays for filter options and edit forms; the same data the
 MCP `list_*` tools return (one shared service, `library.taxonomy`).

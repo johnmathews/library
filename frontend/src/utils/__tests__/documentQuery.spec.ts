@@ -15,6 +15,7 @@ const EMPTY: AppliedFilters = {
   status: '',
   dateFrom: '',
   dateTo: '',
+  review: '',
   page: 1,
 }
 
@@ -43,8 +44,13 @@ describe('parseDocumentQuery', () => {
       status: 'indexed',
       dateFrom: '2026-05-01',
       dateTo: '2026-05-31',
+      review: '',
       page: 2,
     })
+  })
+
+  it('parses review URL param into the review field', () => {
+    expect(parseDocumentQuery({ review: 'needs_review' }).review).toBe('needs_review')
   })
 
   it('parses a single tag into a one-element array (back-compat)', () => {
@@ -80,6 +86,7 @@ describe('buildDocumentQuery', () => {
       status: 'indexed',
       dateFrom: '2026-05-01',
       dateTo: '2026-05-31',
+      review: '',
       page: 1,
     }
     expect(buildDocumentQuery(applied)).toEqual({
@@ -92,6 +99,12 @@ describe('buildDocumentQuery', () => {
       date_from: '2026-05-01',
       date_to: '2026-05-31',
     })
+  })
+
+  it('round-trips review ⇄ review_status (URL key is "review")', () => {
+    const applied = parseDocumentQuery({ review: 'verified' })
+    expect(applied.review).toBe('verified')
+    expect(buildDocumentQuery(applied)).toEqual({ review: 'verified' })
   })
 
   it('includes page when greater than 1', () => {
@@ -114,5 +127,6 @@ describe('hasActiveFilters', () => {
     expect(hasActiveFilters({ ...EMPTY, tags: ['energie'] })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, status: 'failed' })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, page: 5 })).toBe(false)
+    expect(hasActiveFilters({ ...EMPTY, review: 'verified' })).toBe(true)
   })
 })

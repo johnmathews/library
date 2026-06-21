@@ -36,6 +36,7 @@ function makeItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
     currency: null,
     snippet: null,
     rank: null,
+    review_status: 'unreviewed',
     ...overrides,
   }
 }
@@ -416,5 +417,34 @@ describe('DocumentListView', () => {
     expect(w.find('[data-testid="doc-tags"]').text()).toContain('+2')
     // Only 4 chips rendered (AppBadge renders a rounded-full span per chip).
     expect(w.findAll('[data-testid="doc-tags"] .rounded-full')).toHaveLength(4)
+  })
+
+  it('requests needs_review documents when the review query is set', async () => {
+    await router.push('/?review=needs_review')
+    await mountView()
+    await flushPromises()
+
+    const listCall = fetchMock.mock.calls
+      .map((c) => String(c[0]))
+      .find((url) => url.startsWith('/api/documents'))
+    expect(listCall).toBeDefined()
+    const params = new URLSearchParams(listCall!.split('?')[1])
+    expect(params.get('review_status')).toBe('needs_review')
+  })
+
+  it('renders a "needs review" badge on a card when review_status is needs_review', async () => {
+    listResponse = () =>
+      jsonResponse(listBody([makeItem({ review_status: 'needs_review' })]))
+    const w = await mountView()
+    const card = w.find('[data-testid="doc-card"]')
+    expect(card.find('[data-testid="review-badge"]').exists()).toBe(true)
+    expect(card.find('[data-testid="review-badge"]').text()).toContain('Needs review')
+  })
+
+  it('does not render a review badge when review_status is not needs_review', async () => {
+    listResponse = () =>
+      jsonResponse(listBody([makeItem({ review_status: 'unreviewed' })]))
+    const w = await mountView()
+    expect(w.find('[data-testid="review-badge"]').exists()).toBe(false)
   })
 })

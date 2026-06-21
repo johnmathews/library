@@ -13,6 +13,7 @@ const EMPTY: AppliedFilters = {
   status: '',
   dateFrom: '',
   dateTo: '',
+  review: '',
   page: 1,
 }
 

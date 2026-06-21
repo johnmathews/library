@@ -93,6 +93,14 @@ class DocumentLanguage(enum.StrEnum):
     UNKNOWN = "unknown"
 
 
+class ReviewStatus(enum.StrEnum):
+    """Trust state of a document's extracted metadata."""
+
+    VERIFIED = "verified"
+    NEEDS_REVIEW = "needs_review"
+    UNREVIEWED = "unreviewed"
+
+
 class Base(DeclarativeBase):
     """Declarative base with deterministic constraint names for Alembic."""
 
@@ -235,6 +243,18 @@ class Document(Base):
     due_date: Mapped[date | None] = mapped_column(Date)
     expiry_date: Mapped[date | None] = mapped_column(Date)
     extra: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    review_status: Mapped[ReviewStatus] = mapped_column(
+        Enum(
+            ReviewStatus,
+            name="review_status",
+            native_enum=False,
+            length=16,
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        default=ReviewStatus.UNREVIEWED,
+        server_default=ReviewStatus.UNREVIEWED.value,
+        index=True,
+    )
 
     ocr_text: Mapped[str | None] = mapped_column(Text)
     ocr_confidence: Mapped[float | None] = mapped_column(Float)
@@ -363,3 +383,23 @@ class AskLog(Base):
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     used_tools: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class EvalRun(Base):
+    """One extraction-quality evaluation run, comparable across versions.
+
+    ``prompt_version``/``model`` hold the modal (most common) pair across the
+    evaluated documents for easy filtering; ``version_mix`` records the full
+    distribution so a sample spanning versions is never silently misattributed.
+    """
+
+    __tablename__ = "eval_runs"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    prompt_version: Mapped[str] = mapped_column(String(64))
+    model: Mapped[str] = mapped_column(String(64))
+    version_mix: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    sample_size: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    per_field: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    overall: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))

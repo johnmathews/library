@@ -19,6 +19,7 @@ export interface AppliedFilters {
   status: string
   dateFrom: string
   dateTo: string
+  review: string
   page: number
 }
 
@@ -44,6 +45,7 @@ export function parseDocumentQuery(query: LocationQuery): AppliedFilters {
     status: asString(query.status),
     dateFrom: asString(query.date_from),
     dateTo: asString(query.date_to),
+    review: asString(query.review),
     page: Math.max(1, Number.parseInt(asString(query.page), 10) || 1),
   }
 }
@@ -65,6 +67,7 @@ export function buildDocumentQuery(
   if (applied.status) query.status = applied.status
   if (applied.dateFrom) query.date_from = applied.dateFrom
   if (applied.dateTo) query.date_to = applied.dateTo
+  if (applied.review) query.review = applied.review
   if (page > 1) query.page = String(page)
   return query
 }
@@ -79,6 +82,7 @@ export function hasActiveFilters(applied: AppliedFilters): boolean {
       applied.language ||
       applied.status ||
       applied.dateFrom ||
-      applied.dateTo,
+      applied.dateTo ||
+      applied.review,
   )
 }

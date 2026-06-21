@@ -123,6 +123,7 @@ function onSubmit(): void {
     status: current.status, // preserved — modal doesn't manage it
     dateFrom: draft.dateFrom ?? '',
     dateTo: draft.dateTo ?? '',
+    review: current.review, // preserved — modal doesn't manage it
     page: 1, // a new search resets paging
   }
 

@@ -40,6 +40,8 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     original_filename: 'rekening.pdf',
     sha256: 'abc123',
     extraction: null,
+    validation: null,
+    review_status: 'unreviewed',
     user_edited_fields: [],
     events: [],
     ...overrides,
@@ -379,5 +381,78 @@ describe('DocumentDetailView', () => {
     )
     const w = await mountView('/documents/999')
     expect(w.text()).toContain('Document not found')
+  })
+
+  it('shows a warning badge for a flagged field', async () => {
+    detail = makeDetail({
+      validation: {
+        findings: [
+          {
+            rule: 'amount_grounding',
+            field: 'amount_total',
+            severity: 'warn',
+            message: 'Amount could not be verified against source text',
+          },
+        ],
+      },
+    })
+    const w = await mountView()
+    // The amount row should contain a warning badge with the finding message as title
+    const amountRow = w.find('[data-testid="row-amount"]')
+    expect(amountRow.exists()).toBe(true)
+    const badge = amountRow.find('[data-testid="validation-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('title')).toContain('Amount could not be verified')
+  })
+
+  it('renders document-level findings (field: null) in the validation-findings banner', async () => {
+    detail = makeDetail({
+      review_status: 'needs_review',
+      validation: {
+        findings: [
+          {
+            rule: 'empty_extraction',
+            field: null,
+            severity: 'warn',
+            message: 'extraction produced no useful metadata',
+          },
+        ],
+      },
+    })
+    const w = await mountView()
+    // Document-level findings must appear in the distinct validation-findings section.
+    const banner = w.find('[data-testid="validation-findings"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('extraction produced no useful metadata')
+    // Field-level badge section must NOT be triggered for this finding.
+    expect(w.findAll('[data-testid="validation-badge"]')).toHaveLength(0)
+    // The action-notice banner (detail-banner) must not be affected.
+    expect(w.find('[data-testid="detail-banner"]').exists()).toBe(false)
+  })
+
+  it('marks the document verified', async () => {
+    const verifiedDetail = makeDetail({ review_status: 'verified' })
+    // Stub verifyDocument via fetch: POST /api/documents/12/verify
+    fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
+      if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
+      if (url === '/api/documents/12' && method === 'GET')
+        return Promise.resolve(jsonResponse(detail))
+      if (url === '/api/documents/12/verify' && method === 'POST')
+        return Promise.resolve(jsonResponse(verifiedDetail))
+      return Promise.resolve(jsonResponse({ detail: `unexpected ${method} ${url}` }, 500))
+    })
+    const w = await mountView()
+    // "Mark verified" button should be visible when review_status !== 'verified'
+    const btn = w.find('[data-testid="mark-verified"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await flushPromises()
+    // Button should disappear once status is verified
+    expect(w.find('[data-testid="mark-verified"]').exists()).toBe(false)
+    // Status text should reflect verified
+    expect(w.text()).toContain('verified')
   })
 })

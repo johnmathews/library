@@ -29,6 +29,7 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     Kind,
+    ReviewStatus,
     Sender,
     Tag,
 )
@@ -670,6 +671,49 @@ def test_thumbnail_endpoint_serves_webp_and_marks_presence(
     assert by_id[without_thumb]["has_thumbnail"] is False
 
 
+# --- Corrections flywheel ----------------------------------------------------
+
+
+def test_patch_records_correction(api_client: TestClient, api_database_url: str) -> None:
+    """PATCH appends a mining-ready correction record to extra['corrections']."""
+    extraction = {
+        "prompt_version": "v3",
+        "model": "claude-haiku-4-5",
+        "fields_set": ["amount_total"],
+    }
+    document_id = seed_document(
+        api_database_url,
+        "w7-correction",
+        amount_total=Decimal("99.99"),
+        extra={"extraction": extraction},
+    )
+
+    response = api_client.patch(
+        f"/api/documents/{document_id}",
+        json={"amount_total": "150.00"},
+    )
+    assert response.status_code == 200, response.text
+
+    # The API detail response does not expose raw extra; read via DB.
+    rows = fetch_all(
+        api_database_url,
+        "SELECT extra FROM documents WHERE id = :id",
+        id=document_id,
+    )
+    extra = rows[0][0]
+    corrections = extra.get("corrections", [])
+
+    assert len(corrections) == 1, corrections
+    rec = corrections[0]
+    assert rec["field"] == "amount_total"
+    assert rec["original_value"] == "99.99"
+    assert rec["corrected_value"] == "150.00"
+    assert rec["prompt_version"] == "v3"
+    assert rec["model"] == "claude-haiku-4-5"
+    assert rec["corrected_at"]  # ISO timestamp, non-empty
+    assert isinstance(rec["source_excerpt"], str)  # present; may be empty if field not in ocr_text
+
+
 # --- List item amount_total/currency -----------------------------------------
 
 
@@ -738,3 +782,57 @@ def test_inline_disposition_restricted_to_render_safe_types(
     assert response.headers["content-disposition"].startswith("inline")
     assert response.headers["x-content-type-options"] == "nosniff"
     assert response.headers["content-security-policy"] == "sandbox"
+
+
+# --- Review status -----------------------------------------------------------
+
+
+def test_list_filters_by_review_status(api_client: TestClient, api_database_url: str) -> None:
+    """?review_status=needs_review returns only docs with that status."""
+    needs_review_id = seed_document(
+        api_database_url,
+        "w6-review-needs",
+        tag_slugs=["w6-review-filter"],
+        review_status=ReviewStatus.NEEDS_REVIEW,
+    )
+    seed_document(
+        api_database_url,
+        "w6-review-unreviewed",
+        tag_slugs=["w6-review-filter"],
+        review_status=ReviewStatus.UNREVIEWED,
+    )
+
+    body = list_docs(api_client, tag="w6-review-filter", review_status="needs_review")
+    assert body["total"] == 1
+    (item,) = body["items"]
+    assert item["id"] == needs_review_id
+    assert item["review_status"] == "needs_review"
+
+
+def test_verify_endpoint_marks_verified(api_client: TestClient, api_database_url: str) -> None:
+    """POST /api/documents/{id}/verify sets review_status to 'verified'."""
+    document_id = seed_document(
+        api_database_url,
+        "w6-verify",
+        review_status=ReviewStatus.NEEDS_REVIEW,
+    )
+
+    response = api_client.post(f"/api/documents/{document_id}/verify")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["review_status"] == "verified"
+
+
+def test_detail_exposes_validation(api_client: TestClient, api_database_url: str) -> None:
+    """GET /api/documents/{id} exposes extra['validation'] under `validation`."""
+    validation_blob = {"score": 0.92, "flags": ["amount_mismatch"], "checked_at": "2026-06-21"}
+    document_id = seed_document(
+        api_database_url,
+        "w6-detail-validation",
+        extra={"validation": validation_blob},
+    )
+
+    response = api_client.get(f"/api/documents/{document_id}")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["validation"] == validation_blob
