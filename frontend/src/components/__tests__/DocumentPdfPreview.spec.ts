@@ -15,7 +15,7 @@ import DocumentPdfPreview from '../DocumentPdfPreview.vue'
 function fakePdf(numPages: number) {
   return {
     numPages,
-    getPage: vi.fn(async (n: number) => ({
+    getPage: vi.fn(async () => ({
       getViewport: ({ scale }: { scale: number }) => ({ width: 100 * scale, height: 140 * scale }),
       render: () => ({ promise: Promise.resolve() }),
     })),
@@ -46,6 +46,7 @@ describe('DocumentPdfPreview state machine', () => {
     const wrapper = mount(DocumentPdfPreview, { props })
     await flushPromises()
     expect(wrapper.find('[data-testid="pdf-preview-pages"]').exists()).toBe(true)
+    expect(wrapper.vm.pageCount).toBe(2)
   })
 
   it('falls back to the error state when loading rejects', async () => {

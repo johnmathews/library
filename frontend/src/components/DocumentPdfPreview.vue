@@ -21,15 +21,23 @@ type Status = 'loading' | 'rendered' | 'error' | 'password'
 const status = ref<Status>('loading')
 const pageCount = ref(0)
 const pdf = shallowRef<PDFDocumentProxy | null>(null)
+let loadGeneration = 0
 
 async function load(): Promise<void> {
+  const generation = ++loadGeneration
   status.value = 'loading'
+  pdf.value = null
   try {
     const doc = await pdfjsLib.getDocument({ url: props.src }).promise
+    if (generation !== loadGeneration) {
+      void doc.destroy()
+      return
+    }
     pdf.value = doc
     pageCount.value = doc.numPages
     status.value = 'rendered'
   } catch (err: unknown) {
+    if (generation !== loadGeneration) return
     status.value =
       (err as { name?: string } | null)?.name === 'PasswordException' ? 'password' : 'error'
   }
