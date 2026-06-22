@@ -175,7 +175,78 @@ def test_jobs_endpoint_lists_jobs(api_client: TestClient) -> None:
     assert job["task_name"] == "library.jobs.process_document"
     assert job["status"] in {"todo", "doing", "succeeded", "failed"}
     assert job["attempts"] == 0
-    assert set(job) == {"id", "status", "task_name", "attempts", "scheduled_at", "document_id"}
+    assert set(job) == {
+        "id",
+        "status",
+        "task_name",
+        "attempts",
+        "scheduled_at",
+        "document_id",
+        "active",
+        "document_title",
+        "document_status",
+        "error",
+        "cost_usd",
+        "tokens",
+    }
+    # A freshly uploaded document is queued (todo) and still at "received".
+    assert job["active"] is True
+    assert job["document_status"] == "received"
 
     limited = api_client.get("/api/jobs", params={"limit": 1}).json()
     assert len(limited) == 1
+
+
+def test_jobs_endpoint_enriched_with_document_state(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    status_code, body = upload(api_client, b"%PDF-1.4 enriched " + b"z" * 32, filename="x.pdf")
+    assert status_code == 201
+    document_id = body["id"]
+
+    # Give the document title + extraction provenance + a terminal failure, the
+    # way the pipeline would, so the enriched columns have something to surface.
+    _enrich_document(api_database_url, document_id)
+
+    jobs = api_client.get("/api/jobs").json()
+    job = next(job for job in jobs if job["document_id"] == document_id)
+    assert job["document_title"] == "Energierekening"
+    assert job["document_status"] == "failed"
+    assert job["error"] == "ocr exploded"
+    assert job["cost_usd"] == pytest.approx(0.0123)
+    assert job["tokens"] == 1500
+
+
+def _enrich_document(database_url: str, document_id: int) -> None:
+    """Set a title + extraction provenance + a failed event on one document."""
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    async def run() -> None:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "UPDATE documents SET title = :title, status = 'failed', "
+                        "extra = jsonb_build_object('extraction', jsonb_build_object("
+                        "'cost_usd', 0.0123, 'input_tokens', 1000, 'output_tokens', 500)) "
+                        "WHERE id = :id"
+                    ),
+                    {"title": "Energierekening", "id": document_id},
+                )
+                await connection.execute(
+                    text(
+                        "INSERT INTO ingestion_events (document_id, event, detail) "
+                        "VALUES (:id, 'failed', jsonb_build_object("
+                        "'error', 'ocr exploded', 'status', 'ocr'))"
+                    ),
+                    {"id": document_id},
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())

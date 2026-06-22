@@ -9,10 +9,12 @@ stage chunks the text and computes embeddings.
 """
 
 import asyncio
+import json
 import logging
 
 from procrastinate import App, PsycopgConnector
 from sqlalchemy import delete, select
+from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from library import thumbnails
@@ -45,6 +47,47 @@ _TERMINAL_STATUSES: frozenset[DocumentStatus] = frozenset(
 def procrastinate_conninfo(database_url: str) -> str:
     """Translate a SQLAlchemy asyncpg URL into a libpq URL for psycopg."""
     return database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+
+
+# Postgres NOTIFY channel the SSE endpoint (``library.api.events``) listens on.
+# The worker emits on it as documents move through the pipeline; the payload is
+# a compact JSON object kept well under Postgres's 8 kB NOTIFY limit.
+EVENTS_CHANNEL = "library_doc_events"
+
+
+async def notify_document_event(
+    session_factory: async_sessionmaker[AsyncSession],
+    document_id: int,
+    event: str,
+    status: str,
+    *,
+    title: str | None = None,
+) -> None:
+    """Best-effort Postgres NOTIFY so the SSE endpoint can push live updates.
+
+    Runs on its own short-lived session, fully decoupled from the pipeline's
+    unit of work: a NOTIFY failure is isolated to this session (the ``async
+    with`` rolls it back on error) and can never strand a document or fail the
+    job — any error is logged and swallowed, mirroring the thumbnail-defer
+    guard. Crosses the worker→api process boundary via Postgres itself.
+    """
+    payload = json.dumps(
+        {"document_id": document_id, "event": event, "status": status, "title": title}
+    )
+    try:
+        async with session_factory() as session:
+            await session.execute(
+                sql_text("SELECT pg_notify(:channel, :payload)"),
+                {"channel": EVENTS_CHANNEL, "payload": payload},
+            )
+            await session.commit()
+    except Exception:
+        logger.warning(
+            "could not emit %s NOTIFY for document %s; continuing",
+            event,
+            document_id,
+            exc_info=True,
+        )
 
 
 job_app: App = App(
@@ -269,6 +312,13 @@ async def advance_pipeline(
                     )
                 )
                 await session.commit()
+                await notify_document_event(
+                    session_factory,
+                    document.id,
+                    "status_changed",
+                    document.status.value,
+                    title=document.title,
+                )
                 await _run_stage_hook(session, document, document.status)
         except Exception as exc:
             await session.rollback()
@@ -282,6 +332,9 @@ async def advance_pipeline(
                 )
             )
             await session.commit()
+            await notify_document_event(
+                session_factory, document.id, "failed", "failed", title=document.title
+            )
             logger.exception("document %s failed during %s", document_id, failed_in.value)
             raise
 

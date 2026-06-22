@@ -16,14 +16,33 @@ router: APIRouter = APIRouter(tags=["jobs"])
 
 _JOBS_QUERY = text(
     """
-    SELECT id,
-           status,
-           task_name,
-           attempts,
-           scheduled_at,
-           (args ->> 'document_id')::bigint AS document_id
-    FROM procrastinate_jobs
-    ORDER BY id DESC
+    SELECT j.id,
+           j.status,
+           j.task_name,
+           j.attempts,
+           j.scheduled_at,
+           (j.args ->> 'document_id')::bigint AS document_id,
+           j.status IN ('todo', 'doing') AS active,
+           d.title AS document_title,
+           d.status AS document_status,
+           err.detail ->> 'error' AS error,
+           (d.extra -> 'extraction' ->> 'cost_usd')::float8 AS cost_usd,
+           CASE
+               WHEN d.extra ? 'extraction' THEN
+                   COALESCE((d.extra -> 'extraction' ->> 'input_tokens')::int, 0)
+                   + COALESCE((d.extra -> 'extraction' ->> 'output_tokens')::int, 0)
+               ELSE NULL
+           END AS tokens
+    FROM procrastinate_jobs j
+    LEFT JOIN documents d ON d.id = (j.args ->> 'document_id')::bigint
+    LEFT JOIN LATERAL (
+        SELECT detail
+        FROM ingestion_events e
+        WHERE e.document_id = d.id AND e.event = 'failed'
+        ORDER BY e.id DESC
+        LIMIT 1
+    ) err ON true
+    ORDER BY j.id DESC
     LIMIT :limit
     """
 )
