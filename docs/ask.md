@@ -1,6 +1,6 @@
 # 1. Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-06-22.
+**Status:** active. **Last updated:** 2026-06-22 (series + comparative queries).
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -23,14 +23,21 @@ right tool per question:
    the energy provider. Answered by a **structured query** over the extracted
    metadata columns (`sender`, `kind`, `document_date`, `amount_total`), not by
    reading text.
+3. **Comparative questions** ("is this bill higher than usual?", "how does it
+   compare to last year?", "are my bills going up?") — answered by the series
+   engine against the statistical distribution of recurring documents from the
+   same sender and kind.
 
 ## 1.2 How it works
 
 ```
 question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybrid retrieval ─┐
                                     │                      (FTS + vector RRF) │
-                                    └─▶ query_documents ─▶ structured query ──┤
-                                                          (sender/kind/date)  │
+                                    ├─▶ query_documents ─▶ structured query ──┤
+                                    │                     (sender/kind/date)  │
+                                    └─▶ compare_to_series ─▶ series stats ───┤
+                                                            (distribution/    │
+                                                             trend/YoY)       │
             answer + citations ◀───── Claude (answers from tool results) ◀────┘
 ```
 
@@ -56,8 +63,13 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybri
    sender/kind), and document lists. Every row carries the contributing document
    ids for citation. Aggregation citations have no text location, so their
    `page_number` is always `None`.
-4. **Answer** (`ask.engine`). Claude (`ask_model`, default
-   `claude-sonnet-4-6`) is given the two tools and a bounded number of turns
+4. **Series comparison** (`compare_to_series`). Statistical summary of a
+   recurring-document series — see §1.7 for details. Returns distribution
+   (count/mean/median/stdev/min/max), a reference-vs-usual verdict, a trend
+   direction, and a year-over-year comparison. All members contribute their ids
+   to the citation set.
+5. **Answer** (`ask.engine`). Claude (`ask_model`, default
+   `claude-sonnet-4-6`) is given the three tools and a bounded number of turns
    (`ask_max_tool_turns`). It is instructed to answer **only** from tool results,
    to say plainly when the archive doesn't contain the answer, and to cite the
    document ids it used. The endpoint returns the answer, the citations
@@ -84,6 +96,9 @@ All settings use the `LIBRARY_` env prefix (see `.env.example` /
 | `LIBRARY_ASK_MAX_TOOL_TURNS` | `4` | Tool-use loop bound per turn. |
 | `LIBRARY_ASK_MAX_ANSWER_TOKENS` | `1024` | Max answer length. |
 | `LIBRARY_ASK_HISTORY_TURNS` | `3` | Prior turns re-fed into the loop for follow-ups; `0` disables history (each turn answered cold, still recorded). |
+| `LIBRARY_SERIES_MIN_DOCUMENTS` | `3` | Minimum members before series stats are reported; below this `status:"insufficient"` is returned. |
+| `LIBRARY_SERIES_TYPICAL_PCT` | `0.10` | Half-width of the "typical" verdict band as a fraction of the median (OR'd with ±1 stdev). |
+| `LIBRARY_SERIES_FLAT_PCT` | `0.05` | First→last change fraction at or below which the trend direction is reported as `flat`. |
 
 Ask requires `LIBRARY_ANTHROPIC_API_KEY` (the answer step calls Claude); without
 it `POST /api/ask` returns `503` and the UI shows a friendly message. Indexing
@@ -165,7 +180,65 @@ a follow-up input pinned below, and a conversation sidebar listing past threads
 (by title and relative time) with resume and delete actions. `/ask/:threadId`
 loads an existing thread. **"New conversation"** clears to an empty thread.
 
-## 1.7 Limitations (this release)
+## 1.7 Document series + comparative queries
+
+The `compare_to_series` tool answers questions about recurring documents — a
+monthly energy bill, an annual insurance renewal — by computing live statistics
+over the series they belong to.
+
+### Series detection
+
+A **series** is the set of documents that share the same `(sender_id, kind_id)`
+pair and carry an `amount_total`. The engine identifies the series automatically
+from the `kind` and `sender_contains` parameters the model supplies; no user
+tagging or configuration is needed. If a loose filter matches multiple
+(sender, kind) combinations, the most-populous group is used.
+
+Detection is **on the fly** — there is no materialized series table. The
+statistics are recomputed at query time from the live document set.
+
+### Four statistical framings
+
+Every series summary provides four views:
+
+| Framing | What it answers |
+|---------|----------------|
+| **Distribution** | Mean, median, stdev, min, max over the series' amounts. |
+| **Reference-vs-usual** | Where the reference document falls: `higher`, `typical`, or `lower`. |
+| **Trend** | Whether amounts are `rising`, `falling`, or `flat` over time (least-squares slope; `flat` when first→last change ≤ `SERIES_FLAT_PCT`). |
+| **Year-over-year** | The member closest to 12 months before the reference date (within a cadence-dependent tolerance) and the percentage change. |
+
+The cadence (`monthly`, `quarterly`, `yearly`, `irregular`) is derived from the
+median gap between consecutive document dates, and influences the YoY match
+tolerance.
+
+### Typical-band rule
+
+The `typical` verdict is given when the reference value is within **±1 stdev
+OR within ±`SERIES_TYPICAL_PCT` (default 10%) of the median**. The OR ensures
+that a very tight, consistent series (small stdev) doesn't flag normal variation
+as `higher`/`lower`; the percent band handles the degenerate case where stdev is
+zero or very small.
+
+### Currency bucketing
+
+Amounts in different currencies are kept separate and cannot be combined. The
+bucket reported is the one matching the reference document's currency; if
+unspecified, the dominant (most-document) currency is used. Other currencies
+present in the series are listed in `other_currencies`.
+
+### Detail-view trend widget
+
+The document detail view includes a **`DocumentSeriesTrend`** panel (lazy-loaded)
+that renders a Chart.js line chart of the series' dated points, with the current
+document's point highlighted. A one-line verdict (e.g. *"≈6% above usual · trend
+rising"*) and the cadence label are shown below the chart. The panel hides
+itself silently when `status:"insufficient"` or on fetch error — the page always
+renders even without series data.
+
+The raw data is supplied by `GET /api/documents/{id}/series`; see [api.md §1.13](api.md) for the wire contract.
+
+## 1.8 Limitations (this release)
 
 1. **Page citations are conditional on the markdown layer.** Documents that
    have a `document_pages` row (generated by the `markdown` pipeline stage or
