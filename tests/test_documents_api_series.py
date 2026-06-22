@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import uuid
 from decimal import Decimal
 
 import pytest
@@ -106,7 +107,7 @@ def seed_bare_document(database_url: str, marker: str) -> int:
 def test_series_endpoint_ok(api_client: TestClient, api_database_url: str) -> None:
     ids = seed_series(
         api_database_url,
-        "Vattenfall",
+        "SeriesOK Energy",
         "utility-bill",
         [("2025-01-03", "100.00"), ("2025-02-02", "100.00"), ("2025-03-04", "130.00")],
     )
@@ -115,18 +116,20 @@ def test_series_endpoint_ok(api_client: TestClient, api_database_url: str) -> No
     body = response.json()
     assert body["status"] == "ok"
     assert body["reference"]["verdict"] == "higher"
-    assert len(body["points"]) >= 3
+    assert len(body["points"]) == 3
 
 
 def test_series_endpoint_insufficient(api_client: TestClient, api_database_url: str) -> None:
-    ids = seed_series(api_database_url, "Eneco", "utility-bill", [("2025-01-01", "50.00")])
+    ids = seed_series(
+        api_database_url, "SeriesInsufficient Energy", "utility-bill", [("2025-01-01", "50.00")]
+    )
     response = api_client.get(f"/api/documents/{ids[0]}/series")
     assert response.status_code == 200
     assert response.json()["status"] == "insufficient"
 
 
 def test_series_endpoint_no_sender_or_kind(api_client: TestClient, api_database_url: str) -> None:
-    doc_id = seed_bare_document(api_database_url, "bare")  # no sender/kind
+    doc_id = seed_bare_document(api_database_url, f"bare-{uuid.uuid4()}")  # no sender/kind
     response = api_client.get(f"/api/documents/{doc_id}/series")
     assert response.status_code == 200
     assert response.json()["status"] == "insufficient"
