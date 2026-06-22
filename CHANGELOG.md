@@ -8,6 +8,30 @@ All notable changes to Library are documented here. The format follows
 
 ### Added
 
+**Document series + comparative queries** — Ask and the document detail view can
+now compare a recurring bill to its usual values. A *series* is detected
+automatically as the documents sharing one sender + kind (e.g. the monthly energy
+bill from one provider). See [docs/ask.md](docs/ask.md) §1.7 and
+[docs/api.md](docs/api.md) §1.13.
+
+- New read-only module `library.series` computes series statistics on the fly
+  (no new table or migration): distribution (count/mean/median/stdev/min/max per
+  currency), a reference-vs-usual verdict (`higher`/`typical`/`lower`; "typical"
+  = within ±1 stdev OR within `LIBRARY_SERIES_TYPICAL_PCT` of the median), a
+  trend (`rising`/`falling`/`flat`), and a year-over-year comparison.
+- New Ask tool `compare_to_series` joins `semantic_search` and `query_documents`
+  in the tool-use loop, answering "more/less than usual", "vs last year", and
+  "are my bills going up" questions with citations.
+- New endpoint `GET /api/documents/{id}/series` returns the series summary plus
+  per-point data; `status:"insufficient"` when the document has no sender/kind or
+  too few siblings.
+- New `DocumentSeriesTrend` widget on the detail view renders a Chart.js line
+  chart of the series, highlighting the viewed document's point; it self-hides
+  when there is no qualifying series.
+- New settings `LIBRARY_SERIES_MIN_DOCUMENTS` (default `3`),
+  `LIBRARY_SERIES_TYPICAL_PCT` (default `0.10`), and `LIBRARY_SERIES_FLAT_PCT`
+  (default `0.05`).
+
 **Conversational Ask** — Ask is now multi-turn. Follow-up questions like
 *"what about last year?"* resolve against prior turns of the same conversation
 instead of being answered cold. See [docs/ask.md](docs/ask.md) §1.6 and
