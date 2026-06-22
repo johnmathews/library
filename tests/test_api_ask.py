@@ -579,6 +579,87 @@ def test_thread_lifecycle_list_get_delete(
     assert api_client.get(f"/api/ask/threads/{thread_id}").status_code == 404
 
 
+def _seed_utility_series(database_url: str) -> list[int]:
+    """Insert three utility-bill docs for sender Vattenfall, ascending dates and
+    amounts 100/100/130.  Returns ids oldest→newest."""
+    engine = create_engine(database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            sender_id = connection.execute(
+                text(
+                    "INSERT INTO senders (name) VALUES ('Vattenfall')"
+                    " ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id"
+                )
+            ).scalar_one()
+            kind_id = connection.execute(
+                text("SELECT id FROM kinds WHERE slug = 'utility-bill'")
+            ).scalar_one()
+            ids: list[int] = []
+            bills = [
+                (date(2025, 1, 1), 100),
+                (date(2025, 2, 1), 100),
+                (date(2025, 3, 1), 130),
+            ]
+            for d, amount in bills:
+                sha = hashlib.sha256(f"vattenfall-{d}".encode()).hexdigest()
+                doc_id = connection.execute(
+                    text(
+                        "INSERT INTO documents"
+                        " (sha256, mime_type, status, source, sender_id, kind_id,"
+                        "  document_date, amount_total, currency)"
+                        " VALUES (:sha, 'application/pdf', 'indexed', 'upload',"
+                        "         :sid, :kid, :d, :amt, 'EUR')"
+                        " RETURNING id"
+                    ),
+                    {"sha": sha, "sid": sender_id, "kid": kind_id, "d": d, "amt": amount},
+                ).scalar_one()
+                ids.append(doc_id)
+        return ids
+    finally:
+        engine.dispose()
+
+
+def test_ask_uses_compare_to_series(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    doc_ids = _seed_utility_series(api_database_url)
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="compare_to_series",
+                        input={
+                            "kind": "utility-bill",
+                            "sender_contains": "vattenfall",
+                            "reference": "latest",
+                        },
+                        id="c1",
+                    )
+                ],
+                usage=_Usage(120, 25),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"Yes, higher than usual [#{doc_ids[-1]}].")],
+                usage=_Usage(140, 18),
+            ),
+        ],
+    )
+    response = api_client.post(
+        "/api/ask", json={"question": "is my latest bill higher than usual?"}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["used_tools"] == ["compare_to_series"]
+    assert any(c["document_id"] == doc_ids[-1] for c in body["citations"])
+
+
 def test_thread_get_foreign_user_is_404(
     api_client: TestClient,
     api_database_url: str,
