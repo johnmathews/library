@@ -32,6 +32,10 @@ const props = {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  // jsdom has no real canvas; without a stub getContext('2d') logs a
+  // "Not implemented" warning whenever a page actually renders (e.g. the
+  // IntersectionObserver-less eager fallback). Stub it file-wide for pristine output.
+  HTMLCanvasElement.prototype.getContext = vi.fn(() => ({})) as never
 })
 
 describe('DocumentPdfPreview state machine', () => {
@@ -79,8 +83,6 @@ describe('DocumentPdfPreview page rendering', () => {
         disconnect() {}
       },
     )
-    // jsdom canvases return null for getContext — hand back a stub so render() runs.
-    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({})) as never
   })
 
   it('creates one page slot per page', async () => {
@@ -116,7 +118,6 @@ describe('DocumentPdfPreview page rendering', () => {
 
   it('renders all pages eagerly when IntersectionObserver is unavailable', async () => {
     vi.stubGlobal('IntersectionObserver', undefined)
-    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({})) as never
     const pdf = fakePdf(3)
     getDocument.mockReturnValue({ promise: Promise.resolve(pdf) })
     mount(DocumentPdfPreview, { props, attachTo: document.body })
