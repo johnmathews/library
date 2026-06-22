@@ -179,3 +179,20 @@ async def test_document_defaults_to_unreviewed(session: AsyncSession) -> None:
     await session.commit()
     await session.refresh(doc)
     assert doc.review_status is ReviewStatus.UNREVIEWED
+
+
+async def test_ask_thread_cascades_to_turns(session: AsyncSession) -> None:
+    from library.models import AskThread, AskTurn
+
+    thread = AskThread(title="Energy bills")
+    thread.turns.append(
+        AskTurn(query="who?", answer="Vattenfall", model="claude-sonnet-4-6", messages=[])
+    )
+    session.add(thread)
+    await session.commit()
+
+    await session.delete(thread)
+    await session.commit()
+
+    remaining = (await session.execute(select(AskTurn))).scalars().all()
+    assert remaining == []

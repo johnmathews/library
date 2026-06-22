@@ -12,7 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from typing import Any
 
@@ -131,7 +131,7 @@ class AskCitation:
 
 @dataclass(slots=True)
 class AskResult:
-    """The answer plus citations, tools used, and cost."""
+    """The answer plus citations, tools used, cost, and replay blocks."""
 
     answer: str
     citations: list[AskCitation]
@@ -140,6 +140,7 @@ class AskResult:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
+    turn_messages: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _parse_date(value: object) -> date | None:
@@ -245,21 +246,63 @@ def _text_of(content: list[Any]) -> str:
     return "\n".join(block.text for block in content if getattr(block, "type", None) == "text")
 
 
+def _serialize_block(block: Any) -> dict[str, Any]:
+    """Convert an Anthropic content block (SDK model or test fake) to a plain,
+    JSON-serialisable dict suitable for re-sending and for JSONB storage."""
+    if hasattr(block, "model_dump"):
+        return block.model_dump(mode="json", exclude_none=True)
+    block_type = getattr(block, "type", None)
+    if block_type == "text":
+        return {"type": "text", "text": block.text}
+    if block_type == "tool_use":
+        return {"type": "tool_use", "id": block.id, "name": block.name, "input": dict(block.input)}
+    return {"type": block_type}
+
+
+def _apply_cache_control(messages: list[dict[str, Any]], history_len: int) -> None:
+    """Mark the end of the rehydrated history prefix with an ephemeral cache
+    breakpoint so re-sent prior turns hit the Anthropic prompt cache. Best
+    effort: a no-op when there is no history or the boundary isn't block-form."""
+    if history_len == 0:
+        return
+    boundary = messages[history_len - 1]
+    content = boundary.get("content")
+    if isinstance(content, list) and content:
+        content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
+
+
 async def run_ask(
     session: AsyncSession,
     *,
     question: str,
     settings: Settings,
     client: AsyncAnthropic,
+    history_messages: list[dict[str, Any]] | None = None,
 ) -> AskResult:
-    """Answer ``question`` from the archive via a bounded Claude tool-use loop."""
+    """Answer ``question`` from the archive via a bounded Claude tool-use loop.
+
+    ``history_messages`` is a rehydrated prefix of prior turns (already in block
+    form); it is prepended so follow-ups can reason over earlier tool results.
+    """
     model = settings.ask_model
     result = AskResult(answer="", citations=[], used_tools=[], model=model)
     cited: set[int] = set()
     pages: dict[int, int] = {}
     used: list[str] = []
-    messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
-    system_prompt = _system_prompt(date.today())
+
+    history = list(history_messages or [])
+    question_msg: dict[str, Any] = {"role": "user", "content": [{"type": "text", "text": question}]}
+    messages: list[dict[str, Any]] = [*history, question_msg]
+    new_messages: list[dict[str, Any]] = [question_msg]
+    _apply_cache_control(messages, len(history))
+
+    system_prompt: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": _system_prompt(date.today()),
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
 
     answer = ""
     for _ in range(max(1, settings.ask_max_tool_turns)):
@@ -276,8 +319,14 @@ async def run_ask(
             model, response.usage.input_tokens, response.usage.output_tokens
         )
 
+        assistant_msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": [_serialize_block(block) for block in response.content],
+        }
+
         if response.stop_reason != "tool_use":
             answer = _text_of(response.content)
+            new_messages.append(assistant_msg)
             break
 
         tool_results: list[dict[str, Any]] = []
@@ -299,9 +348,13 @@ async def run_ask(
         # text as the answer rather than sending an empty user turn (a 400).
         if not tool_results:
             answer = _text_of(response.content)
+            new_messages.append(assistant_msg)
             break
-        messages.append({"role": "assistant", "content": response.content})
-        messages.append({"role": "user", "content": tool_results})
+        tool_msg: dict[str, Any] = {"role": "user", "content": tool_results}
+        messages.append(assistant_msg)
+        messages.append(tool_msg)
+        new_messages.append(assistant_msg)
+        new_messages.append(tool_msg)
     else:
         logger.info("ask hit the tool-turn limit without a final answer")
 
@@ -312,4 +365,5 @@ async def run_ask(
     result.citations = await _citations_for(session, mentioned or cited, pages)
     # De-duplicate tool names, preserving first-use order.
     result.used_tools = list(dict.fromkeys(used))
+    result.turn_messages = new_messages
     return result

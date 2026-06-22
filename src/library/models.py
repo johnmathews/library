@@ -397,25 +397,55 @@ class IngestionEvent(Base):
     document: Mapped[Document] = relationship(back_populates="events")
 
 
-class AskLog(Base):
-    """One natural-language /ask query: its answer cost and provenance.
+class AskThread(Base):
+    """One Ask conversation: an ordered series of question/answer turns."""
 
-    Not tied to a single document (an ask spans the corpus), so this is a
-    standalone audit table rather than an ``ingestion_events`` row. Used for
-    cost visibility; ask is not budget-gated in this release.
-    """
-
-    __tablename__ = "ask_logs"
+    __tablename__ = "ask_threads"
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    title: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    turns: Mapped[list["AskTurn"]] = relationship(
+        back_populates="thread",
+        cascade="all, delete-orphan",
+        order_by="AskTurn.created_at",
+    )
+
+
+class AskTurn(Base):
+    """One question/answer turn within a thread (cost + provenance + replay).
+
+    Subsumes the former ``ask_logs`` audit row. ``messages`` holds the
+    serialized Anthropic message blocks this turn produced (the user question
+    plus assistant ``tool_use`` / ``tool_result`` / final-answer blocks) so a
+    follow-up can replay prior tool results without re-querying.
+    """
+
+    __tablename__ = "ask_turns"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    thread_id: Mapped[int] = mapped_column(
+        ForeignKey("ask_threads.id", ondelete="CASCADE"), index=True
+    )
     query: Mapped[str] = mapped_column(Text)
+    answer: Mapped[str] = mapped_column(Text)
     model: Mapped[str] = mapped_column(String(64))
     input_tokens: Mapped[int] = mapped_column(Integer, default=0)
     output_tokens: Mapped[int] = mapped_column(Integer, default=0)
     cost_usd: Mapped[float] = mapped_column(Float, default=0.0)
     used_tools: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+    citations: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
+    messages: Mapped[list[Any]] = mapped_column(JSONB, server_default=text("'[]'::jsonb"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    thread: Mapped[AskThread] = relationship(back_populates="turns")
 
 
 class EvalRun(Base):
