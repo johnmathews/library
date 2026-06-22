@@ -1,0 +1,205 @@
+<script setup lang="ts">
+/**
+ * Jobs dashboard (route `/jobs`): background/batch jobs enriched with the
+ * pipeline state of the document each one processes. Split into Active (queued
+ * or running) and Recent (finished) sections. Refetches whenever the live jobs
+ * store reports a document finishing, so the history stays current without a
+ * manual reload.
+ */
+import { computed, onMounted, ref, watch } from 'vue'
+import { AppBadge } from '@/components/app'
+import { listJobs, type JobInfo } from '@/api/documents'
+import { useJobsStore } from '@/stores/jobs'
+
+const jobsStore = useJobsStore()
+
+const jobs = ref<JobInfo[]>([])
+const loading = ref(true)
+const error = ref<string | null>(null)
+
+const activeJobs = computed(() => jobs.value.filter((job) => job.active))
+const historicalJobs = computed(() => jobs.value.filter((job) => !job.active))
+
+async function load(): Promise<void> {
+  error.value = null
+  try {
+    jobs.value = await listJobs(200)
+  } catch {
+    error.value = 'Could not load jobs. Try refreshing the page.'
+  } finally {
+    loading.value = false
+  }
+}
+
+onMounted(load)
+// A change in the live active count means a document started or finished —
+// refresh so the table (and its historical section) reflects the new state.
+watch(() => jobsStore.activeCount, () => void load())
+
+const STAGE_LABELS: Record<string, string> = {
+  received: 'Received',
+  ocr: 'OCR',
+  extract: 'Extracting',
+  markdown: 'Markdown',
+  embed: 'Embedding',
+  indexed: 'Indexed',
+  failed: 'Failed',
+}
+
+type BadgeColour = 'grey' | 'blue' | 'yellow' | 'green' | 'red'
+
+const STATUS_COLOURS: Record<string, BadgeColour> = {
+  todo: 'blue',
+  doing: 'yellow',
+  succeeded: 'green',
+  failed: 'red',
+}
+
+function statusColour(status: string): BadgeColour {
+  return STATUS_COLOURS[status] ?? 'grey'
+}
+
+function stageLabel(status: string | null): string {
+  if (status === null) return '—'
+  return STAGE_LABELS[status] ?? status
+}
+
+function shortTask(name: string): string {
+  return name.replace(/^library\.jobs\./, '')
+}
+
+function documentLabel(job: JobInfo): string {
+  return job.document_title || (job.document_id !== null ? `Document #${job.document_id}` : '—')
+}
+
+function formatCost(cost: number | null): string {
+  return cost === null ? '—' : `$${cost.toFixed(4)}`
+}
+</script>
+
+<template>
+  <div id="jobs-view">
+    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-6">Jobs</h1>
+
+    <p v-if="loading" data-testid="jobs-loading" class="text-gray-600 dark:text-gray-300">
+      Loading jobs…
+    </p>
+
+    <div
+      v-else-if="error"
+      data-testid="jobs-error"
+      role="alert"
+      class="bg-white dark:bg-gray-800 border-l-4 border-red-500 rounded-lg px-4 py-3 shadow-xs text-gray-700 dark:text-gray-200"
+    >
+      {{ error }}
+    </div>
+
+    <template v-else>
+      <!-- Active -->
+      <section class="mb-8">
+        <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">
+          Active
+          <span class="text-gray-400 dark:text-gray-500 font-normal">({{ activeJobs.length }})</span>
+        </h2>
+        <p
+          v-if="activeJobs.length === 0"
+          data-testid="jobs-active-empty"
+          class="text-sm text-gray-500 dark:text-gray-400"
+        >
+          Nothing is processing right now.
+        </p>
+        <div v-else class="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
+          <table class="w-full text-sm">
+            <thead
+              class="text-xs uppercase text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700/60"
+            >
+              <tr>
+                <th class="text-left font-semibold px-4 py-3">Document</th>
+                <th class="text-left font-semibold px-4 py-3">Task</th>
+                <th class="text-left font-semibold px-4 py-3">Status</th>
+                <th class="text-left font-semibold px-4 py-3">Stage</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
+              <tr v-for="job in activeJobs" :key="job.id" data-testid="jobs-active-row">
+                <td class="px-4 py-3">
+                  <RouterLink
+                    v-if="job.document_id !== null"
+                    :to="`/documents/${job.document_id}`"
+                    class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
+                    >{{ documentLabel(job) }}</RouterLink
+                  >
+                  <span v-else class="text-gray-500 dark:text-gray-400">—</span>
+                </td>
+                <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ shortTask(job.task_name) }}</td>
+                <td class="px-4 py-3">
+                  <AppBadge :colour="statusColour(job.status)">{{ job.status }}</AppBadge>
+                </td>
+                <td class="px-4 py-3 text-gray-600 dark:text-gray-300">
+                  {{ stageLabel(job.document_status) }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      <!-- Recent / historical -->
+      <section>
+        <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">
+          Recent
+          <span class="text-gray-400 dark:text-gray-500 font-normal"
+            >({{ historicalJobs.length }})</span
+          >
+        </h2>
+        <p
+          v-if="historicalJobs.length === 0"
+          data-testid="jobs-historical-empty"
+          class="text-sm text-gray-500 dark:text-gray-400"
+        >
+          No completed jobs yet.
+        </p>
+        <div v-else class="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
+          <table class="w-full text-sm">
+            <thead
+              class="text-xs uppercase text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700/60"
+            >
+              <tr>
+                <th class="text-left font-semibold px-4 py-3">Document</th>
+                <th class="text-left font-semibold px-4 py-3">Task</th>
+                <th class="text-left font-semibold px-4 py-3">Status</th>
+                <th class="text-left font-semibold px-4 py-3">Stage</th>
+                <th class="text-left font-semibold px-4 py-3">Cost</th>
+                <th class="text-left font-semibold px-4 py-3">Error</th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
+              <tr v-for="job in historicalJobs" :key="job.id" data-testid="jobs-historical-row">
+                <td class="px-4 py-3">
+                  <RouterLink
+                    v-if="job.document_id !== null"
+                    :to="`/documents/${job.document_id}`"
+                    class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
+                    >{{ documentLabel(job) }}</RouterLink
+                  >
+                  <span v-else class="text-gray-500 dark:text-gray-400">—</span>
+                </td>
+                <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ shortTask(job.task_name) }}</td>
+                <td class="px-4 py-3">
+                  <AppBadge :colour="statusColour(job.status)">{{ job.status }}</AppBadge>
+                </td>
+                <td class="px-4 py-3 text-gray-600 dark:text-gray-300">
+                  {{ stageLabel(job.document_status) }}
+                </td>
+                <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ formatCost(job.cost_usd) }}</td>
+                <td class="px-4 py-3 text-red-600 dark:text-red-400 max-w-xs truncate" :title="job.error ?? ''">
+                  {{ job.error ?? '—' }}
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </template>
+  </div>
+</template>
