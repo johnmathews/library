@@ -6,10 +6,14 @@ import { defineConfig, devices } from '@playwright/test'
  * test` is a no-op without the stack — see docs/frontend.md §1.5 for the
  * full local recipe.
  *
- * Three projects (the W16 cross-device matrix), all running the same specs:
- * desktop Chromium, a 375px mobile WebKit pass (iPhone 14 descriptor, width
- * pinned to the 375px acceptance viewport), and a portrait iPad WebKit pass
- * (iPad (gen 11) descriptor — the registry has no gen 10).
+ * Five projects (the W16 cross-device matrix plus desktop Firefox and desktop
+ * WebKit), all running the same specs: desktop Chromium, a 375px mobile WebKit
+ * pass (iPhone 14 descriptor, width pinned to the 375px acceptance viewport),
+ * a portrait iPad WebKit pass (iPad (gen 11) descriptor — the registry has no
+ * gen 10), desktop Firefox, and desktop WebKit (Safari). The two desktop engine
+ * additions exercise the self-drawn PDF preview (pdf.js canvas rendering) in
+ * all three browser engines — the exact gap that let the original native-iframe
+ * browser-specific bugs ship.
  */
 export default defineConfig({
   testDir: './e2e',
@@ -40,6 +44,14 @@ export default defineConfig({
     {
       name: 'tablet-webkit',
       use: { ...devices['iPad (gen 11)'] }, // portrait
+    },
+    {
+      name: 'firefox',
+      use: { ...devices['Desktop Firefox'] },
+    },
+    {
+      name: 'webkit',
+      use: { ...devices['Desktop Safari'] },
     },
   ],
 })
