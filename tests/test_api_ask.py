@@ -215,11 +215,12 @@ def test_ask_structured_answers_provider_question(
             kind_id = connection.execute(
                 text("SELECT id FROM kinds WHERE slug = 'utility-bill'")
             ).scalar_one()
-            connection.execute(
+            doc_id = connection.execute(
                 text(
                     "INSERT INTO documents"
                     " (sha256, mime_type, status, source, sender_id, kind_id, document_date)"
                     " VALUES (:sha, 'application/pdf', 'indexed', 'upload', :sid, :kid, :d)"
+                    " RETURNING id"
                 ),
                 {
                     "sha": hashlib.sha256(b"energy-2025").hexdigest(),
@@ -227,7 +228,7 @@ def test_ask_structured_answers_provider_question(
                     "kid": kind_id,
                     "d": date(2025, 3, 1),
                 },
-            )
+            ).scalar_one()
     finally:
         engine.dispose()
 
@@ -266,7 +267,8 @@ def test_ask_structured_answers_provider_question(
     body = response.json()
     assert "Vattenfall" in body["answer"]
     assert body["used_tools"] == ["query_documents"]
-    assert len(body["citations"]) == 1
+    citation_ids = [c["document_id"] for c in body["citations"]]
+    assert doc_id in citation_ids
 
 
 def test_ask_citation_schema_has_page_number() -> None:
