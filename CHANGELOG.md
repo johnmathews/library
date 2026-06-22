@@ -8,6 +8,17 @@ All notable changes to Library are documented here. The format follows
 
 ### Added
 
+**Jobs view + live job notifications** — a new **Jobs** page (`/jobs`) lists
+background/batch jobs split into Active and Recent, each enriched with its
+document's pipeline stage, status, extraction cost, and any error. A navbar
+indicator (spinner + count + dropdown) shows while documents are processing, and
+toasts announce when a document finishes (success) or fails. Updates are pushed
+live over Server-Sent Events (`GET /api/events`) backed by Postgres
+`LISTEN/NOTIFY` — no polling. `GET /api/jobs` is now enriched with document
+state. See [docs/jobs-and-notifications.md](docs/jobs-and-notifications.md),
+[docs/api.md](docs/api.md) §1.8 / §1.8.4, and
+[docs/architecture.md](docs/architecture.md) §1.4.1.
+
 **`backfill-summaries` admin command** — `library backfill-summaries` enqueues
 metadata extraction for indexed documents that have no summary (e.g. ingested
 before summaries were generated), reusing the `extract_document` path so it

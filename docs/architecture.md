@@ -137,6 +137,23 @@ re-derivable artifact.
   first, responsive 320px-up, accessible). Typeface is self-hosted Inter:
   GDS Transport and the crown are licence-restricted to gov.uk services.
 
+### 1.4.1 Live job events
+
+Document processing runs in the **worker**, but the UI lives in the **api**
+process. They are bridged by Postgres `LISTEN/NOTIFY`: as a document moves
+through the pipeline, `library.jobs.notify_document_event` emits a `NOTIFY` on
+the `library_doc_events` channel (best-effort — a notify failure never strands a
+document). The api process exposes a Server-Sent Events endpoint
+(`GET /api/events`, `library.api.events`) that holds a dedicated `LISTEN`
+connection and relays each notification to connected browsers.
+
+On the frontend, a Pinia `jobs` store opens one `EventSource`, tracks in-flight
+documents (driving the navbar running-jobs indicator and the live `/jobs` view),
+and raises a toast when a document reaches `indexed` or `failed`. The flow is
+strictly one-way (server→client), which is why SSE is used rather than a
+WebSocket. See [api.md](api.md) §1.8.4 and
+[jobs-and-notifications.md](jobs-and-notifications.md).
+
 ## 1.5 Authentication
 
 Named family accounts over one shared library. Browser: Argon2 password

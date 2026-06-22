@@ -44,7 +44,8 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/kinds` | Document kinds with counts |
 | GET    | `/api/senders` | Senders with counts |
 | GET    | `/api/tags` | Tags with counts |
-| GET    | `/api/jobs` | Recent background jobs |
+| GET    | `/api/jobs` | Recent background jobs (enriched with document state) |
+| GET    | `/api/events` | Live document-pipeline events (Server-Sent Events) |
 | GET    | `/api/settings` | Your display preferences (dashboard fields + page-canvas tone + tile preview) |
 | PUT    | `/api/settings` | Update your dashboard fields |
 | PUT    | `/api/settings/appearance` | Update your page-canvas tone and tile preview |
@@ -212,9 +213,30 @@ triggers a download instead.
 
 ## 1.8 Jobs — `GET /api/jobs`
 
-Most recent background jobs (newest first) from the Procrastinate queue:
-`[{id, status, task_name, attempts, scheduled_at, document_id}, …]`.
-`limit` 1–500, default 50.
+Most recent background jobs (newest first) from the Procrastinate queue, each
+enriched with the pipeline state of the document it processes. `limit` 1–500,
+default 50. Each row:
+
+```jsonc
+{
+  "id": 123,
+  "status": "doing",            // Procrastinate status: todo|doing|succeeded|failed|…
+  "task_name": "library.jobs.process_document",
+  "attempts": 0,
+  "scheduled_at": "2026-06-23T10:00:00Z",
+  "document_id": 42,            // null for document-less jobs (e.g. email poll)
+  "active": true,               // status is todo or doing
+  "document_title": "Energierekening",  // null if no/deleted document
+  "document_status": "ocr",     // current pipeline stage, or terminal indexed/failed
+  "error": "ocr exploded",      // latest `failed` event detail, else null
+  "cost_usd": 0.0123,           // extraction cost from document provenance, else null
+  "tokens": 1500                // extraction input+output tokens, else null
+}
+```
+
+The `document_*` / `error` / `cost_usd` / `tokens` fields are `null` for jobs
+without a document or whose document has been deleted. For a live feed of state
+changes, use `GET /api/events` (§1.8.4) rather than polling this endpoint.
 
 ## 1.8.1 Re-extraction — `POST /api/documents/{id}/extract`
 
@@ -252,6 +274,31 @@ Counts exclude soft-deleted documents; zero-count entries are included.
   name.
 - `GET /api/tags` → `[{slug, name, document_count}, …]`, ordered by
   name.
+
+## 1.8.4 Live job events (SSE) — `GET /api/events`
+
+A [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
+stream of document-pipeline state changes, used by the web app to drive the
+navbar running-jobs indicator, toasts, and the live Jobs view without polling.
+
+- **Transport.** The worker emits a Postgres `NOTIFY` on the `library_doc_events`
+  channel each time a document changes pipeline stage (`status_changed`) or fails
+  (`failed`); this endpoint holds a dedicated `LISTEN` connection and relays each
+  notification. The worker→api hop crosses processes via Postgres itself, so both
+  must point at the same database (they do in the standard compose deployment).
+- **Auth.** Same session cookie as the rest of `/api` (§1.9). A GET is CSRF-safe,
+  so a browser `EventSource` — which cannot send headers — authenticates with the
+  cookie alone. Unauthenticated requests get `401` before the stream opens.
+- **Wire format.** Named SSE events:
+  - `event: document` — `data` is JSON `{document_id, event, status, title}`,
+    where `status` is the stage the document just entered. A document enters at
+    `received`, so the stages actually emitted are `ocr`→`extract`→`markdown`→
+    `embed`→`indexed`, plus `failed` on a terminal error.
+  - keep-alive comments every ~15 s so idle connections and proxies don't time
+    out. The response sets `X-Accel-Buffering: no` to disable proxy buffering.
+- **Lifecycle.** The browser's `EventSource` reconnects automatically; the
+  server tears the `LISTEN` connection down when the client disconnects. Events
+  are not replayed on reconnect — fetch `GET /api/jobs` for the current snapshot.
 
 ## 1.9 Authentication
 
