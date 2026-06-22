@@ -508,4 +508,19 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="markdown-empty"]').exists()).toBe(true)
     expect(w.find('[data-testid="markdown-content"]').exists()).toBe(false)
   })
+
+  it('renders DocumentSeriesTrend with the loaded document id', async () => {
+    const DocumentSeriesTrendStub = { template: '<div />', props: ['documentId'] }
+    await router.push('/documents/12')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentSeriesTrend: DocumentSeriesTrendStub },
+      },
+    })
+    await flushPromises()
+    const trend = wrapper.findComponent(DocumentSeriesTrendStub)
+    expect(trend.exists()).toBe(true)
+    expect(trend.props('documentId')).toBe(detail.id)
+  })
 })

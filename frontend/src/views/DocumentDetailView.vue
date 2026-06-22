@@ -52,6 +52,7 @@ import {
 import { listKinds, listSenders, type KindOption, type SenderOption } from '@/api/taxonomy'
 import { ApiError } from '@/api/client'
 import { renderHighlighted } from '@/utils/snippet'
+import DocumentSeriesTrend from '@/components/DocumentSeriesTrend.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -945,6 +946,8 @@ watch(
             </template>
           </AppDetails>
         </div>
+
+        <DocumentSeriesTrend v-if="doc" :document-id="doc.id" />
       </div>
 
       <!-- Metadata: left column on desktop (lg:order-1). min-w-0 (as above)
