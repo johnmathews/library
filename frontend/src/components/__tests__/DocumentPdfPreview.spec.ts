@@ -125,4 +125,31 @@ describe('DocumentPdfPreview page rendering', () => {
   })
 })
 
+describe('DocumentPdfPreview fallbacks', () => {
+  it('shows the thumbnail poster while loading', () => {
+    getDocument.mockReturnValue({ promise: new Promise(() => {}) })
+    const wrapper = mount(DocumentPdfPreview, { props })
+    const img = wrapper.find('[data-testid="pdf-preview-loading"] img')
+    expect(img.exists()).toBe(true)
+    expect(img.attributes('src')).toBe(props.poster)
+  })
+
+  it('error state links to open and download', async () => {
+    getDocument.mockReturnValue({ promise: Promise.reject(new Error('x')) })
+    const wrapper = mount(DocumentPdfPreview, { props })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="pdf-preview-open"]').attributes('href')).toBe(props.openHref)
+    expect(wrapper.find('[data-testid="pdf-preview-download"]').attributes('href')).toBe(props.downloadHref)
+  })
+
+  it('password state links to open', async () => {
+    const err = Object.assign(new Error('locked'), { name: 'PasswordException' })
+    getDocument.mockReturnValue({ promise: Promise.reject(err) })
+    const wrapper = mount(DocumentPdfPreview, { props })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="pdf-preview-password"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="pdf-preview-open"]').attributes('href')).toBe(props.openHref)
+  })
+})
+
 afterEach(() => vi.unstubAllGlobals())

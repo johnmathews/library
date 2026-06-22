@@ -112,7 +112,19 @@ defineExpose({ status, pageCount })
 
 <template>
   <div data-testid="pdf-preview">
-    <div v-if="status === 'loading'" data-testid="pdf-preview-loading" class="h-[70vh] bg-gray-100 dark:bg-gray-900/40" />
+    <div
+      v-if="status === 'loading'"
+      data-testid="pdf-preview-loading"
+      class="relative flex h-[70vh] items-center justify-center bg-gray-100 dark:bg-gray-900/40"
+    >
+      <img
+        v-if="poster"
+        :src="poster"
+        alt=""
+        class="absolute inset-0 h-full w-full object-contain opacity-40"
+      />
+      <span class="relative text-sm text-gray-500 dark:text-gray-400">Loading preview…</span>
+    </div>
     <div
       v-else-if="status === 'rendered'"
       ref="container"
@@ -127,7 +139,27 @@ defineExpose({ status, pageCount })
         class="mx-auto mb-2 block w-full max-w-3xl shadow-sm"
       />
     </div>
-    <div v-else-if="status === 'password'" data-testid="pdf-preview-password" class="h-[70vh]" />
-    <div v-else data-testid="pdf-preview-error" class="h-[70vh]" />
+    <div
+      v-else-if="status === 'password'"
+      data-testid="pdf-preview-password"
+      class="flex h-[70vh] flex-col items-center justify-center gap-3 bg-gray-100 p-6 text-center text-gray-500 dark:bg-gray-900/40 dark:text-gray-400"
+    >
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="h-12 w-12" aria-hidden="true">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z" />
+      </svg>
+      <span class="text-sm font-medium">Protected PDF — open to unlock</span>
+      <a :href="openHref" target="_blank" rel="noopener" data-testid="pdf-preview-open" class="text-violet-600 hover:underline">Open</a>
+    </div>
+    <div
+      v-else
+      data-testid="pdf-preview-error"
+      class="flex h-[70vh] flex-col items-center justify-center gap-2 bg-gray-100 p-6 text-center text-sm text-gray-500 dark:bg-gray-900/40 dark:text-gray-400"
+    >
+      <span>This preview couldn't be displayed.</span>
+      <span class="flex gap-3">
+        <a :href="openHref" target="_blank" rel="noopener" data-testid="pdf-preview-open" class="text-violet-600 hover:underline">Open</a>
+        <a :href="downloadHref" data-testid="pdf-preview-download" class="text-violet-600 hover:underline">Download</a>
+      </span>
+    </div>
   </div>
 </template>
