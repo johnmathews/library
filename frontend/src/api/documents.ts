@@ -321,6 +321,38 @@ export function uploadDocument(
   })
 }
 
+/** Body of GET /api/documents/{id}/series (optional blocks omitted when N/A). */
+export interface DocumentSeries {
+  status: 'ok' | 'insufficient'
+  sender: string | null
+  kind: string | null
+  currency: string | null
+  other_currencies: string[]
+  cadence: 'monthly' | 'quarterly' | 'yearly' | 'irregular'
+  count: number
+  document_ids: number[]
+  mean?: string
+  median?: string
+  stdev?: string
+  min?: string
+  max?: string
+  reference?: {
+    value: string
+    delta: string
+    vs_median_pct: string
+    z_score: number | null
+    verdict: 'higher' | 'typical' | 'lower'
+  }
+  trend?: { direction: 'rising' | 'falling' | 'flat'; change_pct: string }
+  year_over_year?: { prior_value: string; change_pct: string; document_id: number }
+  points?: { date: string; amount: string }[]
+}
+
+/** GET /api/documents/{id}/series — recurring-series stats + comparison. */
+export function fetchDocumentSeries(id: number, signal?: AbortSignal): Promise<DocumentSeries> {
+  return apiFetch<DocumentSeries>(`/api/documents/${id}/series`, { signal })
+}
+
 function parseDetail(text: string, status: number): string {
   try {
     const data: unknown = JSON.parse(text)
