@@ -74,7 +74,9 @@ library/series.py ──────┤                                      ├
    `mean`, `median`, `stdev` (sample stdev; `0` when n<2), `min`, `max`.
 5. **Cadence.** Median gap (days) between consecutive `document_date`s →
    `monthly | quarterly | yearly | irregular` (nearest band within tolerance;
-   else `irregular`). Documents without a date are excluded from cadence.
+   else `irregular`). The series is defined by its **amount-bearing** members
+   (the comparison is amount-centric); documents with no amount, or no date,
+   take no part in the stats or cadence.
 6. **Reference-vs-usual.** `reference` is `"latest"` (the newest dated member),
    an explicit numeric amount, or a document id. Report `value`, absolute Δ,
    `vs_median_pct`, `z_score` (Δ/stdev, `null` when stdev=0), and a `verdict`
@@ -175,8 +177,8 @@ New settings (`config.py`, `.env.example`, `docs/ask.md`), `LIBRARY_` prefix:
   fabricated stats.
 - **Mixed currencies** → report the reference/dominant bucket; list the others
   in `other_currencies`.
-- **Missing amounts** → excluded from amount stats; still counted for cadence
-  when dated.
+- **Missing amounts** → excluded from the series entirely (it is amount-defined);
+  they do not contribute to stats or cadence.
 - **No YoY match** → `year_over_year: null`.
 - **stdev = 0** (identical amounts / n<2) → `z_score: null`; verdict falls back
   to the percent band.
