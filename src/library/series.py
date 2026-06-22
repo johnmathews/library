@@ -151,9 +151,16 @@ def compute_trend(points: list[tuple[date, Decimal]], flat_pct: float) -> Trend 
     ordered = sorted(points, key=lambda p: p[0])
     first_amount = float(ordered[0][1])
     last_amount = float(ordered[-1][1])
-    change_pct = (last_amount - first_amount) / first_amount if first_amount != 0 else 0.0
-    if abs(change_pct) <= flat_pct:
-        return Trend(direction="flat", change_pct=change_pct)
+    if first_amount != 0:
+        change_pct = (last_amount - first_amount) / first_amount
+        if abs(change_pct) <= flat_pct:
+            return Trend(direction="flat", change_pct=change_pct)
+    elif last_amount == 0:
+        # Both endpoints are zero — genuinely flat.
+        return Trend(direction="flat", change_pct=0.0)
+    else:
+        # first==0 but last!=0: percent change undefined; direction from slope.
+        change_pct = 0.0
     base = ordered[0][0]
     xs = [float((d - base).days) for d, _ in ordered]
     ys = [float(a) for _, a in ordered]
@@ -182,6 +189,8 @@ def year_over_year(
     _, _, prior_value, doc_id = best
     ref_value = next((a for dt, a, _ in points if dt == reference_date), None)
     change_pct = (
-        float((ref_value - prior_value) / prior_value) if ref_value and prior_value != 0 else 0.0
+        float((ref_value - prior_value) / prior_value)
+        if ref_value is not None and prior_value != 0
+        else 0.0
     )
     return YearOverYear(prior_value=_money(prior_value), change_pct=change_pct, document_id=doc_id)

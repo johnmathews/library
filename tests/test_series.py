@@ -129,3 +129,36 @@ def test_year_over_year_match() -> None:
 def test_year_over_year_no_match() -> None:
     pts = [(date(2025, 1, 1), Decimal("130"), 12), (date(2025, 3, 5), Decimal("150"), 13)]
     assert year_over_year(pts, reference_date=date(2025, 3, 5), cadence="monthly") is None
+
+
+def test_compute_trend_rising_from_zero() -> None:
+    """first_amount==0 must not force 'flat'; direction should be 'rising'."""
+    pts = [
+        (date(2025, 1, 1), Decimal("0")),
+        (date(2025, 2, 1), Decimal("100")),
+        (date(2025, 3, 1), Decimal("200")),
+    ]
+    trend = compute_trend(pts, flat_pct=0.05)
+    assert trend is not None and trend.direction == "rising"
+
+
+def test_compute_trend_falling() -> None:
+    """Clearly downward series returns 'falling'."""
+    pts = [
+        (date(2025, 1, 1), Decimal("300")),
+        (date(2025, 2, 1), Decimal("200")),
+        (date(2025, 3, 1), Decimal("100")),
+    ]
+    trend = compute_trend(pts, flat_pct=0.05)
+    assert trend is not None and trend.direction == "falling"
+
+
+def test_year_over_year_zero_reference() -> None:
+    """ref_value==Decimal('0.00') must not be falsy-skipped; change_pct == -1.0."""
+    pts = [
+        (date(2024, 3, 1), Decimal("100"), 20),
+        (date(2025, 3, 1), Decimal("0.00"), 21),
+    ]
+    yoy = year_over_year(pts, reference_date=date(2025, 3, 1), cadence="monthly")
+    assert yoy is not None
+    assert yoy.change_pct == -1.0
