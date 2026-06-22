@@ -45,13 +45,20 @@ export default defineConfig({
       name: 'tablet-webkit',
       use: { ...devices['iPad (gen 11)'] }, // portrait
     },
+    // Desktop Firefox + WebKit exist to prove the self-rendered (pdf.js) PDF
+    // preview behaves identically across engines — the bug the native <iframe>
+    // got wrong three different ways. They run ONLY pdf-preview.spec.ts; the
+    // rest of the suite stays on the chromium/mobile/tablet matrix above so
+    // adding these engines doesn't silently put every spec on Firefox.
     {
       name: 'firefox',
       use: { ...devices['Desktop Firefox'] },
+      testMatch: /pdf-preview\.spec\.ts/,
     },
     {
       name: 'webkit',
       use: { ...devices['Desktop Safari'] },
+      testMatch: /pdf-preview\.spec\.ts/,
     },
   ],
 })
