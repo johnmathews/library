@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 // pdfjs-dist can't run its worker/canvas in jsdom — mock the whole module.
@@ -107,8 +107,22 @@ describe('DocumentPdfPreview page rendering', () => {
     const scrollIntoView = vi.fn()
     Element.prototype.scrollIntoView = scrollIntoView
     getDocument.mockReturnValue({ promise: Promise.resolve(fakePdf(5)) })
-    mount(DocumentPdfPreview, { props: { ...props, initialPage: 4 }, attachTo: document.body })
+    const wrapper = mount(DocumentPdfPreview, { props: { ...props, initialPage: 4 }, attachTo: document.body })
     await flushPromises()
-    expect(scrollIntoView).toHaveBeenCalled()
+    expect(scrollIntoView).toHaveBeenCalledOnce()
+    const page4 = wrapper.find('[data-page="4"]').element
+    expect(scrollIntoView.mock.instances[0]).toBe(page4)
+  })
+
+  it('renders all pages eagerly when IntersectionObserver is unavailable', async () => {
+    vi.stubGlobal('IntersectionObserver', undefined)
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({})) as never
+    const pdf = fakePdf(3)
+    getDocument.mockReturnValue({ promise: Promise.resolve(pdf) })
+    mount(DocumentPdfPreview, { props, attachTo: document.body })
+    await flushPromises()
+    expect(pdf.getPage).toHaveBeenCalledTimes(3)
   })
 })
+
+afterEach(() => vi.unstubAllGlobals())

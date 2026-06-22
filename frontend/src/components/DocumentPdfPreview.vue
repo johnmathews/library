@@ -34,10 +34,10 @@ function setCanvasRef(el: Element | null, index: number): void {
 
 async function renderPage(n: number): Promise<void> {
   if (renderedPages.has(n) || !pdf.value) return
-  renderedPages.add(n)
   const canvas = canvasRefs.value[n - 1]
   const ctx = canvas?.getContext('2d')
   if (!canvas || !ctx) return
+  renderedPages.add(n)
   const page = await pdf.value.getPage(n)
   const width = container.value?.clientWidth || canvas.clientWidth || 800
   const unscaled = page.getViewport({ scale: 1 })
@@ -49,7 +49,10 @@ async function renderPage(n: number): Promise<void> {
 }
 
 function observePages(): void {
-  if (typeof IntersectionObserver === 'undefined') return
+  if (typeof IntersectionObserver === 'undefined') {
+    for (let n = 1; n <= pageCount.value; n++) void renderPage(n)
+    return
+  }
   observer?.disconnect()
   observer = new IntersectionObserver(
     (entries) => {
