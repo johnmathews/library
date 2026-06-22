@@ -18,6 +18,13 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Literal
 
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from library.config import Settings
+from library.models import Document, Kind, Sender
+from library.search import DocumentFilters, filter_conditions
+
 _CENTS = Decimal("0.01")
 
 Cadence = Literal["monthly", "quarterly", "yearly", "irregular"]
@@ -194,3 +201,211 @@ def year_over_year(
         else 0.0
     )
     return YearOverYear(prior_value=_money(prior_value), change_pct=change_pct, document_id=doc_id)
+
+
+MAX_CITED_IDS: int = 25
+
+
+@dataclass(frozen=True, slots=True)
+class _Member:
+    document_id: int
+    sender: str | None
+    kind: str | None
+    document_date: date | None
+    amount: Decimal
+    currency: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesSummary:
+    status: Literal["ok", "insufficient"]
+    sender: str | None
+    kind: str | None
+    currency: str | None
+    other_currencies: list[str]
+    cadence: Cadence
+    count: int
+    distribution: Distribution | None
+    reference: ReferenceComparison | None
+    trend: Trend | None
+    year_over_year: YearOverYear | None
+    document_ids: list[int]
+    points: list[tuple[date, Decimal]]
+
+
+async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list[_Member]:
+    """All non-deleted documents matching ``filters`` that have an amount."""
+    statement = (
+        select(
+            Document.id,
+            Sender.name,
+            Kind.slug,
+            Document.document_date,
+            Document.amount_total,
+            Document.currency,
+            Document.sender_id,
+            Document.kind_id,
+        )
+        .outerjoin(Sender, Document.sender_id == Sender.id)
+        .outerjoin(Kind, Document.kind_id == Kind.id)
+        .where(*filter_conditions(filters), Document.amount_total.isnot(None))
+    )
+    rows = (await session.execute(statement)).all()
+    # Restrict to the single most-populous (sender_id, kind_id) group so a
+    # loosely-filtered query (kind only) can't mix providers into one series.
+    groups: dict[tuple[int | None, int | None], list[_Member]] = {}
+    for did, sname, kslug, ddate, amount, currency, sid, kid in rows:
+        groups.setdefault((sid, kid), []).append(
+            _Member(did, sname, kslug, ddate, amount, currency)
+        )
+    if not groups:
+        return []
+    return max(groups.values(), key=len)
+
+
+def _insufficient(members: list[_Member]) -> SeriesSummary:
+    head = members[0] if members else None
+    return SeriesSummary(
+        status="insufficient",
+        sender=head.sender if head else None,
+        kind=head.kind if head else None,
+        currency=None,
+        other_currencies=[],
+        cadence="irregular",
+        count=len(members),
+        distribution=None,
+        reference=None,
+        trend=None,
+        year_over_year=None,
+        document_ids=[m.document_id for m in members[:MAX_CITED_IDS]],
+        points=[],
+    )
+
+
+async def summarize_series(
+    session: AsyncSession,
+    *,
+    filters: DocumentFilters,
+    settings: Settings,
+    reference: Decimal | Literal["latest"] | None = "latest",
+    reference_date: date | None = None,
+    reference_currency: str | None = None,
+) -> SeriesSummary:
+    """Detect the (sender, kind) series matching ``filters`` and summarise it."""
+    members = await _load_members(session, filters)
+    if len(members) < settings.series_min_documents:
+        return _insufficient(members)
+
+    # Currency bucket: the requested/dominant currency.
+    by_currency: dict[str | None, list[_Member]] = {}
+    for m in members:
+        by_currency.setdefault(m.currency, []).append(m)
+    if reference_currency is not None and reference_currency in by_currency:
+        currency = reference_currency
+    else:
+        currency = max(by_currency, key=lambda c: len(by_currency[c]))
+    bucket = by_currency[currency]
+    other_currencies = sorted(str(c) for c in by_currency if c != currency and c is not None)
+
+    if len(bucket) < settings.series_min_documents:
+        return _insufficient(bucket)
+
+    dated = sorted(
+        (m for m in bucket if m.document_date is not None), key=lambda m: m.document_date
+    )
+    points = [(m.document_date, m.amount) for m in dated]
+    amounts = [m.amount for m in bucket]
+    dist = distribution(amounts)
+    cadence = classify_cadence([m.document_date for m in dated])
+    trend = compute_trend(points, settings.series_flat_pct)
+
+    # Resolve the reference value + anchor date.
+    ref_value: Decimal | None
+    ref_date = reference_date
+    if reference == "latest":
+        ref_value = dated[-1].amount if dated else None
+        ref_date = ref_date or (dated[-1].document_date if dated else None)
+    elif isinstance(reference, Decimal):
+        ref_value = reference
+    else:
+        ref_value = None
+
+    comparison = (
+        compare_reference(ref_value, dist, settings.series_typical_pct)
+        if ref_value is not None
+        else None
+    )
+    yoy = None
+    if ref_date is not None:
+        yoy_points = [(m.document_date, m.amount, m.document_id) for m in dated]
+        if ref_value is not None and ref_date not in {p[0] for p in points}:
+            yoy_points.append((ref_date, ref_value, -1))
+        yoy = year_over_year(yoy_points, ref_date, cadence)
+
+    head = bucket[0]
+    return SeriesSummary(
+        status="ok",
+        sender=head.sender,
+        kind=head.kind,
+        currency=currency,
+        other_currencies=other_currencies,
+        cadence=cadence,
+        count=len(bucket),
+        distribution=dist,
+        reference=comparison,
+        trend=trend,
+        year_over_year=yoy,
+        document_ids=sorted(m.document_id for m in bucket)[:MAX_CITED_IDS],
+        points=points,
+    )
+
+
+def _pct(fraction: float) -> str:
+    return f"{fraction * 100:+.1f}%"
+
+
+def serialise_summary(summary: SeriesSummary, *, include_points: bool = False) -> dict[str, object]:
+    """A JSON-friendly dict (money→str, dates→ISO, fractions→'+6.4%')."""
+    body: dict[str, object] = {
+        "status": summary.status,
+        "sender": summary.sender,
+        "kind": summary.kind,
+        "currency": summary.currency,
+        "other_currencies": summary.other_currencies,
+        "cadence": summary.cadence,
+        "count": summary.count,
+        "document_ids": summary.document_ids,
+    }
+    if summary.distribution is not None:
+        d = summary.distribution
+        body |= {
+            "mean": str(d.mean),
+            "median": str(d.median),
+            "stdev": str(d.stdev),
+            "min": str(d.minimum),
+            "max": str(d.maximum),
+        }
+    if summary.reference is not None:
+        r = summary.reference
+        body["reference"] = {
+            "value": str(r.value),
+            "delta": str(r.delta),
+            "vs_median_pct": _pct(r.vs_median_pct),
+            "z_score": None if r.z_score is None else round(r.z_score, 2),
+            "verdict": r.verdict,
+        }
+    if summary.trend is not None:
+        body["trend"] = {
+            "direction": summary.trend.direction,
+            "change_pct": _pct(summary.trend.change_pct),
+        }
+    if summary.year_over_year is not None:
+        y = summary.year_over_year
+        body["year_over_year"] = {
+            "prior_value": str(y.prior_value),
+            "change_pct": _pct(y.change_pct),
+            "document_id": y.document_id,
+        }
+    if include_points:
+        body["points"] = [{"date": d.isoformat(), "amount": str(a)} for d, a in summary.points]
+    return body
