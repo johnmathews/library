@@ -161,11 +161,12 @@ test('ask citation deep-links to the cited PDF page', async ({ page }, testInfo)
   await citation.click()
   await expect(page).toHaveURL(new RegExp(`/documents/${docId}\\?page=2`))
 
-  // ── Assert the PDF iframe src carries page=2 ────────────────────────────────
-  // The iframe is data-testid="preview-pdf"; its src fragment contains
-  // "#toolbar=0&navpanes=0&view=FitH&page=2". The element is CSS-hidden on
-  // small screens (hidden lg:block) but is in the DOM on all viewports, so
-  // this assertion holds across chromium, mobile-webkit and tablet-webkit.
-  const iframe = page.getByTestId('preview-pdf')
-  await expect(iframe).toHaveAttribute('src', /page=2/)
+  // ── Assert the page-2 deep-link reaches the PDF preview ─────────────────────
+  // The preview is no longer a native <iframe> with a page-encoded src — it is
+  // the self-rendered DocumentPdfPreview component, which receives the target
+  // page via its `initial-page` prop (derived from the ?page=2 query asserted
+  // above) and scrolls to it. The component root (data-testid="preview-pdf")
+  // mounts on all viewports; the scroll-to-page behavior itself is covered by
+  // the component unit tests and pdf-preview.spec.ts.
+  await expect(page.getByTestId('preview-pdf')).toBeVisible()
 })
