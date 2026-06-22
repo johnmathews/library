@@ -405,6 +405,24 @@ from library.jobs import extract_document
 await extract_document.defer_async(document_id=123)
 ```
 
+### Backfill summaries
+
+Documents ingested before extraction generated a summary have
+`summary IS NULL`. `library backfill-summaries` enqueues an
+`extract_document` task for each indexed, non-deleted document that still
+lacks a summary, so they get one through the same path new uploads use:
+
+```console
+library backfill-summaries              # all indexed docs with no summary
+library backfill-summaries --limit 100  # first 100 only (throttle/budget)
+```
+
+Because it re-runs full extraction, it honours `extra["user_edited_fields"]`
+and the daily extraction budget (`LIBRARY_EXTRACTION_DAILY_BUDGET_USD`):
+documents beyond the budget are skipped with an `extraction_skipped`
+(`reason: "budget"`) event and can be re-queued the next day. The worker
+must be running to do the work; the command only enqueues the jobs.
+
 ## Extraction quality (`library.extraction.validation`, `library.extraction.judge`)
 
 After the metadata is written, `apply_extraction` runs deterministic validation
