@@ -288,7 +288,7 @@ the toggle. The user's choice is persisted by `useDark` (localStorage).
   scans `dist/` and fails if any file name or text content reintroduces
   `govuk-`, GDS Transport, or crown/crest references (guarding against a partial
   reskin regression).
-- `npm run test:e2e` — Playwright against the real stack. Five projects: desktop Chromium, mobile WebKit (375 px, iPhone 14), tablet WebKit (iPad gen 11), **desktop Firefox**, and **desktop WebKit** (Safari). The two desktop-engine additions exercise the self-rendered PDF preview across all three browser engines. `e2e/pdf-preview.spec.ts` proves canvases paint and scrolling reveals page 2 on each engine.
+- `npm run test:e2e` — Playwright against the real stack. Five projects: desktop Chromium, mobile WebKit (375 px, iPhone 14), tablet WebKit (iPad gen 11), **desktop Firefox**, and **desktop WebKit** (Safari). The chromium/mobile/tablet projects run the full suite; the two desktop-engine projects are **scoped (via `testMatch`) to `e2e/pdf-preview.spec.ts` only** — they exist to prove the self-rendered PDF preview behaves identically across all three engines, without forcing the rest of the suite onto Firefox. That spec proves canvases paint and scrolling reveals page 2 on each engine. (CI installs all three engines — `chromium firefox webkit` — in `.github/workflows/ci.yml`.)
 
 ## 1.8 What did not change
 
