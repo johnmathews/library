@@ -126,8 +126,11 @@ groups by currency) — consistent behaviour across both query paths.
 - Chart.js is a well-maintained, tree-shakeable library; components and
   controllers are registered locally within `DocumentSeriesTrend.vue`, not
   globally, so unused chart types are not bundled.
-- The widget is lazy-loaded from `DocumentDetailView.vue` (which was already
-  large) to keep the initial bundle lean.
+- The widget is a self-contained component mounted from `DocumentDetailView.vue`
+  (which was already large); it fetches its series data on mount and self-hides
+  when there is no qualifying series, so the detail view stays focused. (Code
+  splitting via `defineAsyncComponent` was considered but skipped — marginal
+  benefit for a self-hosted app, and it complicates the detail-view test.)
 
 ---
 

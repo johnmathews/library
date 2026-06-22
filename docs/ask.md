@@ -229,9 +229,9 @@ present in the series are listed in `other_currencies`.
 
 ### Detail-view trend widget
 
-The document detail view includes a **`DocumentSeriesTrend`** panel (lazy-loaded)
-that renders a Chart.js line chart of the series' dated points, with the current
-document's point highlighted. A one-line verdict (e.g. *"≈6% above usual · trend
+The document detail view includes a **`DocumentSeriesTrend`** panel that fetches
+the document's series on mount and renders a Chart.js line chart of the series'
+dated points, with the current document's point highlighted. A one-line verdict (e.g. *"≈6% above usual · trend
 rising"*) and the cadence label are shown below the chart. The panel hides
 itself silently when `status:"insufficient"` or on fetch error — the page always
 renders even without series data.
