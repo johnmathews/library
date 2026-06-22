@@ -63,6 +63,10 @@ class Settings(BaseSettings):
     ask_max_tool_turns: int = 4
     ask_max_answer_tokens: int = 1024
     ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.
+    # Document series + comparative queries (see docs/ask.md, "Document series").
+    series_min_documents: int = 3  # min members before stats are reported
+    series_typical_pct: float = 0.10  # half-width of the "typical" band vs median
+    series_flat_pct: float = 0.05  # |first→last change| at/below which trend is flat
     # Consume folder watcher (see docs/ingestion.md, "Consume folder" section).
     consume_dir: Path | None = None  # unset = watcher off
     consume_force_polling: bool = False  # required for NFS/SMB mounts (no inotify)
