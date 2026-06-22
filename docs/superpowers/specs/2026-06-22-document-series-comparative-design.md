@@ -48,9 +48,12 @@ library/series.py ──────┤                                      ├
   matching `structured_query.py`.
 - Every result carries contributing `document_ids` (capped at the reused
   `MAX_CITED_IDS = 25`) for citation.
-- Frontend: a new self-contained **`components/DocumentSeriesTrend.vue`**
-  (inline-SVG sparkline, **no new charting dependency**) mounted in
-  `DocumentDetailView.vue`, which is already ~49k and should not grow.
+- Frontend: a new self-contained **`components/DocumentSeriesTrend.vue`** that
+  renders the trend chart with **Chart.js (via `vue-chartjs`)** — a new,
+  deliberately chosen dependency, since this widget is expected to grow (more
+  chart types, a future series UI). Mounted in `DocumentDetailView.vue`, which
+  is already ~49k and should not grow. Chart.js components are registered
+  locally/tree-shaken (not globally) and the widget is lazy-loaded.
 
 ## 4. Series detection & statistics
 
@@ -149,10 +152,12 @@ compare_to_series({
   - `200` with `status:"insufficient"` if the document has no sender/kind or the
     series is too small — the UI hides the widget rather than erroring.
 - **`components/DocumentSeriesTrend.vue`**: a lazy-loaded panel on the detail
-  view. Renders an inline-SVG sparkline of `points` with the current document's
-  point highlighted, a one-line verdict (e.g. *"≈6% above usual · trend
-  rising"*), and the cadence label. Hidden gracefully on `insufficient`/`404`.
-  Uses the same fetch client and error handling as the existing markdown tab.
+  view. Renders a **Chart.js line chart** (via `vue-chartjs`) of `points` with
+  the current document's point highlighted, a one-line verdict (e.g. *"≈6% above
+  usual · trend rising"*), and the cadence label. Hidden gracefully on
+  `insufficient`/`404`. Uses the same fetch client and error handling as the
+  existing markdown tab. Chart.js controllers/elements are imported and
+  registered within the component (tree-shaken), not globally.
 
 ## 7. Configuration
 
@@ -187,8 +192,8 @@ New settings (`config.py`, `.env.example`, `docs/ask.md`), `LIBRARY_` prefix:
   its `document_ids` reach the citation set.
 - **API tests** for `GET /api/documents/{id}/series`: ok, insufficient,
   no-sender/kind, 404, foreign document.
-- **Frontend `DocumentSeriesTrend.spec.ts`**: renders the sparkline + verdict;
-  hides on insufficient/404.
+- **Frontend `DocumentSeriesTrend.spec.ts`**: renders the chart (Chart.js
+  mocked) + verdict; hides on insufficient/404.
 - **Docs**: extend `docs/ask.md` (new tool + capability, config table) and
   `docs/api.md` (new endpoint); add a journal entry
   `journal/260622-document-series.md`.
