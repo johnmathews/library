@@ -596,5 +596,6 @@ hide the trend widget rather than showing an error.
 {"status": "insufficient", "count": 1, "document_ids": [88]}
 ```
 
-**Errors:** `404` when the document does not exist, is soft-deleted, or belongs
-to another user.
+`count` is the number of series members found (0 when the document has no sender or kind).
+
+**Errors:** `404` when the document does not exist or is soft-deleted.

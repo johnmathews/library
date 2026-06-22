@@ -1,8 +1,9 @@
 """Agentic /ask: Claude orchestrates retrieval tools to answer with citations.
 
-Claude is given two tools — ``semantic_search`` (hybrid content retrieval) and
-``query_documents`` (structured aggregation over metadata) — and decides which
-to call for a question. It must answer only from tool results and cite the
+Claude is given three tools — ``semantic_search`` (hybrid content retrieval),
+``query_documents`` (structured aggregation over metadata), and
+``compare_to_series`` (statistical summary of a recurring-document series) —
+and decides which to call for a question. It must answer only from tool results and cite the
 document ids it used. The loop is bounded (``ask_max_tool_turns``); the
 embedding and answer cost is summed for the audit log.
 """

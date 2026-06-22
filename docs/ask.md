@@ -205,7 +205,7 @@ Every series summary provides four views:
 |---------|----------------|
 | **Distribution** | Mean, median, stdev, min, max over the series' amounts. |
 | **Reference-vs-usual** | Where the reference document falls: `higher`, `typical`, or `lower`. |
-| **Trend** | Whether amounts are `rising`, `falling`, or `flat` over time (least-squares slope; `flat` when first→last change ≤ `SERIES_FLAT_PCT`). |
+| **Trend** | Whether amounts are `rising`, `falling`, or `flat` over time (`flat` when first→last change ≤ `SERIES_FLAT_PCT`; otherwise the sign of the least-squares slope decides). |
 | **Year-over-year** | The member closest to 12 months before the reference date (within a cadence-dependent tolerance) and the percentage change. |
 
 The cadence (`monthly`, `quarterly`, `yearly`, `irregular`) is derived from the
