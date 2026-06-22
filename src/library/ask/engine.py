@@ -1,8 +1,9 @@
 """Agentic /ask: Claude orchestrates retrieval tools to answer with citations.
 
-Claude is given two tools — ``semantic_search`` (hybrid content retrieval) and
-``query_documents`` (structured aggregation over metadata) — and decides which
-to call for a question. It must answer only from tool results and cite the
+Claude is given three tools — ``semantic_search`` (hybrid content retrieval),
+``query_documents`` (structured aggregation over metadata), and
+``compare_to_series`` (statistical summary of a recurring-document series) —
+and decides which to call for a question. It must answer only from tool results and cite the
 document ids it used. The loop is bounded (``ask_max_tool_turns``); the
 embedding and answer cost is summed for the audit log.
 """
@@ -14,6 +15,7 @@ import logging
 import re
 from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from anthropic import AsyncAnthropic
@@ -25,6 +27,7 @@ from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
 from library.models import Document
 from library.search import DocumentFilters, semantic_search
+from library.series import serialise_summary, summarize_series
 from library.structured_query import CONCEPT_TO_KIND, query_documents
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,8 @@ Use the tools to find evidence, then answer:
 - query_documents: aggregate over structured metadata (e.g. "who was my energy
   provider last year", "how much did I spend on utilities in 2025"). Use for
   who/how-many/how-much/which-over-time questions.
+- compare_to_series: compare a recurring bill to its usual values / last year /
+  trend (e.g. "is this electricity bill higher than usual?").
 
 Rules:
 - Answer ONLY from tool results. Never invent facts.
@@ -115,6 +120,30 @@ TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["aggregate"],
+        },
+    },
+    {
+        "name": "compare_to_series",
+        "description": (
+            "Compare a recurring document (same sender + kind) to its usual "
+            "values. Use for 'more/less than usual', 'compared to last year', "
+            "'are my bills going up'. Identify the series via kind + sender. "
+            "Returns distribution stats, a reference-vs-usual verdict, a trend, "
+            "and a year-over-year comparison. " + _kind_hint()
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "description": "Kind slug, e.g. utility-bill."},
+                "sender_contains": {"type": "string", "description": "Substring of sender name."},
+                "date_from": {"type": "string", "description": "Inclusive ISO date lower bound."},
+                "date_to": {"type": "string", "description": "Inclusive ISO date upper bound."},
+                "reference": {
+                    "type": "string",
+                    "description": "'latest' (default) to compare the newest bill, or a number.",
+                },
+            },
+            "required": [],
         },
     },
 ]
@@ -212,6 +241,31 @@ async def _run_query_documents(
     return result
 
 
+async def _run_compare_to_series(
+    session: AsyncSession, settings: Settings, args: dict[str, Any], cited: set[int]
+) -> dict[str, Any]:
+    filters = DocumentFilters(
+        kind_slug=args.get("kind"),
+        sender_contains=args.get("sender_contains"),
+        date_from=_parse_date(args.get("date_from")),
+        date_to=_parse_date(args.get("date_to")),
+    )
+    raw_reference = args.get("reference", "latest")
+    reference: Decimal | str
+    if raw_reference in (None, "latest", ""):
+        reference = "latest"
+    else:
+        try:
+            reference = Decimal(str(raw_reference))
+        except (InvalidOperation, ValueError):
+            reference = "latest"
+    summary = await summarize_series(
+        session, filters=filters, settings=settings, reference=reference
+    )
+    cited.update(summary.document_ids)
+    return serialise_summary(summary)
+
+
 async def _dispatch_tool(
     session: AsyncSession,
     settings: Settings,
@@ -224,6 +278,8 @@ async def _dispatch_tool(
         return await _run_semantic_search(session, settings, args, cited, pages)
     if name == "query_documents":
         return await _run_query_documents(session, args, cited)
+    if name == "compare_to_series":
+        return await _run_compare_to_series(session, settings, args, cited)
     return {"error": f"unknown tool {name}"}
 
 

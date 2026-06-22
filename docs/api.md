@@ -1,6 +1,6 @@
 # 1. REST API
 
-**Status:** active. **Last updated:** 2026-06-13.
+**Status:** active. **Last updated:** 2026-06-22 (series endpoint).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -40,6 +40,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/documents/{id}/original` | Download the original file |
 | GET    | `/api/documents/{id}/searchable.pdf` | Download the OCR searchable PDF |
 | GET    | `/api/documents/{id}/thumbnail` | First-page WebP thumbnail |
+| GET    | `/api/documents/{id}/series` | Recurring-series stats + comparison for this document |
 | GET    | `/api/kinds` | Document kinds with counts |
 | GET    | `/api/senders` | Senders with counts |
 | GET    | `/api/tags` | Tags with counts |
@@ -457,7 +458,7 @@ continue an existing one. Auth + CSRF apply (it is a `POST`).
 - `citations` — documents the answer relied on (`document_id`, `title`,
   `page_number`); link these to `GET /api/documents/{id}`.
 - `used_tools` — which retrieval tools the engine invoked
-  (`semantic_search`, `query_documents`).
+  (`semantic_search`, `query_documents`, `compare_to_series`).
 - `cost_usd` — estimated answer cost for this turn (recorded in `ask_turns`,
   not gated; thread total = sum of its turns).
 - `thread_id` — the conversation thread this turn belongs to (new or existing).
@@ -518,3 +519,83 @@ The raw replay `messages` blob is not returned to the client.
 
 Delete a conversation. Cascades to all its turns. Returns `204` on success;
 `404` if the thread does not exist or belongs to another user.
+
+## 1.13 Document series — `GET /api/documents/{id}/series`
+
+Returns statistical information about the recurring-document series this
+document belongs to, and where this specific document sits within it. The
+series is identified automatically from the document's own `sender_id` and
+`kind_id`; the document itself is the reference point.
+
+This endpoint supplies the data for the trend widget on the document detail
+view. See [ask.md §1.7](ask.md) for the series detection and statistics design.
+
+**Response `200` — `status:"ok"`:**
+
+```json
+{
+  "status": "ok",
+  "sender": "Vattenfall",
+  "kind": "utility-bill",
+  "currency": "EUR",
+  "other_currencies": [],
+  "cadence": "monthly",
+  "count": 7,
+  "mean": "145.00",
+  "median": "142.10",
+  "stdev": "8.20",
+  "min": "131.00",
+  "max": "159.40",
+  "reference": {
+    "value": "151.20",
+    "delta": "+9.10",
+    "vs_median_pct": "+6.4%",
+    "z_score": 1.11,
+    "verdict": "higher"
+  },
+  "trend": { "direction": "rising", "change_pct": "+12.0%" },
+  "year_over_year": {
+    "prior_value": "138.40",
+    "change_pct": "+9.2%",
+    "document_id": 41
+  },
+  "document_ids": [12, 19, 27, 33, 41, 55, 88],
+  "points": [
+    {"date": "2025-06-15", "amount": "138.40", "document_id": 41},
+    {"date": "2026-05-15", "amount": "151.20", "document_id": 88}
+  ]
+}
+```
+
+Fields:
+
+- `status` — `"ok"` when the series has enough members; `"insufficient"` otherwise (see below).
+- `sender`, `kind`, `currency` — the resolved series identity and reported currency bucket.
+- `other_currencies` — currencies present in the series that are not being reported.
+- `cadence` — inferred recurrence: `monthly`, `quarterly`, `yearly`, or `irregular`.
+- `count`, `mean`, `median`, `stdev`, `min`, `max` — distribution stats over `amount_total`
+  within the currency bucket. Money values are JSON strings (decimal precision preserved).
+- `reference` — where this document's amount sits: `value`, `delta` (vs median),
+  `vs_median_pct`, `z_score` (null when stdev is 0), and a `verdict` of
+  `higher`, `typical`, or `lower`.
+- `trend` — `direction` (`rising`/`falling`/`flat`) and `change_pct` (first→last).
+- `year_over_year` — the series member closest to 12 months prior (`prior_value`,
+  `change_pct`, `document_id`), or `null` when no match exists.
+- `document_ids` — ids of the series members that contributed to the stats (capped at 25).
+- `points` — all dated, amount-bearing series members in chronological order, each with
+  `date` (ISO), `amount` (string), and `document_id`. Use `document_id` to highlight
+  the current document in the chart.
+
+**Response `200` — `status:"insufficient"`:**
+
+Returned when the document has no `sender` or `kind`, or when the series has
+fewer than `LIBRARY_SERIES_MIN_DOCUMENTS` members (default 3). The UI should
+hide the trend widget rather than showing an error.
+
+```json
+{"status": "insufficient", "count": 1, "document_ids": [88]}
+```
+
+`count` is the number of series members found (0 when the document has no sender or kind).
+
+**Errors:** `404` when the document does not exist or is soft-deleted.

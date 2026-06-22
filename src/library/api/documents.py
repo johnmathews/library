@@ -49,6 +49,7 @@ from library.schemas import (
     TagOut,
 )
 from library.search import DocumentFilters, build_document_query
+from library.series import serialise_summary, summarize_series
 from library.storage import derived_path, path_for
 from library.thumbnails import THUMBNAIL_NAME
 
@@ -327,6 +328,37 @@ async def get_document_markdown(
     )
     pages = [MarkdownPage(page_number=row.page_number, markdown=row.markdown) for row in rows]
     return MarkdownResponse(page_count=len(pages), pages=pages)
+
+
+@router.get(
+    "/documents/{document_id}/series",
+    summary="Recurring-series stats + comparison for this document",
+    responses={404: {"description": "Unknown or deleted document"}},
+)
+async def get_document_series(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, object]:
+    """Summarise the (sender, kind) series this document belongs to and where
+    this document sits within it. ``status:"insufficient"`` when the document
+    has no sender/kind or too few siblings."""
+    document = await _get_document_or_404(session, document_id)
+    settings = get_settings()
+    if document.sender_id is None or document.kind_id is None:
+        return {"status": "insufficient", "count": 0, "document_ids": [document_id]}
+    filters = DocumentFilters(
+        sender_id=document.sender_id,
+        kind_slug=document.kind.slug if document.kind else None,
+    )
+    summary = await summarize_series(
+        session,
+        filters=filters,
+        settings=settings,
+        reference=document.amount_total,
+        reference_date=document.document_date,
+        reference_currency=document.currency,
+    )
+    return serialise_summary(summary, include_points=True)
 
 
 @router.patch(
