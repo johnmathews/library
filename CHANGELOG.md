@@ -115,6 +115,20 @@ See [docs/ingestion.md](docs/ingestion.md) "Markdown layer" and
 
 ### Changed
 
+- **Document preview now renders PDFs in-app, identically across browsers.** The
+  detail page (`/documents/:id`) previously embedded the PDF in a native
+  `<iframe>`, which broke differently in each engine — Chrome forced a
+  "Pages/Manage" panel over the document, Firefox showed its own toolbar and
+  thumbnail sidebar, and Safari rendered a black box. The new
+  `DocumentPdfPreview` component renders every page to `<canvas>` with pdf.js
+  (`pdfjs-dist`), fit-to-width and lazily via `IntersectionObserver`, so all
+  pages are **scrollable** and the result is the same in Chrome, Firefox, and
+  Safari. Shows a thumbnail poster while loading and Open/Download fallbacks for
+  render failures and password-protected PDFs. The Playwright matrix gained
+  desktop Firefox and WebKit projects plus a cross-browser preview spec. See
+  [docs/frontend.md](docs/frontend.md). Adds the `pdfjs-dist` dependency (worker
+  lazy-loaded, off the initial bundle).
+
 - `db` image is now `pgvector/pgvector:pg17` (was `postgres:17.5-alpine`),
   initialised with `C.UTF-8` so text ordering stays byte-wise and an existing
   C-collation `pgdata` volume is reused safely. **The LXC now wants ~6–8 GB
