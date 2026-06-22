@@ -230,7 +230,7 @@ class SeriesSummary:
     trend: Trend | None
     year_over_year: YearOverYear | None
     document_ids: list[int]
-    points: list[tuple[date, Decimal]]
+    points: list[tuple[date, Decimal, int]]
 
 
 async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list[_Member]:
@@ -313,11 +313,12 @@ async def summarize_series(
     dated = sorted(
         (m for m in bucket if m.document_date is not None), key=lambda m: m.document_date
     )
-    points = [(m.document_date, m.amount) for m in dated]
+    points = [(m.document_date, m.amount, m.document_id) for m in dated]
+    trend_points = [(m.document_date, m.amount) for m in dated]
     amounts = [m.amount for m in bucket]
     dist = distribution(amounts)
     cadence = classify_cadence([m.document_date for m in dated])
-    trend = compute_trend(points, settings.series_flat_pct)
+    trend = compute_trend(trend_points, settings.series_flat_pct)
 
     # Resolve the reference value + anchor date.
     ref_value: Decimal | None
@@ -407,5 +408,8 @@ def serialise_summary(summary: SeriesSummary, *, include_points: bool = False) -
             "document_id": y.document_id,
         }
     if include_points:
-        body["points"] = [{"date": d.isoformat(), "amount": str(a)} for d, a in summary.points]
+        body["points"] = [
+            {"date": d.isoformat(), "amount": str(a), "document_id": did}
+            for d, a, did in summary.points
+        ]
     return body

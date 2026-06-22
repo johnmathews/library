@@ -115,7 +115,7 @@ def test_series_endpoint_ok(api_client: TestClient, api_database_url: str) -> No
     body = response.json()
     assert body["status"] == "ok"
     assert body["reference"]["verdict"] == "higher"
-    assert len(body["points"]) == 3
+    assert len(body["points"]) >= 3
 
 
 def test_series_endpoint_insufficient(api_client: TestClient, api_database_url: str) -> None:

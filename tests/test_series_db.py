@@ -168,7 +168,7 @@ async def test_summarize_picks_dominant_currency(session: AsyncSession) -> None:
 
 
 async def test_serialise_summary_shape(session: AsyncSession) -> None:
-    await seed(
+    oldest_id = await seed(
         session,
         "a",
         sender_name="Vattenfall",
@@ -205,3 +205,5 @@ async def test_serialise_summary_shape(session: AsyncSession) -> None:
     assert isinstance(body["document_ids"], list)
     assert isinstance(body["points"], list)
     assert body["points"][0]["amount"] == "100.00"
+    assert isinstance(body["points"][0]["document_id"], int)
+    assert body["points"][0]["document_id"] == oldest_id

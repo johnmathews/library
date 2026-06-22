@@ -207,7 +207,10 @@ def test_ask_structured_answers_provider_question(
     try:
         with engine.begin() as connection:
             sender_id = connection.execute(
-                text("INSERT INTO senders (name) VALUES ('Vattenfall') RETURNING id")
+                text(
+                    "INSERT INTO senders (name) VALUES ('Vattenfall')"
+                    " ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id"
+                )
             ).scalar_one()
             kind_id = connection.execute(
                 text("SELECT id FROM kinds WHERE slug = 'utility-bill'")

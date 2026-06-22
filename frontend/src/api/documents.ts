@@ -345,7 +345,7 @@ export interface DocumentSeries {
   }
   trend?: { direction: 'rising' | 'falling' | 'flat'; change_pct: string }
   year_over_year?: { prior_value: string; change_pct: string; document_id: number }
-  points?: { date: string; amount: string }[]
+  points?: { date: string; amount: string; document_id: number }[]
 }
 
 /** GET /api/documents/{id}/series — recurring-series stats + comparison. */

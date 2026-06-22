@@ -32,15 +32,15 @@ const trendText = computed<string>(() => (series.value?.trend ? `trend ${series.
 
 const chartData = computed(() => {
   const pts = series.value?.points ?? []
+  const highlightIdx = pts.findIndex((p) => p.document_id === props.documentId)
+  const activeIdx = highlightIdx !== -1 ? highlightIdx : pts.length - 1
   return {
     labels: pts.map((p) => p.date),
     datasets: [
       {
         data: pts.map((p) => Number(p.amount)),
         borderColor: '#2563eb',
-        pointBackgroundColor: pts.map((p, i) =>
-          i === pts.length - 1 ? '#dc2626' : '#2563eb',
-        ),
+        pointBackgroundColor: pts.map((_, i) => (i === activeIdx ? '#dc2626' : '#2563eb')),
         tension: 0.2,
       },
     ],
