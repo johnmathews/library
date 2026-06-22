@@ -1,7 +1,9 @@
 <script setup lang="ts">
+defineOptions({ name: 'DocumentPdfPreview' })
+
 import { ref, shallowRef, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
-import type { PDFDocumentProxy } from 'pdfjs-dist'
+import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist'
 
 // Module worker, bundled by Vite and loaded on demand (off the initial bundle).
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -22,6 +24,7 @@ const status = ref<Status>('loading')
 const pageCount = ref(0)
 const pdf = shallowRef<PDFDocumentProxy | null>(null)
 let loadGeneration = 0
+let loadingTask: PDFDocumentLoadingTask | null = null
 
 const container = ref<HTMLElement | null>(null)
 const canvasRefs = ref<Array<HTMLCanvasElement | null>>([])
@@ -45,7 +48,7 @@ async function renderPage(n: number): Promise<void> {
   const viewport = page.getViewport({ scale })
   canvas.width = viewport.width
   canvas.height = viewport.height
-  await page.render({ canvasContext: ctx, viewport }).promise
+  await page.render({ canvas, canvasContext: ctx, viewport }).promise
 }
 
 function observePages(): void {
@@ -78,9 +81,11 @@ async function load(): Promise<void> {
   pdf.value = null
   let loaded = false
   try {
-    const doc = await pdfjsLib.getDocument({ url: props.src }).promise
+    const task = pdfjsLib.getDocument({ url: props.src })
+    loadingTask = task
+    const doc = await task.promise
     if (generation !== loadGeneration) {
-      void doc.destroy()
+      void task.destroy()
       return
     }
     pdf.value = doc
@@ -104,7 +109,7 @@ onMounted(load)
 watch(() => props.src, load)
 onBeforeUnmount(() => {
   observer?.disconnect()
-  void pdf.value?.destroy()
+  void loadingTask?.destroy()
 })
 
 defineExpose({ status, pageCount })

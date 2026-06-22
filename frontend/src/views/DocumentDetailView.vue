@@ -10,11 +10,8 @@
  * Save/Cancel. Each save PATCHes only that row's field(s) and replaces
  * local state with the server response — no optimistic updates.
  *
- * PDF preview uses the browser's native viewer in an <iframe> (the
- * searchable PDF when present, the original otherwise) — every modern
- * browser ships one, and pdf.js would add a heavyweight dependency for
- * no gain at family scale. An "open in new tab" link covers browsers
- * with the inline viewer disabled.
+ * PDF preview uses DocumentPdfPreview (pdf.js canvas renderer) for
+ * consistent cross-browser rendering on every viewport.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
@@ -53,6 +50,7 @@ import { listKinds, listSenders, type KindOption, type SenderOption } from '@/ap
 import { ApiError } from '@/api/client'
 import { renderHighlighted } from '@/utils/snippet'
 import DocumentSeriesTrend from '@/components/DocumentSeriesTrend.vue'
+import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -550,8 +548,7 @@ const preview = computed<'image' | 'pdf' | 'none'>(() => {
 
 /** Preview the searchable PDF when the pipeline produced one (it has a
  * text layer, so in-viewer text selection/search works), else the original.
- * Inline disposition: the attachment default would blank the iframe and
- * trigger a download instead of rendering. */
+ * Inline disposition so the browser renders rather than downloads. */
 const pdfPreviewUrl = computed(() =>
   doc.value
     ? doc.value.has_searchable_pdf
@@ -566,28 +563,6 @@ const pageParam = computed<number | null>(() => {
   const n = Array.isArray(value) ? Number(value[0]) : Number(value)
   return Number.isInteger(n) && n > 0 ? n : null
 })
-
-/** Same PDF, but with native-viewer open parameters. `toolbar=0&navpanes=0`
- * hides the viewer chrome (Chrome/Edge honour it; some Firefox builds ignore
- * it — best effort, the page provides its own Open/Download buttons), and
- * `view=FitH` fits the page to the iframe width so a portrait page is not
- * clipped on a narrow (mobile) viewport. The plain `pdfPreviewUrl` (no
- * fragment) is kept for the open-in-new-tab button. When `?page=N` is present
- * the fragment also carries `&page=N` so the viewer opens on that page. */
-const pdfPreviewIframeUrl = computed(() => {
-  if (!pdfPreviewUrl.value) return ''
-  const page = pageParam.value ? `&page=${pageParam.value}` : ''
-  return `${pdfPreviewUrl.value}#toolbar=0&navpanes=0&view=FitH${page}`
-})
-
-/** Firefox's built-in viewer ignores `#toolbar=0` and shows its own toolbar.
- * There's no URL fragment that hides it, so on Firefox we nudge the iframe up
- * behind an overflow-hidden wrapper to clip the toolbar off the top edge.
- * Chrome/Edge honour the fragment and need no clip (clipping there would just
- * eat document content). */
-const hidePdfToolbar = computed(
-  () => typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent),
-)
 
 /** Where the preview header's "Open" button points (open the inline preview in
  * a new tab): the PDF for PDFs, the original image for images. */
@@ -803,68 +778,15 @@ watch(
             :alt="`Preview of ${doc.title ?? 'this document'}`"
             data-testid="preview-image"
           />
-          <template v-else-if="preview === 'pdf'">
-            <!-- On small screens the browser-native PDF viewer renders wider
-                 than the viewport and ignores #view=FitH (notably iOS Safari),
-                 so show the fit-width first-page thumbnail there instead. The
-                 native <iframe> stays on lg+ (scroll/zoom/text-selection). -->
-            <a
-              v-if="doc.has_thumbnail"
-              :href="pdfPreviewUrl"
-              target="_blank"
-              rel="noopener"
-              class="block lg:hidden"
-              data-testid="preview-pdf-image-link"
-            >
-              <img
-                class="w-full object-contain bg-gray-100 dark:bg-gray-900/40"
-                :src="thumbnailUrl(doc.id)"
-                :alt="`First page of ${doc.title ?? 'this document'} — tap to open the PDF`"
-                data-testid="preview-pdf-image"
-              />
-            </a>
-            <!-- No thumbnail for a PDF means it couldn't be rendered — almost
-                 always password-protected. Show a clickable padlock that opens
-                 the PDF (the browser then prompts for the password). Mobile only;
-                 the desktop iframe can prompt inline. -->
-            <a
-              v-else
-              :href="pdfPreviewUrl"
-              target="_blank"
-              rel="noopener"
-              class="flex lg:hidden aspect-[3/4] w-full flex-col items-center justify-center gap-3 bg-gray-100 dark:bg-gray-900/40 p-6 text-center text-gray-400 dark:text-gray-500"
-              data-testid="preview-pdf-locked"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke-width="1.5"
-                stroke="currentColor"
-                class="w-12 h-12"
-                aria-hidden="true"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z"
-                />
-              </svg>
-              <span class="text-sm font-medium">Protected PDF — tap to open</span>
-            </a>
-            <!-- Browser-native PDF viewing; see the component docblock. The
-                 overflow-hidden wrapper lets us clip the viewer's own toolbar on
-                 Firefox (which ignores #toolbar=0) by nudging the iframe up. -->
-            <div class="hidden lg:block overflow-hidden">
-              <iframe
-                class="w-full border-0 hidden lg:block"
-                :class="hidePdfToolbar ? 'h-[calc(70vh+2.6rem)] -mt-[2.6rem]' : 'h-[70vh]'"
-                :src="pdfPreviewIframeUrl"
-                title="Document preview"
-                data-testid="preview-pdf"
-              ></iframe>
-            </div>
-          </template>
+          <DocumentPdfPreview
+            v-else-if="preview === 'pdf'"
+            :src="pdfPreviewUrl"
+            :poster="doc.has_thumbnail ? thumbnailUrl(doc.id) : undefined"
+            :open-href="previewOpenUrl"
+            :download-href="previewDownloadUrl"
+            :initial-page="pageParam"
+            data-testid="preview-pdf"
+          />
           <div
             v-else
             class="p-4 text-sm text-gray-500 dark:text-gray-400"
