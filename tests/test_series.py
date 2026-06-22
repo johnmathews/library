@@ -3,7 +3,14 @@
 from datetime import date
 from decimal import Decimal
 
-from library.series import Distribution, classify_cadence, distribution
+from library.series import (
+    Distribution,
+    classify_cadence,
+    compare_reference,
+    compute_trend,
+    distribution,
+    year_over_year,
+)
 
 
 def test_distribution_basic() -> None:
@@ -47,3 +54,78 @@ def test_classify_cadence_irregular() -> None:
 
 def test_classify_cadence_too_few() -> None:
     assert classify_cadence([date(2025, 1, 1)]) == "irregular"
+
+
+def _dist(values: list[str]) -> Distribution:
+    return distribution([Decimal(v) for v in values])
+
+
+def test_compare_reference_higher() -> None:
+    dist = _dist(["100", "100", "100"])  # median 100, stdev 0
+    cmp = compare_reference(Decimal("130"), dist, typical_pct=0.10)
+    assert cmp.verdict == "higher"
+    assert cmp.delta == Decimal("30.00")
+    assert cmp.z_score is None  # stdev 0
+    assert round(cmp.vs_median_pct, 3) == 0.30
+
+
+def test_compare_reference_typical_within_pct() -> None:
+    dist = _dist(["100", "100", "100"])
+    cmp = compare_reference(Decimal("108"), dist, typical_pct=0.10)
+    assert cmp.verdict == "typical"  # 8% <= 10% band
+
+
+def test_compare_reference_typical_within_stdev() -> None:
+    dist = _dist(["100", "150", "200"])  # median 150, stdev 50
+    cmp = compare_reference(Decimal("180"), dist, typical_pct=0.01)
+    assert cmp.verdict == "typical"  # within 1 stdev even though >1% of median
+    assert cmp.z_score is not None
+
+
+def test_compare_reference_lower() -> None:
+    dist = _dist(["100", "100", "100"])
+    cmp = compare_reference(Decimal("50"), dist, typical_pct=0.10)
+    assert cmp.verdict == "lower"
+
+
+def test_compute_trend_rising() -> None:
+    pts = [
+        (date(2025, 1, 1), Decimal("100")),
+        (date(2025, 2, 1), Decimal("120")),
+        (date(2025, 3, 1), Decimal("140")),
+    ]
+    trend = compute_trend(pts, flat_pct=0.05)
+    assert trend is not None and trend.direction == "rising"
+    assert round(trend.change_pct, 2) == 0.40
+
+
+def test_compute_trend_flat() -> None:
+    pts = [
+        (date(2025, 1, 1), Decimal("100")),
+        (date(2025, 2, 1), Decimal("101")),
+        (date(2025, 3, 1), Decimal("102")),
+    ]
+    trend = compute_trend(pts, flat_pct=0.05)
+    assert trend is not None and trend.direction == "flat"
+
+
+def test_compute_trend_none_when_single() -> None:
+    assert compute_trend([(date(2025, 1, 1), Decimal("100"))], flat_pct=0.05) is None
+
+
+def test_year_over_year_match() -> None:
+    pts = [
+        (date(2024, 3, 1), Decimal("100"), 11),
+        (date(2025, 1, 1), Decimal("130"), 12),
+        (date(2025, 3, 5), Decimal("150"), 13),
+    ]
+    yoy = year_over_year(pts, reference_date=date(2025, 3, 5), cadence="monthly")
+    assert yoy is not None
+    assert yoy.document_id == 11
+    assert yoy.prior_value == Decimal("100.00")
+    assert round(yoy.change_pct, 2) == 0.50
+
+
+def test_year_over_year_no_match() -> None:
+    pts = [(date(2025, 1, 1), Decimal("130"), 12), (date(2025, 3, 5), Decimal("150"), 13)]
+    assert year_over_year(pts, reference_date=date(2025, 3, 5), cadence="monthly") is None
