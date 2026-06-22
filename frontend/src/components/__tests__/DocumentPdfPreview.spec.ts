@@ -64,3 +64,51 @@ describe('DocumentPdfPreview state machine', () => {
     expect(wrapper.find('[data-testid="pdf-preview-password"]').exists()).toBe(true)
   })
 })
+
+describe('DocumentPdfPreview page rendering', () => {
+  // jsdom has no IntersectionObserver — capture the callback so the test can fire it.
+  let ioCallback: (entries: Array<{ isIntersecting: boolean; target: Element }>) => void
+  beforeEach(() => {
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(cb: typeof ioCallback) {
+          ioCallback = cb
+        }
+        observe() {}
+        disconnect() {}
+      },
+    )
+    // jsdom canvases return null for getContext — hand back a stub so render() runs.
+    HTMLCanvasElement.prototype.getContext = vi.fn(() => ({})) as never
+  })
+
+  it('creates one page slot per page', async () => {
+    getDocument.mockReturnValue({ promise: Promise.resolve(fakePdf(3)) })
+    const wrapper = mount(DocumentPdfPreview, { props, attachTo: document.body })
+    await flushPromises()
+    expect(wrapper.findAll('[data-page]')).toHaveLength(3)
+  })
+
+  it('renders a page only after it intersects', async () => {
+    const pdf = fakePdf(3)
+    getDocument.mockReturnValue({ promise: Promise.resolve(pdf) })
+    const wrapper = mount(DocumentPdfPreview, { props, attachTo: document.body })
+    await flushPromises()
+    expect(pdf.getPage).not.toHaveBeenCalled()
+
+    const slot = wrapper.find('[data-page="2"]').element
+    ioCallback([{ isIntersecting: true, target: slot }])
+    await flushPromises()
+    expect(pdf.getPage).toHaveBeenCalledWith(2)
+  })
+
+  it('scrolls to initialPage when provided', async () => {
+    const scrollIntoView = vi.fn()
+    Element.prototype.scrollIntoView = scrollIntoView
+    getDocument.mockReturnValue({ promise: Promise.resolve(fakePdf(5)) })
+    mount(DocumentPdfPreview, { props: { ...props, initialPage: 4 }, attachTo: document.body })
+    await flushPromises()
+    expect(scrollIntoView).toHaveBeenCalled()
+  })
+})
