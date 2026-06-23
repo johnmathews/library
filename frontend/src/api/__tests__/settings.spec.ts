@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { DASHBOARD_FIELDS, TILE_PREVIEWS, getSettings, updateAppearance, updateSettings } from '../settings'
+import {
+  DASHBOARD_FIELDS,
+  NOTIFICATION_EVENTS,
+  TILE_PREVIEWS,
+  getSettings,
+  updateAppearance,
+  updateNotifications,
+  updateSettings,
+} from '../settings'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -52,5 +60,49 @@ describe('settings api', () => {
     expect(DASHBOARD_FIELDS.map((f) => f.value)).toEqual([
       'kind', 'sender', 'tags', 'date', 'language', 'status', 'amount', 'file_type',
     ])
+  })
+
+  it('NOTIFICATION_EVENTS contains the four canonical event keys in order', () => {
+    expect(NOTIFICATION_EVENTS.map((e) => e.value)).toEqual([
+      'document_success', 'processing_error', 'needs_review', 'duplicate',
+    ])
+  })
+
+  it('PUT /api/settings/notifications sends the notification body', async () => {
+    const readModel = {
+      dashboard_fields: ['kind'],
+      notifications: {
+        enabled: true,
+        pushover_app_token_set: true,
+        pushover_user_key_set: true,
+        pushover_device: null,
+        events: ['document_success'],
+        email_forward_addresses: ['me@example.com'],
+      },
+    }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(readModel))
+    vi.stubGlobal('fetch', fetchMock)
+
+    const result = await updateNotifications({
+      enabled: true,
+      pushover_app_token: 'token-123',
+      pushover_user_key: 'user-456',
+      pushover_device: null,
+      events: ['document_success'],
+      email_forward_addresses: ['me@example.com'],
+    })
+
+    expect(result).toEqual(readModel)
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('/api/settings/notifications')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({
+      enabled: true,
+      pushover_app_token: 'token-123',
+      pushover_user_key: 'user-456',
+      pushover_device: null,
+      events: ['document_success'],
+      email_forward_addresses: ['me@example.com'],
+    })
   })
 })

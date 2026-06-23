@@ -441,3 +441,88 @@ async def test_periodic_task_noops_when_host_unset(monkeypatch: pytest.MonkeyPat
         assert called is False
     finally:
         get_settings.cache_clear()
+
+
+# --- Sender → user attribution (W4) ---
+
+
+async def _make_user(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    username: str,
+    forward_addresses: list[str] | None = None,
+) -> int:
+    from library.models import User
+
+    async with session_factory() as session:
+        prefs: dict[str, object] = {}
+        if forward_addresses is not None:
+            prefs = {"notifications": {"email_forward_addresses": forward_addresses}}
+        user = User(username=username, password_hash="x", preferences=prefs)
+        session.add(user)
+        await session.commit()
+        return user.id
+
+
+async def test_email_attributes_document_to_forwarding_user(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    owner_id = await _make_user(
+        session_factory,
+        username=f"owner-{uuid.uuid4().hex[:8]}",
+        forward_addresses=["jane@example.org"],
+    )
+    name = f"owned-{uuid.uuid4().hex[:8]}.pdf"
+    raw = make_raw_mail(
+        from_addr="Jane Voorbeeld <jane@example.org>",  # display name + addr; case differs below
+        attachments=[(name, make_pdf(), "application", "pdf")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="1")])
+
+    await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1
+    assert documents[0].uploader_id == owner_id
+
+
+async def test_email_unknown_sender_falls_back_to_default_owner(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    default_username = f"default-{uuid.uuid4().hex[:8]}"
+    default_id = await _make_user(session_factory, username=default_username)
+    settings = Settings(email_host="imap.example.test", email_default_owner=default_username)
+    name = f"fallback-{uuid.uuid4().hex[:8]}.pdf"
+    raw = make_raw_mail(
+        from_addr="stranger@nowhere.test",
+        attachments=[(name, make_pdf(), "application", "pdf")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="1")])
+
+    await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1
+    assert documents[0].uploader_id == default_id
+
+
+async def test_resolve_sender_owner_matches_case_insensitively(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    from library.email_ingest import resolve_sender_owner
+
+    owner_id = await _make_user(
+        session_factory,
+        username=f"ci-{uuid.uuid4().hex[:8]}",
+        forward_addresses=["me@example.com"],
+    )
+    async with session_factory() as session:
+        # Mixed-case + whitespace still matches the stored lowercased address.
+        assert await resolve_sender_owner(session, "  Me@Example.COM ") == owner_id
+        # Unknown sender, no default → None.
+        assert await resolve_sender_owner(session, "nobody@example.com") is None

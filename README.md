@@ -30,7 +30,10 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
 - **Live jobs & notifications:** a Jobs view of current and historical
   background work, a navbar running-jobs indicator, and toasts when a
   document finishes — pushed live over Server-Sent Events (no polling).
-  See [`docs/jobs-and-notifications.md`](docs/jobs-and-notifications.md).
+  Each user can also opt into **Pushover** push notifications (their own
+  credentials, owner-targeted, per-event toggles for success, errors,
+  needs-review and duplicates). See
+  [`docs/jobs-and-notifications.md`](docs/jobs-and-notifications.md).
 - **Interfaces:** cookie/bearer-authenticated REST API (OpenAPI at
   `/docs`) and an MCP server at `/mcp`, so LLM clients can search, read
   and ingest documents.

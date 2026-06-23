@@ -56,12 +56,55 @@ export type TilePreview = (typeof TILE_PREVIEWS)[number]['value']
 
 export const DEFAULT_TILE_PREVIEW: TilePreview = 'full_width'
 
+/**
+ * The notification events a user can subscribe to (Settings → Notifications).
+ * This ordered list is the single frontend source of truth for the checkbox
+ * list — the event keys and their labels. The keys mirror the backend's
+ * canonical event set.
+ */
+export const NOTIFICATION_EVENTS = [
+  { value: 'document_success', label: 'Document processed successfully' },
+  { value: 'processing_error', label: 'Processing failed' },
+  { value: 'needs_review', label: 'Needs review (low confidence)' },
+  { value: 'duplicate', label: 'Duplicate detected' },
+] as const
+
+export type NotificationEvent = (typeof NOTIFICATION_EVENTS)[number]['value']
+
+/**
+ * The Pushover/forwarding notification preferences read model (returned by
+ * GET /api/settings and embedded in /api/auth/me). Secrets are never returned;
+ * the `*_set` booleans report whether a value is stored.
+ */
+export interface NotificationPreferences {
+  enabled: boolean
+  pushover_app_token_set: boolean
+  pushover_user_key_set: boolean
+  pushover_device: string | null
+  events: string[]
+  email_forward_addresses: string[]
+}
+
+/**
+ * The PUT /api/settings/notifications write body. Omit (or send "") for a
+ * `pushover_*` secret to keep the stored value unchanged.
+ */
+export interface NotificationUpdate {
+  enabled: boolean
+  pushover_app_token?: string | null
+  pushover_user_key?: string | null
+  pushover_device?: string | null
+  events: string[]
+  email_forward_addresses: string[]
+}
+
 export interface UserPreferences {
   dashboard_fields: DashboardField[]
   // Optional on the client so older payloads (and test fixtures) without the
   // key still type-check; consumers fall back to the defaults.
   background_tone?: BackgroundTone
   tile_preview?: TilePreview
+  notifications?: NotificationPreferences
 }
 
 /** GET /api/settings — resolved display preferences. */
@@ -82,5 +125,13 @@ export function updateAppearance(
   return apiFetch<UserPreferences>('/api/settings/appearance', {
     method: 'PUT',
     body: { background_tone: tone, tile_preview: tilePreview },
+  })
+}
+
+/** PUT /api/settings/notifications — persist Pushover + forwarding settings. */
+export function updateNotifications(payload: NotificationUpdate): Promise<UserPreferences> {
+  return apiFetch<UserPreferences>('/api/settings/notifications', {
+    method: 'PUT',
+    body: payload,
   })
 }

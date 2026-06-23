@@ -17,6 +17,9 @@ class Settings(BaseSettings):
     data_dir: Path = Path("/data")
     environment: str = "production"
     max_upload_bytes: int = 100 * 1024 * 1024
+    # Public base URL of the web app (e.g. https://library.example.com), used
+    # to deep-link push notifications back to a document. Unset = no link.
+    public_base_url: str | None = None
     # Built Vue SPA (docs/deployment.md §1.3). Relative to the working
     # directory: resolves to the baked-in build in the Docker image (/app/
     # frontend/dist) and to the local build in a checkout. If the directory
@@ -83,6 +86,9 @@ class Settings(BaseSettings):
     email_poll_minutes: int = 10
     # Comma-separated in the env; empty = accept mail from any sender.
     email_allowed_senders: Annotated[list[str], NoDecode] = []
+    # Username that owns email-ingested documents whose sender matches no user's
+    # forwarding addresses. Unset = such documents stay unowned (and notify no one).
+    email_default_owner: str | None = None
     # paperless-ngx importer (see docs/migration.md).
     paperless_url: str | None = None
     paperless_token: SecretStr | None = None

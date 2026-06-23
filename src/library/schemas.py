@@ -4,6 +4,7 @@ See docs/api.md for the full surface description. ``Decimal`` fields
 (``amount_total``) serialize to JSON strings to preserve precision.
 """
 
+from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
@@ -306,17 +307,188 @@ class AppearancePreferences(BaseModel):
         return DEFAULT_TILE_PREVIEW
 
 
+class NotificationEvent(StrEnum):
+    """A document event a user can choose to be pushed about (via Pushover)."""
+
+    DOCUMENT_SUCCESS = "document_success"  # finished the full pipeline
+    PROCESSING_ERROR = "processing_error"  # failed somewhere in the pipeline
+    NEEDS_REVIEW = "needs_review"  # processed but low-confidence / flagged
+    DUPLICATE = "duplicate"  # ingested content already in the library
+
+
+#: New users get nothing until they opt in — notifications are off by default.
+DEFAULT_NOTIFICATION_EVENTS: Final[list[NotificationEvent]] = []
+
+
+def _clean_events(value: object) -> list[NotificationEvent]:
+    """Keep only known event keys, de-duplicated, order preserved.
+
+    Tolerant like :meth:`DashboardPreferences._clean`: unknown/garbage values
+    are dropped rather than raising, so a hand-edited row or a renamed event
+    can never 422 a settings save.
+    """
+    if not isinstance(value, list):
+        return []
+    valid = {event.value for event in NotificationEvent}
+    seen: set[str] = set()
+    cleaned: list[NotificationEvent] = []
+    for item in value:
+        if isinstance(item, str) and item in valid and item not in seen:
+            seen.add(item)
+            cleaned.append(NotificationEvent(item))
+    return cleaned
+
+
+def _clean_addresses(value: object) -> list[str]:
+    """Normalise a list of email addresses: lowercased, stripped, de-duplicated.
+
+    The from-addresses a user forwards mail from (email-in attribution). Tolerant
+    like the other preference cleaners — garbage is dropped, never a 422.
+    """
+    if not isinstance(value, list):
+        return []
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            address = item.strip().lower()
+            if address and address not in seen:
+                seen.add(address)
+                cleaned.append(address)
+    return cleaned
+
+
+class NotificationSettingsIn(BaseModel):
+    """Body of PUT /api/settings/notifications (write model).
+
+    The Pushover credentials are secrets: an absent or empty ``pushover_*``
+    value means "leave the stored one unchanged" (so saving only ``events``
+    never wipes the token). ``pushover_device`` and ``events`` are echoed back
+    in the read model, so they are authoritative from the payload.
+    """
+
+    enabled: bool = False
+    pushover_app_token: str | None = None
+    pushover_user_key: str | None = None
+    pushover_device: str | None = None
+    events: list[NotificationEvent] = Field(default_factory=list)
+    # From-addresses this user forwards mail from (email-in attribution): an
+    # email whose sender matches is owned by — and notified to — this user.
+    email_forward_addresses: list[str] = Field(default_factory=list)
+
+    @field_validator("events", mode="before")
+    @classmethod
+    def _clean(cls, value: object) -> list[NotificationEvent]:
+        return _clean_events(value)
+
+    @field_validator("email_forward_addresses", mode="before")
+    @classmethod
+    def _clean_addrs(cls, value: object) -> list[str]:
+        return _clean_addresses(value)
+
+    @field_validator("pushover_app_token", "pushover_user_key", "pushover_device", mode="before")
+    @classmethod
+    def _blank_to_none(cls, value: object) -> object:
+        """Treat an empty/whitespace string as absent (keep-existing)."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+
+class NotificationSettingsOut(BaseModel):
+    """Resolved notification settings (read model) — never exposes secrets.
+
+    The raw Pushover token/key are write-only; the client only learns whether
+    each is configured (``*_set``), so a leaked ``/auth/me`` or ``/settings``
+    response cannot reveal a user's credentials.
+    """
+
+    enabled: bool
+    pushover_app_token_set: bool
+    pushover_user_key_set: bool
+    pushover_device: str | None
+    events: list[NotificationEvent]
+    email_forward_addresses: list[str]
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationCredentials:
+    """Internal: the secrets + event set needed to actually send a push.
+
+    Returned by :func:`get_notification_credentials` only when a user is fully
+    configured (enabled + both credentials present). Never serialized.
+    """
+
+    app_token: str
+    user_key: str
+    device: str | None
+    events: frozenset[NotificationEvent]
+
+
+def _notifications_blob(preferences: dict[str, Any] | None) -> dict[str, Any]:
+    """The ``notifications`` sub-dict of a preferences blob (empty if absent)."""
+    blob = (preferences or {}).get("notifications")
+    return blob if isinstance(blob, dict) else {}
+
+
+def resolve_notification_settings(
+    preferences: dict[str, Any] | None,
+) -> NotificationSettingsOut:
+    """Resolve a stored ``preferences`` blob to the secret-safe read model."""
+    blob = _notifications_blob(preferences)
+    app_token = blob.get("pushover_app_token")
+    user_key = blob.get("pushover_user_key")
+    device = blob.get("pushover_device")
+    return NotificationSettingsOut(
+        enabled=bool(blob.get("enabled", False)),
+        pushover_app_token_set=bool(app_token),
+        pushover_user_key_set=bool(user_key),
+        pushover_device=device if isinstance(device, str) and device else None,
+        events=_clean_events(blob.get("events", DEFAULT_NOTIFICATION_EVENTS)),
+        email_forward_addresses=_clean_addresses(blob.get("email_forward_addresses", [])),
+    )
+
+
+def get_notification_credentials(
+    preferences: dict[str, Any] | None,
+) -> NotificationCredentials | None:
+    """Return send-ready credentials, or ``None`` if the user can't be pushed.
+
+    ``None`` whenever notifications are disabled, either credential is missing,
+    or no events are selected — the caller (the dispatcher) then sends nothing.
+    """
+    blob = _notifications_blob(preferences)
+    if not blob.get("enabled"):
+        return None
+    app_token = blob.get("pushover_app_token")
+    user_key = blob.get("pushover_user_key")
+    if not (isinstance(app_token, str) and isinstance(user_key, str)):
+        return None
+    events = frozenset(_clean_events(blob.get("events", [])))
+    if not events:
+        return None
+    device = blob.get("pushover_device")
+    return NotificationCredentials(
+        app_token=app_token,
+        user_key=user_key,
+        device=device if isinstance(device, str) and device else None,
+        events=events,
+    )
+
+
 class UserPreferences(BaseModel):
     """All resolved per-user display preferences (read model).
 
     Returned by GET /api/settings and embedded in ``UserOut``. Writes are
-    split per concern (dashboard fields vs appearance) so each Settings tab
-    saves independently; this model is the union the client reads back.
+    split per concern (dashboard fields vs appearance vs notifications) so each
+    Settings tab saves independently; this model is the union the client reads
+    back.
     """
 
     dashboard_fields: list[DashboardField]
     background_tone: BackgroundTone
     tile_preview: TilePreview
+    notifications: NotificationSettingsOut
 
 
 def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
@@ -330,6 +502,7 @@ def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
         dashboard_fields=resolve_dashboard_preferences(blob).dashboard_fields,
         background_tone=_resolve_background_tone(blob),
         tile_preview=_resolve_tile_preview(blob),
+        notifications=resolve_notification_settings(blob),
     )
 
 

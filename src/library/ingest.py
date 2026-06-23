@@ -13,9 +13,12 @@ import filetype
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from library.config import get_settings
 from library.images import CONVERTED_JPEG_NAME, HEIC_MIME_TYPES, normalize_image
 from library.jobs import process_document
 from library.models import Document, DocumentSource, IngestionEvent
+from library.notifications import dispatch_loaded_document_notification
+from library.schemas import NotificationEvent
 from library.storage import derived_dir, store
 
 logger = logging.getLogger(__name__)
@@ -144,6 +147,18 @@ async def ingest_file(
         )
         await session.commit()
         logger.info("duplicate upload of document %s (sha256 %s)", existing.id, sha256)
+        # Duplicates never enter the worker pipeline, so notify here from the
+        # already-loaded document rather than from jobs.py. `existing.uploader`
+        # is populated by the selectin load on the query above and stays valid
+        # after commit because every session factory uses expire_on_commit=False
+        # (library.db.get_sessionmaker) — so no lazy reload fires in this sync
+        # access path. Best-effort — never fails the ingest. Guarded end-to-end
+        # by tests/test_ingest_api.py::test_duplicate_upload_notifies_owner.
+        await dispatch_loaded_document_notification(
+            existing,
+            NotificationEvent.DUPLICATE,
+            document_url_base=get_settings().public_base_url,
+        )
         return IngestResult(existing, duplicate=True)
 
     stored = store(content)

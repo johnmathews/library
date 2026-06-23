@@ -330,3 +330,53 @@ def _enrich_document(database_url: str, document_id: int) -> None:
             await engine.dispose()
 
     asyncio.run(run())
+
+
+def test_duplicate_upload_notifies_owner(
+    api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The ingest-time duplicate push reaches the owner end-to-end.
+
+    Exercises the real session lifecycle (HTTP request → ingest_file → commit →
+    dispatch from the already-loaded `existing.uploader`), guarding the
+    expire_on_commit=False invariant the duplicate-notification path relies on.
+    """
+    from library import notifications
+    from library.notifications import PushoverResult, PushoverValidation
+
+    sends: list[dict[str, object]] = []
+
+    async def _ok_validate(**kwargs: object) -> PushoverValidation:
+        return PushoverValidation(valid=True, devices=("iphone",))
+
+    async def _capture_send(**kwargs: object) -> PushoverResult:
+        sends.append(kwargs)
+        return PushoverResult(ok=True, request_id="r")
+
+    monkeypatch.setattr(notifications, "validate_pushover", _ok_validate)
+    monkeypatch.setattr(notifications, "send_pushover", _capture_send)
+
+    # The authenticated user opts into duplicate notifications.
+    resp = api_client.put(
+        "/api/settings/notifications",
+        json={
+            "enabled": True,
+            "pushover_app_token": "app",
+            "pushover_user_key": "usr",
+            "events": ["duplicate"],
+        },
+    )
+    assert resp.status_code == 200, resp.text
+
+    content = b"%PDF-1.4 dup-notify " + b"q" * 32
+    first_status, _ = upload(api_client, content, filename="dn1.pdf")
+    assert first_status == 201
+    assert sends == []  # first upload is not a duplicate
+
+    second_status, second_body = upload(api_client, content, filename="dn2.pdf")
+    assert second_status == 200
+    assert second_body["duplicate"] is True
+    # The owner (uploader) got exactly one duplicate push — proving the
+    # post-commit uploader access works on the real async session.
+    assert len(sends) == 1
+    assert sends[0]["title"] == "Duplicate document"

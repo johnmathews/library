@@ -3,10 +3,11 @@
 A periodic Procrastinate task (``library.jobs.poll_email_inbox``) polls
 ``LIBRARY_EMAIL_FOLDER`` every ``LIBRARY_EMAIL_POLL_MINUTES`` minutes and
 feeds every supported attachment through the same ``ingest_file`` service
-as an upload (``source=email``, no uploader), attaching the sender,
-subject, and Message-ID to the recorded ingestion event. v1 ingests
-attachments only — body-only mails are filed away without creating a
-document (see docs/ingestion.md, "Email-in").
+as an upload (``source=email``; the uploader is resolved from the sender
+via ``resolve_sender_owner``), attaching the sender, subject, and
+Message-ID to the recorded ingestion event. v1 ingests attachments only —
+body-only mails are filed away without creating a document (see
+docs/ingestion.md, "Email-in").
 
 Idempotency is folder-based: every fully processed message is moved to
 ``LIBRARY_EMAIL_PROCESSED_FOLDER`` (created on first use), so a message
@@ -28,6 +29,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from imap_tools import MailBox, MailMessage
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from library.config import Settings
@@ -38,7 +40,7 @@ from library.ingest import (
     detect_mime,
     ingest_file,
 )
-from library.models import DocumentSource
+from library.models import DocumentSource, User
 
 logger = logging.getLogger(__name__)
 
@@ -223,17 +225,56 @@ def poll_mailbox(
     return summary
 
 
+async def resolve_sender_owner(
+    session: AsyncSession, sender: str | None, *, default_owner_username: str | None = None
+) -> int | None:
+    """Resolve an email sender address to the owning user's id.
+
+    Matches the (lowercased) sender against any user's
+    ``preferences.notifications.email_forward_addresses``; on no match, falls
+    back to ``default_owner_username`` (if configured); otherwise ``None`` (the
+    document stays unowned, as before this feature).
+
+    Iterates users in Python rather than a JSONB containment query — a
+    personal/family deployment has a handful of users, so clarity wins; switch
+    to a ``@>`` query if the user table ever grows large.
+    """
+    normalized = (sender or "").strip().lower()
+    if normalized:
+        rows = (await session.execute(select(User.id, User.preferences))).all()
+        for user_id, preferences in rows:
+            block = (preferences or {}).get("notifications") or {}
+            addresses = block.get("email_forward_addresses") or []
+            if isinstance(addresses, list) and normalized in {
+                str(item).strip().lower() for item in addresses
+            }:
+                return user_id
+    if default_owner_username:
+        return (
+            await session.execute(select(User.id).where(User.username == default_owner_username))
+        ).scalar_one_or_none()
+    return None
+
+
 async def _ingest_candidate(
-    session_factory: async_sessionmaker[AsyncSession], candidate: AttachmentCandidate
+    session_factory: async_sessionmaker[AsyncSession],
+    candidate: AttachmentCandidate,
+    *,
+    default_owner_username: str | None = None,
 ) -> IngestResult:
     async with session_factory() as session:
+        owner_id = await resolve_sender_owner(
+            session,
+            candidate.event_detail.get("email_from"),  # type: ignore[arg-type]
+            default_owner_username=default_owner_username,
+        )
         return await ingest_file(
             session,
             content=candidate.content,
             filename=candidate.filename,
             mime=candidate.mime,
             source=DocumentSource.EMAIL,
-            uploader_id=None,
+            uploader_id=owner_id,
             extra_event_detail=dict(candidate.event_detail),
         )
 
@@ -249,13 +290,16 @@ async def poll_mailbox_async(
     The synchronous IMAP work must not block the Procrastinate worker, so
     it runs via ``asyncio.to_thread``; each ingest call is marshalled back
     onto the calling loop (``run_coroutine_threadsafe``) so the database
-    session and job-queue connector stay on their home loop.
+    session and job-queue connector stay on their home loop. The sender is
+    resolved to an owning user there too (``resolve_sender_owner``).
     """
     loop = asyncio.get_running_loop()
+    default_owner = settings.email_default_owner
 
     def ingest_on_loop(candidate: AttachmentCandidate) -> IngestResult:
         future = asyncio.run_coroutine_threadsafe(
-            _ingest_candidate(session_factory, candidate), loop
+            _ingest_candidate(session_factory, candidate, default_owner_username=default_owner),
+            loop,
         )
         return future.result()
 

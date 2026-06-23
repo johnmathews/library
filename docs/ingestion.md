@@ -795,7 +795,8 @@ is rejected by MIME sniffing and lands in `failed/`.
 
 A periodic Procrastinate task (`library.jobs.poll_email_inbox`) polls an
 IMAP mailbox and ingests every supported attachment through the same
-`ingest_file` service as an upload (`source=email`, no uploader). The
+`ingest_file` service as an upload (`source=email`; the uploader is
+resolved from the sender — see "Sender → owner attribution" below). The
 feature is off until `LIBRARY_EMAIL_HOST` is set — the schedule still
 ticks (cron built from `LIBRARY_EMAIL_POLL_MINUTES`, default
 `*/10 * * * *`), but the task returns immediately.
@@ -833,6 +834,17 @@ Details and decisions:
   `received`/`duplicate_upload` event carries `email_from`,
   `email_subject`, and `email_message_id` alongside the standard keys
   (via `ingest_file`'s `extra_event_detail` parameter).
+- **Sender → owner attribution.** Before ingesting, the poller resolves
+  the sender address to a user (`resolve_sender_owner`): the document is
+  owned by (`uploader_id`) the user whose
+  `preferences.notifications.email_forward_addresses` contains the
+  lowercased sender. On no match it falls back to the user named by
+  `LIBRARY_EMAIL_DEFAULT_OWNER`, and on no fallback the document stays
+  unowned (the pre-feature behaviour). Ownership is what routes the
+  success/error **Pushover notification** to the right person — see
+  [jobs-and-notifications.md](jobs-and-notifications.md) §1.5. Note: if
+  you forward from your own mail client the `From:` header becomes *your*
+  address, so list the addresses you forward *from* in your settings.
 - **Allowlist.** `LIBRARY_EMAIL_ALLOWED_SENDERS` is comma-separated and
   case-insensitive; empty (default) accepts mail from anyone, so set it
   whenever the address is guessable. Rejected mail stays in the inbox
@@ -948,3 +960,4 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_EMAIL_PROCESSED_FOLDER` | `Library/Processed` | Where handled messages are moved (created if missing) |
 | `LIBRARY_EMAIL_POLL_MINUTES` | `10` | Poll cadence (cron step; clamped to 1–59) |
 | `LIBRARY_EMAIL_ALLOWED_SENDERS` | empty | Comma-separated sender allowlist; empty accepts anyone |
+| `LIBRARY_EMAIL_DEFAULT_OWNER` | unset | Username owning email documents whose sender matches no user's forwarding addresses; unset leaves them unowned |

@@ -5,17 +5,22 @@
  *     (checkboxes + explicit save; PUT /api/settings).
  *   - Appearance: the page-canvas tone behind the tiles — swatches that apply
  *     live and auto-save per click (PUT /api/settings/appearance).
- * Both preferences live per-user on the server and in the auth store.
+ *   - Notifications: Pushover push notifications + the email addresses a user
+ *     forwards documents from (explicit save; PUT /api/settings/notifications).
+ * All preferences live per-user on the server and in the auth store.
  */
 import { ref } from 'vue'
-import { AppButton, AppBanner, AppCheckboxes, AppErrorSummary } from '@/components/app'
+import { AppButton, AppBanner, AppCheckboxes, AppErrorSummary, AppInput, AppTextarea } from '@/components/app'
+import { ApiError } from '@/api/client'
 import {
   BACKGROUND_TONES,
   DASHBOARD_FIELDS,
   DEFAULT_BACKGROUND_TONE,
   DEFAULT_TILE_PREVIEW,
+  NOTIFICATION_EVENTS,
   TILE_PREVIEWS,
   updateAppearance,
+  updateNotifications,
   updateSettings,
   type BackgroundTone,
   type DashboardField,
@@ -25,7 +30,7 @@ import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 
-type Tab = 'dashboard' | 'appearance'
+type Tab = 'dashboard' | 'appearance' | 'notifications'
 const tab = ref<Tab>('dashboard')
 
 // --- Dashboard fields --------------------------------------------------------
@@ -103,6 +108,79 @@ async function selectTilePreview(mode: TilePreview): Promise<void> {
   }
 }
 
+// --- Notifications (Pushover + email forwarding) ----------------------------
+
+const notificationEventItems = NOTIFICATION_EVENTS.map((event) => ({
+  value: event.value,
+  text: event.label,
+}))
+
+// Seed the form from the store's current notification preferences. Secrets are
+// never returned, so the token/key inputs start blank: a blank value on submit
+// keeps the stored secret unchanged when the corresponding *_set flag is true.
+const notifEnabled = ref<boolean>(auth.notificationSettings.enabled)
+const notifAppToken = ref<string>('')
+const notifUserKey = ref<string>('')
+const notifDevice = ref<string>(auth.notificationSettings.pushover_device ?? '')
+const notifEvents = ref<string[]>([...auth.notificationSettings.events])
+const notifAddresses = ref<string>(auth.notificationSettings.email_forward_addresses.join('\n'))
+const notifAppTokenSet = ref<boolean>(auth.notificationSettings.pushover_app_token_set)
+const notifUserKeySet = ref<boolean>(auth.notificationSettings.pushover_user_key_set)
+
+const notifSaved = ref(false)
+const notifError = ref<string | null>(null)
+const notifSaving = ref(false)
+
+/** Split a textarea of comma/newline-separated addresses into a trimmed list. */
+function parseAddresses(raw: string): string[] {
+  return raw
+    .split(/[\n,]/)
+    .map((address) => address.trim())
+    .filter((address) => address.length > 0)
+}
+
+/** Re-seed the form fields from a fresh notification read model. */
+function seedNotifications(): void {
+  const prefs = auth.notificationSettings
+  notifEnabled.value = prefs.enabled
+  notifDevice.value = prefs.pushover_device ?? ''
+  notifEvents.value = [...prefs.events]
+  notifAddresses.value = prefs.email_forward_addresses.join('\n')
+  notifAppTokenSet.value = prefs.pushover_app_token_set
+  notifUserKeySet.value = prefs.pushover_user_key_set
+  // Secrets are never returned, so clear the entry fields after a save.
+  notifAppToken.value = ''
+  notifUserKey.value = ''
+}
+
+async function onNotificationsSubmit(): Promise<void> {
+  notifSaving.value = true
+  notifSaved.value = false
+  notifError.value = null
+  try {
+    const result = await updateNotifications({
+      enabled: notifEnabled.value,
+      // Send the secret only when the user typed one; a blank value keeps the
+      // stored secret unchanged on the server.
+      pushover_app_token: notifAppToken.value.trim() || undefined,
+      pushover_user_key: notifUserKey.value.trim() || undefined,
+      pushover_device: notifDevice.value.trim() || null,
+      events: notifEvents.value,
+      email_forward_addresses: parseAddresses(notifAddresses.value),
+    })
+    auth.applyPreferences(result)
+    seedNotifications()
+    notifSaved.value = true
+  } catch (error) {
+    notifError.value =
+      error instanceof ApiError
+        ? error.detail
+        : 'Sorry, your notification settings could not be saved. Try again.'
+  } finally {
+    notifSaving.value = false
+  }
+}
+
 const cardClass =
   'bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-6'
 const tabClass = (active: boolean): string =>
@@ -142,6 +220,18 @@ const tabClass = (active: boolean): string =>
         @click="tab = 'appearance'"
       >
         Appearance
+      </button>
+      <button
+        id="settings-tab-notifications"
+        role="tab"
+        type="button"
+        :aria-selected="tab === 'notifications'"
+        :tabindex="tab === 'notifications' ? 0 : -1"
+        :class="tabClass(tab === 'notifications')"
+        data-testid="tab-notifications-btn"
+        @click="tab = 'notifications'"
+      >
+        Notifications
       </button>
     </div>
 
@@ -253,6 +343,105 @@ const tabClass = (active: boolean): string =>
             </button>
           </div>
         </fieldset>
+      </div>
+    </section>
+
+    <!-- Notifications tab -->
+    <section
+      id="settings-panel-notifications"
+      v-show="tab === 'notifications'"
+      role="tabpanel"
+      data-testid="tab-notifications"
+    >
+      <AppErrorSummary
+        v-if="notifError"
+        :errors="[{ text: notifError }]"
+        data-testid="notifications-error"
+      />
+
+      <div v-if="notifSaved" class="mb-6">
+        <AppBanner variant="success" data-testid="notifications-saved">
+          <p>Your notification settings have been saved.</p>
+        </AppBanner>
+      </div>
+
+      <div id="settings-card-notifications" :class="cardClass">
+        <form @submit.prevent="onNotificationsSubmit">
+          <label class="flex items-center gap-2 py-1">
+            <input
+              v-model="notifEnabled"
+              id="notifications-enabled"
+              type="checkbox"
+              class="form-checkbox"
+              data-testid="notifications-enabled"
+            />
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300"
+              >Enable push notifications</span
+            >
+          </label>
+          <p class="text-sm text-gray-500 dark:text-gray-400 mb-5">
+            Send push notifications to your devices via
+            <a href="https://pushover.net" class="text-violet-500 underline">Pushover</a>. Enabling
+            this requires a valid app token and user key.
+          </p>
+
+          <div class="space-y-5">
+            <AppInput
+              id="pushover-app-token"
+              type="password"
+              label="Pushover application token"
+              autocomplete="off"
+              :hint="
+                notifAppTokenSet
+                  ? 'Saved — leave blank to keep the current token.'
+                  : 'The API token from your Pushover application.'
+              "
+              v-model="notifAppToken"
+            />
+            <AppInput
+              id="pushover-user-key"
+              type="password"
+              label="Pushover user key"
+              autocomplete="off"
+              :hint="
+                notifUserKeySet
+                  ? 'Saved — leave blank to keep the current key.'
+                  : 'Your Pushover user (or group) key.'
+              "
+              v-model="notifUserKey"
+            />
+            <AppInput
+              id="pushover-device"
+              label="Pushover device (optional)"
+              autocomplete="off"
+              hint="Limit notifications to a single device. Leave blank for all devices."
+              v-model="notifDevice"
+            />
+
+            <AppCheckboxes
+              id="notification-events"
+              legend="Notify me about"
+              legend-size="s"
+              hint="Choose which document events trigger a notification."
+              :items="notificationEventItems"
+              v-model="notifEvents"
+              small
+            />
+
+            <AppTextarea
+              id="email-forward-addresses"
+              label="Email addresses you forward documents from"
+              :rows="4"
+              autocomplete="off"
+              hint="One per line (or comma-separated). Documents arriving from these addresses are attributed to you."
+              v-model="notifAddresses"
+            />
+          </div>
+
+          <div class="mt-6">
+            <AppButton type="submit" :disabled="notifSaving">Save changes</AppButton>
+          </div>
+        </form>
       </div>
     </section>
   </div>

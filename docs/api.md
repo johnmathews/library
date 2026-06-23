@@ -49,6 +49,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/settings` | Your display preferences (dashboard fields + page-canvas tone + tile preview) |
 | PUT    | `/api/settings` | Update your dashboard fields |
 | PUT    | `/api/settings/appearance` | Update your page-canvas tone and tile preview |
+| PUT    | `/api/settings/notifications` | Update your Pushover notifications + email forwarding addresses |
 
 Soft-deleted documents return **404** from every per-document endpoint and
 never appear in lists. Other error shapes: `404` unknown document, `422`
@@ -405,15 +406,15 @@ curl -H "Authorization: Bearer library_3q2…" \
 Bearer requests are CSRF-exempt (the header cannot be set cross-site).
 Revoked or unknown tokens, and tokens of disabled users, get `401`.
 
-## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`
+## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`, `PUT /api/settings/notifications`
 
-Per-user display preferences: which metadata fields appear on the
-dashboard tiles, the page-canvas tone behind them, and how each tile
-previews the document's first page. Auth and CSRF
-rules are identical to the rest of `/api` (§1.9). All preferences live in
+Per-user preferences: which metadata fields appear on the dashboard tiles, the
+page-canvas tone behind them, how each tile previews the document's first page,
+and Pushover notification settings (incl. email forwarding addresses). Auth and
+CSRF rules are identical to the rest of `/api` (§1.9). All preferences live in
 one JSONB `preferences` blob on the user row; writes are split per concern
-(fields vs appearance) so each Settings tab saves independently, and every
-write preserves the sibling keys.
+(fields vs appearance vs notifications) so each Settings tab saves
+independently, and every write preserves the sibling keys.
 
 ### 1.10.1 `GET /api/settings`
 
@@ -422,7 +423,7 @@ user has never saved preferences, the **default set** is returned (no
 `404` or empty body).
 
 ```json
-{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"], "background_tone": "neutral", "tile_preview": "full_width"}
+{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"], "background_tone": "neutral", "tile_preview": "full_width", "notifications": {"enabled": false, "pushover_app_token_set": false, "pushover_user_key_set": false, "pushover_device": null, "events": [], "email_forward_addresses": []}}
 ```
 
 ### 1.10.2 `PUT /api/settings`
@@ -482,6 +483,61 @@ tile preview to `full_width` — `200` with the default, never `422` — matchin
 `dashboard_fields`. `tile_preview` is also optional in the body (defaults to
 `full_width`), so a client sending only `background_tone` still succeeds. On
 read, absent keys resolve to their defaults.
+
+### 1.10.4 `PUT /api/settings/notifications`
+
+Per-user Pushover push notifications and the email addresses you forward
+documents from. Auth + CSRF apply. Returns the full resolved preference set
+(same shape as GET).
+
+**Notification model.** Each user supplies their **own** Pushover application
+token and user key (register a free app at pushover.net). Notifications target
+the document **owner** (`uploader_id`): on completion the worker sends a single
+push (the `needs_review` message when the document was flagged and the owner
+subscribed, otherwise `document_success`); a failure sends `processing_error`;
+and an ingest-time `duplicate` sends from the ingest path — each only if the
+owner subscribed to that event. See
+[jobs-and-notifications.md](jobs-and-notifications.md) §1.5 for the full rule.
+Documents with no owner (consume-folder, paperless import) notify no one.
+
+**Request body:**
+
+```json
+{
+  "enabled": true,
+  "pushover_app_token": "axxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "pushover_user_key": "uxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+  "pushover_device": "iphone",
+  "events": ["document_success", "processing_error"],
+  "email_forward_addresses": ["me@example.com"]
+}
+```
+
+**Event keys:** `document_success`, `processing_error`, `needs_review`,
+`duplicate`. New users start with **none** selected (opt-in). Unknown keys are
+dropped (`200`, never `422`).
+
+**Secrets are write-only.** The read model returns booleans
+`pushover_app_token_set` / `pushover_user_key_set` and the non-secret
+`pushover_device` / `events` / `email_forward_addresses` — never the raw token
+or key. On write, an **omitted or blank** `pushover_app_token` /
+`pushover_user_key` keeps the stored value unchanged, so saving only `events`
+never wipes credentials.
+
+**Validation on save.** When `enabled` is `true`, both credentials must be
+present (`422` otherwise) and are verified against Pushover's `users/validate`
+endpoint; a typo returns `422` with the Pushover error in `detail` rather than
+silently dropping every future push. When `enabled` is `false`, no Pushover call
+is made.
+
+**`email_forward_addresses`** are lowercased, de-duplicated, and trimmed.
+Email-in attributes an incoming message to the user whose list contains the
+sender's address (see [ingestion.md](ingestion.md), "Email-in").
+
+The GET / login / `/api/auth/me` read model embeds a `notifications` object,
+e.g. `{"enabled": false, "pushover_app_token_set": false,
+"pushover_user_key_set": false, "pushover_device": null, "events": [],
+"email_forward_addresses": []}`.
 
 ## 1.11 Ask — `POST /api/ask`
 

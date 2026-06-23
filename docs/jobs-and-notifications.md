@@ -52,3 +52,50 @@ process boundary — the standard compose deployment already wires both to the
 same `LIBRARY_DATABASE_URL`. If a reverse proxy is placed in front of the api,
 ensure it does not buffer `text/event-stream` responses (the endpoint already
 sends `X-Accel-Buffering: no` for nginx).
+
+## 1.5 Pushover push notifications (per-user)
+
+Beyond the in-app toasts (which are session-bound and only visible while the web
+app is open), each user can opt into **Pushover** push notifications that reach
+their phone/desktop even when Library isn't open. This is a second sink on the
+same document events, configured per-user in **Settings → Notifications**
+(`PUT /api/settings/notifications`, see [api.md](api.md) §1.10.4).
+
+### 1.5.1 Credentials
+
+Each user supplies their **own** Pushover application token **and** user key
+(plus an optional device). There is no server-level Pushover config — register a
+free application at pushover.net and paste both values into the settings form.
+Credentials are validated against Pushover's `users/validate` endpoint at save
+time, so a typo is rejected (`422`) rather than silently dropped. They are stored
+in the user's `preferences` JSONB and are **write-only** over the API (the read
+model returns only `*_set` booleans). **Threat-model note:** the token/key are
+stored in cleartext (they must be re-sent to Pushover, so they cannot be hashed
+like API tokens) — consistent with how the app already holds config secrets;
+a database compromise exposes them.
+
+### 1.5.2 Events and recipient
+
+Four opt-in event kinds: `document_success`, `processing_error`, `needs_review`
+(processed but extraction flagged it low-confidence), and `duplicate`. A
+notification is sent to the **document's owner** (`uploader_id`) only — so for a
+family deployment, each person hears about their own documents. Documents with
+no owner (consume-folder, paperless import) notify no one; email-in documents are
+attributed to a user via their forwarding addresses (see
+[ingestion.md](ingestion.md), "Email-in").
+
+On a successful completion the dispatcher sends **one** push: the `needs_review`
+message when the document was flagged *and* the owner opted into `needs_review`,
+otherwise the `document_success` message (if subscribed). Errors go out at
+Pushover **high priority** (bypassing the recipient's quiet hours); everything
+else at normal priority.
+
+### 1.5.3 Where it fires (`library.notifications`)
+
+`document_success` / `processing_error` / `needs_review` are dispatched from the
+**worker** at the pipeline's terminal transition (`library.jobs.advance_pipeline`).
+`duplicate` is dispatched at **ingest time** (`library.ingest.ingest_file`),
+because a duplicate never enters the worker pipeline. Both are **best-effort**:
+the Pushover HTTP call (async `httpx`) runs after the document state is committed,
+and any failure is logged and swallowed — it can never fail a job or an upload.
+Set `LIBRARY_PUBLIC_BASE_URL` to deep-link each push back to its document.

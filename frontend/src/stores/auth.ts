@@ -6,9 +6,20 @@ import {
   DEFAULT_TILE_PREVIEW,
   type BackgroundTone,
   type DashboardField,
+  type NotificationPreferences,
   type TilePreview,
   type UserPreferences,
 } from '@/api/settings'
+
+/** Empty notification preferences for users/payloads without the block. */
+const DEFAULT_NOTIFICATION_PREFERENCES: NotificationPreferences = {
+  enabled: false,
+  pushover_app_token_set: false,
+  pushover_user_key_set: false,
+  pushover_device: null,
+  events: [],
+  email_forward_addresses: [],
+}
 
 export interface User {
   id: number
@@ -35,6 +46,12 @@ export const useAuthStore = defineStore('auth', () => {
   // user is absent or a payload predates the preference.
   const tilePreview = computed<TilePreview>(
     () => user.value?.preferences?.tile_preview ?? DEFAULT_TILE_PREVIEW,
+  )
+
+  // The Pushover/forwarding notification settings, defaulting to an empty,
+  // disabled block when the user is absent or a payload predates the feature.
+  const notificationSettings = computed<NotificationPreferences>(
+    () => user.value?.preferences?.notifications ?? { ...DEFAULT_NOTIFICATION_PREFERENCES },
   )
 
   function applyPreferences(preferences: UserPreferences): void {
@@ -86,6 +103,7 @@ export const useAuthStore = defineStore('auth', () => {
     dashboardFields,
     backgroundTone,
     tilePreview,
+    notificationSettings,
     applyPreferences,
     ensureLoaded,
     login,

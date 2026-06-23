@@ -24,8 +24,20 @@ from library.embedding import EmbeddingError, embed_texts
 from library.embedding.chunker import chunk_text
 from library.extraction.apply import apply_extraction
 from library.markdown.apply import apply_markdown
-from library.models import Document, DocumentChunk, DocumentPage, DocumentStatus, IngestionEvent
+from library.models import (
+    Document,
+    DocumentChunk,
+    DocumentPage,
+    DocumentStatus,
+    IngestionEvent,
+    ReviewStatus,
+)
+from library.notifications import (
+    dispatch_document_completion,
+    dispatch_document_notification,
+)
 from library.ocr import router as ocr_router
+from library.schemas import NotificationEvent
 from library.storage import derived_dir, path_for
 
 logger = logging.getLogger(__name__)
@@ -320,6 +332,14 @@ async def advance_pipeline(
                     title=document.title,
                 )
                 await _run_stage_hook(session, document, document.status)
+            # Reached INDEXED: send the owner one completion push (success, or
+            # needs-review when extraction flagged the document). Best-effort.
+            await dispatch_document_completion(
+                session_factory,
+                document.id,
+                needs_review=document.review_status == ReviewStatus.NEEDS_REVIEW,
+                document_url_base=get_settings().public_base_url,
+            )
         except Exception as exc:
             await session.rollback()
             failed_in = document.status
@@ -334,6 +354,12 @@ async def advance_pipeline(
             await session.commit()
             await notify_document_event(
                 session_factory, document.id, "failed", "failed", title=document.title
+            )
+            await dispatch_document_notification(
+                session_factory,
+                document.id,
+                NotificationEvent.PROCESSING_ERROR,
+                document_url_base=get_settings().public_base_url,
             )
             logger.exception("document %s failed during %s", document_id, failed_in.value)
             raise

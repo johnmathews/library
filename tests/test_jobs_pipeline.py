@@ -302,3 +302,130 @@ async def test_pipeline_runs_markdown_stage_between_extract_and_embed(
     assert "markdown" in calls
     assert calls.index("markdown") > calls.index("extract")
     assert calls.index("markdown") < calls.index("embed")
+
+
+# --- Per-user Pushover dispatch wiring (W3) ---
+
+
+async def _make_owner(session_factory: async_sessionmaker[AsyncSession], *events: str) -> int:
+    """Insert a user opted into ``events`` with valid Pushover credentials."""
+    from library.models import User
+
+    async with session_factory() as session:
+        user = User(
+            username=f"owner-{hashlib.sha256((events or ('x',))[0].encode()).hexdigest()[:10]}",
+            password_hash="x",
+            preferences={
+                "notifications": {
+                    "enabled": True,
+                    "pushover_app_token": "app",
+                    "pushover_user_key": "usr",
+                    "events": list(events),
+                }
+            },
+        )
+        session.add(user)
+        await session.commit()
+        return user.id
+
+
+async def _make_owned_document(
+    session_factory: async_sessionmaker[AsyncSession], marker: str, uploader_id: int
+) -> int:
+    sha = hashlib.sha256(marker.encode()).hexdigest()
+    async with session_factory() as session:
+        document = Document(
+            sha256=sha,
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            original_filename=f"{marker}.pdf",
+            uploader_id=uploader_id,
+        )
+        session.add(document)
+        await session.commit()
+        return document.id
+
+
+async def test_pipeline_pushes_success_to_owner(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sends: list[dict[str, object]] = []
+
+    async def _capture(**kwargs: object):
+        sends.append(kwargs)
+        from library.notifications import PushoverResult
+
+        return PushoverResult(ok=True, request_id="r")
+
+    monkeypatch.setattr("library.notifications.send_pushover", _capture)
+
+    owner_id = await _make_owner(session_factory, "document_success")
+    document_id = await _make_owned_document(session_factory, "push-success", owner_id)
+
+    await advance_pipeline(session_factory, document_id)
+
+    # Exactly one push, to the owner, the success message — proves session.get
+    # eager-loads the uploader relationship against the real DB.
+    assert len(sends) == 1
+    assert sends[0]["title"] == "Document processed"
+    assert sends[0]["app_token"] == "app"
+    assert sends[0]["user_key"] == "usr"
+
+
+async def test_pipeline_failure_pushes_error_to_owner(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sends: list[dict[str, object]] = []
+
+    async def _capture(**kwargs: object):
+        sends.append(kwargs)
+        from library.notifications import PushoverResult
+
+        return PushoverResult(ok=True, request_id="r")
+
+    monkeypatch.setattr("library.notifications.send_pushover", _capture)
+
+    def explode(document: Document, original_path: Path, derived: Path) -> OcrResult:
+        raise RuntimeError("tesseract binary missing")
+
+    monkeypatch.setattr(ocr_router, "run_ocr", explode)
+
+    owner_id = await _make_owner(session_factory, "processing_error")
+    document_id = await _make_owned_document(session_factory, "push-error", owner_id)
+
+    with pytest.raises(RuntimeError, match="tesseract binary missing"):
+        await advance_pipeline(session_factory, document_id)
+
+    assert len(sends) == 1
+    assert sends[0]["title"] == "Processing failed"
+    assert sends[0]["priority"] == 1
+
+
+async def test_pipeline_no_push_when_owner_not_subscribed(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    sends: list[dict[str, object]] = []
+
+    async def _capture(**kwargs: object):
+        sends.append(kwargs)
+        from library.notifications import PushoverResult
+
+        return PushoverResult(ok=True)
+
+    monkeypatch.setattr("library.notifications.send_pushover", _capture)
+
+    # Owner opted only into duplicate, so a successful completion sends nothing.
+    owner_id = await _make_owner(session_factory, "duplicate")
+    document_id = await _make_owned_document(session_factory, "push-none", owner_id)
+
+    await advance_pipeline(session_factory, document_id)
+
+    assert sends == []
