@@ -79,3 +79,71 @@ Added `sse-starlette` (backend) for the SSE endpoint.
 `docs/jobs-and-notifications.md` (new feature doc), `docs/api.md` §1.8 (enriched
 jobs) + §1.8.4 (SSE), `docs/architecture.md` §1.4.1 (live events), plus CHANGELOG
 and README entries.
+
+## Ship: CI proof, deploy, and a post-deploy fix
+
+**CI proof.** Merged to `main` as `3920d76`; pushed. CI went green on that
+commit — backend (453 passed, 89%), frontend (300 passed), e2e
+(`jobs-view.spec.ts` included), and compose-smoke all passed, so `promote`
+retagged `ghcr.io/johnmathews/library:latest` from the `:3920d76` image.
+
+**No new migration.** The live-events path is pure runtime `pg_notify` /
+`LISTEN` — no schema change. The migration head is still `0008_ask_threads`
+(from the Ask release), so `library-migrate` was a no-op and no pre-deploy
+`pg_dump` was required (code-only change, per deployment.md §1.7).
+
+**Deployed** to the `paperless` LXC (`/srv/apps`, compose project `apps`):
+`docker compose up -d --pull always library-migrate library-webserver
+library-worker`. Confirmed live — `/jobs` renders the Active/Recent tables
+against real production data (document jobs link through to their documents).
+
+**Post-deploy finding → fix: the email-poll heartbeat buried document work.**
+On the live page the Recent list (limit 200, newest-first) was dominated by
+`poll_email_inbox` rows — the `@job_app.periodic` email poll fires on a cron and
+succeeds constantly with no `document_id`, pushing the actual
+`extract_document` / `markdown_document` rows below the fold. It's the only
+periodic task; every document task carries a `document_id`, so that's the clean
+discriminator.
+
+Fix (this follow-up): `GET /api/jobs` now hides document-less **succeeded**
+system jobs by default — `WHERE (j.args ->> 'document_id') IS NOT NULL OR
+j.status <> 'succeeded'` — so a *failed or running* poll still surfaces (you'd
+see a broken poller), only the routine successes are dropped. `JobsView` gains a
+**"Show system tasks"** checkbox that re-fetches with `?include_system=true` to
+list everything. The SSE/`jobs` store is unaffected (it only tracks
+document-bearing in-flight jobs, which always have a `document_id`). Tests:
+backend `test_jobs_endpoint_hides_system_tasks_by_default` (succeeded poll
+hidden, failed poll kept, opt-in shows both); frontend toggle spec; ruff +
+type-check + eslint clean.
+
+**Second pass: one row per document.** Hiding the heartbeats wasn't enough —
+the list was still repetitive because it was *job*-centric, and one document
+spawns several jobs (`process_document` + `generate_thumbnail`, plus a
+`markdown_document` / `embed_document` / `extract_document` each from the
+backfills), so the same document appeared up to ~5 times. `GET /api/jobs` now
+collapses to **one row per document** via `DISTINCT ON
+(COALESCE((args->>'document_id')::bigint, -id))` keeping each document's latest
+job (document-less system rows key on `-id` so each stays its own row). The view
+drops the per-job Task/Status columns in favour of a single document-stage badge
+(Document · Status · Cost · Error). Backend
+`test_jobs_endpoint_collapses_to_one_row_per_document`; ruff + type-check +
+eslint + specs clean. Both passes need a redeploy to go live (new `:latest`).
+
+**Redeploy (2026-06-23, from John's laptop).** The first deploy shipped only
+`3920d76`; the two Jobs refinements landed as `1d6abe7` + `9fb3d6b` and sat in
+`:latest` un-deployed until now. Confirmed prod was stale by digest: the running
+`library-webserver` used the box's local `:latest` (`sha256:081521b9…`) which no
+longer matched the GHCR registry top-level digest (`sha256:4fa25cd9…` = the
+`9fb3d6b` build). Redeployed with the standard scoped command (`docker compose up
+-d --pull always library-migrate library-webserver library-worker`). After:
+running image digest = `4fa25cd9…` (matches registry), `library-migrate` exited
+`0` (head unchanged at `0008_ask_threads`, no `pg_dump` needed), webserver `Up
+(healthy)`, external `/api/settings` → `401`. Both Jobs passes
+(hide-system-tasks + one-row-per-document) are now live.
+
+**Still to verify on the live box** (not yet separately checked): the SSE
+keep-alive through the reverse proxy — confirm `GET /api/events` streams and
+isn't buffered/closed by the proxy in front of `library-webserver` (the one new
+failure mode SSE introduces; the store degrades to a snapshot + backoff
+reconnect, so a buffering proxy shows stale-until-refresh rather than a hard
+break).

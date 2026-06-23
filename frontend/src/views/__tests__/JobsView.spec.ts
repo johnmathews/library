@@ -81,6 +81,8 @@ describe('JobsView', () => {
     expect(row.text()).toContain('Energierekening')
     expect(row.text()).toContain('ocr exploded')
     expect(row.text()).toContain('$0.0123')
+    // The status badge shows the document's pipeline stage, not the job status.
+    expect(row.text()).toContain('Failed')
   })
 
   it('links a job row to its document', async () => {
@@ -103,5 +105,15 @@ describe('JobsView', () => {
     listJobsMock.mockRejectedValue(new Error('boom'))
     const wrapper = await mountView()
     expect(wrapper.find('[data-testid="jobs-error"]').exists()).toBe(true)
+  })
+
+  it('hides system tasks by default and refetches with them when toggled', async () => {
+    listJobsMock.mockResolvedValue([])
+    const wrapper = await mountView()
+    expect(listJobsMock).toHaveBeenCalledWith(200, false)
+
+    await wrapper.get('[data-testid="jobs-show-system"]').setValue(true)
+    await flushPromises()
+    expect(listJobsMock).toHaveBeenCalledWith(200, true)
   })
 })
