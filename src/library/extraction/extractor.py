@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Bump whenever the system prompt or schema changes meaningfully; stored per
 # run so old-prompt documents can be found and re-extracted later.
-PROMPT_VERSION: str = "2026-06-10.1"
+PROMPT_VERSION: str = "2026-06-23.1"
 
 # USD per million tokens (input, output), June 2026 list prices.
 MODEL_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
@@ -51,10 +51,13 @@ letters, contracts, tickets. Input is OCR text (possibly noisy) or the
 original document/image.
 
 Rules:
+- Write ALL free-text output fields (title, summary, reasoning_note) in
+  English, even when the document itself is in Dutch or another language.
+  Translate as needed; keep proper nouns (names, brands) as-is.
 - kind_slug: one of {", ".join(KIND_SLUGS)}. Use "other" only when nothing
   else fits.
-- title: short and descriptive, in the document's own language.
-- summary: at most two sentences, in the document's own language.
+- title: short and descriptive, in English.
+- summary: at most two sentences, in English.
 - sender_name: the organisation or person that issued the document, in a
   short canonical form (e.g. "Eneco", not "Eneco Services B.V., afdeling
   facturatie"). null when unclear.

@@ -18,6 +18,8 @@ function job(partial: Partial<JobInfo> & { id: number }): JobInfo {
     task_name: 'library.jobs.process_document',
     attempts: 0,
     scheduled_at: null,
+    started_at: null,
+    finished_at: null,
     document_id: partial.id,
     active: false,
     document_title: null,
@@ -83,6 +85,43 @@ describe('JobsView', () => {
     expect(row.text()).toContain('$0.0123')
     // The status badge shows the document's pipeline stage, not the job status.
     expect(row.text()).toContain('Failed')
+  })
+
+  it('renders task name and a duration for a finished system task', async () => {
+    listJobsMock.mockResolvedValue([
+      job({
+        id: 50,
+        task_name: 'library.jobs.poll_email_inbox',
+        document_id: null,
+        active: false,
+        started_at: '2026-06-23T10:00:00Z',
+        finished_at: '2026-06-23T10:00:03Z',
+      }),
+    ])
+    const wrapper = await mountView()
+    const row = wrapper.get('[data-testid="jobs-historical-row"]')
+
+    // Humanised task name (final segment, no "library.jobs." prefix).
+    expect(row.text()).toContain('Poll email inbox')
+    // Wall-clock duration between started and finished events.
+    expect(row.text()).toContain('3.0s')
+  })
+
+  it('shows a dash for the duration of a still-running active job', async () => {
+    listJobsMock.mockResolvedValue([
+      job({
+        id: 51,
+        task_name: 'library.jobs.process_document',
+        active: true,
+        status: 'doing',
+        document_status: 'ocr',
+        started_at: '2026-06-23T10:00:00Z',
+        finished_at: null,
+      }),
+    ])
+    const wrapper = await mountView()
+    const row = wrapper.get('[data-testid="jobs-active-row"]')
+    expect(row.text()).toContain('Process document')
   })
 
   it('links a job row to its document', async () => {

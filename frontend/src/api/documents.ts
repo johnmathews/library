@@ -168,6 +168,8 @@ export interface JobInfo {
   task_name: string
   attempts: number
   scheduled_at: string | null
+  started_at: string | null
+  finished_at: string | null
   document_id: number | null
   active: boolean
   document_title: string | null

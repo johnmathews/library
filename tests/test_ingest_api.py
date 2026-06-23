@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
@@ -181,6 +182,8 @@ def test_jobs_endpoint_lists_jobs(api_client: TestClient) -> None:
         "task_name",
         "attempts",
         "scheduled_at",
+        "started_at",
+        "finished_at",
         "document_id",
         "active",
         "document_title",
@@ -256,6 +259,51 @@ def test_jobs_endpoint_hides_system_tasks_by_default(
     poll = next(job for job in full if job["id"] == ok_poll)
     assert poll["document_id"] is None
     assert poll["task_name"] == "library.jobs.poll_email_inbox"
+
+
+def test_jobs_endpoint_surfaces_started_and_finished_timestamps(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    # A document-less system task with a recorded run window: started at, then
+    # succeeded a minute later. The endpoint should surface both timestamps so
+    # the UI can show a "when" and compute a duration.
+    job_id = _insert_job(api_database_url, "library.jobs.poll_email_inbox", "succeeded")
+    started = datetime(2026, 6, 23, 10, 0, 0, tzinfo=UTC)
+    finished = datetime(2026, 6, 23, 10, 1, 0, tzinfo=UTC)
+    _insert_event(api_database_url, job_id, "started", started)
+    _insert_event(api_database_url, job_id, "succeeded", finished)
+
+    full = api_client.get("/api/jobs", params={"limit": 500, "include_system": "true"}).json()
+    job = next(job for job in full if job["id"] == job_id)
+    assert job["started_at"] is not None
+    assert job["finished_at"] is not None
+    # finished strictly after started → a positive, computable duration.
+    assert job["finished_at"] > job["started_at"]
+
+
+def _insert_event(database_url: str, job_id: int, event_type: str, at: datetime) -> None:
+    """Record one Procrastinate lifecycle event (started/succeeded/...) for a job."""
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    async def run() -> None:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as connection:
+                await connection.execute(
+                    text(
+                        "INSERT INTO procrastinate_events (job_id, type, at) "
+                        "VALUES (:job_id, CAST(:type AS procrastinate_job_event_type), :at)"
+                    ),
+                    {"job_id": job_id, "type": event_type, "at": at},
+                )
+        finally:
+            await engine.dispose()
+
+    asyncio.run(run())
 
 
 def _insert_job(

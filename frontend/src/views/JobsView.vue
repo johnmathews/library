@@ -96,6 +96,40 @@ function documentLabel(job: JobInfo): string {
 function formatCost(cost: number | null): string {
   return cost === null ? '—' : `$${cost.toFixed(4)}`
 }
+
+// Procrastinate task names are fully-qualified ("library.jobs.poll_email_inbox").
+// Show just the final segment, humanised, so the column is readable — especially
+// for document-less system rows whose DOCUMENT cell is a bare "—".
+function taskLabel(name: string): string {
+  const leaf = name.split('.').pop() ?? name
+  const words = leaf.replace(/_/g, ' ').trim()
+  return words.charAt(0).toUpperCase() + words.slice(1)
+}
+
+const dateTimeFormat = new Intl.DateTimeFormat('en-GB', {
+  dateStyle: 'medium',
+  timeStyle: 'short',
+})
+
+function formatDateTime(iso: string | null): string {
+  if (!iso) return '—'
+  const parsed = new Date(iso)
+  return Number.isNaN(parsed.getTime()) ? iso : dateTimeFormat.format(parsed)
+}
+
+// Wall-clock run time between a job's start and finish events. "—" while a job
+// is still running (no finish yet) or when timing events weren't recorded.
+function formatDuration(startedAt: string | null, finishedAt: string | null): string {
+  if (!startedAt || !finishedAt) return '—'
+  const start = new Date(startedAt).getTime()
+  const end = new Date(finishedAt).getTime()
+  if (Number.isNaN(start) || Number.isNaN(end) || end < start) return '—'
+  const seconds = (end - start) / 1000
+  if (seconds < 60) return `${seconds.toFixed(1)}s`
+  const mins = Math.floor(seconds / 60)
+  const rem = Math.round(seconds % 60)
+  return `${mins}m ${rem}s`
+}
 </script>
 
 <template>
@@ -136,7 +170,9 @@ function formatCost(cost: number | null): string {
             >
               <tr>
                 <th class="text-left font-semibold px-4 py-3">Document</th>
+                <th class="text-left font-semibold px-4 py-3">Task</th>
                 <th class="text-left font-semibold px-4 py-3">Status</th>
+                <th class="text-left font-semibold px-4 py-3">Started</th>
               </tr>
             </thead>
             <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
@@ -150,8 +186,12 @@ function formatCost(cost: number | null): string {
                   >
                   <span v-else class="text-gray-500 dark:text-gray-400">—</span>
                 </td>
+                <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ taskLabel(job.task_name) }}</td>
                 <td class="px-4 py-3">
                   <AppBadge :colour="statusColour(job)">{{ statusLabel(job) }}</AppBadge>
+                </td>
+                <td class="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                  {{ formatDateTime(job.started_at ?? job.scheduled_at) }}
                 </td>
               </tr>
             </tbody>
@@ -192,7 +232,10 @@ function formatCost(cost: number | null): string {
             >
               <tr>
                 <th class="text-left font-semibold px-4 py-3">Document</th>
+                <th class="text-left font-semibold px-4 py-3">Task</th>
                 <th class="text-left font-semibold px-4 py-3">Status</th>
+                <th class="text-left font-semibold px-4 py-3">Finished</th>
+                <th class="text-left font-semibold px-4 py-3">Duration</th>
                 <th class="text-left font-semibold px-4 py-3">Cost</th>
                 <th class="text-left font-semibold px-4 py-3">Error</th>
               </tr>
@@ -208,8 +251,15 @@ function formatCost(cost: number | null): string {
                   >
                   <span v-else class="text-gray-500 dark:text-gray-400">—</span>
                 </td>
+                <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ taskLabel(job.task_name) }}</td>
                 <td class="px-4 py-3">
                   <AppBadge :colour="statusColour(job)">{{ statusLabel(job) }}</AppBadge>
+                </td>
+                <td class="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                  {{ formatDateTime(job.finished_at ?? job.scheduled_at) }}
+                </td>
+                <td class="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                  {{ formatDuration(job.started_at, job.finished_at) }}
                 </td>
                 <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ formatCost(job.cost_usd) }}</td>
                 <td class="px-4 py-3 text-red-600 dark:text-red-400 max-w-xs truncate" :title="job.error ?? ''">

@@ -155,11 +155,19 @@ describe('DocumentDetailView', () => {
     expect(rowValue(w, 'amount')).toBe('123.45 EUR')
     expect(rowValue(w, 'due_date')).toBe('—')
     expect(rowValue(w, 'summary')).toBe('—')
-    // Read-only rows: status, OCR confidence (dash when null), source.
+    // Read-only rows: status, source, and OCR confidence — which for a
+    // born-digital doc (null confidence) reads "Not applicable", not a bare dash.
     const text = w.text()
     expect(text).toContain('indexed')
     expect(text).toContain('Upload')
+    expect(w.find('[data-testid="ocr-confidence"]').text()).toContain('Not applicable')
     expect(w.find('h1').text()).toBe('Untitled document')
+  })
+
+  it('shows the OCR confidence percentage when a value is present', async () => {
+    detail = makeDetail({ ocr_confidence: 91.4 })
+    const w = await mountView()
+    expect(w.find('[data-testid="ocr-confidence"]').text()).toContain('91%')
   })
 
   it('Change → edit → Save PATCHes only that field and shows a success banner', async () => {
@@ -363,17 +371,6 @@ describe('DocumentDetailView', () => {
     expect(wrapper.find('[data-testid="preview-image"]').attributes('src')).toBe(
       '/api/documents/12/original?disposition=inline',
     )
-  })
-
-  it('highlights ?highlight= matches in the OCR text safely', async () => {
-    detail = makeDetail({ ocr_text: 'De rekeningen <script>alert(1)</script> voor mei.' })
-    const w = await mountView('/documents/12?highlight=rekening')
-
-    const pre = w.find('[data-testid="ocr-text"]')
-    expect(pre.findAll('mark')).toHaveLength(1)
-    expect(pre.find('mark').text()).toBe('rekening')
-    expect(pre.element.querySelector('script')).toBeNull()
-    expect(w.find('[data-testid="ocr-details"]').attributes('open')).toBeDefined()
   })
 
   it('re-run extraction polls until the provenance changes, then stops', async () => {

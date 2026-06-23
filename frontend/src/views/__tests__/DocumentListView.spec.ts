@@ -236,13 +236,11 @@ describe('DocumentListView', () => {
     expect(snippet.text()).toContain('<script>alert(1)</script>')
   })
 
-  it('passes the active search to detail links as ?highlight=', async () => {
+  it('links a result to its detail page', async () => {
     listResponse = () => jsonResponse(listBody([makeItem({ snippet: '<b>rekening</b>' })]))
     await router.push('/?q=rekening')
     const w = await mountView()
-    expect(w.find('.app-doc-card__title a').attributes('href')).toBe(
-      '/documents/12?highlight=rekening',
-    )
+    expect(w.find('.app-doc-card__title a').attributes('href')).toBe('/documents/12')
   })
 
   it('renders no old text filter-summary element (the bar replaces it)', async () => {

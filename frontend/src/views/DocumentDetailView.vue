@@ -48,7 +48,6 @@ import {
 } from '@/api/documents'
 import { listKinds, listSenders, type KindOption, type SenderOption } from '@/api/taxonomy'
 import { ApiError } from '@/api/client'
-import { renderHighlighted } from '@/utils/snippet'
 import DocumentSeriesTrend from '@/components/DocumentSeriesTrend.vue'
 import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 
@@ -580,11 +579,6 @@ const previewDownloadUrl = computed(() => {
   return doc.value.has_searchable_pdf ? searchablePdfUrl(doc.value.id) : originalUrl(doc.value.id)
 })
 
-const highlight = computed(() => {
-  const value = route.query.highlight
-  return typeof value === 'string' ? value : ''
-})
-
 const latestExtractionEvent = computed(() => {
   if (!doc.value) return null
   return (
@@ -798,32 +792,6 @@ watch(
             >
             to view it.
           </div>
-        </div>
-
-        <div
-          v-if="doc.ocr_text"
-          id="document-ocr-card"
-          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
-        >
-          <AppDetails
-            summary="View extracted text"
-            :open="Boolean(highlight)"
-            data-testid="ocr-details"
-          >
-            <!-- eslint-disable-next-line vue/no-v-html -- renderHighlighted escapes every input character; only its own <mark> wrappers survive (docs/api.md §1.3.3) -->
-            <pre
-              v-if="highlight"
-              class="app-ocr-text mt-1 max-h-[28rem] overflow-auto rounded-lg border border-gray-200 dark:border-gray-700/50 bg-gray-50 dark:bg-gray-900/50 p-4 font-mono text-sm leading-relaxed text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words"
-              data-testid="ocr-text"
-              v-html="renderHighlighted(doc.ocr_text, highlight)"
-            ></pre>
-            <pre
-              v-else
-              class="app-ocr-text mt-1 max-h-[28rem] overflow-auto rounded-lg border border-gray-200 dark:border-gray-700/50 bg-gray-50 dark:bg-gray-900/50 p-4 font-mono text-sm leading-relaxed text-gray-700 dark:text-gray-300 whitespace-pre-wrap break-words"
-              data-testid="ocr-text"
-              >{{ doc.ocr_text }}</pre
-            >
-          </AppDetails>
         </div>
 
         <div
@@ -1055,8 +1023,22 @@ watch(
                   <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
                     OCR confidence
                   </dt>
-                  <dd class="mt-1 text-base text-gray-800 dark:text-gray-100">
-                    {{ doc.ocr_confidence === null ? EMPTY : `${Math.round(doc.ocr_confidence)}%` }}
+                  <dd
+                    v-if="doc.ocr_confidence === null"
+                    class="mt-1 text-base text-gray-500 dark:text-gray-400"
+                    data-testid="ocr-confidence"
+                  >
+                    Not applicable
+                    <span class="block text-xs text-gray-400 dark:text-gray-500">
+                      born-digital text — no OCR run
+                    </span>
+                  </dd>
+                  <dd
+                    v-else
+                    class="mt-1 text-base text-gray-800 dark:text-gray-100"
+                    data-testid="ocr-confidence"
+                  >
+                    {{ Math.round(doc.ocr_confidence) }}%
                   </dd>
                 </div>
                 <div>

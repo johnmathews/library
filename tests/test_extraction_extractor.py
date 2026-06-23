@@ -17,6 +17,7 @@ from library import storage
 from library.config import Settings, get_settings
 from library.extraction.extractor import (
     MAX_TEXT_CHARS,
+    SYSTEM_PROMPT,
     ExtractionSkipped,
     extract,
 )
@@ -239,3 +240,11 @@ async def test_unusable_mime_with_no_text_is_skipped(settings: Settings) -> None
 
     assert excinfo.value.reason == "input_unusable"
     assert client.messages.parse.await_count == 0
+
+
+def test_system_prompt_requests_english_output() -> None:
+    """All free-text metadata must be emitted in English (translated if needed),
+    regardless of the document's source language."""
+    assert "in English" in SYSTEM_PROMPT
+    # The source language is still detected and reported separately.
+    assert "language: nld, eng, mixed, or unknown" in SYSTEM_PROMPT

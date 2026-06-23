@@ -16,9 +16,13 @@ worker→api bridge see [architecture.md](architecture.md) §1.4.1.
    dismissed; successes auto-dismiss). Each links to the document. Toasts cover
    the **document-processing lifecycle only**; other job types stay quiet.
 3. **Jobs view (`/jobs`).** A dashboard of background jobs split into **Active**
-   (queued/running) and **Recent** (finished). Rows show the document (linked),
-   task, Procrastinate status, pipeline stage, extraction cost, and any error.
-   It refreshes automatically as documents finish.
+   (queued/running) and **Recent** (finished). Active rows show the document
+   (linked), task name, status, and a started timestamp; Recent rows add a
+   finished timestamp, run **duration** (from the job's `started_at`/`finished_at`
+   events), extraction cost, and any error. The task name (humanised from the
+   Procrastinate `task_name`, e.g. *Poll email inbox*) makes document-less
+   **system tasks** legible — previously their row was an empty `—`. It refreshes
+   automatically as documents finish.
 
 ## 1.2 How it works
 

@@ -335,7 +335,7 @@ the SDK converts the model to a JSON schema (with
 | --- | --- | --- |
 | `kind_slug` | enum | The 11 seeded kind slugs (`invoice` … `other`); enforced by the JSON schema, so the model cannot invent kinds. |
 | `sender_name` | `str \| None` | Canonical short organisation/person name. |
-| `title`, `summary` | `str` | In the document's own language; summary ≤ 2 sentences (prompt-enforced — string length constraints are not supported in structured-output schemas). |
+| `title`, `summary` | `str` | Always in **English** (translated from the source language if needed — prompt-enforced); summary ≤ 2 sentences (also prompt-enforced — string length constraints are not supported in structured-output schemas). |
 | `document_date`, `due_date`, `expiry_date` | `date \| None` | Wire format is an ISO `YYYY-MM-DD` string; a before-validator trims it and maps empty/placeholder values to `None`, so sloppy-but-harmless output degrades to "no date" while a truly malformed date raises (and triggers escalation). |
 | `amount_total` | `str \| None` | Decimal string, parsed defensively (currency symbols stripped, `12,50` → `12.50`); unparseable values become `None` rather than failing the document. Converted to `Decimal` when applied. |
 | `currency` | `str \| None` | ISO 4217; anything that is not three letters becomes `None`. |
@@ -366,7 +366,9 @@ prompt-instructed or normalised by validators.
 A versioned system prompt (`PROMPT_VERSION` in
 `library.extraction.extractor`) describes Library, the kinds taxonomy,
 and the Dutch+English household-paperwork domain, and instructs concise
-title/summary **in the document's language**. The prompt version, model
+title/summary — and all free-text fields — **in English** (translated from
+the source language when the document is e.g. Dutch), while the `language`
+field still records the *detected source* language. The prompt version, model
 and token usage of every run are stored on the document
 (`extra["extraction"]`) and in the audit trail, so a future prompt
 change can identify documents extracted with an older prompt.
@@ -410,7 +412,9 @@ await extract_document.defer_async(document_id=123)
 Documents ingested before extraction generated a summary have
 `summary IS NULL`. `library backfill-summaries` enqueues an
 `extract_document` task for each indexed, non-deleted document that still
-lacks a summary, so they get one through the same path new uploads use:
+lacks a summary, so they get one through the same path new uploads use —
+under the current prompt that summary (and title) is in English regardless
+of the document's language:
 
 ```console
 library backfill-summaries              # all indexed docs with no summary

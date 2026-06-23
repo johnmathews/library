@@ -27,6 +27,11 @@ _BASE_QUERY = """
                j.task_name,
                j.attempts,
                j.scheduled_at,
+               (SELECT max(at) FROM procrastinate_events ev
+                WHERE ev.job_id = j.id AND ev.type = 'started') AS started_at,
+               (SELECT max(at) FROM procrastinate_events ev
+                WHERE ev.job_id = j.id
+                  AND ev.type IN ('succeeded', 'failed', 'aborted')) AS finished_at,
                (j.args ->> 'document_id')::bigint AS document_id,
                j.status IN ('todo', 'doing') AS active,
                d.title AS document_title,

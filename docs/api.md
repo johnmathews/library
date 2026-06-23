@@ -220,8 +220,11 @@ queue, enriched with each document's pipeline state. `limit` 1–500, default 50
 **One row per document.** A document spawns several jobs (`process_document`,
 `generate_thumbnail`, and the per-document backfill tasks); the endpoint
 collapses them to a single row — the document's **most recent** job — so the
-same document isn't repeated. `id` / `task_name` / `status` are that latest
-job's; `document_*` / `cost_usd` / `error` are document-level.
+same document isn't repeated. `id` / `task_name` / `status` / `started_at` /
+`finished_at` are that latest job's; `document_*` / `cost_usd` / `error` are
+document-level. `started_at` / `finished_at` come from Procrastinate's
+`procrastinate_events` table (the job's last `started` and last terminal event),
+so the UI can show a timestamp and compute a run duration.
 
 By default, document-less system/periodic jobs (the scheduled email poll) are
 omitted when they succeeded — they fire constantly and would bury document work
@@ -238,6 +241,8 @@ Each row:
   "task_name": "library.jobs.process_document",
   "attempts": 0,
   "scheduled_at": "2026-06-23T10:00:00Z",
+  "started_at": "2026-06-23T10:00:01Z",  // last `started` event, else null
+  "finished_at": "2026-06-23T10:00:04Z", // last succeeded/failed/aborted event, else null
   "document_id": 42,            // null for document-less jobs (e.g. email poll)
   "active": true,               // status is todo or doing
   "document_title": "Energierekening",  // null if no/deleted document

@@ -307,13 +307,7 @@ const amountLabels = computed<Map<number, string | null>>(() => {
                  anchor (better on touch), without nesting extra links. -->
             <RouterLink
               class="text-violet-600 font-semibold hover:underline after:absolute after:inset-0 after:content-['']"
-              :to="{
-                name: 'document-detail',
-                params: { id: item.id },
-                // Carry the search into the detail page so the OCR text
-                // view can highlight the matches.
-                query: applied.q ? { highlight: applied.q } : {},
-              }"
+              :to="{ name: 'document-detail', params: { id: item.id } }"
             >
               {{ item.title ?? 'Untitled document' }}
             </RouterLink>

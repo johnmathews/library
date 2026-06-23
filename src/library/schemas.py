@@ -553,6 +553,8 @@ class JobInfo(BaseModel):
     task_name: str
     attempts: int
     scheduled_at: datetime | None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     document_id: int | None
     active: bool
     document_title: str | None = None
