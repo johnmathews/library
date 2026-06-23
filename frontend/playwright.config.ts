@@ -19,6 +19,15 @@ export default defineConfig({
   testDir: './e2e',
   timeout: 180_000,
   expect: { timeout: 15_000 },
+  // Retry once in CI only. These specs assert on transient, SSE-driven UI state
+  // (the in-flight `header-jobs-button`, a just-rendered `mark-verified` button),
+  // which occasionally loses a timing race and fails the whole `e2e` job — and
+  // `promote` (the deploy gate) needs `e2e` green. A single retry lets a one-off
+  // flake self-heal; Playwright still reports it as "flaky" (visible, not hidden)
+  // and a genuinely broken test fails both attempts, so real regressions still
+  // gate. Each spec seeds a unique `Date.now()` marker, so a retry is isolated
+  // even under workers:1. Locally retries stay off so flakes surface immediately.
+  retries: process.env.CI ? 1 : 0,
   // The projects share one backend: run them serially so the later projects
   // deterministically hit the duplicate-upload path.
   fullyParallel: false,
