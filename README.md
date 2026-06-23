@@ -27,6 +27,10 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
 - **Web app:** Vue 3 SPA on GOV.UK design patterns (without the
   licence-restricted GDS assets), installable on iOS/Android, responsive
   to 320px.
+- **Live jobs & notifications:** a Jobs view of current and historical
+  background work, a navbar running-jobs indicator, and toasts when a
+  document finishes — pushed live over Server-Sent Events (no polling).
+  See [`docs/jobs-and-notifications.md`](docs/jobs-and-notifications.md).
 - **Interfaces:** cookie/bearer-authenticated REST API (OpenAPI at
   `/docs`) and an MCP server at `/mcp`, so LLM clients can search, read
   and ingest documents.
@@ -85,6 +89,6 @@ cd frontend && npm run lint && npm run type-check && npm run test:unit
 ## Documentation
 
 Project documentation lives in [`docs/`](docs/) — architecture,
-deployment, API, MCP, ingestion, frontend, paperless migration, and the
-OCR benchmark. The development journal (decisions, progress, context)
-lives in [`journal/`](journal/).
+deployment, API, MCP, ingestion, frontend, jobs & notifications, paperless
+migration, and the OCR benchmark. The development journal (decisions,
+progress, context) lives in [`journal/`](journal/).

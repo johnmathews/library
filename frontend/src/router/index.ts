@@ -36,9 +36,19 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/AskView.vue'),
   },
   {
+    path: '/ask/:threadId',
+    name: 'ask-thread',
+    component: () => import('../views/AskView.vue'),
+  },
+  {
     path: '/settings',
     name: 'settings',
     component: () => import('../views/SettingsView.vue'),
+  },
+  {
+    path: '/jobs',
+    name: 'jobs',
+    component: () => import('../views/JobsView.vue'),
   },
   {
     path: '/login',

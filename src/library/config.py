@@ -36,6 +36,16 @@ class Settings(BaseSettings):
     extraction_model: str = "claude-haiku-4-5"
     extraction_escalation_model: str = "claude-sonnet-4-6"
     extraction_daily_budget_usd: float = 5.0
+    extraction_validation_ocr_floor: float = 50.0
+    extraction_judge_model: str = "claude-sonnet-4-6"
+    extraction_judge_inline: bool = False  # reserved; judge is batch-only this phase
+    # Markdown layer (see docs/ingestion.md, "Markdown layer" section).
+    markdown_enabled: bool = True
+    markdown_model: str = "claude-haiku-4-5"
+    markdown_daily_budget_usd: float = 5.0
+    markdown_max_pages: int = 20
+    markdown_page_batch: int = 10
+    markdown_image_long_side_px: int = 1600
     # Semantic search / embeddings (see docs/ask.md). The embedder is a local
     # text-embeddings-inference sidecar serving bge-m3 (1024-dim); document
     # text never leaves the host for indexing.
@@ -48,10 +58,15 @@ class Settings(BaseSettings):
     embedding_chunk_overlap: int = 200
     retrieve_top_k: int = 10
     # Natural-language /ask answering (see docs/ask.md). Cost is recorded per
-    # ask in ask_logs but not gated in this release.
+    # turn in ask_turns but not gated in this release.
     ask_model: str = "claude-sonnet-4-6"
     ask_max_tool_turns: int = 4
     ask_max_answer_tokens: int = 1024
+    ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.
+    # Document series + comparative queries (see docs/ask.md, "Document series").
+    series_min_documents: int = 3  # min members before stats are reported
+    series_typical_pct: float = 0.10  # half-width of the "typical" band vs median
+    series_flat_pct: float = 0.05  # |first→last change| at/below which trend is flat
     # Consume folder watcher (see docs/ingestion.md, "Consume folder" section).
     consume_dir: Path | None = None  # unset = watcher off
     consume_force_polling: bool = False  # required for NFS/SMB mounts (no inotify)

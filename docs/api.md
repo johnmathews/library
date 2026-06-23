@@ -1,6 +1,6 @@
 # 1. REST API
 
-**Status:** active. **Last updated:** 2026-06-13.
+**Status:** active. **Last updated:** 2026-06-22 (series endpoint).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -27,19 +27,25 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | POST   | `/api/auth/tokens` | Create an API token; secret shown **once** |
 | DELETE | `/api/auth/tokens/{id}` | Revoke one of your API tokens |
 | POST   | `/api/ask` | Ask a natural-language question; cited answer |
+| GET    | `/api/ask/threads` | List your Ask conversations |
+| GET    | `/api/ask/threads/{id}` | Full thread detail (all turns) |
+| DELETE | `/api/ask/threads/{id}` | Delete a conversation and its turns |
 | POST   | `/api/documents` | Upload a file for ingestion |
 | GET    | `/api/documents` | List / search documents |
 | GET    | `/api/documents/{id}` | Full document detail |
 | PATCH  | `/api/documents/{id}` | Edit metadata |
 | DELETE | `/api/documents/{id}` | Soft-delete |
 | POST   | `/api/documents/{id}/extract` | Queue metadata re-extraction |
+| POST   | `/api/documents/{id}/verify` | Mark document metadata as verified |
 | GET    | `/api/documents/{id}/original` | Download the original file |
 | GET    | `/api/documents/{id}/searchable.pdf` | Download the OCR searchable PDF |
 | GET    | `/api/documents/{id}/thumbnail` | First-page WebP thumbnail |
+| GET    | `/api/documents/{id}/series` | Recurring-series stats + comparison for this document |
 | GET    | `/api/kinds` | Document kinds with counts |
 | GET    | `/api/senders` | Senders with counts |
 | GET    | `/api/tags` | Tags with counts |
-| GET    | `/api/jobs` | Recent background jobs |
+| GET    | `/api/jobs` | Recent background jobs (enriched with document state) |
+| GET    | `/api/events` | Live document-pipeline events (Server-Sent Events) |
 | GET    | `/api/settings` | Your display preferences (dashboard fields + page-canvas tone + tile preview) |
 | PUT    | `/api/settings` | Update your dashboard fields |
 | PUT    | `/api/settings/appearance` | Update your page-canvas tone and tile preview |
@@ -71,6 +77,7 @@ ingestion semantics are documented in [ingestion.md](ingestion.md).
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown` |
 | `status` | enum | `received` / `ocr` / `extract` / `embed` / `indexed` / `failed` |
 | `date_from`, `date_to` | date | Inclusive bounds on `document_date` |
+| `review_status` | enum | `verified` / `needs_review` / `unreviewed` — filter by extraction-quality review state |
 | `source` | enum | `upload` / `consume` / `email` / `api` / `mcp` / `import` |
 | `limit` | int | Page size, default 25, max 100 |
 | `offset` | int | Rows to skip, default 0 |
@@ -88,7 +95,8 @@ All filters compose (AND), including with `q`.
       "sender": {"id": 3, "name": "Eneco"},
       "tags": [{"slug": "energie", "name": "Energie"}],
       "document_date": "2026-05-15", "language": "nld",
-      "status": "indexed", "mime_type": "application/pdf",
+      "status": "indexed", "review_status": "unreviewed",
+      "mime_type": "application/pdf",
       "page_count": 2, "created_at": "2026-06-10T12:00:00Z",
       "has_searchable_pdf": true, "has_thumbnail": true,
       "amount_total": "123.45", "currency": "EUR",
@@ -102,10 +110,11 @@ All filters compose (AND), including with `q`.
 
 `total` is the filtered count before pagination. `snippet` and `rank` are
 only present (non-null) when `q` is given. Tags are sorted by slug.
-`amount_total` (JSON string, preserves decimal precision) and `currency`
-(3-letter code) are `null` when not set on the document — they were
-previously detail-only fields and are now included in list items so
-dashboard tiles can display financial totals.
+`review_status` reflects extraction-quality validation: `unreviewed` (no
+issues found), `needs_review` (one or more validation findings), or
+`verified` (user confirmed the metadata is correct). `amount_total` (JSON
+string, preserves decimal precision) and `currency` (3-letter code) are
+`null` when not set on the document.
 
 ### 1.3.3 Search semantics
 
@@ -142,6 +151,11 @@ Everything in the list item, plus:
   `fields_set`, …), or `null` if extraction has not run. This is a
   deliberate subset: the raw `extra` JSONB column is not exposed
   wholesale.
+- `validation` — the latest deterministic-validation run:
+  `{prompt_version, findings: [{rule, field, severity, message}, …],
+  validated_at}`. `findings` is an empty list when no rules fired. `null`
+  if validation has not run yet. See [ingestion.md](ingestion.md)
+  "Extraction quality" for the rule table.
 - `user_edited_fields` — fields locked by user edits (see 1.5)
 - `events` — the full ingestion audit trail, oldest first:
   `[{event, detail, created_at}, …]`
@@ -187,8 +201,10 @@ undeleting means clearing `deleted_at` manually in the database.
 Both endpoints take `?disposition=inline|attachment` (default
 `attachment`; anything else is a `422`). `inline` keeps the filename in
 the header but lets the browser render the file instead of downloading
-it — the detail page's iframe/img previews depend on this, because an
-attachment response inside an `<iframe>`/`<img>` shows nothing and
+it — the detail page's previews depend on this: the image preview
+renders inline in an `<img>`, and the PDF preview (rendered to canvas by
+pdf.js in `DocumentPdfPreview.vue`) plus its "Open in new tab" link fetch
+the inline URL, because an attachment response shows nothing inline and
 triggers a download instead.
 - `GET /api/documents/{id}/thumbnail` — first-page thumbnail,
   `image/webp`, ~480 px wide. Generated by a background job after OCR;
@@ -197,9 +213,43 @@ triggers a download instead.
 
 ## 1.8 Jobs — `GET /api/jobs`
 
-Most recent background jobs (newest first) from the Procrastinate queue:
-`[{id, status, task_name, attempts, scheduled_at, document_id}, …]`.
-`limit` 1–500, default 50.
+Most recent document-processing work (newest first) from the Procrastinate
+queue, enriched with each document's pipeline state. `limit` 1–500, default 50.
+
+**One row per document.** A document spawns several jobs (`process_document`,
+`generate_thumbnail`, and the per-document backfill tasks); the endpoint
+collapses them to a single row — the document's **most recent** job — so the
+same document isn't repeated. `id` / `task_name` / `status` are that latest
+job's; `document_*` / `cost_usd` / `error` are document-level.
+
+By default, document-less system/periodic jobs (the scheduled email poll) are
+omitted when they succeeded — they fire constantly and would bury document work
+— while any that **failed or are still running** are kept, so a broken poller
+stays visible. Pass `include_system=true` to list them too (still one row per
+document; system jobs are not deduplicated, having no document to group by).
+
+Each row:
+
+```jsonc
+{
+  "id": 123,
+  "status": "doing",            // Procrastinate status: todo|doing|succeeded|failed|…
+  "task_name": "library.jobs.process_document",
+  "attempts": 0,
+  "scheduled_at": "2026-06-23T10:00:00Z",
+  "document_id": 42,            // null for document-less jobs (e.g. email poll)
+  "active": true,               // status is todo or doing
+  "document_title": "Energierekening",  // null if no/deleted document
+  "document_status": "ocr",     // current pipeline stage, or terminal indexed/failed
+  "error": "ocr exploded",      // latest `failed` event detail, else null
+  "cost_usd": 0.0123,           // extraction cost from document provenance, else null
+  "tokens": 1500                // extraction input+output tokens, else null
+}
+```
+
+The `document_*` / `error` / `cost_usd` / `tokens` fields are `null` for jobs
+without a document or whose document has been deleted. For a live feed of state
+changes, use `GET /api/events` (§1.8.4) rather than polling this endpoint.
 
 ## 1.8.1 Re-extraction — `POST /api/documents/{id}/extract`
 
@@ -215,7 +265,17 @@ Extraction can also be *skipped* (disabled, missing API key, daily
 budget reached) — that is recorded as an `extraction_skipped` event,
 not an error.
 
-## 1.8.2 Taxonomy — `GET /api/kinds`, `/api/senders`, `/api/tags`
+## 1.8.2 Mark verified — `POST /api/documents/{id}/verify`
+
+Sets `review_status = verified` and records a `review_verified` ingestion
+event. Returns the updated document detail (`200`). `404` for unknown or
+deleted documents. Auth + CSRF apply.
+
+Use this after reviewing a document's metadata in the detail view and
+confirming it is correct. The `review_status` can return to `needs_review`
+if extraction is re-run and new findings are produced.
+
+## 1.8.3 Taxonomy — `GET /api/kinds`, `/api/senders`, `/api/tags`
 
 Plain JSON arrays for filter options and edit forms; the same data the
 MCP `list_*` tools return (one shared service, `library.taxonomy`).
@@ -227,6 +287,31 @@ Counts exclude soft-deleted documents; zero-count entries are included.
   name.
 - `GET /api/tags` → `[{slug, name, document_count}, …]`, ordered by
   name.
+
+## 1.8.4 Live job events (SSE) — `GET /api/events`
+
+A [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
+stream of document-pipeline state changes, used by the web app to drive the
+navbar running-jobs indicator, toasts, and the live Jobs view without polling.
+
+- **Transport.** The worker emits a Postgres `NOTIFY` on the `library_doc_events`
+  channel each time a document changes pipeline stage (`status_changed`) or fails
+  (`failed`); this endpoint holds a dedicated `LISTEN` connection and relays each
+  notification. The worker→api hop crosses processes via Postgres itself, so both
+  must point at the same database (they do in the standard compose deployment).
+- **Auth.** Same session cookie as the rest of `/api` (§1.9). A GET is CSRF-safe,
+  so a browser `EventSource` — which cannot send headers — authenticates with the
+  cookie alone. Unauthenticated requests get `401` before the stream opens.
+- **Wire format.** Named SSE events:
+  - `event: document` — `data` is JSON `{document_id, event, status, title}`,
+    where `status` is the stage the document just entered. A document enters at
+    `received`, so the stages actually emitted are `ocr`→`extract`→`markdown`→
+    `embed`→`indexed`, plus `failed` on a terminal error.
+  - keep-alive comments every ~15 s so idle connections and proxies don't time
+    out. The response sets `X-Accel-Buffering: no` to disable proxy buffering.
+- **Lifecycle.** The browser's `EventSource` reconnects automatically; the
+  server tears the `LISTEN` connection down when the client disconnects. Events
+  are not replayed on reconnect — fetch `GET /api/jobs` for the current snapshot.
 
 ## 1.9 Authentication
 
@@ -401,30 +486,178 @@ read, absent keys resolve to their defaults.
 ## 1.11 Ask — `POST /api/ask`
 
 Answer a natural-language question about the archive, grounded in retrieved
-documents. The narrative — architecture, the two question classes, config and
-cost — is in [ask.md](ask.md); this is the wire contract.
+documents. The narrative — architecture, the two question classes, config, cost,
+and conversational threading — is in [ask.md](ask.md); this is the wire contract.
 
-**Request:** `{"question": "<1..1000 chars>"}`. Auth + CSRF apply (it is a
-`POST`).
+**Request:**
+
+```json
+{
+  "question": "<1..1000 chars>",
+  "thread_id": 42
+}
+```
+
+`thread_id` is optional. Omit it to start a new conversation; supply it to
+continue an existing one. Auth + CSRF apply (it is a `POST`).
 
 **Response `200`:**
 
 ```json
 {
   "answer": "Yes — your contract grants a travel allowance of €0.21/km [#42].",
-  "citations": [{"document_id": 42, "title": "Employment contract"}],
+  "citations": [
+    {"document_id": 42, "title": "Employment contract", "page_number": 3}
+  ],
   "used_tools": ["semantic_search"],
-  "cost_usd": 0.0031
+  "cost_usd": 0.0031,
+  "thread_id": 1
 }
 ```
 
 - `answer` — prose, grounded only in retrieved documents; it says plainly when
   the archive does not contain the answer (then `citations` is empty).
-- `citations` — the documents the answer relied on (id + title); link these to
-  `GET /api/documents/{id}`.
+- `citations` — documents the answer relied on (`document_id`, `title`,
+  `page_number`); link these to `GET /api/documents/{id}`.
 - `used_tools` — which retrieval tools the engine invoked
-  (`semantic_search`, `query_documents`).
-- `cost_usd` — estimated answer cost (recorded in `ask_logs`, not gated).
+  (`semantic_search`, `query_documents`, `compare_to_series`).
+- `cost_usd` — estimated answer cost for this turn (recorded in `ask_turns`,
+  not gated; thread total = sum of its turns).
+- `thread_id` — the conversation thread this turn belongs to (new or existing).
 
-**Errors:** `503` when no Anthropic API key is configured (answering needs
-Claude); `422` when the question is empty or too long.
+**Errors:** `503` when no Anthropic API key is configured; `422` when the
+question is empty or too long; `404` when `thread_id` does not exist or belongs
+to another user.
+
+## 1.12 Ask threads
+
+Conversation threads persist server-side. All thread endpoints enforce
+ownership: a thread belonging to another user returns `404` (not `403`) to
+avoid disclosing thread existence.
+
+### `GET /api/ask/threads`
+
+List the authenticated user's conversations, newest-updated first.
+
+```json
+[
+  {
+    "id": 1,
+    "title": "Do I have a travel allowance in my job contract?",
+    "created_at": "2026-06-22T10:00:00Z",
+    "updated_at": "2026-06-22T10:05:00Z",
+    "turn_count": 3,
+    "total_cost_usd": 0.012
+  }
+]
+```
+
+### `GET /api/ask/threads/{id}`
+
+Full thread detail: metadata and every turn in chronological order.
+The raw replay `messages` blob is not returned to the client.
+
+```json
+{
+  "id": 1,
+  "title": "Do I have a travel allowance in my job contract?",
+  "turns": [
+    {
+      "id": 1,
+      "query": "Do I have a travel allowance in my job contract?",
+      "answer": "Yes — your contract grants …",
+      "citations": [{"document_id": 42, "title": "Employment contract", "page_number": 3}],
+      "used_tools": ["semantic_search"],
+      "cost_usd": 0.0031,
+      "created_at": "2026-06-22T10:00:00Z"
+    }
+  ]
+}
+```
+
+`404` if the thread does not exist or belongs to another user.
+
+### `DELETE /api/ask/threads/{id}`
+
+Delete a conversation. Cascades to all its turns. Returns `204` on success;
+`404` if the thread does not exist or belongs to another user.
+
+## 1.13 Document series — `GET /api/documents/{id}/series`
+
+Returns statistical information about the recurring-document series this
+document belongs to, and where this specific document sits within it. The
+series is identified automatically from the document's own `sender_id` and
+`kind_id`; the document itself is the reference point.
+
+This endpoint supplies the data for the trend widget on the document detail
+view. See [ask.md §1.7](ask.md) for the series detection and statistics design.
+
+**Response `200` — `status:"ok"`:**
+
+```json
+{
+  "status": "ok",
+  "sender": "Vattenfall",
+  "kind": "utility-bill",
+  "currency": "EUR",
+  "other_currencies": [],
+  "cadence": "monthly",
+  "count": 7,
+  "mean": "145.00",
+  "median": "142.10",
+  "stdev": "8.20",
+  "min": "131.00",
+  "max": "159.40",
+  "reference": {
+    "value": "151.20",
+    "delta": "+9.10",
+    "vs_median_pct": "+6.4%",
+    "z_score": 1.11,
+    "verdict": "higher"
+  },
+  "trend": { "direction": "rising", "change_pct": "+12.0%" },
+  "year_over_year": {
+    "prior_value": "138.40",
+    "change_pct": "+9.2%",
+    "document_id": 41
+  },
+  "document_ids": [12, 19, 27, 33, 41, 55, 88],
+  "points": [
+    {"date": "2025-06-15", "amount": "138.40", "document_id": 41},
+    {"date": "2026-05-15", "amount": "151.20", "document_id": 88}
+  ]
+}
+```
+
+Fields:
+
+- `status` — `"ok"` when the series has enough members; `"insufficient"` otherwise (see below).
+- `sender`, `kind`, `currency` — the resolved series identity and reported currency bucket.
+- `other_currencies` — currencies present in the series that are not being reported.
+- `cadence` — inferred recurrence: `monthly`, `quarterly`, `yearly`, or `irregular`.
+- `count`, `mean`, `median`, `stdev`, `min`, `max` — distribution stats over `amount_total`
+  within the currency bucket. Money values are JSON strings (decimal precision preserved).
+- `reference` — where this document's amount sits: `value`, `delta` (vs median),
+  `vs_median_pct`, `z_score` (null when stdev is 0), and a `verdict` of
+  `higher`, `typical`, or `lower`.
+- `trend` — `direction` (`rising`/`falling`/`flat`) and `change_pct` (first→last).
+- `year_over_year` — the series member closest to 12 months prior (`prior_value`,
+  `change_pct`, `document_id`), or `null` when no match exists.
+- `document_ids` — ids of the series members that contributed to the stats (capped at 25).
+- `points` — all dated, amount-bearing series members in chronological order, each with
+  `date` (ISO), `amount` (string), and `document_id`. Use `document_id` to highlight
+  the current document in the chart.
+
+**Response `200` — `status:"insufficient"`:**
+
+Returned when the document has no `sender` or `kind`, or when the series has
+fewer than `LIBRARY_SERIES_MIN_DOCUMENTS` members (default 3). The UI should
+hide the trend widget rather than showing an error.
+
+```json
+{"status": "insufficient", "count": 1, "document_ids": [88]}
+```
+
+`count` is the number of series members found (0 when the document has no sender or kind).
+
+**Errors:** `404` when the document does not exist or is soft-deleted.

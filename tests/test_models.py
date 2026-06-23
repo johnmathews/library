@@ -26,6 +26,7 @@ SHA_C = "c" * 64
 SHA_D = "d" * 64
 SHA_E = "e" * 64
 SHA_F = "f" * 64
+SHA_G = "0" * 64
 
 
 @pytest.fixture
@@ -168,3 +169,30 @@ async def test_fts_english_stemming(session: AsyncSession) -> None:
         )
     )
     assert SHA_D in set(result.scalars())
+
+
+async def test_document_defaults_to_unreviewed(session: AsyncSession) -> None:
+    from library.models import ReviewStatus
+
+    doc = Document(sha256=SHA_G, mime_type="text/plain", source=DocumentSource.UPLOAD)
+    session.add(doc)
+    await session.commit()
+    await session.refresh(doc)
+    assert doc.review_status is ReviewStatus.UNREVIEWED
+
+
+async def test_ask_thread_cascades_to_turns(session: AsyncSession) -> None:
+    from library.models import AskThread, AskTurn
+
+    thread = AskThread(title="Energy bills")
+    thread.turns.append(
+        AskTurn(query="who?", answer="Vattenfall", model="claude-sonnet-4-6", messages=[])
+    )
+    session.add(thread)
+    await session.commit()
+
+    await session.delete(thread)
+    await session.commit()
+
+    remaining = (await session.execute(select(AskTurn))).scalars().all()
+    assert remaining == []

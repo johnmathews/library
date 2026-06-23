@@ -28,7 +28,7 @@ POST /api/documents (multipart)
 
 worker (python -m library.worker)
   └─ process_document(document_id)
-       received ─► ocr ─► extract ─► embed ─► indexed   (one ingestion_event per transition)
+       received ─► ocr ─► extract ─► markdown ─► embed ─► indexed   (one ingestion_event per transition)
                 └─ any error ─► failed (+ "failed" event with error detail)
 ```
 
@@ -150,14 +150,14 @@ Decisions:
 
 ### `process_document(document_id)` — pipeline
 
-- Transitions: `received → ocr → extract → embed → indexed`, one commit and
-  one `status_changed` ingestion event (`detail: {"from": …, "to": …}`) per
-  transition. Entering `ocr` runs the OCR stage (below); entering `extract`
-  runs Claude metadata extraction (see "Extraction"); entering `embed` chunks
+- Transitions: `received → ocr → extract → markdown → embed → indexed`, one
+  commit and one `status_changed` ingestion event (`detail: {"from": …, "to": …}`)
+  per transition. Entering `ocr` runs the OCR stage (below); entering `extract`
+  runs Claude metadata extraction (see "Extraction"); entering `markdown` runs
+  Claude vision markdown generation (see "Markdown layer"); entering `embed` chunks
   the text and stores bge-m3 vectors for semantic search (best-effort — a
   document that fails to embed still reaches `indexed`; see [ask.md](ask.md)).
-- Stage hooks are `async def run_ocr(session, document)` /
-  `run_extraction(session, document)` in `library.jobs`. The OCR work
+- Stage hooks are `async def run_ocr(session, document)` / `run_extraction(session, document)` / `run_markdown(session, document)` / `run_embed(session, document)` in `library.jobs`. The OCR work
   itself is CPU-bound and subprocess-heavy, so it runs in a thread via
   `asyncio.to_thread`, keeping the async worker responsive.
 - Re-runs are idempotent: the pipeline resumes from the document's
@@ -405,6 +405,134 @@ from library.jobs import extract_document
 await extract_document.defer_async(document_id=123)
 ```
 
+### Backfill summaries
+
+Documents ingested before extraction generated a summary have
+`summary IS NULL`. `library backfill-summaries` enqueues an
+`extract_document` task for each indexed, non-deleted document that still
+lacks a summary, so they get one through the same path new uploads use:
+
+```console
+library backfill-summaries              # all indexed docs with no summary
+library backfill-summaries --limit 100  # first 100 only (throttle/budget)
+```
+
+Because it re-runs full extraction, it honours `extra["user_edited_fields"]`
+and the daily extraction budget (`LIBRARY_EXTRACTION_DAILY_BUDGET_USD`):
+documents beyond the budget are skipped with an `extraction_skipped`
+(`reason: "budget"`) event and can be re-queued the next day. The worker
+must be running to do the work; the command only enqueues the jobs.
+
+## Extraction quality (`library.extraction.validation`, `library.extraction.judge`)
+
+After the metadata is written, `apply_extraction` runs deterministic validation
+and (separately) supports a batch eval harness for aggregate accuracy measurement.
+
+### Validation rules
+
+Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
+`Finding(rule, field, severity, message)` dataclasses. All current findings have
+`severity="warn"`.
+
+| Rule | Field(s) | Fires when |
+|---|---|---|
+| `amount_grounding` | `amount_total` | Amount is set but its digit sequence is absent from `ocr_text` (normalised: strips currency symbols and separators, also checks the integer part) |
+| `date_plausibility` | `document_date`, `due_date`, `expiry_date` | `document_date` is in the future or before 1990-01-01; or `due_date`/`expiry_date` is before `document_date` |
+| `amount_currency_coupling` | `currency` | Exactly one of amount/currency is set (the rule checks both fields; the finding's `field` attribute is `currency`) |
+| `ocr_confidence_gate` | (document) | `ocr_confidence` is below `LIBRARY_EXTRACTION_VALIDATION_OCR_FLOOR` (default 50.0) |
+| `empty_extraction` | (document) | Kind is `other` or unset **and** no sender, no `document_date`, and no `amount_total` |
+| `self_reported_low` | (document) | `extra["extraction"]["confidence"] == "low"` |
+
+**Date-grounding is explicitly out of scope** this phase — locale date-format
+matching is fiddly; revisit once the simpler rules prove out.
+
+### `review_status` lifecycle
+
+`documents.review_status` is a Postgres enum (`verified` / `needs_review` /
+`unreviewed`), added in **migration 0006** (default `unreviewed`, indexed).
+
+- Any finding ⇒ `needs_review`; no findings ⇒ `unreviewed`.
+- User action via `POST /api/documents/{id}/verify` ⇒ `verified`.
+- Re-extraction (or backfill) re-derives the status from fresh findings.
+
+### `extra["validation"]` shape
+
+Written by `_apply_validation` in `apply.py` as part of the extraction commit:
+
+```json
+{
+  "prompt_version": "v3",
+  "findings": [
+    {"rule": "amount_grounding", "field": "amount_total", "severity": "warn",
+     "message": "amount_total does not appear in the document text"}
+  ],
+  "validated_at": "2026-06-21T10:00:00Z"
+}
+```
+
+`findings` is an empty list when no rules fired. The `validation` key on the
+detail API response (`GET /api/documents/{id}`) exposes this blob directly.
+
+### `extra["corrections"]` shape
+
+Every field edited via `PATCH /api/documents/{id}` appends a record to
+`extra["corrections"]` (the corrections flywheel). This is both a ground-truth
+label source for the eval harness and a mining-ready shape for later few-shot
+improvement:
+
+```json
+{
+  "field": "amount_total",
+  "original_value": "120.00",
+  "corrected_value": "12.00",
+  "source_excerpt": "…Totaal € 12,00…",
+  "prompt_version": "v3",
+  "model": "claude-haiku-4-5",
+  "corrected_at": "2026-06-21T10:00:00Z"
+}
+```
+
+`source_excerpt` is a best-effort ±40-character window from `ocr_text` around
+the original value (empty string when not locatable — never blocks the edit).
+
+### Backfill
+
+To seed `review_status` for an existing corpus (the migration itself does not
+backfill — fast and reversible):
+
+```console
+library backfill-validation              # all non-deleted documents
+library backfill-validation --limit 100  # first 100 only (throttle)
+```
+
+Idempotent: re-running recomputes from current field values using the current
+rule set. Useful after deploying new validation rules.
+
+### Eval harness — `library eval-extractions`
+
+Combines two ground-truth sources to produce per-field accuracy numbers:
+
+- **Flywheel accuracy** — over every document with `extra["corrections"]`:
+  fields the extraction got right vs. total fields set.
+- **Judge agreement** — LLM-as-judge (`judge.py`) grades each sampled
+  document's extracted fields against its OCR text, returning
+  `correct`/`wrong`/`unsupported` per field. Runs on the configured judge model
+  (default `claude-sonnet-4-6`). **Batch-only** — never called from the live
+  pipeline.
+
+Results are printed as a per-field table and persisted to the `eval_runs` table
+(migration 0006) with `prompt_version`, `model`, `version_mix` (full
+prompt/model distribution so a mixed-version sample is visible, not misleading),
+`sample_size`, `per_field` (JSONB), and `overall`.
+
+```console
+library eval-extractions --sample 50   # judge 50 documents (deterministic head-slice)
+library eval-extractions --all          # judge all documents with OCR text
+```
+
+Sampling is currently a deterministic head-slice (`eligible[:N]`). Random
+seeded sampling is a documented follow-up.
+
 ### Failure, skip, and cost handling
 
 | Condition | Event | Document |
@@ -422,6 +550,141 @@ Before each extraction, one query sums today's `cost_usd` across
 `ingestion_events`; at or over `LIBRARY_EXTRACTION_DAILY_BUDGET_USD`
 (default 5.0) extraction is skipped with `reason: "budget"` until the
 next UTC day.
+
+## Markdown layer (`library.markdown`)
+
+The `markdown` pipeline stage renders each document page as clean
+GitHub-flavored markdown using Claude vision, grounded on the OCR text.
+This produces a structured, layout-aware representation: real tables
+(including borderless/columnar tables reconstructed from the page image),
+headings, lists, and emphasis. The markdown feeds the embed stage (richer
+semantic retrieval) and the detail-view markdown tab; it also supplies
+page provenance for Ask citations (see [ask.md](ask.md)).
+
+FTS stays on `ocr_text` — the markdown layer does not affect full-text
+search.
+
+### Generation
+
+Module `library.markdown` mirrors the shape of `library.extraction`:
+`renderer.py` rasterizes pages, `schema.py` defines the structured-output
+schema, `generator.py` calls the vision model, and `apply.py` handles
+guards and persistence.
+
+**Rasterization.** Pages are rasterized with pypdfium2 (the same library
+used by thumbnails and the OCR confidence probe). The rendering scale is
+`min(_PDF_RENDER_SCALE, long_side_px / long_side_pt)`, so a large-point
+page never produces a bitmap much larger than the intended output — PDF
+pages are rendered close to the target size, capped at the 2.0× upper
+bound (~144 dpi). For Pillow-decoded images (JPEG/PNG/HEIC), a pixel-count
+budget (~40 MP) is enforced before decoding; `DecompressionBombError` is
+caught and treated identically — both result in `[]` (the document is
+skipped with `reason: "input_unusable"`).
+
+| Input type | Pages rendered |
+|---|---|
+| `application/pdf` | each page (capped at `LIBRARY_MARKDOWN_MAX_PAGES`) |
+| `image/tiff` | the OCR-produced `searchable.pdf`'s pages |
+| `image/jpeg`, `image/png` | the single image → one page |
+| `image/heic`, `image/heif` | the derived `converted.jpg` → one page |
+| `text/plain` | **skipped** — no visual layout to recover |
+
+**Model call.** One `client.messages.parse()` call (async SDK, structured
+outputs) per page-image batch, with content `[page images…] + [full
+ocr_text as grounding text] + [instruction]` and schema `DocumentMarkdown
+{pages: list[PageMarkdown]}` where `PageMarkdown = {page_number: int,
+markdown: str}`. Pages are sent in batches of
+`LIBRARY_MARKDOWN_PAGE_BATCH` (default 10); the per-batch results are
+concatenated. `PROMPT_VERSION` is recorded with every run (currently
+`"2026-06-21.1"`).
+
+**Page numbering.** Returned pages are sorted by their reported
+`page_number`, then re-assigned absolute positions (`offset + 1`,
+`offset + 2`, …) clamped to the batch's image count. This means a
+mis-numbered or short model response can never invent a page that has no
+image.
+
+**Coverage.** A batch yielding zero pages contributes nothing; if the
+whole document yields zero pages, generation raises `MarkdownSkipped
+("input_unusable")`. A document over `LIBRARY_MARKDOWN_MAX_PAGES` renders
+only its first N pages (logged); pages beyond the cap have no markdown row
+and their chunks fall back to `ocr_text`-style page-less embedding.
+
+### `document_pages` storage (migration 0007)
+
+Each rendered page is stored as one row in `document_pages`:
+
+| Column | Type | Notes |
+|---|---|---|
+| `document_id` | FK `documents.id` ON DELETE CASCADE | |
+| `page_number` | `int` | 1-based, part of PK |
+| `markdown` | `text` | the page's rendered markdown |
+| `char_count` | `int` | `len(markdown)` — cheap diagnostics |
+| `created_at` | `timestamptz` | server default `now()` |
+
+Primary key is `(document_id, page_number)`. The `Document.pages`
+relationship uses `lazy="raise"` + `passive_deletes=True`, mirroring
+`chunks` — per-page markdown is never wanted on a normal document load.
+`apply_markdown` deletes and replaces a document's pages on each run,
+making re-generation idempotent.
+
+Migration 0007 also adds `document_chunks.page_number int | NULL`. `NULL`
+means "no page provenance" — the document had no markdown layer (skipped,
+failed, or text-only), or the chunk came from a page past the render cap.
+
+### Pipeline stage (`markdown`) and best-effort contract
+
+`run_markdown(session, document)` in `library.jobs` is the stage hook,
+placed between `run_extraction` and `run_embed`. It calls
+`apply_markdown(session, document, settings)` from `library.markdown.apply`.
+
+**Best-effort, identical contract to extraction.** Any of the following
+causes `apply_markdown` to record a skip/failed event and return normally;
+the document continues to `embed` and reaches `indexed`:
+
+| Condition | Event |
+|---|---|
+| `LIBRARY_MARKDOWN_ENABLED=false` | `markdown_skipped` `{reason: "disabled"}` |
+| No `LIBRARY_ANTHROPIC_API_KEY` | `markdown_skipped` `{reason: "missing_api_key"}` |
+| Daily budget spent | `markdown_skipped` `{reason: "budget", spent_usd, budget_usd}` |
+| Renderer returns no images (text/plain, oversized, corrupt) | `markdown_skipped` `{reason: "input_unusable", mime \| error}` |
+| Generation yields no pages | `markdown_skipped` `{reason: "input_unusable", detail}` |
+| API error after SDK retries | `markdown_failed` `{error, prompt_version}` |
+| Success | `markdown_completed` `{model, prompt_version, pages, input_tokens, output_tokens, cost_usd}` |
+
+The accepted limitation: a final DB-commit failure after the API call can
+fail the document — the same edge case exists in extraction.
+
+### Page-aware embedding
+
+After the markdown stage, `run_embed` checks for `document_pages`:
+
+- **If pages exist:** chunk each page's markdown with `chunk_text`, carrying
+  `chunk_index` continuously across pages, and tag every `DocumentChunk`
+  with its `page_number`.
+- **Else (no pages):** chunk `ocr_text` as before, with `page_number = NULL`.
+
+The `embedded` event gains a `page_aware: bool` field so it is clear which
+path ran.
+
+### Backfill
+
+```console
+library backfill-markdown              # all documents without pages
+library backfill-markdown --limit 100  # first 100 only (throttle)
+library backfill-markdown --include-existing  # re-render all documents
+```
+
+Enqueues a `markdown_document` Procrastinate task per document. That task
+runs `apply_markdown` then `run_embed` so the chunks are replaced from the
+new pages. Idempotent; the worker must be running.
+
+### `GET /api/documents/{id}/markdown`
+
+Returns the assembled per-page markdown ordered by page number:
+`{page_count: int, pages: [{page_number: int, markdown: str}]}`. Returns
+an empty `pages` list (not 404) when the document has no markdown layer.
+Backs the detail-view markdown tab.
 
 ## Consume folder (`library.consume`, W12)
 
@@ -640,6 +903,9 @@ Append-only audit trail in `ingestion_events`:
 | `extraction_completed` | extraction stage | `{model, prompt_version, confidence, input_tokens, output_tokens, cost_usd, escalated, input_mode}` |
 | `extraction_skipped` | extraction stage | `{reason, ...}` — `disabled`, `missing_api_key`, `budget`, `input_unusable`, `file_too_large` |
 | `extraction_failed` | extraction stage | `{error, prompt_version}` |
+| `markdown_completed` | markdown stage | `{model, prompt_version, pages, input_tokens, output_tokens, cost_usd}` |
+| `markdown_skipped` | markdown stage | `{reason, ...}` — `disabled`, `missing_api_key`, `budget`, `input_unusable` |
+| `markdown_failed` | markdown stage | `{error, prompt_version}` |
 | `failed` | pipeline | `{error, status}` |
 
 ## Configuration
@@ -660,6 +926,15 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_EXTRACTION_MODEL` | `claude-haiku-4-5` | Primary extraction model |
 | `LIBRARY_EXTRACTION_ESCALATION_MODEL` | `claude-sonnet-4-6` | Retry model on low confidence / parse failure |
 | `LIBRARY_EXTRACTION_DAILY_BUDGET_USD` | `5.0` | Estimated daily API spend cap; over budget → skip with `reason: "budget"` |
+| `LIBRARY_EXTRACTION_VALIDATION_OCR_FLOOR` | `50.0` | OCR-confidence threshold for the `ocr_confidence_gate` validation rule |
+| `LIBRARY_EXTRACTION_JUDGE_MODEL` | `claude-sonnet-4-6` | Model used by `library eval-extractions` to judge extraction quality |
+| `LIBRARY_EXTRACTION_JUDGE_INLINE` | `false` | Reserved; per-extraction judging hook (batch-only this phase) |
+| `LIBRARY_MARKDOWN_ENABLED` | `true` | Master switch for the markdown stage |
+| `LIBRARY_MARKDOWN_MODEL` | `claude-haiku-4-5` | Vision model for markdown generation |
+| `LIBRARY_MARKDOWN_DAILY_BUDGET_USD` | `5.0` | Daily spend cap for markdown (independent of the extraction budget; over budget → skip with `reason: "budget"`) |
+| `LIBRARY_MARKDOWN_MAX_PAGES` | `20` | Max pages rendered/sent per document |
+| `LIBRARY_MARKDOWN_PAGE_BATCH` | `10` | Pages per vision call (batched with page-number offset) |
+| `LIBRARY_MARKDOWN_IMAGE_LONG_SIDE_PX` | `1600` | Long-side cap for rendered page images sent to the model |
 | `LIBRARY_CONSUME_DIR` | unset | Consume folder to watch; unset disables the watcher |
 | `LIBRARY_CONSUME_FORCE_POLLING` | `false` | Poll instead of inotify — required for NFS/SMB-mounted consume dirs |
 | `LIBRARY_CONSUME_POLL_INTERVAL_S` | `2.0` | Poll cadence when force-polling |

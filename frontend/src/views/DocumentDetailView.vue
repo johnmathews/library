@@ -10,13 +10,12 @@
  * Save/Cancel. Each save PATCHes only that row's field(s) and replaces
  * local state with the server response — no optimistic updates.
  *
- * PDF preview uses the browser's native viewer in an <iframe> (the
- * searchable PDF when present, the original otherwise) — every modern
- * browser ships one, and pdf.js would add a heavyweight dependency for
- * no gain at family scale. An "open in new tab" link covers browsers
- * with the inline viewer disabled.
+ * PDF preview uses DocumentPdfPreview (pdf.js canvas renderer) for
+ * consistent cross-browser rendering on every viewport.
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import { useRoute } from 'vue-router'
 import {
   AppBackLink,
@@ -33,19 +32,25 @@ import {
 import type { ErrorSummaryItem, SelectItem } from '@/components/app'
 import {
   DOCUMENT_LANGUAGES,
+  fetchDocumentMarkdown,
   getDocument,
   originalUrl,
   requestExtraction,
   searchablePdfUrl,
   thumbnailUrl,
   updateDocument,
+  verifyDocument,
   type DocumentDetail,
   type DocumentLanguage,
+  type DocumentMarkdownResponse,
   type DocumentUpdate,
+  type ValidationFinding,
 } from '@/api/documents'
 import { listKinds, listSenders, type KindOption, type SenderOption } from '@/api/taxonomy'
 import { ApiError } from '@/api/client'
 import { renderHighlighted } from '@/utils/snippet'
+import DocumentSeriesTrend from '@/components/DocumentSeriesTrend.vue'
+import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -466,6 +471,72 @@ function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+// --- Validation findings ------------------------------------------------------
+
+/**
+ * Map from storage field name to UI field name so findings can be shown beside
+ * the right row. The backend uses `kind_id` and `sender_id`; the UI groups them
+ * as `kind` and `sender`.
+ */
+const STORAGE_TO_UI_FIELD: Record<string, string> = {
+  amount_total: 'amount',
+  currency: 'amount',
+  document_date: 'document_date',
+  due_date: 'due_date',
+  expiry_date: 'expiry_date',
+  title: 'title',
+  summary: 'summary',
+  kind_id: 'kind',
+  sender_id: 'sender',
+}
+
+/** Findings indexed by UI field name. */
+const findingsByField = computed<Record<string, ValidationFinding[]>>(() => {
+  const findings = doc.value?.validation?.findings
+  if (!findings?.length) return {}
+  const result: Record<string, ValidationFinding[]> = {}
+  for (const finding of findings) {
+    if (finding.field === null || !(finding.field in STORAGE_TO_UI_FIELD)) continue
+    const uiField = STORAGE_TO_UI_FIELD[finding.field] ?? finding.field
+    ;(result[uiField] ??= []).push(finding)
+  }
+  return result
+})
+
+/**
+ * Document-level findings: those whose `field` is null, or whose `field` is
+ * not mapped to a rendered summary row (e.g. ocr_confidence_gate,
+ * empty_extraction, self_reported_low). Shown in a top-level warning banner.
+ */
+const documentLevelFindings = computed<ValidationFinding[]>(() => {
+  const findings = doc.value?.validation?.findings
+  if (!findings?.length) return []
+  return findings.filter(
+    (f) => f.field === null || !(f.field in STORAGE_TO_UI_FIELD),
+  )
+})
+
+// --- Mark verified ------------------------------------------------------------
+
+const verifying = ref(false)
+
+async function markVerified(): Promise<void> {
+  if (!doc.value || verifying.value) return
+  verifying.value = true
+  actionError.value = null
+  try {
+    doc.value = await verifyDocument(doc.value.id)
+    notice.value = { variant: 'success', text: 'Document marked as verified.' }
+  } catch (error: unknown) {
+    actionError.value =
+      error instanceof ApiError && error.status !== 0
+        ? error.detail
+        : 'Could not mark verified — check your connection and try again'
+  } finally {
+    verifying.value = false
+  }
+}
+
 // --- Preview and OCR text -----------------------------------------------------
 
 const preview = computed<'image' | 'pdf' | 'none'>(() => {
@@ -477,8 +548,7 @@ const preview = computed<'image' | 'pdf' | 'none'>(() => {
 
 /** Preview the searchable PDF when the pipeline produced one (it has a
  * text layer, so in-viewer text selection/search works), else the original.
- * Inline disposition: the attachment default would blank the iframe and
- * trigger a download instead of rendering. */
+ * Inline disposition so the browser renders rather than downloads. */
 const pdfPreviewUrl = computed(() =>
   doc.value
     ? doc.value.has_searchable_pdf
@@ -487,24 +557,12 @@ const pdfPreviewUrl = computed(() =>
     : '',
 )
 
-/** Same PDF, but with native-viewer open parameters. `toolbar=0&navpanes=0`
- * hides the viewer chrome (Chrome/Edge honour it; some Firefox builds ignore
- * it — best effort, the page provides its own Open/Download buttons), and
- * `view=FitH` fits the page to the iframe width so a portrait page is not
- * clipped on a narrow (mobile) viewport. The plain `pdfPreviewUrl` (no
- * fragment) is kept for the open-in-new-tab button. */
-const pdfPreviewIframeUrl = computed(() =>
-  pdfPreviewUrl.value ? `${pdfPreviewUrl.value}#toolbar=0&navpanes=0&view=FitH` : '',
-)
-
-/** Firefox's built-in viewer ignores `#toolbar=0` and shows its own toolbar.
- * There's no URL fragment that hides it, so on Firefox we nudge the iframe up
- * behind an overflow-hidden wrapper to clip the toolbar off the top edge.
- * Chrome/Edge honour the fragment and need no clip (clipping there would just
- * eat document content). */
-const hidePdfToolbar = computed(
-  () => typeof navigator !== 'undefined' && /firefox/i.test(navigator.userAgent),
-)
+/** Positive integer page number from `?page=N` in the route query, or null. */
+const pageParam = computed<number | null>(() => {
+  const value = route.query.page
+  const n = Array.isArray(value) ? Number(value[0]) : Number(value)
+  return Number.isInteger(n) && n > 0 ? n : null
+})
 
 /** Where the preview header's "Open" button points (open the inline preview in
  * a new tab): the PDF for PDFs, the original image for images. */
@@ -534,6 +592,31 @@ const latestExtractionEvent = computed(() => {
   )
 })
 
+// --- Markdown section (lazy fetch on first reveal) ----------------------------
+
+const markdownData = ref<DocumentMarkdownResponse | null>(null)
+const markdownFetched = ref(false)
+const markdownLoading = ref(false)
+const markdownError = ref(false)
+
+function markdownPageHtml(md: string): string {
+  return DOMPurify.sanitize(marked.parse(md, { async: false }) as string)
+}
+
+async function onMarkdownReveal(): Promise<void> {
+  if (markdownFetched.value || !doc.value) return
+  markdownFetched.value = true
+  markdownLoading.value = true
+  markdownError.value = false
+  try {
+    markdownData.value = await fetchDocumentMarkdown(doc.value.id)
+  } catch {
+    markdownError.value = true
+  } finally {
+    markdownLoading.value = false
+  }
+}
+
 // --- Load on navigation (registered last: the handler runs immediately and
 // --- touches the edit/notice state declared above) ----------------------------
 
@@ -547,6 +630,9 @@ watch(
     cancelEdit()
     notice.value = null
     actionError.value = null
+    markdownData.value = null
+    markdownFetched.value = false
+    markdownError.value = false
     const numericId = Number(id)
     if (!Number.isInteger(numericId) || numericId < 1) {
       notFound.value = true
@@ -571,6 +657,17 @@ watch(
       {{ notice.text }}
     </AppBanner>
     <AppErrorSummary v-if="errorItems.length" :errors="errorItems" data-testid="error-summary" />
+    <AppBanner
+      v-if="documentLevelFindings.length"
+      data-testid="validation-findings"
+      class="mb-6"
+    >
+      <ul class="list-disc list-inside space-y-1">
+        <li v-for="finding in documentLevelFindings" :key="finding.rule">
+          {{ finding.message }}
+        </li>
+      </ul>
+    </AppBanner>
 
     <div
       id="document-hero"
@@ -681,68 +778,15 @@ watch(
             :alt="`Preview of ${doc.title ?? 'this document'}`"
             data-testid="preview-image"
           />
-          <template v-else-if="preview === 'pdf'">
-            <!-- On small screens the browser-native PDF viewer renders wider
-                 than the viewport and ignores #view=FitH (notably iOS Safari),
-                 so show the fit-width first-page thumbnail there instead. The
-                 native <iframe> stays on lg+ (scroll/zoom/text-selection). -->
-            <a
-              v-if="doc.has_thumbnail"
-              :href="pdfPreviewUrl"
-              target="_blank"
-              rel="noopener"
-              class="block lg:hidden"
-              data-testid="preview-pdf-image-link"
-            >
-              <img
-                class="w-full object-contain bg-gray-100 dark:bg-gray-900/40"
-                :src="thumbnailUrl(doc.id)"
-                :alt="`First page of ${doc.title ?? 'this document'} — tap to open the PDF`"
-                data-testid="preview-pdf-image"
-              />
-            </a>
-            <!-- No thumbnail for a PDF means it couldn't be rendered — almost
-                 always password-protected. Show a clickable padlock that opens
-                 the PDF (the browser then prompts for the password). Mobile only;
-                 the desktop iframe can prompt inline. -->
-            <a
-              v-else
-              :href="pdfPreviewUrl"
-              target="_blank"
-              rel="noopener"
-              class="flex lg:hidden aspect-[3/4] w-full flex-col items-center justify-center gap-3 bg-gray-100 dark:bg-gray-900/40 p-6 text-center text-gray-400 dark:text-gray-500"
-              data-testid="preview-pdf-locked"
-            >
-              <svg
-                xmlns="http://www.w3.org/2000/svg"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke-width="1.5"
-                stroke="currentColor"
-                class="w-12 h-12"
-                aria-hidden="true"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M16.5 10.5V6.75a4.5 4.5 0 1 0-9 0v3.75m-.75 11.25h10.5a2.25 2.25 0 0 0 2.25-2.25v-6.75a2.25 2.25 0 0 0-2.25-2.25H6.75a2.25 2.25 0 0 0-2.25 2.25v6.75a2.25 2.25 0 0 0 2.25 2.25Z"
-                />
-              </svg>
-              <span class="text-sm font-medium">Protected PDF — tap to open</span>
-            </a>
-            <!-- Browser-native PDF viewing; see the component docblock. The
-                 overflow-hidden wrapper lets us clip the viewer's own toolbar on
-                 Firefox (which ignores #toolbar=0) by nudging the iframe up. -->
-            <div class="hidden lg:block overflow-hidden">
-              <iframe
-                class="w-full border-0 hidden lg:block"
-                :class="hidePdfToolbar ? 'h-[calc(70vh+2.6rem)] -mt-[2.6rem]' : 'h-[70vh]'"
-                :src="pdfPreviewIframeUrl"
-                title="Document preview"
-                data-testid="preview-pdf"
-              ></iframe>
-            </div>
-          </template>
+          <DocumentPdfPreview
+            v-else-if="preview === 'pdf'"
+            :src="pdfPreviewUrl"
+            :poster="doc.has_thumbnail ? thumbnailUrl(doc.id) : undefined"
+            :open-href="previewOpenUrl"
+            :download-href="previewDownloadUrl"
+            :initial-page="pageParam"
+            data-testid="preview-pdf"
+          />
           <div
             v-else
             class="p-4 text-sm text-gray-500 dark:text-gray-400"
@@ -781,6 +825,51 @@ watch(
             >
           </AppDetails>
         </div>
+
+        <div
+          id="document-markdown-card"
+          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
+        >
+          <AppDetails
+            summary="View markdown"
+            data-testid="markdown-details"
+            @toggle="onMarkdownReveal"
+          >
+            <div v-if="markdownLoading" class="mt-2 text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-loading">
+              Loading…
+            </div>
+            <div v-else-if="markdownError" class="mt-2 text-sm text-red-600 dark:text-red-400" data-testid="markdown-error">
+              Could not load markdown — try again later.
+            </div>
+            <div v-else-if="markdownData && markdownData.page_count === 0" class="mt-2 text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-empty">
+              No markdown content is available for this document yet.
+            </div>
+            <template v-else-if="markdownData">
+              <div
+                v-for="page in markdownData.pages"
+                :key="page.page_number"
+                class="mt-3 first:mt-1"
+                data-testid="markdown-page"
+              >
+                <p
+                  v-if="markdownData.page_count > 1"
+                  class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
+                >
+                  Page {{ page.page_number }}
+                </p>
+                <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in markdownPageHtml -->
+                <div
+                  class="doc-markdown text-gray-800 dark:text-gray-100"
+                  data-testid="markdown-content"
+                  v-html="markdownPageHtml(page.markdown)"
+                />
+                <!-- eslint-enable vue/no-v-html -->
+              </div>
+            </template>
+          </AppDetails>
+        </div>
+
+        <DocumentSeriesTrend v-if="doc" :document-id="doc.id" />
       </div>
 
       <!-- Metadata: left column on desktop (lg:order-1). min-w-0 (as above)
@@ -818,8 +907,17 @@ watch(
                   :data-testid="`row-${field}`"
                   :class="WIDE_FIELDS.has(field) || editing === field ? 'sm:col-span-2' : ''"
                 >
-                  <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                  <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
                     {{ rowByField[field].label }}
+                    <template v-if="findingsByField[field]?.length">
+                      <AppBadge
+                        v-for="finding in findingsByField[field]"
+                        :key="finding.rule"
+                        colour="yellow"
+                        :title="finding.message"
+                        data-testid="validation-badge"
+                      >⚠</AppBadge>
+                    </template>
                   </dt>
                   <div v-if="editing !== field" class="mt-1 flex items-start justify-between gap-3">
                     <dd
@@ -1028,6 +1126,15 @@ watch(
           </p>
           <div class="flex flex-wrap gap-3">
             <AppButton
+              v-if="doc.review_status !== 'verified'"
+              type="button"
+              :disabled="verifying"
+              data-testid="mark-verified"
+              @click="markVerified"
+            >
+              {{ verifying ? 'Saving…' : 'Mark verified' }}
+            </AppButton>
+            <AppButton
               type="button"
               variant="secondary"
               :disabled="extracting"
@@ -1062,3 +1169,50 @@ watch(
     Sorry, the document could not be loaded. Try again later.
   </div>
 </template>
+
+<style scoped>
+/* Markdown rendered via v-html; restore readable prose spacing stripped by
+   Tailwind preflight (mirrors .ask-answer in AskView.vue). */
+.doc-markdown :deep(p) {
+  margin-bottom: 0.75rem;
+}
+.doc-markdown :deep(p:last-child) {
+  margin-bottom: 0;
+}
+.doc-markdown :deep(strong) {
+  font-weight: 600;
+}
+.doc-markdown :deep(em) {
+  font-style: italic;
+}
+.doc-markdown :deep(ul),
+.doc-markdown :deep(ol) {
+  margin: 0.5rem 0 0.75rem;
+  padding-left: 1.5rem;
+}
+.doc-markdown :deep(ul) {
+  list-style: disc;
+}
+.doc-markdown :deep(ol) {
+  list-style: decimal;
+}
+.doc-markdown :deep(li) {
+  margin-bottom: 0.25rem;
+}
+.doc-markdown :deep(h1),
+.doc-markdown :deep(h2),
+.doc-markdown :deep(h3) {
+  font-weight: 600;
+  margin: 0.75rem 0 0.5rem;
+}
+.doc-markdown :deep(code) {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.875em;
+  padding: 0.1em 0.3em;
+  border-radius: 0.25rem;
+  background: rgb(0 0 0 / 0.06);
+}
+.dark .doc-markdown :deep(code) {
+  background: rgb(255 255 255 / 0.08);
+}
+</style>

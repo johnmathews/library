@@ -11,7 +11,7 @@ from typing import Annotated, Any, Final
 
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
-from library.models import DocumentLanguage, DocumentSource, DocumentStatus
+from library.models import DocumentLanguage, DocumentSource, DocumentStatus, ReviewStatus
 
 
 class DocumentUploadResponse(BaseModel):
@@ -69,6 +69,7 @@ class DocumentListItem(BaseModel):
     created_at: datetime
     has_searchable_pdf: bool
     has_thumbnail: bool
+    review_status: ReviewStatus
     amount_total: Decimal | None = None
     currency: str | None = None
     snippet: str | None = Field(
@@ -108,6 +109,9 @@ class DocumentDetail(DocumentListItem):
     )
     user_edited_fields: list[str] = Field(
         description="Fields locked by user edits; re-extraction never overwrites them."
+    )
+    validation: dict[str, Any] | None = Field(
+        default=None, description="Latest validation run: findings + provenance."
     )
     events: list[IngestionEventOut] = Field(description="Audit trail, oldest first.")
 
@@ -364,7 +368,12 @@ class TokenInfo(BaseModel):
 
 
 class JobInfo(BaseModel):
-    """One row from the procrastinate_jobs table, as exposed by GET /api/jobs."""
+    """One row from GET /api/jobs: a Procrastinate job enriched with the
+    pipeline state of the document it processes (when it has one).
+
+    The document fields are null for jobs without a ``document_id`` (e.g. the
+    periodic email poll) or whose document has since been deleted.
+    """
 
     id: int
     status: str
@@ -372,3 +381,23 @@ class JobInfo(BaseModel):
     attempts: int
     scheduled_at: datetime | None
     document_id: int | None
+    active: bool
+    document_title: str | None = None
+    document_status: str | None = None
+    error: str | None = None
+    cost_usd: float | None = None
+    tokens: int | None = None
+
+
+class MarkdownPage(BaseModel):
+    """One page of a document's per-page markdown rendering."""
+
+    page_number: int
+    markdown: str
+
+
+class MarkdownResponse(BaseModel):
+    """Body of GET /api/documents/{id}/markdown."""
+
+    page_count: int
+    pages: list[MarkdownPage]

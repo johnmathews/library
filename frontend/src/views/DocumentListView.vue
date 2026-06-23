@@ -98,6 +98,7 @@ watch(
       tag: state.tags.length ? state.tags : undefined,
       language: (state.language || undefined) as DocumentLanguage | undefined,
       status: (state.status || undefined) as DocumentListItem['status'] | undefined,
+      review_status: (state.review || undefined) as DocumentListItem['review_status'] | undefined,
       date_from: state.dateFrom || undefined,
       date_to: state.dateTo || undefined,
       limit: PAGE_SIZE,
@@ -187,6 +188,22 @@ const amountLabels = computed<Map<number, string | null>>(() => {
   <h1 id="dashboard-title" class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Documents</h1>
 
   <DocumentFilterBar :applied="applied" @apply="applyFilterQuery" @clear="clearFilters" />
+
+  <div class="flex flex-wrap gap-2 mb-4">
+    <button
+      type="button"
+      :class="[
+        'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition-colors',
+        applied.review === 'needs_review'
+          ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-400/30 dark:text-yellow-400 ring-1 ring-yellow-400/50'
+          : 'bg-gray-100 text-gray-600 hover:bg-yellow-50 hover:text-yellow-700 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-yellow-400/20 dark:hover:text-yellow-400',
+      ]"
+      data-testid="needs-review-filter"
+      @click="applyFilterQuery(applied.review === 'needs_review' ? {} : { review: 'needs_review' })"
+    >
+      Needs review
+    </button>
+  </div>
 
   <div
     v-if="loadError"
@@ -310,6 +327,7 @@ const amountLabels = computed<Map<number, string | null>>(() => {
               <AppBadge v-if="item.status === 'failed'" colour="red">Failed</AppBadge>
               <AppBadge v-else-if="item.status !== 'indexed'" colour="yellow">Processing</AppBadge>
             </template>
+            <AppBadge v-if="item.review_status === 'needs_review'" colour="yellow" data-testid="review-badge">Needs review</AppBadge>
             <AppBadge v-if="shows('file_type')" colour="grey">{{ fileTypeLabel(item) }}</AppBadge>
             <span
               v-if="shows('sender') && item.sender"

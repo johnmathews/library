@@ -242,7 +242,8 @@ see 1.7.2 for that instance's exact shape):
 3. **Edit the compose**: swap the `db` image; add the `embedder` service; add
    `LIBRARY_EMBEDDING_SERVICE_URL` + a `depends_on: embedder` to api/worker.
 4. `docker compose pull && docker compose up -d` — the `migrate` job enables
-   the `vector` extension and creates `document_chunks` + `ask_logs`; the
+   the `vector` extension and creates `document_chunks`, `ask_threads`, and
+   `ask_turns`; the
    `embedder` downloads bge-m3 (~2 GB) into its cache volume on first start.
 5. **Collation check (important).** If the *old* `db` image's glibc differs
    from `pgvector/pgvector:pg17`'s (e.g. a newer `postgres:17` → the pgvector
@@ -272,7 +273,17 @@ see 1.7.2 for that instance's exact shape):
 
    Idempotent and throttleable (`--limit N`); the worker embeds on CPU
    (~6 min per ~100 docs). See [ask.md](ask.md) §1.5.
-8. **Ask answering needs an Anthropic key.** `POST /api/ask` returns `503`
+8. **Backfill summaries** for documents indexed before extraction produced a
+   summary:
+
+   ```console
+   docker compose exec api library backfill-summaries
+   ```
+
+   Re-runs extraction (honours user edits + the daily budget) for indexed docs
+   with no summary; throttleable (`--limit N`). Needs `LIBRARY_ANTHROPIC_API_KEY`
+   and the worker running. See [ingestion.md](ingestion.md) §"Backfill summaries".
+9. **Ask answering needs an Anthropic key.** `POST /api/ask` returns `503`
    without `LIBRARY_ANTHROPIC_API_KEY` (only the answer step calls Claude;
    embedding/indexing is local). Retrieval works without it.
 

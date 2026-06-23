@@ -125,6 +125,16 @@ describe('UploadView', () => {
     expect(w.find('#file-upload-error').text()).toContain('Select at least one file')
   })
 
+  it('clears the validation error once a file is selected', async () => {
+    const w = mountView()
+    await w.find('form').trigger('submit')
+    expect(w.find('#file-upload-error').exists()).toBe(true)
+
+    await selectFiles(w, [makeFile()])
+
+    expect(w.find('#file-upload-error').exists()).toBe(false)
+  })
+
   it('shows upload progress from XHR progress events', async () => {
     const w = mountView()
     await selectFiles(w, [makeFile()])

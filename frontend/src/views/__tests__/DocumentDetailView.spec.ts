@@ -3,7 +3,14 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import DocumentDetailView from '../DocumentDetailView.vue'
-import type { DocumentDetail } from '@/api/documents'
+import type { DocumentDetail, DocumentMarkdownResponse } from '@/api/documents'
+
+// pdfjs-dist can't run its worker/canvas in jsdom — mock the whole module
+// so that DocumentPdfPreview (now imported by DocumentDetailView) can be loaded.
+vi.mock('pdfjs-dist', () => ({
+  GlobalWorkerOptions: { workerSrc: '' },
+  getDocument: vi.fn(() => ({ promise: new Promise(() => {}), destroy: () => Promise.resolve() })),
+}))
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -40,6 +47,8 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     original_filename: 'rekening.pdf',
     sha256: 'abc123',
     extraction: null,
+    validation: null,
+    review_status: 'unreviewed',
     user_edited_fields: [],
     events: [],
     ...overrides,
@@ -63,10 +72,14 @@ describe('DocumentDetailView', () => {
   let detail: DocumentDetail
   /** What PATCH returns; defaults to echoing `detail`. */
   let patchResponse: () => Response
+  /** What GET /api/documents/12/markdown returns; tests may override. */
+  let markdownResponse: () => Response
 
   beforeEach(async () => {
     detail = makeDetail()
     patchResponse = () => jsonResponse(detail)
+    markdownResponse = () =>
+      jsonResponse({ page_count: 1, pages: [{ page_number: 1, markdown: '# Invoice\n\nTotal: €123.45' }] } satisfies DocumentMarkdownResponse)
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
@@ -82,6 +95,9 @@ describe('DocumentDetailView', () => {
       }
       if (url === '/api/documents/12' && method === 'PATCH') {
         return Promise.resolve(patchResponse())
+      }
+      if (url === '/api/documents/12/markdown' && method === 'GET') {
+        return Promise.resolve(markdownResponse())
       }
       return Promise.resolve(jsonResponse({ detail: `unexpected ${method} ${url}` }, 500))
     })
@@ -213,16 +229,22 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="detail-banner"]').exists()).toBe(false)
   })
 
-  it('previews the searchable PDF inline in an iframe with the toolbar hidden', async () => {
-    const w = await mountView()
-    // disposition=inline: an attachment response would blank the iframe and
-    // trigger a download instead of rendering the PDF.
-    // toolbar=0&navpanes=0 hides the native viewer chrome; view=FitH fits the
-    // page to the iframe width so a portrait page is not clipped on a narrow
-    // (mobile) viewport.
-    expect(w.find('[data-testid="preview-pdf"]').attributes('src')).toBe(
-      '/api/documents/12/searchable.pdf?disposition=inline#toolbar=0&navpanes=0&view=FitH',
-    )
+  it('renders the pdf.js preview component for a PDF document', async () => {
+    detail = makeDetail({ mime_type: 'application/pdf', has_thumbnail: true })
+    const DocumentPdfPreviewStub = { template: '<div />', props: ['src', 'poster', 'openHref', 'downloadHref', 'initialPage'] }
+    await router.push('/documents/12')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentPdfPreview: DocumentPdfPreviewStub },
+      },
+    })
+    await flushPromises()
+    const preview = wrapper.findComponent(DocumentPdfPreviewStub)
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('src')).toContain('disposition=inline')
+    // The legacy native iframe must be gone.
+    expect(wrapper.find('iframe').exists()).toBe(false)
   })
 
   it('preview header opens the inline PDF in a new tab and downloads the searchable PDF', async () => {
@@ -267,61 +289,78 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="hero-tags"]').text()).toContain('Energie')
   })
 
-  it('shows a fit-width first-page thumbnail on mobile and keeps the iframe for lg+', async () => {
-    const w = await mountView()
-    const img = w.find('[data-testid="preview-pdf-image"]')
-    expect(img.exists()).toBe(true)
-    expect(img.attributes('src')).toBe('/api/documents/12/thumbnail')
-    // The thumbnail is wrapped in a link that opens the PDF (same as the text
-    // link), shown only below lg.
-    const link = w.find('[data-testid="preview-pdf-image-link"]')
-    expect(link.attributes('href')).toBe('/api/documents/12/searchable.pdf?disposition=inline')
-    expect(link.attributes('target')).toBe('_blank')
-    expect(link.classes()).toContain('lg:hidden')
-    // The native iframe is kept but hidden below lg.
-    expect(w.find('[data-testid="preview-pdf"]').classes()).toContain('hidden')
-    expect(w.find('[data-testid="preview-pdf"]').classes()).toContain('lg:block')
+  it('passes the thumbnail as poster to DocumentPdfPreview when has_thumbnail is true', async () => {
+    detail = makeDetail({ has_thumbnail: true })
+    const DocumentPdfPreviewStub = { template: '<div />', props: ['src', 'poster', 'openHref', 'downloadHref', 'initialPage'] }
+    await router.push('/documents/12')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentPdfPreview: DocumentPdfPreviewStub },
+      },
+    })
+    await flushPromises()
+    const preview = wrapper.findComponent(DocumentPdfPreviewStub)
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('poster')).toBe('/api/documents/12/thumbnail')
+    expect(wrapper.find('[data-testid="preview-pdf-image-link"]').exists()).toBe(false)
+    expect(wrapper.find('iframe').exists()).toBe(false)
   })
 
-  it('shows a clickable padlock for a PDF with no thumbnail (e.g. password-protected)', async () => {
-    // No thumbnail for a PDF ⇒ it could not be rendered (almost always
-    // password-protected). Mobile gets a padlock that opens the PDF; the
-    // desktop iframe stays (hidden below lg) so it can prompt inline.
+  it('passes undefined poster to DocumentPdfPreview when has_thumbnail is false', async () => {
     detail = makeDetail({ has_thumbnail: false, has_searchable_pdf: false })
-    const w = await mountView()
-    expect(w.find('[data-testid="preview-pdf-image"]').exists()).toBe(false)
-    const locked = w.find('[data-testid="preview-pdf-locked"]')
-    expect(locked.exists()).toBe(true)
-    expect(locked.attributes('href')).toBe('/api/documents/12/original?disposition=inline')
-    expect(locked.attributes('target')).toBe('_blank')
-    expect(locked.classes()).toContain('lg:hidden')
-    expect(locked.find('svg').exists()).toBe(true) // padlock icon
-    const iframe = w.find('[data-testid="preview-pdf"]')
-    expect(iframe.classes()).toContain('hidden')
-    expect(iframe.classes()).toContain('lg:block')
+    const DocumentPdfPreviewStub = { template: '<div />', props: ['src', 'poster', 'openHref', 'downloadHref', 'initialPage'] }
+    await router.push('/documents/12')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentPdfPreview: DocumentPdfPreviewStub },
+      },
+    })
+    await flushPromises()
+    const preview = wrapper.findComponent(DocumentPdfPreviewStub)
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('poster')).toBeUndefined()
+    expect(wrapper.find('[data-testid="preview-pdf-locked"]').exists()).toBe(false)
+    expect(wrapper.find('iframe').exists()).toBe(false)
   })
 
-  it('falls back to the original PDF and then to a no-preview panel', async () => {
+  it('falls back to the original PDF (no searchable PDF) and then to a no-preview panel', async () => {
+    const DocumentPdfPreviewStub = { template: '<div />', props: ['src', 'poster', 'openHref', 'downloadHref', 'initialPage'] }
+
     detail = makeDetail({ has_searchable_pdf: false })
-    let w = await mountView()
-    expect(w.find('[data-testid="preview-pdf"]').attributes('src')).toBe(
-      '/api/documents/12/original?disposition=inline#toolbar=0&navpanes=0&view=FitH',
-    )
-    w.unmount()
+    await router.push('/documents/12')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentPdfPreview: DocumentPdfPreviewStub },
+      },
+    })
+    await flushPromises()
+    const preview = wrapper.findComponent(DocumentPdfPreviewStub)
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('src')).toBe('/api/documents/12/original?disposition=inline')
+    wrapper.unmount()
 
     detail = makeDetail({ mime_type: 'text/plain', has_searchable_pdf: false })
-    w = await mountView()
-    expect(w.find('[data-testid="preview-fallback"]').exists()).toBe(true)
+    wrapper = mount(DocumentDetailView, {
+      global: { plugins: [router, pinia] },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="preview-fallback"]').exists()).toBe(true)
     // The fallback's download link keeps the attachment default.
-    expect(w.find('[data-testid="preview-fallback"] a').attributes('href')).toBe(
+    expect(wrapper.find('[data-testid="preview-fallback"] a').attributes('href')).toBe(
       '/api/documents/12/original',
     )
+    wrapper.unmount()
 
     detail = makeDetail({ mime_type: 'image/jpeg', has_searchable_pdf: false })
-    wrapper?.unmount()
-    w = await mountView()
+    wrapper = mount(DocumentDetailView, {
+      global: { plugins: [router, pinia] },
+    })
+    await flushPromises()
     // Inline: Firefox refuses to render <img> sources served as attachment.
-    expect(w.find('[data-testid="preview-image"]').attributes('src')).toBe(
+    expect(wrapper.find('[data-testid="preview-image"]').attributes('src')).toBe(
       '/api/documents/12/original?disposition=inline',
     )
   })
@@ -379,5 +418,148 @@ describe('DocumentDetailView', () => {
     )
     const w = await mountView('/documents/999')
     expect(w.text()).toContain('Document not found')
+  })
+
+  it('shows a warning badge for a flagged field', async () => {
+    detail = makeDetail({
+      validation: {
+        findings: [
+          {
+            rule: 'amount_grounding',
+            field: 'amount_total',
+            severity: 'warn',
+            message: 'Amount could not be verified against source text',
+          },
+        ],
+      },
+    })
+    const w = await mountView()
+    // The amount row should contain a warning badge with the finding message as title
+    const amountRow = w.find('[data-testid="row-amount"]')
+    expect(amountRow.exists()).toBe(true)
+    const badge = amountRow.find('[data-testid="validation-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.attributes('title')).toContain('Amount could not be verified')
+  })
+
+  it('renders document-level findings (field: null) in the validation-findings banner', async () => {
+    detail = makeDetail({
+      review_status: 'needs_review',
+      validation: {
+        findings: [
+          {
+            rule: 'empty_extraction',
+            field: null,
+            severity: 'warn',
+            message: 'extraction produced no useful metadata',
+          },
+        ],
+      },
+    })
+    const w = await mountView()
+    // Document-level findings must appear in the distinct validation-findings section.
+    const banner = w.find('[data-testid="validation-findings"]')
+    expect(banner.exists()).toBe(true)
+    expect(banner.text()).toContain('extraction produced no useful metadata')
+    // Field-level badge section must NOT be triggered for this finding.
+    expect(w.findAll('[data-testid="validation-badge"]')).toHaveLength(0)
+    // The action-notice banner (detail-banner) must not be affected.
+    expect(w.find('[data-testid="detail-banner"]').exists()).toBe(false)
+  })
+
+  it('passes the page query param as initialPage to DocumentPdfPreview', async () => {
+    const DocumentPdfPreviewStub = { template: '<div />', props: ['src', 'poster', 'openHref', 'downloadHref', 'initialPage'] }
+    await router.push('/documents/12?page=2')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentPdfPreview: DocumentPdfPreviewStub },
+      },
+    })
+    await flushPromises()
+    const preview = wrapper.findComponent(DocumentPdfPreviewStub)
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('initialPage')).toBe(2)
+    expect(wrapper.find('iframe').exists()).toBe(false)
+  })
+
+  it('marks the document verified', async () => {
+    const verifiedDetail = makeDetail({ review_status: 'verified' })
+    // Stub verifyDocument via fetch: POST /api/documents/12/verify
+    fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
+      if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
+      if (url === '/api/documents/12' && method === 'GET')
+        return Promise.resolve(jsonResponse(detail))
+      if (url === '/api/documents/12/verify' && method === 'POST')
+        return Promise.resolve(jsonResponse(verifiedDetail))
+      return Promise.resolve(jsonResponse({ detail: `unexpected ${method} ${url}` }, 500))
+    })
+    const w = await mountView()
+    // "Mark verified" button should be visible when review_status !== 'verified'
+    const btn = w.find('[data-testid="mark-verified"]')
+    expect(btn.exists()).toBe(true)
+    await btn.trigger('click')
+    await flushPromises()
+    // Button should disappear once status is verified
+    expect(w.find('[data-testid="mark-verified"]').exists()).toBe(false)
+    // Status text should reflect verified
+    expect(w.text()).toContain('verified')
+  })
+
+  it('lazily fetches markdown on first reveal and renders page content', async () => {
+    const w = await mountView()
+
+    // Markdown section should exist but not have fetched yet (details is closed)
+    expect(w.find('[data-testid="markdown-details"]').exists()).toBe(true)
+    const markdownCalls = () =>
+      fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/markdown'))
+    expect(markdownCalls()).toHaveLength(0)
+
+    // Trigger the toggle (reveal) — simulates the user opening the <details>
+    await w.find('[data-testid="markdown-details"]').trigger('toggle')
+    await flushPromises()
+
+    expect(markdownCalls()).toHaveLength(1)
+    // Page content should be rendered
+    expect(w.find('[data-testid="markdown-content"]').exists()).toBe(true)
+    expect(w.find('[data-testid="markdown-content"]').html()).toContain('Invoice')
+  })
+
+  it('does not re-fetch markdown if the section is toggled again', async () => {
+    const w = await mountView()
+    const details = w.find('[data-testid="markdown-details"]')
+    await details.trigger('toggle')
+    await flushPromises()
+    await details.trigger('toggle')
+    await flushPromises()
+    const markdownCalls = fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/markdown'))
+    expect(markdownCalls).toHaveLength(1)
+  })
+
+  it('shows the empty state when page_count is 0', async () => {
+    markdownResponse = () => jsonResponse({ page_count: 0, pages: [] } satisfies DocumentMarkdownResponse)
+    const w = await mountView()
+    await w.find('[data-testid="markdown-details"]').trigger('toggle')
+    await flushPromises()
+    expect(w.find('[data-testid="markdown-empty"]').exists()).toBe(true)
+    expect(w.find('[data-testid="markdown-content"]').exists()).toBe(false)
+  })
+
+  it('renders DocumentSeriesTrend with the loaded document id', async () => {
+    const DocumentSeriesTrendStub = { template: '<div />', props: ['documentId'] }
+    await router.push('/documents/12')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentSeriesTrend: DocumentSeriesTrendStub },
+      },
+    })
+    await flushPromises()
+    const trend = wrapper.findComponent(DocumentSeriesTrendStub)
+    expect(trend.exists()).toBe(true)
+    expect(trend.props('documentId')).toBe(detail.id)
   })
 })

@@ -21,8 +21,10 @@ EXPECTED_TABLES: set[str] = {
     "document_tags",
     "documents",
     "document_chunks",
+    "document_pages",
     "ingestion_events",
-    "ask_logs",
+    "ask_threads",
+    "ask_turns",
 }
 
 PROCRASTINATE_TABLES: set[str] = {
@@ -132,3 +134,35 @@ def test_users_have_preferences_column(migrated_database_url: str) -> None:
         """,
     )
     assert rows == [("preferences", "jsonb", "NO")]
+
+
+def test_document_chunks_have_page_number_column(migrated_database_url: str) -> None:
+    rows = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = 'document_chunks' AND column_name = 'page_number'
+        """,
+    )
+    assert rows == [("page_number", "integer", "YES")]
+
+
+def test_ask_turns_has_messages_column(migrated_database_url: str) -> None:
+    rows = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = 'ask_turns' AND column_name = 'messages'
+        """,
+    )
+    assert rows == [("messages", "jsonb", "NO")]
+
+
+def test_ask_logs_table_is_gone(migrated_database_url: str) -> None:
+    rows = fetch_all(
+        migrated_database_url,
+        "SELECT tablename FROM pg_tables WHERE tablename = 'ask_logs'",
+    )
+    assert rows == []

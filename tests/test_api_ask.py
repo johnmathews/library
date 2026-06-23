@@ -116,11 +116,16 @@ def _seed_document_with_chunk(
         engine.dispose()
 
 
-def _ask_logs_count(database_url: str) -> int:
+def _thread_turn_counts(database_url: str) -> list[tuple[int, int]]:
     engine = create_engine(database_url.replace("+asyncpg", "+psycopg"))
     try:
         with engine.connect() as connection:
-            return connection.execute(text("SELECT count(*) FROM ask_logs")).scalar_one()
+            return [
+                (int(tid), int(n))
+                for tid, n in connection.execute(
+                    text("SELECT thread_id, count(*) FROM ask_turns GROUP BY thread_id")
+                ).all()
+            ]
     finally:
         engine.dispose()
 
@@ -189,7 +194,7 @@ def test_ask_semantic_answers_with_citation(
     assert body["used_tools"] == ["semantic_search"]
     assert document_id in [citation["document_id"] for citation in body["citations"]]
     assert body["cost_usd"] > 0
-    assert _ask_logs_count(api_database_url) == 1
+    assert (body["thread_id"], 1) in _thread_turn_counts(api_database_url)
 
 
 def test_ask_structured_answers_provider_question(
@@ -202,16 +207,20 @@ def test_ask_structured_answers_provider_question(
     try:
         with engine.begin() as connection:
             sender_id = connection.execute(
-                text("INSERT INTO senders (name) VALUES ('Vattenfall') RETURNING id")
+                text(
+                    "INSERT INTO senders (name) VALUES ('Vattenfall')"
+                    " ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id"
+                )
             ).scalar_one()
             kind_id = connection.execute(
                 text("SELECT id FROM kinds WHERE slug = 'utility-bill'")
             ).scalar_one()
-            connection.execute(
+            doc_id = connection.execute(
                 text(
                     "INSERT INTO documents"
                     " (sha256, mime_type, status, source, sender_id, kind_id, document_date)"
                     " VALUES (:sha, 'application/pdf', 'indexed', 'upload', :sid, :kid, :d)"
+                    " RETURNING id"
                 ),
                 {
                     "sha": hashlib.sha256(b"energy-2025").hexdigest(),
@@ -219,7 +228,7 @@ def test_ask_structured_answers_provider_question(
                     "kid": kind_id,
                     "d": date(2025, 3, 1),
                 },
-            )
+            ).scalar_one()
     finally:
         engine.dispose()
 
@@ -258,7 +267,94 @@ def test_ask_structured_answers_provider_question(
     body = response.json()
     assert "Vattenfall" in body["answer"]
     assert body["used_tools"] == ["query_documents"]
-    assert len(body["citations"]) == 1
+    citation_ids = [c["document_id"] for c in body["citations"]]
+    assert doc_id in citation_ids
+
+
+def test_ask_citation_schema_has_page_number() -> None:
+    """The Citation response model must expose page_number for clients."""
+    from library.api.ask import Citation
+
+    assert "page_number" in Citation.model_fields
+
+
+def test_ask_semantic_citation_carries_page_number(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A semantic hit with page_number surfaces it in the API citation; an
+    aggregation-only citation gets None."""
+    from sqlalchemy import text as sa_text
+
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            sha = hashlib.sha256(b"page-number-ask").hexdigest()
+            vector_literal = (
+                "[" + ",".join("1" if i == 0 else "0" for i in range(EMBEDDING_DIM)) + "]"
+            )
+            document_id = connection.execute(
+                sa_text(
+                    "INSERT INTO documents (sha256, mime_type, status, source, ocr_text, title)"
+                    " VALUES (:sha, 'application/pdf', 'indexed', 'upload', :ocr, :title)"
+                    " RETURNING id"
+                ),
+                {"sha": sha, "ocr": "travel allowance clause", "title": "Contract 2025"},
+            ).scalar_one()
+            connection.execute(
+                sa_text(
+                    "INSERT INTO document_chunks"
+                    " (document_id, chunk_index, page_number, text, embedding)"
+                    " VALUES (:doc, 1, :page, :txt, CAST(:emb AS vector))"
+                ),
+                {
+                    "doc": document_id,
+                    "page": 7,
+                    "txt": "Article 7: travel allowance 0.21/km",
+                    "emb": vector_literal,
+                },
+            )
+    finally:
+        engine.dispose()
+
+    async def fake_embed_query(
+        text_value: str, *, settings: Any, client: Any = None
+    ) -> list[float]:
+        return _unit_vector(0)
+
+    monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="semantic_search",
+                        input={"query": "travel allowance"},
+                        id="t1",
+                    )
+                ],
+                usage=_Usage(100, 20),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"Yes, travel allowance [#{document_id}].")],
+                usage=_Usage(150, 30),
+            ),
+        ],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "travel allowance?"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    citations = body["citations"]
+    matched = [c for c in citations if c["document_id"] == document_id]
+    assert matched, f"document {document_id} not in citations {citations}"
+    assert matched[0]["page_number"] == 7
 
 
 def test_ask_empty_corpus_is_honest(
@@ -285,3 +381,319 @@ def test_ask_empty_corpus_is_honest(
     assert body["citations"] == []
     assert body["used_tools"] == []
     assert "does not appear" in body["answer"]
+
+
+# --- Engine unit tests (no DB, no HTTP) -------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_run_ask_captures_turn_messages(monkeypatch: pytest.MonkeyPatch) -> None:
+    """turn_messages records the user question, the tool dance, and the answer
+    as plain dicts suitable for replay/persistence."""
+    from typing import cast
+
+    from library.ask.engine import run_ask
+    from library.config import get_settings
+
+    async def fake_embed_query(
+        text_value: str, *, settings: Any, client: Any = None
+    ) -> list[float]:
+        return _unit_vector(0)
+
+    monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
+
+    async def fake_search(
+        session: Any, *, query: str, query_embedding: Any, top_k: int
+    ) -> list[Any]:
+        return []
+
+    monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+
+    client = _FakeAnthropic(
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[_ToolUseBlock(name="semantic_search", input={"query": "x"}, id="t1")],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="No matches.")],
+                usage=_Usage(8, 4),
+            ),
+        ]
+    )
+    settings = get_settings()
+    result = await run_ask(
+        cast(Any, None), question="anything?", settings=settings, client=cast(Any, client)
+    )
+
+    roles = [m["role"] for m in result.turn_messages]
+    assert roles == ["user", "assistant", "user", "assistant"]
+    # every block is a plain dict (JSON-serialisable), not an SDK/dataclass object
+    for message in result.turn_messages:
+        for block in message["content"] if isinstance(message["content"], list) else []:
+            assert isinstance(block, dict)
+
+
+@pytest.mark.asyncio
+async def test_run_ask_replays_history(monkeypatch: pytest.MonkeyPatch) -> None:
+    """history_messages are prepended to the API call's messages, so prior
+    tool results are visible to the follow-up turn."""
+    from typing import cast
+
+    from library.ask.engine import run_ask
+    from library.config import get_settings
+
+    client = _FakeAnthropic(
+        [
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="2025 was Vattenfall.")],
+                usage=_Usage(5, 3),
+            )
+        ]
+    )
+    history = [
+        {"role": "user", "content": [{"type": "text", "text": "who in 2024?"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "Eneco [#1]."}]},
+    ]
+    settings = get_settings()
+    await run_ask(
+        cast(Any, None),
+        question="and 2025?",
+        settings=settings,
+        client=cast(Any, client),
+        history_messages=history,
+    )
+
+    sent = client.messages.calls[0]["messages"]
+    assert sent[0]["content"][0]["text"] == "who in 2024?"
+    assert sent[-1]["content"][-1]["text"] == "and 2025?"
+
+
+# --- Thread persistence tests -----------------------------------------------
+
+
+def test_ask_creates_thread_and_returns_id(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="end_turn", content=[_TextBlock(text="No data.")], usage=_Usage(8, 3)
+            )
+        ],
+    )
+    response = api_client.post("/api/ask", json={"question": "Where are my tax returns?"})
+    assert response.status_code == 200, response.text
+    thread_id = response.json()["thread_id"]
+    assert isinstance(thread_id, int)
+    counts = _thread_turn_counts(api_database_url)
+    assert (thread_id, 1) in counts
+
+
+def test_ask_follow_up_replays_prior_turn(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_run_ask(
+        session: Any,
+        *,
+        question: str,
+        settings: Any,
+        client: Any,
+        history_messages: list[dict[str, Any]] | None = None,
+    ):
+        captured["history"] = history_messages
+        from library.ask.engine import AskResult
+
+        return AskResult(
+            answer="ok",
+            citations=[],
+            used_tools=[],
+            model=settings.ask_model,
+            turn_messages=[
+                {"role": "user", "content": [{"type": "text", "text": question}]},
+                {"role": "assistant", "content": [{"type": "text", "text": "ok"}]},
+            ],
+        )
+
+    monkeypatch.setattr(ask_module, "run_ask", fake_run_ask)
+
+    first = api_client.post("/api/ask", json={"question": "who in 2024?"})
+    thread_id = first.json()["thread_id"]
+    api_client.post("/api/ask", json={"question": "and 2025?", "thread_id": thread_id})
+
+    assert captured["history"]  # second call received the first turn's messages
+    assert captured["history"][0]["content"][0]["text"] == "who in 2024?"
+
+
+def test_ask_foreign_thread_is_404(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+) -> None:
+    response = api_client.post("/api/ask", json={"question": "hi", "thread_id": 999999})
+    assert response.status_code == 404
+
+
+def test_thread_lifecycle_list_get_delete(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="Answer one.")],
+                usage=_Usage(10, 5),
+            )
+        ],
+    )
+    created = api_client.post("/api/ask", json={"question": "first question?"})
+    assert created.status_code == 200, created.text
+    thread_id = created.json()["thread_id"]
+
+    listing = api_client.get("/api/ask/threads")
+    assert listing.status_code == 200
+    summary = next(t for t in listing.json() if t["id"] == thread_id)
+    assert summary["title"] == "first question?"
+    assert summary["turn_count"] == 1
+    assert summary["total_cost_usd"] > 0
+
+    detail = api_client.get(f"/api/ask/threads/{thread_id}")
+    assert detail.status_code == 200
+    body = detail.json()
+    assert body["turns"][0]["query"] == "first question?"
+    assert body["turns"][0]["answer"] == "Answer one."
+
+    deleted = api_client.delete(f"/api/ask/threads/{thread_id}")
+    assert deleted.status_code == 204
+    assert api_client.get(f"/api/ask/threads/{thread_id}").status_code == 404
+
+
+def _seed_utility_series(database_url: str) -> list[int]:
+    """Insert three utility-bill docs for sender Vattenfall, ascending dates and
+    amounts 100/100/130.  Returns ids oldest→newest."""
+    engine = create_engine(database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            sender_id = connection.execute(
+                text(
+                    "INSERT INTO senders (name) VALUES ('Vattenfall')"
+                    " ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id"
+                )
+            ).scalar_one()
+            kind_id = connection.execute(
+                text("SELECT id FROM kinds WHERE slug = 'utility-bill'")
+            ).scalar_one()
+            ids: list[int] = []
+            bills = [
+                (date(2025, 1, 1), 100),
+                (date(2025, 2, 1), 100),
+                (date(2025, 3, 1), 130),
+            ]
+            for d, amount in bills:
+                sha = hashlib.sha256(f"vattenfall-{d}".encode()).hexdigest()
+                doc_id = connection.execute(
+                    text(
+                        "INSERT INTO documents"
+                        " (sha256, mime_type, status, source, sender_id, kind_id,"
+                        "  document_date, amount_total, currency)"
+                        " VALUES (:sha, 'application/pdf', 'indexed', 'upload',"
+                        "         :sid, :kid, :d, :amt, 'EUR')"
+                        " RETURNING id"
+                    ),
+                    {"sha": sha, "sid": sender_id, "kid": kind_id, "d": d, "amt": amount},
+                ).scalar_one()
+                ids.append(doc_id)
+        return ids
+    finally:
+        engine.dispose()
+
+
+def test_ask_uses_compare_to_series(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    doc_ids = _seed_utility_series(api_database_url)
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="compare_to_series",
+                        input={
+                            "kind": "utility-bill",
+                            "sender_contains": "vattenfall",
+                            "reference": "latest",
+                        },
+                        id="c1",
+                    )
+                ],
+                usage=_Usage(120, 25),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"Yes, higher than usual [#{doc_ids[-1]}].")],
+                usage=_Usage(140, 18),
+            ),
+        ],
+    )
+    response = api_client.post(
+        "/api/ask", json={"question": "is my latest bill higher than usual?"}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["used_tools"] == ["compare_to_series"]
+    assert any(c["document_id"] == doc_ids[-1] for c in body["citations"])
+
+
+def test_thread_get_foreign_user_is_404(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A thread owned by another user returns 404 for GET and DELETE."""
+    # Insert a thread row owned by a synthetic foreign user_id via raw SQL.
+    # This avoids the asyncio event-loop conflict that arises when create_user
+    # (which calls asyncio.run) is invoked inside an active TestClient context.
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as conn:
+            foreign_user_id: int = conn.execute(
+                text(
+                    "INSERT INTO users (username, password_hash, display_name, is_active)"
+                    " VALUES ('foreign-thread-owner', 'x', '', true) RETURNING id"
+                )
+            ).scalar_one()
+            foreign_thread_id: int = conn.execute(
+                text(
+                    "INSERT INTO ask_threads (user_id, title)"
+                    " VALUES (:uid, 'foreign thread') RETURNING id"
+                ),
+                {"uid": foreign_user_id},
+            ).scalar_one()
+    finally:
+        engine.dispose()
+
+    # api_client is logged in as its own user — it must NOT see the foreign thread.
+    assert api_client.get(f"/api/ask/threads/{foreign_thread_id}").status_code == 404
+    assert api_client.delete(f"/api/ask/threads/{foreign_thread_id}").status_code == 404

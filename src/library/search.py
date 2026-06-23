@@ -32,6 +32,7 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     Kind,
+    ReviewStatus,
     Sender,
     Tag,
 )
@@ -60,6 +61,7 @@ class DocumentFilters:
     source: DocumentSource | None = None
     date_from: date | None = None
     date_to: date | None = None
+    review_status: ReviewStatus | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -95,6 +97,8 @@ def filter_conditions(filters: DocumentFilters) -> list[Any]:
         conditions.append(Document.language == filters.language)
     if filters.status is not None:
         conditions.append(Document.status == filters.status)
+    if filters.review_status is not None:
+        conditions.append(Document.review_status == filters.review_status)
     if filters.date_from is not None:
         conditions.append(Document.document_date >= filters.date_from)
     if filters.date_to is not None:
@@ -161,12 +165,15 @@ class SemanticHit:
     ``score`` is the RRF score (higher is better). ``chunk_index``/``chunk_text``
     are the nearest chunk by vector distance, or ``None`` when the document
     surfaced only through full-text search (no chunk in the candidate pool).
+    ``page_number`` is the page of the best-matching chunk, or ``None`` when
+    not set on the chunk or when the document surfaced only via FTS.
     """
 
     document: Document
     score: float
     chunk_index: int | None
     chunk_text: str | None
+    page_number: int | None
 
 
 async def _vector_candidates(
@@ -174,7 +181,7 @@ async def _vector_candidates(
     conditions: list[Any],
     query_embedding: Sequence[float],
     pool: int,
-) -> tuple[list[int], dict[int, tuple[int, str]]]:
+) -> tuple[list[int], dict[int, tuple[int, str, int | None]]]:
     """The ``pool`` nearest *documents* (by their closest chunk), with that chunk.
 
     ``DISTINCT ON (document_id)`` collapses to one row per document — the
@@ -186,6 +193,7 @@ async def _vector_candidates(
         select(
             DocumentChunk.document_id.label("document_id"),
             DocumentChunk.chunk_index.label("chunk_index"),
+            DocumentChunk.page_number.label("page_number"),
             DocumentChunk.text.label("text"),
             distance,
         )
@@ -199,15 +207,16 @@ async def _vector_candidates(
         select(
             nearest_per_document.c.document_id,
             nearest_per_document.c.chunk_index,
+            nearest_per_document.c.page_number,
             nearest_per_document.c.text,
         )
         .order_by(nearest_per_document.c.distance.asc())
         .limit(pool)
     )
     order: list[int] = []
-    best_chunk: dict[int, tuple[int, str]] = {}
-    for document_id, chunk_index, text in (await session.execute(statement)).all():
-        best_chunk[document_id] = (chunk_index, text)
+    best_chunk: dict[int, tuple[int, str, int | None]] = {}
+    for document_id, chunk_index, page_number, text in (await session.execute(statement)).all():
+        best_chunk[document_id] = (chunk_index, text, page_number)
         order.append(document_id)
     return order, best_chunk
 
@@ -291,6 +300,7 @@ async def semantic_search(
                 score=scores[document_id],
                 chunk_index=chunk[0] if chunk else None,
                 chunk_text=chunk[1] if chunk else None,
+                page_number=chunk[2] if chunk else None,
             )
         )
     return hits

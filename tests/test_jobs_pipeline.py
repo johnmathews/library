@@ -114,7 +114,8 @@ async def test_pipeline_reaches_indexed_with_events(
     assert [event[1] for event in transitions] == [
         {"from": "received", "to": "ocr"},
         {"from": "ocr", "to": "extract"},
-        {"from": "extract", "to": "embed"},
+        {"from": "extract", "to": "markdown"},
+        {"from": "markdown", "to": "embed"},
         {"from": "embed", "to": "indexed"},
     ]
 
@@ -131,7 +132,7 @@ async def test_pipeline_is_idempotent_when_already_indexed(
     status, events = await get_status_and_events(session_factory, document_id)
     assert status == DocumentStatus.INDEXED
     # Re-running added no extra transition events.
-    assert len([event for event in events if event[0] == "status_changed"]) == 4
+    assert len([event for event in events if event[0] == "status_changed"]) == 5
 
 
 async def test_ocr_stage_persists_results_and_event(
@@ -266,3 +267,38 @@ async def test_thumbnail_defer_failure_does_not_fail_document(
         document = await session.get(Document, document_id)
         assert document is not None
         assert document.status is DocumentStatus.INDEXED
+
+
+def test_next_status_includes_markdown() -> None:
+    assert jobs._NEXT_STATUS[DocumentStatus.EXTRACT] == DocumentStatus.MARKDOWN
+    assert jobs._NEXT_STATUS[DocumentStatus.MARKDOWN] == DocumentStatus.EMBED
+
+
+async def test_pipeline_runs_markdown_stage_between_extract_and_embed(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The markdown stage must run after extract and before embed."""
+    calls: list[str] = []
+
+    async def _stub_extraction(session: AsyncSession, document: Document) -> None:
+        calls.append("extract")
+
+    async def _stub_markdown(session: AsyncSession, document: Document) -> None:
+        calls.append("markdown")
+
+    async def _stub_embed(session: AsyncSession, document: Document) -> None:
+        calls.append("embed")
+
+    monkeypatch.setattr(jobs, "run_extraction", _stub_extraction)
+    monkeypatch.setattr(jobs, "run_markdown", _stub_markdown)
+    monkeypatch.setattr(jobs, "run_embed", _stub_embed)
+
+    document_id = await make_document(session_factory, "pipeline-markdown-order")
+    await advance_pipeline(session_factory, document_id)
+
+    assert "markdown" in calls
+    assert calls.index("markdown") > calls.index("extract")
+    assert calls.index("markdown") < calls.index("embed")

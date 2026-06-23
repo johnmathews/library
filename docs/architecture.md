@@ -1,6 +1,6 @@
 # 1. Architecture
 
-**Status:** active. **Last updated:** 2026-06-16.
+**Status:** active. **Last updated:** 2026-06-22.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design and tracks which parts exist. The full
@@ -59,8 +59,8 @@ volume:
 ## 1.2 Document pipeline
 
 Every ingested file follows the same lifecycle, recorded on the document
-row: `received → ocr → extract → embed → indexed` (or `failed` at any
-stage, with the reason in `ingestion_events`).
+row: `received → ocr → extract → markdown → embed → indexed` (or `failed`
+at any stage, with the reason in `ingestion_events`).
 
 1. **Ingest** (any channel: web upload, consume folder, email, REST, MCP).
    The file is hashed (SHA-256) and stored content-addressed under
@@ -80,27 +80,50 @@ stage, with the reason in `ingestion_events`).
    summary, document date, amounts, expiry, language, suggested tags.
    Low-confidence documents escalate to Sonnet 4.6. Extraction is
    idempotent and re-runnable; a document whose extraction fails stays
-   searchable by its OCR text.
-4. **Embed** — the document's text is chunked and embedded (bge-m3, 1024-dim)
+   searchable by its OCR text. As the final step inside `apply_extraction`,
+   deterministic validation rules run against the extracted values and OCR
+   text: they set `review_status` (`verified`/`needs_review`/`unreviewed`)
+   on the document row and write findings to `extra["validation"]`. A batch
+   eval harness (`library eval-extractions`) combines the corrections
+   flywheel with an LLM-as-judge to produce per-field accuracy numbers;
+   see [ingestion.md](ingestion.md) "Extraction quality".
+4. **Markdown** — Claude vision (Haiku 4.5 by default) rasterizes each
+   page and renders a clean GitHub-flavored markdown representation,
+   grounded on the OCR text. One `messages.parse()` call per page-image
+   batch; results are stored per page in `document_pages`. Best-effort,
+   exactly like extraction: disabled feature, missing API key, blown
+   budget, unusable input, or an API error all produce a skip/failed event
+   and the document continues to `embed`. See
+   [ingestion.md](ingestion.md) "Markdown layer".
+5. **Embed** — the document's text is chunked and embedded (bge-m3, 1024-dim)
    by the local `embedder` sidecar; vectors land in `document_chunks` (HNSW
-   index) for semantic retrieval. Best-effort: a document that fails to embed
-   still reaches `indexed` and stays searchable by full-text. See
-   [ask.md](ask.md).
-5. **Index** — metadata and text become searchable (Postgres FTS, both
+   index) for semantic retrieval. When `document_pages` exist the embed
+   stage chunks each page's markdown and tags every chunk with its
+   `page_number`; otherwise it falls back to `ocr_text` with
+   `page_number = NULL`. Best-effort: a document that fails to embed still
+   reaches `indexed` and stays searchable by full-text. See [ask.md](ask.md).
+6. **Index** — metadata and text become searchable (Postgres FTS, both
    Dutch and English stemming; semantic retrieval via `document_chunks`) and
    visible in the UI.
 
 ## 1.3 Data model (summary)
 
-`documents` (hash, mime, lifecycle status, title, summary, document_date,
-language, amounts/expiry, `extra` JSONB for kind-specific fields, OCR text
-+ confidence, uploader, source channel) with FKs to `senders` and `kinds`
+`documents` (hash, mime, lifecycle status, `review_status` enum, title,
+summary, document_date, language, amounts/expiry, `extra` JSONB for
+kind-specific fields plus `extra["validation"]` + `extra["corrections"]`,
+OCR text + confidence, uploader, source channel) with FKs to `senders` and `kinds`
 (seeded: invoice, receipt, certificate, utility bill, parking ticket,
 warranty, manual, letter, contract, ticket, other), many-to-many `tags`,
-per-chunk embeddings (`document_chunks`, pgvector + HNSW), append-only
-`ingestion_events` audit trail, the `ask_logs` cost/provenance trail, and
+per-page markdown renderings (`document_pages`, PK `(document_id, page_number)`),
+per-chunk embeddings (`document_chunks`, pgvector + HNSW; each chunk carries
+`page_number` when generated from `document_pages`, `NULL` when falling back to
+`ocr_text`), append-only `ingestion_events` audit trail, Ask conversation
+persistence (`ask_threads` — one conversation per owner; `ask_turns` — one
+Q&A turn per thread, storing cost/provenance and the serialized Anthropic
+message blocks used to replay prior tool results into follow-up questions), and
 auth tables (`users`, `sessions`, `api_tokens`). Originals on disk are
-immutable; everything else (including embeddings) is a re-derivable artifact.
+immutable; everything else (including embeddings and page markdown) is a
+re-derivable artifact.
 
 ## 1.4 Interfaces
 
@@ -113,6 +136,23 @@ immutable; everything else (including embeddings) is a re-derivable artifact.
 - **Web app** — Vue 3 SPA following GOV.UK design principles (content
   first, responsive 320px-up, accessible). Typeface is self-hosted Inter:
   GDS Transport and the crown are licence-restricted to gov.uk services.
+
+### 1.4.1 Live job events
+
+Document processing runs in the **worker**, but the UI lives in the **api**
+process. They are bridged by Postgres `LISTEN/NOTIFY`: as a document moves
+through the pipeline, `library.jobs.notify_document_event` emits a `NOTIFY` on
+the `library_doc_events` channel (best-effort — a notify failure never strands a
+document). The api process exposes a Server-Sent Events endpoint
+(`GET /api/events`, `library.api.events`) that holds a dedicated `LISTEN`
+connection and relays each notification to connected browsers.
+
+On the frontend, a Pinia `jobs` store opens one `EventSource`, tracks in-flight
+documents (driving the navbar running-jobs indicator and the live `/jobs` view),
+and raises a toast when a document reaches `indexed` or `failed`. The flow is
+strictly one-way (server→client), which is why SSE is used rather than a
+WebSocket. See [api.md](api.md) §1.8.4 and
+[jobs-and-notifications.md](jobs-and-notifications.md).
 
 ## 1.5 Authentication
 
@@ -143,3 +183,6 @@ hashed, individually revocable.
 | Mobile/PWA polish | W16 | **done** — see [frontend.md](frontend.md) §1.8 (manifest + monogram icons, safe areas, ≥44px touch targets, 3-project Playwright matrix, on-device checklist) |
 | Deployment hardening + full docs | W17 | **done** — see [deployment.md](deployment.md); compose smoke job in CI; v0.1.0 ([CHANGELOG](../CHANGELOG.md)) |
 | Semantic Ask (pgvector, embedder, hybrid retrieval, `/api/ask`) | — | **done** — see [ask.md](ask.md) |
+| Extraction quality (validation, review queue, eval harness) | — | **done** — see [ingestion.md](ingestion.md) "Extraction quality" and [api.md](api.md) §1.3/1.4/1.8.3 |
+| Markdown layer (vision per-page rendering, page-aware embed, page citations in Ask) | — | **done** — see [ingestion.md](ingestion.md) "Markdown layer" and [ask.md](ask.md) |
+| Conversational Ask (multi-turn threads, history replay, prompt caching, chat UI) | — | **done** — see [ask.md](ask.md) §1.6 and [api.md](api.md) §1.11–1.12 |

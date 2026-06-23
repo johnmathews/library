@@ -8,6 +8,115 @@ All notable changes to Library are documented here. The format follows
 
 ### Added
 
+**Jobs view + live job notifications** — a new **Jobs** page (`/jobs`) lists
+background/batch jobs split into Active and Recent, each enriched with its
+document's pipeline stage, status, extraction cost, and any error. A navbar
+indicator (spinner + count + dropdown) shows while documents are processing, and
+toasts announce when a document finishes (success) or fails. Updates are pushed
+live over Server-Sent Events (`GET /api/events`) backed by Postgres
+`LISTEN/NOTIFY` — no polling. `GET /api/jobs` is now enriched with document
+state and shows **one row per document** (a document's several jobs are
+collapsed to its latest), so the same document isn't repeated. Document-less
+system/periodic jobs (the scheduled email poll) are hidden by default — keeping
+any that failed or are running — so their constant successes don't bury document
+work; a "Show system tasks" toggle (and `GET /api/jobs?include_system=true`)
+lists everything. See
+[docs/jobs-and-notifications.md](docs/jobs-and-notifications.md),
+[docs/api.md](docs/api.md) §1.8 / §1.8.4, and
+[docs/architecture.md](docs/architecture.md) §1.4.1.
+
+**`backfill-summaries` admin command** — `library backfill-summaries` enqueues
+metadata extraction for indexed documents that have no summary (e.g. ingested
+before summaries were generated), reusing the `extract_document` path so it
+honours user-edited fields and the daily extraction budget. Throttleable with
+`--limit N`. See [docs/ingestion.md](docs/ingestion.md) §"Backfill summaries"
+and [docs/deployment.md](docs/deployment.md) §1.7.
+
+**Document series + comparative queries** — Ask and the document detail view can
+now compare a recurring bill to its usual values. A *series* is detected
+automatically as the documents sharing one sender + kind (e.g. the monthly energy
+bill from one provider). See [docs/ask.md](docs/ask.md) §1.7 and
+[docs/api.md](docs/api.md) §1.13.
+
+- New read-only module `library.series` computes series statistics on the fly
+  (no new table or migration): distribution (count/mean/median/stdev/min/max per
+  currency), a reference-vs-usual verdict (`higher`/`typical`/`lower`; "typical"
+  = within ±1 stdev OR within `LIBRARY_SERIES_TYPICAL_PCT` of the median), a
+  trend (`rising`/`falling`/`flat`), and a year-over-year comparison.
+- New Ask tool `compare_to_series` joins `semantic_search` and `query_documents`
+  in the tool-use loop, answering "more/less than usual", "vs last year", and
+  "are my bills going up" questions with citations.
+- New endpoint `GET /api/documents/{id}/series` returns the series summary plus
+  per-point data; `status:"insufficient"` when the document has no sender/kind or
+  too few siblings.
+- New `DocumentSeriesTrend` widget on the detail view renders a Chart.js line
+  chart of the series, highlighting the viewed document's point; it self-hides
+  when there is no qualifying series.
+- New settings `LIBRARY_SERIES_MIN_DOCUMENTS` (default `3`),
+  `LIBRARY_SERIES_TYPICAL_PCT` (default `0.10`), and `LIBRARY_SERIES_FLAT_PCT`
+  (default `0.05`).
+
+**Conversational Ask** — Ask is now multi-turn. Follow-up questions like
+*"what about last year?"* resolve against prior turns of the same conversation
+instead of being answered cold. See [docs/ask.md](docs/ask.md) §1.6 and
+[docs/api.md](docs/api.md) §1.11–1.12.
+
+- Persistent conversation threads stored server-side in two new tables:
+  `ask_threads` (one conversation, owner-scoped, titled from the first question)
+  and `ask_turns` (one Q&A turn — question, answer, citations, cost, and the
+  serialized Anthropic message blocks for replay).
+- `ask_logs` is dropped and subsumed by `ask_turns` (migration 0008). `ask_logs`
+  had no readers; existing rows are discarded.
+- History replay: the engine loads the last `LIBRARY_ASK_HISTORY_TURNS` (default
+  3) turns and prepends their message blocks (Q&A + tool results) into the
+  Claude call, so follow-ups can reason over earlier evidence without re-querying.
+- Prompt caching: the rehydrated history prefix and the static system+tools
+  definitions each carry an Anthropic `cache_control: ephemeral` breakpoint,
+  reducing cost and latency on follow-ups.
+- New `LIBRARY_ASK_HISTORY_TURNS` setting (default `3`); `0` disables history.
+- New thread CRUD endpoints: `GET /api/ask/threads`,
+  `GET /api/ask/threads/{id}`, `DELETE /api/ask/threads/{id}`.
+- `POST /api/ask` gains optional `thread_id` on request and returns `thread_id`
+  on response.
+- Chat UI: `AskView` is now a scrollable transcript, with a follow-up input and
+  a conversation sidebar (resume, delete, new conversation). Routes `/ask` and
+  `/ask/:threadId`.
+
+**Markdown layer + page-aware citations** — Claude vision renders each
+document page as clean GitHub-flavored markdown, grounded on OCR text.
+See [docs/ingestion.md](docs/ingestion.md) "Markdown layer" and
+[docs/ask.md](docs/ask.md).
+
+- New pipeline stage `markdown` between `extract` and `embed`
+  (`received → ocr → extract → markdown → embed → indexed`). Best-effort,
+  identical contract to extraction: disabled, no API key, over budget,
+  unusable input, or API error all skip gracefully; the document still reaches
+  `indexed`.
+- Per-page rendering via `client.messages.parse()` (structured outputs,
+  `claude-haiku-4-5` default). Pages are rasterized with pypdfium2; scale is
+  bounded to avoid oversized bitmaps from large-point-dimension PDFs; Pillow
+  images are bounded by a ~40 MP pixel cap and `DecompressionBombError` is caught
+  — corrupt uploads cannot fail the pipeline.
+- New `document_pages` table (migration 0007, PK `(document_id, page_number)`)
+  stores per-page markdown. `document_chunks` gains a nullable `page_number`
+  column.
+- Page-aware embedding: `run_embed` now chunks each page's markdown when
+  `document_pages` exist, tagging every `DocumentChunk` with its `page_number`;
+  falls back to `ocr_text` chunking (`page_number = NULL`) when absent. The
+  `embedded` event gains `page_aware: bool`.
+- Separate daily budget guard (`LIBRARY_MARKDOWN_DAILY_BUDGET_USD`, default
+  $5.00 USD) scoped to `markdown_completed` events — independent of the
+  extraction budget.
+- `library backfill-markdown [--limit N] [--include-existing]` CLI to render
+  existing documents and re-embed page-aware.
+- `GET /api/documents/{id}/markdown` — assembled per-page markdown for the
+  detail-view markdown tab.
+- Ask citations now carry `page_number: int | None` (the page of the top
+  semantic hit). The web UI renders `Title, p. N` and deep-links the PDF
+  iframe via `#page=N` in the URL fragment. Aggregation citations (from
+  `query_documents`) always have `page_number = None`.
+- Six new `LIBRARY_MARKDOWN_*` settings (see `.env.example`).
+
 **Semantic Ask** — natural-language question answering over the archive
 (`/ask` in the web app, `POST /api/ask`). See [docs/ask.md](docs/ask.md).
 
@@ -30,11 +139,33 @@ All notable changes to Library are documented here. The format follows
 
 ### Changed
 
+- **Document preview now renders PDFs in-app, identically across browsers.** The
+  detail page (`/documents/:id`) previously embedded the PDF in a native
+  `<iframe>`, which broke differently in each engine — Chrome forced a
+  "Pages/Manage" panel over the document, Firefox showed its own toolbar and
+  thumbnail sidebar, and Safari rendered a black box. The new
+  `DocumentPdfPreview` component renders every page to `<canvas>` with pdf.js
+  (`pdfjs-dist`), fit-to-width and lazily via `IntersectionObserver`, so all
+  pages are **scrollable** and the result is the same in Chrome, Firefox, and
+  Safari. Shows a thumbnail poster while loading and Open/Download fallbacks for
+  render failures and password-protected PDFs. The Playwright matrix gained
+  desktop Firefox and WebKit projects plus a cross-browser preview spec. See
+  [docs/frontend.md](docs/frontend.md). Adds the `pdfjs-dist` dependency (worker
+  lazy-loaded, off the initial bundle).
+
 - `db` image is now `pgvector/pgvector:pg17` (was `postgres:17.5-alpine`),
   initialised with `C.UTF-8` so text ordering stays byte-wise and an existing
   C-collation `pgdata` volume is reused safely. **The LXC now wants ~6–8 GB
   RAM** for the embedder — see [docs/deployment.md](docs/deployment.md) §1.7.1
   for the upgrade path.
+
+### Fixed
+
+- **Upload: the "Select at least one file" error now clears when you pick a
+  file.** Previously the validation error from a premature submit lingered on
+  screen even after a valid selection (it was only cleared by the next submit),
+  making the picker look broken. `UploadView` now watches the selection and
+  clears the error as soon as a file is chosen.
 
 ## [0.1.0] — 2026-06-11
 

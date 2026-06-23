@@ -25,10 +25,12 @@ from library.jobs import extract_document
 from library.models import (
     Document,
     DocumentLanguage,
+    DocumentPage,
     DocumentSource,
     DocumentStatus,
     IngestionEvent,
     Kind,
+    ReviewStatus,
     User,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
@@ -41,10 +43,13 @@ from library.schemas import (
     ExtractionQueuedResponse,
     IngestionEventOut,
     KindOut,
+    MarkdownPage,
+    MarkdownResponse,
     SenderOut,
     TagOut,
 )
 from library.search import DocumentFilters, build_document_query
+from library.series import serialise_summary, summarize_series
 from library.storage import derived_path, path_for
 from library.thumbnails import THUMBNAIL_NAME
 
@@ -53,6 +58,58 @@ router: APIRouter = APIRouter(tags=["documents"])
 # PATCH body field -> name recorded in extra["user_edited_fields"] (the
 # storage-level names the W6 extraction contract checks).
 _EDITED_FIELD_NAMES: dict[str, str] = {"kind_slug": "kind_id", "sender": "sender_id"}
+
+
+def _current_value(document: Document, name: str) -> Any:
+    """Read a storage-named field's current value off the document."""
+    if name == "kind_id":
+        return document.kind_id
+    if name == "sender_id":
+        return document.sender_id
+    if name == "tags":
+        return sorted(tag.slug for tag in document.tags)
+    return getattr(document, name, None)
+
+
+def _correction_records(
+    document: Document, originals: dict[str, Any], edited: list[str]
+) -> list[dict[str, Any]]:
+    """Build mining-ready correction records for the fields just edited.
+
+    ``originals`` maps storage field name -> value before the edit. Values are
+    JSON-stringified (dates/Decimals -> str) so the records survive in JSONB.
+    """
+    extraction = document.extra.get("extraction") or {}
+    text = document.ocr_text or ""
+
+    def jsonable(value: Any) -> Any:
+        return None if value is None else str(value)
+
+    def excerpt(value: Any) -> str:
+        needle = "" if value is None else str(value)
+        idx = text.find(needle) if needle else -1
+        if idx < 0:
+            return ""
+        start, end = max(0, idx - 40), min(len(text), idx + len(needle) + 40)
+        return text[start:end]
+
+    records: list[dict[str, Any]] = []
+    now = datetime.now(UTC).isoformat()
+    for name in edited:
+        new_value = _current_value(document, name)
+        records.append(
+            {
+                "field": name,
+                "original_value": jsonable(originals.get(name)),
+                "corrected_value": jsonable(new_value),
+                "source_excerpt": excerpt(originals.get(name)),
+                "prompt_version": extraction.get("prompt_version"),
+                "model": extraction.get("model"),
+                "corrected_at": now,
+            }
+        )
+    return records
+
 
 # ?disposition= on the file endpoints: `attachment` (default) downloads,
 # `inline` lets the detail page embed the file in an <iframe>/<img>.
@@ -185,6 +242,7 @@ async def list_documents(
     ] = None,
     language: Annotated[DocumentLanguage | None, Query()] = None,
     status_filter: Annotated[DocumentStatus | None, Query(alias="status")] = None,
+    review_status: Annotated[ReviewStatus | None, Query()] = None,
     date_from: Annotated[
         date | None, Query(description="Inclusive lower bound on document_date.")
     ] = None,
@@ -208,6 +266,7 @@ async def list_documents(
             tag_slugs=tuple(tag or []),
             language=language,
             status=status_filter,
+            review_status=review_status,
             date_from=date_from,
             date_to=date_to,
             source=source,
@@ -244,6 +303,64 @@ async def get_document(
     return _detail(document)
 
 
+@router.get(
+    "/documents/{document_id}/markdown",
+    response_model=MarkdownResponse,
+    summary="Per-page markdown rendering of a document",
+    responses={404: {"description": "Unknown or deleted document"}},
+)
+async def get_document_markdown(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> MarkdownResponse:
+    """Assembled per-page markdown ordered by page number; empty when the document has none."""
+    await _get_document_or_404(session, document_id)
+    rows = (
+        (
+            await session.execute(
+                select(DocumentPage)
+                .where(DocumentPage.document_id == document_id)
+                .order_by(DocumentPage.page_number)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    pages = [MarkdownPage(page_number=row.page_number, markdown=row.markdown) for row in rows]
+    return MarkdownResponse(page_count=len(pages), pages=pages)
+
+
+@router.get(
+    "/documents/{document_id}/series",
+    summary="Recurring-series stats + comparison for this document",
+    responses={404: {"description": "Unknown or deleted document"}},
+)
+async def get_document_series(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, object]:
+    """Summarise the (sender, kind) series this document belongs to and where
+    this document sits within it. ``status:"insufficient"`` when the document
+    has no sender/kind or too few siblings."""
+    document = await _get_document_or_404(session, document_id)
+    settings = get_settings()
+    if document.sender_id is None or document.kind_id is None:
+        return {"status": "insufficient", "count": 0, "document_ids": [document_id]}
+    filters = DocumentFilters(
+        sender_id=document.sender_id,
+        kind_slug=document.kind.slug if document.kind else None,
+    )
+    summary = await summarize_series(
+        session,
+        filters=filters,
+        settings=settings,
+        reference=document.amount_total,
+        reference_date=document.document_date,
+        reference_currency=document.currency,
+    )
+    return serialise_summary(summary, include_points=True)
+
+
 @router.patch(
     "/documents/{document_id}",
     response_model=DocumentDetail,
@@ -268,6 +385,26 @@ async def update_document(
     provided = payload.model_dump(exclude_unset=True)
     if not provided:
         return _detail(document)
+
+    # Snapshot pre-edit values before any mutation so corrections are accurate.
+    originals: dict[str, Any] = {}
+    for body_field, storage in (("kind_slug", "kind_id"), ("sender", "sender_id")):
+        if body_field in provided:
+            originals[storage] = _current_value(document, storage)
+    if "tags" in provided:
+        originals["tags"] = _current_value(document, "tags")
+    for body_field in (
+        "title",
+        "summary",
+        "document_date",
+        "due_date",
+        "expiry_date",
+        "amount_total",
+        "currency",
+        "language",
+    ):
+        if body_field in provided:
+            originals[body_field] = _current_value(document, body_field)
 
     edited: list[str] = []
     if "kind_slug" in provided:
@@ -309,7 +446,13 @@ async def update_document(
 
     user_edited = list(document.extra.get("user_edited_fields", []))
     user_edited.extend(name for name in edited if name not in user_edited)
-    document.extra = {**document.extra, "user_edited_fields": user_edited}
+    corrections = list(document.extra.get("corrections", []))
+    corrections.extend(_correction_records(document, originals, edited))
+    document.extra = {
+        **document.extra,
+        "user_edited_fields": user_edited,
+        "corrections": corrections,
+    }
     session.add(
         IngestionEvent(document_id=document.id, event="user_edited", detail={"fields": edited})
     )
@@ -360,6 +503,25 @@ async def queue_extraction(
     document = await _get_document_or_404(session, document_id)
     job_id = await extract_document.defer_async(document_id=document.id)
     return ExtractionQueuedResponse(queued=True, job_id=job_id)
+
+
+@router.post(
+    "/documents/{document_id}/verify",
+    response_model=DocumentDetail,
+    summary="Mark a document's metadata as reviewed/verified",
+    responses={404: {"description": "Unknown or deleted document"}},
+)
+async def verify_document(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> DocumentDetail:
+    """Set review_status=verified and record an audit event."""
+    document = await _get_document_or_404(session, document_id)
+    document.review_status = ReviewStatus.VERIFIED
+    session.add(IngestionEvent(document_id=document.id, event="review_verified", detail={}))
+    await session.commit()
+    await session.refresh(document)
+    return _detail(document)
 
 
 @router.get(
@@ -480,6 +642,7 @@ def _list_item_fields(document: Document) -> dict[str, Any]:
         "created_at": document.created_at,
         "has_searchable_pdf": document.searchable_pdf,
         "has_thumbnail": (derived_path(document.sha256) / THUMBNAIL_NAME).is_file(),
+        "review_status": document.review_status,
         "amount_total": document.amount_total,
         "currency": document.currency,
     }
@@ -498,6 +661,7 @@ def _detail(document: Document) -> DocumentDetail:
         sha256=document.sha256,
         extraction=document.extra.get("extraction"),
         user_edited_fields=list(document.extra.get("user_edited_fields", [])),
+        validation=document.extra.get("validation"),
         events=[
             IngestionEventOut(event=event.event, detail=event.detail, created_at=event.created_at)
             for event in sorted(document.events, key=lambda event: event.id)

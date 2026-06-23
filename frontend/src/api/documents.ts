@@ -11,6 +11,7 @@ import { ApiError, apiFetch, getCookie, CSRF_COOKIE, CSRF_HEADER } from './clien
 export type DocumentLanguage = 'nld' | 'eng' | 'mixed' | 'unknown'
 export type DocumentStatus = 'received' | 'ocr' | 'extract' | 'indexed' | 'failed'
 export type DocumentSource = 'upload' | 'consume' | 'email' | 'api' | 'mcp' | 'import'
+export type ReviewStatus = 'verified' | 'needs_review' | 'unreviewed'
 
 export interface KindRef {
   slug: string
@@ -51,6 +52,7 @@ export interface DocumentListItem {
   has_thumbnail: boolean
   amount_total: string | null
   currency: string | null
+  review_status: ReviewStatus
   /**
    * Only non-null with `?q=`. ts_headline fragments with <b>/</b> markers
    * over raw (NOT HTML-escaped) OCR text — render via `renderSnippet`,
@@ -68,6 +70,24 @@ export interface DocumentListResponse {
   offset: number
 }
 
+/** One finding from the extraction validation step. */
+export interface ValidationFinding {
+  rule: string
+  /**
+   * Storage field name, e.g. `amount_total`, `currency`, `kind_id`, `sender_id`.
+   * Null for document-level rules (e.g. `ocr_confidence_gate`, `empty_extraction`,
+   * `self_reported_low`) that are not tied to a single field.
+   */
+  field: string | null
+  severity: 'warn' | 'error'
+  message: string
+}
+
+/** Structured output from the validation step attached to a document. */
+export interface ValidationResult {
+  findings: ValidationFinding[]
+}
+
 /** Body of GET /api/documents/{id}. */
 export interface DocumentDetail extends DocumentListItem {
   ocr_text: string | null
@@ -78,6 +98,7 @@ export interface DocumentDetail extends DocumentListItem {
   original_filename: string | null
   sha256: string
   extraction: Record<string, unknown> | null
+  validation: ValidationResult | null
   user_edited_fields: string[]
   events: IngestionEvent[]
 }
@@ -94,6 +115,7 @@ export interface DocumentFilters {
   date_from?: string
   date_to?: string
   source?: DocumentSource
+  review_status?: ReviewStatus
   limit?: number
   offset?: number
 }
@@ -134,7 +156,12 @@ export interface UploadResult {
   duplicate: boolean
 }
 
-/** One entry of GET /api/jobs. */
+/**
+ * One entry of GET /api/jobs: a Procrastinate job enriched with the pipeline
+ * state of the document it processes. The `document_*` / cost fields are null
+ * for jobs without a document (e.g. the periodic email poll) or whose document
+ * has since been deleted.
+ */
 export interface JobInfo {
   id: number
   status: string
@@ -142,6 +169,12 @@ export interface JobInfo {
   attempts: number
   scheduled_at: string | null
   document_id: number | null
+  active: boolean
+  document_title: string | null
+  document_status: string | null
+  error: string | null
+  cost_usd: number | null
+  tokens: number | null
 }
 
 export const DOCUMENT_LANGUAGES: readonly { value: DocumentLanguage; text: string }[] = [
@@ -202,9 +235,37 @@ export function requestExtraction(id: number): Promise<ExtractionQueued> {
   return apiFetch<ExtractionQueued>(`/api/documents/${id}/extract`, { method: 'POST' })
 }
 
-/** GET /api/jobs — recent background jobs, newest first. */
-export function listJobs(limit?: number): Promise<JobInfo[]> {
-  return apiFetch<JobInfo[]>('/api/jobs', { query: { limit } })
+/** POST /api/documents/{id}/verify — mark document as verified; returns updated detail. */
+export function verifyDocument(id: number): Promise<DocumentDetail> {
+  return apiFetch<DocumentDetail>(`/api/documents/${id}/verify`, { method: 'POST' })
+}
+
+/**
+ * GET /api/jobs — recent background jobs, newest first. Document-less
+ * system/periodic jobs (the email poll) are hidden unless they failed or are
+ * running; pass `includeSystem` to list them all.
+ */
+export function listJobs(limit?: number, includeSystem = false): Promise<JobInfo[]> {
+  return apiFetch<JobInfo[]>('/api/jobs', {
+    query: { limit, include_system: includeSystem || undefined },
+  })
+}
+
+/** One page returned by GET /api/documents/{id}/markdown. */
+export interface DocumentMarkdownPage {
+  page_number: number
+  markdown: string
+}
+
+/** Body of GET /api/documents/{id}/markdown. */
+export interface DocumentMarkdownResponse {
+  page_count: number
+  pages: DocumentMarkdownPage[]
+}
+
+/** GET /api/documents/{id}/markdown — assembled per-page markdown. */
+export function fetchDocumentMarkdown(id: number): Promise<DocumentMarkdownResponse> {
+  return apiFetch<DocumentMarkdownResponse>(`/api/documents/${id}/markdown`)
 }
 
 /** URL of a document's first-page thumbnail (404 until generated). */
@@ -275,6 +336,38 @@ export function uploadDocument(
     form.append('file', file, file.name)
     xhr.send(form)
   })
+}
+
+/** Body of GET /api/documents/{id}/series (optional blocks omitted when N/A). */
+export interface DocumentSeries {
+  status: 'ok' | 'insufficient'
+  sender: string | null
+  kind: string | null
+  currency: string | null
+  other_currencies: string[]
+  cadence: 'monthly' | 'quarterly' | 'yearly' | 'irregular'
+  count: number
+  document_ids: number[]
+  mean?: string
+  median?: string
+  stdev?: string
+  min?: string
+  max?: string
+  reference?: {
+    value: string
+    delta: string
+    vs_median_pct: string
+    z_score: number | null
+    verdict: 'higher' | 'typical' | 'lower'
+  }
+  trend?: { direction: 'rising' | 'falling' | 'flat'; change_pct: string }
+  year_over_year?: { prior_value: string; change_pct: string; document_id: number }
+  points?: { date: string; amount: string; document_id: number }[]
+}
+
+/** GET /api/documents/{id}/series — recurring-series stats + comparison. */
+export function fetchDocumentSeries(id: number, signal?: AbortSignal): Promise<DocumentSeries> {
+  return apiFetch<DocumentSeries>(`/api/documents/${id}/series`, { signal })
 }
 
 function parseDetail(text: string, status: number): string {

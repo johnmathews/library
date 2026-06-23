@@ -1,8 +1,9 @@
 """Agentic /ask: Claude orchestrates retrieval tools to answer with citations.
 
-Claude is given two tools — ``semantic_search`` (hybrid content retrieval) and
-``query_documents`` (structured aggregation over metadata) — and decides which
-to call for a question. It must answer only from tool results and cite the
+Claude is given three tools — ``semantic_search`` (hybrid content retrieval),
+``query_documents`` (structured aggregation over metadata), and
+``compare_to_series`` (statistical summary of a recurring-document series) —
+and decides which to call for a question. It must answer only from tool results and cite the
 document ids it used. The loop is bounded (``ask_max_tool_turns``); the
 embedding and answer cost is summed for the audit log.
 """
@@ -12,8 +13,9 @@ from __future__ import annotations
 import json
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
+from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from anthropic import AsyncAnthropic
@@ -25,6 +27,7 @@ from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
 from library.models import Document
 from library.search import DocumentFilters, semantic_search
+from library.series import serialise_summary, summarize_series
 from library.structured_query import CONCEPT_TO_KIND, query_documents
 
 logger = logging.getLogger(__name__)
@@ -42,6 +45,8 @@ Use the tools to find evidence, then answer:
 - query_documents: aggregate over structured metadata (e.g. "who was my energy
   provider last year", "how much did I spend on utilities in 2025"). Use for
   who/how-many/how-much/which-over-time questions.
+- compare_to_series: compare a recurring bill to its usual values / last year /
+  trend (e.g. "is this electricity bill higher than usual?").
 
 Rules:
 - Answer ONLY from tool results. Never invent facts.
@@ -117,6 +122,30 @@ TOOLS: list[dict[str, Any]] = [
             "required": ["aggregate"],
         },
     },
+    {
+        "name": "compare_to_series",
+        "description": (
+            "Compare a recurring document (same sender + kind) to its usual "
+            "values. Use for 'more/less than usual', 'compared to last year', "
+            "'are my bills going up'. Identify the series via kind + sender. "
+            "Returns distribution stats, a reference-vs-usual verdict, a trend, "
+            "and a year-over-year comparison. " + _kind_hint()
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "kind": {"type": "string", "description": "Kind slug, e.g. utility-bill."},
+                "sender_contains": {"type": "string", "description": "Substring of sender name."},
+                "date_from": {"type": "string", "description": "Inclusive ISO date lower bound."},
+                "date_to": {"type": "string", "description": "Inclusive ISO date upper bound."},
+                "reference": {
+                    "type": "string",
+                    "description": "'latest' (default) to compare the newest bill, or a number.",
+                },
+            },
+            "required": [],
+        },
+    },
 ]
 
 
@@ -126,11 +155,12 @@ class AskCitation:
 
     document_id: int
     title: str | None
+    page_number: int | None = None
 
 
 @dataclass(slots=True)
 class AskResult:
-    """The answer plus citations, tools used, and cost."""
+    """The answer plus citations, tools used, cost, and replay blocks."""
 
     answer: str
     citations: list[AskCitation]
@@ -139,6 +169,7 @@ class AskResult:
     input_tokens: int = 0
     output_tokens: int = 0
     cost_usd: float = 0.0
+    turn_messages: list[dict[str, Any]] = field(default_factory=list)
 
 
 def _parse_date(value: object) -> date | None:
@@ -151,7 +182,11 @@ def _parse_date(value: object) -> date | None:
 
 
 async def _run_semantic_search(
-    session: AsyncSession, settings: Settings, args: dict[str, Any], cited: set[int]
+    session: AsyncSession,
+    settings: Settings,
+    args: dict[str, Any],
+    cited: set[int],
+    pages: dict[int, int],
 ) -> dict[str, Any]:
     query = str(args.get("query", "")).strip()
     if not query:
@@ -167,6 +202,8 @@ async def _run_semantic_search(
     rows = []
     for hit in hits:
         cited.add(hit.document.id)
+        if hit.page_number is not None and hit.document.id not in pages:
+            pages[hit.document.id] = hit.page_number
         rows.append(
             {
                 "document_id": hit.document.id,
@@ -204,17 +241,51 @@ async def _run_query_documents(
     return result
 
 
+async def _run_compare_to_series(
+    session: AsyncSession, settings: Settings, args: dict[str, Any], cited: set[int]
+) -> dict[str, Any]:
+    filters = DocumentFilters(
+        kind_slug=args.get("kind"),
+        sender_contains=args.get("sender_contains"),
+        date_from=_parse_date(args.get("date_from")),
+        date_to=_parse_date(args.get("date_to")),
+    )
+    raw_reference = args.get("reference", "latest")
+    reference: Decimal | str
+    if raw_reference in (None, "latest", ""):
+        reference = "latest"
+    else:
+        try:
+            reference = Decimal(str(raw_reference))
+        except (InvalidOperation, ValueError):
+            reference = "latest"
+    summary = await summarize_series(
+        session, filters=filters, settings=settings, reference=reference
+    )
+    cited.update(summary.document_ids)
+    return serialise_summary(summary)
+
+
 async def _dispatch_tool(
-    session: AsyncSession, settings: Settings, name: str, args: dict[str, Any], cited: set[int]
+    session: AsyncSession,
+    settings: Settings,
+    name: str,
+    args: dict[str, Any],
+    cited: set[int],
+    pages: dict[int, int],
 ) -> dict[str, Any]:
     if name == "semantic_search":
-        return await _run_semantic_search(session, settings, args, cited)
+        return await _run_semantic_search(session, settings, args, cited, pages)
     if name == "query_documents":
         return await _run_query_documents(session, args, cited)
+    if name == "compare_to_series":
+        return await _run_compare_to_series(session, settings, args, cited)
     return {"error": f"unknown tool {name}"}
 
 
-async def _citations_for(session: AsyncSession, cited: set[int]) -> list[AskCitation]:
+async def _citations_for(
+    session: AsyncSession, cited: set[int], pages: dict[int, int]
+) -> list[AskCitation]:
     if not cited:
         return []
     rows = (
@@ -222,11 +293,38 @@ async def _citations_for(session: AsyncSession, cited: set[int]) -> list[AskCita
             select(Document.id, Document.title).where(Document.id.in_(cited)).order_by(Document.id)
         )
     ).all()
-    return [AskCitation(document_id=document_id, title=title) for document_id, title in rows]
+    return [
+        AskCitation(document_id=did, title=title, page_number=pages.get(did)) for did, title in rows
+    ]
 
 
 def _text_of(content: list[Any]) -> str:
     return "\n".join(block.text for block in content if getattr(block, "type", None) == "text")
+
+
+def _serialize_block(block: Any) -> dict[str, Any]:
+    """Convert an Anthropic content block (SDK model or test fake) to a plain,
+    JSON-serialisable dict suitable for re-sending and for JSONB storage."""
+    if hasattr(block, "model_dump"):
+        return block.model_dump(mode="json", exclude_none=True)
+    block_type = getattr(block, "type", None)
+    if block_type == "text":
+        return {"type": "text", "text": block.text}
+    if block_type == "tool_use":
+        return {"type": "tool_use", "id": block.id, "name": block.name, "input": dict(block.input)}
+    return {"type": block_type}
+
+
+def _apply_cache_control(messages: list[dict[str, Any]], history_len: int) -> None:
+    """Mark the end of the rehydrated history prefix with an ephemeral cache
+    breakpoint so re-sent prior turns hit the Anthropic prompt cache. Best
+    effort: a no-op when there is no history or the boundary isn't block-form."""
+    if history_len == 0:
+        return
+    boundary = messages[history_len - 1]
+    content = boundary.get("content")
+    if isinstance(content, list) and content:
+        content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
 
 
 async def run_ask(
@@ -235,14 +333,32 @@ async def run_ask(
     question: str,
     settings: Settings,
     client: AsyncAnthropic,
+    history_messages: list[dict[str, Any]] | None = None,
 ) -> AskResult:
-    """Answer ``question`` from the archive via a bounded Claude tool-use loop."""
+    """Answer ``question`` from the archive via a bounded Claude tool-use loop.
+
+    ``history_messages`` is a rehydrated prefix of prior turns (already in block
+    form); it is prepended so follow-ups can reason over earlier tool results.
+    """
     model = settings.ask_model
     result = AskResult(answer="", citations=[], used_tools=[], model=model)
     cited: set[int] = set()
+    pages: dict[int, int] = {}
     used: list[str] = []
-    messages: list[dict[str, Any]] = [{"role": "user", "content": question}]
-    system_prompt = _system_prompt(date.today())
+
+    history = list(history_messages or [])
+    question_msg: dict[str, Any] = {"role": "user", "content": [{"type": "text", "text": question}]}
+    messages: list[dict[str, Any]] = [*history, question_msg]
+    new_messages: list[dict[str, Any]] = [question_msg]
+    _apply_cache_control(messages, len(history))
+
+    system_prompt: list[dict[str, Any]] = [
+        {
+            "type": "text",
+            "text": _system_prompt(date.today()),
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
 
     answer = ""
     for _ in range(max(1, settings.ask_max_tool_turns)):
@@ -259,8 +375,14 @@ async def run_ask(
             model, response.usage.input_tokens, response.usage.output_tokens
         )
 
+        assistant_msg: dict[str, Any] = {
+            "role": "assistant",
+            "content": [_serialize_block(block) for block in response.content],
+        }
+
         if response.stop_reason != "tool_use":
             answer = _text_of(response.content)
+            new_messages.append(assistant_msg)
             break
 
         tool_results: list[dict[str, Any]] = []
@@ -268,7 +390,9 @@ async def run_ask(
             if getattr(block, "type", None) != "tool_use":
                 continue
             used.append(block.name)
-            output = await _dispatch_tool(session, settings, block.name, dict(block.input), cited)
+            output = await _dispatch_tool(
+                session, settings, block.name, dict(block.input), cited, pages
+            )
             tool_results.append(
                 {
                     "type": "tool_result",
@@ -280,9 +404,13 @@ async def run_ask(
         # text as the answer rather than sending an empty user turn (a 400).
         if not tool_results:
             answer = _text_of(response.content)
+            new_messages.append(assistant_msg)
             break
-        messages.append({"role": "assistant", "content": response.content})
-        messages.append({"role": "user", "content": tool_results})
+        tool_msg: dict[str, Any] = {"role": "user", "content": tool_results}
+        messages.append(assistant_msg)
+        messages.append(tool_msg)
+        new_messages.append(assistant_msg)
+        new_messages.append(tool_msg)
     else:
         logger.info("ask hit the tool-turn limit without a final answer")
 
@@ -290,7 +418,8 @@ async def run_ask(
     # Prefer the documents Claude actually cited inline (#id); fall back to the
     # full retrieved set when the answer cited none explicitly.
     mentioned = {int(match) for match in re.findall(r"#(\d+)", answer)} & cited
-    result.citations = await _citations_for(session, mentioned or cited)
+    result.citations = await _citations_for(session, mentioned or cited, pages)
     # De-duplicate tool names, preserving first-use order.
     result.used_tools = list(dict.fromkeys(used))
+    result.turn_messages = new_messages
     return result
