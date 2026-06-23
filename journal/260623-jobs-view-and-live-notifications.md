@@ -114,7 +114,20 @@ list everything. The SSE/`jobs` store is unaffected (it only tracks
 document-bearing in-flight jobs, which always have a `document_id`). Tests:
 backend `test_jobs_endpoint_hides_system_tasks_by_default` (succeeded poll
 hidden, failed poll kept, opt-in shows both); frontend toggle spec; ruff +
-type-check + eslint clean. Needs a redeploy to go live (new `:latest`).
+type-check + eslint clean.
+
+**Second pass: one row per document.** Hiding the heartbeats wasn't enough —
+the list was still repetitive because it was *job*-centric, and one document
+spawns several jobs (`process_document` + `generate_thumbnail`, plus a
+`markdown_document` / `embed_document` / `extract_document` each from the
+backfills), so the same document appeared up to ~5 times. `GET /api/jobs` now
+collapses to **one row per document** via `DISTINCT ON
+(COALESCE((args->>'document_id')::bigint, -id))` keeping each document's latest
+job (document-less system rows key on `-id` so each stays its own row). The view
+drops the per-job Task/Status columns in favour of a single document-stage badge
+(Document · Status · Cost · Error). Backend
+`test_jobs_endpoint_collapses_to_one_row_per_document`; ruff + type-check +
+eslint + specs clean. Both passes need a redeploy to go live (new `:latest`).
 
 **Still to verify on the live box** (not yet separately checked): the SSE
 keep-alive through the reverse proxy — confirm `GET /api/events` streams and

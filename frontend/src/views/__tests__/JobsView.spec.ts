@@ -81,6 +81,8 @@ describe('JobsView', () => {
     expect(row.text()).toContain('Energierekening')
     expect(row.text()).toContain('ocr exploded')
     expect(row.text()).toContain('$0.0123')
+    // The status badge shows the document's pipeline stage, not the job status.
+    expect(row.text()).toContain('Failed')
   })
 
   it('links a job row to its document', async () => {

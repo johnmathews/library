@@ -213,14 +213,20 @@ triggers a download instead.
 
 ## 1.8 Jobs — `GET /api/jobs`
 
-Most recent background jobs (newest first) from the Procrastinate queue, each
-enriched with the pipeline state of the document it processes. `limit` 1–500,
-default 50.
+Most recent document-processing work (newest first) from the Procrastinate
+queue, enriched with each document's pipeline state. `limit` 1–500, default 50.
+
+**One row per document.** A document spawns several jobs (`process_document`,
+`generate_thumbnail`, and the per-document backfill tasks); the endpoint
+collapses them to a single row — the document's **most recent** job — so the
+same document isn't repeated. `id` / `task_name` / `status` are that latest
+job's; `document_*` / `cost_usd` / `error` are document-level.
 
 By default, document-less system/periodic jobs (the scheduled email poll) are
 omitted when they succeeded — they fire constantly and would bury document work
 — while any that **failed or are still running** are kept, so a broken poller
-stays visible. Pass `include_system=true` to list every job unfiltered.
+stays visible. Pass `include_system=true` to list them too (still one row per
+document; system jobs are not deduplicated, having no document to group by).
 
 Each row:
 
