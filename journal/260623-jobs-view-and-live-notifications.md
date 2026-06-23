@@ -129,6 +129,18 @@ drops the per-job Task/Status columns in favour of a single document-stage badge
 `test_jobs_endpoint_collapses_to_one_row_per_document`; ruff + type-check +
 eslint + specs clean. Both passes need a redeploy to go live (new `:latest`).
 
+**Redeploy (2026-06-23, from John's laptop).** The first deploy shipped only
+`3920d76`; the two Jobs refinements landed as `1d6abe7` + `9fb3d6b` and sat in
+`:latest` un-deployed until now. Confirmed prod was stale by digest: the running
+`library-webserver` used the box's local `:latest` (`sha256:081521b9…`) which no
+longer matched the GHCR registry top-level digest (`sha256:4fa25cd9…` = the
+`9fb3d6b` build). Redeployed with the standard scoped command (`docker compose up
+-d --pull always library-migrate library-webserver library-worker`). After:
+running image digest = `4fa25cd9…` (matches registry), `library-migrate` exited
+`0` (head unchanged at `0008_ask_threads`, no `pg_dump` needed), webserver `Up
+(healthy)`, external `/api/settings` → `401`. Both Jobs passes
+(hide-system-tasks + one-row-per-document) are now live.
+
 **Still to verify on the live box** (not yet separately checked): the SSE
 keep-alive through the reverse proxy — confirm `GET /api/events` streams and
 isn't buffered/closed by the proxy in front of `library-webserver` (the one new
