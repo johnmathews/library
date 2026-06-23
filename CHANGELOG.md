@@ -8,6 +8,30 @@ All notable changes to Library are documented here. The format follows
 
 ### Added
 
+**Jobs view + live job notifications** — a new **Jobs** page (`/jobs`) lists
+background/batch jobs split into Active and Recent, each enriched with its
+document's pipeline stage, status, extraction cost, and any error. A navbar
+indicator (spinner + count + dropdown) shows while documents are processing, and
+toasts announce when a document finishes (success) or fails. Updates are pushed
+live over Server-Sent Events (`GET /api/events`) backed by Postgres
+`LISTEN/NOTIFY` — no polling. `GET /api/jobs` is now enriched with document
+state and shows **one row per document** (a document's several jobs are
+collapsed to its latest), so the same document isn't repeated. Document-less
+system/periodic jobs (the scheduled email poll) are hidden by default — keeping
+any that failed or are running — so their constant successes don't bury document
+work; a "Show system tasks" toggle (and `GET /api/jobs?include_system=true`)
+lists everything. See
+[docs/jobs-and-notifications.md](docs/jobs-and-notifications.md),
+[docs/api.md](docs/api.md) §1.8 / §1.8.4, and
+[docs/architecture.md](docs/architecture.md) §1.4.1.
+
+**`backfill-summaries` admin command** — `library backfill-summaries` enqueues
+metadata extraction for indexed documents that have no summary (e.g. ingested
+before summaries were generated), reusing the `extract_document` path so it
+honours user-edited fields and the daily extraction budget. Throttleable with
+`--limit N`. See [docs/ingestion.md](docs/ingestion.md) §"Backfill summaries"
+and [docs/deployment.md](docs/deployment.md) §1.7.
+
 **Document series + comparative queries** — Ask and the document detail view can
 now compare a recurring bill to its usual values. A *series* is detected
 automatically as the documents sharing one sender + kind (e.g. the monthly energy
@@ -134,6 +158,14 @@ See [docs/ingestion.md](docs/ingestion.md) "Markdown layer" and
   C-collation `pgdata` volume is reused safely. **The LXC now wants ~6–8 GB
   RAM** for the embedder — see [docs/deployment.md](docs/deployment.md) §1.7.1
   for the upgrade path.
+
+### Fixed
+
+- **Upload: the "Select at least one file" error now clears when you pick a
+  file.** Previously the validation error from a premature submit lingered on
+  screen even after a valid selection (it was only cleared by the next submit),
+  making the picker look broken. `UploadView` now watches the selection and
+  clears the error as soon as a file is chosen.
 
 ## [0.1.0] — 2026-06-11
 

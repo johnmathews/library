@@ -1,7 +1,7 @@
 # Cross-browser PDF preview (self-rendered with pdf.js)
 
 **Date:** 2026-06-22
-**Status:** approved design, pending implementation plan
+**Status:** shipped 2026-06-22 (merged `0828a0f`, deployed to production). Implemented per [the plan](../plans/2026-06-22-cross-browser-pdf-preview.md).
 **Area:** `frontend/` — document detail page preview
 
 ## Problem

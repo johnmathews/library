@@ -13,7 +13,7 @@
  * camera and the photo library (a `capture` attribute would force the
  * camera and hide the library).
  */
-import { computed, onBeforeUnmount, reactive, ref } from 'vue'
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
 import { AppBadge, AppBanner, AppButton, AppErrorSummary, AppFileUpload } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
 import AppProgressBar from '@/components/AppProgressBar.vue'
@@ -50,6 +50,13 @@ let nextKey = 1
 let unmounted = false
 onBeforeUnmount(() => {
   unmounted = true
+})
+
+// Clear the "select a file" validation error as soon as the user picks a
+// file. Without this, the error set by a premature submit lingers on screen
+// even after a valid selection, making the picker look broken.
+watch(selected, (files) => {
+  if (files?.length) fileError.value = null
 })
 
 const duplicates = computed(() => entries.value.filter((entry) => entry.phase === 'duplicate'))

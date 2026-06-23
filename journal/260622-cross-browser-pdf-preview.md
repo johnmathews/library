@@ -52,14 +52,38 @@ scrolling reveals page 2).
   so a not-yet-mounted canvas retries instead of staying permanently blank; and an
   eager-render fallback covers the (theoretical) no-`IntersectionObserver` case.
 
-## Outstanding
-
-**Run `frontend/e2e/pdf-preview.spec.ts` green against the compose stack**
-(`E2E_BASE_URL`, recipe in `docs/frontend.md §1.5`) across chromium/firefox/webkit.
-The unit tests mock pdfjs entirely, so the actual render path is currently proven
-only by inspection — the e2e is the real cross-browser proof and hasn't executed
-green yet. Highest-value follow-up.
-
 Worked through the brainstorming → spec → plan → subagent-driven execution flow;
 final whole-branch review: ready to merge, no Critical/Important. Merged to `main`
 as `0828a0f`.
+
+## Ship: CI cross-browser proof, then deploy
+
+Pushing `main` turned the "outstanding e2e" item into the real proof — but only
+after CI exposed three integration issues the no-stack build couldn't:
+
+1. **CI didn't install Firefox.** Task 5 added a desktop `firefox` Playwright
+   project, but `ci.yml` installed only `chromium webkit`, and the `promote`
+   job (which retags `:latest`, the deployed image) `needs: [e2e]`. So the e2e
+   job would fail launching Firefox and block the deploy. Fixed the install
+   (`chromium firefox webkit`) and **scoped the firefox/webkit-desktop projects
+   to `pdf-preview.spec.ts` via `testMatch`** so adding these engines didn't put
+   the whole suite on Firefox.
+2. **`pdf-preview.spec.ts` 409 on every project after chromium.** The five
+   matrix projects run serially and the backend dedups by *content hash*; the
+   per-project filename marker didn't change the bytes, so only chromium got
+   201. Fixed by appending the marker as a trailing PDF comment for unique bytes
+   (the `library.spec.ts` trick).
+3. **`ask-page-citation.spec.ts` asserted the removed `<iframe>`'s
+   `src=/page=2/`.** Task 4 deleted the iframe; updated the spec to assert the
+   `?page=2` deep-link mounts the component instead.
+
+With those fixed, CI went green: `pdf-preview.spec.ts` **passed on chromium,
+firefox, and webkit** — the real cross-browser proof, by execution. `promote`
+retagged `:latest`.
+
+**Deployed** to the `paperless` LXC (`/srv/apps`, compose project `apps`):
+`docker compose pull` + `up -d library-webserver library-worker` (migrate ran
+clean — no new migrations for a frontend-only change). Healthcheck green,
+`/healthz` → `{"status":"ok","version":"0.1.0"}`, and the live server serves the
+new bundle with `pdf.worker.min-*.mjs`. The three engines that each broke a
+different way are now confirmed identical in CI and in production.

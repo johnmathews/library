@@ -40,6 +40,7 @@ def _seed_document(
     ocr_text: str | None,
     with_chunk: bool,
     with_page: bool = False,
+    summary: str | None = None,
 ) -> int:
     """Insert a document (optionally with one chunk and/or one page) and return its id."""
 
@@ -53,6 +54,7 @@ def _seed_document(
                     source=DocumentSource.UPLOAD,
                     ocr_text=ocr_text,
                     status=DocumentStatus.INDEXED,
+                    summary=summary,
                 )
                 session.add(document)
                 await session.commit()
@@ -385,6 +387,43 @@ def test_backfill_markdown_enqueues_documents_without_pages(cli_database_url: st
     }
     assert needs in enqueued
     assert already not in enqueued  # already has pages
+
+
+def test_backfill_summaries_enqueues_documents_without_summary(cli_database_url: str) -> None:
+    needs = _seed_document(cli_database_url, "sum-needs", ocr_text="real text", with_chunk=True)
+    already = _seed_document(
+        cli_database_url, "sum-done", ocr_text="real text", with_chunk=True, summary="A summary."
+    )
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill-summaries"])
+    assert result.exit_code == 0, result.output
+
+    enqueued = {
+        job["args"]["document_id"]
+        for job in connector.jobs.values()
+        if job["task_name"] == "library.jobs.extract_document"
+    }
+    assert needs in enqueued
+    assert already not in enqueued  # already has a summary
+
+
+def test_backfill_summaries_respects_limit(cli_database_url: str) -> None:
+    _seed_document(cli_database_url, "sum-a", ocr_text="real text", with_chunk=True)
+    _seed_document(cli_database_url, "sum-b", ocr_text="real text", with_chunk=True)
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill-summaries", "--limit", "1"])
+    assert result.exit_code == 0, result.output
+
+    enqueued = [
+        job
+        for job in connector.jobs.values()
+        if job["task_name"] == "library.jobs.extract_document"
+    ]
+    assert len(enqueued) == 1
 
 
 def test_backfill_markdown_include_existing(cli_database_url: str) -> None:

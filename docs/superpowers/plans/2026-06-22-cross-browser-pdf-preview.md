@@ -1,5 +1,7 @@
 # Cross-browser PDF preview Implementation Plan
 
+**Status:** closed — all 6 tasks shipped 2026-06-22 (merged `0828a0f`, deployed to production). CI cross-browser e2e (chromium/firefox/webkit) green.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Replace the native-`<iframe>` PDF preview on the document detail page with a self-rendered pdf.js viewer that scrolls through all pages and behaves identically in Chrome, Firefox, and Safari.

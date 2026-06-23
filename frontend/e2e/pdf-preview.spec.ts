@@ -45,22 +45,26 @@ async function signIn(page: Page): Promise<void> {
  * library.spec.ts), wait for indexing, navigate to the detail page, and
  * return. The test's `page` already has a signed-in session from `signIn`.
  *
- * Uses a unique marker per project/run so the upload is always fresh content
- * and never hits the duplicate-upload path, which would skip the PDF pipeline.
+ * The backend deduplicates by CONTENT hash, and the five matrix projects run
+ * serially against one stack — so a unique filename is not enough (only the
+ * first project would get 201, the rest 409). Append the per-project marker as
+ * a trailing PDF comment so every project uploads unique bytes while the file
+ * stays a valid 2-page PDF (readers ignore bytes after %%EOF), the same
+ * unique-bytes trick library.spec.ts uses.
  */
 async function uploadAndOpenDetailPage(page: Page, marker: string): Promise<number> {
   // Fetch the CSRF cookie that Django sets on page load.
   await page.goto('/')
   const csrf = (await page.context().cookies()).find((c) => c.name === 'library_csrftoken')
+  const fixture = await import('node:fs/promises').then((fs) => fs.readFile(FIXTURE))
+  const uniqueBytes = Buffer.concat([fixture, Buffer.from(`\n% ${marker}\n`)])
   const response = await page.request.post('/api/documents', {
     headers: { 'X-CSRF-Token': csrf!.value },
     multipart: {
       file: {
         name: `pdf-preview-${marker}.pdf`,
         mimeType: 'application/pdf',
-        // Read the 2-page fixture from disk via Node.js fs (Playwright allows
-        // Buffer here; the fixture is under 10 kB so reading it inline is fine).
-        buffer: await import('node:fs/promises').then((fs) => fs.readFile(FIXTURE)),
+        buffer: uniqueBytes,
       },
     },
   })

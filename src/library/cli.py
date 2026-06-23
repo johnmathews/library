@@ -31,8 +31,16 @@ from library.extraction.judge import JudgeResult, judge
 from library.extraction.validation import derive_review_status, findings_to_payload, validate
 from library.importer.client import PaperlessClient
 from library.importer.runner import ImportReport, format_report, run_import
-from library.jobs import embed_document, job_app, markdown_document
-from library.models import Document, DocumentChunk, DocumentPage, EvalRun, Kind, User
+from library.jobs import embed_document, extract_document, job_app, markdown_document
+from library.models import (
+    Document,
+    DocumentChunk,
+    DocumentPage,
+    DocumentStatus,
+    EvalRun,
+    Kind,
+    User,
+)
 
 app: typer.Typer = typer.Typer(
     no_args_is_help=True, help="Library administration (accounts, imports)."
@@ -317,6 +325,44 @@ def backfill_markdown(
 
     count = _run(operation)
     typer.echo(f"queued markdown generation for {count} document(s)")
+
+
+@app.command("backfill-summaries")
+def backfill_summaries(
+    limit: int | None = typer.Option(
+        None, "--limit", min=1, help="Only enqueue the first N documents."
+    ),
+) -> None:
+    """Queue metadata extraction for indexed documents that have no summary.
+
+    Backfills summaries for documents ingested before the summary was
+    generated. Re-runs the same extraction path new uploads use (via
+    ``extract_document``), so it honours ``extra["user_edited_fields"]`` and
+    respects the daily extraction budget — documents beyond the budget are
+    skipped and can be re-queued the next day. The worker must be running to
+    do the work; this command only enqueues the jobs.
+    """
+
+    async def operation(session: AsyncSession) -> int:
+        statement = (
+            select(Document.id)
+            .where(
+                Document.deleted_at.is_(None),
+                Document.status == DocumentStatus.INDEXED,
+                Document.summary.is_(None),
+            )
+            .order_by(Document.id)
+        )
+        if limit is not None:
+            statement = statement.limit(limit)
+        document_ids = list((await session.execute(statement)).scalars().all())
+        async with job_app.open_async():
+            for document_id in document_ids:
+                await extract_document.defer_async(document_id=document_id)
+        return len(document_ids)
+
+    count = _run(operation)
+    typer.echo(f"queued extraction for {count} document(s)")
 
 
 @app.command("eval-extractions")
