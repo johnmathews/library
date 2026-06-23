@@ -141,6 +141,38 @@ running image digest = `4fa25cd9…` (matches registry), `library-migrate` exite
 (healthy)`, external `/api/settings` → `401`. Both Jobs passes
 (hide-system-tasks + one-row-per-document) are now live.
 
+**Follow-up tidy (2026-06-23): e2e flake guard, Dependabot, security redeploy.**
+Three loose ends from the plan closed out the same day:
+- *Flaky e2e gate.* The `e2e` job had `retries: 0`, so a single timing race
+  (the transient SSE-driven `header-jobs-button`; a just-rendered
+  `mark-verified` button) failed the whole job and blocked `promote` — the
+  deploy gate. Set `retries: process.env.CI ? 1 : 0` in `playwright.config.ts`
+  (CI-only; Playwright still flags retried-then-passed as "flaky", and a real
+  break fails both attempts and still gates). Commit `0000544`.
+- *Dependabot (10 alerts, 3 high).* All four open PRs were merely **stale** (no
+  real incompatibility — #5's "build failure" was a pre-existing type-check
+  error already fixed on main, unrelated to pydantic-settings). Rebased each
+  onto current main (picking up the type-check fix + e2e retry), all went green,
+  merged: undici 7.27.2→7.28.0 (#4, dev-dep, 2×high), starlette 1.2.1→1.3.1
+  (#2, high), dompurify 3.4.10→3.4.11 (#3), pydantic-settings 2.14.1→2.14.2
+  (#5). Lockfiles on main confirm the patched versions.
+- *Security redeploy.* The merged deps weren't live (prod was still on the
+  `9fb3d6b` image). After main CI for `49e5b30` promoted `:latest`, redeployed
+  the three `library-*` services; verified inside the live container:
+  `starlette 1.3.1`, `pydantic-settings 2.14.2`; migrate exit 0 (head still
+  `0008_ask_threads`), webserver healthy, `/api/settings` → 401. The HIGH
+  starlette advisory is now remediated in production. (The box is LAN-only
+  plain-HTTP, so exposure was limited regardless.)
+
+**SSE verified live (2026-06-23).** The one open verification item below was
+checked: there is **no reverse proxy** in front of `library-webserver` on the
+box (direct `0.0.0.0:8010->8000` publish to uvicorn), so the buffering failure
+mode is structurally absent; the endpoint already sends `X-Accel-Buffering: no`
++ a 15s keep-alive; an unauthenticated `GET /api/events` returns a 401 in ~11ms
+(no hang); and a `pg_notify` on `library_doc_events` was received by a `LISTEN`er
+against the live DB in <1s — proving the NOTIFY→relay core of the stream end to
+end on production.
+
 **Still to verify on the live box** (not yet separately checked): the SSE
 keep-alive through the reverse proxy — confirm `GET /api/events` streams and
 isn't buffered/closed by the proxy in front of `library-webserver` (the one new
