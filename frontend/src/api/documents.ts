@@ -240,9 +240,15 @@ export function verifyDocument(id: number): Promise<DocumentDetail> {
   return apiFetch<DocumentDetail>(`/api/documents/${id}/verify`, { method: 'POST' })
 }
 
-/** GET /api/jobs — recent background jobs, newest first. */
-export function listJobs(limit?: number): Promise<JobInfo[]> {
-  return apiFetch<JobInfo[]>('/api/jobs', { query: { limit } })
+/**
+ * GET /api/jobs — recent background jobs, newest first. Document-less
+ * system/periodic jobs (the email poll) are hidden unless they failed or are
+ * running; pass `includeSystem` to list them all.
+ */
+export function listJobs(limit?: number, includeSystem = false): Promise<JobInfo[]> {
+  return apiFetch<JobInfo[]>('/api/jobs', {
+    query: { limit, include_system: includeSystem || undefined },
+  })
 }
 
 /** One page returned by GET /api/documents/{id}/markdown. */

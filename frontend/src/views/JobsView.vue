@@ -16,6 +16,9 @@ const jobsStore = useJobsStore()
 const jobs = ref<JobInfo[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
+// Document-less system/periodic jobs (the email poll) are hidden by default so
+// their constant successes don't bury document work; this toggles them back in.
+const showSystem = ref(false)
 
 const activeJobs = computed(() => jobs.value.filter((job) => job.active))
 const historicalJobs = computed(() => jobs.value.filter((job) => !job.active))
@@ -23,7 +26,7 @@ const historicalJobs = computed(() => jobs.value.filter((job) => !job.active))
 async function load(): Promise<void> {
   error.value = null
   try {
-    jobs.value = await listJobs(200)
+    jobs.value = await listJobs(200, showSystem.value)
   } catch {
     error.value = 'Could not load jobs. Try refreshing the page.'
   } finally {
@@ -35,6 +38,8 @@ onMounted(load)
 // A change in the live active count means a document started or finished —
 // refresh so the table (and its historical section) reflects the new state.
 watch(() => jobsStore.activeCount, () => void load())
+// Re-fetch when the system-task filter flips (the server applies it).
+watch(showSystem, () => void load())
 
 const STAGE_LABELS: Record<string, string> = {
   received: 'Received',
@@ -146,12 +151,23 @@ function formatCost(cost: number | null): string {
 
       <!-- Recent / historical -->
       <section>
-        <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">
-          Recent
-          <span class="text-gray-400 dark:text-gray-500 font-normal"
-            >({{ historicalJobs.length }})</span
-          >
-        </h2>
+        <div class="flex items-center justify-between mb-3">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+            Recent
+            <span class="text-gray-400 dark:text-gray-500 font-normal"
+              >({{ historicalJobs.length }})</span
+            >
+          </h2>
+          <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer">
+            <input
+              v-model="showSystem"
+              type="checkbox"
+              data-testid="jobs-show-system"
+              class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
+            />
+            Show system tasks
+          </label>
+        </div>
         <p
           v-if="historicalJobs.length === 0"
           data-testid="jobs-historical-empty"

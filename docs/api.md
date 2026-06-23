@@ -215,7 +215,14 @@ triggers a download instead.
 
 Most recent background jobs (newest first) from the Procrastinate queue, each
 enriched with the pipeline state of the document it processes. `limit` 1–500,
-default 50. Each row:
+default 50.
+
+By default, document-less system/periodic jobs (the scheduled email poll) are
+omitted when they succeeded — they fire constantly and would bury document work
+— while any that **failed or are still running** are kept, so a broken poller
+stays visible. Pass `include_system=true` to list every job unfiltered.
+
+Each row:
 
 ```jsonc
 {

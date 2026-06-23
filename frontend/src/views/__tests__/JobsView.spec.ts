@@ -104,4 +104,14 @@ describe('JobsView', () => {
     const wrapper = await mountView()
     expect(wrapper.find('[data-testid="jobs-error"]').exists()).toBe(true)
   })
+
+  it('hides system tasks by default and refetches with them when toggled', async () => {
+    listJobsMock.mockResolvedValue([])
+    const wrapper = await mountView()
+    expect(listJobsMock).toHaveBeenCalledWith(200, false)
+
+    await wrapper.get('[data-testid="jobs-show-system"]').setValue(true)
+    await flushPromises()
+    expect(listJobsMock).toHaveBeenCalledWith(200, true)
+  })
 })

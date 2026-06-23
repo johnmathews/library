@@ -15,7 +15,11 @@ indicator (spinner + count + dropdown) shows while documents are processing, and
 toasts announce when a document finishes (success) or fails. Updates are pushed
 live over Server-Sent Events (`GET /api/events`) backed by Postgres
 `LISTEN/NOTIFY` — no polling. `GET /api/jobs` is now enriched with document
-state. See [docs/jobs-and-notifications.md](docs/jobs-and-notifications.md),
+state. The Recent list hides document-less system/periodic jobs (the scheduled
+email poll) by default — keeping any that failed or are running — so their
+constant successes don't bury document work; a "Show system tasks" toggle (and
+`GET /api/jobs?include_system=true`) lists everything. See
+[docs/jobs-and-notifications.md](docs/jobs-and-notifications.md),
 [docs/api.md](docs/api.md) §1.8 / §1.8.4, and
 [docs/architecture.md](docs/architecture.md) §1.4.1.
 

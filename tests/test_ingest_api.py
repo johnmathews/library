@@ -217,6 +217,56 @@ def test_jobs_endpoint_enriched_with_document_state(
     assert job["tokens"] == 1500
 
 
+def test_jobs_endpoint_hides_system_tasks_by_default(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    # A routine (succeeded) email-poll heartbeat carries no document_id...
+    ok_poll = _insert_system_job(api_database_url, "library.jobs.poll_email_inbox", "succeeded")
+    # ...but a failed system job must still surface so a broken poller is visible.
+    bad_poll = _insert_system_job(api_database_url, "library.jobs.poll_email_inbox", "failed")
+
+    default = api_client.get("/api/jobs", params={"limit": 500}).json()
+    default_ids = {job["id"] for job in default}
+    assert ok_poll not in default_ids  # heartbeat hidden by default
+    assert bad_poll in default_ids  # failure still shown
+
+    full = api_client.get("/api/jobs", params={"limit": 500, "include_system": "true"}).json()
+    full_ids = {job["id"] for job in full}
+    assert ok_poll in full_ids  # opt back in
+    assert bad_poll in full_ids
+
+    poll = next(job for job in full if job["id"] == ok_poll)
+    assert poll["document_id"] is None
+    assert poll["task_name"] == "library.jobs.poll_email_inbox"
+
+
+def _insert_system_job(database_url: str, task_name: str, status: str) -> int:
+    """Insert a document-less Procrastinate job (a system/periodic task); return its id."""
+    import asyncio
+
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    async def run() -> int:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as connection:
+                result = await connection.execute(
+                    text(
+                        "INSERT INTO procrastinate_jobs (queue_name, task_name, args, status) "
+                        "VALUES ('default', :task, '{\"timestamp\": 0}'::jsonb, "
+                        "CAST(:status AS procrastinate_job_status)) RETURNING id"
+                    ),
+                    {"task": task_name, "status": status},
+                )
+                return int(result.scalar_one())
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(run())
+
+
 def _enrich_document(database_url: str, document_id: int) -> None:
     """Set a title + extraction provenance + a failed event on one document."""
     import asyncio
