@@ -171,3 +171,19 @@ Sub-project 5 is the last item in the extraction/Ask roadmap:
 The archive can now answer content questions, aggregation questions, and
 comparative questions — with citations — in a persistent multi-turn conversation,
 with per-document trend context in the detail view.
+
+---
+
+## Wrap-up: CI type-check gap
+
+Merged to `main` and pushed (live ghcr `:latest` deploy). The first CI run
+failed: the frontend `Type check` job runs `npm run type-check` = `vue-tsc
+--build`, which type-checks the whole project via references **including the test
+files** (`tsconfig.vitest.json`). Local verification had used `vue-tsc --noEmit`,
+which only checks the app config and skips `__tests__/`, so two type errors in
+the new middle-point spec slipped through (a `this` cast needing `unknown` first,
+and a strict-indexing `datasets[0]` possibly-undefined). The Docker image build
+runs the type-check too, so the deploy did not actually update until the fix
+landed. Lesson: verify the frontend with **`npm run type-check`**, not `npx
+vue-tsc --noEmit`. Fixed, re-pushed, CI green (incl. the `promote`/deploy job).
+Also added the document-series entry to `CHANGELOG.md` (the README's "full list").

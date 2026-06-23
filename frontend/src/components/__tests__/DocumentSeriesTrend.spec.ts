@@ -7,7 +7,7 @@ vi.mock('vue-chartjs', () => ({
     name: 'Line',
     props: ['data', 'options'],
     template: '<canvas data-testid="chart"/>',
-    mounted() { lineDataCapture.data = (this as { data: unknown }).data },
+    mounted() { lineDataCapture.data = (this as unknown as { data: unknown }).data },
   },
 }))
 vi.mock('@/api/documents', () => ({ fetchDocumentSeries: vi.fn() }))
@@ -53,7 +53,7 @@ describe('DocumentSeriesTrend', () => {
     mount(DocumentSeriesTrend, { props: { documentId: 2 } })
     await flushPromises()
     const captured = lineDataCapture.data as { datasets: { pointBackgroundColor: string[] }[] }
-    const colors = captured.datasets[0].pointBackgroundColor
+    const colors = captured.datasets[0]!.pointBackgroundColor
     expect(colors[0]).toBe('#2563eb') // index 0 — normal
     expect(colors[1]).toBe('#dc2626') // index 1 — highlighted (documentId=2)
     expect(colors[2]).toBe('#2563eb') // index 2 — normal

@@ -1,11 +1,19 @@
 <script setup lang="ts">
-import { ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import AppSidebar from '@/components/layout/AppSidebar.vue'
 import AppHeader from '@/components/layout/AppHeader.vue'
 import SearchModal from '@/components/SearchModal.vue'
+import { ToastContainer } from '@/components/app'
+import { useJobsStore } from '@/stores/jobs'
 
 const sidebarOpen = ref(false)
 const searchModal = ref<InstanceType<typeof SearchModal> | null>(null)
+
+// The default layout renders only for authenticated routes, so this is the
+// right place to open the live job stream (and tear it down on sign-out).
+const jobs = useJobsStore()
+onMounted(() => jobs.connect())
+onUnmounted(() => jobs.disconnect())
 </script>
 
 <template>
@@ -25,4 +33,5 @@ const searchModal = ref<InstanceType<typeof SearchModal> | null>(null)
     </div>
   </div>
   <SearchModal ref="searchModal" />
+  <ToastContainer />
 </template>

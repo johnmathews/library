@@ -273,7 +273,17 @@ see 1.7.2 for that instance's exact shape):
 
    Idempotent and throttleable (`--limit N`); the worker embeds on CPU
    (~6 min per ~100 docs). See [ask.md](ask.md) §1.5.
-8. **Ask answering needs an Anthropic key.** `POST /api/ask` returns `503`
+8. **Backfill summaries** for documents indexed before extraction produced a
+   summary:
+
+   ```console
+   docker compose exec api library backfill-summaries
+   ```
+
+   Re-runs extraction (honours user edits + the daily budget) for indexed docs
+   with no summary; throttleable (`--limit N`). Needs `LIBRARY_ANTHROPIC_API_KEY`
+   and the worker running. See [ingestion.md](ingestion.md) §"Backfill summaries".
+9. **Ask answering needs an Anthropic key.** `POST /api/ask` returns `503`
    without `LIBRARY_ANTHROPIC_API_KEY` (only the answer step calls Claude;
    embedding/indexing is local). Retrieval works without it.
 

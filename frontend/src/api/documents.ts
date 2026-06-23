@@ -156,7 +156,12 @@ export interface UploadResult {
   duplicate: boolean
 }
 
-/** One entry of GET /api/jobs. */
+/**
+ * One entry of GET /api/jobs: a Procrastinate job enriched with the pipeline
+ * state of the document it processes. The `document_*` / cost fields are null
+ * for jobs without a document (e.g. the periodic email poll) or whose document
+ * has since been deleted.
+ */
 export interface JobInfo {
   id: number
   status: string
@@ -164,6 +169,12 @@ export interface JobInfo {
   attempts: number
   scheduled_at: string | null
   document_id: number | null
+  active: boolean
+  document_title: string | null
+  document_status: string | null
+  error: string | null
+  cost_usd: number | null
+  tokens: number | null
 }
 
 export const DOCUMENT_LANGUAGES: readonly { value: DocumentLanguage; text: string }[] = [
@@ -229,9 +240,15 @@ export function verifyDocument(id: number): Promise<DocumentDetail> {
   return apiFetch<DocumentDetail>(`/api/documents/${id}/verify`, { method: 'POST' })
 }
 
-/** GET /api/jobs — recent background jobs, newest first. */
-export function listJobs(limit?: number): Promise<JobInfo[]> {
-  return apiFetch<JobInfo[]>('/api/jobs', { query: { limit } })
+/**
+ * GET /api/jobs — recent background jobs, newest first. Document-less
+ * system/periodic jobs (the email poll) are hidden unless they failed or are
+ * running; pass `includeSystem` to list them all.
+ */
+export function listJobs(limit?: number, includeSystem = false): Promise<JobInfo[]> {
+  return apiFetch<JobInfo[]>('/api/jobs', {
+    query: { limit, include_system: includeSystem || undefined },
+  })
 }
 
 /** One page returned by GET /api/documents/{id}/markdown. */

@@ -368,7 +368,12 @@ class TokenInfo(BaseModel):
 
 
 class JobInfo(BaseModel):
-    """One row from the procrastinate_jobs table, as exposed by GET /api/jobs."""
+    """One row from GET /api/jobs: a Procrastinate job enriched with the
+    pipeline state of the document it processes (when it has one).
+
+    The document fields are null for jobs without a ``document_id`` (e.g. the
+    periodic email poll) or whose document has since been deleted.
+    """
 
     id: int
     status: str
@@ -376,6 +381,12 @@ class JobInfo(BaseModel):
     attempts: int
     scheduled_at: datetime | None
     document_id: int | None
+    active: bool
+    document_title: str | None = None
+    document_status: str | None = None
+    error: str | None = None
+    cost_usd: float | None = None
+    tokens: int | None = None
 
 
 class MarkdownPage(BaseModel):

@@ -5,6 +5,13 @@ import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import DocumentDetailView from '../DocumentDetailView.vue'
 import type { DocumentDetail, DocumentMarkdownResponse } from '@/api/documents'
 
+// pdfjs-dist can't run its worker/canvas in jsdom — mock the whole module
+// so that DocumentPdfPreview (now imported by DocumentDetailView) can be loaded.
+vi.mock('pdfjs-dist', () => ({
+  GlobalWorkerOptions: { workerSrc: '' },
+  getDocument: vi.fn(() => ({ promise: new Promise(() => {}), destroy: () => Promise.resolve() })),
+}))
+
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
     status,
@@ -222,16 +229,22 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="detail-banner"]').exists()).toBe(false)
   })
 
-  it('previews the searchable PDF inline in an iframe with the toolbar hidden', async () => {
-    const w = await mountView()
-    // disposition=inline: an attachment response would blank the iframe and
-    // trigger a download instead of rendering the PDF.
-    // toolbar=0&navpanes=0 hides the native viewer chrome; view=FitH fits the
-    // page to the iframe width so a portrait page is not clipped on a narrow
-    // (mobile) viewport.
-    expect(w.find('[data-testid="preview-pdf"]').attributes('src')).toBe(
-      '/api/documents/12/searchable.pdf?disposition=inline#toolbar=0&navpanes=0&view=FitH',
-    )
+  it('renders the pdf.js preview component for a PDF document', async () => {
+    detail = makeDetail({ mime_type: 'application/pdf', has_thumbnail: true })
+    const DocumentPdfPreviewStub = { template: '<div />', props: ['src', 'poster', 'openHref', 'downloadHref', 'initialPage'] }
+    await router.push('/documents/12')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentPdfPreview: DocumentPdfPreviewStub },
+      },
+    })
+    await flushPromises()
+    const preview = wrapper.findComponent(DocumentPdfPreviewStub)
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('src')).toContain('disposition=inline')
+    // The legacy native iframe must be gone.
+    expect(wrapper.find('iframe').exists()).toBe(false)
   })
 
   it('preview header opens the inline PDF in a new tab and downloads the searchable PDF', async () => {
@@ -276,61 +289,78 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="hero-tags"]').text()).toContain('Energie')
   })
 
-  it('shows a fit-width first-page thumbnail on mobile and keeps the iframe for lg+', async () => {
-    const w = await mountView()
-    const img = w.find('[data-testid="preview-pdf-image"]')
-    expect(img.exists()).toBe(true)
-    expect(img.attributes('src')).toBe('/api/documents/12/thumbnail')
-    // The thumbnail is wrapped in a link that opens the PDF (same as the text
-    // link), shown only below lg.
-    const link = w.find('[data-testid="preview-pdf-image-link"]')
-    expect(link.attributes('href')).toBe('/api/documents/12/searchable.pdf?disposition=inline')
-    expect(link.attributes('target')).toBe('_blank')
-    expect(link.classes()).toContain('lg:hidden')
-    // The native iframe is kept but hidden below lg.
-    expect(w.find('[data-testid="preview-pdf"]').classes()).toContain('hidden')
-    expect(w.find('[data-testid="preview-pdf"]').classes()).toContain('lg:block')
+  it('passes the thumbnail as poster to DocumentPdfPreview when has_thumbnail is true', async () => {
+    detail = makeDetail({ has_thumbnail: true })
+    const DocumentPdfPreviewStub = { template: '<div />', props: ['src', 'poster', 'openHref', 'downloadHref', 'initialPage'] }
+    await router.push('/documents/12')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentPdfPreview: DocumentPdfPreviewStub },
+      },
+    })
+    await flushPromises()
+    const preview = wrapper.findComponent(DocumentPdfPreviewStub)
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('poster')).toBe('/api/documents/12/thumbnail')
+    expect(wrapper.find('[data-testid="preview-pdf-image-link"]').exists()).toBe(false)
+    expect(wrapper.find('iframe').exists()).toBe(false)
   })
 
-  it('shows a clickable padlock for a PDF with no thumbnail (e.g. password-protected)', async () => {
-    // No thumbnail for a PDF ⇒ it could not be rendered (almost always
-    // password-protected). Mobile gets a padlock that opens the PDF; the
-    // desktop iframe stays (hidden below lg) so it can prompt inline.
+  it('passes undefined poster to DocumentPdfPreview when has_thumbnail is false', async () => {
     detail = makeDetail({ has_thumbnail: false, has_searchable_pdf: false })
-    const w = await mountView()
-    expect(w.find('[data-testid="preview-pdf-image"]').exists()).toBe(false)
-    const locked = w.find('[data-testid="preview-pdf-locked"]')
-    expect(locked.exists()).toBe(true)
-    expect(locked.attributes('href')).toBe('/api/documents/12/original?disposition=inline')
-    expect(locked.attributes('target')).toBe('_blank')
-    expect(locked.classes()).toContain('lg:hidden')
-    expect(locked.find('svg').exists()).toBe(true) // padlock icon
-    const iframe = w.find('[data-testid="preview-pdf"]')
-    expect(iframe.classes()).toContain('hidden')
-    expect(iframe.classes()).toContain('lg:block')
+    const DocumentPdfPreviewStub = { template: '<div />', props: ['src', 'poster', 'openHref', 'downloadHref', 'initialPage'] }
+    await router.push('/documents/12')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentPdfPreview: DocumentPdfPreviewStub },
+      },
+    })
+    await flushPromises()
+    const preview = wrapper.findComponent(DocumentPdfPreviewStub)
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('poster')).toBeUndefined()
+    expect(wrapper.find('[data-testid="preview-pdf-locked"]').exists()).toBe(false)
+    expect(wrapper.find('iframe').exists()).toBe(false)
   })
 
-  it('falls back to the original PDF and then to a no-preview panel', async () => {
+  it('falls back to the original PDF (no searchable PDF) and then to a no-preview panel', async () => {
+    const DocumentPdfPreviewStub = { template: '<div />', props: ['src', 'poster', 'openHref', 'downloadHref', 'initialPage'] }
+
     detail = makeDetail({ has_searchable_pdf: false })
-    let w = await mountView()
-    expect(w.find('[data-testid="preview-pdf"]').attributes('src')).toBe(
-      '/api/documents/12/original?disposition=inline#toolbar=0&navpanes=0&view=FitH',
-    )
-    w.unmount()
+    await router.push('/documents/12')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentPdfPreview: DocumentPdfPreviewStub },
+      },
+    })
+    await flushPromises()
+    const preview = wrapper.findComponent(DocumentPdfPreviewStub)
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('src')).toBe('/api/documents/12/original?disposition=inline')
+    wrapper.unmount()
 
     detail = makeDetail({ mime_type: 'text/plain', has_searchable_pdf: false })
-    w = await mountView()
-    expect(w.find('[data-testid="preview-fallback"]').exists()).toBe(true)
+    wrapper = mount(DocumentDetailView, {
+      global: { plugins: [router, pinia] },
+    })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="preview-fallback"]').exists()).toBe(true)
     // The fallback's download link keeps the attachment default.
-    expect(w.find('[data-testid="preview-fallback"] a').attributes('href')).toBe(
+    expect(wrapper.find('[data-testid="preview-fallback"] a').attributes('href')).toBe(
       '/api/documents/12/original',
     )
+    wrapper.unmount()
 
     detail = makeDetail({ mime_type: 'image/jpeg', has_searchable_pdf: false })
-    wrapper?.unmount()
-    w = await mountView()
+    wrapper = mount(DocumentDetailView, {
+      global: { plugins: [router, pinia] },
+    })
+    await flushPromises()
     // Inline: Firefox refuses to render <img> sources served as attachment.
-    expect(w.find('[data-testid="preview-image"]').attributes('src')).toBe(
+    expect(wrapper.find('[data-testid="preview-image"]').attributes('src')).toBe(
       '/api/documents/12/original?disposition=inline',
     )
   })
@@ -437,11 +467,20 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="detail-banner"]').exists()).toBe(false)
   })
 
-  it('deep-links the PDF iframe to the page from the route query', async () => {
-    const w = await mountView('/documents/12?page=2')
-    const iframe = w.get('iframe')
-    expect(iframe.attributes('src')).toContain('&page=2')
-    expect(iframe.attributes('src')).toContain('#toolbar=0&navpanes=0&view=FitH&page=2')
+  it('passes the page query param as initialPage to DocumentPdfPreview', async () => {
+    const DocumentPdfPreviewStub = { template: '<div />', props: ['src', 'poster', 'openHref', 'downloadHref', 'initialPage'] }
+    await router.push('/documents/12?page=2')
+    wrapper = mount(DocumentDetailView, {
+      global: {
+        plugins: [router, pinia],
+        stubs: { DocumentPdfPreview: DocumentPdfPreviewStub },
+      },
+    })
+    await flushPromises()
+    const preview = wrapper.findComponent(DocumentPdfPreviewStub)
+    expect(preview.exists()).toBe(true)
+    expect(preview.props('initialPage')).toBe(2)
+    expect(wrapper.find('iframe').exists()).toBe(false)
   })
 
   it('marks the document verified', async () => {

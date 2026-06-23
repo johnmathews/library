@@ -8,6 +8,54 @@ All notable changes to Library are documented here. The format follows
 
 ### Added
 
+**Jobs view + live job notifications** — a new **Jobs** page (`/jobs`) lists
+background/batch jobs split into Active and Recent, each enriched with its
+document's pipeline stage, status, extraction cost, and any error. A navbar
+indicator (spinner + count + dropdown) shows while documents are processing, and
+toasts announce when a document finishes (success) or fails. Updates are pushed
+live over Server-Sent Events (`GET /api/events`) backed by Postgres
+`LISTEN/NOTIFY` — no polling. `GET /api/jobs` is now enriched with document
+state and shows **one row per document** (a document's several jobs are
+collapsed to its latest), so the same document isn't repeated. Document-less
+system/periodic jobs (the scheduled email poll) are hidden by default — keeping
+any that failed or are running — so their constant successes don't bury document
+work; a "Show system tasks" toggle (and `GET /api/jobs?include_system=true`)
+lists everything. See
+[docs/jobs-and-notifications.md](docs/jobs-and-notifications.md),
+[docs/api.md](docs/api.md) §1.8 / §1.8.4, and
+[docs/architecture.md](docs/architecture.md) §1.4.1.
+
+**`backfill-summaries` admin command** — `library backfill-summaries` enqueues
+metadata extraction for indexed documents that have no summary (e.g. ingested
+before summaries were generated), reusing the `extract_document` path so it
+honours user-edited fields and the daily extraction budget. Throttleable with
+`--limit N`. See [docs/ingestion.md](docs/ingestion.md) §"Backfill summaries"
+and [docs/deployment.md](docs/deployment.md) §1.7.
+
+**Document series + comparative queries** — Ask and the document detail view can
+now compare a recurring bill to its usual values. A *series* is detected
+automatically as the documents sharing one sender + kind (e.g. the monthly energy
+bill from one provider). See [docs/ask.md](docs/ask.md) §1.7 and
+[docs/api.md](docs/api.md) §1.13.
+
+- New read-only module `library.series` computes series statistics on the fly
+  (no new table or migration): distribution (count/mean/median/stdev/min/max per
+  currency), a reference-vs-usual verdict (`higher`/`typical`/`lower`; "typical"
+  = within ±1 stdev OR within `LIBRARY_SERIES_TYPICAL_PCT` of the median), a
+  trend (`rising`/`falling`/`flat`), and a year-over-year comparison.
+- New Ask tool `compare_to_series` joins `semantic_search` and `query_documents`
+  in the tool-use loop, answering "more/less than usual", "vs last year", and
+  "are my bills going up" questions with citations.
+- New endpoint `GET /api/documents/{id}/series` returns the series summary plus
+  per-point data; `status:"insufficient"` when the document has no sender/kind or
+  too few siblings.
+- New `DocumentSeriesTrend` widget on the detail view renders a Chart.js line
+  chart of the series, highlighting the viewed document's point; it self-hides
+  when there is no qualifying series.
+- New settings `LIBRARY_SERIES_MIN_DOCUMENTS` (default `3`),
+  `LIBRARY_SERIES_TYPICAL_PCT` (default `0.10`), and `LIBRARY_SERIES_FLAT_PCT`
+  (default `0.05`).
+
 **Conversational Ask** — Ask is now multi-turn. Follow-up questions like
 *"what about last year?"* resolve against prior turns of the same conversation
 instead of being answered cold. See [docs/ask.md](docs/ask.md) §1.6 and
@@ -91,11 +139,33 @@ See [docs/ingestion.md](docs/ingestion.md) "Markdown layer" and
 
 ### Changed
 
+- **Document preview now renders PDFs in-app, identically across browsers.** The
+  detail page (`/documents/:id`) previously embedded the PDF in a native
+  `<iframe>`, which broke differently in each engine — Chrome forced a
+  "Pages/Manage" panel over the document, Firefox showed its own toolbar and
+  thumbnail sidebar, and Safari rendered a black box. The new
+  `DocumentPdfPreview` component renders every page to `<canvas>` with pdf.js
+  (`pdfjs-dist`), fit-to-width and lazily via `IntersectionObserver`, so all
+  pages are **scrollable** and the result is the same in Chrome, Firefox, and
+  Safari. Shows a thumbnail poster while loading and Open/Download fallbacks for
+  render failures and password-protected PDFs. The Playwright matrix gained
+  desktop Firefox and WebKit projects plus a cross-browser preview spec. See
+  [docs/frontend.md](docs/frontend.md). Adds the `pdfjs-dist` dependency (worker
+  lazy-loaded, off the initial bundle).
+
 - `db` image is now `pgvector/pgvector:pg17` (was `postgres:17.5-alpine`),
   initialised with `C.UTF-8` so text ordering stays byte-wise and an existing
   C-collation `pgdata` volume is reused safely. **The LXC now wants ~6–8 GB
   RAM** for the embedder — see [docs/deployment.md](docs/deployment.md) §1.7.1
   for the upgrade path.
+
+### Fixed
+
+- **Upload: the "Select at least one file" error now clears when you pick a
+  file.** Previously the validation error from a premature submit lingered on
+  screen even after a valid selection (it was only cleared by the next submit),
+  making the picker look broken. `UploadView` now watches the selection and
+  clears the error as soon as a file is chosen.
 
 ## [0.1.0] — 2026-06-11
 
