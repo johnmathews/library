@@ -48,9 +48,12 @@ async function mountView() {
   return wrapper
 }
 
+const COLUMNS_KEY = 'library:jobs-columns'
+
 describe('JobsView', () => {
   beforeEach(() => {
     listJobsMock.mockReset()
+    localStorage.clear()
   })
 
   it('splits jobs into active and historical sections', async () => {
@@ -154,5 +157,54 @@ describe('JobsView', () => {
     await wrapper.get('[data-testid="jobs-show-system"]').setValue(true)
     await flushPromises()
     expect(listJobsMock).toHaveBeenCalledWith(200, true)
+  })
+
+  it('hides a column from the Recent table when toggled off in the Columns menu', async () => {
+    listJobsMock.mockResolvedValue([
+      job({ id: 7, active: false, document_title: 'Energierekening', document_status: 'indexed', cost_usd: 0.5 }),
+    ])
+    const wrapper = await mountView()
+
+    // Cost column is visible by default.
+    expect(wrapper.find('[data-testid="jobs-col-header-cost"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="jobs-col-cell-cost"]').exists()).toBe(true)
+
+    // Open the Columns menu and toggle Cost off.
+    await wrapper.get('[data-testid="jobs-columns-button"]').trigger('click')
+    await wrapper.get('[data-testid="jobs-col-toggle-cost"]').setValue(false)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="jobs-col-header-cost"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="jobs-col-cell-cost"]').exists()).toBe(false)
+  })
+
+  it('persists the column choice to localStorage and reads it back on a fresh mount', async () => {
+    listJobsMock.mockResolvedValue([
+      job({ id: 8, active: false, document_title: 'Persisted', document_status: 'indexed', cost_usd: 0.5 }),
+    ])
+    const wrapper = await mountView()
+
+    await wrapper.get('[data-testid="jobs-columns-button"]').trigger('click')
+    await wrapper.get('[data-testid="jobs-col-toggle-cost"]').setValue(false)
+    await flushPromises()
+
+    // The visibility map was written to the stable localStorage key.
+    const stored = JSON.parse(localStorage.getItem(COLUMNS_KEY) ?? '{}')
+    expect(stored.cost).toBe(false)
+
+    // A fresh mount reads it back: the Cost column starts hidden.
+    const fresh = await mountView()
+    expect(fresh.find('[data-testid="jobs-col-header-cost"]').exists()).toBe(false)
+  })
+
+  it('renders a mobile card list mirroring the Recent jobs', async () => {
+    listJobsMock.mockResolvedValue([
+      job({ id: 11, active: false, document_title: 'CardDoc', document_status: 'indexed' }),
+    ])
+    const wrapper = await mountView()
+
+    const cards = wrapper.find('[data-testid="jobs-historical-cards"]')
+    expect(cards.exists()).toBe(true)
+    expect(cards.text()).toContain('CardDoc')
   })
 })

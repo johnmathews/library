@@ -13,7 +13,7 @@
  * PDF preview uses DocumentPdfPreview (pdf.js canvas renderer) for
  * consistent cross-browser rendering on every viewport.
  */
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useRoute } from 'vue-router'
@@ -281,119 +281,167 @@ const heroStats = computed<{ label: string; value: string }[]>(() => {
   ]
 })
 
-// --- Inline editing -----------------------------------------------------------
+// --- Page-wide edit mode (per-field autosave) ---------------------------------
+//
+// A single "Edit" toggle reveals an inline editor for every field at once,
+// replacing the old one-row-at-a-time "Change" reveal (and its ~10 buttons).
+// Each field autosaves independently when committed — native `change` fires on
+// blur for text inputs and on selection for selects/dates, and bubbles up to
+// the field wrapper — via the same per-field PATCH the backend already expects.
+// There is no global Save/Cancel; "Done" just leaves edit mode.
 
-const editing = ref<EditableField | null>(null)
-const editText = ref('')
-const editCurrency = ref('')
-const editDate = ref<string | null>(null)
-const editSelect = ref('')
-const editError = ref<string | null>(null)
-const saving = ref(false)
+const editMode = ref(false)
+
+/** The fields whose draft is a plain string (text inputs + selects). */
+type StringDraftField = 'title' | 'summary' | 'sender' | 'tags' | 'kind' | 'language' | 'amount'
+
+/** Draft string values for the text and select fields, keyed by field. */
+const drafts = reactive<Record<StringDraftField, string>>({
+  title: '',
+  summary: '',
+  sender: '',
+  tags: '',
+  kind: '',
+  language: '',
+  amount: '',
+})
+/** Draft ISO date strings for the date fields. */
+const dateDrafts = reactive<{
+  document_date: string | null
+  due_date: string | null
+  expiry_date: string | null
+}>({ document_date: null, due_date: null, expiry_date: null })
+/** Draft currency for the amount field (its own input). */
+const currencyDraft = ref('')
+/** Per-field in-flight guard, validation/save error, and transient "Saved" flag. */
+const savingField = reactive<Record<string, boolean>>({})
+const fieldError = reactive<Record<string, string | null>>({})
+const savedField = reactive<Record<string, boolean>>({})
 
 /** The success / progress notification shown at the top of the page. */
 const notice = ref<{ variant?: 'success'; text: string } | null>(null)
-/** Failure of a page-level action (re-extraction request). */
+/** Failure of a page-level action (re-extraction / verify). */
 const actionError = ref<string | null>(null)
 
 const errorItems = computed<ErrorSummaryItem[]>(() => {
   const items: ErrorSummaryItem[] = []
-  if (editError.value && editing.value) {
-    items.push({ text: editError.value, href: `#${editorInputId(editing.value)}` })
-  }
   if (actionError.value) items.push({ text: actionError.value })
   return items
 })
 
-function editorInputId(field: EditableField): string {
-  if (field === 'amount') return 'edit-amount'
-  const id = `edit-${field.replaceAll('_', '-')}`
-  // AppDateInput puts the id on the container; its first field is -day.
-  return field.endsWith('date') ? `${id}-day` : id
-}
-
-function startEdit(field: EditableField): void {
+/** Load every draft from the current document (called when edit mode opens). */
+function hydrateDrafts(): void {
   const d = doc.value
   if (!d) return
-  editing.value = field
-  editError.value = null
+  drafts.title = d.title ?? ''
+  drafts.summary = d.summary ?? ''
+  drafts.sender = d.sender?.name ?? ''
+  drafts.tags = d.tags.map((tag) => tag.slug).join(', ')
+  drafts.kind = d.kind?.slug ?? ''
+  drafts.language = d.language
+  drafts.amount = d.amount_total ?? ''
+  currencyDraft.value = d.currency ?? ''
+  dateDrafts.document_date = d.document_date
+  dateDrafts.due_date = d.due_date
+  dateDrafts.expiry_date = d.expiry_date
+}
+
+/** Re-sync one field's draft from the server response after a save, so a
+ * canonicalised value (e.g. slugified tags) is reflected back in the editor. */
+function hydrateField(field: EditableField): void {
+  const d = doc.value
+  if (!d) return
   switch (field) {
-    case 'title':
-      editText.value = d.title ?? ''
-      break
-    case 'summary':
-      editText.value = d.summary ?? ''
-      break
-    case 'sender':
-      editText.value = d.sender?.name ?? ''
-      break
-    case 'tags':
-      editText.value = d.tags.map((tag) => tag.slug).join(', ')
-      break
-    case 'kind':
-      editSelect.value = d.kind?.slug ?? ''
-      break
-    case 'language':
-      editSelect.value = d.language
-      break
+    case 'title': drafts.title = d.title ?? ''; break
+    case 'summary': drafts.summary = d.summary ?? ''; break
+    case 'sender': drafts.sender = d.sender?.name ?? ''; break
+    case 'tags': drafts.tags = d.tags.map((tag) => tag.slug).join(', '); break
+    case 'kind': drafts.kind = d.kind?.slug ?? ''; break
+    case 'language': drafts.language = d.language; break
     case 'amount':
-      editText.value = d.amount_total ?? ''
-      editCurrency.value = d.currency ?? ''
+      drafts.amount = d.amount_total ?? ''
+      currencyDraft.value = d.currency ?? ''
       break
-    case 'document_date':
-      editDate.value = d.document_date
-      break
-    case 'due_date':
-      editDate.value = d.due_date
-      break
-    case 'expiry_date':
-      editDate.value = d.expiry_date
-      break
+    case 'document_date': dateDrafts.document_date = d.document_date; break
+    case 'due_date': dateDrafts.due_date = d.due_date; break
+    case 'expiry_date': dateDrafts.expiry_date = d.expiry_date; break
   }
 }
 
-function cancelEdit(): void {
-  editing.value = null
-  editError.value = null
-  saving.value = false
+function toggleEditMode(): void {
+  editMode.value = !editMode.value
+  if (editMode.value) hydrateDrafts()
+  else resetEditState()
 }
 
-/** The PATCH body for the open editor — exactly that row's field(s). */
+/** Leave edit mode and clear the transient per-field error / "Saved" state. */
+function resetEditState(): void {
+  editMode.value = false
+  for (const key of Object.keys(fieldError)) fieldError[key] = null
+  for (const key of Object.keys(savedField)) savedField[key] = false
+}
+
+/** Whether a field's draft differs from the stored value — guards autosave so a
+ * plain focus-through (no real edit) never fires a needless PATCH. */
+function fieldDirty(field: EditableField): boolean {
+  const d = doc.value
+  if (!d) return false
+  switch (field) {
+    case 'title': return (drafts.title.trim() || null) !== (d.title ?? null)
+    case 'summary': return (drafts.summary.trim() || null) !== (d.summary ?? null)
+    case 'sender': return (drafts.sender.trim() || null) !== (d.sender?.name ?? null)
+    case 'kind': return (drafts.kind || null) !== (d.kind?.slug ?? null)
+    case 'language': return drafts.language !== d.language
+    case 'tags': {
+      // Tags are an unordered set: compare sorted slugs so a reorder-only edit
+      // (or the server returning a different order) isn't seen as a change.
+      const next = drafts.tags.split(',').map((t) => t.trim()).filter(Boolean).sort()
+      return next.join(',') !== d.tags.map((t) => t.slug).sort().join(',')
+    }
+    case 'document_date': return (dateDrafts.document_date ?? null) !== (d.document_date ?? null)
+    case 'due_date': return (dateDrafts.due_date ?? null) !== (d.due_date ?? null)
+    case 'expiry_date': return (dateDrafts.expiry_date ?? null) !== (d.expiry_date ?? null)
+    case 'amount': {
+      const amount = drafts.amount.trim().replace(',', '.') || null
+      const currency = currencyDraft.value.trim() || null
+      return amount !== (d.amount_total ?? null) || currency !== (d.currency ?? null)
+    }
+  }
+  return false
+}
+
+/** The PATCH body for one field — exactly that field's column(s). Returns null
+ * (and sets fieldError) when the field fails client-side validation. */
 function buildPatch(field: EditableField): DocumentUpdate | null {
   switch (field) {
     case 'title':
-      return { title: editText.value.trim() || null }
+      return { title: drafts.title.trim() || null }
     case 'summary':
-      return { summary: editText.value.trim() || null }
+      return { summary: drafts.summary.trim() || null }
     case 'sender':
-      return { sender: editText.value.trim() || null }
+      return { sender: drafts.sender.trim() || null }
     case 'kind':
-      return { kind_slug: editSelect.value || null }
+      return { kind_slug: drafts.kind || null }
     case 'language':
-      return { language: editSelect.value as DocumentLanguage }
+      return { language: drafts.language as DocumentLanguage }
     case 'tags':
-      return {
-        tags: editText.value
-          .split(',')
-          .map((tag) => tag.trim())
-          .filter(Boolean),
-      }
+      return { tags: drafts.tags.split(',').map((tag) => tag.trim()).filter(Boolean) }
     case 'document_date':
-      return { document_date: editDate.value }
+      return { document_date: dateDrafts.document_date }
     case 'due_date':
-      return { due_date: editDate.value }
+      return { due_date: dateDrafts.due_date }
     case 'expiry_date':
-      return { expiry_date: editDate.value }
+      return { expiry_date: dateDrafts.expiry_date }
     case 'amount': {
-      const amount = editText.value.trim().replace(',', '.')
-      const currency = editCurrency.value.trim()
+      const amount = drafts.amount.trim().replace(',', '.')
+      const currency = currencyDraft.value.trim()
       if (!amount) return { amount_total: null, currency: null }
       if (!/^\d+(\.\d+)?$/.test(amount)) {
-        editError.value = 'Enter the amount as a number, like 123.45'
+        fieldError.amount = 'Enter the amount as a number, like 123.45'
         return null
       }
       if (currency && !/^[A-Za-z]{3}$/.test(currency)) {
-        editError.value = 'Enter a 3-letter currency code, like EUR'
+        fieldError.amount = 'Enter a 3-letter currency code, like EUR'
         return null
       }
       return { amount_total: amount, currency: currency || null }
@@ -401,24 +449,40 @@ function buildPatch(field: EditableField): DocumentUpdate | null {
   }
 }
 
-async function save(row: RowConfig): Promise<void> {
-  if (!doc.value || saving.value) return
-  editError.value = null
-  const patch = buildPatch(row.field)
+/** Autosave one field: skip when unchanged or invalid, PATCH just that field,
+ * replace the document with the response, and flash a brief "Saved". */
+async function saveField(field: EditableField): Promise<void> {
+  if (!doc.value || savingField[field]) return
+  fieldError[field] = null
+  if (!fieldDirty(field)) return
+  const patch = buildPatch(field)
   if (!patch) return
-  saving.value = true
+  savingField[field] = true
   try {
     doc.value = await updateDocument(doc.value.id, patch)
-    notice.value = { variant: 'success', text: `${row.label} updated.` }
-    cancelEdit()
+    hydrateField(field)
+    savedField[field] = true
+    window.setTimeout(() => {
+      savedField[field] = false
+    }, 2000)
   } catch (error: unknown) {
-    editError.value =
+    fieldError[field] =
       error instanceof ApiError && error.status !== 0
         ? error.detail
         : 'Could not save the change — check your connection and try again'
   } finally {
-    saving.value = false
+    savingField[field] = false
   }
+}
+
+/** Save a date field once, when focus leaves the whole day/month/year group —
+ * not on each sub-field's `change`, which would persist intermediate dates. */
+function onDateFocusOut(field: EditableField, event: FocusEvent): void {
+  const group = event.currentTarget as HTMLElement | null
+  const next = event.relatedTarget as Node | null
+  // Focus moved between the day/month/year inputs — still inside the group.
+  if (group && next && group.contains(next)) return
+  void saveField(field)
 }
 
 // --- Re-extraction ------------------------------------------------------------
@@ -621,7 +685,7 @@ watch(
     doc.value = null
     notFound.value = false
     loadError.value = false
-    cancelEdit()
+    resetEditState()
     notice.value = null
     actionError.value = null
     markdownData.value = null
@@ -847,7 +911,41 @@ watch(
           id="document-details-card"
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
         >
-          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Details</h2>
+          <div class="mb-4 flex items-center justify-between gap-3">
+            <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Details</h2>
+            <button
+              type="button"
+              class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
+              :class="editMode ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-500/15 dark:text-violet-300' : ''"
+              data-testid="edit-toggle"
+              :aria-pressed="editMode"
+              @click="toggleEditMode"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke-width="1.5"
+                stroke="currentColor"
+                class="w-4 h-4"
+                aria-hidden="true"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125"
+                />
+              </svg>
+              {{ editMode ? 'Done' : 'Edit' }}
+            </button>
+          </div>
+          <p
+            v-if="editMode"
+            class="mb-4 text-xs text-gray-500 dark:text-gray-400"
+            data-testid="edit-mode-hint"
+          >
+            Editing — changes save automatically as you leave each field.
+          </p>
 
           <div id="document-details-list" class="space-y-3">
             <!-- One themed panel per metadata group: accent rail + tint + heading
@@ -873,7 +971,7 @@ watch(
                   v-for="field in group.fields"
                   :key="field"
                   :data-testid="`row-${field}`"
-                  :class="WIDE_FIELDS.has(field) || editing === field ? 'sm:col-span-2' : ''"
+                  :class="WIDE_FIELDS.has(field) || editMode ? 'sm:col-span-2' : ''"
                 >
                   <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
                     {{ rowByField[field].label }}
@@ -887,106 +985,150 @@ watch(
                       >⚠</AppBadge>
                     </template>
                   </dt>
-                  <div v-if="editing !== field" class="mt-1 flex items-start justify-between gap-3">
-                    <dd
-                      class="min-w-0 break-words leading-snug text-gray-800 dark:text-gray-100"
-                      :class="field === 'amount' ? 'text-2xl font-semibold tracking-tight' : 'text-base'"
-                      data-testid="row-value"
-                      >{{ rowByField[field].display(doc) ?? EMPTY }}</dd
-                    >
-                    <button
-                      type="button"
-                      class="mt-0.5 shrink-0 text-xs font-medium text-violet-600 hover:underline app-link-button"
-                      @click="startEdit(field)"
-                    >
-                      Change<span class="sr-only"> {{ rowByField[field].label.toLowerCase() }}</span>
-                    </button>
-                  </div>
+                  <!-- Read mode: value only. The page-wide Edit toggle replaces the
+                       old per-row "Change" buttons. -->
+                  <dd
+                    v-if="!editMode"
+                    class="mt-1 min-w-0 break-words leading-snug text-gray-800 dark:text-gray-100"
+                    :class="field === 'amount' ? 'text-2xl font-semibold tracking-tight' : 'text-base'"
+                    data-testid="row-value"
+                    >{{ rowByField[field].display(doc) ?? EMPTY }}</dd
+                  >
+                  <!-- Edit mode: an inline editor that autosaves on commit. Each
+                       editor owns its trigger: native `change` (fires on blur for
+                       text, on selection for selects) for single-value fields; a
+                       fieldset-level `focusout` for the three-part date inputs, so
+                       a date saves once when focus leaves the group rather than on
+                       every sub-field commit. -->
                   <dd v-else class="mt-2">
-                    <form class="space-y-3" novalidate @submit.prevent="save(rowByField[field])">
+                    <AppInput
+                      v-if="field === 'title'"
+                      id="edit-title"
+                      v-model="drafts.title"
+                      label="Title"
+                      :error-message="fieldError.title ?? undefined"
+                      @change="saveField('title')"
+                      @keyup.enter="saveField('title')"
+                    />
+                    <AppTextarea
+                      v-else-if="field === 'summary'"
+                      id="edit-summary"
+                      v-model="drafts.summary"
+                      label="Summary"
+                      :rows="4"
+                      :error-message="fieldError.summary ?? undefined"
+                      @change="saveField('summary')"
+                    />
+                    <AppSelect
+                      v-else-if="field === 'kind'"
+                      id="edit-kind"
+                      v-model="drafts.kind"
+                      label="Kind"
+                      :items="kindItems"
+                      :error-message="fieldError.kind ?? undefined"
+                      @change="saveField('kind')"
+                    />
+                    <template v-else-if="field === 'sender'">
                       <AppInput
-                        v-if="field === 'title'"
-                        id="edit-title"
-                        v-model="editText"
-                        label="New title"
-                        :error-message="editError ?? undefined"
+                        id="edit-sender"
+                        v-model="drafts.sender"
+                        label="Sender"
+                        hint="Start typing to see known senders"
+                        list="sender-options"
+                        :error-message="fieldError.sender ?? undefined"
+                        @change="saveField('sender')"
+                        @keyup.enter="saveField('sender')"
                       />
-                      <AppTextarea
-                        v-else-if="field === 'summary'"
-                        id="edit-summary"
-                        v-model="editText"
-                        label="New summary"
-                        :rows="4"
-                        :error-message="editError ?? undefined"
-                      />
-                      <AppSelect
-                        v-else-if="field === 'kind'"
-                        id="edit-kind"
-                        v-model="editSelect"
-                        label="New kind"
-                        :items="kindItems"
-                        :error-message="editError ?? undefined"
-                      />
-                      <template v-else-if="field === 'sender'">
-                        <AppInput
-                          id="edit-sender"
-                          v-model="editText"
-                          label="New sender"
-                          hint="Start typing to see known senders"
-                          list="sender-options"
-                          :error-message="editError ?? undefined"
-                        />
-                        <datalist id="sender-options">
-                          <option v-for="sender in senders" :key="sender.id" :value="sender.name" />
-                        </datalist>
-                      </template>
-                      <AppSelect
-                        v-else-if="field === 'language'"
-                        id="edit-language"
-                        v-model="editSelect"
-                        label="New language"
-                        :items="languageItems"
-                        :error-message="editError ?? undefined"
+                      <datalist id="sender-options">
+                        <option v-for="sender in senders" :key="sender.id" :value="sender.name" />
+                      </datalist>
+                    </template>
+                    <AppSelect
+                      v-else-if="field === 'language'"
+                      id="edit-language"
+                      v-model="drafts.language"
+                      label="Language"
+                      :items="languageItems"
+                      :error-message="fieldError.language ?? undefined"
+                      @change="saveField('language')"
+                    />
+                    <AppInput
+                      v-else-if="field === 'tags'"
+                      id="edit-tags"
+                      v-model="drafts.tags"
+                      label="Tags"
+                      hint="Separate tags with commas"
+                      :error-message="fieldError.tags ?? undefined"
+                      @change="saveField('tags')"
+                      @keyup.enter="saveField('tags')"
+                    />
+                    <div
+                      v-else-if="field === 'amount'"
+                      class="flex flex-wrap gap-3"
+                      @change="saveField('amount')"
+                    >
+                      <AppInput
+                        id="edit-amount"
+                        v-model="drafts.amount"
+                        label="Amount"
+                        inputmode="decimal"
+                        width-class="w-40"
+                        :error-message="fieldError.amount ?? undefined"
+                        @keyup.enter="saveField('amount')"
                       />
                       <AppInput
-                        v-else-if="field === 'tags'"
-                        id="edit-tags"
-                        v-model="editText"
-                        label="New tags"
-                        hint="Separate tags with commas"
-                        :error-message="editError ?? undefined"
+                        id="edit-currency"
+                        v-model="currencyDraft"
+                        label="Currency"
+                        hint="3-letter code, like EUR"
+                        width-class="w-24"
+                        @keyup.enter="saveField('amount')"
                       />
-                      <template v-else-if="field === 'amount'">
-                        <AppInput
-                          id="edit-amount"
-                          v-model="editText"
-                          label="New amount"
-                          inputmode="decimal"
-                          width-class="w-40"
-                          :error-message="editError ?? undefined"
+                    </div>
+                    <AppDateInput
+                      v-else-if="field === 'document_date'"
+                      id="edit-document-date"
+                      v-model="dateDrafts.document_date"
+                      :legend="rowByField[field].label"
+                      :error-message="fieldError.document_date ?? undefined"
+                      @focusout="onDateFocusOut('document_date', $event)"
+                    />
+                    <AppDateInput
+                      v-else-if="field === 'due_date'"
+                      id="edit-due-date"
+                      v-model="dateDrafts.due_date"
+                      :legend="rowByField[field].label"
+                      :error-message="fieldError.due_date ?? undefined"
+                      @focusout="onDateFocusOut('due_date', $event)"
+                    />
+                    <AppDateInput
+                      v-else
+                      id="edit-expiry-date"
+                      v-model="dateDrafts.expiry_date"
+                      :legend="rowByField[field].label"
+                      :error-message="fieldError.expiry_date ?? undefined"
+                      @focusout="onDateFocusOut('expiry_date', $event)"
+                    />
+                    <p
+                      v-if="savedField[field]"
+                      class="mt-1 flex items-center gap-1 text-xs font-medium text-green-600 dark:text-green-400"
+                      :data-testid="`saved-${field}`"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        viewBox="0 0 20 20"
+                        fill="currentColor"
+                        class="w-3.5 h-3.5"
+                        aria-hidden="true"
+                      >
+                        <path
+                          fill-rule="evenodd"
+                          d="M16.704 4.153a.75.75 0 0 1 .143 1.052l-8 10.5a.75.75 0 0 1-1.127.075l-4.5-4.5a.75.75 0 0 1 1.06-1.06l3.894 3.893 7.48-9.817a.75.75 0 0 1 1.05-.143Z"
+                          clip-rule="evenodd"
                         />
-                        <AppInput
-                          id="edit-currency"
-                          v-model="editCurrency"
-                          label="Currency"
-                          hint="3-letter code, like EUR"
-                          width-class="w-24"
-                        />
-                      </template>
-                      <AppDateInput
-                        v-else
-                        :id="`edit-${field.replaceAll('_', '-')}`"
-                        v-model="editDate"
-                        :legend="`New ${rowByField[field].label.toLowerCase()}`"
-                        :error-message="editError ?? undefined"
-                      />
-                      <div class="flex gap-3">
-                        <AppButton type="submit" :disabled="saving">Save</AppButton>
-                        <AppButton type="button" variant="secondary" @click="cancelEdit">
-                          Cancel
-                        </AppButton>
-                      </div>
-                    </form>
+                      </svg>
+                      Saved
+                    </p>
                   </dd>
                 </div>
               </dl>
@@ -1023,8 +1165,22 @@ watch(
                   <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
                     OCR confidence
                   </dt>
+                  <!-- Null confidence has two provenances: a born-digital upload
+                       (Library found a text layer and skipped OCR), or a Paperless
+                       import (Library reused Paperless's own OCR text — so a scanned
+                       letter is "imported", not "born-digital"). -->
                   <dd
-                    v-if="doc.ocr_confidence === null"
+                    v-if="doc.ocr_confidence === null && doc.source === 'import'"
+                    class="mt-1 text-base text-gray-500 dark:text-gray-400"
+                    data-testid="ocr-confidence"
+                  >
+                    Imported (Paperless)
+                    <span class="block text-xs text-gray-400 dark:text-gray-500">
+                      text layer reused from Paperless — no OCR re-run
+                    </span>
+                  </dd>
+                  <dd
+                    v-else-if="doc.ocr_confidence === null"
                     class="mt-1 text-base text-gray-500 dark:text-gray-400"
                     data-testid="ocr-confidence"
                   >

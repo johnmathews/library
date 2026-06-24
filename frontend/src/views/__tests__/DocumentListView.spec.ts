@@ -216,7 +216,9 @@ describe('DocumentListView', () => {
     expect(last.searchParams.get('kind')).toBe('invoice')
     expect(last.searchParams.get('sender_id')).toBe('3')
     expect(last.searchParams.getAll('tag')).toEqual(['energie'])
-    expect(last.searchParams.get('offset')).toBe('25')
+    // Deep-linked ?page=2 loads pages 1..2 in one batch at offset 0 (limit 50).
+    expect(last.searchParams.get('offset')).toBe('0')
+    expect(last.searchParams.get('limit')).toBe('50')
   })
 
   it('renders snippets via renderSnippet: <b> kept, script neutralised', async () => {
@@ -256,33 +258,75 @@ describe('DocumentListView', () => {
   // intentionally replaced by DocumentFilterBar (chips + clear button).
   // Active-filter chip rendering is covered in DocumentFilterBar.spec.ts.
 
-  it('paginates: 60 results make 3 pages and page links update offset', async () => {
-    listResponse = () => jsonResponse(listBody([makeItem()], 60))
+  it('appends a second batch when "Load more" is clicked (offset 25)', async () => {
+    // First batch (offset 0) returns a full page of 25; the next offset is the
+    // number of loaded items (25). Second batch (offset 25) appends "Second
+    // doc". The list must accumulate, not replace.
+    const firstBatch = Array.from({ length: 25 }, (_, i) =>
+      makeItem({ id: i + 1, title: i === 0 ? 'First doc' : `Doc ${i + 1}` }),
+    )
+    listResponse = () => jsonResponse(listBody(firstBatch, 60))
     const w = await mountView()
 
-    const pagination = w.find('nav[aria-label="Pagination"]')
-    expect(pagination.exists()).toBe(true)
-    await pagination.find('button[aria-label="Page 2"]').trigger('click')
+    expect(w.text()).toContain('First doc')
+    expect(w.findAll('[data-testid="doc-card"]')).toHaveLength(25)
+    const loadMore = w.find('[data-testid="load-more"]')
+    expect(loadMore.exists()).toBe(true)
+
+    listResponse = () =>
+      jsonResponse(listBody([makeItem({ id: 2, title: 'Second doc' })], 60))
+    await loadMore.trigger('click')
     await flushPromises()
 
-    expect(router.currentRoute.value.query.page).toBe('2')
+    // Both batches present — the list accumulated.
+    expect(w.text()).toContain('First doc')
+    expect(w.text()).toContain('Second doc')
+    expect(w.findAll('[data-testid="doc-card"]')).toHaveLength(26)
+
     const last = new URL(documentUrls().at(-1)!, 'http://test')
     expect(last.searchParams.get('offset')).toBe('25')
+    expect(last.searchParams.get('limit')).toBe('25')
   })
 
-  it('keeps the active filters in the URL when changing page', async () => {
-    listResponse = () => jsonResponse(listBody([makeItem()], 60))
-    await router.push('/?q=rekening&kind=invoice')
+  it('hides "Load more" and stops fetching once all items are loaded', async () => {
+    // total === items.length on the first batch: nothing more to load.
+    listResponse = () => jsonResponse(listBody([makeItem({ id: 1, title: 'Only doc' })], 1))
     const w = await mountView()
 
-    await w.find('nav[aria-label="Pagination"] button[aria-label="Page 2"]').trigger('click')
+    expect(w.text()).toContain('Only doc')
+    expect(w.find('[data-testid="load-more"]').exists()).toBe(false)
+    // Exactly one documents fetch (the initial load) — no extra batch attempted.
+    expect(documentUrls()).toHaveLength(1)
+  })
+
+  it('deep-links ?page=3 by loading the first three pages worth', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem({ id: 1 })], 100))
+    await router.push('/?page=3')
+    await mountView()
+
+    // The first apply fetches with limit 75 (3 * PAGE_SIZE) at offset 0, so a
+    // deep-linked page shows everything up to that page.
+    const last = new URL(documentUrls().at(-1)!, 'http://test')
+    expect(last.searchParams.get('offset')).toBe('0')
+    expect(last.searchParams.get('limit')).toBe('75')
+  })
+
+  it('resets the list when a filter changes (offset 0, old items gone)', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem({ id: 1, title: 'Old doc' })], 60))
+    const w = await mountView()
+    expect(w.text()).toContain('Old doc')
+
+    // Apply a new filter via the bar — accumulation must reset.
+    listResponse = () => jsonResponse(listBody([makeItem({ id: 2, title: 'New doc' })], 60))
+    const bar = w.findComponent({ name: 'DocumentFilterBar' })
+    bar.vm.$emit('apply', { kind: 'invoice' }, {})
     await flushPromises()
 
-    expect(router.currentRoute.value.query).toMatchObject({
-      q: 'rekening',
-      kind: 'invoice',
-      page: '2',
-    })
+    expect(w.text()).toContain('New doc')
+    expect(w.text()).not.toContain('Old doc')
+    expect(w.findAll('[data-testid="doc-card"]')).toHaveLength(1)
+    const last = new URL(documentUrls().at(-1)!, 'http://test')
+    expect(last.searchParams.get('offset')).toBe('0')
   })
 
   it('shows a load error message when the API fails', async () => {

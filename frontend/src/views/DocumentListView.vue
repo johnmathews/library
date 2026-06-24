@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * Documents dashboard: a responsive tile grid with pagination (route `/`).
+ * Documents dashboard: a responsive tile grid with infinite scroll (route `/`).
  *
  * The hero renders DocumentFilterBar (components/DocumentFilterBar.vue), which
  * owns the search input, the filter pills, and the removable active-filter
@@ -13,8 +13,9 @@
  * docs/api.md §1.3.3 for why they must never hit v-html unescaped.
  */
 import { computed, reactive, ref, watch } from 'vue'
+import { useIntersectionObserver } from '@vueuse/core'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
-import { AppBadge, AppBanner, AppPagination } from '@/components/app'
+import { AppBadge, AppBanner } from '@/components/app'
 import DocumentFilterBar from '@/components/DocumentFilterBar.vue'
 import {
   DOCUMENT_LANGUAGES,
@@ -28,11 +29,7 @@ import { renderSnippet } from '@/utils/snippet'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import type { DashboardField } from '@/api/settings'
-import {
-  parseDocumentQuery,
-  buildDocumentQuery,
-  hasActiveFilters,
-} from '@/utils/documentQuery'
+import { parseDocumentQuery, hasActiveFilters } from '@/utils/documentQuery'
 
 const PAGE_SIZE = 25
 const MAX_TAGS = 4
@@ -69,48 +66,97 @@ function applyFilterQuery(query: LocationQueryRaw, opts?: { replace?: boolean })
   else void router.push({ query })
 }
 
-function goToPage(page: number): void {
-  void router.push({ query: buildDocumentQuery(applied.value, page) })
-}
+// --- Fetching (infinite scroll) ---------------------------------------------
+//
+// The list accumulates: each batch is APPENDED to `items`. `total` (from the
+// response) tells us when there is nothing left to load. A deep-linked
+// `?page=N` loads the first N pages' worth in one batch so the link round-
+// trips; thereafter scrolling (or "Load more") appends one PAGE_SIZE batch at
+// a time from `offset = items.length`.
+//
+// `generation` guards against a late response from a superseded filter: the
+// `applied` watch bumps it and clears `items`; any in-flight fetch whose
+// generation no longer matches is discarded (belt-and-braces with abort).
 
-// --- Fetching ---------------------------------------------------------------
-
-const loading = ref(true)
+const loading = ref(true) // initial load for the current filter set
+const loadingMore = ref(false) // a "load more" batch is in flight
 const loadError = ref<string | null>(null)
 const items = ref<DocumentListItem[]>([])
 const total = ref(0)
-const totalPages = computed(() => Math.max(1, Math.ceil(total.value / PAGE_SIZE)))
+const hasMore = computed(() => items.value.length < total.value)
 
 let abortController: AbortController | null = null
+let generation = 0
+
+/** Build the API filters for the current applied state at a given window. */
+function buildFilters(
+  state: typeof applied.value,
+  limit: number,
+  offset: number,
+): DocumentFilters {
+  const senderId = Number.parseInt(state.senderId, 10)
+  return {
+    q: state.q || undefined,
+    kind: state.kind || undefined,
+    sender_id: Number.isInteger(senderId) ? senderId : undefined,
+    tag: state.tags.length ? state.tags : undefined,
+    language: (state.language || undefined) as DocumentLanguage | undefined,
+    status: (state.status || undefined) as DocumentListItem['status'] | undefined,
+    review_status: (state.review || undefined) as DocumentListItem['review_status'] | undefined,
+    date_from: state.dateFrom || undefined,
+    date_to: state.dateTo || undefined,
+    limit,
+    offset,
+  }
+}
+
+/** Append the next PAGE_SIZE batch from the current offset (items.length). */
+async function loadMore(): Promise<void> {
+  if (loading.value || loadingMore.value || !hasMore.value) return
+  if (!abortController) return
+  const gen = generation
+  const signal = abortController.signal
+  loadingMore.value = true
+  try {
+    const response = await listDocuments(
+      buildFilters(applied.value, PAGE_SIZE, items.value.length),
+      signal,
+    )
+    if (gen !== generation) return // a newer filter superseded this fetch
+    items.value = [...items.value, ...response.items]
+    total.value = response.total
+  } catch (error: unknown) {
+    if (error instanceof DOMException && error.name === 'AbortError') return
+    if (gen !== generation) return
+    loadError.value = 'Sorry, the document list could not be loaded. Try again later.'
+  } finally {
+    if (gen === generation) loadingMore.value = false
+  }
+}
 
 watch(
   applied,
   async (state) => {
     abortController?.abort()
     abortController = new AbortController()
+    const gen = ++generation
+    const signal = abortController.signal
     loading.value = true
+    loadingMore.value = false
     loadError.value = null
-    const senderId = Number.parseInt(state.senderId, 10)
-    const filters: DocumentFilters = {
-      q: state.q || undefined,
-      kind: state.kind || undefined,
-      sender_id: Number.isInteger(senderId) ? senderId : undefined,
-      tag: state.tags.length ? state.tags : undefined,
-      language: (state.language || undefined) as DocumentLanguage | undefined,
-      status: (state.status || undefined) as DocumentListItem['status'] | undefined,
-      review_status: (state.review || undefined) as DocumentListItem['review_status'] | undefined,
-      date_from: state.dateFrom || undefined,
-      date_to: state.dateTo || undefined,
-      limit: PAGE_SIZE,
-      offset: (state.page - 1) * PAGE_SIZE,
-    }
+    items.value = []
+    total.value = 0
+    // Deep-link: ?page=N shows the first N pages in one batch, then appends.
+    const initialLimit = state.page * PAGE_SIZE
     try {
-      const response = await listDocuments(filters, abortController.signal)
+      const response = await listDocuments(buildFilters(state, initialLimit, 0), signal)
+      if (gen !== generation) return
       items.value = response.items
       total.value = response.total
       loading.value = false
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === 'AbortError') return
+      if (gen !== generation) return
       items.value = []
       total.value = 0
       loadError.value = 'Sorry, the document list could not be loaded. Try again later.'
@@ -119,6 +165,14 @@ watch(
   },
   { immediate: true },
 )
+
+// IntersectionObserver on a foot sentinel auto-loads as it scrolls into view.
+// (jsdom has no real IntersectionObserver, so the visible "Load more" button
+// below is the test/a11y fallback.)
+const sentinel = ref<HTMLElement | null>(null)
+useIntersectionObserver(sentinel, ([entry]) => {
+  if (entry?.isIntersecting) void loadMore()
+})
 
 // --- Presentation helpers ---------------------------------------------------
 
@@ -367,8 +421,27 @@ const amountLabels = computed<Map<number, string | null>>(() => {
       </li>
     </ul>
 
-    <div class="mt-6">
-      <AppPagination :page="applied.page" :total-pages="totalPages" @change="goToPage" />
+    <!-- Infinite scroll: the sentinel triggers loadMore() as it enters view;
+         the button is the visible a11y / no-IntersectionObserver fallback. -->
+    <div v-if="items.length" class="mt-6 flex flex-col items-center gap-3">
+      <p
+        v-if="loadingMore"
+        class="text-sm text-gray-500 dark:text-gray-400"
+        data-testid="loading-more"
+      >
+        Loading more…
+      </p>
+      <button
+        v-if="hasMore"
+        type="button"
+        class="inline-flex items-center rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50"
+        data-testid="load-more"
+        :disabled="loadingMore"
+        @click="loadMore"
+      >
+        Load more
+      </button>
+      <div ref="sentinel" aria-hidden="true" class="h-px w-full"></div>
     </div>
   </template>
 </template>

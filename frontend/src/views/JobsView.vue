@@ -8,7 +8,7 @@
  * without a manual reload. Document-less system tasks (the email poll) are
  * hidden unless "Show system tasks" is on.
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { AppBadge } from '@/components/app'
 import { listJobs, type JobInfo } from '@/api/documents'
 import { useJobsStore } from '@/stores/jobs'
@@ -130,6 +130,112 @@ function formatDuration(startedAt: string | null, finishedAt: string | null): st
   const rem = Math.round(seconds % 60)
   return `${mins}m ${rem}s`
 }
+
+// --- Recent-table column configuration ------------------------------------
+// Each column is user-toggleable; the Document column is special (it renders a
+// link, so it has its own cell template) but is still listed here so the menu
+// can offer it. `style` drives per-column sizing under `table-fixed`: the
+// Document column clamps between ~10rem and ~22rem and truncates so it stops
+// dominating; narrow value columns get a fixed compact width.
+interface ColumnDef {
+  key: string
+  label: string
+  defaultVisible: boolean
+  // Inline width style applied to the matching <col> in the <colgroup>.
+  style: string
+}
+
+const COLUMNS: ColumnDef[] = [
+  { key: 'document', label: 'Document', defaultVisible: true, style: 'width: clamp(10rem, 22vw, 22rem)' },
+  { key: 'task', label: 'Task', defaultVisible: true, style: 'width: 9rem' },
+  { key: 'status', label: 'Status', defaultVisible: true, style: 'width: 7rem' },
+  { key: 'finished', label: 'Finished', defaultVisible: true, style: 'width: 11rem' },
+  { key: 'duration', label: 'Duration', defaultVisible: true, style: 'width: 6rem' },
+  { key: 'cost', label: 'Cost', defaultVisible: true, style: 'width: 6rem' },
+  { key: 'error', label: 'Error', defaultVisible: true, style: 'width: clamp(8rem, 20vw, 20rem)' },
+]
+
+const COLUMNS_STORAGE_KEY = 'library:jobs-columns'
+
+const DEFAULT_VISIBILITY: Record<string, boolean> = Object.fromEntries(
+  COLUMNS.map((c) => [c.key, c.defaultVisible]),
+)
+
+const columnVisibility = ref<Record<string, boolean>>({ ...DEFAULT_VISIBILITY })
+const showColumnMenu = ref(false)
+/** The Columns menu wrapper, for the outside-click close handler. */
+const columnMenu = ref<HTMLElement | null>(null)
+
+function isVisible(key: string): boolean {
+  return columnVisibility.value[key] ?? true
+}
+
+// Visible columns, in definition order, used to drive both <thead>/<tbody>.
+const visibleColumns = computed(() => COLUMNS.filter((c) => isVisible(c.key)))
+
+// Mobile-card meta grid: every visible column except the two that form the
+// card headline (Document + Status), so the card respects the user's prefs.
+const cardMetaColumns = computed(() =>
+  visibleColumns.value.filter((c) => c.key !== 'document' && c.key !== 'status'),
+)
+
+function loadColumnPrefs(): void {
+  try {
+    const raw = localStorage.getItem(COLUMNS_STORAGE_KEY)
+    if (!raw) return
+    const parsed = JSON.parse(raw) as Record<string, boolean>
+    // Merge over defaults so newly-added columns keep their default visibility.
+    columnVisibility.value = { ...DEFAULT_VISIBILITY, ...parsed }
+  } catch {
+    // Corrupt/unavailable storage — fall back to defaults.
+  }
+}
+
+function toggleColumn(key: string): void {
+  columnVisibility.value = {
+    ...columnVisibility.value,
+    [key]: !isVisible(key),
+  }
+  try {
+    localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(columnVisibility.value))
+  } catch {
+    // Storage unavailable (private mode/quota) — keep the in-memory choice.
+  }
+}
+
+// String value for a column's cell, used by both the Recent table (non-document
+// columns) and the mobile meta grid. The Document column renders a link, so it
+// is handled directly in the template rather than here.
+function cellValue(key: string, job: JobInfo): string {
+  switch (key) {
+    case 'task':
+      return taskLabel(job.task_name)
+    case 'finished':
+      return formatDateTime(job.finished_at ?? job.scheduled_at)
+    case 'duration':
+      return formatDuration(job.started_at, job.finished_at)
+    case 'cost':
+      return formatCost(job.cost_usd)
+    case 'error':
+      return job.error ?? '—'
+    default:
+      return ''
+  }
+}
+
+// Close the column menu on an outside click (uses the wrapper ref, not a
+// document-wide query, so it stays correct regardless of DOM structure).
+function onDocumentClick(e: MouseEvent): void {
+  if (!showColumnMenu.value) return
+  const container = columnMenu.value
+  if (container && !container.contains(e.target as Node)) showColumnMenu.value = false
+}
+
+onMounted(() => {
+  loadColumnPrefs()
+  document.addEventListener('click', onDocumentClick)
+})
+onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 </script>
 
 <template>
@@ -163,40 +269,81 @@ function formatDuration(startedAt: string | null, finishedAt: string | null): st
         >
           Nothing is processing right now.
         </p>
-        <div v-else class="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
-          <table class="w-full text-sm">
-            <thead
-              class="text-xs uppercase text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700/60"
-            >
-              <tr>
-                <th class="text-left font-semibold px-4 py-3">Document</th>
-                <th class="text-left font-semibold px-4 py-3">Task</th>
-                <th class="text-left font-semibold px-4 py-3">Status</th>
-                <th class="text-left font-semibold px-4 py-3">Started</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
-              <tr v-for="job in activeJobs" :key="job.id" data-testid="jobs-active-row">
-                <td class="px-4 py-3">
-                  <RouterLink
-                    v-if="job.document_id !== null"
-                    :to="`/documents/${job.document_id}`"
-                    class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
-                    >{{ documentLabel(job) }}</RouterLink
-                  >
-                  <span v-else class="text-gray-500 dark:text-gray-400">—</span>
-                </td>
-                <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ taskLabel(job.task_name) }}</td>
-                <td class="px-4 py-3">
-                  <AppBadge :colour="statusColour(job)">{{ statusLabel(job) }}</AppBadge>
-                </td>
-                <td class="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                  {{ formatDateTime(job.started_at ?? job.scheduled_at) }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+        <template v-else>
+          <!-- Active table (tablet & desktop) -->
+          <div class="hidden sm:block overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
+            <table class="table-fixed w-full text-sm">
+              <colgroup>
+                <col style="width: clamp(10rem, 30vw, 24rem)" />
+                <col style="width: 10rem" />
+                <col style="width: 8rem" />
+                <col style="width: 12rem" />
+              </colgroup>
+              <thead
+                class="text-xs uppercase text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700/60"
+              >
+                <tr>
+                  <th class="text-left font-semibold px-4 py-3">Document</th>
+                  <th class="text-left font-semibold px-4 py-3">Task</th>
+                  <th class="text-left font-semibold px-4 py-3">Status</th>
+                  <th class="text-left font-semibold px-4 py-3">Started</th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
+                <tr v-for="job in activeJobs" :key="job.id" data-testid="jobs-active-row">
+                  <td class="px-4 py-3">
+                    <RouterLink
+                      v-if="job.document_id !== null"
+                      :to="`/documents/${job.document_id}`"
+                      :title="documentLabel(job)"
+                      class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 block truncate"
+                      >{{ documentLabel(job) }}</RouterLink
+                    >
+                    <span v-else class="text-gray-500 dark:text-gray-400">—</span>
+                  </td>
+                  <td class="px-4 py-3 text-gray-600 dark:text-gray-300 truncate">{{ taskLabel(job.task_name) }}</td>
+                  <td class="px-4 py-3">
+                    <AppBadge :colour="statusColour(job)">{{ statusLabel(job) }}</AppBadge>
+                  </td>
+                  <td class="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
+                    {{ formatDateTime(job.started_at ?? job.scheduled_at) }}
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Active cards (mobile) -->
+          <ul
+            class="sm:hidden bg-white dark:bg-gray-800 rounded-lg shadow-xs divide-y divide-gray-100 dark:divide-gray-700/60"
+            data-testid="jobs-active-cards"
+          >
+            <li v-for="job in activeJobs" :key="job.id" class="p-4" data-testid="jobs-active-card">
+              <div class="flex items-center justify-between gap-2">
+                <RouterLink
+                  v-if="job.document_id !== null"
+                  :to="`/documents/${job.document_id}`"
+                  class="font-medium text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
+                  >{{ documentLabel(job) }}</RouterLink
+                >
+                <span v-else class="font-medium text-gray-500 dark:text-gray-400">—</span>
+                <AppBadge :colour="statusColour(job)" class="shrink-0">{{ statusLabel(job) }}</AppBadge>
+              </div>
+              <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                <div>
+                  <span class="text-gray-500 dark:text-gray-400">Task:</span>
+                  <span class="ml-1 text-gray-700 dark:text-gray-300">{{ taskLabel(job.task_name) }}</span>
+                </div>
+                <div>
+                  <span class="text-gray-500 dark:text-gray-400">Started:</span>
+                  <span class="ml-1 text-gray-700 dark:text-gray-300">{{
+                    formatDateTime(job.started_at ?? job.scheduled_at)
+                  }}</span>
+                </div>
+              </div>
+            </li>
+          </ul>
+        </template>
       </section>
 
       <!-- Recent / historical -->
@@ -208,15 +355,56 @@ function formatDuration(startedAt: string | null, finishedAt: string | null): st
               >({{ historicalJobs.length }})</span
             >
           </h2>
-          <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer">
-            <input
-              v-model="showSystem"
-              type="checkbox"
-              data-testid="jobs-show-system"
-              class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
-            />
-            Show system tasks
-          </label>
+          <div class="flex items-center gap-4">
+            <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer">
+              <input
+                v-model="showSystem"
+                type="checkbox"
+                data-testid="jobs-show-system"
+                class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
+              />
+              Show system tasks
+            </label>
+
+            <!-- Column-visibility menu (governs the Recent table only) -->
+            <div ref="columnMenu" class="relative">
+              <button
+                type="button"
+                data-testid="jobs-columns-button"
+                class="flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+                @click="showColumnMenu = !showColumnMenu"
+              >
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M9 4h6m-6 4h6m-6 4h6m-6 4h6M4 4v16m16-16v16"
+                  />
+                </svg>
+                Columns
+              </button>
+              <div
+                v-if="showColumnMenu"
+                data-testid="jobs-columns-menu"
+                class="absolute right-0 mt-1 w-52 rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 shadow-lg z-40 py-1"
+              >
+                <label
+                  v-for="col in COLUMNS"
+                  :key="col.key"
+                  class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+                >
+                  <input
+                    type="checkbox"
+                    :checked="isVisible(col.key)"
+                    :data-testid="`jobs-col-toggle-${col.key}`"
+                    class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
+                    @change="toggleColumn(col.key)"
+                  />
+                  {{ col.label }}
+                </label>
+              </div>
+            </div>
+          </div>
         </div>
         <p
           v-if="historicalJobs.length === 0"
@@ -225,50 +413,95 @@ function formatDuration(startedAt: string | null, finishedAt: string | null): st
         >
           No completed jobs yet.
         </p>
-        <div v-else class="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
-          <table class="w-full text-sm">
-            <thead
-              class="text-xs uppercase text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700/60"
-            >
-              <tr>
-                <th class="text-left font-semibold px-4 py-3">Document</th>
-                <th class="text-left font-semibold px-4 py-3">Task</th>
-                <th class="text-left font-semibold px-4 py-3">Status</th>
-                <th class="text-left font-semibold px-4 py-3">Finished</th>
-                <th class="text-left font-semibold px-4 py-3">Duration</th>
-                <th class="text-left font-semibold px-4 py-3">Cost</th>
-                <th class="text-left font-semibold px-4 py-3">Error</th>
-              </tr>
-            </thead>
-            <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
-              <tr v-for="job in historicalJobs" :key="job.id" data-testid="jobs-historical-row">
-                <td class="px-4 py-3">
-                  <RouterLink
-                    v-if="job.document_id !== null"
-                    :to="`/documents/${job.document_id}`"
-                    class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
-                    >{{ documentLabel(job) }}</RouterLink
+        <template v-else>
+          <!-- Recent table (tablet & desktop) — table-fixed with per-column
+               <col> widths so the Document column clamps and stops dominating. -->
+          <div class="hidden sm:block overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
+            <table class="table-fixed w-full text-sm">
+              <colgroup>
+                <col v-for="col in visibleColumns" :key="col.key" :style="col.style" />
+              </colgroup>
+              <thead
+                class="text-xs uppercase text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700/60"
+              >
+                <tr>
+                  <th
+                    v-for="col in visibleColumns"
+                    :key="col.key"
+                    :data-testid="`jobs-col-header-${col.key}`"
+                    class="text-left font-semibold px-4 py-3 whitespace-nowrap"
                   >
-                  <span v-else class="text-gray-500 dark:text-gray-400">—</span>
-                </td>
-                <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ taskLabel(job.task_name) }}</td>
-                <td class="px-4 py-3">
-                  <AppBadge :colour="statusColour(job)">{{ statusLabel(job) }}</AppBadge>
-                </td>
-                <td class="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                  {{ formatDateTime(job.finished_at ?? job.scheduled_at) }}
-                </td>
-                <td class="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                  {{ formatDuration(job.started_at, job.finished_at) }}
-                </td>
-                <td class="px-4 py-3 text-gray-600 dark:text-gray-300">{{ formatCost(job.cost_usd) }}</td>
-                <td class="px-4 py-3 text-red-600 dark:text-red-400 max-w-xs truncate" :title="job.error ?? ''">
-                  {{ job.error ?? '—' }}
-                </td>
-              </tr>
-            </tbody>
-          </table>
-        </div>
+                    {{ col.label }}
+                  </th>
+                </tr>
+              </thead>
+              <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
+                <tr v-for="job in historicalJobs" :key="job.id" data-testid="jobs-historical-row">
+                  <td
+                    v-for="col in visibleColumns"
+                    :key="col.key"
+                    :data-testid="`jobs-col-cell-${col.key}`"
+                    class="px-4 py-3"
+                    :class="{
+                      'text-gray-600 dark:text-gray-300': col.key !== 'error',
+                      'text-red-600 dark:text-red-400 truncate': col.key === 'error',
+                      'whitespace-nowrap': col.key === 'finished' || col.key === 'duration' || col.key === 'cost',
+                    }"
+                    :title="col.key === 'error' ? (job.error ?? '') : undefined"
+                  >
+                    <RouterLink
+                      v-if="col.key === 'document' && job.document_id !== null"
+                      :to="`/documents/${job.document_id}`"
+                      :title="documentLabel(job)"
+                      class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 block truncate"
+                      >{{ documentLabel(job) }}</RouterLink
+                    >
+                    <span v-else-if="col.key === 'document'" class="text-gray-500 dark:text-gray-400">—</span>
+                    <AppBadge v-else-if="col.key === 'status'" :colour="statusColour(job)">{{
+                      statusLabel(job)
+                    }}</AppBadge>
+                    <template v-else>{{ cellValue(col.key, job) }}</template>
+                  </td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Recent cards (mobile) — headline Document + Status, then the
+               remaining visible columns as a meta grid (respects column prefs). -->
+          <ul
+            class="sm:hidden bg-white dark:bg-gray-800 rounded-lg shadow-xs divide-y divide-gray-100 dark:divide-gray-700/60"
+            data-testid="jobs-historical-cards"
+          >
+            <li v-for="job in historicalJobs" :key="job.id" class="p-4" data-testid="jobs-historical-card">
+              <div class="flex items-center justify-between gap-2">
+                <RouterLink
+                  v-if="isVisible('document') && job.document_id !== null"
+                  :to="`/documents/${job.document_id}`"
+                  class="font-medium text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
+                  >{{ documentLabel(job) }}</RouterLink
+                >
+                <span v-else class="font-medium text-gray-800 dark:text-gray-100 truncate">{{
+                  isVisible('document') ? '—' : `Job #${job.id}`
+                }}</span>
+                <AppBadge v-if="isVisible('status')" :colour="statusColour(job)" class="shrink-0">{{
+                  statusLabel(job)
+                }}</AppBadge>
+              </div>
+
+              <div v-if="cardMetaColumns.length" class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+                <div v-for="col in cardMetaColumns" :key="col.key">
+                  <span class="text-gray-500 dark:text-gray-400">{{ col.label }}:</span>
+                  <span
+                    class="ml-1 break-words"
+                    :class="col.key === 'error' ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'"
+                    >{{ cellValue(col.key, job) }}</span
+                  >
+                </div>
+              </div>
+            </li>
+          </ul>
+        </template>
       </section>
     </template>
   </div>

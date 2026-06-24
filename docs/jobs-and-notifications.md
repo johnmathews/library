@@ -22,7 +22,16 @@ worker→api bridge see [architecture.md](architecture.md) §1.4.1.
    events), extraction cost, and any error. The task name (humanised from the
    Procrastinate `task_name`, e.g. *Poll email inbox*) makes document-less
    **system tasks** legible — previously their row was an empty `—`. It refreshes
-   automatically as documents finish.
+   automatically as documents finish. The **Recent** table has a **Columns**
+   visibility menu (`[data-testid="jobs-columns-button"]`) — toggling a column
+   persists to `localStorage['library:jobs-columns']` (merged over defaults, so
+   new columns keep their default visibility); column widths are fixed via
+   `table-fixed` + a `<colgroup>` of `clamp()` widths so the Document column no
+   longer dominates the row. Both sections are **responsive**: a table from the
+   `sm` breakpoint up (`hidden sm:block`) and a card/tile list below it
+   (`sm:hidden`) — the cards lead with Document + Status and render the remaining
+   *visible* columns as a meta grid (mirroring the journal-insights webapp
+   convention).
 
 ## 1.2 How it works
 

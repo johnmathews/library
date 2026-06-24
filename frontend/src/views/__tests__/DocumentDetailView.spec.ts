@@ -170,44 +170,95 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="ocr-confidence"]').text()).toContain('91%')
   })
 
-  it('Change → edit → Save PATCHes only that field and shows a success banner', async () => {
+  it('labels null OCR confidence on a Paperless import as imported, not born-digital', async () => {
+    detail = makeDetail({ ocr_confidence: null, source: 'import' })
+    const w = await mountView()
+    const ocr = w.find('[data-testid="ocr-confidence"]').text()
+    expect(ocr).toContain('Imported (Paperless)')
+    expect(ocr).toContain('reused from Paperless')
+    expect(ocr).not.toContain('born-digital')
+  })
+
+  it('labels null OCR confidence on an upload as born-digital', async () => {
+    detail = makeDetail({ ocr_confidence: null, source: 'upload' })
+    const w = await mountView()
+    const ocr = w.find('[data-testid="ocr-confidence"]').text()
+    expect(ocr).toContain('Not applicable')
+    expect(ocr).toContain('born-digital')
+    expect(ocr).not.toContain('Paperless')
+  })
+
+  it('shows no per-field "Change" buttons; an Edit toggle reveals all editors at once', async () => {
+    const w = await mountView()
+    // No editors and no legacy per-row Change links in read mode.
+    expect(w.findAll('.app-link-button')).toHaveLength(0)
+    expect(w.find('#edit-title').exists()).toBe(false)
+
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+
+    // Every field's editor is revealed simultaneously.
+    expect(w.find('#edit-title').exists()).toBe(true)
+    expect(w.find('#edit-kind').exists()).toBe(true)
+    expect(w.find('#edit-sender').exists()).toBe(true)
+    expect(w.find('#edit-tags').exists()).toBe(true)
+    expect(w.find('#edit-amount').exists()).toBe(true)
+    // Read-only values are gone while editing.
+    expect(w.find('[data-testid="row-title"] [data-testid="row-value"]').exists()).toBe(false)
+
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    expect(w.find('#edit-title').exists()).toBe(false)
+    expect(w.find('[data-testid="row-title"] [data-testid="row-value"]').exists()).toBe(true)
+  })
+
+  it('autosaves a text field on change, PATCHing only that field', async () => {
     const w = await mountView()
     patchResponse = () => jsonResponse(makeDetail({ title: 'Nieuwe titel' }))
 
-    await w.find('[data-testid="row-title"] .app-link-button').trigger('click')
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
     await w.find('#edit-title').setValue('Nieuwe titel')
-    await w.find('[data-testid="row-title"] form').trigger('submit')
+    await w.find('#edit-title').trigger('change')
     await flushPromises()
 
     const calls = patchCalls()
     expect(calls).toHaveLength(1)
     expect(calls[0]!.url).toBe('/api/documents/12')
     expect(calls[0]!.body).toEqual({ title: 'Nieuwe titel' }) // exactly one field
-    expect(w.find('[data-testid="detail-banner"]').text()).toContain('Title updated.')
     expect(w.find('h1').text()).toBe('Nieuwe titel')
-    expect(w.find('#edit-title').exists()).toBe(false) // editor closed
+    expect(w.find('[data-testid="saved-title"]').exists()).toBe(true)
   })
 
-  it('kind editor offers the fetched kind options and PATCHes kind_slug', async () => {
+  it('does not PATCH a field that was focused but left unchanged', async () => {
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    await w.find('#edit-title').trigger('change') // no edit
+    await flushPromises()
+    expect(patchCalls()).toHaveLength(0)
+  })
+
+  it('kind editor offers the fetched kind options and autosaves kind_slug', async () => {
     const w = await mountView()
     patchResponse = () =>
       jsonResponse(makeDetail({ kind: { slug: 'receipt', name: 'Receipt' } }))
 
-    await w.find('[data-testid="row-kind"] .app-link-button').trigger('click')
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
     const options = w.find('#edit-kind').findAll('option')
     expect(options.map((option) => option.text())).toEqual(['Not set', 'Invoice', 'Receipt'])
 
-    await w.find('#edit-kind').setValue('receipt')
-    await w.find('[data-testid="row-kind"] form').trigger('submit')
+    await w.find('#edit-kind').setValue('receipt') // <select> setValue emits change
     await flushPromises()
 
     expect(patchCalls()[0]!.body).toEqual({ kind_slug: 'receipt' })
-    expect(rowValue(w, 'kind')).toBe('Receipt')
   })
 
   it('sender editor has a datalist fed by /api/senders', async () => {
     const w = await mountView()
-    await w.find('[data-testid="row-sender"] .app-link-button').trigger('click')
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
     expect(w.find('#edit-sender').attributes('list')).toBe('sender-options')
     const options = w.find('datalist#sender-options').findAll('option')
     expect(options.map((option) => option.attributes('value'))).toEqual(['Eneco'])
@@ -215,26 +266,57 @@ describe('DocumentDetailView', () => {
 
   it('tags editor sends a comma-split full-replacement list', async () => {
     const w = await mountView()
-    await w.find('[data-testid="row-tags"] .app-link-button').trigger('click')
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
     await w.find('#edit-tags').setValue(' energie,  wonen ,')
-    await w.find('[data-testid="row-tags"] form').trigger('submit')
+    await w.find('#edit-tags').trigger('change')
     await flushPromises()
     expect(patchCalls()[0]!.body).toEqual({ tags: ['energie', 'wonen'] })
   })
 
-  it('shows an error summary and keeps the editor open on a 422', async () => {
+  it('shows an inline field error and keeps editing on a 422', async () => {
     const w = await mountView()
     patchResponse = () => jsonResponse({ detail: "unknown kind slug: 'bogus'" }, 422)
 
-    await w.find('[data-testid="row-kind"] .app-link-button').trigger('click')
-    await w.find('[data-testid="row-kind"] form').trigger('submit')
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    await w.find('#edit-kind').setValue('receipt')
     await flushPromises()
 
-    const summary = w.find('[data-testid="error-summary"]')
-    expect(summary.exists()).toBe(true)
-    expect(summary.text()).toContain('unknown kind slug')
-    expect(w.find('#edit-kind').exists()).toBe(true)
+    expect(w.find('#edit-kind-error').text()).toContain('unknown kind slug')
+    expect(w.find('#edit-kind').exists()).toBe(true) // still editing
     expect(w.find('[data-testid="detail-banner"]').exists()).toBe(false)
+  })
+
+  it('validates the amount locally and does not PATCH a non-numeric value', async () => {
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    await w.find('#edit-amount').setValue('not-a-number')
+    await w.find('#edit-amount').trigger('change')
+    await flushPromises()
+    expect(patchCalls()).toHaveLength(0)
+    expect(w.find('#edit-amount-error').text()).toContain('number')
+  })
+
+  it('autosaves a date once, when focus leaves the day/month/year group', async () => {
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+
+    // Edit a sub-field; the per-sub-field change must NOT fire a save yet.
+    await w.find('#edit-document-date-day').setValue('16')
+    await w.find('#edit-document-date-day').trigger('change')
+    await flushPromises()
+    expect(patchCalls()).toHaveLength(0)
+
+    // Focus leaving the whole fieldset (relatedTarget outside) saves once.
+    await w.find('[data-testid="row-document_date"] fieldset').trigger('focusout')
+    await flushPromises()
+
+    const calls = patchCalls()
+    expect(calls).toHaveLength(1)
+    expect(calls[0]!.body).toEqual({ document_date: '2026-05-16' })
   })
 
   it('renders the pdf.js preview component for a PDF document', async () => {
