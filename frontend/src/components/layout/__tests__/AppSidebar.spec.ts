@@ -9,6 +9,8 @@ const router = createRouter({
     { path: '/', name: 'documents', component: { template: '<div/>' } },
     { path: '/upload', name: 'upload', component: { template: '<div/>' } },
     { path: '/settings', name: 'settings', component: { template: '<div/>' } },
+    { path: '/jobs', name: 'jobs', component: { template: '<div/>' } },
+    { path: '/charts', name: 'charts', component: { template: '<div/>' } },
   ],
 })
 
@@ -41,5 +43,18 @@ describe('AppSidebar', () => {
     expect(wrapper.find('[data-testid="sidebar-upload-link"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="sidebar-settings-link"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('LIBRARY')
+  })
+
+  it('renders a Charts nav link to /charts', async () => {
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    const chartsLink = wrapper.find('[data-testid="sidebar-charts-link"]')
+    expect(chartsLink.exists()).toBe(true)
+    expect(chartsLink.attributes('href')).toBe('/charts')
+    expect(chartsLink.text()).toContain('Charts')
   })
 })

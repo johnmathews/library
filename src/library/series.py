@@ -22,7 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
-from library.models import Document, Kind, Sender
+from library.models import Document, Kind, Sender, SeriesInsight
 from library.search import DocumentFilters, filter_conditions
 
 _CENTS = Decimal("0.01")
@@ -214,6 +214,9 @@ class _Member:
     document_date: date | None
     amount: Decimal
     currency: str | None
+    sender_id: int | None
+    kind_id: int | None
+    title: str | None
 
 
 @dataclass(frozen=True, slots=True)
@@ -221,6 +224,8 @@ class SeriesSummary:
     status: Literal["ok", "insufficient"]
     sender: str | None
     kind: str | None
+    sender_id: int | None
+    kind_id: int | None
     currency: str | None
     other_currencies: list[str]
     cadence: Cadence
@@ -231,6 +236,10 @@ class SeriesSummary:
     year_over_year: YearOverYear | None
     document_ids: list[int]
     points: list[tuple[date, Decimal, int]]
+    # document_id -> title, for per-point citation links on the chart.
+    titles: dict[int, str | None]
+    # Cached LLM prose summary of the series, or None when not yet generated.
+    description: str | None
 
 
 async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list[_Member]:
@@ -245,6 +254,7 @@ async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list
             Document.currency,
             Document.sender_id,
             Document.kind_id,
+            Document.title,
         )
         .outerjoin(Sender, Document.sender_id == Sender.id)
         .outerjoin(Kind, Document.kind_id == Kind.id)
@@ -254,9 +264,9 @@ async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list
     # Restrict to the single most-populous (sender_id, kind_id) group so a
     # loosely-filtered query (kind only) can't mix providers into one series.
     groups: dict[tuple[int | None, int | None], list[_Member]] = {}
-    for did, sname, kslug, ddate, amount, currency, sid, kid in rows:
+    for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
         groups.setdefault((sid, kid), []).append(
-            _Member(did, sname, kslug, ddate, amount, currency)
+            _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title)
         )
     if not groups:
         return []
@@ -269,6 +279,8 @@ def _insufficient(members: list[_Member]) -> SeriesSummary:
         status="insufficient",
         sender=head.sender if head else None,
         kind=head.kind if head else None,
+        sender_id=head.sender_id if head else None,
+        kind_id=head.kind_id if head else None,
         currency=None,
         other_currencies=[],
         cadence="irregular",
@@ -279,7 +291,29 @@ def _insufficient(members: list[_Member]) -> SeriesSummary:
         year_over_year=None,
         document_ids=[m.document_id for m in members[:MAX_CITED_IDS]],
         points=[],
+        titles={},
+        description=None,
     )
+
+
+async def load_series_description(
+    session: AsyncSession,
+    sender_id: int | None,
+    kind_id: int | None,
+    currency: str | None,
+) -> str | None:
+    """The cached LLM description for one ``(sender, kind, currency)`` series, if any."""
+    if sender_id is None or kind_id is None:
+        return None
+    currency_match = (
+        SeriesInsight.currency.is_(None) if currency is None else SeriesInsight.currency == currency
+    )
+    statement = select(SeriesInsight.description).where(
+        SeriesInsight.sender_id == sender_id,
+        SeriesInsight.kind_id == kind_id,
+        currency_match,
+    )
+    return (await session.execute(statement)).scalar_one_or_none()
 
 
 async def summarize_series(
@@ -344,10 +378,13 @@ async def summarize_series(
         yoy = year_over_year(yoy_points, ref_date, cadence)
 
     head = bucket[0]
+    description = await load_series_description(session, head.sender_id, head.kind_id, currency)
     return SeriesSummary(
         status="ok",
         sender=head.sender,
         kind=head.kind,
+        sender_id=head.sender_id,
+        kind_id=head.kind_id,
         currency=currency,
         other_currencies=other_currencies,
         cadence=cadence,
@@ -358,6 +395,8 @@ async def summarize_series(
         year_over_year=yoy,
         document_ids=sorted(m.document_id for m in bucket)[:MAX_CITED_IDS],
         points=points,
+        titles={m.document_id: m.title for m in bucket},
+        description=description,
     )
 
 
@@ -371,12 +410,16 @@ def serialise_summary(summary: SeriesSummary, *, include_points: bool = False) -
         "status": summary.status,
         "sender": summary.sender,
         "kind": summary.kind,
+        "sender_id": summary.sender_id,
+        "kind_id": summary.kind_id,
         "currency": summary.currency,
         "other_currencies": summary.other_currencies,
         "cadence": summary.cadence,
         "count": summary.count,
         "document_ids": summary.document_ids,
     }
+    if summary.description is not None:
+        body["description"] = summary.description
     if summary.distribution is not None:
         d = summary.distribution
         body |= {
@@ -409,7 +452,12 @@ def serialise_summary(summary: SeriesSummary, *, include_points: bool = False) -
         }
     if include_points:
         body["points"] = [
-            {"date": d.isoformat(), "amount": str(a), "document_id": did}
+            {
+                "date": d.isoformat(),
+                "amount": str(a),
+                "document_id": did,
+                "title": summary.titles.get(did),
+            }
             for d, a, did in summary.points
         ]
     return body

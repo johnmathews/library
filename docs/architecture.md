@@ -120,7 +120,9 @@ per-chunk embeddings (`document_chunks`, pgvector + HNSW; each chunk carries
 `ocr_text`), append-only `ingestion_events` audit trail, Ask conversation
 persistence (`ask_threads` — one conversation per owner; `ask_turns` — one
 Q&A turn per thread, storing cost/provenance and the serialized Anthropic
-message blocks used to replay prior tool results into follow-up questions), and
+message blocks used to replay prior tool results into follow-up questions),
+cached per-series prose descriptions (`series_insights`, one row per
+`(sender_id, kind_id, currency)` — see [ask.md §1.7](ask.md)), and
 auth tables (`users`, `sessions`, `api_tokens`). Originals on disk are
 immutable; everything else (including embeddings and page markdown) is a
 re-derivable artifact.

@@ -1,12 +1,7 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { Line } from 'vue-chartjs'
-import {
-  Chart as ChartJS, CategoryScale, LinearScale, PointElement, LineElement, Tooltip,
-} from 'chart.js'
+import { onMounted, ref } from 'vue'
 import { fetchDocumentSeries, type DocumentSeries } from '@/api/documents'
-
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip)
+import SeriesChartTile from './SeriesChartTile.vue'
 
 const props = defineProps<{ documentId: number }>()
 const series = ref<DocumentSeries | null>(null)
@@ -19,57 +14,13 @@ onMounted(async () => {
     series.value = null
   }
 })
-
-const verdictText = computed<string>(() => {
-  const s = series.value
-  if (!s?.reference) return ''
-  const pct = s.reference.vs_median_pct
-  if (s.reference.verdict === 'typical') return 'about usual'
-  return `${pct.replace('+', '').replace('-', '')} ${s.reference.verdict === 'higher' ? 'above' : 'below'} usual`
-})
-
-const trendText = computed<string>(() => (series.value?.trend ? `trend ${series.value.trend.direction}` : ''))
-
-const chartData = computed(() => {
-  const pts = series.value?.points ?? []
-  const highlightIdx = pts.findIndex((p) => p.document_id === props.documentId)
-  const activeIdx = highlightIdx !== -1 ? highlightIdx : pts.length - 1
-  return {
-    labels: pts.map((p) => p.date),
-    datasets: [
-      {
-        data: pts.map((p) => Number(p.amount)),
-        borderColor: '#2563eb',
-        pointBackgroundColor: pts.map((_, i) => (i === activeIdx ? '#dc2626' : '#2563eb')),
-        tension: 0.2,
-      },
-    ],
-  }
-})
-
-const chartOptions = {
-  responsive: true,
-  maintainAspectRatio: false,
-  plugins: { legend: { display: false } },
-}
 </script>
 
 <template>
-  <section
+  <SeriesChartTile
     v-if="series"
-    data-testid="series-trend"
-    class="mt-4 rounded-lg border border-gray-200 p-4 dark:border-gray-700"
-  >
-    <h3 class="text-sm font-medium text-gray-700 dark:text-gray-300">
-      {{ series.sender }} · {{ series.cadence }} series
-    </h3>
-    <p class="text-sm text-gray-600 dark:text-gray-400">
-      <span v-if="verdictText">{{ verdictText }}</span>
-      <span v-if="verdictText && trendText"> · </span>
-      <span v-if="trendText">{{ trendText }}</span>
-    </p>
-    <div class="mt-3 h-40">
-      <Line :data="chartData" :options="chartOptions" />
-    </div>
-  </section>
+    class="mt-4"
+    :series="series"
+    :highlight-document-id="props.documentId"
+  />
 </template>

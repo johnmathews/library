@@ -49,10 +49,20 @@ worker→api bridge see [architecture.md](architecture.md) §1.4.1.
    `notifications` toast store. The store is connected once in `DefaultLayout`
    (so it runs only for authenticated routes) and torn down on sign-out.
 
+### 1.2.1 Series-insight refresh job
+
+When a document reaches `indexed` with both a sender and a kind, the pipeline
+also defers `library.jobs.generate_series_insight(sender_id, kind_id)`
+(best-effort, like the thumbnail defer). The task regenerates the cached
+natural-language description for that `(sender, kind)` series and upserts it into
+`series_insights` (see [ask.md §1.7](ask.md)). It is idempotent and skips quietly
+for series too small to summarise; it does not toast.
+
 ## 1.3 Scope & non-goals
 
 1. Toasts fire for document processing only — manual re-extract/embed/markdown,
-   email polling, and importer jobs appear in the Jobs view but do not toast.
+   email polling, importer, and series-insight jobs appear in the Jobs view but
+   do not toast.
 2. The Jobs view is read-only: no cancel/retry/requeue actions (jobs are
    retried by Procrastinate per its own policy).
 3. Transport is one-way SSE, not a WebSocket; events are not replayed on

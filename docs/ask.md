@@ -1,6 +1,6 @@
 # 1. Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-06-22 (series + comparative queries).
+**Status:** active. **Last updated:** 2026-06-24 (cached series descriptions + /charts view).
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -194,8 +194,9 @@ from the `kind` and `sender_contains` parameters the model supplies; no user
 tagging or configuration is needed. If a loose filter matches multiple
 (sender, kind) combinations, the most-populous group is used.
 
-Detection is **on the fly** — there is no materialized series table. The
-statistics are recomputed at query time from the live document set.
+Detection is **on the fly** — there is no materialized series table, and the
+*statistics* are recomputed at query time from the live document set. The only
+thing cached per series is the natural-language **description** (see below).
 
 ### Four statistical framings
 
@@ -227,16 +228,46 @@ bucket reported is the one matching the reference document's currency; if
 unspecified, the dominant (most-document) currency is used. Other currencies
 present in the series are listed in `other_currencies`.
 
-### Detail-view trend widget
+### Cached series descriptions
+
+Each series also carries a one- or two-sentence **LLM-generated prose
+description** (e.g. *"Energy bills have crept up ~12% over the past year, peaking
+in winter"*). Because that costs an LLM call, it is **precomputed and cached**
+rather than generated per request:
+
+- **Storage.** One row per `(sender_id, kind_id, currency)` in the
+  `series_insights` table (`library.models.SeriesInsight`), with the description,
+  the generating model, the member count it was generated over, and token/cost
+  provenance. The unique key treats a NULL currency as a single bucket
+  (`NULLS NOT DISTINCT`).
+- **Generation.** `library.series_insight.refresh_series_insight` summarises the
+  series, builds a compact stats prompt, and calls the **extraction LLM client**
+  (`settings.extraction_model`, the cheap Haiku tier) to write the prose, then
+  upserts the row. It is best-effort: a disabled feature, a missing API key, or
+  an insufficient series all skip quietly.
+- **Trigger.** The `library.jobs.generate_series_insight` Procrastinate task is
+  deferred whenever a document reaches `indexed` with both a sender and a kind,
+  so the description refreshes as the series grows.
+
+`summarize_series` attaches the cached description (and per-point document
+`title`s for citation links) to its output; `serialise_summary` includes them in
+the API body. The description is absent until the first successful generation.
+
+### Detail-view trend widget + the /charts view
 
 The document detail view includes a **`DocumentSeriesTrend`** panel that fetches
-the document's series on mount and renders a Chart.js line chart of the series'
-dated points, with the current document's point highlighted. A one-line verdict (e.g. *"≈6% above usual · trend
-rising"*) and the cadence label are shown below the chart. The panel hides
-itself silently when `status:"insufficient"` or on fetch error — the page always
-renders even without series data.
+the document's series on mount and renders a **`SeriesChartTile`**: a Chart.js
+line chart of the series' dated points (current document's point highlighted),
+the cached description, a one-line verdict (e.g. *"6.4% above usual · trend
+rising"*), and a list of **citation links** (each point → `/documents/{id}`). The
+panel hides itself silently when `status:"insufficient"` or on fetch error.
 
-The raw data is supplied by `GET /api/documents/{id}/series`; see [api.md §1.13](api.md) for the wire contract.
+The **`/charts`** view (sidebar nav) renders a responsive grid of the same
+`SeriesChartTile`, one per eligible series, fed by `GET /api/charts`. Tiles here
+have no per-document reference, so the latest member is highlighted.
+
+The raw data is supplied by `GET /api/documents/{id}/series` and `GET /api/charts`;
+see [api.md §1.13–1.14](api.md) for the wire contracts.
 
 ## 1.8 Limitations (this release)
 

@@ -351,6 +351,48 @@ watch(
                 </a>
               </li>
             </RouterLink>
+
+            <!-- Charts link -->
+            <RouterLink v-slot="{ href, navigate, isActive }" to="/charts" custom>
+              <li
+                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                :class="
+                  isActive &&
+                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                "
+              >
+                <a
+                  :href="href"
+                  class="block truncate transition"
+                  data-testid="sidebar-charts-link"
+                  :class="
+                    isActive
+                      ? 'text-gray-900 dark:text-white'
+                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                  "
+                  @click="navigate"
+                >
+                  <div class="flex items-center">
+                    <svg
+                      class="shrink-0 fill-current"
+                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                    >
+                      <path
+                        d="M0 0h2v14h14v2H0V0Zm4.5 9.5 3-3 2.5 2.5 4-4.5 1.5 1.3-5.4 6.1-2.6-2.5-2.9 2.9-1.6-1.6Z"
+                      />
+                    </svg>
+                    <span
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      >Charts</span
+                    >
+                  </div>
+                </a>
+              </li>
+            </RouterLink>
           </ul>
         </div>
       </div>

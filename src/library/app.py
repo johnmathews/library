@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import library
-from library.api import ask, auth, documents, events, jobs, settings, taxonomy
+from library.api import ask, auth, charts, documents, events, jobs, settings, taxonomy
 from library.auth.deps import csrf_protect, current_user
 from library.config import get_settings
 from library.jobs import job_app
@@ -138,6 +138,7 @@ def create_app() -> FastAPI:
         prefix="/api", dependencies=[Depends(current_user), Depends(csrf_protect)]
     )
     api_router.include_router(documents.router)
+    api_router.include_router(charts.router)
     api_router.include_router(taxonomy.router)
     api_router.include_router(jobs.router)
     api_router.include_router(events.router)

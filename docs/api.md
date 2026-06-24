@@ -1,6 +1,6 @@
 # 1. REST API
 
-**Status:** active. **Last updated:** 2026-06-22 (series endpoint).
+**Status:** active. **Last updated:** 2026-06-24 (charts endpoint + cached series descriptions).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -41,6 +41,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/documents/{id}/searchable.pdf` | Download the OCR searchable PDF |
 | GET    | `/api/documents/{id}/thumbnail` | First-page WebP thumbnail |
 | GET    | `/api/documents/{id}/series` | Recurring-series stats + comparison for this document |
+| GET    | `/api/charts` | Every eligible recurring `(sender, kind)` series, summarised |
 | GET    | `/api/kinds` | Document kinds with counts |
 | GET    | `/api/senders` | Senders with counts |
 | GET    | `/api/tags` | Tags with counts |
@@ -660,10 +661,13 @@ view. See [ask.md §1.7](ask.md) for the series detection and statistics design.
   "status": "ok",
   "sender": "Vattenfall",
   "kind": "utility-bill",
+  "sender_id": 7,
+  "kind_id": 2,
   "currency": "EUR",
   "other_currencies": [],
   "cadence": "monthly",
   "count": 7,
+  "description": "Energy bills have crept up about 12% over the past year, peaking in winter.",
   "mean": "145.00",
   "median": "142.10",
   "stdev": "8.20",
@@ -684,8 +688,8 @@ view. See [ask.md §1.7](ask.md) for the series detection and statistics design.
   },
   "document_ids": [12, 19, 27, 33, 41, 55, 88],
   "points": [
-    {"date": "2025-06-15", "amount": "138.40", "document_id": 41},
-    {"date": "2026-05-15", "amount": "151.20", "document_id": 88}
+    {"date": "2025-06-15", "amount": "138.40", "document_id": 41, "title": "June 2025 bill"},
+    {"date": "2026-05-15", "amount": "151.20", "document_id": 88, "title": "May 2026 bill"}
   ]
 }
 ```
@@ -694,6 +698,10 @@ Fields:
 
 - `status` — `"ok"` when the series has enough members; `"insufficient"` otherwise (see below).
 - `sender`, `kind`, `currency` — the resolved series identity and reported currency bucket.
+- `sender_id`, `kind_id` — numeric ids of the resolved series (used as a stable key on `/charts`).
+- `description` — a cached, LLM-generated one- or two-sentence prose summary of the
+  series, precomputed in the background (see [ask.md §1.7](ask.md)). Absent until the
+  first description has been generated for the series.
 - `other_currencies` — currencies present in the series that are not being reported.
 - `cadence` — inferred recurrence: `monthly`, `quarterly`, `yearly`, or `irregular`.
 - `count`, `mean`, `median`, `stdev`, `min`, `max` — distribution stats over `amount_total`
@@ -706,8 +714,9 @@ Fields:
   `change_pct`, `document_id`), or `null` when no match exists.
 - `document_ids` — ids of the series members that contributed to the stats (capped at 25).
 - `points` — all dated, amount-bearing series members in chronological order, each with
-  `date` (ISO), `amount` (string), and `document_id`. Use `document_id` to highlight
-  the current document in the chart.
+  `date` (ISO), `amount` (string), `document_id`, and `title` (the document's title, or
+  `null`). Use `document_id` to highlight the current document in the chart and to link
+  each point to its document; `title` labels the citation.
 
 **Response `200` — `status:"insufficient"`:**
 
@@ -722,3 +731,42 @@ hide the trend widget rather than showing an error.
 `count` is the number of series members found (0 when the document has no sender or kind).
 
 **Errors:** `404` when the document does not exist or is soft-deleted.
+
+## 1.14 Charts — `GET /api/charts`
+
+Enumerates every recurring `(sender, kind)` series with enough amount-bearing
+documents to summarise (at least `LIBRARY_SERIES_MIN_DOCUMENTS`, default 3), and
+returns each one fully summarised. This backs the `/charts` aggregate view.
+
+**Response `200`:**
+
+```json
+{
+  "series": [
+    {
+      "status": "ok",
+      "sender": "Vattenfall",
+      "kind": "utility-bill",
+      "sender_id": 7,
+      "kind_id": 2,
+      "currency": "EUR",
+      "count": 7,
+      "description": "Energy bills have crept up about 12% over the past year…",
+      "median": "142.10",
+      "trend": { "direction": "rising", "change_pct": "+12.0%" },
+      "document_ids": [12, 19, 27, 33, 41, 55, 88],
+      "points": [
+        {"date": "2025-06-15", "amount": "138.40", "document_id": 41, "title": "June 2025 bill"}
+      ]
+    }
+  ]
+}
+```
+
+Each entry has the **same shape** as the `status:"ok"` body of
+`GET /api/documents/{id}/series` (with `points` always included). Series whose
+dominant currency bucket is too small are omitted, so every returned entry is
+`status:"ok"`. Entries are ordered by document count (busiest series first).
+There is no per-document reference point here, so `reference`/`year_over_year`
+are anchored on the latest member. Use `sender_id`-`kind_id`-`currency` as a
+stable key.
