@@ -180,6 +180,58 @@ async def test_pipeline_defers_thumbnail_job_after_ocr(
     assert [job["args"] for job in thumbnail_jobs] == [{"document_id": document_id}]
 
 
+async def test_pipeline_defers_series_insight_when_sender_and_kind_present(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+) -> None:
+    from library.models import Kind, Sender
+
+    async with session_factory() as session:
+        sender = Sender(name="SeriesInsight Energy")
+        session.add(sender)
+        kind = (await session.execute(select(Kind).where(Kind.slug == "utility-bill"))).scalar_one()
+        await session.flush()
+        document = Document(
+            sha256=hashlib.sha256(b"series-insight-defer").hexdigest(),
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            sender_id=sender.id,
+            kind_id=kind.id,
+        )
+        session.add(document)
+        await session.commit()
+        document_id = document.id
+        sender_id = sender.id
+        kind_id = kind.id
+
+    await advance_pipeline(session_factory, document_id)
+
+    insight_jobs = [
+        job
+        for job in job_connector.jobs.values()
+        if job["task_name"] == "library.jobs.generate_series_insight"
+    ]
+    assert [job["args"] for job in insight_jobs] == [{"sender_id": sender_id, "kind_id": kind_id}]
+
+
+async def test_pipeline_skips_series_insight_without_sender_or_kind(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+) -> None:
+    document_id = await make_document(session_factory, "series-insight-noskip")
+
+    await advance_pipeline(session_factory, document_id)
+
+    insight_jobs = [
+        job
+        for job in job_connector.jobs.values()
+        if job["task_name"] == "library.jobs.generate_series_insight"
+    ]
+    assert insight_jobs == []
+
+
 async def test_ocr_stage_failure_records_ocr_failed_event(
     session_factory: async_sessionmaker[AsyncSession],
     data_dir: Path,

@@ -340,16 +340,28 @@ export function uploadDocument(
   })
 }
 
+/** One point on a series trend; carries enough metadata for a citation link. */
+export interface SeriesPoint {
+  date: string
+  amount: string
+  document_id: number
+  title?: string | null
+}
+
 /** Body of GET /api/documents/{id}/series (optional blocks omitted when N/A). */
 export interface DocumentSeries {
   status: 'ok' | 'insufficient'
   sender: string | null
   kind: string | null
+  sender_id?: number | null
+  kind_id?: number | null
   currency: string | null
   other_currencies: string[]
   cadence: 'monthly' | 'quarterly' | 'yearly' | 'irregular'
   count: number
   document_ids: number[]
+  /** Cached LLM prose summary of the series; absent until precomputed. */
+  description?: string
   mean?: string
   median?: string
   stdev?: string
@@ -364,12 +376,22 @@ export interface DocumentSeries {
   }
   trend?: { direction: 'rising' | 'falling' | 'flat'; change_pct: string }
   year_over_year?: { prior_value: string; change_pct: string; document_id: number }
-  points?: { date: string; amount: string; document_id: number }[]
+  points?: SeriesPoint[]
 }
 
 /** GET /api/documents/{id}/series — recurring-series stats + comparison. */
 export function fetchDocumentSeries(id: number, signal?: AbortSignal): Promise<DocumentSeries> {
   return apiFetch<DocumentSeries>(`/api/documents/${id}/series`, { signal })
+}
+
+/** Body of GET /api/charts — every eligible series, summarised for charting. */
+export interface ChartsResponse {
+  series: DocumentSeries[]
+}
+
+/** GET /api/charts — all chartable (sender, kind) series. */
+export function fetchCharts(signal?: AbortSignal): Promise<ChartsResponse> {
+  return apiFetch<ChartsResponse>('/api/charts', { signal })
 }
 
 function parseDetail(text: string, status: number): string {

@@ -37,6 +37,7 @@ from sqlalchemy import (
     String,
     Table,
     Text,
+    UniqueConstraint,
     func,
     text,
 )
@@ -466,3 +467,45 @@ class EvalRun(Base):
     sample_size: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
     per_field: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
     overall: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
+
+
+class SeriesInsight(Base):
+    """Cached, LLM-generated natural-language description of a recurring series.
+
+    A *series* is one ``(sender_id, kind_id, currency)`` — e.g. EUR utility
+    bills from one provider (see ``library.series``). The series statistics are
+    computed on the fly, but the prose summary ("bills have crept up ~12% over
+    the last year, with a seasonal winter peak") costs an LLM call, so it is
+    precomputed by a background job whenever a new document joins the series and
+    cached here. ``member_count`` records how many documents the description was
+    generated over, so a description left behind by series growth can be spotted
+    and regenerated. One row per series: the unique key treats a NULL currency
+    as a single bucket (``NULLS NOT DISTINCT``) rather than allowing duplicates.
+    """
+
+    __tablename__ = "series_insights"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sender_id: Mapped[int] = mapped_column(ForeignKey("senders.id", ondelete="CASCADE"), index=True)
+    kind_id: Mapped[int] = mapped_column(ForeignKey("kinds.id", ondelete="CASCADE"), index=True)
+    currency: Mapped[str | None] = mapped_column(CHAR(3))
+    description: Mapped[str] = mapped_column(Text)
+    model: Mapped[str] = mapped_column(String(64))
+    member_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    cost_usd: Mapped[float] = mapped_column(Float, default=0.0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "sender_id",
+            "kind_id",
+            "currency",
+            name="series_insights_sender_kind_currency",
+            postgresql_nulls_not_distinct=True,
+        ),
+    )

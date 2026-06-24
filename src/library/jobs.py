@@ -38,6 +38,7 @@ from library.notifications import (
 )
 from library.ocr import router as ocr_router
 from library.schemas import NotificationEvent
+from library.series_insight import refresh_series_insight
 from library.storage import derived_dir, path_for
 
 logger = logging.getLogger(__name__)
@@ -340,6 +341,20 @@ async def advance_pipeline(
                 needs_review=document.review_status == ReviewStatus.NEEDS_REVIEW,
                 document_url_base=get_settings().public_base_url,
             )
+            # This document may have joined (or grown) a recurring series; refresh
+            # its cached LLM description out of band. Best-effort: a queue hiccup
+            # must never strand an already-indexed document.
+            if document.sender_id is not None and document.kind_id is not None:
+                try:
+                    await generate_series_insight.defer_async(
+                        sender_id=document.sender_id, kind_id=document.kind_id
+                    )
+                except Exception:
+                    logger.warning(
+                        "could not queue series insight for document %s; continuing",
+                        document.id,
+                        exc_info=True,
+                    )
         except Exception as exc:
             await session.rollback()
             failed_in = document.status
@@ -456,6 +471,18 @@ async def markdown_document(document_id: int) -> None:
             raise ValueError(f"document {document_id} not found")
         await apply_markdown(session, document, get_settings())
         await run_embed(session, document)
+
+
+@job_app.task(name="library.jobs.generate_series_insight")
+async def generate_series_insight(sender_id: int, kind_id: int) -> None:
+    """Background task: (re-)generate the cached LLM description for one series.
+
+    Deferred when a document reaches ``indexed`` with both a sender and a kind.
+    Best-effort and idempotent (upserts the single ``series_insights`` row);
+    skips quietly when the series is too small or extraction is disabled.
+    """
+    async with get_sessionmaker()() as session:
+        await refresh_series_insight(session, get_settings(), sender_id, kind_id)
 
 
 def email_poll_cron(minutes: int) -> str:
