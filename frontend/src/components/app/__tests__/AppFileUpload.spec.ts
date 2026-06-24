@@ -72,4 +72,90 @@ describe('AppFileUpload', () => {
     await zone.trigger('dragleave')
     expect(zone.classes()).not.toContain('ring-2')
   })
+
+  /** Set the hidden input's FileList and fire `change`. */
+  async function pick(wrapper: ReturnType<typeof mount>, files: File[]): Promise<void> {
+    const input = wrapper.find('input[type="file"]').element as HTMLInputElement
+    Object.defineProperty(input, 'files', { value: files, configurable: true })
+    await wrapper.find('input[type="file"]').trigger('change')
+  }
+
+  function lastModel(wrapper: ReturnType<typeof mount>): File[] | null {
+    return (wrapper.emitted('update:modelValue')!.at(-1) as [File[] | null])[0]
+  }
+
+  describe('selected-files preview', () => {
+    it('lists the selected files with a count', async () => {
+      const wrapper = mount(AppFileUpload, { props: { id: 'u', label: 'Upload', multiple: true } })
+      const a = new File(['a'], 'a.pdf', { type: 'application/pdf' })
+      const b = new File(['bb'], 'b.pdf', { type: 'application/pdf' })
+
+      await pick(wrapper, [a, b])
+
+      expect(wrapper.find('[data-testid="selected-files"]').exists()).toBe(true)
+      expect(wrapper.text()).toContain('2 files selected')
+      expect(wrapper.findAll('[data-testid="selected-file"]')).toHaveLength(2)
+      expect(wrapper.text()).toContain('a.pdf')
+      expect(wrapper.text()).toContain('b.pdf')
+    })
+
+    it('uses the singular count for one file', async () => {
+      const wrapper = mount(AppFileUpload, { props: { id: 'u', label: 'Upload', multiple: true } })
+      await pick(wrapper, [new File(['a'], 'a.pdf')])
+      expect(wrapper.text()).toContain('1 file selected')
+    })
+
+    it('removes a file when its remove button is clicked', async () => {
+      const wrapper = mount(AppFileUpload, { props: { id: 'u', label: 'Upload', multiple: true } })
+      const a = new File(['a'], 'a.pdf', { type: 'application/pdf' })
+      const b = new File(['bb'], 'b.pdf', { type: 'application/pdf' })
+      await pick(wrapper, [a, b])
+
+      await wrapper.findAll('[data-testid="selected-file"]')[0]!.find('button').trigger('click')
+
+      expect(lastModel(wrapper)!.map((f) => f.name)).toEqual(['b.pdf'])
+    })
+
+    it('clears the model to null when the last file is removed', async () => {
+      const wrapper = mount(AppFileUpload, { props: { id: 'u', label: 'Upload', multiple: true } })
+      await pick(wrapper, [new File(['a'], 'a.pdf')])
+
+      await wrapper.find('[data-testid="selected-file"] button').trigger('click')
+
+      expect(lastModel(wrapper)).toBeNull()
+    })
+
+    it('appends new picks to the existing selection (multiple)', async () => {
+      const wrapper = mount(AppFileUpload, { props: { id: 'u', label: 'Upload', multiple: true } })
+      const a = new File(['a'], 'a.pdf', { type: 'application/pdf' })
+      const b = new File(['bb'], 'b.pdf', { type: 'application/pdf' })
+
+      await pick(wrapper, [a])
+      await pick(wrapper, [b])
+
+      expect(lastModel(wrapper)!.map((f) => f.name)).toEqual(['a.pdf', 'b.pdf'])
+    })
+
+    it('does not add an identical file twice', async () => {
+      const wrapper = mount(AppFileUpload, { props: { id: 'u', label: 'Upload', multiple: true } })
+      const a = new File(['a'], 'a.pdf', { type: 'application/pdf' })
+
+      await pick(wrapper, [a])
+      await pick(wrapper, [a])
+
+      expect(lastModel(wrapper)!.map((f) => f.name)).toEqual(['a.pdf'])
+      expect(wrapper.findAll('[data-testid="selected-file"]')).toHaveLength(1)
+    })
+
+    it('replaces rather than appends in single-file mode', async () => {
+      const wrapper = mount(AppFileUpload, { props: { id: 'u', label: 'Upload', multiple: false } })
+      const a = new File(['a'], 'a.pdf', { type: 'application/pdf' })
+      const b = new File(['bb'], 'b.pdf', { type: 'application/pdf' })
+
+      await pick(wrapper, [a])
+      await pick(wrapper, [b])
+
+      expect(lastModel(wrapper)!.map((f) => f.name)).toEqual(['b.pdf'])
+    })
+  })
 })
