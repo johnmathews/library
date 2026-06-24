@@ -152,6 +152,15 @@ point), the **`ThemeToggle`**, and a **user menu** showing
 `auth.user?.display_name || username` with **Settings** and **Sign Out** (calls
 `auth.logout()` then routes to `login`).
 
+It also renders the **background-jobs indicator** (`#header-jobs-indicator`,
+`[data-testid="header-jobs-button"]`), present only while `jobsStore.activeCount
+> 0`: a spinner with a count badge that opens a dropdown of in-flight documents
+(stage label per row) plus a **View all jobs** link to `/jobs`. Because the
+button sits mid-cluster (search/theme/user-menu are to its right), the dropdown
+**pins to the viewport's right edge below `sm`** (`fixed` + `max-w-[calc(100vw-1rem)]`)
+so it can't overflow the screen on a phone, and reverts to the under-button
+`absolute` anchor at `sm`+.
+
 ### `src/components/layout/ThemeToggle.vue`
 
 A `sr-only` checkbox bound to `@vueuse/core`'s `useDark({ selector: 'html' })`,
@@ -190,7 +199,7 @@ components use `defineModel()`.
 | `AppErrorMessage` | GovErrorMessage | Standalone field-error paragraph with a visually-hidden "Error:" prefix. |
 | `AppSummaryList` | GovSummaryList | Key/value rows with optional per-row "Change" action links. |
 | `AppPagination` | GovPagination | Numeric pagination; props `{ page, totalPages }`, emits `change(page)`. **Still exported from the barrel but no longer mounted** — `DocumentListView` moved to infinite scroll (§1.5). |
-| `AppFileUpload` | GovFileUpload | Drop-zone; v-model is `File[] \| null`; `multiple`/`accept` props. |
+| `AppFileUpload` | GovFileUpload | Drop-zone; v-model is `File[] \| null`; `multiple`/`accept` props. Below the zone it lists the **pending selection** (count + name + size per row, `[data-testid="selected-file"]`) with a per-row remove button, so the user can confirm/prune before submitting. In `multiple` mode new picks **accumulate** into the selection (de-duped by name+size+mtime); single mode replaces. Removing the last file resets the model to `null`. |
 | — | GovServiceNavigation | **Removed** — its job is now split between `AppSidebar` (nav) and `AppHeader` (search trigger, theme toggle, user menu). |
 
 Two retained custom components, restyled to Mosaic:
