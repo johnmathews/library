@@ -186,12 +186,14 @@ test('detail: open from list, edit title, delete via confirmation page', async (
   await expect(page).toHaveURL(new RegExp(`/documents/${id}$`))
   await expect(page.getByText('Status', { exact: true })).toBeVisible()
 
-  // Edit the title through the summary-list Change → Save flow.
+  // Edit the title via the page-wide Edit toggle: enable edit mode, change the
+  // field, and commit with Enter — each field autosaves on its own (no Save
+  // button). The hero heading reflecting the new title proves the PATCH landed.
   const newTitle = `Titel ${marker}`
-  await page.getByRole('button', { name: 'Change title' }).click()
+  await page.getByTestId('edit-toggle').click()
   await page.locator('#edit-title').fill(newTitle)
-  await page.getByRole('button', { name: 'Save', exact: true }).click()
-  await expect(page.getByTestId('detail-banner')).toContainText('Title updated')
+  await page.locator('#edit-title').press('Enter')
+  await expect(page.getByTestId('saved-title')).toBeVisible()
   await expect(page.getByRole('heading', { level: 1, name: newTitle })).toBeVisible()
 
   // The edit persisted: still there after a full reload.
