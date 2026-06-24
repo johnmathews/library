@@ -128,10 +128,17 @@ async function handleSignOut() {
               leave-from-class="opacity-100 translate-y-0"
               leave-to-class="opacity-0 -translate-y-1"
             >
+              <!--
+                The jobs button sits mid-cluster (search/theme/user-menu are
+                to its right), so a button-anchored `right-0` dropdown runs off
+                the LEFT edge on a phone. Below `sm` we pin it to the viewport's
+                right edge with a width cap so it always stays on screen; at
+                `sm`+ the button has room, so restore the under-button anchor.
+              -->
               <div
                 v-show="jobsMenuOpen"
                 id="header-jobs-dropdown"
-                class="origin-top-right z-10 absolute top-full min-w-64 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 py-1.5 rounded-lg shadow-lg overflow-hidden mt-1 right-0"
+                class="origin-top-right z-50 fixed top-16 right-2 w-72 max-w-[calc(100vw-1rem)] sm:absolute sm:top-full sm:right-0 sm:mt-1 sm:w-auto sm:min-w-64 sm:max-w-none bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 py-1.5 rounded-lg shadow-lg overflow-hidden"
                 @focusin="jobsMenuOpen = true"
                 @focusout="jobsMenuOpen = false"
               >
