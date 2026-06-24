@@ -59,9 +59,12 @@ test('upload surfaces the navbar indicator, a toast, and a /jobs row', async ({
   // 'indexed' event.
   await expect(page.getByText('Document processed')).toBeVisible({ timeout: 150_000 })
 
-  // The Jobs page lists the run and links it to the document.
+  // The Jobs page lists the run and links it to the document. The page renders
+  // both a desktop table (hidden on phones) and a mobile card list (hidden on
+  // larger screens), so both contain the link — match the VISIBLE one with the
+  // `:visible` pseudo-class so this holds on every viewport.
   await page.goto('/jobs')
   await expect(page.getByRole('heading', { name: 'Jobs', exact: true })).toBeVisible()
-  const row = page.locator(`a[href="/documents/${id}"]`).first()
+  const row = page.locator(`a[href="/documents/${id}"]:visible`).first()
   await expect(row).toBeVisible({ timeout: 30_000 })
 })
