@@ -281,6 +281,81 @@ def test_jobs_endpoint_surfaces_started_and_finished_timestamps(
     assert job["finished_at"] > job["started_at"]
 
 
+def test_jobs_endpoint_document_filter_returns_full_history(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    # Upload enqueues process_document; add two more jobs for the SAME document.
+    status_code, body = upload(api_client, b"%PDF-1.4 history " + b"z" * 32, filename="hist.pdf")
+    assert status_code == 201
+    document_id = body["id"]
+    _insert_job(api_database_url, "library.jobs.markdown_document", document_id=document_id)
+    _insert_job(api_database_url, "library.jobs.embed_document", document_id=document_id)
+
+    rows = api_client.get(
+        "/api/jobs", params={"document_id": document_id, "limit": 500}
+    ).json()
+    # History mode is uncollapsed: every job for the document, not just the latest.
+    assert all(row["document_id"] == document_id for row in rows)
+    assert sorted(row["task_name"] for row in rows) == [
+        "library.jobs.embed_document",
+        "library.jobs.markdown_document",
+        "library.jobs.process_document",
+    ]
+    # Newest first.
+    ids = [row["id"] for row in rows]
+    assert ids == sorted(ids, reverse=True)
+
+
+def test_jobs_endpoint_task_name_filter_surfaces_system_tasks(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    # A succeeded poll heartbeat is hidden by default; filtering to its task must
+    # surface it even without include_system.
+    ok_poll = _insert_job(api_database_url, "library.jobs.poll_email_inbox", "succeeded")
+
+    filtered = api_client.get(
+        "/api/jobs",
+        params={"limit": 500, "task_name": "library.jobs.poll_email_inbox"},
+    ).json()
+    ids = {row["id"] for row in filtered}
+    assert ok_poll in ids
+    assert all(row["task_name"] == "library.jobs.poll_email_inbox" for row in filtered)
+
+
+def test_jobs_endpoint_task_name_filter_matches_documents_by_task(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    # Upload enqueues process_document; add a LATER embed job so the document's
+    # most-recent job is embed, not process_document.
+    status_code, body = upload(api_client, b"%PDF-1.4 bytask " + b"z" * 32, filename="bytask.pdf")
+    assert status_code == 201
+    document_id = body["id"]
+    _insert_job(api_database_url, "library.jobs.embed_document", document_id=document_id)
+
+    # Filtering by process_document must still surface the document via its
+    # process_document job — the task filter runs before the per-document collapse,
+    # so a document isn't dropped just because its latest job is a different task.
+    rows = api_client.get(
+        "/api/jobs", params={"limit": 500, "task_name": "library.jobs.process_document"}
+    ).json()
+    matching = [row for row in rows if row["document_id"] == document_id]
+    assert len(matching) == 1
+    assert matching[0]["task_name"] == "library.jobs.process_document"
+
+
+def test_jobs_task_names_endpoint_lists_distinct_tasks(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    _insert_job(api_database_url, "library.jobs.poll_email_inbox", "succeeded")
+    upload(api_client, b"%PDF-1.4 names " + b"z" * 32, filename="names.pdf")  # process_document
+
+    names = api_client.get("/api/jobs/task-names").json()
+    assert "library.jobs.poll_email_inbox" in names
+    assert "library.jobs.process_document" in names
+    assert names == sorted(names)  # ordered
+    assert len(names) == len(set(names))  # distinct
+
+
 def _insert_event(database_url: str, job_id: int, event_type: str, at: datetime) -> None:
     """Record one Procrastinate lifecycle event (started/succeeded/...) for a job."""
     import asyncio

@@ -45,7 +45,8 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/kinds` | Document kinds with counts |
 | GET    | `/api/senders` | Senders with counts |
 | GET    | `/api/tags` | Tags with counts |
-| GET    | `/api/jobs` | Recent background jobs (enriched with document state) |
+| GET    | `/api/jobs` | Recent background jobs (enriched with document state); filter by `task_name`/`document_id` |
+| GET    | `/api/jobs/task-names` | Distinct task names (for the task-type filter) |
 | GET    | `/api/events` | Live document-pipeline events (Server-Sent Events) |
 | GET    | `/api/settings` | Your display preferences (dashboard fields + page-canvas tone + tile preview) |
 | PUT    | `/api/settings` | Update your dashboard fields |
@@ -233,6 +234,16 @@ omitted when they succeeded — they fire constantly and would bury document wor
 stays visible. Pass `include_system=true` to list them too (still one row per
 document; system jobs are not deduplicated, having no document to group by).
 
+**Filters.**
+
+- `task_name=<fully-qualified name>` — restrict to a single task type (e.g.
+  `library.jobs.poll_email_inbox`). A task filter implies system rows are shown,
+  so it overrides the hide-succeeded-system-tasks default.
+- `document_id=<id>` — **history mode**: returns *every* job for that one
+  document (uncollapsed), newest first, so a document's full processing history
+  can be traced. The per-document collapse and the hide-system default do not
+  apply in this mode.
+
 Each row:
 
 ```jsonc
@@ -256,9 +267,17 @@ Each row:
 
 The `document_*` / `error` / `cost_usd` / `tokens` fields are `null` for jobs
 without a document or whose document has been deleted. For a live feed of state
-changes, use `GET /api/events` (§1.8.4) rather than polling this endpoint.
+changes, use `GET /api/events` (§1.8.5) rather than polling this endpoint.
 
-## 1.8.1 Re-extraction — `POST /api/documents/{id}/extract`
+## 1.8.1 Job task names — `GET /api/jobs/task-names`
+
+A plain JSON array of the distinct `task_name` values present in the queue,
+ordered alphabetically — e.g. `["library.jobs.poll_email_inbox",
+"library.jobs.process_document", …]`. Used to populate the Jobs view's
+task-type filter dropdown without the client inferring the set from a partial
+result window.
+
+## 1.8.2 Re-extraction — `POST /api/documents/{id}/extract`
 
 Queues the W6 metadata-extraction task for one document and returns
 **`202`** with `{"queued": true, "job_id": <procrastinate job id>}` —
@@ -272,7 +291,7 @@ Extraction can also be *skipped* (disabled, missing API key, daily
 budget reached) — that is recorded as an `extraction_skipped` event,
 not an error.
 
-## 1.8.2 Mark verified — `POST /api/documents/{id}/verify`
+## 1.8.3 Mark verified — `POST /api/documents/{id}/verify`
 
 Sets `review_status = verified` and records a `review_verified` ingestion
 event. Returns the updated document detail (`200`). `404` for unknown or
@@ -282,7 +301,7 @@ Use this after reviewing a document's metadata in the detail view and
 confirming it is correct. The `review_status` can return to `needs_review`
 if extraction is re-run and new findings are produced.
 
-## 1.8.3 Taxonomy — `GET /api/kinds`, `/api/senders`, `/api/tags`
+## 1.8.4 Taxonomy — `GET /api/kinds`, `/api/senders`, `/api/tags`
 
 Plain JSON arrays for filter options and edit forms; the same data the
 MCP `list_*` tools return (one shared service, `library.taxonomy`).
@@ -295,11 +314,15 @@ Counts exclude soft-deleted documents; zero-count entries are included.
 - `GET /api/tags` → `[{slug, name, document_count}, …]`, ordered by
   name.
 
-## 1.8.4 Live job events (SSE) — `GET /api/events`
+## 1.8.5 Live job events (SSE) — `GET /api/events`
 
 A [Server-Sent Events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events)
 stream of document-pipeline state changes, used by the web app to drive the
-navbar running-jobs indicator, toasts, and the live Jobs view without polling.
+navbar running-jobs indicator, toasts, the live Jobs view, and the live status
+badges on the document list and detail pages — all without polling. (Each event
+also bumps the jobs Pinia store's `lastEvent`, which those views watch to
+refetch or patch themselves; document-less system tasks emit no SSE event, so the
+Jobs view polls for them while "Show system tasks" is on.)
 
 - **Transport.** The worker emits a Postgres `NOTIFY` on the `library_doc_events`
   channel each time a document changes pipeline stage (`status_changed`) or fails
