@@ -36,6 +36,10 @@ const SNAPSHOT_LIMIT = 200
 export const useJobsStore = defineStore('jobs', () => {
   const active = ref<Map<number, ActiveDocument>>(new Map())
   const connected = ref(false)
+  // The most recent document event, bumped on EVERY event (not just terminal
+  // ones). Views watch this to refetch/patch themselves as a document advances
+  // through the pipeline — see JobsView, DocumentListView, DocumentDetailView.
+  const lastEvent = ref<DocumentEvent | null>(null)
 
   let source: EventSource | null = null
   let reconnectTimer: ReturnType<typeof setTimeout> | null = null
@@ -70,6 +74,9 @@ export const useJobsStore = defineStore('jobs', () => {
   function handle(event: DocumentEvent): void {
     const notifications = useNotificationsStore()
     const { document_id: id, status, title } = event
+    // Surface every event so views can react to intra-pipeline stage changes,
+    // not only enter/leave of the in-flight set (which `activeCount` tracks).
+    lastEvent.value = event
 
     if (status === 'indexed') {
       removeActive(id)
@@ -99,7 +106,7 @@ export const useJobsStore = defineStore('jobs', () => {
   /** Seed the active set from the current jobs so a fresh tab isn't blank. */
   async function loadSnapshot(): Promise<void> {
     try {
-      const jobs = await listJobs(SNAPSHOT_LIMIT)
+      const jobs = await listJobs({ limit: SNAPSHOT_LIMIT })
       const next = new Map<number, ActiveDocument>()
       for (const job of jobs) {
         if (
@@ -188,6 +195,7 @@ export const useJobsStore = defineStore('jobs', () => {
     activeCount,
     activeList,
     connected,
+    lastEvent,
     connect,
     disconnect,
     handle,

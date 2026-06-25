@@ -70,6 +70,21 @@ describe('useJobsStore', () => {
     expect(jobs.activeCount).toBe(2) // still in flight, just a later stage
   })
 
+  it('exposes the latest event via lastEvent on every handle, including stage changes', () => {
+    const jobs = useJobsStore()
+    expect(jobs.lastEvent).toBeNull()
+
+    jobs.handle(event({ document_id: 1, status: 'ocr', title: 'A' }))
+    expect(jobs.lastEvent).toMatchObject({ document_id: 1, status: 'ocr' })
+
+    // A non-terminal stage change (count unchanged) still updates lastEvent.
+    jobs.handle(event({ document_id: 1, status: 'extract', title: 'A' }))
+    expect(jobs.lastEvent).toMatchObject({ document_id: 1, status: 'extract' })
+
+    jobs.handle(event({ document_id: 1, status: 'indexed', title: 'A' }))
+    expect(jobs.lastEvent).toMatchObject({ document_id: 1, status: 'indexed' })
+  })
+
   it('raises a success toast and clears the doc when indexed', () => {
     const jobs = useJobsStore()
     const notifications = useNotificationsStore()

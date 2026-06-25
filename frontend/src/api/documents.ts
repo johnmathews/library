@@ -242,15 +242,42 @@ export function verifyDocument(id: number): Promise<DocumentDetail> {
   return apiFetch<DocumentDetail>(`/api/documents/${id}/verify`, { method: 'POST' })
 }
 
+/** Options for {@link listJobs}. All optional; an empty call is the default view. */
+export interface ListJobsOptions {
+  limit?: number
+  /** Include document-less system/periodic rows (the email poll) that succeeded. */
+  includeSystem?: boolean
+  /**
+   * History mode: every job for this one document (uncollapsed), newest first,
+   * so a document's full processing history can be traced. System rows are not
+   * relevant in this mode.
+   */
+  documentId?: number
+  /** Fully-qualified task name to filter to (implies system rows are shown). */
+  taskName?: string
+}
+
 /**
  * GET /api/jobs — recent background jobs, newest first. Document-less
  * system/periodic jobs (the email poll) are hidden unless they failed or are
- * running; pass `includeSystem` to list them all.
+ * running; pass `includeSystem` to list them all. `documentId` switches to
+ * uncollapsed history mode; `taskName` filters to one task type.
  */
-export function listJobs(limit?: number, includeSystem = false): Promise<JobInfo[]> {
+export function listJobs(options: ListJobsOptions = {}): Promise<JobInfo[]> {
+  const { limit, includeSystem = false, documentId, taskName } = options
   return apiFetch<JobInfo[]>('/api/jobs', {
-    query: { limit, include_system: includeSystem || undefined },
+    query: {
+      limit,
+      include_system: includeSystem || undefined,
+      document_id: documentId,
+      task_name: taskName,
+    },
   })
+}
+
+/** GET /api/jobs/task-names — distinct task names, for the task-type filter. */
+export function listJobTaskNames(): Promise<string[]> {
+  return apiFetch<string[]>('/api/jobs/task-names')
 }
 
 /** One page returned by GET /api/documents/{id}/markdown. */

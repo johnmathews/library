@@ -28,6 +28,7 @@ import {
 import { renderSnippet } from '@/utils/snippet'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
+import { useJobsStore } from '@/stores/jobs'
 import type { DashboardField } from '@/api/settings'
 import { parseDocumentQuery, hasActiveFilters } from '@/utils/documentQuery'
 
@@ -38,6 +39,7 @@ const route = useRoute()
 const router = useRouter()
 
 const auth = useAuthStore()
+const jobsStore = useJobsStore()
 
 function shows(field: DashboardField): boolean {
   return auth.dashboardFields.includes(field)
@@ -164,6 +166,20 @@ watch(
     }
   },
   { immediate: true },
+)
+
+// Live status: when the jobs store reports a document advancing or finishing,
+// patch that tile's status in place so its badge (Processing / Failed) updates
+// without a refetch — preserving scroll position and the accumulated infinite-
+// scroll pages. A document not currently in the list is ignored; it appears on
+// the next navigation/fetch.
+watch(
+  () => jobsStore.lastEvent,
+  (event) => {
+    if (!event) return
+    const item = items.value.find((doc) => doc.id === event.document_id)
+    if (item) item.status = event.status as DocumentListItem['status']
+  },
 )
 
 // IntersectionObserver on a foot sentinel auto-loads as it scrolls into view.

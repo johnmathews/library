@@ -4,6 +4,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import DocumentDetailView from '../DocumentDetailView.vue'
 import type { DocumentDetail, DocumentMarkdownResponse } from '@/api/documents'
+import { useJobsStore } from '@/stores/jobs'
 
 // pdfjs-dist can't run its worker/canvas in jsdom — mock the whole module
 // so that DocumentPdfPreview (now imported by DocumentDetailView) can be loaded.
@@ -109,6 +110,7 @@ describe('DocumentDetailView', () => {
         { path: '/', name: 'documents', component: Stub },
         { path: '/documents/:id', name: 'document-detail', component: DocumentDetailView },
         { path: '/documents/:id/delete', name: 'document-delete', component: Stub },
+        { path: '/jobs', name: 'jobs', component: Stub },
       ],
     })
   })
@@ -640,5 +642,42 @@ describe('DocumentDetailView', () => {
     const trend = wrapper.findComponent(DocumentSeriesTrendStub)
     expect(trend.exists()).toBe(true)
     expect(trend.props('documentId')).toBe(detail.id)
+  })
+
+  function detailGetCount(): number {
+    return fetchMock.mock.calls.filter(
+      (call) => String(call[0]) === '/api/documents/12' && ((call[1] as RequestInit | undefined)?.method ?? 'GET') === 'GET',
+    ).length
+  }
+
+  it('refetches and refreshes status when the jobs store reports an event for this document', async () => {
+    detail = makeDetail({ status: 'ocr' })
+    const w = await mountView()
+    expect(w.text()).toContain('ocr') // the System-panel status badge
+
+    // The pipeline finishes in the background: the next fetch returns 'indexed'.
+    detail = makeDetail({ status: 'indexed' })
+    const store = useJobsStore()
+    store.handle({ document_id: 12, event: 'status_changed', status: 'indexed', title: null })
+    await flushPromises()
+
+    expect(w.text()).toContain('indexed')
+  })
+
+  it('ignores jobs-store events for a different document', async () => {
+    const w = await mountView()
+    const before = detailGetCount()
+    const store = useJobsStore()
+    store.handle({ document_id: 999, event: 'status_changed', status: 'failed', title: null })
+    await flushPromises()
+    expect(detailGetCount()).toBe(before) // no refetch for an unrelated document
+    expect(w.exists()).toBe(true)
+  })
+
+  it('links to the document-filtered jobs history', async () => {
+    const w = await mountView()
+    const link = w.find('[data-testid="view-job-history"]')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('/jobs?document_id=12')
   })
 })

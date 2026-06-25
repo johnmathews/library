@@ -2,7 +2,7 @@
 
 How Library surfaces background work to the user: a **Jobs view**, **toasts**,
 and a **navbar running-jobs indicator**, all fed by a live Server-Sent Events
-stream. For the API contract see [api.md](api.md) §1.8 / §1.8.4; for the
+stream. For the API contract see [api.md](api.md) §1.8 / §1.8.5; for the
 worker→api bridge see [architecture.md](architecture.md) §1.4.1.
 
 ## 1.1 What the user sees

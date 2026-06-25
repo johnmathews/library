@@ -9,11 +9,20 @@
  * hidden unless "Show system tasks" is on.
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import { AppBadge } from '@/components/app'
-import { listJobs, type JobInfo } from '@/api/documents'
+import { useRoute, useRouter } from 'vue-router'
+import { AppBadge, AppInput, AppSelect } from '@/components/app'
+import {
+  getDocument,
+  listDocuments,
+  listJobs,
+  listJobTaskNames,
+  type JobInfo,
+} from '@/api/documents'
 import { useJobsStore } from '@/stores/jobs'
 
 const jobsStore = useJobsStore()
+const route = useRoute()
+const router = useRouter()
 
 const jobs = ref<JobInfo[]>([])
 const loading = ref(true)
@@ -25,10 +34,126 @@ const showSystem = ref(false)
 const activeJobs = computed(() => jobs.value.filter((job) => job.active))
 const historicalJobs = computed(() => jobs.value.filter((job) => !job.active))
 
+// --- Filters: document + task type ------------------------------------------
+//
+// Both live in the URL query (?document_id=&task=) so the view survives a
+// reload and a document's history can be deep-linked — e.g. the document detail
+// page links to /jobs?document_id=<id>. A document filter switches the server to
+// uncollapsed "history mode": every job for that one document, newest first.
+
+/** Currently-filtered document id, or null when not filtering by document. */
+const documentFilterId = computed<number | null>(() => {
+  const raw = route.query.document_id
+  const n = Number(Array.isArray(raw) ? raw[0] : raw)
+  return Number.isInteger(n) && n > 0 ? n : null
+})
+
+/** Selected task name (the select's v-model); '' means "All tasks". */
+const taskFilter = computed<string>({
+  get() {
+    const raw = route.query.task
+    return typeof raw === 'string' ? raw : ''
+  },
+  set(value: string) {
+    void router.push({ query: withQuery({ task: value || undefined }) })
+  },
+})
+
+const inHistoryMode = computed(() => documentFilterId.value !== null)
+
+/** Merge overrides into the current query; keys set to undefined are removed. */
+function withQuery(overrides: Record<string, string | undefined>): Record<string, string> {
+  const next: Record<string, string> = {}
+  for (const [key, value] of Object.entries(route.query)) {
+    if (typeof value === 'string') next[key] = value
+  }
+  for (const [key, value] of Object.entries(overrides)) {
+    if (value === undefined) delete next[key]
+    else next[key] = value
+  }
+  return next
+}
+
+// Task-type dropdown options, loaded once from the queue's distinct task names.
+const taskNames = ref<string[]>([])
+const taskOptions = computed(() => [
+  { value: '', text: 'All tasks' },
+  ...taskNames.value.map((name) => ({ value: name, text: taskLabel(name) })),
+])
+
+// Document typeahead: search by title, map the chosen title back to its id.
+const documentInput = ref('')
+const documentSuggestions = ref<{ id: number; title: string }[]>([])
+const documentChipTitle = ref('')
+let suggestAbort: AbortController | null = null
+
+async function searchDocuments(): Promise<void> {
+  const q = documentInput.value.trim()
+  suggestAbort?.abort()
+  if (!q) {
+    documentSuggestions.value = []
+    return
+  }
+  suggestAbort = new AbortController()
+  try {
+    const res = await listDocuments({ q, limit: 10 }, suggestAbort.signal)
+    documentSuggestions.value = res.items.map((item) => ({
+      id: item.id,
+      title: item.title ?? `Document #${item.id}`,
+    }))
+  } catch {
+    // Aborted or failed — keep whatever suggestions we already had.
+  }
+}
+
+/** Apply the filter when the typed text matches a suggested document title. */
+function applyTypedDocument(): void {
+  const match = documentSuggestions.value.find((d) => d.title === documentInput.value.trim())
+  if (match) setDocumentFilter(match.id)
+}
+
+function setDocumentFilter(id: number | null): void {
+  void router.push({ query: withQuery({ document_id: id === null ? undefined : String(id) }) })
+}
+
+function clearDocumentFilter(): void {
+  documentInput.value = ''
+  setDocumentFilter(null)
+}
+
+// Resolve a readable title for the active-document chip. Prefer a title already
+// in the suggestion list (free); otherwise fetch it (covers deep-links).
+watch(
+  documentFilterId,
+  async (id) => {
+    if (id === null) {
+      documentChipTitle.value = ''
+      return
+    }
+    const known = documentSuggestions.value.find((d) => d.id === id)
+    if (known) {
+      documentChipTitle.value = known.title
+      return
+    }
+    try {
+      const doc = await getDocument(id)
+      documentChipTitle.value = doc.title ?? `Document #${id}`
+    } catch {
+      documentChipTitle.value = `Document #${id}`
+    }
+  },
+  { immediate: true },
+)
+
 async function load(): Promise<void> {
   error.value = null
   try {
-    jobs.value = await listJobs(200, showSystem.value)
+    jobs.value = await listJobs({
+      limit: 200,
+      includeSystem: showSystem.value,
+      documentId: documentFilterId.value ?? undefined,
+      taskName: taskFilter.value || undefined,
+    })
   } catch {
     error.value = 'Could not load jobs. Try refreshing the page.'
   } finally {
@@ -36,12 +161,52 @@ async function load(): Promise<void> {
   }
 }
 
+// System/periodic rows (the email poll, series insight) don't emit SSE events,
+// so a live document stream can never surface them. While they're shown — and
+// we're not pinned to one document's history — poll so new ones appear without a
+// manual reload.
+const SYSTEM_POLL_MS = 10000
+let systemPollTimer: ReturnType<typeof setInterval> | null = null
+
+function stopSystemPoll(): void {
+  if (systemPollTimer !== null) {
+    clearInterval(systemPollTimer)
+    systemPollTimer = null
+  }
+}
+
+function syncSystemPoll(): void {
+  const shouldPoll = showSystem.value && !inHistoryMode.value
+  if (shouldPoll && systemPollTimer === null) {
+    systemPollTimer = setInterval(() => void load(), SYSTEM_POLL_MS)
+  } else if (!shouldPoll) {
+    stopSystemPoll()
+  }
+}
+
 onMounted(load)
-// A change in the live active count means a document started or finished —
-// refresh so the table (and its historical section) reflects the new state.
-watch(() => jobsStore.activeCount, () => void load())
-// Re-fetch when the system-task filter flips (the server applies it).
-watch(showSystem, () => void load())
+onMounted(async () => {
+  try {
+    taskNames.value = await listJobTaskNames()
+  } catch {
+    // Best-effort: the dropdown just offers "All tasks".
+  }
+})
+// Any document event — including an intra-pipeline stage change that leaves the
+// active count unchanged (ocr → extract → …) — means the table may be stale, so
+// refetch. (activeCount alone misses stage-to-stage transitions.)
+watch(() => jobsStore.lastEvent, () => void load())
+// Re-fetch when the system-task filter flips (the server applies it), and start
+// or stop the system-task poll to match.
+watch(showSystem, () => {
+  void load()
+  syncSystemPoll()
+})
+// Re-fetch when a document or task-type filter changes; entering/leaving history
+// mode also flips whether the system poll should run.
+watch([documentFilterId, () => taskFilter.value], () => void load())
+watch(inHistoryMode, syncSystemPoll)
+onUnmounted(stopSystemPoll)
 
 type BadgeColour = 'grey' | 'blue' | 'yellow' | 'green' | 'red'
 
@@ -299,7 +464,14 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
                       class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 block truncate"
                       >{{ documentLabel(job) }}</RouterLink
                     >
-                    <span v-else class="text-gray-500 dark:text-gray-400">—</span>
+                    <span
+                      v-else
+                      class="inline-flex items-center gap-1.5 min-w-0 text-gray-500 dark:text-gray-400"
+                      data-testid="jobs-system-label"
+                    >
+                      <AppBadge colour="grey">System</AppBadge>
+                      <span class="truncate">{{ taskLabel(job.task_name) }}</span>
+                    </span>
                   </td>
                   <td class="px-4 py-3 text-gray-600 dark:text-gray-300 truncate">{{ taskLabel(job.task_name) }}</td>
                   <td class="px-4 py-3">
@@ -326,7 +498,13 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
                   class="font-medium text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
                   >{{ documentLabel(job) }}</RouterLink
                 >
-                <span v-else class="font-medium text-gray-500 dark:text-gray-400">—</span>
+                <span
+                  v-else
+                  class="inline-flex items-center gap-1.5 min-w-0 font-medium text-gray-500 dark:text-gray-400"
+                >
+                  <AppBadge colour="grey">System</AppBadge>
+                  <span class="truncate">{{ taskLabel(job.task_name) }}</span>
+                </span>
                 <AppBadge :colour="statusColour(job)" class="shrink-0">{{ statusLabel(job) }}</AppBadge>
               </div>
               <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
@@ -350,7 +528,7 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
       <section>
         <div class="flex items-center justify-between mb-3">
           <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
-            Recent
+            {{ inHistoryMode ? 'History' : 'Recent' }}
             <span class="text-gray-400 dark:text-gray-500 font-normal"
               >({{ historicalJobs.length }})</span
             >
@@ -406,6 +584,50 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
             </div>
           </div>
         </div>
+
+        <!-- Filter bar: pick a task type, or a document to trace its full
+             history. Both are reflected in the URL query for deep-linking. -->
+        <div class="mb-4 flex flex-wrap items-end gap-3" data-testid="jobs-filter-bar">
+          <div class="w-44">
+            <AppSelect
+              id="jobs-task-filter"
+              v-model="taskFilter"
+              label="Task type"
+              :items="taskOptions"
+            />
+          </div>
+          <div class="w-72">
+            <AppInput
+              id="jobs-document-filter"
+              v-model="documentInput"
+              label="Document"
+              hint="Type to find a document, then pick it to trace its history"
+              list="jobs-document-options"
+              @input="searchDocuments"
+              @change="applyTypedDocument"
+            />
+            <datalist id="jobs-document-options">
+              <option v-for="d in documentSuggestions" :key="d.id" :value="d.title" />
+            </datalist>
+          </div>
+          <div v-if="inHistoryMode" class="pb-1.5" data-testid="jobs-document-chip">
+            <span
+              class="inline-flex items-center gap-1.5 rounded-full bg-violet-100 dark:bg-violet-500/20 px-3 py-1 text-sm font-medium text-violet-700 dark:text-violet-300"
+            >
+              Document: {{ documentChipTitle }}
+              <button
+                type="button"
+                data-testid="jobs-document-chip-clear"
+                class="text-violet-500 hover:text-violet-700 dark:hover:text-violet-200"
+                aria-label="Clear document filter"
+                @click="clearDocumentFilter"
+              >
+                ✕
+              </button>
+            </span>
+          </div>
+        </div>
+
         <p
           v-if="historicalJobs.length === 0"
           data-testid="jobs-historical-empty"
@@ -456,7 +678,14 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
                       class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 block truncate"
                       >{{ documentLabel(job) }}</RouterLink
                     >
-                    <span v-else-if="col.key === 'document'" class="text-gray-500 dark:text-gray-400">—</span>
+                    <span
+                      v-else-if="col.key === 'document'"
+                      class="inline-flex items-center gap-1.5 min-w-0 text-gray-500 dark:text-gray-400"
+                      data-testid="jobs-system-label"
+                    >
+                      <AppBadge colour="grey">System</AppBadge>
+                      <span class="truncate">{{ taskLabel(job.task_name) }}</span>
+                    </span>
                     <AppBadge v-else-if="col.key === 'status'" :colour="statusColour(job)">{{
                       statusLabel(job)
                     }}</AppBadge>
@@ -481,9 +710,16 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
                   class="font-medium text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
                   >{{ documentLabel(job) }}</RouterLink
                 >
-                <span v-else class="font-medium text-gray-800 dark:text-gray-100 truncate">{{
-                  isVisible('document') ? '—' : `Job #${job.id}`
-                }}</span>
+                <span
+                  v-else-if="isVisible('document')"
+                  class="inline-flex items-center gap-1.5 min-w-0 font-medium text-gray-500 dark:text-gray-400"
+                >
+                  <AppBadge colour="grey">System</AppBadge>
+                  <span class="truncate">{{ taskLabel(job.task_name) }}</span>
+                </span>
+                <span v-else class="font-medium text-gray-800 dark:text-gray-100 truncate"
+                  >Job #{{ job.id }}</span
+                >
                 <AppBadge v-if="isVisible('status')" :colour="statusColour(job)" class="shrink-0">{{
                   statusLabel(job)
                 }}</AppBadge>

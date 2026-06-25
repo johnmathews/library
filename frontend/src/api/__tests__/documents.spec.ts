@@ -4,6 +4,8 @@ import {
   documentQueryString,
   fetchDocumentMarkdown,
   listDocuments,
+  listJobs,
+  listJobTaskNames,
   originalUrl,
   searchablePdfUrl,
   thumbnailUrl,
@@ -97,6 +99,64 @@ describe('verifyDocument', () => {
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
     expect(url).toBe('/api/documents/7/verify')
     expect(init.method).toBe('POST')
+  })
+})
+
+describe('listJobs', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+    fetchMock.mockResolvedValue(new Response('[]', { status: 200 }))
+  })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('GETs /api/jobs with no params by default', async () => {
+    await listJobs()
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe('/api/jobs')
+  })
+
+  it('passes limit and include_system', async () => {
+    await listJobs({ limit: 200, includeSystem: true })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toContain('limit=200')
+    expect(url).toContain('include_system=true')
+  })
+
+  it('passes document_id for history mode', async () => {
+    await listJobs({ documentId: 42 })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toContain('document_id=42')
+  })
+
+  it('passes task_name to filter by task type', async () => {
+    await listJobs({ taskName: 'library.jobs.poll_email_inbox' })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toContain('task_name=library.jobs.poll_email_inbox')
+  })
+})
+
+describe('listJobTaskNames', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+  })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('GETs /api/jobs/task-names', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify(['library.jobs.process_document']), { status: 200 }),
+    )
+    const names = await listJobTaskNames()
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe('/api/jobs/task-names')
+    expect(names).toEqual(['library.jobs.process_document'])
   })
 })
 

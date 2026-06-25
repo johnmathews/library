@@ -48,6 +48,7 @@ import {
 } from '@/api/documents'
 import { listKinds, listSenders, type KindOption, type SenderOption } from '@/api/taxonomy'
 import { ApiError } from '@/api/client'
+import { useJobsStore } from '@/stores/jobs'
 import DocumentSeriesTrend from '@/components/DocumentSeriesTrend.vue'
 import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 
@@ -533,6 +534,29 @@ async function rerunExtraction(): Promise<void> {
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms))
 }
+
+// --- Live status (SSE) --------------------------------------------------------
+//
+// While this document is open and processing in the background, refetch it on
+// each of its own pipeline events so the status badge (and any metadata the
+// pipeline fills in) updates without a manual reload. Skip while a re-extraction
+// poll is running — that loop already owns refreshes and a double-fetch would
+// race it.
+const jobsStore = useJobsStore()
+watch(
+  () => jobsStore.lastEvent,
+  async (event) => {
+    if (!event || extracting.value) return
+    const current = doc.value
+    if (!current || event.document_id !== current.id) return
+    try {
+      const fresh = await getDocument(current.id)
+      if (!unmounted) doc.value = fresh
+    } catch {
+      // Transient — the next event or a reload recovers the latest state.
+    }
+  },
+)
 
 // --- Validation findings ------------------------------------------------------
 
@@ -1253,7 +1277,7 @@ watch(
               Download the original file
             </a>
           </p>
-          <p v-if="doc.has_searchable_pdf" class="text-sm mb-4">
+          <p v-if="doc.has_searchable_pdf" class="text-sm mb-2">
             <a
               class="text-violet-600 hover:underline"
               :href="searchablePdfUrl(doc.id)"
@@ -1261,6 +1285,15 @@ watch(
             >
               Download the searchable PDF
             </a>
+          </p>
+          <p class="text-sm mb-4">
+            <RouterLink
+              class="text-violet-600 hover:underline"
+              :to="`/jobs?document_id=${doc.id}`"
+              data-testid="view-job-history"
+            >
+              View job history
+            </RouterLink>
           </p>
           <div class="flex flex-wrap gap-3">
             <AppButton

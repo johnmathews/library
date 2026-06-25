@@ -8,6 +8,7 @@ import type { DashboardField } from '@/api/settings'
 import { resetTaxonomyOptionsForTests } from '@/composables/taxonomyOptions'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
+import { useJobsStore } from '@/stores/jobs'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -488,5 +489,22 @@ describe('DocumentListView', () => {
       jsonResponse(listBody([makeItem({ review_status: 'unreviewed' })]))
     const w = await mountView()
     expect(w.find('[data-testid="review-badge"]').exists()).toBe(false)
+  })
+
+  it('updates a tile status badge live when the jobs store reports an event', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem({ id: 12, status: 'ocr' })]))
+    const w = await mountView()
+    const tile = (): ReturnType<VueWrapper['find']> => w.find('[data-testid="doc-card"]')
+    expect(tile().text()).toContain('Processing')
+
+    const fetchesBefore = documentUrls().length
+    const store = useJobsStore()
+    store.handle({ document_id: 12, event: 'status_changed', status: 'failed', title: null })
+    await flushPromises()
+
+    // The badge flips in place — no extra /api/documents fetch (scroll preserved).
+    expect(tile().text()).toContain('Failed')
+    expect(tile().text()).not.toContain('Processing')
+    expect(documentUrls().length).toBe(fetchesBefore)
   })
 })
