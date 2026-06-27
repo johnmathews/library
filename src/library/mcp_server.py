@@ -153,6 +153,7 @@ def _document_summary(document: Document) -> dict[str, Any]:
             {"slug": tag.slug, "name": tag.name}
             for tag in sorted(document.tags, key=lambda tag: tag.slug)
         ],
+        "topics": list(document.topics or []),
         "projects": [
             {"slug": project.slug, "name": project.name}
             for project in sorted(document.projects, key=lambda project: project.slug)

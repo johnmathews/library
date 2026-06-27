@@ -143,6 +143,12 @@ async def test_born_digital_writes_single_page_no_anthropic(
     assert pages[0].markdown == body  # full body verbatim
     assert pages[0].char_count == len(body)
 
+    # page_count is set to match the single synthesized page.
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.page_count == 1
+
     events = await get_events(session_factory, document_id)
     completed = [detail for ev, detail in events if ev == "markdown_completed"]
     assert len(completed) == 1
@@ -201,3 +207,9 @@ async def test_born_digital_empty_body_records_no_text(
     assert skipped == [{"reason": "no_text"}]
     assert "markdown_completed" not in [ev for ev, _ in events]
     assert await get_pages(session_factory, document_id) == []
+
+    # The no-text branch writes no page, so page_count stays unchanged (None).
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.page_count is None

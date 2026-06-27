@@ -29,6 +29,7 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     sender: { id: 3, name: 'Eneco' },
     tags: [{ slug: 'energie', name: 'Energie' }],
     projects: [],
+    topics: [],
     document_date: '2026-05-15',
     language: 'nld',
     status: 'indexed',
@@ -290,6 +291,34 @@ describe('DocumentDetailView', () => {
     await w.find('#edit-projects').trigger('change')
     await flushPromises()
     expect(patchCalls()[0]!.body).toEqual({ projects: ['House purchase', 'Taxes'] })
+  })
+
+  it('topics editor sends a comma-split full-replacement list', async () => {
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    await w.find('#edit-topics').setValue(' thermostat installation,  boiler maintenance ,')
+    await w.find('#edit-topics').trigger('change')
+    await flushPromises()
+    expect(patchCalls()[0]!.body).toEqual({
+      topics: ['thermostat installation', 'boiler maintenance'],
+    })
+  })
+
+  it('read mode renders each topic as a badge', async () => {
+    detail = makeDetail({ topics: ['thermostat installation', 'boiler maintenance'] })
+    const w = await mountView()
+    expect(rowValue(w, 'topics')).toContain('thermostat installation')
+    const badges = w.findAll('[data-testid="topic-badge"]')
+    expect(badges).toHaveLength(2)
+    expect(badges[0]!.text()).toBe('thermostat installation')
+    expect(badges[1]!.text()).toBe('boiler maintenance')
+  })
+
+  it('hides the topics row in read mode when there are none', async () => {
+    detail = makeDetail({ topics: [] })
+    const w = await mountView()
+    expect(w.find('[data-testid="row-topics"]').exists()).toBe(false)
   })
 
   it('read mode renders each project as a badge link to the project-filtered dashboard', async () => {

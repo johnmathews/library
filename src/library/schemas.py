@@ -69,6 +69,7 @@ class DocumentListItem(BaseModel):
     kind: KindOut | None
     sender: SenderOut | None
     tags: list[TagOut] = Field(description="Sorted by slug.")
+    topics: list[str] = Field(default_factory=list, description="Extracted free-text topics.")
     projects: list[ProjectRef] = Field(default_factory=list, description="Sorted by slug.")
     document_date: date | None
     language: DocumentLanguage
@@ -146,6 +147,10 @@ class DocumentUpdate(BaseModel):
     )
     tags: list[str] | None = Field(
         default=None, description="Full replacement list of tag slugs; created if unknown."
+    )
+    topics: list[str] | None = Field(
+        default=None,
+        description="Full replacement list of free-text topics; `[]` clears, null is a no-op.",
     )
     projects: list[str] | None = Field(
         default=None,

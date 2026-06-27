@@ -210,6 +210,7 @@ async def test_search_documents_dutch_stem(
         kind_slug="invoice",
         sender_name="MCP Energie BV",
         tag_slugs=["mcp-search-nl"],
+        topics=["betaling", "herinnering"],
         title="Energierekening mei",
         ocr_text="Uw rekeningen zijn nog niet betaald.",
         language=DocumentLanguage.NLD,
@@ -227,6 +228,7 @@ async def test_search_documents_dutch_stem(
     assert item["kind"] == {"slug": "invoice", "name": "Invoice"}
     assert item["sender"]["name"] == "MCP Energie BV"
     assert item["tags"] == [{"slug": "mcp-search-nl", "name": "mcp-search-nl"}]
+    assert item["topics"] == ["betaling", "herinnering"]
     assert item["language"] == "nld"
     assert "<b>rekeningen</b>" in item["snippet"]
     assert item["rank"] > 0
@@ -284,10 +286,12 @@ async def test_get_document_truncates_long_ocr_text(
         "mcp-truncate",
         title="Lange tekst",
         ocr_text=long_text,
+        topics=["water", "rekening"],
     )
     async with mcp_connect() as session:
         result = payload(await session.call_tool("get_document", {"document_id": document_id}))
     assert result["id"] == document_id
+    assert result["topics"] == ["water", "rekening"]
     assert result["ocr_text_truncated"] is True
     assert len(result["ocr_text"]) < 21_000
     assert result["ocr_text"].startswith("rekening en water")

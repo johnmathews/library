@@ -122,6 +122,7 @@ def test_list_item_shape_and_expansions(api_client: TestClient, api_database_url
         kind_slug="invoice",
         sender_name="W7 Shape BV",
         tag_slugs=["w7-shape-b", "w7-shape-a"],
+        topics=["installation", "error codes"],
         title="Vormtest",
         summary="Een document.",
         document_date=date(2026, 4, 1),
@@ -139,6 +140,8 @@ def test_list_item_shape_and_expansions(api_client: TestClient, api_database_url
     assert item["sender"]["name"] == "W7 Shape BV"
     # Tags expanded and sorted by slug.
     assert [tag["slug"] for tag in item["tags"]] == ["w7-shape-a", "w7-shape-b"]
+    # Topics surfaced verbatim, insertion order preserved.
+    assert item["topics"] == ["installation", "error codes"]
     assert item["document_date"] == "2026-04-01"
     assert item["language"] == "unknown"
     assert item["status"] == "indexed"
@@ -348,6 +351,7 @@ def test_detail_exposes_content_and_audit_trail_not_raw_extra(
         kind_slug="contract",
         sender_name="W7 Detail BV",
         tag_slugs=["w7-detail"],
+        topics=["lease term", "rent"],
         title="Contract",
         ocr_text="De volledige tekst.",
         ocr_confidence=91.5,
@@ -363,6 +367,7 @@ def test_detail_exposes_content_and_audit_trail_not_raw_extra(
     assert response.status_code == 200
     body = response.json()
     assert body["ocr_text"] == "De volledige tekst."
+    assert body["topics"] == ["lease term", "rent"]  # surfaced on detail too
     assert body["ocr_confidence"] == 91.5
     assert Decimal(body["amount_total"]) == Decimal("123.45")
     assert body["currency"] == "EUR"
@@ -932,3 +937,30 @@ def test_patch_null_projects_rejected(api_client: TestClient, api_database_url: 
     document_id = seed_document(api_database_url, "w6-proj-null")
     response = api_client.patch(f"/api/documents/{document_id}", json={"projects": None})
     assert response.status_code == 422
+
+
+# --- Topics ------------------------------------------------------------------
+
+
+def test_patch_sets_and_clears_topics(api_client: TestClient, api_database_url: str) -> None:
+    """PATCH topics is a full-replace list: `[]` clears, `null` leaves unchanged."""
+    document_id = seed_document(api_database_url, "topics-patch", tag_slugs=["topics-patch"])
+
+    response = api_client.patch(
+        f"/api/documents/{document_id}",
+        json={"topics": ["installation", "error codes"]},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["topics"] == ["installation", "error codes"]
+    assert "topics" in body["user_edited_fields"]
+
+    # null leaves topics unchanged.
+    unchanged = api_client.patch(f"/api/documents/{document_id}", json={"topics": None})
+    assert unchanged.status_code == 200, unchanged.text
+    assert unchanged.json()["topics"] == ["installation", "error codes"]
+
+    # Re-PATCH with [] clears them.
+    cleared = api_client.patch(f"/api/documents/{document_id}", json={"topics": []})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["topics"] == []

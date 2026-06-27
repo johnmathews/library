@@ -96,6 +96,8 @@ export interface ValidationResult {
 
 /** Body of GET /api/documents/{id}. */
 export interface DocumentDetail extends DocumentListItem {
+  /** Human-readable topic phrases extracted for general/reference docs. */
+  topics: string[]
   ocr_text: string | null
   ocr_confidence: number | null
   due_date: string | null
@@ -147,6 +149,8 @@ export interface DocumentUpdate {
    * names are upserted by the backend, so free text creates a new project.
    */
   projects?: string[]
+  /** Full-replacement list of human-readable topic phrases (`[]` clears). */
+  topics?: string[]
   language?: DocumentLanguage
   /** Decimal as string to preserve precision. */
   amount_total?: string | null

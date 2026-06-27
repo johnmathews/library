@@ -67,6 +67,7 @@ async def _apply_born_digital_markdown(session: AsyncSession, document: Document
             char_count=len(body),
         )
     )
+    document.page_count = 1
     await _record_event(
         session,
         document,
