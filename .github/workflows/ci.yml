@@ -40,7 +40,10 @@ jobs:
       - name: Test with coverage
         run: |
           uv run coverage run -m pytest
-          uv run coverage report
+          # Generate the HTML report BEFORE the fail-under gate below, so the
+          # artifact is still produced (and uploaded) when coverage drops below
+          # threshold — that's exactly when you want to see what's uncovered.
+          uv run coverage html
           # Surface the report on the run's summary page and in a file the
           # PR-comment step can reuse.
           {
@@ -48,13 +51,17 @@ jobs:
             echo
             uv run coverage report --format=markdown
           } | tee coverage.md >> "$GITHUB_STEP_SUMMARY"
-          uv run coverage html
+          # Enforce the fail-under gate last, after artifacts are produced.
+          uv run coverage report
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: backend-coverage-html
           path: htmlcov/
+          # When an earlier step (e.g. lint) fails, coverage never runs and
+          # there's no htmlcov/ — don't warn about the expected absence.
+          if-no-files-found: ignore
       - name: Coverage PR comment
         if: success() && github.event_name == 'pull_request'
         uses: marocchino/sticky-pull-request-comment@v3
