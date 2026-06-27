@@ -1,6 +1,6 @@
 # 1. Architecture
 
-**Status:** active. **Last updated:** 2026-06-22.
+**Status:** active. **Last updated:** 2026-06-28.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design and tracks which parts exist. The full
@@ -67,6 +67,8 @@ at any stage, with the reason in `ingestion_events`).
    `/data/originals/ab/cd/<sha256>`; duplicate content is detected by hash
    and not re-ingested. HEIC is converted to JPEG (original kept).
 2. **OCR** — routed by input type:
+   - Born-digital `text/plain`/`text/markdown` → passthrough read, no OCR
+     (the file content becomes the text layer directly).
    - PDF with a text layer → direct extraction (pypdfium2), no OCR.
    - Scans / image-only PDFs (the primary path — iOS Notes scan exports
      land here) → OCRmyPDF + Tesseract `nld+eng` with deskew/clean/
@@ -77,7 +79,12 @@ at any stage, with the reason in `ingestion_events`).
      the neural path and the better result kept.
 3. **Extract** — Claude (Haiku 4.5, structured outputs via
    `messages.parse()`) turns OCR text into metadata: kind, sender, title,
-   summary, document date, amounts, expiry, language, suggested tags.
+   summary, document date, amounts, expiry, language, suggested tags, and —
+   for general-reference material — `topics`. The prompt spans both
+   transactional paperwork and general material (manuals, reference docs,
+   research papers, notes); long documents are **window-sampled** (head +
+   evenly-spaced middles + tail, joined by `[...]`) rather than truncated, so
+   signal from a whole manual reaches the model within a fixed token budget.
    Low-confidence documents escalate to Sonnet 4.6. Extraction is
    idempotent and re-runnable; a document whose extraction fails stays
    searchable by its OCR text. As the final step inside `apply_extraction`,
@@ -90,7 +97,10 @@ at any stage, with the reason in `ingestion_events`).
 4. **Markdown** — Claude vision (Haiku 4.5 by default) rasterizes each
    page and renders a clean GitHub-flavored markdown representation,
    grounded on the OCR text. One `messages.parse()` call per page-image
-   batch; results are stored per page in `document_pages`. Best-effort,
+   batch; results are stored per page in `document_pages`. **Born-digital
+   `text/markdown`/`text/plain` bypass the vision model entirely**: the raw
+   content is already the text layer, so it is written as a single
+   `document_pages` row with no API call or budget spend. Best-effort,
    exactly like extraction: disabled feature, missing API key, blown
    budget, unusable input, or an API error all produce a skip/failed event
    and the document continues to `embed`. See
@@ -109,11 +119,16 @@ at any stage, with the reason in `ingestion_events`).
 ## 1.3 Data model (summary)
 
 `documents` (hash, mime, lifecycle status, `review_status` enum, title,
-summary, document_date, language, amounts/expiry, `extra` JSONB for
+summary, document_date, language, amounts/expiry, `topics` JSONB list of
+human-readable subject phrases for general-reference material, `extra` JSONB for
 kind-specific fields plus `extra["validation"]` + `extra["corrections"]`,
 OCR text + confidence, uploader, source channel) with FKs to `senders` and `kinds`
 (seeded: invoice, receipt, certificate, utility bill, parking ticket,
-warranty, manual, letter, contract, ticket, other), many-to-many `tags`,
+warranty, manual, reference, research, note, letter, contract, ticket, other —
+the last group of general-reference kinds added in migration 0010 alongside
+`topics`), many-to-many `tags`, many-to-many `projects` (first-class
+collections — `projects` + `document_projects`, migration 0011; soft-archived
+via `archived_at`, documents survive a project delete),
 per-page markdown renderings (`document_pages`, PK `(document_id, page_number)`),
 per-chunk embeddings (`document_chunks`, pgvector + HNSW; each chunk carries
 `page_number` when generated from `document_pages`, `NULL` when falling back to

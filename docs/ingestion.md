@@ -70,7 +70,7 @@ Derived artifacts (conversions, future `searchable.pdf`, `thumb.webp`,
 ## MIME detection and the allowed set
 
 Accepted types: `application/pdf`, `image/jpeg`, `image/png`,
-`image/heic`, `image/heif`, `image/tiff`, `text/plain`.
+`image/heic`, `image/heif`, `image/tiff`, `text/plain`, `text/markdown`.
 
 Detection (`library.ingest.detect_mime`) prefers content sniffing over
 the client-declared type:
@@ -78,13 +78,15 @@ the client-declared type:
 1. Sniff magic bytes with the **`filetype`** library (pure Python — no
    `libmagic` system dependency, unlike `python-magic`; it covers every
    binary type we accept, including HEIC).
-2. `filetype` cannot identify plain text (it is magic-bytes based), so
-   if sniffing fails and the content decodes as UTF-8, the type is
-   `text/plain`.
+2. `filetype` cannot identify text (it is magic-bytes based), so if
+   sniffing fails and the content decodes as UTF-8, the type is
+   `text/markdown` when the filename ends `.md`/`.markdown`, otherwise
+   `text/plain`. (The binary sniff always wins over the filename.)
 3. Otherwise fall back to the client-declared type (normalised, e.g.
-   `image/jpg` → `image/jpeg`).
+   `image/jpg` → `image/jpeg`, `text/x-markdown` → `text/markdown`).
 
 Anything that resolves outside the allowed set is rejected with **415**.
+`.docx`/`.epub` are **not** supported — there is no route for them.
 
 ## HEIC handling (`library.images`)
 
@@ -175,7 +177,7 @@ needs nothing from extraction, so it runs in parallel with that stage).
 Renders page 1 — pypdfium2 for PDFs, Pillow for images, HEIC via the
 derived `converted.jpg` — to a ~480 px wide WebP at
 `derived/<sha>/thumb.webp` and records a `thumbnail_generated` (or
-`thumbnail_skipped`, e.g. for `text/plain`) event. The file's existence
+`thumbnail_skipped`, e.g. for `text/plain`/`text/markdown`) event. The file's existence
 is the only thumbnail marker; `GET /api/documents/{id}/thumbnail` serves
 it (see [api.md](api.md)).
 
@@ -188,7 +190,7 @@ three engines**, selected by input type, with a confidence gate.
 ```
 run_ocr(document, original_path, derived_dir) -> OcrResult
   │
-  ├─ text/plain ───────────► passthrough read              engine="text"
+  ├─ text/plain, text/markdown ► passthrough read           engine="text"
   ├─ application/pdf ──────► analyze_pdf (library.ocr.analysis)
   │    ├─ text layer (avg chars/page ≥
   │    │  LIBRARY_TEXT_LAYER_MIN_CHARS_PER_PAGE, default 50)
@@ -333,7 +335,7 @@ the SDK converts the model to a JSON schema (with
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `kind_slug` | enum | The 11 seeded kind slugs (`invoice` … `other`); enforced by the JSON schema, so the model cannot invent kinds. |
+| `kind_slug` | enum | The 14 seeded kind slugs (`invoice` … `other`, including the general-reference kinds `reference`, `research`, `note`); enforced by the JSON schema, so the model cannot invent kinds. |
 | `sender_name` | `str \| None` | Canonical short organisation/person name. |
 | `title`, `summary` | `str` | Always in **English** (translated from the source language if needed — prompt-enforced); summary ≤ 2 sentences (also prompt-enforced — string length constraints are not supported in structured-output schemas). |
 | `document_date`, `due_date`, `expiry_date` | `date \| None` | Wire format is an ISO `YYYY-MM-DD` string; a before-validator trims it and maps empty/placeholder values to `None`, so sloppy-but-harmless output degrades to "no date" while a truly malformed date raises (and triggers escalation). |
@@ -341,6 +343,7 @@ the SDK converts the model to a JSON schema (with
 | `currency` | `str \| None` | ISO 4217; anything that is not three letters becomes `None`. |
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown`. |
 | `tags` | `list[str]` | Normalised to lowercase slugs, deduplicated, capped at 8 client-side (array length constraints are also unsupported in the schema). |
+| `topics` | `list[str]` | Human-readable topic phrases (kept as prose, **not** slugified) for general-reference material — what the document covers. Stripped, case-insensitively deduplicated, capped at 12. Empty (`[]`) for transactional paperwork. Persisted to the `documents.topics` JSONB column (migration 0010). |
 | `confidence` | enum | `high` / `medium` / `low` — `low` triggers escalation. |
 | `reasoning_note` | `str \| None` | One-line note when something needed judgement. |
 
@@ -350,9 +353,14 @@ prompt-instructed or normalised by validators.
 
 ### Input selection
 
-- **Normal case:** the user message is the document's `ocr_text`,
-  truncated to 8,000 characters (≈ 2–3k tokens — plenty for metadata,
-  caps spend on huge documents).
+- **Normal case:** the user message is the document's `ocr_text`. Text up
+  to `MAX_TEXT_CHARS` (8,000) is sent whole. **Longer text is sampled, not
+  truncated** (`_sample_long_text`): `_SAMPLE_WINDOWS` (6) evenly-spaced
+  windows — the first anchored at the start, the last at the end — are
+  joined by a `[...]` marker, capped at `MAX_TEXT_CHARS_LONG` (24,000). This
+  keeps head, middle, and tail of long general-reference material (manuals,
+  papers, notes) in front of the model while spend stays bounded; the marker
+  tells the model not to read across the gaps.
 - **Garbage/empty OCR** (stripped text < 20 chars) and the original is
   a PDF or image: the original file is sent directly as a base64
   `document` (PDF) or `image` content block. HEIC/HEIF uses the derived
@@ -364,11 +372,18 @@ prompt-instructed or normalised by validators.
 ### Prompt
 
 A versioned system prompt (`PROMPT_VERSION` in
-`library.extraction.extractor`) describes Library, the kinds taxonomy,
-and the Dutch+English household-paperwork domain, and instructs concise
-title/summary — and all free-text fields — **in English** (translated from
-the source language when the document is e.g. Dutch), while the `language`
-field still records the *detected source* language. The prompt version, model
+`library.extraction.extractor`) describes Library, the kinds taxonomy, and
+the Dutch+English domain. It now frames the archive as **two groups** —
+transactional paperwork (invoices, receipts, …) and general reference
+material (manuals, reference docs, research papers, notes) — and adapts the
+instructions accordingly: a 2-sentence summary for paperwork but 3–6
+sentences plus `topics` for general material, and an explicit note that a
+missing sender/date/amount is normal for reference material and must **not**
+be treated as a low-confidence signal (so clean general docs are not flagged
+for review). All free-text fields (title, summary, reasoning_note) are
+**in English** (translated from the source language when the document is e.g.
+Dutch), while the `language` field still records the *detected source*
+language. The prompt version, model
 and token usage of every run are stored on the document
 (`extra["extraction"]`) and in the audit trail, so a future prompt
 change can identify documents extracted with an older prompt.
@@ -384,6 +399,9 @@ On success:
 - Scalar fields (`title`, `summary`, dates, `amount_total`, `currency`,
   `language`) are set; `None` extraction values never null out existing
   data, and `language` is only set when not `unknown`.
+- `topics` is written to `documents.topics` when the model returned any
+  (and the field is not user-edited); like the other fields it is recorded
+  in `fields_set`.
 - `extra["extraction"]` records `{prompt_version, model, confidence,
   input_tokens, output_tokens, cost_usd, escalated, input_mode,
   fields_set, reasoning_note}`.
@@ -444,7 +462,7 @@ Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
 | `date_plausibility` | `document_date`, `due_date`, `expiry_date` | `document_date` is in the future or before 1990-01-01; or `due_date`/`expiry_date` is before `document_date` |
 | `amount_currency_coupling` | `currency` | Exactly one of amount/currency is set (the rule checks both fields; the finding's `field` attribute is `currency`) |
 | `ocr_confidence_gate` | (document) | `ocr_confidence` is below `LIBRARY_EXTRACTION_VALIDATION_OCR_FLOOR` (default 50.0) |
-| `empty_extraction` | (document) | Kind is `other` or unset **and** no sender, no `document_date`, and no `amount_total` |
+| `empty_extraction` | (document) | Kind is `other` or unset **and** no sender, no `document_date`, no `amount_total`, **and** no `title` and no `summary`. A clean general document (reference/research/note) that has a real title/summary but no sender/amount/date is therefore **not** flagged. |
 | `self_reported_low` | (document) | `extra["extraction"]["confidence"] == "low"` |
 
 **Date-grounding is explicitly out of scope** this phase — locale date-format
@@ -591,7 +609,7 @@ skipped with `reason: "input_unusable"`).
 | `image/tiff` | the OCR-produced `searchable.pdf`'s pages |
 | `image/jpeg`, `image/png` | the single image → one page |
 | `image/heic`, `image/heif` | the derived `converted.jpg` → one page |
-| `text/plain` | **skipped** — no visual layout to recover |
+| `text/markdown`, `text/plain` | **no vision call** — born-digital text is its own markdown layer (see below) |
 
 **Model call.** One `client.messages.parse()` call (async SDK, structured
 outputs) per page-image batch, with content `[page images…] + [full
@@ -642,7 +660,19 @@ failed, or text-only), or the chunk came from a page past the render cap.
 placed between `run_extraction` and `run_embed`. It calls
 `apply_markdown(session, document, settings)` from `library.markdown.apply`.
 
-**Best-effort, identical contract to extraction.** Any of the following
+**Born-digital text bypass.** For `text/markdown` and `text/plain` the raw
+file content is already the authoritative text layer (captured verbatim as
+`ocr_text` by the OCR passthrough), so `apply_markdown` short-circuits to
+`_apply_born_digital_markdown`: it writes that body as a single
+`DocumentPage` (page 1) with **no Anthropic call, no budget spend, and no
+`markdown_max_pages` cap**, and records `markdown_completed` with
+`{engine: "passthrough", model: null, pages: 1, cost_usd: 0.0}` (or
+`markdown_skipped {reason: "no_text"}` for an empty body). Markdown documents
+thus get a clean per-page layer (and page-aware embedding) for free; only
+PDFs and images reach the vision model.
+
+**Best-effort, identical contract to extraction.** For the remaining
+(non-text) inputs, any of the following
 causes `apply_markdown` to record a skip/failed event and return normally;
 the document continues to `embed` and reaches `indexed`:
 
@@ -651,7 +681,9 @@ the document continues to `embed` and reaches `indexed`:
 | `LIBRARY_MARKDOWN_ENABLED=false` | `markdown_skipped` `{reason: "disabled"}` |
 | No `LIBRARY_ANTHROPIC_API_KEY` | `markdown_skipped` `{reason: "missing_api_key"}` |
 | Daily budget spent | `markdown_skipped` `{reason: "budget", spent_usd, budget_usd}` |
-| Renderer returns no images (text/plain, oversized, corrupt) | `markdown_skipped` `{reason: "input_unusable", mime \| error}` |
+| Renderer returns no images (oversized, corrupt) | `markdown_skipped` `{reason: "input_unusable", mime \| error}` |
+| Born-digital `text/markdown`/`text/plain` with content | `markdown_completed` `{engine: "passthrough", model: null, pages: 1, cost_usd: 0.0}` |
+| Born-digital text with empty body | `markdown_skipped` `{reason: "no_text"}` |
 | Generation yields no pages | `markdown_skipped` `{reason: "input_unusable", detail}` |
 | API error after SDK retries | `markdown_failed` `{error, prompt_version}` |
 | Success | `markdown_completed` `{model, prompt_version, pages, input_tokens, output_tokens, cost_usd}` |
@@ -661,12 +693,20 @@ fail the document — the same edge case exists in extraction.
 
 ### Page-aware embedding
 
-After the markdown stage, `run_embed` checks for `document_pages`:
+After the markdown stage, `run_embed` picks a chunker by MIME type and
+checks for `document_pages`:
 
-- **If pages exist:** chunk each page's markdown with `chunk_text`, carrying
-  `chunk_index` continuously across pages, and tag every `DocumentChunk`
-  with its `page_number`.
-- **Else (no pages):** chunk `ocr_text` as before, with `page_number = NULL`.
+- **Chunker.** `text/markdown` documents use `chunk_markdown` (structure
+  preserving — packs whole blank-line-delimited blocks, so headings, list
+  items and tables survive; a single oversized block falls back to the
+  word-packer). Every other type uses `chunk_text` (greedy word packing).
+  Note this keys on the document's MIME type, so vision-generated markdown
+  pages on a PDF are still chunked with `chunk_text`; only born-digital
+  markdown gets `chunk_markdown`.
+- **If pages exist:** chunk each page's markdown, carrying `chunk_index`
+  continuously across pages, and tag every `DocumentChunk` with its
+  `page_number`.
+- **Else (no pages):** chunk `ocr_text`, with `page_number = NULL`.
 
 The `embedded` event gains a `page_aware: bool` field so it is clear which
 path ran.
@@ -775,7 +815,8 @@ unlink instead of archiving.
 
 ### Supported extensions
 
-`.pdf .jpg .jpeg .png .heic .heif .tif .tiff .txt` (case-insensitive).
+`.pdf .jpg .jpeg .png .heic .heif .tif .tiff .txt .md .markdown`
+(case-insensitive).
 Anything else is ignored in place — extensionless or unknown files are
 *not* moved to `failed/`, because Syncthing folders routinely contain
 foreign files (e.g. `.stfolder`) that are not ours to touch. Content
@@ -919,8 +960,8 @@ Append-only audit trail in `ingestion_events`:
 | `extraction_completed` | extraction stage | `{model, prompt_version, confidence, input_tokens, output_tokens, cost_usd, escalated, input_mode}` |
 | `extraction_skipped` | extraction stage | `{reason, ...}` — `disabled`, `missing_api_key`, `budget`, `input_unusable`, `file_too_large` |
 | `extraction_failed` | extraction stage | `{error, prompt_version}` |
-| `markdown_completed` | markdown stage | `{model, prompt_version, pages, input_tokens, output_tokens, cost_usd}` |
-| `markdown_skipped` | markdown stage | `{reason, ...}` — `disabled`, `missing_api_key`, `budget`, `input_unusable` |
+| `markdown_completed` | markdown stage | `{model, prompt_version, pages, input_tokens, output_tokens, cost_usd}`; born-digital text instead records `{engine: "passthrough", model: null, pages: 1, cost_usd: 0.0}` |
+| `markdown_skipped` | markdown stage | `{reason, ...}` — `disabled`, `missing_api_key`, `budget`, `input_unusable`, `no_text` |
 | `markdown_failed` | markdown stage | `{error, prompt_version}` |
 | `failed` | pipeline | `{error, status}` |
 

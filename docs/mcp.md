@@ -84,13 +84,14 @@ explanation.
 
 | Tool | Parameters | Returns |
 |------|------------|---------|
-| `search_documents` | `query?` (websearch syntax, Dutch+English stemming), `kind?` (slug), `sender?` (case-insensitive substring of sender name), `tag?` (slug), `language?` (`nld`/`eng`/`mixed`/`unknown`), `date_from?`, `date_to?` (ISO dates, inclusive, on `document_date`), `limit` (default 10, max 50) | `{results: [{id, title, summary, kind, sender, tags, document_date, language, snippet, rank}], total}` — ranked when `query` is given, newest-first otherwise. Snippets carry `<b>…</b>` match markers. |
+| `search_documents` | `query?` (websearch syntax, Dutch+English stemming), `kind?` (slug), `sender?` (case-insensitive substring of sender name), `tag?` (slug), `project?` (slug — see `list_projects`), `language?` (`nld`/`eng`/`mixed`/`unknown`), `date_from?`, `date_to?` (ISO dates, inclusive, on `document_date`), `limit` (default 10, max 50) | `{results: [{id, title, summary, kind, sender, tags, projects, document_date, language, snippet, rank}], total}` — ranked when `query` is given, newest-first otherwise. Snippets carry `<b>…</b>` match markers. |
 | `get_document` | `document_id` | Full metadata (kind, sender, tags, dates, amount, language, status, provenance) plus OCR text (truncated at 20 000 characters with an explanatory note and `ocr_text_truncated: true`) and the audit-trail events `[{event, created_at}]`. |
 | `get_document_file` | `document_id`, `variant` = `"original"` (default) or `"searchable_pdf"` | `{filename, mime_type, size_bytes, content_base64}`. Files over 10 MB are refused with an error pointing at the REST download endpoints. |
 | `ingest_document` | `filename`, `content_base64`, `source_note?` | `{id, sha256, status, duplicate}`. Runs the same ingestion service as uploads (dedup by SHA-256, OCR + extraction queued); `source` is recorded as `mcp` and the calling token's user as uploader. A `source_note` is stored on the audit trail. |
 | `list_kinds` | — | `{kinds: [{slug, name, document_count}]}` |
 | `list_senders` | — | `{senders: [{id, name, document_count}]}` |
 | `list_tags` | — | `{tags: [{slug, name, document_count}]}` |
+| `list_projects` | — | `{projects: [{id, slug, name, description, document_count}]}` — archived projects are omitted. Use the slugs as the `project` filter of `search_documents`. |
 | `library_stats` | — | `{total_documents, by_status, by_kind, ingested_last_7_days, oldest_document_date, newest_document_date}` |
 
 Search behaviour is identical to `GET /api/documents` — both run the same

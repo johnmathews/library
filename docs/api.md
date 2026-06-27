@@ -1,6 +1,6 @@
 # 1. REST API
 
-**Status:** active. **Last updated:** 2026-06-24 (charts endpoint + cached series descriptions).
+**Status:** active. **Last updated:** 2026-06-28 (projects/collections CRUD + `projects` on documents).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -45,6 +45,11 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/kinds` | Document kinds with counts |
 | GET    | `/api/senders` | Senders with counts |
 | GET    | `/api/tags` | Tags with counts |
+| GET    | `/api/projects` | List projects/collections with counts |
+| POST   | `/api/projects` | Create a project |
+| GET    | `/api/projects/{slug}` | Project detail |
+| PATCH  | `/api/projects/{slug}` | Edit a project (name/description/archived) |
+| DELETE | `/api/projects/{slug}` | Delete a project (memberships cascade) |
 | GET    | `/api/jobs` | Recent background jobs (enriched with document state); filter by `task_name`/`document_id` |
 | GET    | `/api/jobs/task-names` | Distinct task names (for the task-type filter) |
 | GET    | `/api/events` | Live document-pipeline events (Server-Sent Events) |
@@ -77,6 +82,7 @@ ingestion semantics are documented in [ingestion.md](ingestion.md).
 | `kind` | string | Kind slug (e.g. `invoice`) |
 | `sender_id` | int | Sender id |
 | `tag` | string, repeatable | Tag slug; repeating the parameter ANDs them (`?tag=energie&tag=wonen` requires both) |
+| `project` | string | Project slug; only documents that belong to this project |
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown` |
 | `status` | enum | `received` / `ocr` / `extract` / `embed` / `indexed` / `failed` |
 | `date_from`, `date_to` | date | Inclusive bounds on `document_date` |
@@ -97,6 +103,7 @@ All filters compose (AND), including with `q`.
       "kind": {"slug": "invoice", "name": "Invoice"},
       "sender": {"id": 3, "name": "Eneco"},
       "tags": [{"slug": "energie", "name": "Energie"}],
+      "projects": [{"slug": "house-purchase", "name": "House purchase"}],
       "document_date": "2026-05-15", "language": "nld",
       "status": "indexed", "review_status": "unreviewed",
       "mime_type": "application/pdf",
@@ -112,7 +119,8 @@ All filters compose (AND), including with `q`.
 ```
 
 `total` is the filtered count before pagination. `snippet` and `rank` are
-only present (non-null) when `q` is given. Tags are sorted by slug.
+only present (non-null) when `q` is given. Tags and `projects` are each
+sorted by slug; `projects` is `[]` when the document is in no project.
 `review_status` reflects extraction-quality validation: `unreviewed` (no
 issues found), `needs_review` (one or more validation findings), or
 `verified` (user confirmed the metadata is correct). `amount_total` (JSON
@@ -174,6 +182,7 @@ JSON body; only the fields present in the body change. Editable fields:
 | `kind_slug` | Must be an existing kind slug (`422` otherwise); `null` clears the kind |
 | `sender` | Sender **name**; upserted case-insensitively (same rule extraction uses); `null` clears |
 | `tags` | **Full replacement** list of slugs; unknown slugs are created; `[]` clears; `null` is rejected |
+| `projects` | **Full replacement** list of project slugs *or names*; unknown identifiers are upserted (a name becomes a new project, slugified); `[]` clears membership; `null` is rejected. Also appends a `project_changed` ingestion event |
 | `language` | `nld` / `eng` / `mixed` / `unknown`; `null` rejected |
 | `amount_total` | Decimal as string or number; `null` clears |
 | `currency` | 3-letter code, normalized to upper case; `null` clears |
@@ -793,3 +802,43 @@ dominant currency bucket is too small are omitted, so every returned entry is
 There is no per-document reference point here, so `reference`/`year_over_year`
 are anchored on the latest member. Use `sender_id`-`kind_id`-`currency` as a
 stable key.
+
+## 1.15 Projects — `/api/projects`
+
+First-class **collections**: a many-to-many grouping of documents
+(`projects` + `document_projects` tables, migration 0011), mirroring the
+tags pattern but with their own CRUD surface, descriptions, and a
+soft-archive state. A document's project membership is edited through
+`PATCH /api/documents/{id}` (the `projects` field, §1.5) and surfaced as the
+`projects` array on every document list/detail item; documents are also
+filterable by `?project=<slug>` (§1.3.1).
+
+**Slugs are stable.** `POST` derives a slug from the name (or accepts an
+explicit, normalised `slug` override); `PATCH` never changes it, so inbound
+links and the `?project=` filter survive renames. Counts exclude soft-deleted
+documents and include zero-count projects.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/projects` | All projects ordered by name. `?include_archived=true` to include archived ones (hidden by default). |
+| POST | `/api/projects` | Body `{name, slug?, description?}`. `201`; `409` if the slug already exists. |
+| GET | `/api/projects/{slug}` | One project; `404` if unknown. |
+| PATCH | `/api/projects/{slug}` | Body `{name?, description?, archived?}`; only present fields change. The slug is **immutable**. `archived: true/false` toggles `archived_at`. `404` if unknown. |
+| DELETE | `/api/projects/{slug}` | Hard-delete; `204`. Memberships cascade away (`document_projects`), the **documents themselves are kept**. `404` if unknown. |
+
+**Project object** (every endpoint returns this shape; `GET /api/projects`
+returns an array of them):
+
+```json
+{
+  "id": 3,
+  "slug": "house-purchase",
+  "name": "House purchase",
+  "description": "Mortgage, survey, and notary paperwork",
+  "archived": false,
+  "document_count": 12
+}
+```
+
+`document_count` is the number of non-deleted documents in the project.
+Auth + CSRF apply exactly as elsewhere (§1.9).
