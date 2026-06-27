@@ -150,6 +150,23 @@ async def test_list_documents_newest_first(session: AsyncSession) -> None:
     assert [ref.id for ref in refs[:2]] == [newer, older]
 
 
+async def test_list_documents_narrows_by_project_slug(session: AsyncSession) -> None:
+    from library.models import Project
+
+    in_project = await seed(session, "in-project")
+    await seed(session, "out-of-project")
+
+    document = (
+        await session.execute(select(Document).where(Document.id == in_project))
+    ).scalar_one()
+    document.projects = [Project(slug="renovation", name="Renovation")]
+    await session.commit()
+
+    refs = await list_documents(session, filters=DocumentFilters(project_slug="renovation"))
+
+    assert [ref.id for ref in refs] == [in_project]
+
+
 async def test_query_documents_dispatch_distinct_senders(session: AsyncSession) -> None:
     await seed(session, "q1", sender_name="Vattenfall", kind_slug="utility-bill")
 

@@ -198,6 +198,40 @@ document_tags: Table = Table(
 )
 
 
+class Project(Base):
+    """A first-class project/collection grouping documents (M2M, soft-archive)."""
+
+    __tablename__ = "projects"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+document_projects: Table = Table(
+    "document_projects",
+    Base.metadata,
+    Column(
+        "document_id",
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "project_id",
+        ForeignKey("projects.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+Index("ix_document_projects_project_id", document_projects.c.project_id)
+
+
 class Document(Base):
     __tablename__ = "documents"
 
@@ -297,6 +331,7 @@ class Document(Base):
     sender: Mapped[Sender | None] = relationship(lazy="selectin")
     kind: Mapped[Kind | None] = relationship(lazy="selectin")
     tags: Mapped[list[Tag]] = relationship(secondary=document_tags, lazy="selectin")
+    projects: Mapped[list[Project]] = relationship(secondary=document_projects, lazy="selectin")
     events: Mapped[list["IngestionEvent"]] = relationship(
         back_populates="document", cascade="all, delete-orphan", lazy="selectin"
     )

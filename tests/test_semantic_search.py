@@ -123,6 +123,29 @@ async def test_filters_restrict_results(session: AsyncSession) -> None:
     assert [hit.document.id for hit in hits] == [invoice]
 
 
+async def test_project_slug_filter_restricts_results(session: AsyncSession) -> None:
+    from library.models import Document, Project
+
+    in_project = await seed_document(session, "p-in", ocr_text="x", chunks=[("c", unit_vector(0))])
+    await seed_document(session, "p-out", ocr_text="y", chunks=[("c", unit_vector(0))])
+
+    document = (
+        await session.execute(select(Document).where(Document.id == in_project))
+    ).scalar_one()
+    document.projects = [Project(slug="audit", name="Audit")]
+    await session.commit()
+
+    hits = await semantic_search(
+        session,
+        query="",
+        query_embedding=unit_vector(0),
+        filters=DocumentFilters(project_slug="audit"),
+        top_k=10,
+    )
+
+    assert [hit.document.id for hit in hits] == [in_project]
+
+
 async def test_hybrid_fuses_vector_and_fts(session: AsyncSession) -> None:
     """A doc found only by FTS and one found only by vector both surface; the
     FTS match (also present in the vector tail) is boosted to the top."""

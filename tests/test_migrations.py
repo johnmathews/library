@@ -25,6 +25,8 @@ EXPECTED_TABLES: set[str] = {
     "ingestion_events",
     "ask_threads",
     "ask_turns",
+    "projects",
+    "document_projects",
 }
 
 PROCRASTINATE_TABLES: set[str] = {
@@ -178,6 +180,39 @@ def test_ask_turns_has_messages_column(migrated_database_url: str) -> None:
         """,
     )
     assert rows == [("messages", "jsonb", "NO")]
+
+
+def test_projects_slug_unique_and_archived_at_nullable(migrated_database_url: str) -> None:
+    archived = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = 'projects' AND column_name = 'archived_at'
+        """,
+    )
+    assert archived == [("archived_at", "timestamp with time zone", "YES")]
+
+    unique = fetch_all(
+        migrated_database_url,
+        """
+        SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE rel.relname = 'projects' AND con.contype = 'u'
+        """,
+    )
+    assert ("uq_projects_slug",) in unique
+
+
+def test_document_projects_project_id_index_exists(migrated_database_url: str) -> None:
+    indexes = asyncio.run(
+        _fetch_scalars(
+            migrated_database_url,
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'document_projects'",
+        )
+    )
+    assert "ix_document_projects_project_id" in {str(name) for name in indexes}
 
 
 def test_ask_logs_table_is_gone(migrated_database_url: str) -> None:

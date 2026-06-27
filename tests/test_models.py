@@ -181,6 +181,66 @@ async def test_document_defaults_to_unreviewed(session: AsyncSession) -> None:
     assert doc.review_status is ReviewStatus.UNREVIEWED
 
 
+async def test_project_round_trip(session: AsyncSession) -> None:
+    """A Project persists and reloads; archived_at defaults NULL."""
+    from library.models import Project
+
+    project = Project(slug="taxes-2026", name="Taxes 2026", description="Tax year filings")
+    session.add(project)
+    await session.commit()
+    session.expunge_all()
+
+    loaded = (
+        await session.execute(select(Project).where(Project.slug == "taxes-2026"))
+    ).scalar_one()
+    assert loaded.name == "Taxes 2026"
+    assert loaded.description == "Tax year filings"
+    assert loaded.archived_at is None
+    assert loaded.created_at is not None
+
+
+async def test_document_projects_attach_detach(session: AsyncSession) -> None:
+    """Documents attach to and detach from projects via Document.projects."""
+    from library.models import Project
+
+    project_a = Project(slug="house", name="House")
+    project_b = Project(slug="car", name="Car")
+    document = Document(
+        sha256="1" * 64,
+        mime_type="application/pdf",
+        source=DocumentSource.UPLOAD,
+        projects=[project_a, project_b],
+    )
+    session.add(document)
+    await session.commit()
+    session.expunge_all()
+
+    loaded = (
+        await session.execute(select(Document).where(Document.sha256 == "1" * 64))
+    ).scalar_one()
+    assert {project.slug for project in loaded.projects} == {"house", "car"}
+
+    loaded.projects = [project for project in loaded.projects if project.slug == "house"]
+    await session.commit()
+    session.expunge_all()
+
+    reloaded = (
+        await session.execute(select(Document).where(Document.sha256 == "1" * 64))
+    ).scalar_one()
+    assert {project.slug for project in reloaded.projects} == {"house"}
+
+
+async def test_project_slug_unique_enforced(session: AsyncSession) -> None:
+    from library.models import Project
+
+    session.add(Project(slug="dup", name="First"))
+    await session.commit()
+    session.add(Project(slug="dup", name="Second"))
+    with pytest.raises(IntegrityError):
+        await session.commit()
+    await session.rollback()
+
+
 async def test_ask_thread_cascades_to_turns(session: AsyncSession) -> None:
     from library.models import AskThread, AskTurn
 

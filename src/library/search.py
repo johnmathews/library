@@ -32,6 +32,7 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     Kind,
+    Project,
     ReviewStatus,
     Sender,
     Tag,
@@ -56,6 +57,7 @@ class DocumentFilters:
     sender_id: int | None = None
     sender_contains: str | None = None
     tag_slugs: Sequence[str] = field(default_factory=tuple)
+    project_slug: str | None = None
     language: DocumentLanguage | None = None
     status: DocumentStatus | None = None
     source: DocumentSource | None = None
@@ -93,6 +95,8 @@ def filter_conditions(filters: DocumentFilters) -> list[Any]:
         conditions.append(Document.sender.has(Sender.name.ilike(f"%{escaped}%", escape="\\")))
     for slug in filters.tag_slugs:
         conditions.append(Document.tags.any(Tag.slug == slug))
+    if filters.project_slug is not None:
+        conditions.append(Document.projects.any(Project.slug == filters.project_slug))
     if filters.language is not None:
         conditions.append(Document.language == filters.language)
     if filters.status is not None:
