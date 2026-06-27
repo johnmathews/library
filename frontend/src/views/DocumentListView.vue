@@ -101,6 +101,7 @@ function buildFilters(
     q: state.q || undefined,
     kind: state.kind || undefined,
     sender_id: Number.isInteger(senderId) ? senderId : undefined,
+    project: state.project || undefined,
     tag: state.tags.length ? state.tags : undefined,
     language: (state.language || undefined) as DocumentLanguage | undefined,
     status: (state.status || undefined) as DocumentListItem['status'] | undefined,

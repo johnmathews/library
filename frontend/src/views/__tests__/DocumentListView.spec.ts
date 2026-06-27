@@ -25,6 +25,7 @@ function makeItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
     kind: { slug: 'invoice', name: 'Invoice' },
     sender: { id: 3, name: 'Eneco' },
     tags: [],
+    projects: [],
     document_date: '2026-05-15',
     language: 'nld',
     status: 'indexed',
@@ -63,6 +64,7 @@ const KINDS = [
 ]
 const SENDERS = [{ id: 3, name: 'Eneco', document_count: 3 }]
 const TAGS = [{ slug: 'energie', name: 'Energie', document_count: 2 }]
+const PROJECTS = [{ slug: 'house-purchase', name: 'House purchase', document_count: 4 }]
 
 const Stub = { template: '<div />' }
 
@@ -84,6 +86,7 @@ describe('DocumentListView', () => {
       if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
       if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
       if (url === '/api/tags') return Promise.resolve(jsonResponse(TAGS))
+      if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
       if (url.startsWith('/api/documents')) return Promise.resolve(listResponse())
       return Promise.resolve(jsonResponse({ detail: `unexpected ${url}` }, 500))
     })
@@ -220,6 +223,19 @@ describe('DocumentListView', () => {
     // Deep-linked ?page=2 loads pages 1..2 in one batch at offset 0 (limit 50).
     expect(last.searchParams.get('offset')).toBe('0')
     expect(last.searchParams.get('limit')).toBe('50')
+  })
+
+  it('sends the project filter from the URL to the API', async () => {
+    await router.push('/?project=house-purchase')
+    await mountView()
+    await flushPromises()
+
+    const listCall = fetchMock.mock.calls
+      .map((c) => String(c[0]))
+      .find((url) => url.startsWith('/api/documents'))
+    expect(listCall).toBeDefined()
+    const params = new URLSearchParams(listCall!.split('?')[1])
+    expect(params.get('project')).toBe('house-purchase')
   })
 
   it('renders snippets via renderSnippet: <b> kept, script neutralised', async () => {

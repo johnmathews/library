@@ -28,6 +28,11 @@ export interface TagRef {
   name: string
 }
 
+export interface ProjectRef {
+  slug: string
+  name: string
+}
+
 export interface IngestionEvent {
   event: string
   detail: Record<string, unknown>
@@ -42,6 +47,7 @@ export interface DocumentListItem {
   kind: KindRef | null
   sender: SenderRef | null
   tags: TagRef[]
+  projects: ProjectRef[]
   document_date: string | null
   language: DocumentLanguage
   status: DocumentStatus
@@ -108,6 +114,8 @@ export interface DocumentFilters {
   q?: string
   kind?: string
   sender_id?: number
+  /** Single project slug; AND-composes with the other filters. */
+  project?: string
   /** Repeatable: every slug must match (AND). */
   tag?: string[]
   language?: DocumentLanguage
@@ -134,6 +142,11 @@ export interface DocumentUpdate {
   /** Sender name; upserted case-insensitively. */
   sender?: string | null
   tags?: string[]
+  /**
+   * Full-replacement list of project names-or-slugs (`[]` clears). Unknown
+   * names are upserted by the backend, so free text creates a new project.
+   */
+  projects?: string[]
   language?: DocumentLanguage
   /** Decimal as string to preserve precision. */
   amount_total?: string | null

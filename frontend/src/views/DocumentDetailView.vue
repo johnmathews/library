@@ -47,6 +47,7 @@ import {
   type ValidationFinding,
 } from '@/api/documents'
 import { listKinds, listSenders, type KindOption, type SenderOption } from '@/api/taxonomy'
+import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { ApiError } from '@/api/client'
 import { useJobsStore } from '@/stores/jobs'
 import DocumentSeriesTrend from '@/components/DocumentSeriesTrend.vue'
@@ -79,6 +80,11 @@ onBeforeUnmount(() => {
 
 const kinds = ref<KindOption[]>([])
 const senders = ref<SenderOption[]>([])
+
+// Existing project names feed the projects editor's datalist (free text still
+// creates new projects via the backend upsert).
+const { projects: projectOptions, ensureLoaded: ensureProjectsLoaded } = useTaxonomyOptions()
+void ensureProjectsLoaded()
 
 onMounted(async () => {
   // Best-effort: without options the kind select still offers the current
@@ -114,6 +120,7 @@ type EditableField =
   | 'document_date'
   | 'language'
   | 'tags'
+  | 'projects'
   | 'amount'
   | 'due_date'
   | 'expiry_date'
@@ -137,6 +144,12 @@ const rowConfigs: RowConfig[] = [
     field: 'tags',
     label: 'Tags',
     display: (d) => (d.tags.length ? d.tags.map((tag) => tag.name).join(', ') : null),
+  },
+  {
+    field: 'projects',
+    label: 'Projects',
+    display: (d) =>
+      d.projects.length ? d.projects.map((project) => project.name).join(', ') : null,
   },
   {
     field: 'amount',
@@ -171,7 +184,7 @@ interface FieldGroup {
 }
 
 const fieldGroups: FieldGroup[] = [
-  { key: 'content', label: 'Content', accent: 'violet', fields: ['title', 'summary', 'tags'] },
+  { key: 'content', label: 'Content', accent: 'violet', fields: ['title', 'summary', 'tags', 'projects'] },
   { key: 'classification', label: 'Classification', accent: 'yellow', fields: ['kind', 'language'] },
   {
     key: 'parties',
@@ -183,7 +196,7 @@ const fieldGroups: FieldGroup[] = [
 ]
 
 /** Fields that read better spanning the full width of the two-column grid. */
-const WIDE_FIELDS = new Set<EditableField>(['title', 'summary', 'tags', 'amount'])
+const WIDE_FIELDS = new Set<EditableField>(['title', 'summary', 'tags', 'projects', 'amount'])
 
 /** True when any field in the group has a non-null display value. Used to hide a
  * whole group in read mode when it would otherwise show only em-dashes. */
@@ -306,7 +319,15 @@ const heroStats = computed<{ label: string; value: string }[]>(() => {
 const editMode = ref(false)
 
 /** The fields whose draft is a plain string (text inputs + selects). */
-type StringDraftField = 'title' | 'summary' | 'sender' | 'tags' | 'kind' | 'language' | 'amount'
+type StringDraftField =
+  | 'title'
+  | 'summary'
+  | 'sender'
+  | 'tags'
+  | 'projects'
+  | 'kind'
+  | 'language'
+  | 'amount'
 
 /** Draft string values for the text and select fields, keyed by field. */
 const drafts = reactive<Record<StringDraftField, string>>({
@@ -314,6 +335,7 @@ const drafts = reactive<Record<StringDraftField, string>>({
   summary: '',
   sender: '',
   tags: '',
+  projects: '',
   kind: '',
   language: '',
   amount: '',
@@ -350,6 +372,7 @@ function hydrateDrafts(): void {
   drafts.summary = d.summary ?? ''
   drafts.sender = d.sender?.name ?? ''
   drafts.tags = d.tags.map((tag) => tag.slug).join(', ')
+  drafts.projects = d.projects.map((project) => project.name).join(', ')
   drafts.kind = d.kind?.slug ?? ''
   drafts.language = d.language
   drafts.amount = d.amount_total ?? ''
@@ -369,6 +392,7 @@ function hydrateField(field: EditableField): void {
     case 'summary': drafts.summary = d.summary ?? ''; break
     case 'sender': drafts.sender = d.sender?.name ?? ''; break
     case 'tags': drafts.tags = d.tags.map((tag) => tag.slug).join(', '); break
+    case 'projects': drafts.projects = d.projects.map((project) => project.name).join(', '); break
     case 'kind': drafts.kind = d.kind?.slug ?? ''; break
     case 'language': drafts.language = d.language; break
     case 'amount':
@@ -411,6 +435,12 @@ function fieldDirty(field: EditableField): boolean {
       const next = drafts.tags.split(',').map((t) => t.trim()).filter(Boolean).sort()
       return next.join(',') !== d.tags.map((t) => t.slug).sort().join(',')
     }
+    case 'projects': {
+      // Projects are an unordered set, full-replaced by name; compare sorted
+      // names so a reorder-only edit isn't seen as a change.
+      const next = drafts.projects.split(',').map((p) => p.trim()).filter(Boolean).sort()
+      return next.join(',') !== d.projects.map((p) => p.name).sort().join(',')
+    }
     case 'document_date': return (dateDrafts.document_date ?? null) !== (d.document_date ?? null)
     case 'due_date': return (dateDrafts.due_date ?? null) !== (d.due_date ?? null)
     case 'expiry_date': return (dateDrafts.expiry_date ?? null) !== (d.expiry_date ?? null)
@@ -439,6 +469,8 @@ function buildPatch(field: EditableField): DocumentUpdate | null {
       return { language: drafts.language as DocumentLanguage }
     case 'tags':
       return { tags: drafts.tags.split(',').map((tag) => tag.trim()).filter(Boolean) }
+    case 'projects':
+      return { projects: drafts.projects.split(',').map((project) => project.trim()).filter(Boolean) }
     case 'document_date':
       return { document_date: dateDrafts.document_date }
     case 'due_date':
@@ -1029,8 +1061,25 @@ watch(
                   </dt>
                   <!-- Read mode: value only. The page-wide Edit toggle replaces the
                        old per-row "Change" buttons. -->
+                  <!-- Projects render as badges that link to the project-filtered
+                       dashboard, rather than a plain comma-joined string. -->
                   <dd
-                    v-if="!editMode"
+                    v-if="!editMode && field === 'projects'"
+                    class="mt-1 flex flex-wrap gap-2"
+                    data-testid="row-value"
+                  >
+                    <RouterLink
+                      v-for="project in doc.projects"
+                      :key="project.slug"
+                      :to="{ path: '/', query: { project: project.slug } }"
+                      data-testid="project-badge"
+                      class="rounded-full"
+                    >
+                      <AppBadge :colour="tagColour(project.name)">{{ project.name }}</AppBadge>
+                    </RouterLink>
+                  </dd>
+                  <dd
+                    v-else-if="!editMode"
                     class="mt-1 min-w-0 break-words leading-snug text-gray-800 dark:text-gray-100"
                     :class="field === 'amount' ? 'text-2xl font-semibold tracking-tight' : 'text-base'"
                     data-testid="row-value"
@@ -1104,6 +1153,25 @@ watch(
                       @change="saveField('tags')"
                       @keyup.enter="saveField('tags')"
                     />
+                    <template v-else-if="field === 'projects'">
+                      <AppInput
+                        id="edit-projects"
+                        v-model="drafts.projects"
+                        label="Projects"
+                        hint="Separate projects with commas"
+                        list="project-options"
+                        :error-message="fieldError.projects ?? undefined"
+                        @change="saveField('projects')"
+                        @keyup.enter="saveField('projects')"
+                      />
+                      <datalist id="project-options">
+                        <option
+                          v-for="project in projectOptions"
+                          :key="project.slug"
+                          :value="project.name"
+                        />
+                      </datalist>
+                    </template>
                     <div
                       v-else-if="field === 'amount'"
                       class="flex flex-wrap gap-3"

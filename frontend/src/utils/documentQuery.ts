@@ -14,6 +14,7 @@ export interface AppliedFilters {
   q: string
   kind: string
   senderId: string
+  project: string
   tags: string[]
   language: string
   status: string
@@ -40,6 +41,7 @@ export function parseDocumentQuery(query: LocationQuery): AppliedFilters {
     q: asString(query.q),
     kind: asString(query.kind),
     senderId: asString(query.sender_id),
+    project: asString(query.project),
     tags: asStringArray(query.tag),
     language: asString(query.language),
     status: asString(query.status),
@@ -62,6 +64,7 @@ export function buildDocumentQuery(
   if (applied.q) query.q = applied.q
   if (applied.kind) query.kind = applied.kind
   if (applied.senderId) query.sender_id = applied.senderId
+  if (applied.project) query.project = applied.project
   if (applied.tags.length) query.tag = [...applied.tags]
   if (applied.language) query.language = applied.language
   if (applied.status) query.status = applied.status
@@ -78,6 +81,7 @@ export function hasActiveFilters(applied: AppliedFilters): boolean {
     applied.q ||
       applied.kind ||
       applied.senderId ||
+      applied.project ||
       applied.tags.length ||
       applied.language ||
       applied.status ||

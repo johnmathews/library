@@ -8,6 +8,7 @@ const EMPTY: AppliedFilters = {
   q: '',
   kind: '',
   senderId: '',
+  project: '',
   tags: [],
   language: '',
   status: '',
@@ -30,6 +31,7 @@ const TAGS = [
   { slug: 'energie', name: 'Energie', document_count: 2 },
   { slug: 'wonen', name: 'Wonen', document_count: 1 },
 ]
+const PROJECTS = [{ slug: 'house-purchase', name: 'House purchase', document_count: 4 }]
 
 function mountBar(applied: AppliedFilters = EMPTY): VueWrapper {
   return mount(DocumentFilterBar, {
@@ -50,6 +52,7 @@ describe('DocumentFilterBar', () => {
       if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
       if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
       if (url === '/api/tags') return Promise.resolve(jsonResponse(TAGS))
+      if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
       return Promise.resolve(jsonResponse({ detail: `unexpected ${url}` }, 500))
     })
   })
@@ -96,6 +99,23 @@ describe('DocumentFilterBar', () => {
     await w.get('[data-testid="pill-kind"] [data-testid="filter-pill-button"]').trigger('click')
     await w.get('[data-testid="kind-option-invoice"]').trigger('click')
     expect(w.emitted('apply')!.at(-1)![0]).toEqual({ kind: 'invoice' })
+  })
+
+  it('selecting a project emits a push apply with the project slug', async () => {
+    const w = mountBar()
+    await flushPromises() // taxonomy load
+    await w.get('[data-testid="pill-project"] [data-testid="filter-pill-button"]').trigger('click')
+    await w.get('[data-testid="project-option-house-purchase"]').trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ project: 'house-purchase' })
+  })
+
+  it('renders a removable project chip and clears the project on remove', async () => {
+    const w = mountBar({ ...EMPTY, project: 'house-purchase' })
+    await flushPromises()
+    const chip = w.get('[data-testid="chip-project"]')
+    expect(chip.text()).toContain('House purchase')
+    await w.get('[data-testid="chip-remove-project"]').trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({})
   })
 
   it('selecting multiple tags emits repeated tag', async () => {

@@ -28,6 +28,7 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     kind: { slug: 'invoice', name: 'Invoice' },
     sender: { id: 3, name: 'Eneco' },
     tags: [{ slug: 'energie', name: 'Energie' }],
+    projects: [],
     document_date: '2026-05-15',
     language: 'nld',
     status: 'indexed',
@@ -61,6 +62,7 @@ const KINDS = [
   { slug: 'receipt', name: 'Receipt', document_count: 0 },
 ]
 const SENDERS = [{ id: 3, name: 'Eneco', document_count: 3 }]
+const PROJECTS = [{ slug: 'house-purchase', name: 'House purchase', document_count: 4 }]
 
 const Stub = { template: '<div />' }
 
@@ -88,6 +90,8 @@ describe('DocumentDetailView', () => {
       const method = init?.method ?? 'GET'
       if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
       if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
+      if (url === '/api/tags') return Promise.resolve(jsonResponse([]))
+      if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
       if (url === '/api/documents/12/extract' && method === 'POST') {
         return Promise.resolve(jsonResponse({ queued: true, job_id: 1 }, 202))
       }
@@ -276,6 +280,37 @@ describe('DocumentDetailView', () => {
     await w.find('#edit-tags').trigger('change')
     await flushPromises()
     expect(patchCalls()[0]!.body).toEqual({ tags: ['energie', 'wonen'] })
+  })
+
+  it('projects editor sends a comma-split full-replacement list', async () => {
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    await w.find('#edit-projects').setValue(' House purchase,  Taxes ,')
+    await w.find('#edit-projects').trigger('change')
+    await flushPromises()
+    expect(patchCalls()[0]!.body).toEqual({ projects: ['House purchase', 'Taxes'] })
+  })
+
+  it('read mode renders each project as a badge link to the project-filtered dashboard', async () => {
+    detail = makeDetail({
+      projects: [
+        { slug: 'house-purchase', name: 'House purchase' },
+        { slug: 'taxes', name: 'Taxes' },
+      ],
+    })
+    const w = await mountView()
+    expect(rowValue(w, 'projects')).toContain('House purchase')
+    const badges = w.findAll('[data-testid="project-badge"]')
+    expect(badges).toHaveLength(2)
+    expect(badges[0]!.attributes('href')).toBe('/?project=house-purchase')
+    expect(badges[1]!.attributes('href')).toBe('/?project=taxes')
+  })
+
+  it('hides the projects row in read mode when there are none', async () => {
+    detail = makeDetail({ projects: [] })
+    const w = await mountView()
+    expect(w.find('[data-testid="row-projects"]').exists()).toBe(false)
   })
 
   it('shows an inline field error and keeps editing on a 422', async () => {

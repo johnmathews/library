@@ -118,6 +118,7 @@ function onSubmit(): void {
     q: draft.q.trim(),
     kind: draft.kind,
     senderId: draft.senderId,
+    project: current.project, // preserved — modal doesn't manage it
     tags: resolvedTags,
     language: draft.language,
     status: current.status, // preserved — modal doesn't manage it

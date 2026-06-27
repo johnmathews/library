@@ -9,6 +9,7 @@ import {
   originalUrl,
   searchablePdfUrl,
   thumbnailUrl,
+  updateDocument,
   uploadDocument,
   verifyDocument,
 } from '../documents'
@@ -33,6 +34,11 @@ describe('documentQueryString', () => {
 
   it('omits undefined and empty values', () => {
     expect(documentQueryString({ q: '', kind: undefined })).toBe('')
+  })
+
+  it('serialises the scalar project filter', () => {
+    const params = new URLSearchParams(documentQueryString({ project: 'house-purchase' }))
+    expect(params.get('project')).toBe('house-purchase')
   })
 })
 
@@ -78,6 +84,26 @@ describe('listDocuments', () => {
     await listDocuments({ review_status: 'needs_review' })
     const [url] = fetchMock.mock.calls[0] as [string]
     expect(url).toContain('review_status=needs_review')
+  })
+})
+
+describe('updateDocument', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+  })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('PATCHes a projects full-replacement list through the body', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ id: 7 }), { status: 200 }))
+    await updateDocument(7, { projects: ['House purchase', 'Taxes'] })
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/documents/7')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(String(init.body))).toEqual({ projects: ['House purchase', 'Taxes'] })
   })
 })
 

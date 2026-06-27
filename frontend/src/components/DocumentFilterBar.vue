@@ -31,7 +31,7 @@ const emit = defineEmits<{
   clear: []
 }>()
 
-const { kinds, senders, tags, ensureLoaded } = useTaxonomyOptions()
+const { kinds, senders, tags, projects, ensureLoaded } = useTaxonomyOptions()
 void ensureLoaded()
 
 // Which pill popover is open (only one at a time); null = all closed.
@@ -99,6 +99,10 @@ function selectSender(id: string): void {
   emitWith({ senderId: id })
   openPill.value = null
 }
+function selectProject(slug: string): void {
+  emitWith({ project: slug })
+  openPill.value = null
+}
 // The "More" pill holds two independent choices (language + status), so —
 // unlike the single-choice Kind/Sender pills — selecting one does NOT close
 // the pill; the user can set both before dismissing it.
@@ -151,6 +155,10 @@ const senderLabel = computed(
     senders.value.find((s) => String(s.id) === props.applied.senderId)?.name ??
     props.applied.senderId,
 )
+const projectLabel = computed(
+  () =>
+    projects.value.find((p) => p.slug === props.applied.project)?.name ?? props.applied.project,
+)
 const tagPillLabel = computed(() => {
   const n = props.applied.tags.length
   if (!n) return ''
@@ -183,6 +191,12 @@ const chips = computed<Chip[]>(() => {
       key: 'sender',
       label: `Sender: ${senderLabel.value}`,
       remove: () => emitWith({ senderId: '' }),
+    })
+  if (a.project)
+    out.push({
+      key: 'project',
+      label: `Project: ${projectLabel.value}`,
+      remove: () => emitWith({ project: '' }),
     })
   for (const slug of a.tags) {
     const name = tags.value.find((t) => t.slug === slug)?.name ?? slug
@@ -390,6 +404,39 @@ const statusOptions = DOCUMENT_STATUSES
           :items="tagItems"
           v-model="tagModel"
         />
+      </FilterPill>
+
+      <FilterPill
+        data-testid="pill-project"
+        label="Project"
+        :active="Boolean(applied.project)"
+        :value-label="projectLabel"
+        :open="pillOpen('project')"
+        @update:open="setPillOpen('project', $event)"
+      >
+        <ul class="max-h-64 overflow-auto text-sm">
+          <li>
+            <button
+              type="button"
+              data-testid="project-option-any"
+              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
+              @click="selectProject('')"
+            >
+              All projects
+            </button>
+          </li>
+          <li v-for="p in projects" :key="p.slug">
+            <button
+              type="button"
+              :data-testid="`project-option-${p.slug}`"
+              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
+              :class="{ 'font-semibold text-violet-600 dark:text-violet-300': applied.project === p.slug }"
+              @click="selectProject(p.slug)"
+            >
+              {{ p.name }}
+            </button>
+          </li>
+        </ul>
       </FilterPill>
 
       <FilterPill
