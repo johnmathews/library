@@ -291,9 +291,7 @@ def test_jobs_endpoint_document_filter_returns_full_history(
     _insert_job(api_database_url, "library.jobs.markdown_document", document_id=document_id)
     _insert_job(api_database_url, "library.jobs.embed_document", document_id=document_id)
 
-    rows = api_client.get(
-        "/api/jobs", params={"document_id": document_id, "limit": 500}
-    ).json()
+    rows = api_client.get("/api/jobs", params={"document_id": document_id, "limit": 500}).json()
     # History mode is uncollapsed: every job for the document, not just the latest.
     assert all(row["document_id"] == document_id for row in rows)
     assert sorted(row["task_name"] for row in rows) == [
