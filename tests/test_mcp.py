@@ -64,6 +64,7 @@ EXPECTED_TOOLS = {
     "list_kinds",
     "list_senders",
     "list_tags",
+    "list_projects",
     "library_stats",
 }
 
@@ -246,6 +247,29 @@ async def test_search_documents_sender_filter_without_query(
     assert [item["id"] for item in result["results"]] == [document_id]
     assert result["results"][0]["snippet"] is None
     assert result["results"][0]["rank"] is None
+
+
+async def test_search_documents_project_filter(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    document_id = await _seed_document(
+        api_database_url,
+        "mcp-search-project",
+        tag_slugs=["mcp-search-project"],
+        project_slugs=["mcp-search-project"],
+        title="Project document",
+    )
+    async with mcp_connect() as session:
+        result = payload(
+            await session.call_tool("search_documents", {"project": "mcp-search-project"})
+        )
+        projects = payload(await session.call_tool("list_projects", {}))["projects"]
+    assert [item["id"] for item in result["results"]] == [document_id]
+    assert result["results"][0]["projects"] == [
+        {"slug": "mcp-search-project", "name": "mcp-search-project"}
+    ]
+    project = next(p for p in projects if p["slug"] == "mcp-search-project")
+    assert project["document_count"] == 1
 
 
 # --- get_document ------------------------------------------------------------

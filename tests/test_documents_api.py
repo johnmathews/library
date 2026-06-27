@@ -29,6 +29,7 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     Kind,
+    Project,
     ReviewStatus,
     Sender,
     Tag,
@@ -48,6 +49,7 @@ async def _seed_document(
     kind_slug: str | None = None,
     sender_name: str | None = None,
     tag_slugs: Iterable[str] = (),
+    project_slugs: Iterable[str] = (),
     **fields: Any,
 ) -> int:
     engine = create_async_engine(database_url, poolclass=NullPool)
@@ -83,6 +85,15 @@ async def _seed_document(
                     session.add(tag)
                     await session.flush()
                 document.tags.append(tag)
+            for slug in project_slugs:
+                project = (
+                    await session.execute(select(Project).where(Project.slug == slug))
+                ).scalar_one_or_none()
+                if project is None:
+                    project = Project(slug=slug, name=slug)
+                    session.add(project)
+                    await session.flush()
+                document.projects.append(project)
             session.add(document)
             await session.commit()
             return document.id
@@ -270,6 +281,31 @@ def test_search_ranks_heavier_match_first(api_client: TestClient, api_database_u
     assert [item["id"] for item in body["items"]] == [heavy, light]
     ranks = [item["rank"] for item in body["items"]]
     assert ranks[0] > ranks[1] > 0
+
+
+def test_search_long_doc_not_inflated_by_repetition(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """FTS length normalization keeps a short on-topic invoice ahead of a long,
+    multi-topic doc that merely repeats the matched term among lots of filler."""
+    short = seed_document(
+        api_database_url,
+        "w7-norm-short",
+        tag_slugs=["w7-norm"],
+        title="Energie factuur",
+        ocr_text="Energie factuur 2026.",
+    )
+    filler = " ".join(f"onderwerp{i}" for i in range(400))
+    seed_document(
+        api_database_url,
+        "w7-norm-long",
+        tag_slugs=["w7-norm"],
+        title="Lang dossier",
+        ocr_text=f"{filler} energie {filler} energie {filler} energie {filler}",
+    )
+
+    body = list_docs(api_client, q="energie", tag="w7-norm")
+    assert body["items"][0]["id"] == short
 
 
 def test_search_snippet_is_capped_and_excludes_distant_html(
@@ -836,3 +872,63 @@ def test_detail_exposes_validation(api_client: TestClient, api_database_url: str
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["validation"] == validation_blob
+
+
+# --- Projects (W6) -----------------------------------------------------------
+
+
+def test_list_item_includes_projects_and_project_filter(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """List items expose `projects` (sorted by slug) and ?project= filters."""
+    in_project = seed_document(
+        api_database_url,
+        "w6-proj-in",
+        tag_slugs=["w6-proj"],
+        project_slugs=["w6-proj-beta", "w6-proj-alpha"],
+    )
+    seed_document(api_database_url, "w6-proj-out", tag_slugs=["w6-proj"])
+
+    body = list_docs(api_client, tag="w6-proj")
+    by_id = {item["id"]: item for item in body["items"]}
+    # Projects expanded and sorted by slug.
+    assert [p["slug"] for p in by_id[in_project]["projects"]] == ["w6-proj-alpha", "w6-proj-beta"]
+    assert by_id[in_project]["projects"][0] == {"slug": "w6-proj-alpha", "name": "w6-proj-alpha"}
+
+    # ?project= narrows to members of that project only.
+    filtered = list_docs(api_client, tag="w6-proj", project="w6-proj-alpha")
+    assert [item["id"] for item in filtered["items"]] == [in_project]
+
+
+def test_patch_sets_and_clears_projects(api_client: TestClient, api_database_url: str) -> None:
+    """PATCH projects upserts unknown projects by name, then [] clears them."""
+    document_id = seed_document(api_database_url, "w6-proj-patch", tag_slugs=["w6-proj-patch"])
+
+    # Setting a name that does not exist yet creates the project (slugified).
+    response = api_client.patch(
+        f"/api/documents/{document_id}", json={"projects": ["House purchase"]}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["projects"] == [{"slug": "house-purchase", "name": "House purchase"}]
+    assert "projects" in body["user_edited_fields"]
+    project_events = [e for e in body["events"] if e["event"] == "project_changed"]
+    assert len(project_events) == 1
+    assert project_events[0]["detail"]["projects"] == ["house-purchase"]
+
+    # The project is now discoverable and filters the document.
+    assert list_docs(api_client, project="house-purchase")["total"] == 1
+    listing = api_client.get("/api/projects").json()
+    assert any(p["slug"] == "house-purchase" for p in listing)
+
+    # Re-PATCH with [] clears membership; the project row survives (count 0).
+    cleared = api_client.patch(f"/api/documents/{document_id}", json={"projects": []})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["projects"] == []
+    assert list_docs(api_client, project="house-purchase")["total"] == 0
+
+
+def test_patch_null_projects_rejected(api_client: TestClient, api_database_url: str) -> None:
+    document_id = seed_document(api_database_url, "w6-proj-null")
+    response = api_client.patch(f"/api/documents/{document_id}", json={"projects": None})
+    assert response.status_code == 422

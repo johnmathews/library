@@ -45,6 +45,13 @@ class TagOut(BaseModel):
     name: str
 
 
+class ProjectRef(BaseModel):
+    """A project/collection, expanded inline on a document."""
+
+    slug: str
+    name: str
+
+
 class IngestionEventOut(BaseModel):
     """One entry of a document's append-only audit trail."""
 
@@ -62,6 +69,7 @@ class DocumentListItem(BaseModel):
     kind: KindOut | None
     sender: SenderOut | None
     tags: list[TagOut] = Field(description="Sorted by slug.")
+    projects: list[ProjectRef] = Field(default_factory=list, description="Sorted by slug.")
     document_date: date | None
     language: DocumentLanguage
     status: DocumentStatus
@@ -138,6 +146,13 @@ class DocumentUpdate(BaseModel):
     )
     tags: list[str] | None = Field(
         default=None, description="Full replacement list of tag slugs; created if unknown."
+    )
+    projects: list[str] | None = Field(
+        default=None,
+        description=(
+            "Full replacement list of project slugs or names; created if unknown. "
+            "`[]` clears membership, `null` is rejected."
+        ),
     )
     language: DocumentLanguage | None = None
     amount_total: Decimal | None = None

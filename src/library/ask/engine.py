@@ -197,7 +197,11 @@ async def _run_semantic_search(
         logger.warning("ask semantic_search embedding failed: %s", exc)
         return {"error": "semantic search is temporarily unavailable"}
     hits = await semantic_search(
-        session, query=query, query_embedding=embedding, top_k=settings.retrieve_top_k
+        session,
+        query=query,
+        query_embedding=embedding,
+        top_k=settings.retrieve_top_k,
+        chunks_per_doc=settings.retrieve_chunks_per_doc,
     )
     rows = []
     for hit in hits:
@@ -212,7 +216,9 @@ async def _run_semantic_search(
                 "document_date": (
                     hit.document.document_date.isoformat() if hit.document.document_date else None
                 ),
-                "excerpt": hit.chunk_text,
+                "excerpt": (
+                    "\n\n[…]\n\n".join(hit.chunk_texts) if hit.chunk_texts else hit.chunk_text
+                ),
             }
         )
     return {"results": rows}

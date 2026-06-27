@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 import library
-from library import taxonomy
+from library import projects, taxonomy
 from library.auth.service import validate_api_token
 from library.config import get_settings
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
@@ -68,10 +68,10 @@ English, made searchable by OCR and metadata extraction.
 
 Start with `search_documents` to find documents (full-text search with
 Dutch and English stemming, plus metadata filters), then `get_document`
-for the full text of one document. Use `list_kinds`, `list_senders`, and
-`list_tags` to discover valid filter values, `library_stats` for an
-overview, `get_document_file` to retrieve the actual file, and
-`ingest_document` to add a new document to the archive.
+for the full text of one document. Use `list_kinds`, `list_senders`,
+`list_tags`, and `list_projects` to discover valid filter values,
+`library_stats` for an overview, `get_document_file` to retrieve the
+actual file, and `ingest_document` to add a new document to the archive.
 """
 
 
@@ -153,6 +153,10 @@ def _document_summary(document: Document) -> dict[str, Any]:
             {"slug": tag.slug, "name": tag.name}
             for tag in sorted(document.tags, key=lambda tag: tag.slug)
         ],
+        "projects": [
+            {"slug": project.slug, "name": project.name}
+            for project in sorted(document.projects, key=lambda project: project.slug)
+        ],
         "document_date": document.document_date.isoformat() if document.document_date else None,
         "language": document.language.value,
         "status": document.status.value,
@@ -195,6 +199,10 @@ async def search_documents(
         str | None,
         Field(description="Filter by tag slug (see list_tags)."),
     ] = None,
+    project: Annotated[
+        str | None,
+        Field(description="Filter by project slug (see list_projects)."),
+    ] = None,
     language: Annotated[
         DocumentLanguage | None,
         Field(description="Filter by detected document language."),
@@ -227,6 +235,7 @@ async def search_documents(
             kind_slug=kind,
             sender_contains=sender,
             tag_slugs=(tag,) if tag else (),
+            project_slug=project,
             language=language,
             date_from=date_from,
             date_to=date_to,
@@ -450,6 +459,18 @@ async def list_tags() -> dict[str, Any]:
     async with _session() as session:
         tags = await taxonomy.list_tags(session)
     return {"tags": [asdict(tag) for tag in tags]}
+
+
+@mcp.tool
+async def list_projects() -> dict[str, Any]:
+    """List all projects (document collections) with per-project document counts.
+
+    Use the returned slugs as the `project` filter of search_documents.
+    Archived projects are omitted.
+    """
+    async with _session() as session:
+        items = await projects.list_projects(session)
+    return {"projects": [asdict(item) for item in items]}
 
 
 @mcp.tool

@@ -48,6 +48,11 @@ HEADLINE_OPTIONS: str = (
 # long tail so the top few results from each retriever dominate.
 RRF_K: int = 60
 
+# ts_rank normalization bitmask (Postgres). 1 = divide rank by 1 + log(document
+# length): damps long docs accumulating raw match count so score reflects match
+# density, keeping short on-topic invoices competitive. 0 restores prior behavior.
+FTS_RANK_NORMALIZATION: int = 1
+
 
 @dataclass(frozen=True, slots=True)
 class DocumentFilters:
@@ -126,8 +131,8 @@ def build_document_query(q: str | None, filters: DocumentFilters) -> DocumentQue
         english = cast("english", REGCONFIG)
         tsq_nl = func.websearch_to_tsquery(dutch, q)
         tsq_en = func.websearch_to_tsquery(english, q)
-        rank_nl = func.ts_rank(Document.search_vector_nl, tsq_nl)
-        rank_en = func.ts_rank(Document.search_vector_en, tsq_en)
+        rank_nl = func.ts_rank(Document.search_vector_nl, tsq_nl, FTS_RANK_NORMALIZATION)
+        rank_en = func.ts_rank(Document.search_vector_en, tsq_en, FTS_RANK_NORMALIZATION)
         conditions.append(
             or_(
                 Document.search_vector_nl.bool_op("@@")(tsq_nl),
@@ -171,6 +176,11 @@ class SemanticHit:
     surfaced only through full-text search (no chunk in the candidate pool).
     ``page_number`` is the page of the best-matching chunk, or ``None`` when
     not set on the chunk or when the document surfaced only via FTS.
+
+    ``chunk_texts`` holds up to ``chunks_per_doc`` nearest passages (best-first)
+    for long, multi-topic documents; it is ``(chunk_text,)`` for the single-chunk
+    default and ``()`` when the document surfaced only via FTS. ``chunk_text``
+    stays the single BEST chunk for citation back-compat.
     """
 
     document: Document
@@ -178,6 +188,7 @@ class SemanticHit:
     chunk_index: int | None
     chunk_text: str | None
     page_number: int | None
+    chunk_texts: tuple[str, ...] = ()
 
 
 async def _vector_candidates(
@@ -234,8 +245,8 @@ async def _fts_candidates(
     tsq_nl = func.websearch_to_tsquery(dutch, query)
     tsq_en = func.websearch_to_tsquery(english, query)
     rank = func.greatest(
-        func.ts_rank(Document.search_vector_nl, tsq_nl),
-        func.ts_rank(Document.search_vector_en, tsq_en),
+        func.ts_rank(Document.search_vector_nl, tsq_nl, FTS_RANK_NORMALIZATION),
+        func.ts_rank(Document.search_vector_en, tsq_en, FTS_RANK_NORMALIZATION),
     )
     statement = (
         select(Document.id)
@@ -252,6 +263,48 @@ async def _fts_candidates(
     return list((await session.execute(statement)).scalars().all())
 
 
+async def _chunks_per_document(
+    session: AsyncSession,
+    conditions: list[Any],
+    query_embedding: Sequence[float],
+    document_ids: Sequence[int],
+    per_doc: int,
+) -> dict[int, list[str]]:
+    """The ``per_doc`` nearest chunk texts per document (best-first by distance).
+
+    ``ROW_NUMBER() OVER (PARTITION BY document_id ORDER BY distance)`` ranks
+    chunks within each document; rows with rownum <= ``per_doc`` are kept. Same
+    ``conditions`` as the candidate retrievers, restricted to ``document_ids``.
+    """
+    if not document_ids:
+        return {}
+    distance = DocumentChunk.embedding.cosine_distance(query_embedding)
+    rownum = (
+        func.row_number()
+        .over(partition_by=DocumentChunk.document_id, order_by=distance.asc())
+        .label("rownum")
+    )
+    ranked = (
+        select(
+            DocumentChunk.document_id.label("document_id"),
+            DocumentChunk.text.label("text"),
+            rownum,
+        )
+        .join(Document, Document.id == DocumentChunk.document_id)
+        .where(*conditions, DocumentChunk.document_id.in_(document_ids))
+        .subquery()
+    )
+    statement = (
+        select(ranked.c.document_id, ranked.c.text)
+        .where(ranked.c.rownum <= per_doc)
+        .order_by(ranked.c.document_id, ranked.c.rownum)
+    )
+    texts: dict[int, list[str]] = {}
+    for document_id, text in (await session.execute(statement)).all():
+        texts.setdefault(document_id, []).append(text)
+    return texts
+
+
 async def semantic_search(
     session: AsyncSession,
     *,
@@ -260,6 +313,7 @@ async def semantic_search(
     filters: DocumentFilters | None = None,
     top_k: int = 10,
     candidate_pool: int | None = None,
+    chunks_per_doc: int = 1,
 ) -> list[SemanticHit]:
     """Hybrid retrieval: fuse vector kNN and full-text search with RRF.
 
@@ -292,19 +346,38 @@ async def semantic_search(
         (await session.execute(select(Document).where(Document.id.in_(ranked)))).scalars().all()
     )
     by_id = {document.id: document for document in documents}
+
+    # For multi-passage retrieval, fetch the nearest chunks per ranked doc that
+    # has a vector best_chunk (FTS-only docs have no chunk in the candidate pool).
+    extra_texts: dict[int, list[str]] = {}
+    if chunks_per_doc > 1:
+        vector_ranked = [document_id for document_id in ranked if document_id in best_chunk]
+        extra_texts = await _chunks_per_document(
+            session, conditions, query_embedding, vector_ranked, chunks_per_doc
+        )
+
     hits: list[SemanticHit] = []
     for document_id in ranked:
         document = by_id.get(document_id)
         if document is None:
             continue
         chunk = best_chunk.get(document_id)
+        chunk_text = chunk[1] if chunk else None
+        passages = extra_texts.get(document_id)
+        if passages:
+            chunk_texts: tuple[str, ...] = tuple(passages)
+        elif chunk_text is not None:
+            chunk_texts = (chunk_text,)
+        else:
+            chunk_texts = ()
         hits.append(
             SemanticHit(
                 document=document,
                 score=scores[document_id],
                 chunk_index=chunk[0] if chunk else None,
-                chunk_text=chunk[1] if chunk else None,
+                chunk_text=chunk_text,
                 page_number=chunk[2] if chunk else None,
+                chunk_texts=chunk_texts,
             )
         )
     return hits

@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     embedding_chunk_chars: int = 1800
     embedding_chunk_overlap: int = 200
     retrieve_top_k: int = 10
+    retrieve_chunks_per_doc: int = 3  # passages per doc fed to Ask; 1 = legacy single-chunk
     # Natural-language /ask answering (see docs/ask.md). Cost is recorded per
     # turn in ask_turns but not gated in this release.
     ask_model: str = "claude-sonnet-4-6"

@@ -57,7 +57,15 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybri
    **Reciprocal Rank Fusion** (RRF, k=60), so exact-term matches (invoice
    numbers, names) and paraphrase matches both surface. Each result carries its
    nearest chunk as the citation excerpt and, when the chunk came from a
-   page-aware document, its `page_number`.
+   page-aware document, its `page_number`. The FTS leg uses `ts_rank`
+   **length normalization** (Postgres bitmask `1`: divide rank by `1 + log(length)`),
+   so a long, multi-topic document cannot out-rank a short on-topic invoice
+   merely by repeating the matched term — score reflects match *density*. For
+   long documents, Ask retrieval also pulls the `LIBRARY_RETRIEVE_CHUNKS_PER_DOC`
+   nearest chunks per result (best-first) and joins them into the excerpt with a
+   `[…]` separator, so multi-topic answers see more than the single best passage.
+   The per-document candidate ranking and anti-crowding guarantee are unchanged
+   (one chunk per document still drives fusion).
 3. **Structured query** (`query_documents`). Aggregations over the extracted
    columns: distinct senders, summed amounts (by currency, optionally grouped by
    sender/kind), and document lists. Every row carries the contributing document
@@ -92,6 +100,7 @@ All settings use the `LIBRARY_` env prefix (see `.env.example` /
 | `LIBRARY_EMBEDDING_CHUNK_CHARS` | `1800` | Target chunk size. |
 | `LIBRARY_EMBEDDING_CHUNK_OVERLAP` | `200` | Overlap carried between chunks. |
 | `LIBRARY_RETRIEVE_TOP_K` | `10` | Documents returned by hybrid retrieval. |
+| `LIBRARY_RETRIEVE_CHUNKS_PER_DOC` | `3` | Nearest passages per document folded into the Ask excerpt (best-first, `[…]`-joined); `1` = legacy single-chunk. Does not affect candidate ranking or citations. |
 | `LIBRARY_ASK_MODEL` | `claude-sonnet-4-6` | Answer model. |
 | `LIBRARY_ASK_MAX_TOOL_TURNS` | `4` | Tool-use loop bound per turn. |
 | `LIBRARY_ASK_MAX_ANSWER_TOKENS` | `1024` | Max answer length. |

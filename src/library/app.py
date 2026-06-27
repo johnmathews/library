@@ -9,7 +9,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import library
-from library.api import ask, auth, charts, documents, events, jobs, settings, taxonomy
+from library.api import ask, auth, charts, documents, events, jobs, projects, settings, taxonomy
 from library.auth.deps import csrf_protect, current_user
 from library.config import get_settings
 from library.jobs import job_app
@@ -50,6 +50,14 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "description": (
             "Kinds, senders, and tags with document counts — the valid values "
             "for the document list filters and metadata edits."
+        ),
+    },
+    {
+        "name": "projects",
+        "description": (
+            "Projects/collections grouping documents (many-to-many, "
+            "soft-archive) with document counts — the values for the "
+            "document `?project=` filter and membership edits."
         ),
     },
     {
@@ -140,6 +148,7 @@ def create_app() -> FastAPI:
     api_router.include_router(documents.router)
     api_router.include_router(charts.router)
     api_router.include_router(taxonomy.router)
+    api_router.include_router(projects.router)
     api_router.include_router(jobs.router)
     api_router.include_router(events.router)
     api_router.include_router(settings.router)

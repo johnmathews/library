@@ -26,6 +26,29 @@ def slugify(value: str) -> str:
     return slug or "project"
 
 
+async def get_or_create_project(session: AsyncSession, identifier: str) -> Project:
+    """Resolve a project by slug (raw or slugified ``identifier``), creating it.
+
+    Mirrors ``extraction.apply.get_or_create_tag``: ``identifier`` may be an
+    existing slug or a human name. We match on slug (the input itself and its
+    slugified form) and, failing that, create a new project whose ``name`` is
+    the cleaned input and whose ``slug`` is ``slugify(identifier)``.
+    """
+    cleaned = identifier.strip()
+    slug = slugify(cleaned)
+    existing = (
+        (await session.execute(select(Project).where(Project.slug.in_({cleaned, slug}))))
+        .scalars()
+        .first()
+    )
+    if existing is not None:
+        return existing
+    project = Project(slug=slug, name=cleaned)
+    session.add(project)
+    await session.flush()
+    return project
+
+
 @dataclass(frozen=True)
 class ProjectCount:
     """One project with the number of (non-deleted) documents it groups."""

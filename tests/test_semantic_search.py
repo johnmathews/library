@@ -218,6 +218,55 @@ async def test_semantic_hit_carries_page_number(session: AsyncSession) -> None:
     assert hit.page_number == 3
 
 
+async def test_multi_chunk_passages_for_long_doc(session: AsyncSession) -> None:
+    """chunks_per_doc=3 returns the 3 nearest chunks (distance order) for a long
+    doc; a single-chunk doc yields exactly one passage."""
+    long_doc = await seed_document(
+        session,
+        "long",
+        ocr_text="long multi-topic doc",
+        chunks=[
+            ("nearest passage", unit_vector(0)),
+            ("second passage", unit_vector(1)),
+            ("third passage", unit_vector(2)),
+            ("fourth passage", unit_vector(3)),
+        ],
+    )
+    short_doc = await seed_document(
+        session, "short", ocr_text="short doc", chunks=[("only passage", unit_vector(0))]
+    )
+
+    # Query embedding nearest unit_vector(0); orthogonal vectors give increasing
+    # cosine distance for indices 1, 2, 3, so order is deterministic.
+    hits = await semantic_search(
+        session, query="", query_embedding=unit_vector(0), top_k=10, chunks_per_doc=3
+    )
+
+    by_id = {hit.document.id: hit for hit in hits}
+    assert by_id[long_doc].chunk_texts == (
+        "nearest passage",
+        "second passage",
+        "third passage",
+    )
+    assert by_id[short_doc].chunk_texts == ("only passage",)
+
+
+async def test_chunks_per_doc_one_is_legacy(session: AsyncSession) -> None:
+    """The default single-chunk mode mirrors chunk_text in chunk_texts."""
+    document_id = await seed_document(
+        session,
+        "legacy",
+        ocr_text="alpha",
+        chunks=[("the near one", unit_vector(0)), ("the far one", unit_vector(200))],
+    )
+
+    hits = await semantic_search(session, query="", query_embedding=unit_vector(0), top_k=5)
+
+    hit = next(hit for hit in hits if hit.document.id == document_id)
+    assert hit.chunk_texts == (hit.chunk_text,)
+    assert hit.chunk_texts == ("the near one",)
+
+
 async def test_semantic_hit_page_number_none_when_unset(session: AsyncSession) -> None:
     """A chunk without page_number gives page_number==None on the SemanticHit."""
     await seed_document(

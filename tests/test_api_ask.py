@@ -403,7 +403,7 @@ async def test_run_ask_captures_turn_messages(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
 
     async def fake_search(
-        session: Any, *, query: str, query_embedding: Any, top_k: int
+        session: Any, *, query: str, query_embedding: Any, top_k: int, chunks_per_doc: int = 1
     ) -> list[Any]:
         return []
 
@@ -697,3 +697,60 @@ def test_thread_get_foreign_user_is_404(
     # api_client is logged in as its own user — it must NOT see the foreign thread.
     assert api_client.get(f"/api/ask/threads/{foreign_thread_id}").status_code == 404
     assert api_client.delete(f"/api/ask/threads/{foreign_thread_id}").status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_run_semantic_search_excerpt_concatenates_passages(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When a hit carries multiple chunk_texts, the tool result excerpt joins
+    them; a single-passage hit keeps a plain excerpt."""
+    from types import SimpleNamespace
+    from typing import cast
+
+    from library.ask.engine import _run_semantic_search
+    from library.search import SemanticHit
+
+    async def fake_embed_query(
+        text_value: str, *, settings: Any, client: Any = None
+    ) -> list[float]:
+        return _unit_vector(0)
+
+    multi_doc = SimpleNamespace(id=11, title="Long dossier", sender=None, document_date=None)
+    single_doc = SimpleNamespace(id=22, title="Invoice", sender=None, document_date=None)
+
+    async def fake_search(
+        session: Any, *, query: str, query_embedding: Any, top_k: int, chunks_per_doc: int = 1
+    ) -> list[Any]:
+        return [
+            SemanticHit(
+                document=cast(Any, multi_doc),
+                score=0.9,
+                chunk_index=1,
+                chunk_text="first passage",
+                page_number=None,
+                chunk_texts=("first passage", "second passage", "third passage"),
+            ),
+            SemanticHit(
+                document=cast(Any, single_doc),
+                score=0.5,
+                chunk_index=1,
+                chunk_text="only passage",
+                page_number=None,
+                chunk_texts=("only passage",),
+            ),
+        ]
+
+    monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
+    monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+
+    cited: set[int] = set()
+    pages: dict[int, int] = {}
+    result = await _run_semantic_search(
+        cast(Any, None), get_settings(), {"query": "energie"}, cited, pages
+    )
+
+    rows = {row["document_id"]: row for row in result["results"]}
+    assert rows[11]["excerpt"] == "first passage\n\n[…]\n\nsecond passage\n\n[…]\n\nthird passage"
+    assert rows[22]["excerpt"] == "only passage"
+    assert cited == {11, 22}

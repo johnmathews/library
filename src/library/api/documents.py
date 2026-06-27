@@ -34,6 +34,7 @@ from library.models import (
     User,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
+from library.projects import get_or_create_project
 from library.schemas import (
     DocumentDetail,
     DocumentListItem,
@@ -45,6 +46,7 @@ from library.schemas import (
     KindOut,
     MarkdownPage,
     MarkdownResponse,
+    ProjectRef,
     SenderOut,
     TagOut,
 )
@@ -68,6 +70,8 @@ def _current_value(document: Document, name: str) -> Any:
         return document.sender_id
     if name == "tags":
         return sorted(tag.slug for tag in document.tags)
+    if name == "projects":
+        return sorted(project.slug for project in document.projects)
     return getattr(document, name, None)
 
 
@@ -240,6 +244,9 @@ async def list_documents(
         list[str] | None,
         Query(description="Tag slug; repeat the parameter to require all of them (AND)."),
     ] = None,
+    project: Annotated[
+        str | None, Query(description="Project slug; only documents in this project.")
+    ] = None,
     language: Annotated[DocumentLanguage | None, Query()] = None,
     status_filter: Annotated[DocumentStatus | None, Query(alias="status")] = None,
     review_status: Annotated[ReviewStatus | None, Query()] = None,
@@ -264,6 +271,7 @@ async def list_documents(
             kind_slug=kind,
             sender_id=sender_id,
             tag_slugs=tuple(tag or []),
+            project_slug=project,
             language=language,
             status=status_filter,
             review_status=review_status,
@@ -393,6 +401,8 @@ async def update_document(
             originals[storage] = _current_value(document, storage)
     if "tags" in provided:
         originals["tags"] = _current_value(document, "tags")
+    if "projects" in provided:
+        originals["projects"] = _current_value(document, "projects")
     for body_field in (
         "title",
         "summary",
@@ -435,6 +445,18 @@ async def update_document(
             )
         document.tags = [await get_or_create_tag(session, slug) for slug in dict.fromkeys(slugs)]
         edited.append("tags")
+    if "projects" in provided:
+        identifiers = provided.pop("projects")
+        if identifiers is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="projects cannot be null; send [] to clear them",
+            )
+        document.projects = [
+            await get_or_create_project(session, identifier)
+            for identifier in dict.fromkeys(identifiers)
+        ]
+        edited.append("projects")
     if provided.get("language", "") is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -456,8 +478,16 @@ async def update_document(
     session.add(
         IngestionEvent(document_id=document.id, event="user_edited", detail={"fields": edited})
     )
+    if "projects" in edited:
+        session.add(
+            IngestionEvent(
+                document_id=document.id,
+                event="project_changed",
+                detail={"projects": _current_value(document, "projects")},
+            )
+        )
     await session.commit()
-    await session.refresh(document, ["kind", "sender", "tags", "events"])
+    await session.refresh(document, ["kind", "sender", "tags", "projects", "events"])
     return _detail(document)
 
 
@@ -633,6 +663,10 @@ def _list_item_fields(document: Document) -> dict[str, Any]:
         "tags": [
             TagOut(slug=tag.slug, name=tag.name)
             for tag in sorted(document.tags, key=lambda tag: tag.slug)
+        ],
+        "projects": [
+            ProjectRef(slug=project.slug, name=project.name)
+            for project in sorted(document.projects, key=lambda project: project.slug)
         ],
         "document_date": document.document_date,
         "language": document.language,
