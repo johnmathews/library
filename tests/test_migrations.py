@@ -42,6 +42,9 @@ EXPECTED_KIND_SLUGS: set[str] = {
     "parking-ticket",
     "warranty",
     "manual",
+    "reference",
+    "research",
+    "note",
     "letter",
     "contract",
     "ticket",
@@ -89,8 +92,13 @@ def test_upgrade_downgrade_upgrade_cycle(admin_database_url: str) -> None:
 
 def test_kinds_seeded(migrated_database_url: str) -> None:
     slugs = asyncio.run(_fetch_scalars(migrated_database_url, "SELECT slug FROM kinds"))
-    assert len(slugs) == 11
+    assert len(slugs) == 14
     assert {str(slug) for slug in slugs} == EXPECTED_KIND_SLUGS
+
+
+def test_new_kinds_seeded(migrated_database_url: str) -> None:
+    slugs = asyncio.run(_fetch_scalars(migrated_database_url, "SELECT slug FROM kinds"))
+    assert {"reference", "research", "note"} <= {str(slug) for slug in slugs}
 
 
 def test_fts_indexes_exist(migrated_database_url: str) -> None:
@@ -146,6 +154,18 @@ def test_document_chunks_have_page_number_column(migrated_database_url: str) -> 
         """,
     )
     assert rows == [("page_number", "integer", "YES")]
+
+
+def test_documents_have_topics_column(migrated_database_url: str) -> None:
+    rows = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = 'documents' AND column_name = 'topics'
+        """,
+    )
+    assert rows == [("topics", "jsonb", "YES")]
 
 
 def test_ask_turns_has_messages_column(migrated_database_url: str) -> None:

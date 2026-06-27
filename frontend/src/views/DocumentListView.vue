@@ -427,6 +427,11 @@ const amountLabels = computed<Map<number, string | null>>(() => {
               +{{ item.tags.length - MAX_TAGS }}
             </span>
           </p>
+          <p
+            v-if="item.summary && !(applied.q && item.snippet)"
+            class="text-sm text-gray-600 dark:text-gray-400 mt-2 app-doc-card__summary line-clamp-3"
+            data-testid="doc-summary"
+          >{{ item.summary }}</p>
           <!-- eslint-disable-next-line vue/no-v-html -- renderSnippet escapes everything except the ts_headline <b> markers (docs/api.md §1.3.3) -->
           <p
             v-if="applied.q && item.snippet"

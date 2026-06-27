@@ -8,6 +8,7 @@ See docs/ingestion.md for the full flow.
 import hashlib
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 import filetype
 from sqlalchemy import select
@@ -32,6 +33,7 @@ ALLOWED_MIME_TYPES: frozenset[str] = frozenset(
         "image/heif",
         "image/tiff",
         "text/plain",
+        "text/markdown",
     }
 )
 
@@ -41,7 +43,13 @@ _MIME_ALIASES: dict[str, str] = {
     "image/pjpeg": "image/jpeg",
     "image/tif": "image/tiff",
     "text/plain; charset=utf-8": "text/plain",
+    "text/markdown; charset=utf-8": "text/markdown",
+    "text/x-markdown": "text/markdown",
 }
+
+# Filename suffixes that mark UTF-8-decodable content as Markdown rather than
+# plain text (used only when content sniffing cannot identify a binary type).
+_MARKDOWN_SUFFIXES: frozenset[str] = frozenset({".md", ".markdown"})
 
 
 class IngestError(Exception):
@@ -72,12 +80,14 @@ class IngestResult:
     duplicate: bool
 
 
-def detect_mime(content: bytes, claimed: str | None) -> str | None:
+def detect_mime(content: bytes, claimed: str | None, filename: str | None = None) -> str | None:
     """Determine the mime type, preferring content sniffing over the client's claim.
 
     ``filetype`` (pure Python, magic-bytes based) covers every binary type we
-    accept; it cannot identify plain text, so UTF-8-decodable content falls
-    back to ``text/plain``. The claimed type is the last resort.
+    accept; it cannot identify text, so UTF-8-decodable content falls back to
+    ``text/markdown`` (when ``filename`` ends ``.md``/``.markdown``) or
+    ``text/plain``. The binary sniff always wins over the filename. The claimed
+    type is the last resort.
     """
     kind = filetype.guess(content)
     if kind is not None:
@@ -87,6 +97,8 @@ def detect_mime(content: bytes, claimed: str | None) -> str | None:
     except UnicodeDecodeError:
         pass
     else:
+        if filename is not None and Path(filename).suffix.lower() in _MARKDOWN_SUFFIXES:
+            return "text/markdown"
         return "text/plain"
     if claimed:
         normalized = claimed.strip().lower()
@@ -122,7 +134,7 @@ async def ingest_file(
     paperless's OCR text) takes over status handling and job deferral
     itself (see ``library.importer.runner``).
     """
-    detected = detect_mime(content, mime)
+    detected = detect_mime(content, mime, filename)
     if detected not in ALLOWED_MIME_TYPES:
         raise UnsupportedMimeTypeError(detected)
 

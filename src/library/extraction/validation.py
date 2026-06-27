@@ -120,12 +120,15 @@ def validate(
             )
         )
 
-    # empty_extraction — kind=other and nothing else learned.
+    # empty_extraction — kind=other and nothing else learned (incl. no
+    # title/summary, so a general doc with a real summary is not flagged).
     if (
         (kind_slug is None or kind_slug == "other")
         and document.sender_id is None
         and document.document_date is None
         and document.amount_total is None
+        and not document.title
+        and not document.summary
     ):
         findings.append(
             Finding("empty_extraction", None, "warn", "extraction produced no useful metadata")

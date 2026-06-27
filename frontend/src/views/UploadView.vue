@@ -8,8 +8,9 @@
  * `duplicate: true`) get a notification banner pointing at the existing
  * document. 413/415/network failures land in a GOV.UK error summary.
  *
- * The file input deliberately has `accept="image/*,application/pdf"` and
- * NO `capture` attribute: on iOS/Android the picker then offers both the
+ * The file input deliberately accepts images, PDFs, and text/markdown notes
+ * (`accept="image/*,application/pdf,.md,.markdown,.txt,text/markdown,text/plain"`)
+ * and has NO `capture` attribute: on iOS/Android the picker then offers both the
  * camera and the photo library (a `capture` attribute would force the
  * camera and hide the library).
  */
@@ -147,7 +148,7 @@ function sleep(ms: number): Promise<void> {
 function friendlyError(error: unknown): string {
   if (error instanceof ApiError) {
     if (error.status === 413) return 'the file is too large'
-    if (error.status === 415) return 'this file type is not supported — upload a PDF or an image'
+    if (error.status === 415) return 'this file type is not supported — upload a PDF, image, or text/markdown file'
     if (error.status === 409) return 'this file matches a deleted document'
     if (error.status === 0) return 'network problem — check your connection and try again'
     return error.detail
@@ -175,7 +176,7 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
   <div id="upload-page" class="max-w-2xl">
     <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Upload documents</h1>
     <p class="text-gray-500 dark:text-gray-400 mb-6">
-      Add documents to your library. PDFs and photos are accepted.
+      Add documents to your library. PDFs, photos, and text/markdown notes are accepted.
     </p>
 
     <AppErrorSummary v-if="failures.length" :errors="failures" data-testid="error-summary" class="mb-6" />
@@ -216,9 +217,9 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
         id="file-upload"
         v-model="selected"
         label="Choose files"
-        hint="PDFs and photos, up to 100MB each. On a phone you can take a photo or pick one from your library."
+        hint="PDFs, photos, and text/markdown notes, up to 100MB each. On a phone you can take a photo or pick one from your library."
         multiple
-        accept="image/*,application/pdf"
+        accept="image/*,application/pdf,.md,.markdown,.txt,text/markdown,text/plain"
         :error-message="fileError ?? undefined"
       />
       <AppButton type="submit" class="mt-4">Upload</AppButton>

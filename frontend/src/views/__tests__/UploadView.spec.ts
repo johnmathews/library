@@ -110,11 +110,18 @@ describe('UploadView', () => {
     expect(w.find('h1').text()).toBe('Upload documents')
   })
 
-  it('exposes a multi-file input accepting images and PDFs without capture', () => {
+  it('exposes a multi-file input accepting images, PDFs and text/markdown without capture', () => {
     const w = mountView()
     const input = w.find('input[type="file"]')
     expect(input.attributes('multiple')).toBeDefined()
-    expect(input.attributes('accept')).toBe('image/*,application/pdf')
+    const accept = input.attributes('accept') ?? ''
+    expect(accept).toContain('image/*')
+    expect(accept).toContain('application/pdf')
+    // Text/markdown notes are now accepted too.
+    expect(accept).toContain('.md')
+    expect(accept).toContain('.txt')
+    expect(accept).toContain('text/markdown')
+    expect(accept).toContain('text/plain')
     // No capture attribute: phones must offer the photo library too.
     expect(input.attributes('capture')).toBeUndefined()
   })

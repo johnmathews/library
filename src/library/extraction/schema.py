@@ -33,6 +33,9 @@ KIND_SLUGS: tuple[str, ...] = (
     "parking-ticket",
     "warranty",
     "manual",
+    "reference",
+    "research",
+    "note",
     "letter",
     "contract",
     "ticket",
@@ -47,6 +50,9 @@ KindSlug = Literal[
     "parking-ticket",
     "warranty",
     "manual",
+    "reference",
+    "research",
+    "note",
     "letter",
     "contract",
     "ticket",
@@ -54,6 +60,7 @@ KindSlug = Literal[
 ]
 
 MAX_TAGS: int = 8
+MAX_TOPICS: int = 12
 
 # Strings the model sometimes emits instead of null for an absent date.
 _DATE_PLACEHOLDERS: frozenset[str] = frozenset({"", "unknown", "none", "null", "n/a", "-"})
@@ -88,6 +95,7 @@ class ExtractedMetadata(BaseModel):
     expiry_date: OptionalIsoDate
     language: Literal["nld", "eng", "mixed", "unknown"]
     tags: list[str]
+    topics: list[str] = []
     confidence: Literal["high", "medium", "low"]
     reasoning_note: str | None
 
@@ -145,3 +153,21 @@ class ExtractedMetadata(BaseModel):
             if slug and slug not in slugs:
                 slugs.append(slug)
         return slugs[:MAX_TAGS]
+
+    @field_validator("topics", mode="after")
+    @classmethod
+    def _normalize_topics(cls, value: list[str]) -> list[str]:
+        """Strip, case-insensitively deduplicate, and cap at MAX_TOPICS.
+
+        Unlike tags, topics stay human-readable (not slugified): they are
+        short prose phrases describing what a general document covers.
+        """
+        topics: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            cleaned = raw.strip()
+            key = cleaned.lower()
+            if cleaned and key not in seen:
+                seen.add(key)
+                topics.append(cleaned)
+        return topics[:MAX_TOPICS]

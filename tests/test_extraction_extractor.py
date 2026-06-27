@@ -16,7 +16,7 @@ import pytest
 from library import storage
 from library.config import Settings, get_settings
 from library.extraction.extractor import (
-    MAX_TEXT_CHARS,
+    MAX_TEXT_CHARS_LONG,
     SYSTEM_PROMPT,
     ExtractionSkipped,
     extract,
@@ -156,14 +156,39 @@ async def test_api_error_propagates(settings: Settings) -> None:
         )
 
 
-async def test_long_ocr_text_is_truncated(settings: Settings) -> None:
+async def test_long_ocr_text_is_sampled(settings: Settings) -> None:
     client = make_client(make_response(make_metadata()))
 
-    await extract(make_document(), "x" * 50_000, client=client, settings=settings)
+    # Distinctive head and a tail marker placed well clear of the very end so
+    # it survives the bounded join even after the cap.
+    head = "HEADMARKER" + "a" * 90
+    tail_marker = "TAILMARKER"
+    source = head + "b" * (50_000 - len(head) - len(tail_marker) - 200) + tail_marker + "c" * 200
+
+    await extract(make_document(), source, client=client, settings=settings)
 
     content = client.messages.parse.await_args.kwargs["messages"][0]["content"]
     assert content[0]["type"] == "text"
-    assert len(content[0]["text"]) == MAX_TEXT_CHARS
+    sampled = content[0]["text"]
+    # Sampling leaves explicit discontinuity markers and stays within budget.
+    assert "[...]" in sampled
+    assert len(sampled) <= MAX_TEXT_CHARS_LONG
+    # Head is preserved at the very start.
+    assert sampled.startswith("HEADMARKER")
+    # A marker from near the end proves coverage extends well past the head.
+    assert tail_marker in sampled
+
+
+async def test_short_text_sent_whole(settings: Settings) -> None:
+    client = make_client(make_response(make_metadata()))
+    source = "Short but usable OCR text well under the cap."
+
+    await extract(make_document(), source, client=client, settings=settings)
+
+    content = client.messages.parse.await_args.kwargs["messages"][0]["content"]
+    assert content[0]["type"] == "text"
+    assert content[0]["text"] == source
+    assert "[...]" not in content[0]["text"]
 
 
 async def test_empty_ocr_text_sends_pdf_document_block(settings: Settings, data_dir: Path) -> None:
@@ -248,3 +273,11 @@ def test_system_prompt_requests_english_output() -> None:
     assert "in English" in SYSTEM_PROMPT
     # The source language is still detected and reported separately.
     assert "language: nld, eng, mixed, or unknown" in SYSTEM_PROMPT
+
+
+def test_system_prompt_mentions_topics_and_general_kinds() -> None:
+    """The prompt now frames a mixed archive of general reference material and
+    instructs the topics field; the old household-paperwork framing is gone."""
+    assert "topics" in SYSTEM_PROMPT
+    assert "research" in SYSTEM_PROMPT
+    assert "household paperwork" not in SYSTEM_PROMPT

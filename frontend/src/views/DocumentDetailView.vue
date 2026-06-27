@@ -185,6 +185,14 @@ const fieldGroups: FieldGroup[] = [
 /** Fields that read better spanning the full width of the two-column grid. */
 const WIDE_FIELDS = new Set<EditableField>(['title', 'summary', 'tags', 'amount'])
 
+/** True when any field in the group has a non-null display value. Used to hide a
+ * whole group in read mode when it would otherwise show only em-dashes. */
+function groupHasValue(group: FieldGroup): boolean {
+  const d = doc.value
+  if (!d) return false
+  return group.fields.some((field) => rowByField[field].display(d) !== null)
+}
+
 /** Static Tailwind class strings per accent (kept literal so the build's content
  * scan keeps them). `border` is left-only so it never fights a shorthand. */
 const ACCENT: Record<Accent, { bar: string; text: string; border: string; bg: string }> = {
@@ -268,18 +276,22 @@ function tagColour(name: string): (typeof TAG_COLOURS)[number] {
 }
 
 /** The at-a-glance facts shown as a labelled stat row in the hero header.
- * These mirror (read-only) the most important editable rows below; empty
- * values render as the em-dash so the row layout stays stable. */
+ * These mirror (read-only) the most important editable rows below. Only stats
+ * that actually have a value are emitted — a value-less stat is dropped rather
+ * than shown as a dead em-dash, so a general doc reads cleanly. */
 const heroStats = computed<{ label: string; value: string }[]>(() => {
   const d = doc.value
   if (!d) return []
-  const amount = d.amount_total === null ? null : [d.amount_total, d.currency].filter(Boolean).join(' ')
-  return [
-    { label: 'Kind', value: d.kind?.name ?? EMPTY },
-    { label: 'Sender', value: d.sender?.name ?? EMPTY },
-    { label: 'Document date', value: formatDate(d.document_date) ?? EMPTY },
-    { label: 'Amount', value: amount ?? EMPTY },
-  ]
+  const stats: { label: string; value: string }[] = []
+  if (d.kind?.name) stats.push({ label: 'Kind', value: d.kind.name })
+  if (d.sender?.name) stats.push({ label: 'Sender', value: d.sender.name })
+  const documentDate = formatDate(d.document_date)
+  if (documentDate) stats.push({ label: 'Document date', value: documentDate })
+  if (d.amount_total !== null) {
+    const amount = [d.amount_total, d.currency].filter(Boolean).join(' ')
+    if (amount) stats.push({ label: 'Amount', value: amount })
+  }
+  return stats
 })
 
 // --- Page-wide edit mode (per-field autosave) ---------------------------------
@@ -674,10 +686,9 @@ const latestExtractionEvent = computed(() => {
   )
 })
 
-// --- Markdown section (lazy fetch on first reveal) ----------------------------
+// --- Document text reader (markdown, fetched eagerly on load) -----------------
 
 const markdownData = ref<DocumentMarkdownResponse | null>(null)
-const markdownFetched = ref(false)
 const markdownLoading = ref(false)
 const markdownError = ref(false)
 
@@ -685,13 +696,16 @@ function markdownPageHtml(md: string): string {
   return DOMPurify.sanitize(marked.parse(md, { async: false }) as string)
 }
 
-async function onMarkdownReveal(): Promise<void> {
-  if (markdownFetched.value || !doc.value) return
-  markdownFetched.value = true
+/** Whether the document has readable extracted text to show in the reader. */
+const hasReadableText = computed(() => (markdownData.value?.pages.length ?? 0) > 0)
+
+/** Fetch the rendered markdown for a document. Called from the load watcher so
+ * the reader is the primary content even for files with no PDF/image preview. */
+async function loadMarkdown(id: number): Promise<void> {
   markdownLoading.value = true
   markdownError.value = false
   try {
-    markdownData.value = await fetchDocumentMarkdown(doc.value.id)
+    markdownData.value = await fetchDocumentMarkdown(id)
   } catch {
     markdownError.value = true
   } finally {
@@ -713,7 +727,7 @@ watch(
     notice.value = null
     actionError.value = null
     markdownData.value = null
-    markdownFetched.value = false
+    markdownLoading.value = false
     markdownError.value = false
     const numericId = Number(id)
     if (!Number.isInteger(numericId) || numericId < 1) {
@@ -725,7 +739,10 @@ watch(
     } catch (error: unknown) {
       if (error instanceof ApiError && error.status === 404) notFound.value = true
       else loadError.value = true
+      return
     }
+    // Fetch the rendered text eagerly so the reader is ready without a reveal.
+    await loadMarkdown(numericId)
   },
   { immediate: true },
 )
@@ -762,6 +779,7 @@ watch(
         {{ doc.title ?? 'Untitled document' }}
       </h1>
       <dl
+        v-if="heroStats.length"
         class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3"
         data-testid="hero-stats"
       >
@@ -870,7 +888,7 @@ watch(
             data-testid="preview-pdf"
           />
           <div
-            v-else
+            v-else-if="!hasReadableText"
             class="p-4 text-sm text-gray-500 dark:text-gray-400"
             data-testid="preview-fallback"
           >
@@ -882,47 +900,45 @@ watch(
           </div>
         </div>
 
+        <!-- Document text: a first-class long-form reader. The extracted text is
+             the primary content for files with no PDF/image preview, so it is
+             rendered directly rather than hidden behind a disclosure. -->
         <div
           id="document-markdown-card"
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
         >
-          <AppDetails
-            summary="View markdown"
-            data-testid="markdown-details"
-            @toggle="onMarkdownReveal"
-          >
-            <div v-if="markdownLoading" class="mt-2 text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-loading">
-              Loading…
-            </div>
-            <div v-else-if="markdownError" class="mt-2 text-sm text-red-600 dark:text-red-400" data-testid="markdown-error">
-              Could not load markdown — try again later.
-            </div>
-            <div v-else-if="markdownData && markdownData.page_count === 0" class="mt-2 text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-empty">
-              No markdown content is available for this document yet.
-            </div>
-            <template v-else-if="markdownData">
-              <div
-                v-for="page in markdownData.pages"
-                :key="page.page_number"
-                class="mt-3 first:mt-1"
-                data-testid="markdown-page"
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">Document text</h2>
+          <div v-if="markdownLoading" class="text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-loading">
+            Loading…
+          </div>
+          <div v-else-if="markdownError" class="text-sm text-red-600 dark:text-red-400" data-testid="markdown-error">
+            Could not load markdown — try again later.
+          </div>
+          <div v-else-if="markdownData && markdownData.page_count === 0" class="text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-empty">
+            No markdown content is available for this document yet.
+          </div>
+          <template v-else-if="markdownData">
+            <div
+              v-for="page in markdownData.pages"
+              :key="page.page_number"
+              class="mt-3 first:mt-0"
+              data-testid="markdown-page"
+            >
+              <p
+                v-if="markdownData.page_count > 1"
+                class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
               >
-                <p
-                  v-if="markdownData.page_count > 1"
-                  class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
-                >
-                  Page {{ page.page_number }}
-                </p>
-                <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in markdownPageHtml -->
-                <div
-                  class="doc-markdown text-gray-800 dark:text-gray-100"
-                  data-testid="markdown-content"
-                  v-html="markdownPageHtml(page.markdown)"
-                />
-                <!-- eslint-enable vue/no-v-html -->
-              </div>
-            </template>
-          </AppDetails>
+                Page {{ page.page_number }}
+              </p>
+              <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in markdownPageHtml -->
+              <div
+                class="doc-markdown text-gray-800 dark:text-gray-100"
+                data-testid="markdown-content"
+                v-html="markdownPageHtml(page.markdown)"
+              />
+              <!-- eslint-enable vue/no-v-html -->
+            </div>
+          </template>
         </div>
 
         <DocumentSeriesTrend v-if="doc" :document-id="doc.id" />
@@ -975,9 +991,11 @@ watch(
             <!-- One themed panel per metadata group: accent rail + tint + heading
                  make each kind of metadata distinguishable at a glance, and the
                  two-column grid uses the width instead of one tall column. -->
+            <!-- v-for on a wrapper template so the per-group v-if doesn't sit on
+                 the same element as v-for (vue/no-use-v-if-with-v-for). -->
+            <template v-for="group in fieldGroups" :key="group.key">
             <section
-              v-for="group in fieldGroups"
-              :key="group.key"
+              v-if="editMode || groupHasValue(group)"
               class="rounded-lg border-l-4 px-4 py-3.5"
               :class="[ACCENT[group.accent].border, ACCENT[group.accent].bg]"
             >
@@ -991,9 +1009,9 @@ watch(
                 </h3>
               </div>
               <dl class="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+                <template v-for="field in group.fields" :key="field">
                 <div
-                  v-for="field in group.fields"
-                  :key="field"
+                  v-if="editMode || rowByField[field].display(doc) !== null"
                   :data-testid="`row-${field}`"
                   :class="WIDE_FIELDS.has(field) || editMode ? 'sm:col-span-2' : ''"
                 >
@@ -1155,8 +1173,10 @@ watch(
                     </p>
                   </dd>
                 </div>
+                </template>
               </dl>
             </section>
+            </template>
 
             <!-- System: read-only provenance, set apart with a neutral accent. -->
             <section

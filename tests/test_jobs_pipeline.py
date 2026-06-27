@@ -321,6 +321,80 @@ async def test_thumbnail_defer_failure_does_not_fail_document(
         assert document.status is DocumentStatus.INDEXED
 
 
+async def test_born_digital_markdown_reaches_indexed_with_page_and_chunks(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A text/markdown document flows through to indexed: OCR passthrough →
+    one born-digital DocumentPage → markdown-aware chunks → embedded."""
+    from library.models import EMBEDDING_DIM, DocumentChunk, DocumentPage
+
+    monkeypatch.setenv("LIBRARY_EMBEDDING_ENABLED", "true")
+    get_settings.cache_clear()
+
+    body = "# Heading\n\n- one\n- two\n\nclosing paragraph"
+
+    def fake_run_ocr(document: Document, original_path: Path, derived: Path) -> OcrResult:
+        # Mirror the real router's text/markdown passthrough.
+        return OcrResult(text=body, confidence=None, searchable_pdf=None, engine="text", pages=None)
+
+    async def fake_embed_texts(
+        texts: list[str], *, settings: object, client: object | None = None
+    ) -> list[list[float]]:
+        return [[1.0] + [0.0] * (EMBEDDING_DIM - 1) for _ in texts]
+
+    monkeypatch.setattr(ocr_router, "run_ocr", fake_run_ocr)
+    monkeypatch.setattr(jobs, "embed_texts", fake_embed_texts)
+
+    sha = hashlib.sha256(b"born-digital-md-pipeline").hexdigest()
+    async with session_factory() as session:
+        document = Document(
+            sha256=sha,
+            mime_type="text/markdown",
+            source=DocumentSource.UPLOAD,
+            original_filename="note.md",
+        )
+        session.add(document)
+        await session.commit()
+        document_id = document.id
+
+    await advance_pipeline(session_factory, document_id)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.status is DocumentStatus.INDEXED
+        assert document.ocr_text == body
+
+        pages = (
+            (
+                await session.execute(
+                    select(DocumentPage).where(DocumentPage.document_id == document_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(pages) == 1
+        assert pages[0].page_number == 1
+        assert pages[0].markdown == body
+
+        chunks = (
+            (
+                await session.execute(
+                    select(DocumentChunk).where(DocumentChunk.document_id == document_id)
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert len(chunks) >= 1
+
+    get_settings.cache_clear()
+
+
 def test_next_status_includes_markdown() -> None:
     assert jobs._NEXT_STATUS[DocumentStatus.EXTRACT] == DocumentStatus.MARKDOWN
     assert jobs._NEXT_STATUS[DocumentStatus.MARKDOWN] == DocumentStatus.EMBED

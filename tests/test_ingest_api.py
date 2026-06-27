@@ -152,6 +152,22 @@ def test_txt_upload_accepted(api_client: TestClient) -> None:
     assert body["status"] == "received"
 
 
+def test_upload_markdown_detected_as_markdown(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    content = b"# Notitie\n\n- rekeningen mei\n- belasting"
+    status_code, body = upload(api_client, content, filename="note.md", content_type="")
+    assert status_code == 201
+    assert body["status"] == "received"
+
+    rows = fetch_all(
+        api_database_url,
+        "SELECT mime_type FROM documents WHERE id = :id",
+        id=body["id"],
+    )
+    assert rows == [("text/markdown",)]
+
+
 def test_upload_too_large_rejected(api_client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
     from library.config import get_settings
 

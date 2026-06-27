@@ -84,6 +84,26 @@ class TestTextPassthrough:
         assert result.searchable_pdf is None
         assert result.pages is None
 
+    def test_markdown_file_is_read_directly(
+        self,
+        tmp_path: Path,
+        derived: Path,
+        settings: Settings,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        forbid(monkeypatch, tesseract, "ocr_pdf")
+        forbid(monkeypatch, photo, "ocr_image")
+        source = tmp_path / "note.md"
+        source.write_text("# Heading\n\nbody text", encoding="utf-8")
+
+        result = router.run_ocr(make_document("text/markdown"), source, derived, settings=settings)
+
+        assert result.text == "# Heading\n\nbody text"
+        assert result.engine == "text"
+        assert result.confidence is None
+        assert result.searchable_pdf is None
+        assert result.pages is None
+
 
 class TestPdfRouting:
     def test_born_digital_pdf_skips_ocr(

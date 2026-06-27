@@ -6,7 +6,7 @@ from typing import Any
 import pytest
 from pydantic import ValidationError
 
-from library.extraction.schema import KIND_SLUGS, MAX_TAGS, ExtractedMetadata
+from library.extraction.schema import KIND_SLUGS, MAX_TAGS, MAX_TOPICS, ExtractedMetadata
 
 
 def payload(**overrides: Any) -> dict[str, Any]:
@@ -109,3 +109,29 @@ def test_tags_normalised_deduplicated_and_capped() -> None:
 
 def test_blank_sender_becomes_none() -> None:
     assert ExtractedMetadata.model_validate(payload(sender_name="   ")).sender_name is None
+
+
+def test_topics_default_empty() -> None:
+    """topics is optional and defaults to an empty list when omitted."""
+    base = payload()
+    base.pop("topics", None)
+    assert ExtractedMetadata.model_validate(base).topics == []
+
+
+def test_topics_trimmed_deduped_capped() -> None:
+    """topics are trimmed, case-insensitively deduped, capped, NOT slugified."""
+    raw = [
+        "  Machine Learning ",
+        "machine learning",
+        "Neural Networks",
+        "",
+        "   ",
+        *[f"Topic {i}" for i in range(15)],
+    ]
+    metadata = ExtractedMetadata.model_validate(payload(topics=raw))
+    # Human-readable, not slugified; first two survive dedup in order.
+    assert metadata.topics[:2] == ["Machine Learning", "Neural Networks"]
+    assert len(metadata.topics) == MAX_TOPICS
+    # Case-insensitive dedup: no two topics equal ignoring case.
+    lowered = [t.lower() for t in metadata.topics]
+    assert len(set(lowered)) == len(lowered)

@@ -154,6 +154,27 @@ async def test_drop_pdf_creates_document_and_archives(
     assert len(process_jobs) == 1
 
 
+async def test_markdown_file_is_candidate_and_ingests_as_markdown(
+    watcher: ConsumeWatcher,
+    consume_root: Path,
+    session_factory: async_sessionmaker[AsyncSession],
+    job_connector: InMemoryConnector,
+) -> None:
+    name = f"note-{uuid.uuid4().hex[:8]}.md"
+    path = consume_root / name
+    path.write_bytes(b"# Heading " + uuid.uuid4().hex.encode() + b"\n\nbody text")
+
+    assert watcher._is_candidate(path)
+
+    await watcher.process_path(path)
+
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1
+    assert documents[0].mime_type == "text/markdown"
+    assert documents[0].source is DocumentSource.CONSUME
+    assert not path.exists()  # archived on success
+
+
 async def test_duplicate_drop_archives_without_second_document(
     watcher: ConsumeWatcher,
     consume_root: Path,

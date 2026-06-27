@@ -228,6 +228,7 @@ class Document(Base):
 
     title: Mapped[str | None] = mapped_column(Text)
     summary: Mapped[str | None] = mapped_column(Text)
+    topics: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     document_date: Mapped[date | None] = mapped_column(Date, index=True)
     language: Mapped[DocumentLanguage] = mapped_column(
         Enum(

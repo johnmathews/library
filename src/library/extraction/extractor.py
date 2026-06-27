@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Bump whenever the system prompt or schema changes meaningfully; stored per
 # run so old-prompt documents can be found and re-extracted later.
-PROMPT_VERSION: str = "2026-06-23.1"
+PROMPT_VERSION: str = "2026-06-28.1"
 
 # USD per million tokens (input, output), June 2026 list prices.
 MODEL_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
@@ -32,9 +32,15 @@ MODEL_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-sonnet-4-6": (3.0, 15.0),
 }
 
-# OCR text is truncated to this many characters before being sent: metadata
-# lives on the first pages, and this caps per-document spend.
+# Short OCR text (<= this many characters) is sent whole: metadata lives on
+# the first pages, and this caps per-document spend for transactional docs.
 MAX_TEXT_CHARS: int = 8_000
+# Total budget for the sampled representation of a long document: general
+# reference material (manuals, papers, notes) carries useful signal
+# throughout, so longer text is window-sampled up to this many characters.
+MAX_TEXT_CHARS_LONG: int = 24_000
+# Number of evenly-spaced windows taken across a long document.
+_SAMPLE_WINDOWS: int = 6
 # Below this many stripped characters the OCR text is considered garbage and
 # the original file is sent instead (when it is a PDF or image).
 MIN_TEXT_CHARS: int = 20
@@ -45,10 +51,14 @@ MAX_OUTPUT_TOKENS: int = 2_048
 
 SYSTEM_PROMPT: str = f"""\
 You extract metadata for "Library", a self-hosted family document archive.
-Documents are household paperwork in Dutch, English, or a mix: invoices,
-receipts, certificates, utility bills, parking tickets, warranties, manuals,
-letters, contracts, tickets. Input is OCR text (possibly noisy) or the
-original document/image.
+The archive is a mixed collection in Dutch, English, or a mix, spanning two
+broad groups: (1) transactional paperwork — invoices, receipts, certificates,
+utility bills, parking tickets, warranties, letters, contracts, tickets — and
+(2) general reference material — manuals, reference documents, research
+papers, and notes. General-reference items are often long and multi-topic, so
+their text may reach you sampled (windows of the document joined by "[...]")
+rather than in full. Input is OCR text (possibly noisy) or the original
+document/image.
 
 Rules:
 - Write ALL free-text output fields (title, summary, reasoning_note) in
@@ -57,7 +67,10 @@ Rules:
 - kind_slug: one of {", ".join(KIND_SLUGS)}. Use "other" only when nothing
   else fits.
 - title: short and descriptive, in English.
-- summary: at most two sentences, in English.
+- summary: in English, and adaptive to the document. For transactional
+  paperwork keep it to at most two sentences. For general reference material
+  (manuals, reference docs, research papers, notes) write 3-6 sentences
+  capturing what it covers.
 - sender_name: the organisation or person that issued the document, in a
   short canonical form (e.g. "Eneco", not "Eneco Services B.V., afdeling
   facturatie"). null when unclear.
@@ -68,7 +81,13 @@ Rules:
   not applicable.
 - tags: at most 8 lowercase slug tags ("hyphenated-like-this"), useful for
   finding the document later. No duplicates of kind or sender.
+- topics: up to 12 short, human-readable topic phrases for general reference
+  material, capturing the subjects it covers. Leave empty ([]) for
+  transactional paperwork.
 - language: nld, eng, mixed, or unknown — the language of the document.
+- A missing sender, date, or amount is entirely normal for general reference
+  material — do not guess values, leave them null, and treat their absence as
+  expected, NOT as a low-confidence signal.
 - confidence: "low" when the text is garbled or you had to guess key fields,
   "high" only when the document is clear.
 - reasoning_note: one short line when something needed judgement; else null.
@@ -76,6 +95,29 @@ Rules:
 
 # Claude-accepted image media types we can send as-is.
 _IMAGE_MEDIA_TYPES: frozenset[str] = frozenset({"image/jpeg", "image/png"})
+
+# Joins the sampled windows of a long document; the marker makes the gaps
+# explicit to the model so it does not read across a discontinuity.
+_SAMPLE_SEPARATOR: str = "\n\n[...]\n\n"
+
+
+def _sample_long_text(text: str) -> str:
+    """Represent a long document by evenly-spaced windows of its text.
+
+    Short text (<= ``MAX_TEXT_CHARS``) is returned unchanged. Longer text is
+    sampled into ``_SAMPLE_WINDOWS`` windows of ``MAX_TEXT_CHARS_LONG //
+    _SAMPLE_WINDOWS`` characters each — the first starting at the very
+    beginning and the last ending at the very end — joined by
+    ``_SAMPLE_SEPARATOR`` so head, tail, and the middle all reach the model
+    while spend stays bounded by ``MAX_TEXT_CHARS_LONG``.
+    """
+    if len(text) <= MAX_TEXT_CHARS:
+        return text
+    window = MAX_TEXT_CHARS_LONG // _SAMPLE_WINDOWS
+    last_start = len(text) - window
+    starts = [round(i * last_start / (_SAMPLE_WINDOWS - 1)) for i in range(_SAMPLE_WINDOWS)]
+    windows = [text[start : start + window] for start in starts]
+    return _SAMPLE_SEPARATOR.join(windows)[:MAX_TEXT_CHARS_LONG]
 
 
 class ExtractionSkipped(Exception):
@@ -141,7 +183,7 @@ def build_user_content(document: Document, ocr_text: str) -> tuple[list[dict[str
     """
     text = ocr_text.strip()
     if len(text) >= MIN_TEXT_CHARS:
-        return [{"type": "text", "text": text[:MAX_TEXT_CHARS]}], "text"
+        return [{"type": "text", "text": _sample_long_text(text)}], "text"
 
     mime = document.mime_type
     if mime == "application/pdf":

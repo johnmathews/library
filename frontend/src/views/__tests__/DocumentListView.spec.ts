@@ -491,6 +491,28 @@ describe('DocumentListView', () => {
     expect(w.find('[data-testid="review-badge"]').exists()).toBe(false)
   })
 
+  it('renders the document summary on a tile when item.summary is set', async () => {
+    listResponse = () =>
+      jsonResponse(listBody([makeItem({ summary: 'A short overview of the energy bill.' })]))
+    const w = await mountView()
+    const summary = w.find('[data-testid="doc-summary"]')
+    expect(summary.exists()).toBe(true)
+    expect(summary.text()).toBe('A short overview of the energy bill.')
+  })
+
+  it('hides the summary in favour of the search snippet when both are present', async () => {
+    listResponse = () =>
+      jsonResponse(
+        listBody([
+          makeItem({ summary: 'A short overview.', snippet: 'uw <b>rekening</b>', rank: 0.3 }),
+        ]),
+      )
+    await router.push('/?q=rekening')
+    const w = await mountView()
+    expect(w.find('[data-testid="doc-summary"]').exists()).toBe(false)
+    expect(w.find('.app-doc-card__snippet').exists()).toBe(true)
+  })
+
   it('updates a tile status badge live when the jobs store reports an event', async () => {
     listResponse = () => jsonResponse(listBody([makeItem({ id: 12, status: 'ocr' })]))
     const w = await mountView()

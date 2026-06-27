@@ -127,6 +127,10 @@ async def _apply_outcome(
         document.language = DocumentLanguage(metadata.language)
         fields_set.append("language")
 
+    if metadata.topics and "topics" not in user_edited:
+        document.topics = metadata.topics
+        fields_set.append("topics")
+
     if metadata.tags and "tags" not in user_edited:
         existing_slugs = {tag.slug for tag in document.tags}
         merged = False

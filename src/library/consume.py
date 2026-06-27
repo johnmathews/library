@@ -32,7 +32,19 @@ logger = logging.getLogger(__name__)
 
 #: Extensions worth ingesting (must resolve to ALLOWED_MIME_TYPES content).
 SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
-    {".pdf", ".jpg", ".jpeg", ".png", ".heic", ".heif", ".tif", ".tiff", ".txt"}
+    {
+        ".pdf",
+        ".jpg",
+        ".jpeg",
+        ".png",
+        ".heic",
+        ".heif",
+        ".tif",
+        ".tiff",
+        ".txt",
+        ".md",
+        ".markdown",
+    }
 )
 
 CONSUMED_DIR_NAME: str = "consumed"

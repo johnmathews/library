@@ -21,7 +21,7 @@ from library import thumbnails
 from library.config import get_settings
 from library.db import get_sessionmaker
 from library.embedding import EmbeddingError, embed_texts
-from library.embedding.chunker import chunk_text
+from library.embedding.chunker import chunk_markdown, chunk_text
 from library.extraction.apply import apply_extraction
 from library.markdown.apply import apply_markdown
 from library.models import (
@@ -214,17 +214,18 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
         .all()
     )
 
+    chunker = chunk_markdown if document.mime_type == "text/markdown" else chunk_text
     chunk_records: list[tuple[str, int | None]] = []
     if pages:
         for page in pages:
-            for piece in chunk_text(
+            for piece in chunker(
                 page.markdown,
                 max_chars=settings.embedding_chunk_chars,
                 overlap=settings.embedding_chunk_overlap,
             ):
                 chunk_records.append((piece, page.page_number))
     else:
-        for piece in chunk_text(
+        for piece in chunker(
             document.ocr_text or "",
             max_chars=settings.embedding_chunk_chars,
             overlap=settings.embedding_chunk_overlap,

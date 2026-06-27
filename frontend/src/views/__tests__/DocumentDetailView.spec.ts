@@ -144,21 +144,23 @@ describe('DocumentDetailView', () => {
       }))
   }
 
-  it('renders summary rows with values, and a dash for null fields', async () => {
+  it('renders rows with values and hides value-less rows in read mode', async () => {
     detail = makeDetail({ title: null, summary: null, due_date: null, ocr_confidence: null })
     const w = await mountView()
 
-    expect(rowValue(w, 'title')).toBe('—')
+    // Valued fields render their value.
     expect(rowValue(w, 'kind')).toBe('Invoice')
     expect(rowValue(w, 'sender')).toBe('Eneco')
     expect(rowValue(w, 'document_date')).toBe('15 May 2026')
     expect(rowValue(w, 'language')).toBe('Dutch')
     expect(rowValue(w, 'tags')).toBe('Energie')
     expect(rowValue(w, 'amount')).toBe('123.45 EUR')
-    expect(rowValue(w, 'due_date')).toBe('—')
-    expect(rowValue(w, 'summary')).toBe('—')
-    // Read-only rows: status, source, and OCR confidence — which for a
-    // born-digital doc (null confidence) reads "Not applicable", not a bare dash.
+    // Value-less fields are hidden in read mode — no dead em-dashes.
+    expect(w.find('[data-testid="row-title"]').exists()).toBe(false)
+    expect(w.find('[data-testid="row-due_date"]').exists()).toBe(false)
+    expect(w.find('[data-testid="row-summary"]').exists()).toBe(false)
+    // Read-only system rows still render: status, source, and OCR confidence —
+    // which for a born-digital doc (null confidence) reads "Not applicable".
     const text = w.text()
     expect(text).toContain('indexed')
     expect(text).toContain('Upload')
@@ -366,7 +368,43 @@ describe('DocumentDetailView', () => {
     expect(stats).toContain('Invoice') // kind
     expect(stats).toContain('Eneco') // sender
     expect(stats).toContain('15 May 2026') // document date
-    expect(stats).toContain('—') // amount is null
+    // A null amount is dropped from the hero entirely — no em-dash placeholder.
+    expect(stats).not.toContain('Amount')
+    expect(stats).not.toContain('—')
+  })
+
+  it('hides value-less hero stats and metadata groups in read mode, shows them when editing', async () => {
+    // A general document: a kind and a date, but no sender and no amount.
+    detail = makeDetail({
+      title: 'Brief van de gemeente',
+      kind: { slug: 'letter', name: 'Letter' },
+      sender: null,
+      amount_total: null,
+      currency: null,
+      tags: [],
+    })
+    const w = await mountView()
+
+    // Hero shows only the stats that have a value.
+    const stats = w.find('[data-testid="hero-stats"]').text()
+    expect(stats).toContain('Letter') // kind
+    expect(stats).toContain('15 May 2026') // document date
+    expect(stats).not.toContain('Sender')
+    expect(stats).not.toContain('Amount')
+
+    // The Financial group (amount only) and the Sender row are absent in read mode.
+    expect(w.text()).not.toContain('Financial')
+    expect(w.find('[data-testid="row-amount"]').exists()).toBe(false)
+    expect(w.find('[data-testid="row-sender"]').exists()).toBe(false)
+    // The "Sender & dates" group itself still shows because the date has a value.
+    expect(w.find('[data-testid="row-document_date"]').exists()).toBe(true)
+
+    // Edit mode reveals every field and group again.
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    expect(w.text()).toContain('Financial')
+    expect(w.find('[data-testid="row-amount"]').exists()).toBe(true)
+    expect(w.find('[data-testid="row-sender"]').exists()).toBe(true)
   })
 
   it('hero header renders each tag as a coloured badge', async () => {
@@ -434,6 +472,9 @@ describe('DocumentDetailView', () => {
     expect(preview.props('src')).toBe('/api/documents/12/original?disposition=inline')
     wrapper.unmount()
 
+    // Empty markdown too: with no readable text and no preview, the no-preview
+    // panel is the only fallback left.
+    markdownResponse = () => jsonResponse({ page_count: 0, pages: [] } satisfies DocumentMarkdownResponse)
     detail = makeDetail({ mime_type: 'text/plain', has_searchable_pdf: false })
     wrapper = mount(DocumentDetailView, {
       global: { plugins: [router, pinia] },
@@ -590,43 +631,37 @@ describe('DocumentDetailView', () => {
     expect(w.text()).toContain('verified')
   })
 
-  it('lazily fetches markdown on first reveal and renders page content', async () => {
-    const w = await mountView()
-
-    // Markdown section should exist but not have fetched yet (details is closed)
-    expect(w.find('[data-testid="markdown-details"]').exists()).toBe(true)
+  it('fetches markdown eagerly on load and renders the document-text reader', async () => {
     const markdownCalls = () =>
       fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/markdown'))
-    expect(markdownCalls()).toHaveLength(0)
+    const w = await mountView()
 
-    // Trigger the toggle (reveal) — simulates the user opening the <details>
-    await w.find('[data-testid="markdown-details"]').trigger('toggle')
-    await flushPromises()
-
+    // Fetched once on document load — no disclosure to open.
     expect(markdownCalls()).toHaveLength(1)
-    // Page content should be rendered
     expect(w.find('[data-testid="markdown-content"]').exists()).toBe(true)
     expect(w.find('[data-testid="markdown-content"]').html()).toContain('Invoice')
-  })
-
-  it('does not re-fetch markdown if the section is toggled again', async () => {
-    const w = await mountView()
-    const details = w.find('[data-testid="markdown-details"]')
-    await details.trigger('toggle')
-    await flushPromises()
-    await details.trigger('toggle')
-    await flushPromises()
-    const markdownCalls = fetchMock.mock.calls.filter((c) => String(c[0]).endsWith('/markdown'))
-    expect(markdownCalls).toHaveLength(1)
   })
 
   it('shows the empty state when page_count is 0', async () => {
     markdownResponse = () => jsonResponse({ page_count: 0, pages: [] } satisfies DocumentMarkdownResponse)
     const w = await mountView()
-    await w.find('[data-testid="markdown-details"]').trigger('toggle')
-    await flushPromises()
     expect(w.find('[data-testid="markdown-empty"]').exists()).toBe(true)
     expect(w.find('[data-testid="markdown-content"]').exists()).toBe(false)
+  })
+
+  it('shows the document-text reader (not the no-preview fallback) for a text document', async () => {
+    detail = makeDetail({ mime_type: 'text/plain', has_searchable_pdf: false })
+    markdownResponse = () =>
+      jsonResponse({
+        page_count: 1,
+        pages: [{ page_number: 1, markdown: '# Letter\n\nDear sir' }],
+      } satisfies DocumentMarkdownResponse)
+    const w = await mountView()
+    // The reader is the primary content for a no-PDF text doc.
+    expect(w.find('[data-testid="markdown-content"]').exists()).toBe(true)
+    expect(w.find('[data-testid="markdown-content"]').html()).toContain('Letter')
+    // The no-preview fallback must not appear when there is readable text.
+    expect(w.find('[data-testid="preview-fallback"]').exists()).toBe(false)
   })
 
   it('renders DocumentSeriesTrend with the loaded document id', async () => {

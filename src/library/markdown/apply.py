@@ -46,8 +46,43 @@ async def _record_event(
     await session.commit()
 
 
+async def _apply_born_digital_markdown(session: AsyncSession, document: Document) -> None:
+    """Synthesize the markdown layer for born-digital text directly from OCR text.
+
+    For ``text/markdown``/``text/plain`` the raw file content (already captured
+    as ``ocr_text`` by the OCR passthrough) is the authoritative text layer, so
+    one ``DocumentPage`` is written verbatim — no Anthropic call, no budget
+    consumption, bypassing ``markdown_max_pages``.
+    """
+    body = (document.ocr_text or "").strip()
+    if not body:
+        await _record_event(session, document, "markdown_skipped", {"reason": "no_text"})
+        return
+    await session.execute(delete(DocumentPage).where(DocumentPage.document_id == document.id))
+    session.add(
+        DocumentPage(
+            document_id=document.id,
+            page_number=1,
+            markdown=body,
+            char_count=len(body),
+        )
+    )
+    await _record_event(
+        session,
+        document,
+        "markdown_completed",
+        {"engine": "passthrough", "model": None, "pages": 1, "cost_usd": 0.0},
+    )
+    logger.info(
+        "markdown passthrough for born-digital document %s (%s)", document.id, document.mime_type
+    )
+
+
 async def apply_markdown(session: AsyncSession, document: Document, settings: Settings) -> None:
     """Generate per-page markdown for one document and persist it (best-effort)."""
+    if document.mime_type in ("text/markdown", "text/plain"):
+        await _apply_born_digital_markdown(session, document)
+        return
     if not settings.markdown_enabled:
         await _record_event(session, document, "markdown_skipped", {"reason": "disabled"})
         return

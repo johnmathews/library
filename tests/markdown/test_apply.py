@@ -315,8 +315,13 @@ async def test_no_images_records_skip(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """render_page_images returns [] → markdown_skipped, no pages."""
-    document_id = await make_document(session_factory, "md-apply-no-images", mime_type="text/plain")
+    """render_page_images returns [] → markdown_skipped, no pages.
+
+    Uses a binary mime (image/tiff): born-digital text types (text/plain,
+    text/markdown) now bypass the renderer entirely (W4 passthrough), so the
+    no-images branch is only reachable for renderable types.
+    """
+    document_id = await make_document(session_factory, "md-apply-no-images", mime_type="image/tiff")
 
     monkeypatch.setattr(markdown_apply, "render_page_images", lambda *a, **k: [])
 

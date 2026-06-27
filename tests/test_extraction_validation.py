@@ -88,6 +88,24 @@ def test_empty_extraction_fires() -> None:
     )
 
 
+def test_general_doc_with_summary_not_flagged_empty() -> None:
+    """A general doc with a real title/summary but no sender/date/amount is
+    informative, so empty_extraction must NOT fire."""
+    doc = _doc(title="Router setup guide", summary="How to configure the home router.")
+    assert "empty_extraction" not in _rules(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_reference_kind_never_empty() -> None:
+    """A non-other kind (e.g. reference) never triggers empty_extraction,
+    even with no sender/date/amount/title/summary."""
+    doc = _doc()
+    assert "empty_extraction" not in _rules(
+        validate(doc, kind_slug="reference", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
 def test_self_reported_low_confidence_fires() -> None:
     doc = _doc(extra={"extraction": {"confidence": "low"}})
     assert "self_reported_low" in _rules(

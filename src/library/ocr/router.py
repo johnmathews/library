@@ -2,7 +2,7 @@
 
 Routing (see docs/ingestion.md):
 
-- ``text/plain``                  -> passthrough read (engine "text")
+- ``text/plain``/``text/markdown`` -> passthrough read (engine "text")
 - ``application/pdf`` w/ text layer, NOT scan-like
                                   -> pypdfium2 extraction (engine "text-layer")
 - ``application/pdf`` scan-like (with or without embedded text)
@@ -65,7 +65,7 @@ def run_ocr(
     settings = settings if settings is not None else get_settings()
     mime_type = document.mime_type
 
-    if mime_type == "text/plain":
+    if mime_type in ("text/plain", "text/markdown"):
         text = original_path.read_text(encoding="utf-8", errors="replace").strip()
         return OcrResult(text=text, confidence=None, searchable_pdf=None, engine="text", pages=None)
 
