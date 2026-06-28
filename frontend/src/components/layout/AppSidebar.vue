@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch } from 'vue'
 import { useRoute } from 'vue-router'
+import { useAuthStore } from '@/stores/auth'
+
+const auth = useAuthStore()
 
 const props = defineProps<{
   sidebarOpen: boolean
@@ -434,6 +437,48 @@ watch(
                     <span
                       class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
                       >Charts</span
+                    >
+                  </div>
+                </a>
+              </li>
+            </RouterLink>
+
+            <!-- Admin link (admins only) -->
+            <RouterLink v-if="auth.isAdmin" v-slot="{ href, navigate, isActive }" to="/admin" custom>
+              <li
+                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                :class="
+                  isActive &&
+                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                "
+              >
+                <a
+                  :href="href"
+                  class="block truncate transition"
+                  data-testid="sidebar-admin-link"
+                  :class="
+                    isActive
+                      ? 'text-gray-900 dark:text-white'
+                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                  "
+                  @click="navigate"
+                >
+                  <div class="flex items-center">
+                    <svg
+                      class="shrink-0 fill-current"
+                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                    >
+                      <path
+                        d="M8 0 1 3v5c0 3.5 3 6.5 7 8 4-1.5 7-4.5 7-8V3L8 0Zm0 2.2 5 2.1V8c0 2.5-2 4.8-5 6-3-1.2-5-3.5-5-6V4.3l5-2.1Z"
+                      />
+                    </svg>
+                    <span
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      >Admin</span
                     >
                   </div>
                 </a>

@@ -61,6 +61,12 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/ChartsView.vue'),
   },
   {
+    path: '/admin',
+    name: 'admin',
+    component: () => import('../views/AdminView.vue'),
+    meta: { adminOnly: true },
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('../views/LoginView.vue'),
@@ -85,6 +91,11 @@ export async function authGuard(to: RouteLocationNormalized) {
   }
   if (!user) {
     return { name: 'login', query: { redirect: to.fullPath } }
+  }
+  // Admin-only routes are reserved for users holding the admin role; everyone
+  // else is bounced back to the documents dashboard.
+  if (to.meta.adminOnly && !user.is_admin) {
+    return { name: 'documents' }
   }
   return true
 }
