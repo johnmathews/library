@@ -1,6 +1,6 @@
 # 1. REST API
 
-**Status:** active. **Last updated:** 2026-06-28 (projects/collections CRUD + `projects` on documents).
+**Status:** active. **Last updated:** 2026-06-28 (in-app notes `/api/notes` + version history; `topics` now read-only and searchable).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -41,6 +41,10 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/documents/{id}/searchable.pdf` | Download the OCR searchable PDF |
 | GET    | `/api/documents/{id}/thumbnail` | First-page WebP thumbnail |
 | GET    | `/api/documents/{id}/series` | Recurring-series stats + comparison for this document |
+| POST   | `/api/notes` | Author a new in-app markdown note |
+| PATCH  | `/api/notes/{id}` | Edit a note's title/body in place (snapshots a version) |
+| GET    | `/api/notes/{id}/versions` | A note's version history (newest first) |
+| POST   | `/api/notes/{id}/versions/{n}/restore` | Restore a note to a previous version |
 | GET    | `/api/charts` | Every eligible recurring `(sender, kind)` series, summarised |
 | GET    | `/api/kinds` | Document kinds with counts |
 | GET    | `/api/senders` | Senders with counts |
@@ -87,7 +91,7 @@ ingestion semantics are documented in [ingestion.md](ingestion.md).
 | `status` | enum | `received` / `ocr` / `extract` / `embed` / `indexed` / `failed` |
 | `date_from`, `date_to` | date | Inclusive bounds on `document_date` |
 | `review_status` | enum | `verified` / `needs_review` / `unreviewed` — filter by extraction-quality review state |
-| `source` | enum | `upload` / `consume` / `email` / `api` / `mcp` / `import` |
+| `source` | enum | `upload` / `consume` / `email` / `api` / `mcp` / `import` / `note` |
 | `limit` | int | Page size, default 25, max 100 |
 | `offset` | int | Rows to skip, default 0 |
 
@@ -134,6 +138,10 @@ string, preserves decimal precision) and `currency` (3-letter code) are
   `search_vector_en` (`english` config), OR-combined. Stemming therefore
   works in both languages: `q=rekening` finds "rekeningen", `q=policy`
   finds "policies".
+- Each vector folds in `title`, `summary`, `ocr_text`, **and `topics`** (the
+  auto-extracted subject phrases, cast with `coalesce(topics::text,'')`;
+  migration `0012_topics_fts`), so a document is findable by its topics even
+  when the term never appears in its body. `topics` is read-only (see §1.5).
 - The rank is `greatest(ts_rank(nl), ts_rank(en))` — the best of the two
   language interpretations — and results are ordered by it, descending.
 - `snippet` is `ts_headline` over `ocr_text`, generated with whichever
@@ -192,6 +200,12 @@ storage names: `kind_slug`→`kind_id`, `sender`→`sender_id`). Re-extraction
 (W6) honours this list and never overwrites user-edited fields. An
 ingestion event `user_edited` is recorded with the changed field names.
 Returns the updated document detail.
+
+> **`topics` is read-only.** The auto-extracted `topics` list is **not** in this
+> body (it was removed from `DocumentUpdate` and the detail editor). It still
+> appears on every list/detail response (and the MCP document summary) and is
+> now indexed for full-text search (§1.3.3), but it is owned by extraction, not
+> the user. `tags` remains the curated, editable cross-document filter facet.
 
 ## 1.6 Delete — `DELETE /api/documents/{id}`
 
@@ -842,3 +856,35 @@ returns an array of them):
 
 `document_count` is the number of non-deleted documents in the project.
 Auth + CSRF apply exactly as elsewhere (§1.9).
+
+## 1.16 Notes — `/api/notes`
+
+In-app **note authoring**: compose a Markdown note directly in Library and it
+becomes a first-class document (`source = "note"`, `mime_type =
+"text/markdown"`) that flows through the normal pipeline — one
+born-digital `DocumentPage`, no OCR/vision API call, with metadata still
+auto-extracted from the body. Unlike an upload, a note is **edited in place**
+(the same document row) with a version-history snapshot recorded on every edit,
+and is **exempt from content dedup** (its `sha256` is a salted digest), so two
+identical notes — or a note edited back to an earlier body — never collide. See
+[ingestion.md](ingestion.md) "Notes" for the storage/dedup mechanics. Auth +
+CSRF apply exactly as elsewhere (§1.9).
+
+| Method | Path | Notes |
+|--------|------|-------|
+| POST | `/api/notes` | Body `{title, body_markdown}`. Creates the note and queues processing; `201` with the full document detail (same shape as `GET /api/documents/{id}`, §1.4). |
+| PATCH | `/api/notes/{id}` | Body `{title?, body_markdown?}`; only present fields change. Snapshots the prior (title, body) into history, applies the edit, and (on a body change) re-runs extraction + markdown (which re-embeds). Returns the updated detail. `404` for unknown, deleted, or **non-note** documents. |
+| GET | `/api/notes/{id}/versions` | The note's version history, **newest first**: `[{version_no, title, body, created_at}, …]`. `404` for non-note documents. |
+| POST | `/api/notes/{id}/versions/{version_no}/restore` | Snapshots the current state, then re-applies the chosen version's title + body (a restore is itself an edit, so it can be undone). Returns the updated detail. `404` for an unknown note **or** unknown version number. |
+
+**Title is locked.** A note's `title` is added to `extra["user_edited_fields"]`
+on create, so re-extraction (and the re-extraction triggered by every edit)
+never overwrites it; the body still drives the auto-extracted summary, topics,
+tags, and kind. Each create/edit/restore also appends an ingestion event
+(`received` / `note_edited` / `note_restored`) to the document's audit trail.
+
+**Create body:**
+
+```json
+{"title": "Mortgage call notes", "body_markdown": "# Call with broker\n\n- rate 3.9% …"}
+```

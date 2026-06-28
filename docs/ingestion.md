@@ -4,8 +4,8 @@ How a file becomes a Document: upload → content-addressed storage →
 database row → background job → status lifecycle. This document covers
 storage layout, MIME handling, HEIC conversion, the upload API, the
 Procrastinate job queue, the OCR stage (W4), the Claude metadata
-extraction stage (W6), the consume folder watcher (W12), and email-in
-ingestion (W14).
+extraction stage (W6), the consume folder watcher (W12), email-in
+ingestion (W14), and in-app note authoring.
 
 > **Authentication.** Every endpoint below requires a session cookie or
 > bearer API token — see [api.md §1.9](api.md).
@@ -121,7 +121,10 @@ Decisions:
 - **Dedup:** an existing, non-deleted document with the same sha256 is
   returned with `duplicate=True`; a `duplicate_upload` ingestion event
   is recorded against it (with the attempted filename/source), and no
-  file or row is written.
+  file or row is written. **Notes are exempt** — they are authored, not
+  uploaded, through the `/api/notes` router rather than `ingest_file`, and
+  their `sha256` is a salted digest so identical/edited-back-to-identical
+  bodies coexist (see "Notes" below).
 - **Soft-deleted collision:** if the only match is soft-deleted, ingest
   raises `DeletedDuplicateError` (HTTP **409**) — `sha256` is unique in
   the schema, so re-inserting is impossible; restoring or purging the
@@ -424,6 +427,37 @@ existing tags are preserved.
 from library.jobs import extract_document
 await extract_document.defer_async(document_id=123)
 ```
+
+### Backfill (stale prompt version)
+
+`library backfill` re-enqueues the full `extract_document → markdown_document`
+(→ embed) path for documents whose extraction `prompt_version` is **missing or
+different** from the current `PROMPT_VERSION`, so an existing corpus picks up the
+latest prompt, long-doc sampling, `topics`, and structure-preserving markdown
+chunking.
+
+```console
+library backfill                      # general kinds on an old prompt version
+library backfill --limit 100          # throttle: first 100 matching ids only
+library backfill --all-kinds          # consider every kind, not just general
+library backfill --include-current    # re-enqueue regardless of prompt version
+library backfill --dry-run            # count + scope only; enqueue nothing
+```
+
+- **`--general-only` (default) / `--all-kinds`.** By default only the
+  general-reference kinds (`manual`, `reference`, `research`, `note`) are
+  considered, so transactional documents (invoices, receipts, …) are **never
+  re-paid for**. `--all-kinds` lifts that restriction.
+- **`--include-current`** re-enqueues documents already at the current prompt
+  version too (e.g. to pick up a markdown-chunking change).
+- **`--dry-run`** prints how many documents would be enqueued (with the kind +
+  version scope) and enqueues nothing.
+
+Like the other backfills it re-runs the same path new uploads use, so it honours
+`extra["user_edited_fields"]` and the daily extraction budget — over-budget
+documents are skipped worker-side (`extraction_skipped`, `reason: "budget"`) and
+can be re-queued the next day. The CLI only enqueues; the worker must be running
+to do the work.
 
 ### Backfill summaries
 
@@ -924,6 +958,58 @@ LIBRARY_EMAIL_ALLOWED_SENDERS=mthwsjc@gmail.com,partner@example.com
 LIBRARY_EMAIL_POLL_MINUTES=10
 ```
 
+## Notes (in-app authoring, `library.api.notes`)
+
+A **note** is a born-digital `text/markdown` document composed inside Library
+rather than uploaded — a fifth ingestion channel (`source=note`) alongside
+upload, consume, email, and MCP. Notes flow through the normal pipeline (one
+`DocumentPage`, no OCR/vision call — the markdown body is its own text layer via
+the born-digital passthrough; metadata is still auto-extracted), but they differ
+from an upload in two ways: they are **edited in place** with a version history,
+and they **bypass content dedup**.
+
+The wire contract (POST / PATCH / versions / restore) is in
+[api.md §1.16](api.md); this section covers the storage and processing
+mechanics.
+
+### Dedup bypass via a salted sha
+
+Notes are authored through the `/api/notes` router, **not** `ingest_file`, so the
+content-dedup check never runs for them. A note's `sha256` is a **salted digest**
+— `sha256(body + uuid4())` — computed once at creation and fixed for the note's
+life. The body is written **directly** to `path_for(sha256)` (bypassing
+`storage.store`, which would re-hash the content and file it under a different
+name). Two consequences:
+
+- Two notes with identical bodies, or a note edited back to an earlier body,
+  coexist as distinct documents instead of colliding on the unique `sha256`.
+- Because the sha is fixed, an **in-place edit overwrites the same file** rather
+  than creating a new content-addressed original.
+
+### In-place edit, version history, re-processing
+
+- **Create** (`POST /api/notes`): writes the body, inserts the document
+  (`status=received`, `extra.user_edited_fields=["title"]` so the title is locked
+  against re-extraction), records a `received` event, and defers
+  `process_document` — the same pipeline a new upload runs.
+- **Edit** (`PATCH /api/notes/{id}`): snapshots the note's *previous*
+  `(title, body)` into a new `note_versions` row, overwrites the title and/or
+  body (`ocr_text` and the on-disk file both updated in place), records a
+  `note_edited` event, and — when the body changed — re-defers
+  `extract_document` then `markdown_document` (which re-embeds). The current body
+  for snapshotting is the document's `ocr_text` (the authoritative born-digital
+  layer).
+- **Version history** (`GET /api/notes/{id}/versions`): every prior snapshot,
+  newest first.
+- **Restore** (`POST /api/notes/{id}/versions/{n}/restore`): snapshots the
+  current state first (so a restore is undoable), then re-applies the chosen
+  version's title + body, records a `note_restored` event, and re-processes.
+
+`note_versions` (migration 0013) is append-only and mirrors `ingestion_events`:
+`(id, document_id FK CASCADE, version_no, title, body, created_at)`, `version_no`
+monotonic per document from 1. Migration 0013 also adds `'note'` to the
+`document_source` CHECK constraint.
+
 ## HTTP API
 
 ### `POST /api/documents`
@@ -952,8 +1038,10 @@ Append-only audit trail in `ingestion_events`:
 
 | event | written by | detail |
 | --- | --- | --- |
-| `received` | ingest | `{filename, size, mime_type, source}`; email adds `{email_from, email_subject, email_message_id}` |
+| `received` | ingest | `{filename, size, mime_type, source}`; email adds `{email_from, email_subject, email_message_id}`; a note records `{source: "note", size}` |
 | `duplicate_upload` | ingest | `{filename, source}`; email adds the same `email_*` keys |
+| `note_edited` | notes router | `{fields}` — the note fields changed by a `PATCH /api/notes/{id}` |
+| `note_restored` | notes router | `{restored_version_no, restored_at}` |
 | `status_changed` | pipeline | `{from, to}` |
 | `ocr_completed` | OCR stage | `{engine, confidence, pages, characters}`; plus `gate: {tesseract_confidence, rapidocr_confidence}` when the confidence gate retried |
 | `ocr_failed` | OCR stage | `{error}` |

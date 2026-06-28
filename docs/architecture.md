@@ -114,7 +114,10 @@ at any stage, with the reason in `ingestion_events`).
    reaches `indexed` and stays searchable by full-text. See [ask.md](ask.md).
 6. **Index** — metadata and text become searchable (Postgres FTS, both
    Dutch and English stemming; semantic retrieval via `document_chunks`) and
-   visible in the UI.
+   visible in the UI. The two STORED generated tsvector columns fold in
+   `title`, `summary`, `ocr_text`, **and `topics`** (the auto-extracted subject
+   phrases, via an immutable `topics::text` cast; migration `0012_topics_fts`),
+   so a document is findable by its topics.
 
 ## 1.3 Data model (summary)
 
@@ -132,7 +135,10 @@ via `archived_at`, documents survive a project delete),
 per-page markdown renderings (`document_pages`, PK `(document_id, page_number)`),
 per-chunk embeddings (`document_chunks`, pgvector + HNSW; each chunk carries
 `page_number` when generated from `document_pages`, `NULL` when falling back to
-`ocr_text`), append-only `ingestion_events` audit trail, Ask conversation
+`ocr_text`), append-only `ingestion_events` audit trail, append-only
+`note_versions` (one (title, body) snapshot per edit/restore of an in-app note —
+`source = note`, migration 0013, which also adds `note` to the `document_source`
+CHECK), Ask conversation
 persistence (`ask_threads` — one conversation per owner; `ask_turns` — one
 Q&A turn per thread, storing cost/provenance and the serialized Anthropic
 message blocks used to replay prior tool results into follow-up questions),
@@ -146,8 +152,9 @@ re-derivable artifact.
 
 - **REST API** (`/api`) — versioned, cookie- or bearer-authenticated,
   OpenAPI-documented. The full product surface: search, CRUD, downloads,
-  ingestion, job status, and natural-language **Ask** (`POST /api/ask`, see
-  [ask.md](ask.md)).
+  ingestion, in-app **note authoring** (`/api/notes` — create / edit-in-place /
+  version history / restore, see [api.md §1.16](api.md)), job status, and
+  natural-language **Ask** (`POST /api/ask`, see [ask.md](ask.md)).
 - **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens.
   Tools for searching, reading, and ingesting documents from LLM clients.
 - **Web app** — Vue 3 SPA following GOV.UK design principles (content
@@ -203,3 +210,4 @@ hashed, individually revocable.
 | Extraction quality (validation, review queue, eval harness) | — | **done** — see [ingestion.md](ingestion.md) "Extraction quality" and [api.md](api.md) §1.3/1.4/1.8.3 |
 | Markdown layer (vision per-page rendering, page-aware embed, page citations in Ask) | — | **done** — see [ingestion.md](ingestion.md) "Markdown layer" and [ask.md](ask.md) |
 | Conversational Ask (multi-turn threads, history replay, prompt caching, chat UI) | — | **done** — see [ask.md](ask.md) §1.6 and [api.md](api.md) §1.11–1.12 |
+| Notes authoring + topics refinement (in-app notes w/ version history, `topics` read-only + in FTS, `library backfill`) | — | **done** — see [api.md §1.16](api.md), [ingestion.md](ingestion.md) "Notes" + "Backfill (stale prompt version)", and [frontend.md](frontend.md) |

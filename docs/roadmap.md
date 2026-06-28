@@ -8,22 +8,21 @@ they don't get lost between sessions. Most recent context lives in
 
 ## 1.1 Planned next
 
-1. **Notes (in-app authoring).** Compose/paste text directly into Library
-   (title + markdown body) so any copied text becomes a document, with
-   in-place editing. Decisions pending — see the session discussion.
-2. **Topics ↔ tags refinement.** Resolve the overlap between `topics` and
-   `tags` before extending either. The decision gates the "topics in FTS"
-   work. See §1.3.
-3. **Corpus backfill.** A one-shot command to re-extract / re-embed existing
-   documents so they pick up the new prompt (`PROMPT_VERSION`), long-doc
-   sampling, `topics`, and structure-preserving markdown chunking. Per-doc
-   tasks already exist (`extract_document` / `markdown_document` /
-   `embed_document` in `jobs.py`); needs targeting (old prompt version /
-   general kinds only), budget-cap respect, and idempotency.
-4. **E2E coverage for this session's flows.** Playwright specs for: upload a
-   `.md` → reader renders; create a project → assign → filter by it; edit
-   `topics`. Unit + integration already cover these; the browser-level
-   journeys do not.
+Nothing is currently queued. The previously-planned items all shipped in the
+2026-06-28 notes + topics refinement cycle:
+
+- **Notes (in-app authoring)** — `DocumentSource.NOTE`, the `/api/notes` router
+  (create / edit-in-place / version history / restore) and the New-note + detail
+  editing UI. See [api.md §1.16](api.md), [ingestion.md](ingestion.md) "Notes",
+  and [frontend.md](frontend.md).
+- **Topics ↔ tags refinement** — decided (see §1.3): `topics` is now read-only
+  and folded into full-text search; `tags` stays the editable filter facet.
+- **Corpus backfill** — the `library backfill` command (re-enqueues
+  extract→markdown→embed for documents on a stale `PROMPT_VERSION`, general-only
+  by default, budget-cap respected worker-side). See
+  [ingestion.md](ingestion.md) "Backfill (stale prompt version)".
+- **E2E coverage** — Playwright specs `markdown-reader`, `projects`, `notes`,
+  and `topics-readonly` (run in CI's e2e job). See [frontend.md §1.7](frontend.md).
 
 ## 1.2 Deferred — implement only if a trigger fires
 
@@ -39,17 +38,25 @@ they don't get lost between sessions. Most recent context lives in
    inadequate.
 2. **`.docx` / `.epub` ingestion.** Not wanted — corpus is PDF / `.md` /
    `.txt` only.
-3. **Document versioning / supersession.** Edited-and-re-uploaded files create
-   duplicates (SHA-256 content dedup). Largely mooted for in-app notes if
-   those are edited in place (§1.1.1); still relevant for externally-edited
+3. **Document versioning / supersession (non-note files).** Edited-and-re-uploaded
+   files create duplicates (SHA-256 content dedup). Now **mooted for in-app notes**
+   — they are edited in place with their own `note_versions` history and bypass
+   the content dedup (salted sha) — but still relevant for externally-edited
    files re-synced via the consume folder.
 
-## 1.3 Open question — why both `topics` and `tags`?
+## 1.3 Decided — `topics` vs `tags`
 
-Both describe doc content, which feels redundant. Working distinction:
-`tags` = curated, low-cardinality, **cross-document** labels for
-finding/grouping (a filter facet); `topics` = a single document's own
-**subject list**, descriptive and meant to be **searchable**, not a filter.
-`topics` only earns its place if it becomes search content (FTS); if it stays
-a parallel editable taxonomy, it should be dropped in favour of `tags`. To be
-decided before extending either.
+**Resolved (2026-06-28).** The two no longer overlap:
+
+- `tags` = curated, low-cardinality, **cross-document** labels for
+  finding/grouping — the editable **filter facet** (`PATCH /api/documents/{id}`,
+  the `?tag=` filter).
+- `topics` = a single document's own auto-extracted **subject list** — now
+  **read-only** (removed from `DocumentUpdate` and the detail editor) and folded
+  into the full-text search vectors (`search_vector_nl`/`search_vector_en` via
+  `coalesce(topics::text,'')`, migration `0012_topics_fts`). It renders as
+  read-only badges in the UI and still appears in list/detail REST responses and
+  the MCP document summary.
+
+`topics` earned its place by becoming search content rather than a parallel
+editable taxonomy.
