@@ -438,6 +438,14 @@ async def run_ask(
         new_messages.append(tool_msg)
     else:
         logger.info("ask hit the tool-turn limit without a final answer")
+        # The loop exhausted mid-tool-dance, so new_messages ends on a
+        # tool_result (role "user"). Persisting that as the turn's history would
+        # put two consecutive "user" turns when the next question is appended on
+        # a follow-up — which the Anthropic API rejects (400). Close the turn
+        # with the fallback answer as an assistant message so the stored history
+        # alternates correctly and the tool_use/tool_result pair stays intact.
+        answer = answer or "I couldn't find an answer to that in the archive."
+        new_messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
 
     result.answer = answer or "I couldn't find an answer to that in the archive."
     # Prefer the documents Claude actually cited inline (#id); fall back to the

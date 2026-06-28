@@ -25,6 +25,9 @@ router: APIRouter = APIRouter(tags=["ask"])
 # Cap attachments per question — bounds the request body and the multimodal
 # token cost. The media types are the ones the Anthropic vision API accepts.
 MAX_ASK_IMAGES = 5
+# Per-image base64 ceiling (~15 MB decoded). Bounds memory before the bytes ever
+# reach the model, in addition to any upstream proxy body limit.
+MAX_ASK_IMAGE_BASE64 = 20_000_000
 AskImageMediaType = Literal["image/png", "image/jpeg", "image/gif", "image/webp"]
 
 
@@ -32,7 +35,9 @@ class AskImage(BaseModel):
     """A base64 image attached to a question (no ``data:`` prefix)."""
 
     media_type: AskImageMediaType
-    data: str = Field(min_length=1, description="Base64-encoded image bytes.")
+    data: str = Field(
+        min_length=1, max_length=MAX_ASK_IMAGE_BASE64, description="Base64-encoded image bytes."
+    )
 
 
 class AskRequest(BaseModel):

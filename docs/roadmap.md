@@ -21,7 +21,7 @@ refinement cycle:
 
 - **Notes (in-app authoring)** — `DocumentSource.NOTE`, the `/api/notes` router
   (create / edit-in-place / version history / restore) and the New-note + detail
-  editing UI. See [api.md §1.16](api.md), [ingestion.md](ingestion.md) "Notes",
+  editing UI. See [api.md §1.17](api.md), [ingestion.md](ingestion.md) "Notes",
   and [frontend.md](frontend.md).
 - **Topics ↔ tags refinement** — decided (see §1.3): `topics` is now read-only
   and folded into full-text search; `tags` stays the editable filter facet.

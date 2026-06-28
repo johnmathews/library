@@ -473,6 +473,57 @@ async def test_run_ask_replays_history(monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 @pytest.mark.asyncio
+async def test_run_ask_turn_messages_replayable_when_tool_limit_hit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Exhausting the tool-turn budget must still leave replayable history.
+
+    Otherwise the stored turn ends on a tool_result (role "user") and the next
+    question in the thread produces back-to-back user turns → Anthropic 400.
+    """
+    from typing import cast
+
+    from library.ask.engine import run_ask
+    from library.config import get_settings
+
+    async def fake_embed_query(
+        text_value: str, *, settings: Any, client: Any = None
+    ) -> list[float]:
+        return _unit_vector(0)
+
+    async def fake_search(
+        session: Any, *, query: str, query_embedding: Any, top_k: int, chunks_per_doc: int = 1
+    ) -> list[Any]:
+        return []
+
+    monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
+    monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+
+    settings = get_settings()
+    # Every round returns a tool_use, so the loop never reaches a final answer.
+    client = _FakeAnthropic(
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[_ToolUseBlock(name="semantic_search", input={"query": "x"}, id=f"t{i}")],
+                usage=_Usage(10, 5),
+            )
+            for i in range(settings.ask_max_tool_turns)
+        ]
+    )
+    result = await run_ask(
+        cast(Any, None), question="loop forever?", settings=settings, client=cast(Any, client)
+    )
+
+    import itertools
+
+    roles = [m["role"] for m in result.turn_messages]
+    assert roles[-1] == "assistant"  # history ends on an assistant turn
+    # No two consecutive user turns anywhere (the replay-breaking condition).
+    assert not any(a == b == "user" for a, b in itertools.pairwise(roles))
+
+
+@pytest.mark.asyncio
 async def test_run_ask_includes_image_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
     """Attached images become base64 image content blocks on the user turn (W11)."""
     from typing import cast
