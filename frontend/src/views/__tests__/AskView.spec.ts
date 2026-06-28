@@ -148,6 +148,35 @@ describe('AskView', () => {
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
   })
 
+  it('syncs the URL to /ask/:threadId and shows no error on a successful ask', async () => {
+    askQuestionMock.mockResolvedValueOnce(sampleResponse({ thread_id: 42 }))
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
+    expect(w.find('[data-testid="error-summary"]').exists()).toBe(false)
+    expect(router.currentRoute.value.name).toBe('ask-thread')
+    expect(router.currentRoute.value.params.threadId).toBe('42')
+  })
+
+  it('shows no error summary when a successful response omits thread_id', async () => {
+    // The real backend always returns thread_id, but a malformed/partial
+    // response (or an incomplete test mock) can omit it. A rendered answer
+    // must never be turned into a generic "Something went wrong" error by a
+    // failed post-success navigation. Regression guard for the spurious
+    // error-on-success alert.
+    const withoutThreadId = sampleResponse()
+    delete (withoutThreadId as Partial<AskResponse>).thread_id
+    askQuestionMock.mockResolvedValueOnce(withoutThreadId)
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+
+    // The answer turn renders…
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
+    // …and no error alert appears.
+    expect(w.find('[data-testid="error-summary"]').exists()).toBe(false)
+  })
+
   it('validates an empty question without calling the API', async () => {
     const w = mountView()
     await w.find('form').trigger('submit')

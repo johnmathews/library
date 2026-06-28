@@ -123,6 +123,10 @@ test('ask citation deep-links to the cited PDF page', async ({ page }, testInfo)
         ],
         used_tools: ['search_documents'],
         cost_usd: 0.0,
+        // The real backend always returns thread_id; include it so AskView can
+        // sync the URL to /ask/:threadId without a navigation failure (which
+        // previously surfaced a spurious "Something went wrong" error alert).
+        thread_id: 1,
       }),
     })
   })
@@ -156,6 +160,11 @@ test('ask citation deep-links to the cited PDF page', async ({ page }, testInfo)
   const citation = page.getByTestId('ask-citation').first()
   await expect(citation).toBeVisible()
   await expect(citation).toContainText('p. 2')
+
+  // A successful ask must never show an error alert. (Regression guard: a
+  // response missing thread_id used to make the post-success URL sync reject
+  // and surface a spurious "Something went wrong" error here.)
+  await expect(page.getByTestId('error-summary')).toHaveCount(0)
 
   // ── Click the citation → land on the document detail page with ?page=2 ─────
   await citation.click()
