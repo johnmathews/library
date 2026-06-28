@@ -187,3 +187,48 @@ def test_cannot_demote_last_active_admin(api_app: object, api_database_url: str)
         assert response.status_code == 409, response.text
         # And they remain admin.
         assert client.get("/api/admin/users").json()  # still authorized → still admin
+
+
+def test_create_admin_user(admin_client: TestClient) -> None:
+    created = admin_client.post(
+        "/api/admin/users",
+        json={"username": "w2-admin-created", "password": "a-strong-pw-12345", "is_admin": True},
+    )
+    assert created.status_code == 201, created.text
+    assert created.json()["is_admin"] is True
+
+
+def test_deactivate_user_revokes_their_session(
+    api_app: object, api_database_url: str, admin_client: TestClient
+) -> None:
+    """PATCH is_active=false flips the flag and kills the user's live session."""
+    from procrastinate import PsycopgConnector
+
+    from library.jobs import job_app, procrastinate_conninfo
+    from tests.conftest import login
+
+    target = create_user(api_database_url)
+    connector = PsycopgConnector(conninfo=procrastinate_conninfo(api_database_url))
+    with job_app.replace_connector(connector), TestClient(api_app) as victim:  # type: ignore[arg-type]
+        login(victim, target)
+        assert victim.get("/api/auth/me").status_code == 200
+
+        patched = admin_client.patch(f"/api/admin/users/{target.id}", json={"is_active": False})
+        assert patched.status_code == 200, patched.text
+        assert patched.json()["is_active"] is False
+
+        # The deactivation revoked the session server-side, so the victim is out.
+        assert victim.get("/api/auth/me").status_code == 401
+
+
+def test_coverage_malformed_json_unavailable(
+    admin_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from library.config import get_settings
+
+    summary = tmp_path / "coverage-summary.json"
+    summary.write_text("{ not valid json")
+    monkeypatch.setenv("LIBRARY_COVERAGE_SUMMARY_PATH", str(summary))
+    get_settings.cache_clear()
+    assert admin_client.get("/api/admin/coverage").json()["available"] is False
+    get_settings.cache_clear()
