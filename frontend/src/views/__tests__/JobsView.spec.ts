@@ -71,16 +71,22 @@ describe('JobsView', () => {
     localStorage.clear()
   })
 
-  it('splits jobs into active and historical sections', async () => {
+  it('shows all jobs in one table, active first with an in-progress indicator', async () => {
     listJobsMock.mockResolvedValue([
-      job({ id: 1, status: 'doing', active: true, document_title: 'Running', document_status: 'ocr' }),
       job({ id: 2, status: 'succeeded', active: false, document_title: 'Done', document_status: 'indexed' }),
+      job({ id: 1, status: 'doing', active: true, document_title: 'Running', document_status: 'ocr' }),
       job({ id: 3, status: 'failed', active: false, document_title: 'Broken', document_status: 'failed', error: 'ocr exploded' }),
     ])
     const wrapper = await mountView()
 
-    expect(wrapper.findAll('[data-testid="jobs-active-row"]')).toHaveLength(1)
-    expect(wrapper.findAll('[data-testid="jobs-historical-row"]')).toHaveLength(2)
+    const rows = wrapper.findAll('[data-testid="jobs-row"]')
+    expect(rows).toHaveLength(3)
+    // The single active job sorts to the top, regardless of server order.
+    expect(rows[0]!.attributes('data-active')).toBe('true')
+    expect(rows[0]!.text()).toContain('Running')
+    // Exactly one in-progress indicator (on the active row).
+    expect(wrapper.findAll('[data-testid="jobs-active-indicator"]')).toHaveLength(1)
+    expect(rows[0]!.find('[data-testid="jobs-active-indicator"]').exists()).toBe(true)
   })
 
   it('renders enriched columns: stage, cost, and error', async () => {
@@ -96,7 +102,7 @@ describe('JobsView', () => {
       }),
     ])
     const wrapper = await mountView()
-    const row = wrapper.get('[data-testid="jobs-historical-row"]')
+    const row = wrapper.get('[data-testid="jobs-row"]')
 
     expect(row.text()).toContain('Energierekening')
     expect(row.text()).toContain('ocr exploded')
@@ -117,7 +123,7 @@ describe('JobsView', () => {
       }),
     ])
     const wrapper = await mountView()
-    const row = wrapper.get('[data-testid="jobs-historical-row"]')
+    const row = wrapper.get('[data-testid="jobs-row"]')
 
     // Humanised task name (final segment, no "library.jobs." prefix).
     expect(row.text()).toContain('Poll email inbox')
@@ -138,7 +144,7 @@ describe('JobsView', () => {
       }),
     ])
     const wrapper = await mountView()
-    const row = wrapper.get('[data-testid="jobs-active-row"]')
+    const row = wrapper.get('[data-testid="jobs-row"]')
     expect(row.text()).toContain('Process document')
   })
 
@@ -147,15 +153,15 @@ describe('JobsView', () => {
       job({ id: 42, active: true, status: 'doing', document_title: 'Linkable', document_status: 'extract' }),
     ])
     const wrapper = await mountView()
-    const link = wrapper.get('[data-testid="jobs-active-row"] a')
+    const link = wrapper.get('[data-testid="jobs-row"] a')
     expect(link.attributes('href')).toBe('/documents/42')
   })
 
-  it('shows empty states when there are no jobs', async () => {
+  it('shows a single empty state when there are no jobs', async () => {
     listJobsMock.mockResolvedValue([])
     const wrapper = await mountView()
-    expect(wrapper.find('[data-testid="jobs-active-empty"]').exists()).toBe(true)
-    expect(wrapper.find('[data-testid="jobs-historical-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="jobs-empty"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="jobs-row"]').exists()).toBe(false)
   })
 
   it('surfaces an error when the request fails', async () => {
@@ -222,7 +228,7 @@ describe('JobsView', () => {
     ])
     const wrapper = await mountView()
 
-    const cards = wrapper.find('[data-testid="jobs-historical-cards"]')
+    const cards = wrapper.find('[data-testid="jobs-cards"]')
     expect(cards.exists()).toBe(true)
     expect(cards.text()).toContain('CardDoc')
   })
@@ -279,8 +285,6 @@ describe('JobsView', () => {
     // The active-document chip appears with the resolved title.
     const chip = wrapper.get('[data-testid="jobs-document-chip"]')
     expect(chip.text()).toContain('Invoice')
-    // And the section heading switches to History.
-    expect(wrapper.text()).toContain('History')
 
     // Clearing the chip drops the filter.
     await wrapper.get('[data-testid="jobs-document-chip-clear"]').trigger('click')
