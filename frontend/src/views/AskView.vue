@@ -221,12 +221,17 @@ defineExpose({ resetConversation })
 </script>
 
 <template>
-  <!-- Chat layout (Option A): the page fills the viewport below the shell
-       header (100dvh − h-16 header − the app-page py-8 = 8rem). The transcript
-       scrolls INTERNALLY and the composer is a shrink-0 flex sibling pinned at
-       the bottom — always visible, and (unlike position:sticky) it never floats
-       over transcript content, so it can't intercept citation clicks. -->
-  <div id="ask-page" class="flex gap-6 items-stretch h-[calc(100dvh-8rem)]">
+  <!-- Chat layout (Option A) — lg+ ONLY. On a wide column the page fills the
+       viewport below the shell header (100dvh − h-16 header − app-page py-8 =
+       8rem): the transcript scrolls INTERNALLY and the composer is pinned at the
+       bottom. On mobile/tablet (< lg) the 256px sidebar leaves the column too
+       narrow for a fixed-height internal-scroll region (it trapped citation
+       clicks on mobile-webkit), so there we fall back to normal page flow — the
+       layout that ships green on main. -->
+  <div
+    id="ask-page"
+    class="flex gap-6 items-start lg:items-stretch lg:h-[calc(100dvh-8rem)]"
+  >
     <ConversationSidebar
       ref="sidebarRef"
       :active-thread-id="threadId"
@@ -234,8 +239,9 @@ defineExpose({ resetConversation })
       @new="resetConversation"
     />
 
-    <!-- Answer column fills the height; transcript scrolls, composer pinned. -->
-    <div class="flex-1 min-w-0 flex flex-col min-h-0">
+    <!-- Answer column. On lg+ it is a full-height flex column (transcript
+         scrolls, composer pinned); below lg it is a normal block. -->
+    <div class="flex-1 min-w-0 lg:flex lg:flex-col lg:min-h-0">
       <PageHeader
         title="Ask"
         description="Ask a question about your documents in plain language and get an answer with citations."
@@ -248,9 +254,14 @@ defineExpose({ resetConversation })
         class="mb-6"
       />
 
-      <!-- Transcript: wide rich-markdown answers, not chat bubbles. Scrolls
-           internally so the composer below stays pinned to the bottom. -->
-      <div ref="transcriptRef" data-testid="ask-transcript" class="flex-1 min-h-0 overflow-y-auto">
+      <!-- Transcript: wide rich-markdown answers, not chat bubbles. On lg+ it
+           scrolls internally (so the composer below stays pinned); below lg it
+           flows normally and the page scrolls. -->
+      <div
+        ref="transcriptRef"
+        data-testid="ask-transcript"
+        class="lg:flex-1 lg:min-h-0 lg:overflow-y-auto"
+      >
         <div v-if="turns.length" class="space-y-6 mb-6">
           <section
             v-for="(turn, i) in turns"
@@ -322,10 +333,10 @@ defineExpose({ resetConversation })
         </p>
       </div>
 
-      <!-- Multi-line composer pinned at the bottom of the column as a shrink-0
-           flex sibling (NOT position:sticky — a sticky bar floats over the
-           transcript and intercepts citation clicks on short viewports; here it
-           sits below the internally-scrolling transcript and never overlaps). -->
+      <!-- Multi-line composer. On lg+ it is a shrink-0 flex sibling pinned below
+           the internally-scrolling transcript (NOT position:sticky, which would
+           float over the transcript and intercept citation clicks). Below lg it
+           is a normal block at the bottom of the page-scrolled column. -->
       <form
         id="ask-form"
         novalidate

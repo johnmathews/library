@@ -242,11 +242,14 @@ describe('AskView', () => {
     expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
   })
 
-  it('renders an internally-scrolling transcript (chat layout, Option A)', () => {
+  it('renders an internally-scrolling transcript at lg+ (chat layout, Option A)', () => {
     const w = mountView()
     const transcript = w.find('[data-testid="ask-transcript"]')
     expect(transcript.exists()).toBe(true)
-    expect(transcript.classes()).toContain('overflow-y-auto')
+    // Internal scroll is gated to lg+ — on mobile/tablet the transcript flows
+    // normally (a fixed-height internal-scroll column trapped citation clicks on
+    // mobile-webkit).
+    expect(transcript.classes()).toContain('lg:overflow-y-auto')
   })
 
   it('shows an empty-state prompt before any question (W10)', () => {

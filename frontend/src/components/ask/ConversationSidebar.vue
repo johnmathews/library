@@ -40,7 +40,7 @@ defineExpose({ refresh })
 
 <template>
   <aside
-    class="w-64 shrink-0 flex flex-col gap-2 h-full min-h-0"
+    class="w-64 shrink-0 flex flex-col gap-2 max-lg:sticky max-lg:top-4 max-lg:self-start max-lg:max-h-[calc(100vh-2rem)] lg:min-h-0"
     data-testid="conversation-sidebar"
   >
     <button
@@ -70,7 +70,7 @@ defineExpose({ refresh })
     </p>
 
     <ul
-      class="flex-1 min-h-0 divide-y divide-gray-200 dark:divide-gray-700/60 border border-gray-200 dark:border-gray-700/60 rounded-lg overflow-y-auto"
+      class="lg:flex-1 lg:min-h-0 divide-y divide-gray-200 dark:divide-gray-700/60 border border-gray-200 dark:border-gray-700/60 rounded-lg overflow-y-auto"
     >
       <li
         v-for="thread in filteredThreads"
