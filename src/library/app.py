@@ -25,7 +25,8 @@ from library.api import (
 )
 from library.auth.deps import csrf_protect, current_user, require_admin
 from library.config import get_settings
-from library.jobs import job_app
+from library.events_broker import EventsBroker
+from library.jobs import job_app, procrastinate_conninfo
 from library.mcp_server import create_mcp_http_app
 
 API_DESCRIPTION = """\
@@ -146,10 +147,17 @@ def create_app() -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        """Open the Procrastinate connection (so defer() works) and run the
-        mounted MCP app's lifespan (its Streamable HTTP session manager)."""
-        async with job_app.open_async(), mcp_http.lifespan(mcp_http):
-            yield
+        """Open the Procrastinate connection (so defer() works), start the
+        process-wide SSE events broker (one shared Postgres LISTEN connection
+        fanned out to all clients), and run the mounted MCP app's lifespan."""
+        broker = EventsBroker(procrastinate_conninfo(get_settings().database_url))
+        await broker.start()
+        app.state.events_broker = broker
+        try:
+            async with job_app.open_async(), mcp_http.lifespan(mcp_http):
+                yield
+        finally:
+            await broker.stop()
 
     app = FastAPI(
         title="Library",

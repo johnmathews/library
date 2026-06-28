@@ -2,8 +2,11 @@
 
 The worker emits a Postgres NOTIFY on ``library.jobs.EVENTS_CHANNEL`` as
 documents move through the pipeline (see ``library.jobs.notify_document_event``).
-This endpoint holds one dedicated asyncpg connection LISTENing on that channel
-and relays each notification to the client as an SSE ``document`` event.
+A single process-wide ``EventsBroker`` (``library.events_broker``) holds *one*
+asyncpg connection LISTENing on that channel and fans each notification out to
+every connected client in-process — this endpoint just drains a per-client
+queue and relays each payload as an SSE ``document`` event. No per-client
+Postgres connection: SSE usage is capped at one connection per process.
 
 Authentication and CSRF-exemption come from the ``/api`` include-level
 dependencies in ``app.py``: a GET is CSRF-safe, so ``EventSource`` — which can
@@ -11,16 +14,13 @@ only send cookies, not headers — authenticates with the session cookie exactly
 like any other GET. Unauthenticated requests get a 401 before the stream opens.
 """
 
-import asyncio
 import logging
 from collections.abc import AsyncIterator
 
-import asyncpg
-from fastapi import APIRouter
+from fastapi import APIRouter, Request
 from sse_starlette import EventSourceResponse
 
-from library.config import get_settings
-from library.jobs import EVENTS_CHANNEL, procrastinate_conninfo
+from library.events_broker import EventsBroker
 
 logger = logging.getLogger(__name__)
 
@@ -31,40 +31,31 @@ router: APIRouter = APIRouter(tags=["events"])
 _PING_SECONDS = 15
 
 
-async def document_event_stream(dsn: str) -> AsyncIterator[dict[str, str]]:
+async def document_event_stream(broker: EventsBroker) -> AsyncIterator[dict[str, str]]:
     """Yield one SSE event per document NOTIFY, for the lifetime of the stream.
 
-    Opens a dedicated asyncpg connection, LISTENs on the events channel, and
-    relays each payload as an SSE ``document`` event whose data is the raw JSON
-    (``{document_id, event, status, title}``). The connection is always torn
-    down in the ``finally`` — when the client disconnects, sse-starlette cancels
-    this generator, which runs cleanup.
+    Registers a per-client queue with the shared ``broker`` and relays each
+    fanned-out payload as an SSE ``document`` event whose data is the raw JSON
+    (``{document_id, event, status, title}``). The queue is always unregistered
+    in the ``finally`` — when the client disconnects, sse-starlette cancels this
+    generator, which drops the queue; the shared LISTEN connection is untouched.
     """
-    queue: asyncio.Queue[str] = asyncio.Queue()
-    connection = await asyncpg.connect(dsn)
-
-    def _on_notify(_conn: object, _pid: int, _channel: str, payload: str) -> None:
-        queue.put_nowait(payload)
-
-    await connection.add_listener(EVENTS_CHANNEL, _on_notify)
+    queue = broker.register()
     try:
         while True:
             payload = await queue.get()
             yield {"event": "document", "data": payload}
     finally:
-        try:
-            await connection.remove_listener(EVENTS_CHANNEL, _on_notify)
-        finally:
-            await connection.close()
-        logger.debug("SSE client disconnected; LISTEN connection closed")
+        broker.unregister(queue)
+        logger.debug("SSE client disconnected; queue unregistered")
 
 
 @router.get("/events")
-async def stream_events() -> EventSourceResponse:
+async def stream_events(request: Request) -> EventSourceResponse:
     """Stream document-pipeline lifecycle events to the client over SSE."""
-    dsn = procrastinate_conninfo(get_settings().database_url)
+    broker: EventsBroker = request.app.state.events_broker
     return EventSourceResponse(
-        document_event_stream(dsn),
+        document_event_stream(broker),
         ping=_PING_SECONDS,
         # Defensive: stop any reverse proxy (nginx) from buffering the stream.
         headers={"X-Accel-Buffering": "no"},
