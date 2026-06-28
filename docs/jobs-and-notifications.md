@@ -38,9 +38,13 @@ worker→api bridge see [architecture.md](architecture.md) §1.4.1.
 1. **Emit (worker).** Each pipeline transition and failure emits a Postgres
    `NOTIFY` on `library_doc_events` (`library.jobs.notify_document_event`),
    best-effort so a notify failure never fails the job.
-2. **Stream (api).** `GET /api/events` (`library.api.events`) holds a dedicated
-   asyncpg `LISTEN` connection and relays each notification as an SSE `document`
-   event. Authenticated by the session cookie (a GET is CSRF-safe), with ~15 s
+2. **Stream (api).** A single process-wide `EventsBroker`
+   (`library.events_broker`) holds *one* asyncpg `LISTEN` connection for the
+   whole process lifetime and fans each notification out to an in-process queue
+   per connected client. `GET /api/events` (`library.api.events`) registers a
+   queue on connect, relays each fanned-out payload as an SSE `document` event,
+   and unregisters on disconnect — no per-client Postgres connection.
+   Authenticated by the session cookie (a GET is CSRF-safe), with ~15 s
    keep-alive pings and `X-Accel-Buffering: no` to defeat proxy buffering.
 3. **Consume (frontend).** The `jobs` Pinia store
    (`frontend/src/stores/jobs.ts`) opens one `EventSource`, seeds an initial
