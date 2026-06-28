@@ -10,7 +10,7 @@
  * All preferences live per-user on the server and in the auth store.
  */
 import { ref } from 'vue'
-import { AppButton, AppBanner, AppCheckboxes, AppErrorSummary, AppInput, AppTextarea } from '@/components/app'
+import { AppButton, AppBanner, AppCheckboxes, AppErrorSummary, AppInput, AppTextarea, PageHeader } from '@/components/app'
 import { ApiError } from '@/api/client'
 import {
   BACKGROUND_TONES,
@@ -193,8 +193,8 @@ const tabClass = (active: boolean): string =>
 </script>
 
 <template>
-  <div id="settings-page" class="max-w-2xl">
-    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-4">Settings</h1>
+  <div id="settings-page" class="w-full">
+    <PageHeader title="Settings" />
 
     <div id="settings-tablist" role="tablist" class="flex gap-1 border-b border-gray-200 dark:border-gray-700/60 mb-6">
       <button
@@ -249,7 +249,7 @@ const tabClass = (active: boolean): string =>
         </AppBanner>
       </div>
 
-      <div id="settings-card-dashboard-fields" :class="cardClass">
+      <div id="settings-card-dashboard-fields" :class="cardClass" class="max-w-2xl">
         <form @submit.prevent="onSubmit">
           <AppCheckboxes
             id="dashboard-fields"
@@ -285,7 +285,7 @@ const tabClass = (active: boolean): string =>
             The canvas colour behind your document tiles. Applies in light mode and saves to your
             account automatically.
           </p>
-          <div role="radiogroup" aria-label="Page background" class="grid grid-cols-2 sm:grid-cols-3 gap-3 mt-5">
+          <div role="radiogroup" aria-label="Page background" class="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-6 gap-3 mt-5">
             <button
               v-for="tone in BACKGROUND_TONES"
               :key="tone.value"
@@ -322,7 +322,7 @@ const tabClass = (active: boolean): string =>
             How each dashboard tile shows the document's first page. Saves to your account
             automatically.
           </p>
-          <div role="radiogroup" aria-label="Document previews" class="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-5">
+          <div role="radiogroup" aria-label="Document previews" class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3 mt-5">
             <button
               v-for="mode in TILE_PREVIEWS"
               :key="mode.value"
@@ -365,7 +365,7 @@ const tabClass = (active: boolean): string =>
         </AppBanner>
       </div>
 
-      <div id="settings-card-notifications" :class="cardClass">
+      <div id="settings-card-notifications" :class="cardClass" class="max-w-2xl">
         <form @submit.prevent="onNotificationsSubmit">
           <label class="flex items-center gap-2 py-1">
             <input
