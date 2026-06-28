@@ -29,6 +29,16 @@ class Settings(BaseSettings):
     # Auth (see docs/api.md §1.9).
     session_ttl_days: int = 30
     cookie_secure: bool = True
+    # Admin views (see docs/admin.md). Build metadata is injected at image
+    # build time; coverage_summary_path points at a JSON file the CI build
+    # bakes into the image (absent in dev → the admin coverage view reports
+    # "unavailable").
+    git_sha: str | None = None
+    coverage_summary_path: Path = Path("coverage-summary.json")
+    # Markdown docs surfaced read-only in the admin Architecture view. Baked
+    # into the image (Dockerfile COPYs docs/); absent in some contexts → the
+    # view lists whatever is present and degrades gracefully.
+    docs_dir: Path = Path("docs")
     # OCR (see docs/ingestion.md, "OCR" section).
     ocr_languages: str = "nld+eng"
     ocr_confidence_threshold: float = 65.0

@@ -44,6 +44,11 @@ jobs:
           # artifact is still produced (and uploaded) when coverage drops below
           # threshold — that's exactly when you want to see what's uncovered.
           uv run coverage html
+          # Machine-readable totals (totals.percent_covered) for the unified
+          # coverage summary the `build` job bakes into the image via
+          # scripts/coverage_summary.py. Emitted before the fail-under gate so it
+          # exists even when coverage dips below threshold.
+          uv run coverage json -o coverage.json
           # Surface the report on the run's summary page and in a file the
           # PR-comment step can reuse.
           {
@@ -61,6 +66,13 @@ jobs:
           path: htmlcov/
           # When an earlier step (e.g. lint) fails, coverage never runs and
           # there's no htmlcov/ — don't warn about the expected absence.
+          if-no-files-found: ignore
+      - name: Upload backend coverage JSON
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-coverage-json
+          path: coverage.json
           if-no-files-found: ignore
       - name: Coverage PR comment
         if: success() && github.event_name == 'pull_request'
@@ -233,14 +245,16 @@ jobs:
         if: always()
         run: docker compose down -v
 
-  # Build the published image once, early and in parallel with the test jobs,
-  # so it is ready to promote the instant the suite goes green — rather than
-  # gating a full build+push behind e2e. Pushes the immutable :sha tag on main
-  # (the rollback artifact and the source the promote step retags); on branches
-  # it skips the push and only warms the cache. This job is the sole writer of
-  # the `library-image` layer-cache scope that the e2e and compose-smoke bake
-  # builds read from.
+  # Build the published image, gated on the backend + frontend test jobs so it
+  # can bake in their real coverage numbers (the unified coverage-summary.json
+  # the admin views read). Image readiness is unaffected in practice: promote
+  # already waits for the full green suite (incl. e2e + compose-smoke). Pushes
+  # the immutable :sha tag on main (the rollback artifact and the source the
+  # promote step retags); on branches it skips the push and only warms the
+  # cache. This job is the sole writer of the `library-image` layer-cache scope
+  # that the e2e and compose-smoke bake builds read from.
   build:
+    needs: [backend, frontend]
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -248,6 +262,33 @@ jobs:
     steps:
       - uses: actions/checkout@v6
       - uses: docker/setup-buildx-action@v4
+      # Pull the coverage reports the test jobs uploaded; missing artifacts are
+      # tolerated so the build never fails for want of coverage (the script then
+      # records a null pct for that side).
+      - name: Download backend coverage JSON
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          name: backend-coverage-json
+          path: coverage-artifacts/backend
+      - name: Download frontend coverage report
+        uses: actions/download-artifact@v7
+        continue-on-error: true
+        with:
+          name: frontend-coverage-html
+          path: coverage-artifacts/frontend
+      - name: Generate the unified coverage summary
+        # Pure-stdlib script; the runner's system python3 is enough (no uv).
+        run: |
+          python3 scripts/coverage_summary.py \
+            --backend-json coverage-artifacts/backend/coverage.json \
+            --frontend-json coverage-artifacts/frontend/coverage-summary.json \
+            --git-sha "$GIT_SHA" \
+            --generated-at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            --output coverage-summary.json
+          cat coverage-summary.json
+        env:
+          GIT_SHA: ${{ github.sha }}
       - name: Log in to GHCR
         if: github.ref == 'refs/heads/main'
         uses: docker/login-action@v4
@@ -261,6 +302,8 @@ jobs:
           context: .
           push: ${{ github.ref == 'refs/heads/main' }}
           tags: ghcr.io/johnmathews/library:${{ github.sha }}
+          build-args: |
+            GIT_SHA=${{ github.sha }}
           cache-from: type=gha,scope=library-image
           cache-to: type=gha,scope=library-image,mode=max
 
