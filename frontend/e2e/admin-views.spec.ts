@@ -49,10 +49,14 @@ test('a normal user has no admin link and is redirected away from /admin', async
 test('an admin reaches /admin and the four tabs render', async ({ page }) => {
   await signIn(page, ADMIN_USERNAME, ADMIN_PASSWORD)
 
-  // The admin link is present; follow it.
-  const link = page.getByTestId('sidebar-admin-link')
-  await expect(link).toBeVisible()
-  await link.click()
+  // The admin link is present in the sidebar (the gating signal). We assert its
+  // presence rather than clicking it: on mobile/tablet the sidebar is a closed
+  // overlay, so nav links aren't clickable without opening the hamburger —
+  // existing specs navigate via goto for the same reason.
+  await expect(page.getByTestId('sidebar-admin-link')).toHaveCount(1)
+
+  // Reach the page directly (the guard allows admins through).
+  await page.goto('/admin')
   await expect(page).toHaveURL(/\/admin$/)
 
   // System tab is the default panel and is visible on arrival.
