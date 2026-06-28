@@ -354,9 +354,7 @@ async def update_user(
     await session.execute(
         text("SELECT pg_advisory_xact_lock(:key)"), {"key": _ADMIN_MUTATION_LOCK_KEY}
     )
-    user = (
-        await session.execute(select(User).where(User.id == user_id))
-    ).scalar_one_or_none()
+    user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if user is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
 

@@ -15,8 +15,12 @@ from tests.conftest import AuthUser, create_user
 
 pytestmark = pytest.mark.integration
 
-_ADMIN_GET_ROUTES = ["/api/admin/system", "/api/admin/architecture", "/api/admin/coverage",
-                     "/api/admin/users"]
+_ADMIN_GET_ROUTES = [
+    "/api/admin/system",
+    "/api/admin/architecture",
+    "/api/admin/coverage",
+    "/api/admin/users",
+]
 
 
 # ----------------------------------------------------------------- gating
@@ -146,9 +150,7 @@ def test_create_user_duplicate_409(admin_client: TestClient, auth_user: AuthUser
     assert response.status_code == 409
 
 
-def test_patch_promote_and_demote(
-    admin_client: TestClient, api_database_url: str
-) -> None:
+def test_patch_promote_and_demote(admin_client: TestClient, api_database_url: str) -> None:
     target = create_user(api_database_url)
     promote = admin_client.patch(f"/api/admin/users/{target.id}", json={"is_admin": True})
     assert promote.status_code == 200, promote.text
@@ -164,9 +166,7 @@ def test_patch_unknown_user_404(admin_client: TestClient) -> None:
     assert response.status_code == 404
 
 
-def test_cannot_demote_last_active_admin(
-    api_app: object, api_database_url: str
-) -> None:
+def test_cannot_demote_last_active_admin(api_app: object, api_database_url: str) -> None:
     """In a DB with exactly one active admin, demoting them is rejected (409)."""
     from procrastinate import PsycopgConnector
 
