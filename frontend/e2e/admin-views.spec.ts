@@ -70,7 +70,11 @@ test('an admin reaches /admin and the four tabs render', async ({ page }) => {
   await expect(page.getByTestId('admin-tab-coverage')).toBeVisible()
 
   await page.getByTestId('admin-tab-users-btn').click()
-  await expect(page.getByTestId('admin-tab-users')).toBeVisible()
-  // The admin themself appears in the user list.
-  await expect(page.getByText(ADMIN_USERNAME).first()).toBeVisible()
+  const usersPanel = page.getByTestId('admin-tab-users')
+  await expect(usersPanel).toBeVisible()
+  // The admin themself appears in the user list. Scope the lookup to the Users
+  // panel: the raw username also renders in the header user-menu dropdown
+  // (`AppHeader`), which is hidden until clicked, so a page-wide
+  // getByText(...).first() would match that hidden copy and fail.
+  await expect(usersPanel.getByText(ADMIN_USERNAME).first()).toBeVisible()
 })
