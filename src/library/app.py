@@ -10,6 +10,7 @@ from fastapi.staticfiles import StaticFiles
 
 import library
 from library.api import (
+    admin,
     ask,
     auth,
     charts,
@@ -21,7 +22,7 @@ from library.api import (
     settings,
     taxonomy,
 )
-from library.auth.deps import csrf_protect, current_user
+from library.auth.deps import csrf_protect, current_user, require_admin
 from library.config import get_settings
 from library.jobs import job_app
 from library.mcp_server import create_mcp_http_app
@@ -173,6 +174,9 @@ def create_app() -> FastAPI:
     api_router.include_router(settings.router)
     api_router.include_router(ask.router)
     api_router.include_router(auth.router)
+    # Admin surface: additionally gated by require_admin (which layers on the
+    # already-attached current_user, so anon → 401, non-admin → 403).
+    api_router.include_router(admin.router, dependencies=[Depends(require_admin)])
     app.include_router(api_router)
     # Login is the only unauthenticated /api route (and is CSRF-exempt: the
     # session doesn't exist yet, and the password itself proves intent).
