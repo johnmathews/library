@@ -8,6 +8,7 @@ const router = createRouter({
   routes: [
     { path: '/', name: 'documents', component: { template: '<div/>' } },
     { path: '/upload', name: 'upload', component: { template: '<div/>' } },
+    { path: '/notes/new', name: 'note-new', component: { template: '<div/>' } },
     { path: '/settings', name: 'settings', component: { template: '<div/>' } },
     { path: '/jobs', name: 'jobs', component: { template: '<div/>' } },
     { path: '/charts', name: 'charts', component: { template: '<div/>' } },
@@ -43,6 +44,19 @@ describe('AppSidebar', () => {
     expect(wrapper.find('[data-testid="sidebar-upload-link"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="sidebar-settings-link"]').exists()).toBe(true)
     expect(wrapper.text()).toContain('LIBRARY')
+  })
+
+  it('renders a New note nav link to /notes/new', async () => {
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    const notesLink = wrapper.find('[data-testid="sidebar-notes-link"]')
+    expect(notesLink.exists()).toBe(true)
+    expect(notesLink.attributes('href')).toBe('/notes/new')
+    expect(notesLink.text()).toContain('New note')
   })
 
   it('renders a Charts nav link to /charts', async () => {

@@ -4,6 +4,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import DocumentDetailView from '../DocumentDetailView.vue'
 import type { DocumentDetail, DocumentMarkdownResponse } from '@/api/documents'
+import { listNoteVersions, restoreNoteVersion, updateNote } from '@/api/notes'
 import { useJobsStore } from '@/stores/jobs'
 
 // pdfjs-dist can't run its worker/canvas in jsdom — mock the whole module
@@ -12,6 +13,18 @@ vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: { workerSrc: '' },
   getDocument: vi.fn(() => ({ promise: new Promise(() => {}), destroy: () => Promise.resolve() })),
 }))
+
+// The notes API is exercised only by the note-specific controls; mock it so
+// the existing document fetch mock stays focused on the document endpoints.
+vi.mock('@/api/notes', () => ({
+  updateNote: vi.fn(),
+  listNoteVersions: vi.fn(),
+  restoreNoteVersion: vi.fn(),
+}))
+
+const updateNoteMock = vi.mocked(updateNote)
+const listNoteVersionsMock = vi.mocked(listNoteVersions)
+const restoreNoteVersionMock = vi.mocked(restoreNoteVersion)
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -86,6 +99,9 @@ describe('DocumentDetailView', () => {
       jsonResponse({ page_count: 1, pages: [{ page_number: 1, markdown: '# Invoice\n\nTotal: €123.45' }] } satisfies DocumentMarkdownResponse)
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
+    updateNoteMock.mockReset()
+    listNoteVersionsMock.mockReset()
+    restoreNoteVersionMock.mockReset()
     fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
@@ -774,5 +790,92 @@ describe('DocumentDetailView', () => {
     const link = w.find('[data-testid="view-job-history"]')
     expect(link.exists()).toBe(true)
     expect(link.attributes('href')).toBe('/jobs?document_id=12')
+  })
+
+  describe('note editing and version history', () => {
+    function noteDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
+      return makeDetail({
+        source: 'note',
+        mime_type: 'text/markdown',
+        has_searchable_pdf: false,
+        has_thumbnail: false,
+        title: 'My note',
+        ...overrides,
+      })
+    }
+
+    it('shows the note-only controls for a note document', async () => {
+      detail = noteDetail()
+      const w = await mountView()
+      expect(w.find('[data-testid="note-edit-button"]').exists()).toBe(true)
+      expect(w.find('[data-testid="note-versions"]').exists()).toBe(true)
+    })
+
+    it('hides the note-only controls for a non-note document', async () => {
+      detail = makeDetail({ source: 'upload' })
+      const w = await mountView()
+      expect(w.find('[data-testid="note-edit-button"]').exists()).toBe(false)
+      expect(w.find('[data-testid="note-versions"]').exists()).toBe(false)
+    })
+
+    it('edits the note title and body, calling updateNote', async () => {
+      detail = noteDetail()
+      markdownResponse = () =>
+        jsonResponse({
+          page_count: 1,
+          pages: [{ page_number: 1, markdown: 'original body' }],
+        } satisfies DocumentMarkdownResponse)
+      updateNoteMock.mockResolvedValue(noteDetail({ title: 'Updated note' }))
+      const w = await mountView()
+
+      await w.find('[data-testid="note-edit-button"]').trigger('click')
+      await flushPromises()
+      // The body editor is pre-filled with the current markdown body.
+      expect((w.find('#note-edit-body').element as HTMLTextAreaElement).value).toBe('original body')
+
+      await w.find('#note-edit-title').setValue('Updated note')
+      await w.find('#note-edit-body').setValue('updated body')
+      await w.find('[data-testid="note-edit-save"]').trigger('click')
+      await flushPromises()
+
+      expect(updateNoteMock).toHaveBeenCalledWith(12, {
+        title: 'Updated note',
+        body_markdown: 'updated body',
+      })
+      expect(w.find('h1').text()).toBe('Updated note')
+    })
+
+    it('opens the version history, calling listNoteVersions', async () => {
+      detail = noteDetail()
+      listNoteVersionsMock.mockResolvedValue([
+        { version_no: 2, title: 'v2', body: 'b2', created_at: '2026-06-02T00:00:00Z' },
+        { version_no: 1, title: 'v1', body: 'b1', created_at: '2026-06-01T00:00:00Z' },
+      ])
+      const w = await mountView()
+
+      await w.find('[data-testid="note-versions-toggle"]').trigger('click')
+      await flushPromises()
+
+      expect(listNoteVersionsMock).toHaveBeenCalledWith(12)
+      expect(w.find('[data-testid="note-restore-2"]').exists()).toBe(true)
+      expect(w.find('[data-testid="note-restore-1"]').exists()).toBe(true)
+    })
+
+    it('restores a version, calling restoreNoteVersion', async () => {
+      detail = noteDetail()
+      listNoteVersionsMock.mockResolvedValue([
+        { version_no: 1, title: 'v1', body: 'b1', created_at: '2026-06-01T00:00:00Z' },
+      ])
+      restoreNoteVersionMock.mockResolvedValue(noteDetail({ title: 'Restored note' }))
+      const w = await mountView()
+
+      await w.find('[data-testid="note-versions-toggle"]').trigger('click')
+      await flushPromises()
+      await w.find('[data-testid="note-restore-1"]').trigger('click')
+      await flushPromises()
+
+      expect(restoreNoteVersionMock).toHaveBeenCalledWith(12, 1)
+      expect(w.find('h1').text()).toBe('Restored note')
+    })
   })
 })

@@ -10,7 +10,7 @@ import { ApiError, apiFetch, getCookie, CSRF_COOKIE, CSRF_HEADER } from './clien
 
 export type DocumentLanguage = 'nld' | 'eng' | 'mixed' | 'unknown'
 export type DocumentStatus = 'received' | 'ocr' | 'extract' | 'indexed' | 'failed'
-export type DocumentSource = 'upload' | 'consume' | 'email' | 'api' | 'mcp' | 'import'
+export type DocumentSource = 'upload' | 'consume' | 'email' | 'api' | 'mcp' | 'import' | 'note'
 export type ReviewStatus = 'verified' | 'needs_review' | 'unreviewed'
 
 export interface KindRef {

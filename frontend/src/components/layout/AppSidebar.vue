@@ -212,6 +212,52 @@ watch(
               </li>
             </RouterLink>
 
+            <!-- New note link -->
+            <RouterLink v-slot="{ href, navigate, isActive }" to="/notes/new" custom>
+              <li
+                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                :class="
+                  isActive &&
+                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                "
+              >
+                <a
+                  :href="href"
+                  class="block truncate transition"
+                  data-testid="sidebar-notes-link"
+                  :class="
+                    isActive
+                      ? 'text-gray-900 dark:text-white'
+                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                  "
+                  @click="navigate"
+                >
+                  <div class="flex items-center">
+                    <svg
+                      class="shrink-0 fill-current"
+                      :class="
+                        isActive
+                          ? 'text-violet-500'
+                          : 'text-gray-600 dark:text-gray-300'
+                      "
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                    >
+                      <path
+                        d="M11.7.3a1 1 0 0 1 1.4 0l2.6 2.6a1 1 0 0 1 0 1.4l-9 9a1 1 0 0 1-.46.26l-4 1a1 1 0 0 1-1.21-1.2l1-4a1 1 0 0 1 .26-.47l9-9Zm.7 2.1L4 10.8 3.5 12.5l1.7-.4 8.4-8.4-1.2-1.3Z"
+                      />
+                    </svg>
+                    <span
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      >New note</span
+                    >
+                  </div>
+                </a>
+              </li>
+            </RouterLink>
+
             <!-- Ask link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/ask" custom>
               <li

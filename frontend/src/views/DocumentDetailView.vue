@@ -46,6 +46,12 @@ import {
   type DocumentUpdate,
   type ValidationFinding,
 } from '@/api/documents'
+import {
+  listNoteVersions,
+  restoreNoteVersion,
+  updateNote,
+  type NoteVersion,
+} from '@/api/notes'
 import { listKinds, listSenders, type KindOption, type SenderOption } from '@/api/taxonomy'
 import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { ApiError } from '@/api/client'
@@ -745,6 +751,111 @@ async function loadMarkdown(id: number): Promise<void> {
   }
 }
 
+// --- Notes: in-place editing + version history --------------------------------
+//
+// Note documents (source === 'note') are authored in-app and carry their body
+// in the markdown reader. They get their own edit affordance (separate from the
+// generic per-field metadata editor) plus a version-history panel with restore.
+
+const isNote = computed(() => doc.value?.source === 'note')
+
+/** The note's current markdown body, assembled from the reader's pages. */
+const noteBody = computed(() =>
+  (markdownData.value?.pages ?? []).map((page) => page.markdown).join('\n\n'),
+)
+
+const noteEditMode = ref(false)
+const noteTitleDraft = ref('')
+const noteBodyDraft = ref('')
+const noteSaving = ref(false)
+const noteEditError = ref<string | null>(null)
+
+function openNoteEditor(): void {
+  noteTitleDraft.value = doc.value?.title ?? ''
+  noteBodyDraft.value = noteBody.value
+  noteEditError.value = null
+  noteEditMode.value = true
+}
+
+function cancelNoteEdit(): void {
+  noteEditMode.value = false
+  noteEditError.value = null
+}
+
+async function saveNote(): Promise<void> {
+  if (!doc.value || noteSaving.value) return
+  noteSaving.value = true
+  noteEditError.value = null
+  try {
+    const id = doc.value.id
+    doc.value = await updateNote(id, {
+      title: noteTitleDraft.value.trim(),
+      body_markdown: noteBodyDraft.value,
+    })
+    await loadMarkdown(id)
+    noteEditMode.value = false
+  } catch (error: unknown) {
+    noteEditError.value =
+      error instanceof ApiError && error.status !== 0
+        ? error.detail
+        : 'Could not save the note — check your connection and try again'
+  } finally {
+    noteSaving.value = false
+  }
+}
+
+const noteVersions = ref<NoteVersion[]>([])
+const noteVersionsOpen = ref(false)
+const noteVersionsLoading = ref(false)
+const noteVersionsError = ref<string | null>(null)
+const restoringVersion = ref<number | null>(null)
+
+async function toggleNoteVersions(): Promise<void> {
+  noteVersionsOpen.value = !noteVersionsOpen.value
+  if (!noteVersionsOpen.value || !doc.value) return
+  await loadNoteVersions()
+}
+
+async function loadNoteVersions(): Promise<void> {
+  if (!doc.value) return
+  noteVersionsLoading.value = true
+  noteVersionsError.value = null
+  try {
+    noteVersions.value = await listNoteVersions(doc.value.id)
+  } catch {
+    noteVersionsError.value = 'Could not load version history — try again later.'
+  } finally {
+    noteVersionsLoading.value = false
+  }
+}
+
+async function restoreVersion(versionNo: number): Promise<void> {
+  if (!doc.value || restoringVersion.value !== null) return
+  restoringVersion.value = versionNo
+  noteVersionsError.value = null
+  try {
+    const id = doc.value.id
+    doc.value = await restoreNoteVersion(id, versionNo)
+    await loadMarkdown(id)
+    await loadNoteVersions()
+  } catch {
+    noteVersionsError.value = 'Could not restore that version — try again later.'
+  } finally {
+    restoringVersion.value = null
+  }
+}
+
+/** Clear all note-specific state on navigation to another document. */
+function resetNoteState(): void {
+  noteEditMode.value = false
+  noteEditError.value = null
+  noteTitleDraft.value = ''
+  noteBodyDraft.value = ''
+  noteVersions.value = []
+  noteVersionsOpen.value = false
+  noteVersionsError.value = null
+}
+
 // --- Load on navigation (registered last: the handler runs immediately and
 // --- touches the edit/notice state declared above) ----------------------------
 
@@ -756,6 +867,7 @@ watch(
     notFound.value = false
     loadError.value = false
     resetEditState()
+    resetNoteState()
     notice.value = null
     actionError.value = null
     markdownData.value = null
@@ -979,6 +1091,120 @@ watch(
       <!-- Metadata: left column on desktop (lg:order-1). min-w-0 (as above)
            lets long metadata values wrap rather than widen the page. -->
       <div id="document-metadata-column" class="min-w-0 space-y-6 lg:order-1">
+        <!-- Note-only controls: in-place note editing + version history. Shown
+             only for notes (source === 'note'); the generic metadata editor
+             below stays available for notes too. -->
+        <div
+          v-if="isNote"
+          id="document-note-card"
+          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
+        >
+          <div class="mb-4 flex items-center justify-between gap-3">
+            <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Note</h2>
+            <button
+              v-if="!noteEditMode"
+              type="button"
+              class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
+              data-testid="note-edit-button"
+              @click="openNoteEditor"
+            >
+              Edit note
+            </button>
+          </div>
+
+          <template v-if="noteEditMode">
+            <div class="space-y-4">
+              <AppInput id="note-edit-title" v-model="noteTitleDraft" label="Title" />
+              <AppTextarea
+                id="note-edit-body"
+                v-model="noteBodyDraft"
+                label="Body (markdown)"
+                :rows="12"
+                :error-message="noteEditError ?? undefined"
+              />
+            </div>
+            <div class="mt-4 flex flex-wrap gap-3">
+              <AppButton
+                type="button"
+                :disabled="noteSaving"
+                data-testid="note-edit-save"
+                @click="saveNote"
+              >
+                {{ noteSaving ? 'Saving…' : 'Save note' }}
+              </AppButton>
+              <AppButton
+                type="button"
+                variant="secondary"
+                :disabled="noteSaving"
+                data-testid="note-edit-cancel"
+                @click="cancelNoteEdit"
+              >
+                Cancel
+              </AppButton>
+            </div>
+          </template>
+
+          <!-- Version history disclosure. -->
+          <div data-testid="note-versions" class="mt-4 border-t border-gray-200 dark:border-gray-700/60 pt-4">
+            <button
+              type="button"
+              class="text-sm font-medium text-violet-500 hover:underline"
+              data-testid="note-versions-toggle"
+              :aria-expanded="noteVersionsOpen"
+              @click="toggleNoteVersions"
+            >
+              {{ noteVersionsOpen ? 'Hide version history' : 'Show version history' }}
+            </button>
+            <div v-if="noteVersionsOpen" class="mt-3">
+              <p
+                v-if="noteVersionsLoading"
+                class="text-sm text-gray-500 dark:text-gray-400"
+                data-testid="note-versions-loading"
+              >
+                Loading…
+              </p>
+              <p
+                v-else-if="noteVersionsError"
+                class="text-sm text-red-600 dark:text-red-400"
+                data-testid="note-versions-error"
+              >
+                {{ noteVersionsError }}
+              </p>
+              <p
+                v-else-if="noteVersions.length === 0"
+                class="text-sm text-gray-500 dark:text-gray-400"
+                data-testid="note-versions-empty"
+              >
+                No earlier versions yet.
+              </p>
+              <ul v-else class="divide-y divide-gray-200 dark:divide-gray-700/60">
+                <li
+                  v-for="version in noteVersions"
+                  :key="version.version_no"
+                  class="flex items-center justify-between gap-3 py-2"
+                  :data-testid="`note-version-${version.version_no}`"
+                >
+                  <span class="min-w-0 text-sm text-gray-800 dark:text-gray-100">
+                    Version {{ version.version_no }}
+                    <span class="block text-xs text-gray-400 dark:text-gray-500">
+                      {{ formatDateTime(version.created_at) }}
+                    </span>
+                  </span>
+                  <button
+                    type="button"
+                    class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 whitespace-nowrap"
+                    :disabled="restoringVersion !== null"
+                    :data-testid="`note-restore-${version.version_no}`"
+                    @click="restoreVersion(version.version_no)"
+                  >
+                    {{ restoringVersion === version.version_no ? 'Restoring…' : 'Restore' }}
+                  </button>
+                </li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
         <div
           id="document-details-card"
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"

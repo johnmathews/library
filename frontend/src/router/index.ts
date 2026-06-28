@@ -31,6 +31,11 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/UploadView.vue'),
   },
   {
+    path: '/notes/new',
+    name: 'note-new',
+    component: () => import('../views/NewNoteView.vue'),
+  },
+  {
     path: '/ask',
     name: 'ask',
     component: () => import('../views/AskView.vue'),
