@@ -230,10 +230,13 @@ describe('AskView', () => {
     expect(w.find('#ask-page').classes()).not.toContain('max-w-6xl')
   })
 
-  it('renders a sticky composer with a Send button (W10)', () => {
+  it('renders a bottom composer with a Send button (W10)', () => {
     const w = mountView()
+    // Not position:sticky — a sticky bottom bar overlaps the last turn's
+    // citations on short viewports and intercepts their clicks.
     const form = w.find('[data-testid="ask-form"]')
-    expect(form.classes()).toContain('sticky')
+    expect(form.exists()).toBe(true)
+    expect(form.classes()).not.toContain('sticky')
     expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
   })
 

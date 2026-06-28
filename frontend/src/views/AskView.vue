@@ -215,10 +215,8 @@ defineExpose({ resetConversation })
       @new="resetConversation"
     />
 
-    <!-- Answer column fills the width; the composer sticks to the bottom while
-         scrolling. The column takes its natural height (no forced min-height) so
-         the sticky composer never floats over short content and intercept its
-         clicks (e.g. a citation link) on small viewports. -->
+    <!-- Answer column fills the width; the composer follows the transcript at
+         the bottom (natural flow, not sticky — see the composer comment). -->
     <div class="flex-1 min-w-0">
       <PageHeader
         title="Ask"
@@ -305,11 +303,14 @@ defineExpose({ resetConversation })
         </p>
       </div>
 
-      <!-- Sticky multi-line composer pinned to the bottom of the column. -->
+      <!-- Multi-line composer at the bottom of the column. (Not position:sticky:
+           a sticky bottom bar overlaps transcript content on short viewports and
+           intercepts clicks on the last turn's citations — see
+           e2e/ask-page-citation.spec.ts.) -->
       <form
         id="ask-form"
         novalidate
-        class="sticky bottom-0 z-10 mt-2 bg-gray-50 dark:bg-gray-900 pt-2 pb-3"
+        class="mt-4"
         data-testid="ask-form"
         @submit.prevent="onSubmit"
       >
