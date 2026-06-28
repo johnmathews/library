@@ -213,14 +213,32 @@ describe('AskView', () => {
 
     const button = w.find('[data-testid="ask-submit"]')
     expect(button.attributes('disabled')).toBeDefined()
-    expect(button.text()).toContain('Asking')
+    expect(button.text()).toContain('Sending')
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
 
     resolve(sampleResponse({ thread_id: 1 }))
     await flushPromises()
 
     expect(w.find('[data-testid="ask-submit"]').attributes('disabled')).toBeUndefined()
-    expect(w.find('[data-testid="ask-submit"]').text()).toBe('Ask')
+    expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
+  })
+
+  it('uses the shared PageHeader and imposes no max-width cap (W10)', () => {
+    const w = mountView()
+    expect(w.find('[data-testid="page-header"]').exists()).toBe(true)
+    expect(w.find('#ask-page').classes()).not.toContain('max-w-6xl')
+  })
+
+  it('renders a sticky composer with a Send button (W10)', () => {
+    const w = mountView()
+    const form = w.find('[data-testid="ask-form"]')
+    expect(form.classes()).toContain('sticky')
+    expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
+  })
+
+  it('shows an empty-state prompt before any question (W10)', () => {
+    const w = mountView()
+    expect(w.find('[data-testid="ask-empty"]').exists()).toBe(true)
   })
 })
