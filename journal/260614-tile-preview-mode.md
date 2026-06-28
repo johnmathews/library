@@ -1,4 +1,4 @@
-# 260614 — Per-user document tile preview mode
+# Per-user document tile preview mode
 
 ## Problem
 

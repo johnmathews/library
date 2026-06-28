@@ -1,4 +1,4 @@
-# W17 — Deployment hardening, docs completion, wrap (2026-06-11)
+# W17 — Deployment hardening, docs completion, wrap
 
 Final work unit. Library v0.1.0 is feature-complete and deployable from
 the docs alone.

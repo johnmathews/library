@@ -1,4 +1,4 @@
-# 1. Dashboard tile elevation
+# Dashboard tile elevation
 
 **Date:** 2026-06-14
 

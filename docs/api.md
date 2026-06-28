@@ -1,4 +1,4 @@
-# 1. REST API
+# REST API
 
 **Status:** active. **Last updated:** 2026-06-28 (in-app notes `/api/notes` + version history; `topics` now read-only and searchable).
 

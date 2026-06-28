@@ -1,4 +1,4 @@
-# 1. CI: build once early, promote on green
+# CI: build once early, promote on green
 
 **Date:** 2026-06-14
 

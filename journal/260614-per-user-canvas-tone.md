@@ -1,4 +1,4 @@
-# 1. Per-user page-canvas tone
+# Per-user page-canvas tone
 
 **Date:** 2026-06-14
 

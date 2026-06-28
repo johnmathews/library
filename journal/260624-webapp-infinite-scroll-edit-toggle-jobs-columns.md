@@ -1,4 +1,4 @@
-# 2026-06-24 — Webapp: infinite scroll, page-wide edit toggle, jobs columns, OCR provenance
+# Webapp: infinite scroll, page-wide edit toggle, jobs columns, OCR provenance
 
 Four user-requested UI improvements to the Library webapp, shipped together on
 `feat/webapp-list-edit-jobs-improvements`. A fifth request (per-document charts +

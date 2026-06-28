@@ -1,4 +1,4 @@
-# 1. Roadmap & deferred work
+# Roadmap & deferred work
 
 **Status:** active. **Last updated:** 2026-06-28. **Supersedes:** none.
 

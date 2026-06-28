@@ -1,4 +1,4 @@
-# 2026-06-22 — Cross-browser PDF preview (self-rendered pdf.js)
+# Cross-browser PDF preview (self-rendered pdf.js)
 
 ## Context
 

@@ -1,4 +1,4 @@
-# 260622 — Conversational Ask
+# Conversational Ask
 
 Sub-project 4 of the extraction/Ask roadmap. Makes Ask multi-turn: a follow-up
 like *"what about last year?"* resolves against the prior turns of the same

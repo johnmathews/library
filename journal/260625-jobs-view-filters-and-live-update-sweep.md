@@ -1,4 +1,4 @@
-# 260625 — Jobs view: system-task labels, filters, and an app-wide live-update sweep
+# Jobs view: system-task labels, filters, and an app-wide live-update sweep
 
 Run via the engineering-team skill (run dir `manual-20260624T194552Z`). Six work
 units on branch `worktree-eng-jobs-view-and-live-update`.

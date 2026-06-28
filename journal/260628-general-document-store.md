@@ -1,4 +1,4 @@
-# 1. General document store — extend Library beyond invoices/correspondence
+# General document store — extend Library beyond invoices/correspondence
 
 **Date:** 2026-06-28
 **Branch:** `eng-general-document-store`
