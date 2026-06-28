@@ -121,7 +121,6 @@ type EditableField =
   | 'language'
   | 'tags'
   | 'projects'
-  | 'topics'
   | 'amount'
   | 'due_date'
   | 'expiry_date'
@@ -151,11 +150,6 @@ const rowConfigs: RowConfig[] = [
     label: 'Projects',
     display: (d) =>
       d.projects.length ? d.projects.map((project) => project.name).join(', ') : null,
-  },
-  {
-    field: 'topics',
-    label: 'Topics',
-    display: (d) => (d.topics.length ? d.topics.join(', ') : null),
   },
   {
     field: 'amount',
@@ -190,7 +184,7 @@ interface FieldGroup {
 }
 
 const fieldGroups: FieldGroup[] = [
-  { key: 'content', label: 'Content', accent: 'violet', fields: ['title', 'summary', 'tags', 'topics', 'projects'] },
+  { key: 'content', label: 'Content', accent: 'violet', fields: ['title', 'summary', 'tags', 'projects'] },
   { key: 'classification', label: 'Classification', accent: 'yellow', fields: ['kind', 'language'] },
   {
     key: 'parties',
@@ -202,7 +196,7 @@ const fieldGroups: FieldGroup[] = [
 ]
 
 /** Fields that read better spanning the full width of the two-column grid. */
-const WIDE_FIELDS = new Set<EditableField>(['title', 'summary', 'tags', 'topics', 'projects', 'amount'])
+const WIDE_FIELDS = new Set<EditableField>(['title', 'summary', 'tags', 'projects', 'amount'])
 
 /** True when any field in the group has a non-null display value. Used to hide a
  * whole group in read mode when it would otherwise show only em-dashes. */
@@ -331,7 +325,6 @@ type StringDraftField =
   | 'sender'
   | 'tags'
   | 'projects'
-  | 'topics'
   | 'kind'
   | 'language'
   | 'amount'
@@ -343,7 +336,6 @@ const drafts = reactive<Record<StringDraftField, string>>({
   sender: '',
   tags: '',
   projects: '',
-  topics: '',
   kind: '',
   language: '',
   amount: '',
@@ -381,7 +373,6 @@ function hydrateDrafts(): void {
   drafts.sender = d.sender?.name ?? ''
   drafts.tags = d.tags.map((tag) => tag.slug).join(', ')
   drafts.projects = d.projects.map((project) => project.name).join(', ')
-  drafts.topics = d.topics.join(', ')
   drafts.kind = d.kind?.slug ?? ''
   drafts.language = d.language
   drafts.amount = d.amount_total ?? ''
@@ -402,7 +393,6 @@ function hydrateField(field: EditableField): void {
     case 'sender': drafts.sender = d.sender?.name ?? ''; break
     case 'tags': drafts.tags = d.tags.map((tag) => tag.slug).join(', '); break
     case 'projects': drafts.projects = d.projects.map((project) => project.name).join(', '); break
-    case 'topics': drafts.topics = d.topics.join(', '); break
     case 'kind': drafts.kind = d.kind?.slug ?? ''; break
     case 'language': drafts.language = d.language; break
     case 'amount':
@@ -451,12 +441,6 @@ function fieldDirty(field: EditableField): boolean {
       const next = drafts.projects.split(',').map((p) => p.trim()).filter(Boolean).sort()
       return next.join(',') !== d.projects.map((p) => p.name).sort().join(',')
     }
-    case 'topics': {
-      // Topics are an ordered list of phrases; compare order-preserving so the
-      // editor reflects exactly what is stored.
-      const next = drafts.topics.split(',').map((t) => t.trim()).filter(Boolean)
-      return next.join('|') !== d.topics.join('|')
-    }
     case 'document_date': return (dateDrafts.document_date ?? null) !== (d.document_date ?? null)
     case 'due_date': return (dateDrafts.due_date ?? null) !== (d.due_date ?? null)
     case 'expiry_date': return (dateDrafts.expiry_date ?? null) !== (d.expiry_date ?? null)
@@ -487,8 +471,6 @@ function buildPatch(field: EditableField): DocumentUpdate | null {
       return { tags: drafts.tags.split(',').map((tag) => tag.trim()).filter(Boolean) }
     case 'projects':
       return { projects: drafts.projects.split(',').map((project) => project.trim()).filter(Boolean) }
-    case 'topics':
-      return { topics: drafts.topics.split(',').map((topic) => topic.trim()).filter(Boolean) }
     case 'document_date':
       return { document_date: dateDrafts.document_date }
     case 'due_date':
@@ -1079,24 +1061,10 @@ watch(
                   </dt>
                   <!-- Read mode: value only. The page-wide Edit toggle replaces the
                        old per-row "Change" buttons. -->
-                  <!-- Topics render as plain badge pills (no links), like tags. -->
-                  <dd
-                    v-if="!editMode && field === 'topics'"
-                    class="mt-1 flex flex-wrap gap-2"
-                    data-testid="row-value"
-                  >
-                    <AppBadge
-                      v-for="topic in doc.topics"
-                      :key="topic"
-                      :colour="tagColour(topic)"
-                      data-testid="topic-badge"
-                      >{{ topic }}</AppBadge
-                    >
-                  </dd>
                   <!-- Projects render as badges that link to the project-filtered
                        dashboard, rather than a plain comma-joined string. -->
                   <dd
-                    v-else-if="!editMode && field === 'projects'"
+                    v-if="!editMode && field === 'projects'"
                     class="mt-1 flex flex-wrap gap-2"
                     data-testid="row-value"
                   >
@@ -1204,16 +1172,6 @@ watch(
                         />
                       </datalist>
                     </template>
-                    <AppInput
-                      v-else-if="field === 'topics'"
-                      id="edit-topics"
-                      v-model="drafts.topics"
-                      label="Topics"
-                      hint="Separate topics with commas"
-                      :error-message="fieldError.topics ?? undefined"
-                      @change="saveField('topics')"
-                      @keyup.enter="saveField('topics')"
-                    />
                     <div
                       v-else-if="field === 'amount'"
                       class="flex flex-wrap gap-3"
@@ -1287,6 +1245,40 @@ watch(
               </dl>
             </section>
             </template>
+
+            <!-- Topics: auto-extracted subject phrases, shown read-only as badge
+                 pills (no editor). Hidden in edit mode and when there are none. -->
+            <section
+              v-if="!editMode && doc.topics.length"
+              class="rounded-lg border-l-4 px-4 py-3.5"
+              :class="[ACCENT.violet.border, ACCENT.violet.bg]"
+            >
+              <div class="mb-3 flex items-center gap-2">
+                <span class="h-3.5 w-1 rounded-full" :class="ACCENT.violet.bar"></span>
+                <h3
+                  class="text-xs font-semibold uppercase tracking-wider"
+                  :class="ACCENT.violet.text"
+                >
+                  Topics
+                </h3>
+              </div>
+              <dl class="grid grid-cols-1">
+                <div data-testid="row-topics">
+                  <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+                    Topics
+                  </dt>
+                  <dd class="mt-1 flex flex-wrap gap-2" data-testid="row-value">
+                    <AppBadge
+                      v-for="topic in doc.topics"
+                      :key="topic"
+                      :colour="tagColour(topic)"
+                      data-testid="topic-badge"
+                      >{{ topic }}</AppBadge
+                    >
+                  </dd>
+                </div>
+              </dl>
+            </section>
 
             <!-- System: read-only provenance, set apart with a neutral accent. -->
             <section

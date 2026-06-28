@@ -942,25 +942,56 @@ def test_patch_null_projects_rejected(api_client: TestClient, api_database_url: 
 # --- Topics ------------------------------------------------------------------
 
 
-def test_patch_sets_and_clears_topics(api_client: TestClient, api_database_url: str) -> None:
-    """PATCH topics is a full-replace list: `[]` clears, `null` leaves unchanged."""
-    document_id = seed_document(api_database_url, "topics-patch", tag_slugs=["topics-patch"])
+def test_patch_topics_is_read_only(api_client: TestClient, api_database_url: str) -> None:
+    """topics is auto-extracted, never user-editable: a PATCH body containing
+    topics is ignored (the field was removed from DocumentUpdate, so pydantic
+    drops it) and the stored topics are left untouched."""
+    document_id = seed_document(
+        api_database_url,
+        "topics-readonly",
+        tag_slugs=["topics-readonly"],
+        topics=["installation", "error codes"],
+    )
 
+    # A PATCH with ONLY topics is a no-op: nothing changes, no edit recorded.
     response = api_client.patch(
         f"/api/documents/{document_id}",
-        json={"topics": ["installation", "error codes"]},
+        json={"topics": ["hacked", "tampered"]},
     )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["topics"] == ["installation", "error codes"]
-    assert "topics" in body["user_edited_fields"]
+    assert "topics" not in body["user_edited_fields"]
 
-    # null leaves topics unchanged.
-    unchanged = api_client.patch(f"/api/documents/{document_id}", json={"topics": None})
-    assert unchanged.status_code == 200, unchanged.text
-    assert unchanged.json()["topics"] == ["installation", "error codes"]
+    # Even alongside a real edit, topics stays auto-extracted (ignored).
+    mixed = api_client.patch(
+        f"/api/documents/{document_id}",
+        json={"title": "Nieuwe titel", "topics": []},
+    )
+    assert mixed.status_code == 200, mixed.text
+    mixed_body = mixed.json()
+    assert mixed_body["title"] == "Nieuwe titel"
+    assert mixed_body["topics"] == ["installation", "error codes"]
+    assert "topics" not in mixed_body["user_edited_fields"]
 
-    # Re-PATCH with [] clears them.
-    cleared = api_client.patch(f"/api/documents/{document_id}", json={"topics": []})
-    assert cleared.status_code == 200, cleared.text
-    assert cleared.json()["topics"] == []
+    # Confirm via a fresh GET that the stored value is unchanged.
+    fetched = api_client.get(f"/api/documents/{document_id}").json()
+    assert fetched["topics"] == ["installation", "error codes"]
+
+
+def test_search_matches_topics(api_client: TestClient, api_database_url: str) -> None:
+    """FTS now indexes topics: a document whose only occurrence of a distinctive
+    term is in its topics list is returned by ?q= (migration 0012)."""
+    document_id = seed_document(
+        api_database_url,
+        "topics-search",
+        tag_slugs=["topics-search"],
+        title="Onderwerpen test",
+        summary="Geen bijzondere woorden hier.",
+        ocr_text="Deze tekst bevat het zoekwoord niet.",
+        topics=["zzxytopicterm"],
+        language=DocumentLanguage.NLD,
+    )
+
+    body = list_docs(api_client, q="zzxytopicterm", tag="topics-search")
+    assert [item["id"] for item in body["items"]] == [document_id]

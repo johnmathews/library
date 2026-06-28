@@ -59,7 +59,8 @@ NAMING_CONVENTION: dict[str, str] = {
 # Postgres text-search config ('dutch' / 'english').
 FTS_EXPRESSION: str = (
     "to_tsvector('{config}', coalesce(title, '') || ' ' "
-    "|| coalesce(summary, '') || ' ' || coalesce(ocr_text, ''))"
+    "|| coalesce(summary, '') || ' ' || coalesce(ocr_text, '') || ' ' "
+    "|| coalesce(topics::text, ''))"
 )
 
 

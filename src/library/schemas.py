@@ -148,10 +148,6 @@ class DocumentUpdate(BaseModel):
     tags: list[str] | None = Field(
         default=None, description="Full replacement list of tag slugs; created if unknown."
     )
-    topics: list[str] | None = Field(
-        default=None,
-        description="Full replacement list of free-text topics; `[]` clears, null is a no-op.",
-    )
     projects: list[str] | None = Field(
         default=None,
         description=(

@@ -293,16 +293,12 @@ describe('DocumentDetailView', () => {
     expect(patchCalls()[0]!.body).toEqual({ projects: ['House purchase', 'Taxes'] })
   })
 
-  it('topics editor sends a comma-split full-replacement list', async () => {
+  it('has no topics editor in edit mode (topics are read-only)', async () => {
+    detail = makeDetail({ topics: ['thermostat installation', 'boiler maintenance'] })
     const w = await mountView()
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
-    await w.find('#edit-topics').setValue(' thermostat installation,  boiler maintenance ,')
-    await w.find('#edit-topics').trigger('change')
-    await flushPromises()
-    expect(patchCalls()[0]!.body).toEqual({
-      topics: ['thermostat installation', 'boiler maintenance'],
-    })
+    expect(w.find('#edit-topics').exists()).toBe(false)
   })
 
   it('read mode renders each topic as a badge', async () => {

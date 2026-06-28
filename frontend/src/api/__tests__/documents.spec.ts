@@ -106,16 +106,6 @@ describe('updateDocument', () => {
     expect(JSON.parse(String(init.body))).toEqual({ projects: ['House purchase', 'Taxes'] })
   })
 
-  it('PATCHes a topics full-replacement list through the body', async () => {
-    fetchMock.mockResolvedValue(new Response(JSON.stringify({ id: 7 }), { status: 200 }))
-    await updateDocument(7, { topics: ['thermostat installation', 'boiler maintenance'] })
-    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
-    expect(url).toBe('/api/documents/7')
-    expect(init.method).toBe('PATCH')
-    expect(JSON.parse(String(init.body))).toEqual({
-      topics: ['thermostat installation', 'boiler maintenance'],
-    })
-  })
 })
 
 describe('verifyDocument', () => {

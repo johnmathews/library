@@ -70,8 +70,6 @@ def _current_value(document: Document, name: str) -> Any:
         return document.sender_id
     if name == "tags":
         return sorted(tag.slug for tag in document.tags)
-    if name == "topics":
-        return list(document.topics or [])
     if name == "projects":
         return sorted(project.slug for project in document.projects)
     return getattr(document, name, None)
@@ -403,8 +401,6 @@ async def update_document(
             originals[storage] = _current_value(document, storage)
     if "tags" in provided:
         originals["tags"] = _current_value(document, "tags")
-    if "topics" in provided:
-        originals["topics"] = _current_value(document, "topics")
     if "projects" in provided:
         originals["projects"] = _current_value(document, "projects")
     for body_field in (
@@ -449,12 +445,6 @@ async def update_document(
             )
         document.tags = [await get_or_create_tag(session, slug) for slug in dict.fromkeys(slugs)]
         edited.append("tags")
-    if "topics" in provided:
-        topics = provided.pop("topics")
-        # `null` leaves topics unchanged (unlike tags); `[]` clears them.
-        if topics is not None:
-            document.topics = list(dict.fromkeys(topics))
-            edited.append("topics")
     if "projects" in provided:
         identifiers = provided.pop("projects")
         if identifiers is None:
