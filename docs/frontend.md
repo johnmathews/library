@@ -81,7 +81,11 @@ vocabulary that the `App*` components and views compose:
   base + dark-mode styling for every field control.
 - **Typography helpers** (`.h1`–`.h4`) and `.no-scrollbar`.
 - **Dashboard tiles:** `.app-doc-grid` (the responsive 1/2/3/4-column document
-  grid — column count per viewport is the W16 acceptance contract) and
+  grid — the per-viewport *default* column count is the W16 acceptance contract;
+  the desktop/wide counts read from the `--doc-grid-cols` CSS var, which
+  DocumentListView sets from a per-machine "tiles per row" preference stored in
+  `localStorage` under `library:doc-grid-cols`, falling back to 3/4 when "Auto")
+  and
   `.app-doc-card` (the elevated tile surface: rounded corners, a layered drop
   shadow that lifts the white tile off the gray page, and a hover state that
   raises it 3px and warms the border to violet). Dark mode swaps the shadow for
