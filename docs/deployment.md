@@ -80,12 +80,20 @@ service and set `LIBRARY_EMBEDDING_ENABLED=false` to stay at ~4 GB.
    to `ghcr.io/johnmathews/library` — add `image:
    ghcr.io/johnmathews/library:latest` to the `migrate`/`api`/`worker`
    services (or a small override file) and `docker compose pull`.
-5. **Create the first user** (there is deliberately no signup endpoint):
+5. **Create the first user** (there is deliberately no signup endpoint), and
+   make them an admin so they can reach the admin views and manage other
+   users from the UI:
 
    ```console
-   docker compose exec api library user add anna --display-name "Anna"
+   docker compose exec api library user add anna --display-name "Anna" --admin
+   # or promote an existing user: library user set-admin anna
    # prompts for a password; `library user --help` for passwd/disable/list
    ```
+
+   The admin role gates global project mutations and the `/admin` views
+   (system/architecture/coverage/users); see [admin.md](admin.md). The
+   image bakes a CI-generated `coverage-summary.json` and `LIBRARY_GIT_SHA`
+   so the System/Coverage views show real build and coverage data.
 6. **Log in.** Browse to `http://<lxc-ip>:8000` (with
    `LIBRARY_COOKIE_SECURE=false` while there is no TLS yet) or to your
    proxied HTTPS hostname (1.5), sign in, upload a PDF on `/upload`, and

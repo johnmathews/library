@@ -133,6 +133,10 @@ jobs:
       # Both compose files for every compose invocation (up/exec/logs/down).
       COMPOSE_FILE: docker-compose.yml:frontend/e2e/compose.e2e.yml
       E2E_BASE_URL: http://localhost:4173
+      # The admin-gating spec needs a second, admin-role login alongside the
+      # normal `e2e` user (created below).
+      E2E_ADMIN_USERNAME: e2e-admin
+      E2E_ADMIN_PASSWORD: e2e-admin-password-123
     steps:
       - uses: actions/checkout@v6
       - uses: docker/setup-buildx-action@v4
@@ -157,6 +161,10 @@ jobs:
         run: |
           echo 'e2e-password-123' | docker compose exec -T api \
             library user add e2e --display-name "E2E" --password-stdin
+      - name: Create the e2e admin user
+        run: |
+          echo 'e2e-admin-password-123' | docker compose exec -T api \
+            library user add e2e-admin --display-name "E2E Admin" --admin --password-stdin
       - uses: actions/setup-node@v6
         with:
           node-version: 22

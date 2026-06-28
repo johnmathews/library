@@ -8,8 +8,16 @@ they don't get lost between sessions. Most recent context lives in
 
 ## 1.1 Planned next
 
-Nothing is currently queued. The previously-planned items all shipped in the
-2026-06-28 notes + topics refinement cycle:
+Nothing is currently queued.
+
+The **admin role + admin views** shipped in the 2026-06-28 cycle: a boolean
+`users.is_admin` role with a `require_admin` guard, global project mutations
+gated to admins, the `/api/admin/*` API (system/architecture/coverage/users),
+the `/admin` views page, and a CI coverage-summary pipeline baked into the
+image. See [admin.md](admin.md).
+
+The previously-planned items all shipped in the 2026-06-28 notes + topics
+refinement cycle:
 
 - **Notes (in-app authoring)** — `DocumentSource.NOTE`, the `/api/notes` router
   (create / edit-in-place / version history / restore) and the New-note + detail

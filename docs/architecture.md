@@ -185,6 +185,10 @@ hashing (pwdlib), Postgres-backed sessions in an httpOnly cookie.
 Automation (REST/MCP): per-integration opaque bearer tokens, stored
 hashed, individually revocable.
 
+A single boolean **admin** role (`users.is_admin`) layers on top: admins
+gate global project mutations and an admin-only views surface
+(`/api/admin/*`, the `/admin` page). See [admin.md](admin.md).
+
 ## 1.6 Implementation status
 
 | Area | Unit | Status |

@@ -834,11 +834,14 @@ documents and include zero-count projects.
 
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/api/projects` | All projects ordered by name. `?include_archived=true` to include archived ones (hidden by default). |
-| POST | `/api/projects` | Body `{name, slug?, description?}`. `201`; `409` if the slug already exists. |
-| GET | `/api/projects/{slug}` | One project; `404` if unknown. |
-| PATCH | `/api/projects/{slug}` | Body `{name?, description?, archived?}`; only present fields change. The slug is **immutable**. `archived: true/false` toggles `archived_at`. `404` if unknown. |
-| DELETE | `/api/projects/{slug}` | Hard-delete; `204`. Memberships cascade away (`document_projects`), the **documents themselves are kept**. `404` if unknown. |
+| GET | `/api/projects` | All projects ordered by name. `?include_archived=true` to include archived ones (hidden by default). Open to all authenticated users. |
+| POST | `/api/projects` | **Admin only** (`403` otherwise). Body `{name, slug?, description?}`. `201`; `409` if the slug already exists. |
+| GET | `/api/projects/{slug}` | One project; `404` if unknown. Open to all authenticated users. |
+| PATCH | `/api/projects/{slug}` | **Admin only** (`403` otherwise). Body `{name?, description?, archived?}`; only present fields change. The slug is **immutable**. `archived: true/false` toggles `archived_at`. `404` if unknown. |
+| DELETE | `/api/projects/{slug}` | **Admin only** (`403` otherwise). Hard-delete; `204`. Memberships cascade away (`document_projects`), the **documents themselves are kept**. `404` if unknown. |
+
+Projects are a global, shared taxonomy, so mutating them is restricted to
+admins (reads stay open). See [admin.md](admin.md).
 
 **Project object** (every endpoint returns this shape; `GET /api/projects`
 returns an array of them):
@@ -888,3 +891,21 @@ tags, and kind. Each create/edit/restore also appends an ingestion event
 ```json
 {"title": "Mortgage call notes", "body_markdown": "# Call with broker\n\n- rate 3.9% …"}
 ```
+
+## 1.17 Admin — `/api/admin`
+
+Admin-only context and user management. Every endpoint requires the **admin**
+role (`require_admin`): anonymous → `401`, non-admin → `403`. Full design notes
+in [admin.md](admin.md).
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/admin/system` | App version + git sha, redacted operational config, deployment topology, and live DB stats (documents by status, users, job-queue depth, total extraction spend). |
+| GET | `/api/admin/architecture` | `docs/architecture.md` + `docs/ingestion.md` as `{docs: [{name, title, markdown}]}` (rendered client-side). |
+| GET | `/api/admin/coverage` | Backend/frontend coverage vs gate from the CI-baked summary: `{available, backend, frontend, generated_at, git_sha}`; `available: false` when no summary is baked in. |
+| GET | `/api/admin/users` | Every user: `[{id, username, display_name, is_admin, is_active, created_at}]`. |
+| POST | `/api/admin/users` | Body `{username, password, display_name?, is_admin?}`. `201`; `409` if the username exists. |
+| PATCH | `/api/admin/users/{id}` | Body `{is_admin?, is_active?}`. Promote/demote, activate/deactivate. `404` unknown; `409` if it would remove the **last active admin**. Deactivating also revokes the user's sessions and tokens. |
+
+The system `config` view exposes only a curated, secret-free subset of settings
+— never API keys, passwords, or internal URLs.
