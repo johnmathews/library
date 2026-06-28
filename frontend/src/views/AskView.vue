@@ -215,8 +215,11 @@ defineExpose({ resetConversation })
       @new="resetConversation"
     />
 
-    <!-- Answer column fills the width; the composer sticks to the bottom. -->
-    <div class="flex-1 min-w-0 flex flex-col min-h-[calc(100vh-8rem)]">
+    <!-- Answer column fills the width; the composer sticks to the bottom while
+         scrolling. The column takes its natural height (no forced min-height) so
+         the sticky composer never floats over short content and intercept its
+         clicks (e.g. a citation link) on small viewports. -->
+    <div class="flex-1 min-w-0">
       <PageHeader
         title="Ask"
         description="Ask a question about your documents in plain language and get an answer with citations."
@@ -230,7 +233,7 @@ defineExpose({ resetConversation })
       />
 
       <!-- Transcript: wide rich-markdown answers, not chat bubbles. -->
-      <div class="flex-1">
+      <div>
         <div v-if="turns.length" class="space-y-6 mb-6">
           <section
             v-for="(turn, i) in turns"
@@ -306,7 +309,7 @@ defineExpose({ resetConversation })
       <form
         id="ask-form"
         novalidate
-        class="sticky bottom-0 z-10 mt-2 bg-gray-50/95 dark:bg-gray-900/95 backdrop-blur supports-[backdrop-filter]:bg-gray-50/80 pt-2 pb-3"
+        class="sticky bottom-0 z-10 mt-2 bg-gray-50 dark:bg-gray-900 pt-2 pb-3"
         data-testid="ask-form"
         @submit.prevent="onSubmit"
       >
