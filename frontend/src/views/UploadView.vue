@@ -15,7 +15,7 @@
  * camera and hide the library).
  */
 import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue'
-import { AppBadge, AppBanner, AppButton, AppErrorSummary, AppFileUpload } from '@/components/app'
+import { AppBadge, AppBanner, AppButton, AppErrorSummary, AppFileUpload, PageHeader } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
 import AppProgressBar from '@/components/AppProgressBar.vue'
 import { getDocument, uploadDocument } from '@/api/documents'
@@ -173,11 +173,15 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
 </script>
 
 <template>
-  <div id="upload-page" class="max-w-2xl">
-    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Upload documents</h1>
-    <p class="text-gray-500 dark:text-gray-400 mb-6">
-      Add documents to your library. PDFs, photos, and text/markdown notes are accepted.
-    </p>
+  <div id="upload-page">
+    <PageHeader
+      title="Upload documents"
+      description="Add documents to your library. PDFs, photos, and text/markdown notes are accepted."
+    >
+      <template #actions>
+        <AppButton type="button" data-testid="upload-action" @click="onSubmit">Upload</AppButton>
+      </template>
+    </PageHeader>
 
     <AppErrorSummary v-if="failures.length" :errors="failures" data-testid="error-summary" class="mb-6" />
 
@@ -222,19 +226,18 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
         accept="image/*,application/pdf,.md,.markdown,.txt,text/markdown,text/plain"
         :error-message="fileError ?? undefined"
       />
-      <AppButton type="submit" class="mt-4">Upload</AppButton>
     </form>
 
     <ul
       v-if="entries.length"
       id="upload-list"
-      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 divide-y divide-gray-200 dark:divide-gray-700/60"
+      class="grid grid-cols-1 lg:grid-cols-2 gap-4"
       data-testid="upload-list"
     >
       <li
         v-for="entry in entries"
         :key="entry.key"
-        class="flex items-center gap-3 px-4 py-3"
+        class="flex items-center gap-3 bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 px-4 py-3"
       >
         <span class="flex-1 min-w-0 truncate text-sm text-gray-800 dark:text-gray-100">{{
           entry.name
