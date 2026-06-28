@@ -10,6 +10,13 @@ constraint is dropped/created with explicit DDL (``IF EXISTS`` on the drop) so
 the migration is idempotent and independent of Alembic's naming-convention
 rendering — and it leaves the column actively enforcing the enum going forward.
 
+The downgrade removes the notes feature wholesale: it drops ``note_versions``
+and then **hard-deletes any ``source = 'note'`` documents** before re-adding the
+narrower CHECK. Without that delete, the ``ADD CONSTRAINT`` would fail row
+validation whenever notes exist, aborting the migration mid-flight. Downgrading
+past this revision is therefore destructive of note documents by design — there
+is no schema that can hold them once ``'note'`` is no longer a valid source.
+
 Revision ID: 0013
 Revises: 0012
 Create Date: 2026-06-28 12:00:00.000000
@@ -72,4 +79,7 @@ def downgrade() -> None:
     op.drop_index(op.f("ix_note_versions_document_id"), table_name="note_versions")
     op.drop_table("note_versions")
 
+    # 'note' is about to become an invalid source; any note documents would fail
+    # the narrower CHECK's row validation. Remove them so the constraint applies.
+    op.execute("DELETE FROM documents WHERE source = 'note'")
     _set_source_check(_SOURCES_WITHOUT_NOTE)

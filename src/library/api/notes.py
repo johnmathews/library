@@ -17,6 +17,8 @@ detail payload is shaped exactly like any other document's.
 """
 
 import hashlib
+import os
+import tempfile
 from datetime import UTC, datetime
 from typing import Annotated
 from uuid import uuid4
@@ -56,10 +58,21 @@ def _write_body(sha256: str, body_bytes: bytes) -> None:
     Bypasses ``storage.store`` deliberately: ``store`` re-hashes the content and
     would file it under a different name, breaking the fixed salted-sha identity.
     The born-digital OCR passthrough reads exactly this file.
+
+    The write is atomic (temp file in the target dir + ``os.replace``), mirroring
+    ``storage.store``: an edit/restore overwrites the note's only file in place,
+    so a crash mid-write must never truncate or corrupt the existing content.
     """
     path = path_for(sha256)
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(body_bytes)
+    fd, tmp_name = tempfile.mkstemp(dir=path.parent, prefix=f".{sha256}.")
+    try:
+        with os.fdopen(fd, "wb") as handle:
+            handle.write(body_bytes)
+        os.replace(tmp_name, path)
+    except BaseException:
+        os.unlink(tmp_name)
+        raise
 
 
 async def _get_note_or_404(session: AsyncSession, document_id: int) -> Document:
@@ -187,6 +200,10 @@ async def update_note(
     """
     document = await _get_note_or_404(session, document_id)
     provided = payload.model_dump(exclude_unset=True)
+    # A no-op PATCH must not pollute the version history with a phantom snapshot.
+    if not provided:
+        await session.refresh(document, _DETAIL_RELATIONSHIPS)
+        return _detail(document)
 
     await _snapshot_current(session, document)
 

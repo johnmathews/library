@@ -961,8 +961,9 @@ LIBRARY_EMAIL_POLL_MINUTES=10
 ## Notes (in-app authoring, `library.api.notes`)
 
 A **note** is a born-digital `text/markdown` document composed inside Library
-rather than uploaded — a fifth ingestion channel (`source=note`) alongside
-upload, consume, email, and MCP. Notes flow through the normal pipeline (one
+rather than uploaded — an additional ingestion channel (`source=note`) alongside
+the existing sources (`upload`, `consume`, `email`, `api`, `mcp`, `import`).
+Notes flow through the normal pipeline (one
 `DocumentPage`, no OCR/vision call — the markdown body is its own text layer via
 the born-digital passthrough; metadata is still auto-extracted), but they differ
 from an upload in two ways: they are **edited in place** with a version history,

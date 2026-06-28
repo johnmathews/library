@@ -44,7 +44,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | POST   | `/api/notes` | Author a new in-app markdown note |
 | PATCH  | `/api/notes/{id}` | Edit a note's title/body in place (snapshots a version) |
 | GET    | `/api/notes/{id}/versions` | A note's version history (newest first) |
-| POST   | `/api/notes/{id}/versions/{n}/restore` | Restore a note to a previous version |
+| POST   | `/api/notes/{id}/versions/{version_no}/restore` | Restore a note to a previous version |
 | GET    | `/api/charts` | Every eligible recurring `(sender, kind)` series, summarised |
 | GET    | `/api/kinds` | Document kinds with counts |
 | GET    | `/api/senders` | Senders with counts |

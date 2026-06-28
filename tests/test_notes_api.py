@@ -108,6 +108,17 @@ def test_patch_snapshots_old_and_updates_body(
     assert versions[0]["created_at"]
 
 
+def test_empty_patch_is_a_noop_no_version(api_client: TestClient, api_database_url: str) -> None:
+    """A PATCH with no fields must not snapshot a phantom version."""
+    note = create_note(api_client, "T1", "body one")
+    note_id = note["id"]
+    run_pipeline(api_database_url, note_id)
+
+    response = api_client.patch(f"/api/notes/{note_id}", json={})
+    assert response.status_code == 200, response.text
+    assert api_client.get(f"/api/notes/{note_id}/versions").json() == []
+
+
 def test_get_versions_newest_first(api_client: TestClient, api_database_url: str) -> None:
     note = create_note(api_client, "v0", "b0")
     note_id = note["id"]

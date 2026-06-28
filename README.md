@@ -13,7 +13,8 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
 
 - **Ingestion from anywhere:** web upload (camera-friendly on mobile), a
   watched consume folder (Syncthing/scanner drops), email-in (IMAP
-  attachment polling), REST, MCP, and a paperless-ngx importer.
+  attachment polling), in-app note authoring (markdown, edited in place with
+  version history), REST, MCP, and a paperless-ngx importer.
 - **Routed OCR:** born-digital PDFs keep their text layer; scans go
   through OCRmyPDF/Tesseract (`nld+eng`, searchable-PDF output); photos
   get OpenCV perspective correction + RapidOCR; a confidence gate retries
