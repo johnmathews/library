@@ -85,6 +85,29 @@ def test_create_materializes_reader_without_worker(api_client: TestClient) -> No
     assert markdown["pages"][0]["markdown"].strip() == "# Title\n\nbody now."
 
 
+def test_create_empty_body_has_no_page(api_client: TestClient) -> None:
+    """A whitespace-only body materializes no page (the _apply_body else-branch)."""
+    note = create_note(api_client, "Empty", "   ")
+    note_id = note["id"]
+    # The else-branch leaves the document's own page_count unset (None)...
+    assert note["page_count"] is None
+    # ...and no DocumentPage row is written, so the reader is empty.
+    markdown = api_client.get(f"/api/documents/{note_id}/markdown").json()
+    assert markdown["page_count"] == 0
+    assert markdown["pages"] == []
+
+
+def test_create_and_patch_reject_empty_title(api_client: TestClient) -> None:
+    """`title` is min_length=1 on both create and edit (422 contract lock)."""
+    assert (
+        api_client.post("/api/notes", json={"title": "", "body_markdown": "x"}).status_code == 422
+    )
+    assert api_client.post("/api/notes", json={"body_markdown": "x"}).status_code == 422  # no title
+
+    note = create_note(api_client, "Has title", "body")
+    assert api_client.patch(f"/api/notes/{note['id']}", json={"title": ""}).status_code == 422
+
+
 def test_identical_notes_both_succeed_distinct_sha(api_client: TestClient) -> None:
     """Two notes with an identical body coexist (salted sha bypasses dedup)."""
     first = create_note(api_client, "Dup A", "exactly the same body")
