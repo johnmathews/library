@@ -25,12 +25,17 @@ export interface User {
   id: number
   username: string
   display_name: string
+  is_admin: boolean
   preferences: UserPreferences
 }
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(null)
   const isAuthenticated = computed(() => user.value !== null)
+
+  // Whether the signed-in user holds the admin role, gating the /admin area and
+  // its sidebar link. Defaults to false when the user is absent (login page).
+  const isAdmin = computed(() => user.value?.is_admin ?? false)
 
   const dashboardFields = computed<DashboardField[]>(
     () => user.value?.preferences?.dashboard_fields ?? [],
@@ -100,6 +105,7 @@ export const useAuthStore = defineStore('auth', () => {
   return {
     user,
     isAuthenticated,
+    isAdmin,
     dashboardFields,
     backgroundTone,
     tilePreview,

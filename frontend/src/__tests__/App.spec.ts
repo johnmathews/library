@@ -99,6 +99,7 @@ describe('App Mosaic shell', () => {
       id: 1,
       username: 'e2e',
       display_name: 'E2E',
+      is_admin: false,
       preferences: { dashboard_fields: [] },
     }
     wrapper = mount(App, { global: { plugins: [router, pinia] } })
