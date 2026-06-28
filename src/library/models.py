@@ -85,6 +85,7 @@ class DocumentSource(enum.StrEnum):
     API = "api"
     MCP = "mcp"
     IMPORT = "import"
+    NOTE = "note"
 
 
 class DocumentLanguage(enum.StrEnum):
@@ -433,6 +434,29 @@ class IngestionEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     document: Mapped[Document] = relationship(back_populates="events")
+
+
+class NoteVersion(Base):
+    """Append-only version history for in-app notes (source ``note``).
+
+    Each edit (or restore) of a note snapshots the note's *previous* title and
+    markdown body here before overwriting them, so the full edit history can be
+    listed and any prior version restored. ``version_no`` is monotonic per
+    document starting at 1; the table mirrors ``IngestionEvent`` in being
+    append-only (rows are never updated or deleted except via the document's
+    ON DELETE CASCADE).
+    """
+
+    __tablename__ = "note_versions"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    version_no: Mapped[int] = mapped_column(Integer)
+    title: Mapped[str | None] = mapped_column(Text)
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AskThread(Base):

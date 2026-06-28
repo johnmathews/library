@@ -23,6 +23,7 @@ EXPECTED_TABLES: set[str] = {
     "document_chunks",
     "document_pages",
     "ingestion_events",
+    "note_versions",
     "ask_threads",
     "ask_turns",
     "projects",
@@ -213,6 +214,20 @@ def test_document_projects_project_id_index_exists(migrated_database_url: str) -
         )
     )
     assert "ix_document_projects_project_id" in {str(name) for name in indexes}
+
+
+def test_documents_source_check_allows_note(migrated_database_url: str) -> None:
+    rows = fetch_all(
+        migrated_database_url,
+        """
+        SELECT pg_get_constraintdef(con.oid)
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE rel.relname = 'documents' AND con.conname = 'ck_documents_document_source'
+        """,
+    )
+    assert rows, "documents source CHECK constraint is missing"
+    assert "'note'" in rows[0][0]
 
 
 def test_ask_logs_table_is_gone(migrated_database_url: str) -> None:

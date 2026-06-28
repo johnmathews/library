@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 
 import typer
 from anthropic import AsyncAnthropic
-from sqlalchemy import exists, select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -27,6 +27,7 @@ from library.extraction.eval import (
     modal_version,
     version_distribution,
 )
+from library.extraction.extractor import PROMPT_VERSION
 from library.extraction.judge import JudgeResult, judge
 from library.extraction.validation import derive_review_status, findings_to_payload, validate
 from library.importer.client import PaperlessClient
@@ -214,6 +215,92 @@ def import_paperless(
     typer.echo(format_report(report))
     if report.failed:
         raise typer.Exit(code=1)
+
+
+# General document kinds (KIND_SLUGS subset) that carry free-form prose worth
+# re-extracting under a new prompt. Restricting to these is the safe default so
+# transactional kinds (invoices, receipts, ...) are never re-paid for.
+GENERAL_KIND_SLUGS: frozenset[str] = frozenset({"manual", "reference", "research", "note"})
+
+
+@app.command("backfill")
+def backfill(
+    limit: int | None = typer.Option(
+        None, "--limit", min=1, help="Only enqueue the first N matching documents (by id)."
+    ),
+    general_only: bool = typer.Option(
+        True,
+        "--general-only/--all-kinds",
+        help=(
+            "Restrict to general kinds (manual, reference, research, note) so "
+            "transactional documents like invoices are never re-extracted. "
+            "Pass --all-kinds to consider every kind."
+        ),
+    ),
+    include_current: bool = typer.Option(
+        False,
+        "--include-current",
+        help=(
+            "Re-enqueue documents already at the current prompt version too "
+            "(e.g. to pick up markdown-chunking changes)."
+        ),
+    ),
+    dry_run: bool = typer.Option(
+        False,
+        "--dry-run",
+        help="Print how many documents would be enqueued (with scope); enqueue nothing.",
+    ),
+) -> None:
+    """Re-run extract -> markdown -> embed for documents on an old extraction prompt.
+
+    Targets documents whose extraction ``prompt_version`` is missing or differs
+    from the current ``PROMPT_VERSION`` so they pick up the latest prompt,
+    long-doc sampling, ``topics``, and structure-preserving markdown chunking.
+    By default only general kinds (manual, reference, research, note) are
+    considered so invoices and receipts are never re-extracted; pass
+    ``--all-kinds`` to include everything, or ``--include-current`` to re-enqueue
+    regardless of prompt version.
+
+    Re-runs the same path new uploads use (``extract_document`` then
+    ``markdown_document``, which re-embeds), so it honours
+    ``extra["user_edited_fields"]`` and respects the daily extraction budget —
+    documents beyond the budget are skipped worker-side and can be re-queued the
+    next day. Use ``--limit`` to throttle per run. The worker must be running to
+    do the work; this command only enqueues the jobs.
+    """
+
+    async def operation(session: AsyncSession) -> int:
+        statement = select(Document.id).where(Document.deleted_at.is_(None))
+        if not include_current:
+            prompt_version = Document.extra["extraction"]["prompt_version"].astext
+            statement = statement.where(
+                or_(prompt_version.is_(None), prompt_version != PROMPT_VERSION)
+            )
+        if general_only:
+            statement = statement.where(
+                Document.kind_id.in_(select(Kind.id).where(Kind.slug.in_(GENERAL_KIND_SLUGS)))
+            )
+        statement = statement.order_by(Document.id)
+        if limit is not None:
+            statement = statement.limit(limit)
+        document_ids = list((await session.execute(statement)).scalars().all())
+        if dry_run:
+            return len(document_ids)
+        async with job_app.open_async():
+            for document_id in document_ids:
+                await extract_document.defer_async(document_id=document_id)
+                await markdown_document.defer_async(document_id=document_id)
+        return len(document_ids)
+
+    count = _run(operation)
+    if dry_run:
+        kinds_scope = "general kinds" if general_only else "all kinds"
+        version_scope = (
+            "all prompt versions" if include_current else f"prompt_version != {PROMPT_VERSION}"
+        )
+        typer.echo(f"would queue backfill for {count} document(s) ({kinds_scope}, {version_scope})")
+    else:
+        typer.echo(f"queued backfill for {count} document(s)")
 
 
 @app.command("backfill-embeddings")

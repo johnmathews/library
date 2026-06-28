@@ -7,6 +7,7 @@ from collections.abc import Iterator
 
 import pytest
 from procrastinate.testing import InMemoryConnector
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 from typer.testing import CliRunner
@@ -15,6 +16,7 @@ import library.cli as cli_module
 from library.auth.passwords import verify_password
 from library.cli import app
 from library.config import get_settings
+from library.extraction.extractor import PROMPT_VERSION
 from library.extraction.judge import FieldVerdict, JudgeResult
 from library.jobs import job_app
 from library.models import (
@@ -23,6 +25,7 @@ from library.models import (
     DocumentPage,
     DocumentSource,
     DocumentStatus,
+    Kind,
     ReviewStatus,
 )
 from tests.conftest import create_user, fetch_all
@@ -424,6 +427,130 @@ def test_backfill_summaries_respects_limit(cli_database_url: str) -> None:
         if job["task_name"] == "library.jobs.extract_document"
     ]
     assert len(enqueued) == 1
+
+
+def _seed_extraction_document(
+    database_url: str,
+    *,
+    kind_slug: str | None,
+    prompt_version: str | None,
+) -> int:
+    """Insert a document with the given kind slug and extraction prompt_version.
+
+    ``prompt_version=None`` leaves ``extra`` empty (never extracted); otherwise
+    it sets ``extra["extraction"]["prompt_version"]``.
+    """
+
+    async def _insert() -> int:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                kind_id = None
+                if kind_slug is not None:
+                    kind_id = (
+                        await session.execute(select(Kind.id).where(Kind.slug == kind_slug))
+                    ).scalar_one()
+                extra: dict[str, object] = {}
+                if prompt_version is not None:
+                    extra = {"extraction": {"prompt_version": prompt_version}}
+                document = Document(
+                    sha256=uuid.uuid4().hex * 2,
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    ocr_text="some text",
+                    status=DocumentStatus.INDEXED,
+                    kind_id=kind_id,
+                    extra=extra,
+                )
+                session.add(document)
+                await session.commit()
+                return document.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_insert())
+
+
+def _deferred_ids(connector: InMemoryConnector, task_name: str) -> set[int]:
+    return {
+        job["args"]["document_id"]
+        for job in connector.jobs.values()
+        if job["task_name"] == task_name
+    }
+
+
+def test_backfill_dry_run_enqueues_nothing(cli_database_url: str) -> None:
+    _seed_extraction_document(cli_database_url, kind_slug="reference", prompt_version="old-version")
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "would queue" in result.output
+    assert connector.jobs == {}
+
+
+def test_backfill_default_targets_old_prompt_general_kinds(cli_database_url: str) -> None:
+    invoice_old = _seed_extraction_document(
+        cli_database_url, kind_slug="invoice", prompt_version="old-version"
+    )
+    ref_old = _seed_extraction_document(
+        cli_database_url, kind_slug="reference", prompt_version="old-version"
+    )
+    ref_current = _seed_extraction_document(
+        cli_database_url, kind_slug="reference", prompt_version=PROMPT_VERSION
+    )
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill"])
+    assert result.exit_code == 0, result.output
+
+    extract_ids = _deferred_ids(connector, "library.jobs.extract_document")
+    markdown_ids = _deferred_ids(connector, "library.jobs.markdown_document")
+    assert ref_old in extract_ids
+    assert ref_old in markdown_ids  # markdown re-embeds
+    assert invoice_old not in extract_ids  # not a general kind
+    assert ref_current not in extract_ids  # already at current prompt version
+
+
+def test_backfill_all_kinds_includes_invoice(cli_database_url: str) -> None:
+    invoice_old = _seed_extraction_document(
+        cli_database_url, kind_slug="invoice", prompt_version="old-version"
+    )
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill", "--all-kinds"])
+    assert result.exit_code == 0, result.output
+
+    assert invoice_old in _deferred_ids(connector, "library.jobs.extract_document")
+
+
+def test_backfill_include_current_includes_up_to_date(cli_database_url: str) -> None:
+    ref_current = _seed_extraction_document(
+        cli_database_url, kind_slug="reference", prompt_version=PROMPT_VERSION
+    )
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill", "--include-current"])
+    assert result.exit_code == 0, result.output
+
+    assert ref_current in _deferred_ids(connector, "library.jobs.extract_document")
+
+
+def test_backfill_respects_limit(cli_database_url: str) -> None:
+    _seed_extraction_document(cli_database_url, kind_slug="reference", prompt_version="old-version")
+    _seed_extraction_document(cli_database_url, kind_slug="research", prompt_version="old-version")
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill", "--limit", "1"])
+    assert result.exit_code == 0, result.output
+
+    assert len(_deferred_ids(connector, "library.jobs.extract_document")) == 1
+    assert len(_deferred_ids(connector, "library.jobs.markdown_document")) == 1
 
 
 def test_backfill_markdown_include_existing(cli_database_url: str) -> None:

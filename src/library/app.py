@@ -9,7 +9,18 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import library
-from library.api import ask, auth, charts, documents, events, jobs, projects, settings, taxonomy
+from library.api import (
+    ask,
+    auth,
+    charts,
+    documents,
+    events,
+    jobs,
+    notes,
+    projects,
+    settings,
+    taxonomy,
+)
 from library.auth.deps import csrf_protect, current_user
 from library.config import get_settings
 from library.jobs import job_app
@@ -43,6 +54,13 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "description": (
             "Upload, search, read, edit, and soft-delete documents; download "
             "originals, searchable PDFs, and thumbnails."
+        ),
+    },
+    {
+        "name": "notes",
+        "description": (
+            "Author Markdown notes inside Library, edit them in place, and "
+            "browse or restore their version history."
         ),
     },
     {
@@ -146,6 +164,7 @@ def create_app() -> FastAPI:
         prefix="/api", dependencies=[Depends(current_user), Depends(csrf_protect)]
     )
     api_router.include_router(documents.router)
+    api_router.include_router(notes.router)
     api_router.include_router(charts.router)
     api_router.include_router(taxonomy.router)
     api_router.include_router(projects.router)

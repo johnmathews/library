@@ -169,6 +169,29 @@ class ExtractionQueuedResponse(BaseModel):
     job_id: int = Field(description="The Procrastinate job id (see GET /api/jobs).")
 
 
+class NoteCreate(BaseModel):
+    """Body of POST /api/notes — author a new in-app note."""
+
+    title: str = Field(min_length=1, description="The note title (locked against re-extraction).")
+    body_markdown: str = Field(description="The note body, authored as Markdown.")
+
+
+class NoteUpdate(BaseModel):
+    """Body of PATCH /api/notes/{id}; only fields present in the body change."""
+
+    title: str | None = Field(default=None, min_length=1)
+    body_markdown: str | None = None
+
+
+class NoteVersionOut(BaseModel):
+    """One snapshot in a note's version history (newest-first in listings)."""
+
+    version_no: int
+    title: str | None
+    body: str
+    created_at: datetime
+
+
 class LoginRequest(BaseModel):
     """Body of POST /api/auth/login."""
 
