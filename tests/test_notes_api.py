@@ -73,6 +73,18 @@ def test_create_note_is_born_digital_markdown(
     assert markdown["pages"][0]["markdown"].strip() == "# Hello\n\nWorld."
 
 
+def test_create_materializes_reader_without_worker(api_client: TestClient) -> None:
+    """The born-digital body is readable immediately — no worker run required."""
+    note = create_note(api_client, "Instant", "# Title\n\nbody now.")
+    note_id = note["id"]
+    # No run_pipeline(): the markdown page + ocr_text must already be present.
+    detail = api_client.get(f"/api/documents/{note_id}").json()
+    assert detail["ocr_text"].strip() == "# Title\n\nbody now."
+    markdown = api_client.get(f"/api/documents/{note_id}/markdown").json()
+    assert markdown["page_count"] == 1
+    assert markdown["pages"][0]["markdown"].strip() == "# Title\n\nbody now."
+
+
 def test_identical_notes_both_succeed_distinct_sha(api_client: TestClient) -> None:
     """Two notes with an identical body coexist (salted sha bypasses dedup)."""
     first = create_note(api_client, "Dup A", "exactly the same body")
@@ -106,6 +118,20 @@ def test_patch_snapshots_old_and_updates_body(
     assert versions[0]["title"] == "T1"
     assert versions[0]["body"].strip() == "body one"
     assert versions[0]["created_at"]
+
+
+def test_patch_updates_reader_without_worker(api_client: TestClient, api_database_url: str) -> None:
+    """An edit rewrites the reader page synchronously, not via the async worker."""
+    note = create_note(api_client, "T1", "body one")
+    note_id = note["id"]
+    run_pipeline(api_database_url, note_id)
+
+    response = api_client.patch(f"/api/notes/{note_id}", json={"body_markdown": "body two"})
+    assert response.status_code == 200, response.text
+    # No second run_pipeline(): the page must already reflect the new body.
+    markdown = api_client.get(f"/api/documents/{note_id}/markdown").json()
+    assert markdown["page_count"] == 1
+    assert markdown["pages"][0]["markdown"].strip() == "body two"
 
 
 def test_empty_patch_is_a_noop_no_version(api_client: TestClient, api_database_url: str) -> None:

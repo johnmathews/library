@@ -24,14 +24,21 @@ from typing import Annotated
 from uuid import uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.api.documents import _detail
 from library.auth.deps import current_user
 from library.db import get_session
-from library.jobs import extract_document, markdown_document, process_document
-from library.models import Document, DocumentSource, IngestionEvent, NoteVersion, User
+from library.jobs import embed_document, extract_document, process_document
+from library.models import (
+    Document,
+    DocumentPage,
+    DocumentSource,
+    IngestionEvent,
+    NoteVersion,
+    User,
+)
 from library.schemas import DocumentDetail, NoteCreate, NoteUpdate, NoteVersionOut
 from library.storage import path_for
 
@@ -110,11 +117,34 @@ async def _snapshot_current(session: AsyncSession, document: Document) -> None:
     )
 
 
-def _apply_body(document: Document, body_markdown: str) -> None:
-    """Overwrite a note's stored body + ``ocr_text`` in place (sha stays fixed)."""
+async def _apply_body(session: AsyncSession, document: Document, body_markdown: str) -> None:
+    """Materialize a note's body in place: stored file, ``ocr_text``, and the
+    single born-digital ``DocumentPage`` the reader renders.
+
+    Born-digital text needs no OCR/vision call, so the displayable layer is
+    written **synchronously** here rather than waiting for the async pipeline —
+    the reader is correct the instant the request returns, even if the worker is
+    backed up or down. The deferred pipeline still re-runs extraction (metadata)
+    and embedding (search) idempotently. The sha stays fixed; the file is
+    overwritten atomically.
+    """
     body_bytes = body_markdown.encode("utf-8")
     _write_body(document.sha256, body_bytes)
     document.ocr_text = body_markdown
+    await session.execute(delete(DocumentPage).where(DocumentPage.document_id == document.id))
+    body = body_markdown.strip()
+    if body:
+        session.add(
+            DocumentPage(
+                document_id=document.id,
+                page_number=1,
+                markdown=body,
+                char_count=len(body),
+            )
+        )
+        document.page_count = 1
+    else:
+        document.page_count = None
 
 
 def _lock_title(document: Document, title: str) -> None:
@@ -127,13 +157,16 @@ def _lock_title(document: Document, title: str) -> None:
 
 
 async def _reprocess_note(document_id: int) -> None:
-    """Re-run the metadata + markdown (and, via markdown, embed) stages for an edit.
+    """Re-run metadata extraction and embedding after an in-place edit.
 
-    Deferred after the commit: Procrastinate uses its own connection, so a job
-    picked up before the edit is visible would read stale content.
+    The displayable body (``ocr_text`` + the ``DocumentPage``) is already
+    materialized synchronously by ``_apply_body``, so only the derived layers
+    need the worker: extraction (metadata) and embedding (search vectors).
+    Deferred after the commit — Procrastinate uses its own connection, so a job
+    picked up before the edit committed would read stale content.
     """
     await extract_document.defer_async(document_id=document_id)
-    await markdown_document.defer_async(document_id=document_id)
+    await embed_document.defer_async(document_id=document_id)
 
 
 @router.post(
@@ -155,7 +188,6 @@ async def create_note(
     """
     body_bytes = payload.body_markdown.encode("utf-8")
     sha256 = _salted_sha256(body_bytes)
-    _write_body(sha256, body_bytes)
 
     document = Document(
         sha256=sha256,
@@ -168,6 +200,10 @@ async def create_note(
     )
     session.add(document)
     await session.flush()
+    # Materialize the body synchronously (file + ocr_text + DocumentPage) so the
+    # reader is correct immediately; the deferred pipeline still adds metadata,
+    # markdown re-render, and embeddings.
+    await _apply_body(session, document, payload.body_markdown)
     session.add(
         IngestionEvent(
             document_id=document.id,
@@ -211,7 +247,7 @@ async def update_note(
     if provided.get("title") is not None:
         _lock_title(document, provided["title"])
     if provided.get("body_markdown") is not None:
-        _apply_body(document, provided["body_markdown"])
+        await _apply_body(session, document, provided["body_markdown"])
         body_changed = True
 
     session.add(
@@ -292,7 +328,7 @@ async def restore_note_version(
 
     await _snapshot_current(session, document)
     _lock_title(document, target.title or "")
-    _apply_body(document, target.body)
+    await _apply_body(session, document, target.body)
     session.add(
         IngestionEvent(
             document_id=document.id,

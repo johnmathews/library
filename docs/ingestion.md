@@ -989,17 +989,26 @@ name). Two consequences:
 
 ### In-place edit, version history, re-processing
 
-- **Create** (`POST /api/notes`): writes the body, inserts the document
+Because a note's body is born-digital, the **displayable layer is materialized
+synchronously** on create/edit/restore — the on-disk file, `ocr_text`, and the
+single `DocumentPage` (`page_count=1`) are written inside the request. The reader
+is therefore correct the instant the call returns, independent of when (or
+whether) the worker picks up the deferred job. The pipeline still runs
+asynchronously for the *derived* layers only: metadata extraction and embeddings.
+
+- **Create** (`POST /api/notes`): inserts the document
   (`status=received`, `extra.user_edited_fields=["title"]` so the title is locked
-  against re-extraction), records a `received` event, and defers
-  `process_document` — the same pipeline a new upload runs.
+  against re-extraction), materializes the body (file + `ocr_text` + page),
+  records a `received` event, and defers `process_document` — the same pipeline a
+  new upload runs (re-OCR/markdown are idempotent no-ops over the materialized
+  layer; it adds metadata + embeddings and advances to `indexed`).
 - **Edit** (`PATCH /api/notes/{id}`): snapshots the note's *previous*
   `(title, body)` into a new `note_versions` row, overwrites the title and/or
-  body (`ocr_text` and the on-disk file both updated in place), records a
-  `note_edited` event, and — when the body changed — re-defers
-  `extract_document` then `markdown_document` (which re-embeds). The current body
-  for snapshotting is the document's `ocr_text` (the authoritative born-digital
-  layer).
+  body in place (file + `ocr_text` + page rewritten synchronously), records a
+  `note_edited` event, and — when the body changed — re-defers `extract_document`
+  and `embed_document`. The current body for snapshotting is the document's
+  `ocr_text` (the authoritative born-digital layer). A no-op edit (empty body)
+  is a no-op: no snapshot, no event. 
 - **Version history** (`GET /api/notes/{id}/versions`): every prior snapshot,
   newest first.
 - **Restore** (`POST /api/notes/{id}/versions/{n}/restore`): snapshots the

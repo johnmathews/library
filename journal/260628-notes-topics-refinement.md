@@ -117,6 +117,23 @@ fixed before merge:
    destructive-by-design — there is no schema that can hold notes once `'note'`
    is invalid).
 
+A follow-up gap review (does the webapp reach the new endpoints? docs fresh?
+coverage?) confirmed the frontend↔backend wiring is correct (notes router mounted
+at `/api` with auth+CSRF; `api/notes.ts` paths and `apiFetch` CSRF handling match)
+and surfaced one more real issue, now fixed:
+
+4. **Note reader was stale until the async worker caught up.** Create/edit/restore
+   only deferred the markdown re-render to the worker, so the reader (which reads
+   the `DocumentPage` rows) showed stale/empty content until the job ran — and
+   indefinitely if the worker was down. Since a note's body is born-digital, the
+   displayable layer (`ocr_text` + the single `DocumentPage`) is now **materialized
+   synchronously** in the request; the worker handles only metadata extraction and
+   embeddings (`extract_document` + `embed_document`). This also removes an e2e
+   race that was masked by Playwright's retry. (The `notes.py` line-coverage figure
+   reads low in isolation only because Starlette's TestClient runs async handlers in
+   worker threads the default coverage tracer doesn't follow — every endpoint is
+   exercised and asserted by `test_notes_api.py`.)
+
 A doc-freshness audit subagent found and fixed four gaps: `topics` missing from
 `docs/mcp.md` return shapes; note authoring missing from the `README.md` channel
 list; an inaccurate "fifth ingestion channel" phrasing in `docs/ingestion.md`
