@@ -93,6 +93,6 @@ cd frontend && npm run lint && npm run type-check && npm run test:unit
 ## Documentation
 
 Project documentation lives in [`docs/`](docs/) — architecture,
-deployment, API, MCP, ingestion, frontend, jobs & notifications, paperless
-migration, and the OCR benchmark. The development journal (decisions,
-progress, context) lives in [`journal/`](journal/).
+deployment, API, MCP, ingestion, frontend, admin role & views, jobs &
+notifications, paperless migration, and the OCR benchmark. The development
+journal (decisions, progress, context) lives in [`journal/`](journal/).

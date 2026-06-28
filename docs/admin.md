@@ -42,7 +42,8 @@ Projects are a **global, shared** taxonomy, so changing them affects everyone.
 `POST`/`PATCH`/`DELETE /api/projects*` require admin; `GET /api/projects*`
 stays open to all authenticated users (they still filter and assign documents).
 Ordinary per-user or recoverable actions (document soft-delete, notes, uploads,
-settings, ask threads) remain open — see the gating matrix in the W6 plan.
+settings, ask threads) remain open to all authenticated users — only globally
+shared, destructive, or administrative operations are gated.
 
 ### 1.2.2 The admin API (`/api/admin/*`)
 

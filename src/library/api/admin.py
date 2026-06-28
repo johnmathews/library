@@ -58,6 +58,11 @@ _DEPLOYMENT_SERVICES: list[dict[str, str]] = [
 # Markdown docs surfaced read-only in the Architecture view (from settings.docs_dir).
 _ARCHITECTURE_DOCS: tuple[str, ...] = ("architecture.md", "ingestion.md")
 
+# Transaction-scoped advisory-lock key serialising admin-role mutations, so the
+# last-active-admin guard is race-safe: concurrent demote/deactivate requests
+# would each otherwise see one remaining admin (READ COMMITTED) and both commit.
+_ADMIN_MUTATION_LOCK_KEY: int = 0x4C49_4241  # "LIBA"
+
 
 class DbStats(BaseModel):
     """Aggregate counts over the library's content and job queue."""
@@ -248,9 +253,10 @@ async def architecture() -> ArchitectureOut:
     docs: list[ArchitectureDoc] = []
     for name in _ARCHITECTURE_DOCS:
         path = docs_dir / name
-        if not path.is_file():
-            continue
-        markdown = path.read_text(encoding="utf-8")
+        try:
+            markdown = path.read_text(encoding="utf-8")
+        except OSError:
+            continue  # missing/unreadable (e.g. a slim image) → skip, degrade gracefully
         docs.append(ArchitectureDoc(name=name, title=_doc_title(markdown, name), markdown=markdown))
     return ArchitectureOut(docs=docs)
 
@@ -343,6 +349,11 @@ async def update_user(
     active admins to zero. Deactivating a user also revokes their sessions and
     tokens (mirrors the `library user disable` CLI).
     """
+    # Serialise concurrent admin-role mutations so the last-admin count below is
+    # race-safe (released automatically at commit/rollback).
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": _ADMIN_MUTATION_LOCK_KEY}
+    )
     user = (
         await session.execute(select(User).where(User.id == user_id))
     ).scalar_one_or_none()

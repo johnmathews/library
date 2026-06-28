@@ -8,6 +8,23 @@ All notable changes to Library are documented here. The format follows
 
 ### Added
 
+**Admin role + admin views** — users now have a boolean **admin** role
+(`users.is_admin`, migration 0014). Admins reach a new **Admin** page (`/admin`)
+with four tabs backed by `/api/admin/*`: **System** (app version + git sha,
+redacted operational config, deployment topology, live DB stats), **Architecture**
+(the architecture/ingestion docs rendered read-only), **Coverage** (backend +
+frontend test coverage from a CI-baked summary), and **Users** (list, create, and
+promote/demote/deactivate, with a last-active-admin lockout guard). Promote a user
+from the host with `library user set-admin <name>` (or `library user add --admin`).
+The role is exposed on `GET /api/auth/me`. See [docs/admin.md](docs/admin.md).
+
+### Changed
+
+**Project mutations are now admin-only** — projects are a global, shared taxonomy,
+so `POST`/`PATCH`/`DELETE /api/projects` now require the admin role (`403`
+otherwise); `GET /api/projects*` stays open to all authenticated users. See
+[docs/api.md](docs/api.md) §1.15.
+
 **Jobs view + live job notifications** — a new **Jobs** page (`/jobs`) lists
 background/batch jobs split into Active and Recent, each enriched with its
 document's pipeline stage, status, extraction cost, and any error. A navbar
