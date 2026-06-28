@@ -77,9 +77,9 @@ ENV LIBRARY_GIT_SHA=$GIT_SHA
 COPY --chown=app:app pyproject.toml coverage-summar[y].json /app/
 
 # The markdown docs the admin Architecture view renders read-only at runtime
-# (Settings.docs_dir default `docs` → /app/docs). Absent → the view degrades
-# gracefully (empty list).
-COPY --chown=app:app docs/ /app/docs/
+# (Settings.docs_dir default `docs` → /app/docs). Top-level *.md only — the
+# heavy docs/ subtrees are kept out of the build context by .dockerignore.
+COPY --chown=app:app docs/*.md /app/docs/
 
 ENV PATH="/app/.venv/bin:$PATH"
 

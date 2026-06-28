@@ -15,7 +15,11 @@ frontend/node_modules
 frontend/dist
 frontend/test-results
 frontend/playwright-report
-docs
+# docs/ top-level *.md is baked into the image (the admin Architecture view
+# renders it); the heavy/irrelevant subtrees stay out of the build context.
+docs/superpowers
+docs/archive
+docs/benchmarks
 journal
 tests
 Makefile
