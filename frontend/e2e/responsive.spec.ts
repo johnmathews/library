@@ -100,7 +100,11 @@ test('wide desktops get the widened content container', async ({ page }, testInf
   await expectNoHorizontalOverflow(page, '/ @1920')
 
   // Above the 1400px app breakpoint the dashboard grid goes 4-up
-  // (library.spec.ts ran first in this project, so documents exist).
+  // (library.spec.ts ran first in this project, so documents exist). Wait for a
+  // card before measuring — otherwise the grid may not have rendered yet on a
+  // slow first attempt and gridColumnCount returns 0 (this was a CI flake the
+  // retry masked). Mirrors the sibling per-viewport test below.
+  await expect(page.locator('.app-doc-card').first()).toBeVisible()
   expect(await gridColumnCount(page)).toBe(4)
 })
 
