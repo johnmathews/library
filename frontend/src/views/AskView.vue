@@ -21,9 +21,9 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { AppButton, AppErrorSummary, AppTextarea } from '@/components/app'
+import { AppButton, AppErrorSummary, AppTextarea, PageHeader } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
-import { askQuestion, getThread, type AskCitation } from '@/api/ask'
+import { askQuestion, getThread, type AskCitation, type AskImage } from '@/api/ask'
 import { ApiError } from '@/api/client'
 import ConversationSidebar from '@/components/ask/ConversationSidebar.vue'
 
@@ -35,6 +35,21 @@ interface TurnVM {
   costUsd: number
 }
 
+// A picked-but-not-yet-sent image: the base64 payload plus a data URL for the
+// preview thumbnail and the original filename.
+interface PendingImage extends AskImage {
+  url: string
+  name: string
+}
+
+const MAX_IMAGES = 5
+const SUPPORTED_IMAGE_TYPES: AskImage['media_type'][] = [
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]
+
 const route = useRoute()
 const router = useRouter()
 
@@ -44,6 +59,39 @@ const errorMessage = ref<string | null>(null)
 const turns = ref<TurnVM[]>([])
 const threadId = ref<number | null>(null)
 const sidebarRef = ref<InstanceType<typeof ConversationSidebar> | null>(null)
+const pendingImages = ref<PendingImage[]>([])
+const imageInput = ref<HTMLInputElement | null>(null)
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+async function onImagesPicked(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  for (const file of Array.from(input.files ?? [])) {
+    if (pendingImages.value.length >= MAX_IMAGES) break
+    const mediaType = file.type as AskImage['media_type']
+    if (!SUPPORTED_IMAGE_TYPES.includes(mediaType)) continue
+    const dataUrl = await readAsDataUrl(file)
+    pendingImages.value.push({
+      media_type: mediaType,
+      data: dataUrl.slice(dataUrl.indexOf(',') + 1),
+      url: dataUrl,
+      name: file.name,
+    })
+  }
+  // Reset so the same file can be re-picked after removal.
+  input.value = ''
+}
+
+function removeImage(index: number): void {
+  pendingImages.value.splice(index, 1)
+}
 
 const errors = computed<ErrorSummaryItem[]>(() =>
   errorMessage.value ? [{ text: errorMessage.value }] : [],
@@ -76,8 +124,14 @@ async function onSubmit(): Promise<void> {
   errorMessage.value = null
   const controller = new AbortController()
   const wasNewThread = threadId.value === null
+  const images: AskImage[] = pendingImages.value.map((image) => ({
+    media_type: image.media_type,
+    data: image.data,
+  }))
   try {
-    const res = await askQuestion(trimmed, threadId.value ?? undefined, controller.signal)
+    const res = images.length
+      ? await askQuestion(trimmed, threadId.value ?? undefined, controller.signal, images)
+      : await askQuestion(trimmed, threadId.value ?? undefined, controller.signal)
     turns.value.push({
       query: trimmed,
       answerHtml: renderAnswer(res.answer),
@@ -87,6 +141,7 @@ async function onSubmit(): Promise<void> {
     })
     threadId.value = res.thread_id
     question.value = ''
+    pendingImages.value = []
     // If we started on /ask (no threadId param), update the URL so the
     // browser history and sidebar can track this conversation.
     if (!route.params.threadId) {
@@ -152,7 +207,7 @@ defineExpose({ resetConversation })
 </script>
 
 <template>
-  <div id="ask-page" class="max-w-6xl mx-auto flex gap-6 items-start">
+  <div id="ask-page" class="flex gap-6 items-start">
     <ConversationSidebar
       ref="sidebarRef"
       :active-thread-id="threadId"
@@ -160,106 +215,172 @@ defineExpose({ resetConversation })
       @new="resetConversation"
     />
 
+    <!-- Answer column fills the width; the composer follows the transcript at
+         the bottom (natural flow, not sticky — see the composer comment). -->
     <div class="flex-1 min-w-0">
-    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Ask</h1>
-    <p class="text-gray-500 dark:text-gray-400 mb-6">
-      Ask a question about your documents in plain language and get an answer with citations.
-    </p>
+      <PageHeader
+        title="Ask"
+        description="Ask a question about your documents in plain language and get an answer with citations."
+      />
 
-    <AppErrorSummary
-      v-if="errors.length"
-      :errors="errors"
-      data-testid="error-summary"
-      class="mb-6"
-    />
+      <AppErrorSummary
+        v-if="errors.length"
+        :errors="errors"
+        data-testid="error-summary"
+        class="mb-6"
+      />
 
-    <!-- Transcript of Q&A turns -->
-    <div v-if="turns.length" class="space-y-6 mb-6">
-      <section
-        v-for="(turn, i) in turns"
-        :key="i"
-        data-testid="ask-turn"
-        class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
-      >
-        <p class="text-sm font-medium text-gray-500 dark:text-gray-400 mb-3">
-          {{ turn.query }}
-        </p>
-
-        <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in renderAnswer -->
-        <div
-          class="ask-answer text-gray-800 dark:text-gray-100"
-          data-testid="ask-answer"
-          v-html="turn.answerHtml"
-        />
-
-        <div v-if="turn.citations.length" class="mt-5">
-          <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">Citations</h3>
-          <ul
-            class="divide-y divide-gray-200 dark:divide-gray-700/60 border border-gray-200 dark:border-gray-700/60 rounded-lg"
-            data-testid="ask-citations"
+      <!-- Transcript: wide rich-markdown answers, not chat bubbles. -->
+      <div>
+        <div v-if="turns.length" class="space-y-6 mb-6">
+          <section
+            v-for="(turn, i) in turns"
+            :key="i"
+            data-testid="ask-turn"
+            class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-6"
           >
-            <li v-for="citation in turn.citations" :key="citation.document_id">
-              <RouterLink
-                class="flex items-center justify-between gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
-                :to="{
-                  name: 'document-detail',
-                  params: { id: citation.document_id },
-                  query: citation.page_number ? { page: citation.page_number } : {},
-                }"
-                data-testid="ask-citation"
+            <h2 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-4">
+              {{ turn.query }}
+            </h2>
+
+            <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in renderAnswer -->
+            <div
+              class="ask-answer text-gray-800 dark:text-gray-100"
+              data-testid="ask-answer"
+              v-html="turn.answerHtml"
+            />
+
+            <div v-if="turn.citations.length" class="mt-5">
+              <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
+                Citations
+              </h3>
+              <ul
+                class="grid grid-cols-1 md:grid-cols-2 gap-2"
+                data-testid="ask-citations"
               >
-                <span
-                  class="min-w-0 truncate text-sm text-violet-600 dark:text-violet-400 underline"
-                >
-                  {{ citation.title ?? 'Untitled'
-                  }}<span v-if="citation.page_number">, p. {{ citation.page_number }}</span>
-                </span>
-                <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400"
-                  >#{{ citation.document_id }}</span
-                >
-              </RouterLink>
-            </li>
-          </ul>
+                <li v-for="citation in turn.citations" :key="citation.document_id">
+                  <RouterLink
+                    class="flex items-center justify-between gap-3 px-4 py-3 border border-gray-200 dark:border-gray-700/60 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
+                    :to="{
+                      name: 'document-detail',
+                      params: { id: citation.document_id },
+                      query: citation.page_number ? { page: citation.page_number } : {},
+                    }"
+                    data-testid="ask-citation"
+                  >
+                    <span
+                      class="min-w-0 truncate text-sm text-violet-600 dark:text-violet-400 underline"
+                    >
+                      {{ citation.title ?? 'Untitled'
+                      }}<span v-if="citation.page_number">, p. {{ citation.page_number }}</span>
+                    </span>
+                    <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400"
+                      >#{{ citation.document_id }}</span
+                    >
+                  </RouterLink>
+                </li>
+              </ul>
+            </div>
+
+            <p
+              v-if="turn.usedTools.length || turn.costUsd"
+              class="mt-4 text-xs text-gray-500 dark:text-gray-400"
+              data-testid="ask-meta"
+            >
+              <span v-if="turn.usedTools.length">Tools: {{ turn.usedTools.join(', ') }}</span>
+              <span v-if="turn.usedTools.length && turn.costUsd"> · </span>
+              <span v-if="turn.costUsd">Estimated cost: ${{ turn.costUsd.toFixed(4) }}</span>
+            </p>
+          </section>
         </div>
 
         <p
-          v-if="turn.usedTools.length || turn.costUsd"
-          class="mt-4 text-xs text-gray-500 dark:text-gray-400"
-          data-testid="ask-meta"
+          v-else
+          data-testid="ask-empty"
+          class="text-gray-500 dark:text-gray-400 mb-6"
         >
-          <span v-if="turn.usedTools.length">Tools: {{ turn.usedTools.join(', ') }}</span>
-          <span v-if="turn.usedTools.length && turn.costUsd"> · </span>
-          <span v-if="turn.costUsd">Estimated cost: ${{ turn.costUsd.toFixed(4) }}</span>
+          No questions yet. Ask one below — for example, “which invoices are due this month?”
         </p>
-      </section>
-    </div>
+      </div>
 
-    <!-- Follow-up input form -->
-    <form
-      id="ask-form"
-      novalidate
-      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
-      data-testid="ask-form"
-      @submit.prevent="onSubmit"
-    >
-      <AppTextarea
-        id="ask-question"
-        v-model="question"
-        :label="turns.length ? 'Follow-up question' : 'Your question'"
-        hint="For example: which invoices are due this month?"
-        :rows="4"
-        data-testid="ask-question"
-      />
-      <AppButton
-        id="ask-submit"
-        type="submit"
+      <!-- Multi-line composer at the bottom of the column. (Not position:sticky:
+           a sticky bottom bar overlaps transcript content on short viewports and
+           intercepts clicks on the last turn's citations — see
+           e2e/ask-page-citation.spec.ts.) -->
+      <form
+        id="ask-form"
+        novalidate
         class="mt-4"
-        data-testid="ask-submit"
-        :disabled="loading"
+        data-testid="ask-form"
+        @submit.prevent="onSubmit"
       >
-        {{ loading ? 'Asking…' : 'Ask' }}
-      </AppButton>
-    </form>
+        <div
+          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-4"
+        >
+          <AppTextarea
+            id="ask-question"
+            v-model="question"
+            :label="turns.length ? 'Follow-up question' : 'Your question'"
+            hint="For example: which invoices are due this month?"
+            :rows="3"
+            data-testid="ask-question"
+          />
+
+          <!-- Pending image attachments (W11): preview thumbnails + remove. -->
+          <ul
+            v-if="pendingImages.length"
+            data-testid="ask-image-previews"
+            class="mt-3 flex flex-wrap gap-2"
+          >
+            <li v-for="(image, i) in pendingImages" :key="i" class="relative">
+              <img
+                :src="image.url"
+                :alt="image.name"
+                data-testid="ask-image-preview"
+                class="h-16 w-16 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
+              />
+              <button
+                type="button"
+                data-testid="ask-image-remove"
+                :aria-label="`Remove ${image.name}`"
+                class="absolute -top-2 -right-2 h-5 w-5 flex items-center justify-center rounded-full bg-gray-700 text-white text-xs hover:bg-red-600"
+                @click="removeImage(i)"
+              >
+                ×
+              </button>
+            </li>
+          </ul>
+
+          <div class="mt-3 flex items-center justify-between gap-2">
+            <input
+              ref="imageInput"
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              class="hidden"
+              data-testid="ask-image-input"
+              @change="onImagesPicked"
+            />
+            <button
+              type="button"
+              data-testid="ask-image-attach"
+              class="btn-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+              :disabled="pendingImages.length >= MAX_IMAGES"
+              @click="imageInput?.click()"
+            >
+              Attach image
+            </button>
+            <AppButton
+              id="ask-submit"
+              type="submit"
+              data-testid="ask-submit"
+              :disabled="loading"
+            >
+              {{ loading ? 'Sending…' : 'Send' }}
+            </AppButton>
+          </div>
+        </div>
+      </form>
     </div>
   </div>
 </template>
@@ -316,5 +437,29 @@ defineExpose({ resetConversation })
 .ask-answer :deep(h3) {
   font-weight: 600;
   margin: 0.75rem 0 0.5rem;
+}
+/* Wide answers can include GFM tables; give them readable borders/spacing. */
+.ask-answer :deep(table) {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  font-size: 0.875rem;
+}
+.ask-answer :deep(th),
+.ask-answer :deep(td) {
+  border: 1px solid rgb(0 0 0 / 0.12);
+  padding: 0.4rem 0.6rem;
+  text-align: left;
+}
+.dark .ask-answer :deep(th),
+.dark .ask-answer :deep(td) {
+  border-color: rgb(255 255 255 / 0.14);
+}
+.ask-answer :deep(th) {
+  font-weight: 600;
+  background: rgb(0 0 0 / 0.04);
+}
+.dark .ask-answer :deep(th) {
+  background: rgb(255 255 255 / 0.06);
 }
 </style>

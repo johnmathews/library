@@ -105,6 +105,13 @@ class ReviewStatus(enum.StrEnum):
     UNREVIEWED = "unreviewed"
 
 
+class OverrideAction(enum.StrEnum):
+    """Direction of a manual series-membership override (see ``SeriesMembershipOverride``)."""
+
+    PIN = "pin"
+    EXCLUDE = "exclude"
+
+
 class Base(DeclarativeBase):
     """Declarative base with deterministic constraint names for Alembic."""
 
@@ -571,3 +578,72 @@ class SeriesInsight(Base):
             postgresql_nulls_not_distinct=True,
         ),
     )
+
+
+class SeriesMembershipOverride(Base):
+    """A durable manual edit to a recurring series' computed membership.
+
+    Series are computed on the fly as ``(sender_id, kind_id, currency)`` groups
+    (see ``library.series``). A user can nudge that computation: ``pin`` a
+    document the grouping missed, or ``exclude`` one it wrongly included. The
+    override is keyed by series identity + ``document_id`` and applied on every
+    future ``summarize_series`` call, mirroring the ``document.extra["corrections"]``
+    precedent for extraction edits — but as a first-class table so all overrides
+    for a series can be queried (the LLM matcher in W9 reads them as hints).
+
+    A pinned document whose own currency differs from the series is
+    FX-converted (see ``library.fx``) into the series currency. One override per
+    ``(series, document)``: the unique key treats NULL currency as one bucket.
+    """
+
+    __tablename__ = "series_membership_overrides"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sender_id: Mapped[int] = mapped_column(ForeignKey("senders.id", ondelete="CASCADE"), index=True)
+    kind_id: Mapped[int] = mapped_column(ForeignKey("kinds.id", ondelete="CASCADE"), index=True)
+    currency: Mapped[str | None] = mapped_column(CHAR(3))
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    action: Mapped[OverrideAction] = mapped_column(
+        Enum(
+            OverrideAction,
+            name="series_override_action",
+            native_enum=False,
+            length=16,
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint(
+            "sender_id",
+            "kind_id",
+            "currency",
+            "document_id",
+            name="series_membership_overrides_series_document",
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+
+class FxRate(Base):
+    """A reference foreign-exchange rate, base = USD.
+
+    ``rate_to_base`` is the value of one unit of ``currency`` in USD on ``as_of``
+    (so USD itself is 1.0 by definition and is handled in code, not stored).
+    Conversion picks the row with the greatest ``as_of`` on-or-before the
+    document's date (falling back to the earliest), giving date-aware historical
+    conversion (see ``library.fx``). Seeded with a researched yearly snapshot by
+    migration 0015; rows can be added later to refine accuracy.
+    """
+
+    __tablename__ = "fx_rates"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    currency: Mapped[str] = mapped_column(CHAR(3), index=True)
+    as_of: Mapped[date] = mapped_column(Date)
+    rate_to_base: Mapped[Decimal] = mapped_column(Numeric(18, 8))
+
+    __table_args__ = (UniqueConstraint("currency", "as_of", name="fx_rates_currency_as_of"),)

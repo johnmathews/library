@@ -6,14 +6,16 @@ import SeriesChartTile from './SeriesChartTile.vue'
 const props = defineProps<{ documentId: number }>()
 const series = ref<DocumentSeries | null>(null)
 
-onMounted(async () => {
+async function load(): Promise<void> {
   try {
     const data = await fetchDocumentSeries(props.documentId)
     series.value = data.status === 'ok' ? data : null
   } catch {
     series.value = null
   }
-})
+}
+
+onMounted(load)
 </script>
 
 <template>
@@ -22,5 +24,7 @@ onMounted(async () => {
     class="mt-4"
     :series="series"
     :highlight-document-id="props.documentId"
+    editable
+    @changed="load"
   />
 </template>

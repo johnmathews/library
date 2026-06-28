@@ -38,4 +38,18 @@ describe('ConversationSidebar', () => {
     expect(listThreads).toHaveBeenCalledTimes(2)
     expect(w.emitted('new')).toBeTruthy()
   })
+
+  it('filters threads by the search query (W10)', async () => {
+    vi.mocked(listThreads).mockResolvedValue([
+      { id: 1, title: 'Energy bills', created_at: '', updated_at: '', turn_count: 3, total_cost_usd: 0 },
+      { id: 2, title: 'Tax documents', created_at: '', updated_at: '', turn_count: 1, total_cost_usd: 0 },
+    ])
+    const w = mount(ConversationSidebar, { props: { activeThreadId: null } })
+    await flushPromises()
+    expect(w.findAll('[data-testid="thread-item"]')).toHaveLength(2)
+    await w.find('[data-testid="thread-search"]').setValue('tax')
+    expect(w.findAll('[data-testid="thread-item"]')).toHaveLength(1)
+    expect(w.text()).toContain('Tax documents')
+    expect(w.text()).not.toContain('Energy bills')
+  })
 })

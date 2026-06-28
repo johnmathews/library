@@ -236,3 +236,57 @@ def test_ask_logs_table_is_gone(migrated_database_url: str) -> None:
         "SELECT tablename FROM pg_tables WHERE tablename = 'ask_logs'",
     )
     assert rows == []
+
+
+def test_series_membership_overrides_table_exists(migrated_database_url: str) -> None:
+    """0015 adds the series_membership_overrides table with a NULLS-NOT-DISTINCT unique."""
+    cols = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_name = 'series_membership_overrides'
+        ORDER BY column_name
+        """,
+    )
+    names = {name for name, _ in cols}
+    assert {
+        "id",
+        "sender_id",
+        "kind_id",
+        "currency",
+        "document_id",
+        "action",
+        "created_at",
+    } <= names
+    unique = fetch_all(
+        migrated_database_url,
+        """
+        SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE rel.relname = 'series_membership_overrides' AND con.contype = 'u'
+        """,
+    )
+    assert ("series_membership_overrides_series_document",) in unique
+
+
+def test_fx_rates_table_seeded(migrated_database_url: str) -> None:
+    """0015 adds fx_rates and seeds a researched historical snapshot."""
+    cols = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_name = 'fx_rates'
+        ORDER BY column_name
+        """,
+    )
+    names = {name for name, _ in cols}
+    assert {"id", "currency", "as_of", "rate_to_base"} <= names
+    count = fetch_all(migrated_database_url, "SELECT count(*) FROM fx_rates")[0][0]
+    assert count > 0
+    currencies = {
+        row[0] for row in fetch_all(migrated_database_url, "SELECT DISTINCT currency FROM fx_rates")
+    }
+    assert {"EUR", "GBP"} <= currencies

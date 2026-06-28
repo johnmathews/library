@@ -143,7 +143,12 @@ persistence (`ask_threads` — one conversation per owner; `ask_turns` — one
 Q&A turn per thread, storing cost/provenance and the serialized Anthropic
 message blocks used to replay prior tool results into follow-up questions),
 cached per-series prose descriptions (`series_insights`, one row per
-`(sender_id, kind_id, currency)` — see [ask.md §1.7](ask.md)), and
+`(sender_id, kind_id, currency)` — see [ask.md §1.7](ask.md)), durable manual
+series-membership overrides (`series_membership_overrides`, migration 0015 —
+`pin`/`exclude` keyed by `(sender_id, kind_id, currency, document_id)`, applied
+on every series computation; see [api.md §1.15](api.md)) with a small reference
+FX snapshot (`fx_rates`, USD base, date-aware) used to convert cross-currency
+pins, and
 auth tables (`users`, `sessions`, `api_tokens`). Originals on disk are
 immutable; everything else (including embeddings and page markdown) is a
 re-derivable artifact.
@@ -153,7 +158,7 @@ re-derivable artifact.
 - **REST API** (`/api`) — versioned, cookie- or bearer-authenticated,
   OpenAPI-documented. The full product surface: search, CRUD, downloads,
   ingestion, in-app **note authoring** (`/api/notes` — create / edit-in-place /
-  version history / restore, see [api.md §1.16](api.md)), job status, and
+  version history / restore, see [api.md §1.17](api.md)), job status, and
   natural-language **Ask** (`POST /api/ask`, see [ask.md](ask.md)).
 - **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens.
   Tools for searching, reading, and ingesting documents from LLM clients.
@@ -214,4 +219,4 @@ gate global project mutations and an admin-only views surface
 | Extraction quality (validation, review queue, eval harness) | — | **done** — see [ingestion.md](ingestion.md) "Extraction quality" and [api.md](api.md) §1.3/1.4/1.8.3 |
 | Markdown layer (vision per-page rendering, page-aware embed, page citations in Ask) | — | **done** — see [ingestion.md](ingestion.md) "Markdown layer" and [ask.md](ask.md) |
 | Conversational Ask (multi-turn threads, history replay, prompt caching, chat UI) | — | **done** — see [ask.md](ask.md) §1.6 and [api.md](api.md) §1.11–1.12 |
-| Notes authoring + topics refinement (in-app notes w/ version history, `topics` read-only + in FTS, `library backfill`) | — | **done** — see [api.md §1.16](api.md), [ingestion.md](ingestion.md) "Notes" + "Backfill (stale prompt version)", and [frontend.md](frontend.md) |
+| Notes authoring + topics refinement (in-app notes w/ version history, `topics` read-only + in FTS, `library backfill`) | — | **done** — see [api.md §1.17](api.md), [ingestion.md](ingestion.md) "Notes" + "Backfill (stale prompt version)", and [frontend.md](frontend.md) |

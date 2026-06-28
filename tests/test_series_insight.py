@@ -11,12 +11,23 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from library.config import Settings
-from library.models import Document, DocumentSource, Kind, Sender, SeriesInsight
+from library.models import (
+    Document,
+    DocumentSource,
+    Kind,
+    OverrideAction,
+    Sender,
+    SeriesInsight,
+    SeriesMembershipOverride,
+)
 from library.search import DocumentFilters
-from library.series import serialise_summary, summarize_series
+from library.series import SeriesSummary, serialise_summary, summarize_series
 from library.series_insight import (
+    MAX_OVERRIDE_EXAMPLES,
+    OverrideExample,
     build_series_prompt,
     generate_description,
+    load_override_examples,
     refresh_series_insight,
 )
 
@@ -123,6 +134,29 @@ def _settings() -> Settings:
     return Settings(series_min_documents=3, series_typical_pct=0.10, series_flat_pct=0.05)
 
 
+def _FakeSummary() -> SeriesSummary:
+    """A minimal ``status:"ok"`` summary for pure prompt-construction tests."""
+    return SeriesSummary(
+        status="ok",
+        sender="Vattenfall",
+        kind="utility-bill",
+        sender_id=1,
+        kind_id=2,
+        currency="EUR",
+        other_currencies=[],
+        cadence="monthly",
+        count=3,
+        distribution=None,
+        reference=None,
+        trend=None,
+        year_over_year=None,
+        document_ids=[1, 2, 3],
+        points=[],
+        titles={},
+        description=None,
+    )
+
+
 async def _seed_three(session: AsyncSession, sender_name: str = "Vattenfall") -> Sender:
     sender = await _sender(session, sender_name)
     await _seed(
@@ -171,6 +205,91 @@ async def test_build_series_prompt_includes_stats_and_timeline(session: AsyncSes
     assert "utility-bill" in prompt
     assert "EUR" in prompt
     assert "2025-01-03=100.00" in prompt  # timeline carries dated amounts
+
+
+def test_build_series_prompt_renders_override_hints() -> None:
+    """Pure prompt construction: pinned/excluded examples become labelled hints."""
+    overrides = [
+        OverrideExample(action=OverrideAction.PIN, document_id=12, title="Stray March bill"),
+        OverrideExample(action=OverrideAction.EXCLUDE, document_id=27, title="One-off deposit"),
+    ]
+    prompt = build_series_prompt(_FakeSummary(), overrides=overrides)
+    assert "manually" in prompt.lower()
+    assert "Stray March bill" in prompt
+    assert "#12" in prompt
+    assert "One-off deposit" in prompt
+    assert "#27" in prompt
+
+
+def test_build_series_prompt_has_no_override_block_when_empty() -> None:
+    prompt = build_series_prompt(_FakeSummary())
+    assert "manually" not in prompt.lower()
+
+
+async def test_load_override_examples_caps_per_direction(session: AsyncSession) -> None:
+    sender = await _seed_three(session)
+    kind_id = (
+        (await session.execute(select(Kind).where(Kind.slug == "utility-bill"))).scalar_one().id
+    )
+    # More pins than the cap allows.
+    for n in range(MAX_OVERRIDE_EXAMPLES + 3):
+        doc_id = await _seed(
+            session,
+            f"pin-{n}",
+            sender=sender,
+            kind_slug="utility-bill",
+            document_date=date(2025, 6, 1),
+            amount="90.00",
+            title=f"Pinned {n}",
+        )
+        session.add(
+            SeriesMembershipOverride(
+                sender_id=sender.id,
+                kind_id=kind_id,
+                currency="EUR",
+                document_id=doc_id,
+                action=OverrideAction.PIN,
+            )
+        )
+    await session.commit()
+    examples = await load_override_examples(session, sender.id, kind_id, "EUR")
+    assert len(examples) == MAX_OVERRIDE_EXAMPLES
+    assert all(e.action == OverrideAction.PIN for e in examples)
+
+
+async def test_load_override_examples_reflected_in_prompt(session: AsyncSession) -> None:
+    sender = await _seed_three(session)
+    kind_id = (
+        (await session.execute(select(Kind).where(Kind.slug == "utility-bill"))).scalar_one().id
+    )
+    pinned = await _seed(
+        session,
+        "outsider",
+        sender=sender,
+        kind_slug="invoice",
+        document_date=date(2025, 4, 1),
+        amount="200.00",
+        title="Misfiled bill",
+    )
+    session.add(
+        SeriesMembershipOverride(
+            sender_id=sender.id,
+            kind_id=kind_id,
+            currency="EUR",
+            document_id=pinned,
+            action=OverrideAction.PIN,
+        )
+    )
+    await session.commit()
+    summary = await summarize_series(
+        session,
+        filters=DocumentFilters(kind_slug="utility-bill", sender_contains="vattenfall"),
+        settings=_settings(),
+        reference="latest",
+    )
+    examples = await load_override_examples(session, sender.id, kind_id, summary.currency)
+    prompt = build_series_prompt(summary, overrides=examples)
+    assert "Misfiled bill" in prompt
 
 
 async def test_generate_description_returns_text_and_tokens(session: AsyncSession) -> None:

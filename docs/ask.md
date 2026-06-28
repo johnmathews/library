@@ -87,6 +87,13 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybri
    fragment); citations from documents without a markdown layer show only the
    title.
 
+**Image attachments (W11).** `ask_model` (`claude-sonnet-4-6`) is multimodal, so
+a question may carry up to 5 base64 images (see [api.md §1.11](api.md)). They are
+rendered as image content blocks on the question turn alongside the text, and the
+system prompt tells the model to read them as evidence and combine them with tool
+results. Attachments persist in `ask_turns.messages`, so they replay as history on
+follow-ups. The composer offers an **Attach image** control with preview + remove.
+
 ## 1.3 Configuration
 
 All settings use the `LIBRARY_` env prefix (see `.env.example` /
@@ -254,6 +261,13 @@ rather than generated per request:
   (`settings.extraction_model`, the cheap Haiku tier) to write the prose, then
   upserts the row. It is best-effort: a disabled feature, a missing API key, or
   an insufficient series all skip quietly.
+- **Membership hints (W9).** If the owner has manually pinned/excluded documents
+  for this series (see [api.md §1.15](api.md)), up to
+  `MAX_OVERRIDE_EXAMPLES` examples per direction are appended to the prompt as a
+  labelled, authoritative "curated membership" block, and the system prompt is
+  told to weight them — so the description reflects the corrected series. The
+  cap bounds prompt size and cost; tests assert prompt construction only (no
+  live LLM call).
 - **Trigger.** The `library.jobs.generate_series_insight` Procrastinate task is
   deferred whenever a document reaches `indexed` with both a sender and a kind,
   so the description refreshes as the series grows.

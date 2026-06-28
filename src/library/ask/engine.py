@@ -48,6 +48,10 @@ Use the tools to find evidence, then answer:
 - compare_to_series: compare a recurring bill to its usual values / last year /
   trend (e.g. "is this electricity bill higher than usual?").
 
+The user may attach one or more images (a photo or scan of a document) with the
+question. Read them directly as evidence, and combine what they show with tool
+results when answering.
+
 Rules:
 - Answer ONLY from tool results. Never invent facts.
 - If the tools return nothing relevant, say plainly that the archive does not
@@ -340,11 +344,14 @@ async def run_ask(
     settings: Settings,
     client: AsyncAnthropic,
     history_messages: list[dict[str, Any]] | None = None,
+    images: list[dict[str, str]] | None = None,
 ) -> AskResult:
     """Answer ``question`` from the archive via a bounded Claude tool-use loop.
 
     ``history_messages`` is a rehydrated prefix of prior turns (already in block
     form); it is prepended so follow-ups can reason over earlier tool results.
+    ``images`` are ``{"media_type", "data"}`` (base64) attachments rendered as
+    image content blocks on the question turn for the multimodal model.
     """
     model = settings.ask_model
     result = AskResult(answer="", citations=[], used_tools=[], model=model)
@@ -353,7 +360,19 @@ async def run_ask(
     used: list[str] = []
 
     history = list(history_messages or [])
-    question_msg: dict[str, Any] = {"role": "user", "content": [{"type": "text", "text": question}]}
+    question_content: list[dict[str, Any]] = [{"type": "text", "text": question}]
+    for image in images or []:
+        question_content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image["media_type"],
+                    "data": image["data"],
+                },
+            }
+        )
+    question_msg: dict[str, Any] = {"role": "user", "content": question_content}
     messages: list[dict[str, Any]] = [*history, question_msg]
     new_messages: list[dict[str, Any]] = [question_msg]
     _apply_cache_control(messages, len(history))
@@ -419,6 +438,14 @@ async def run_ask(
         new_messages.append(tool_msg)
     else:
         logger.info("ask hit the tool-turn limit without a final answer")
+        # The loop exhausted mid-tool-dance, so new_messages ends on a
+        # tool_result (role "user"). Persisting that as the turn's history would
+        # put two consecutive "user" turns when the next question is appended on
+        # a follow-up — which the Anthropic API rejects (400). Close the turn
+        # with the fallback answer as an assistant message so the stored history
+        # alternates correctly and the tool_use/tool_result pair stays intact.
+        answer = answer or "I couldn't find an answer to that in the archive."
+        new_messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
 
     result.answer = answer or "I couldn't find an answer to that in the archive."
     # Prefer the documents Claude actually cited inline (#id); fall back to the

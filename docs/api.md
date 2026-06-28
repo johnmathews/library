@@ -46,6 +46,8 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/notes/{id}/versions` | A note's version history (newest first) |
 | POST   | `/api/notes/{id}/versions/{version_no}/restore` | Restore a note to a previous version |
 | GET    | `/api/charts` | Every eligible recurring `(sender, kind)` series, summarised |
+| POST   | `/api/series/{sender_id}/{kind_id}/members` | Pin a document into a series (or clear an exclude) |
+| DELETE | `/api/series/{sender_id}/{kind_id}/members/{document_id}` | Exclude a document from a series (or clear a pin) |
 | GET    | `/api/kinds` | Document kinds with counts |
 | GET    | `/api/senders` | Senders with counts |
 | GET    | `/api/tags` | Tags with counts |
@@ -608,12 +610,20 @@ and conversational threading — is in [ask.md](ask.md); this is the wire contra
 ```json
 {
   "question": "<1..1000 chars>",
-  "thread_id": 42
+  "thread_id": 42,
+  "images": [{ "media_type": "image/png", "data": "<base64, no data: prefix>" }]
 }
 ```
 
 `thread_id` is optional. Omit it to start a new conversation; supply it to
 continue an existing one. Auth + CSRF apply (it is a `POST`).
+
+`images` is optional (W11): up to **5** base64 attachments for the multimodal
+model (`ask_model` = `claude-sonnet-4-6`). Each has a `media_type` of
+`image/png`, `image/jpeg`, `image/gif`, or `image/webp` and base64 `data` with
+no `data:` prefix. They become image content blocks on the question turn (and
+persist in `ask_turns.messages` for replay). `422` if more than 5 images or an
+unsupported `media_type`.
 
 **Response `200`:**
 
@@ -823,7 +833,55 @@ There is no per-document reference point here, so `reference`/`year_over_year`
 are anchored on the latest member. Use `sender_id`-`kind_id`-`currency` as a
 stable key.
 
-## 1.15 Projects — `/api/projects`
+## 1.15 Series membership overrides — `/api/series/{sender_id}/{kind_id}/members`
+
+Series are computed on the fly (no membership table). These two endpoints let a
+user **manually correct** that computation and have the correction persist:
+`pin` a document the grouping missed, or `exclude` one it wrongly grouped in.
+Overrides are stored in `series_membership_overrides`, keyed by the series
+identity `(sender_id, kind_id, currency)` plus `document_id`, and applied on
+every future `summarize_series` call (so both `GET /api/documents/{id}/series`
+and `GET /api/charts` reflect them). They mirror the per-document extraction
+`corrections` precedent, but as a first-class table so the LLM series matcher
+can read accumulated examples as hints.
+
+A `(series, document)` pair is in one of three states; both endpoints are
+idempotent toggles between them:
+
+- `pinned` — a `pin` override exists (force-include).
+- `excluded` — an `exclude` override exists (force-remove).
+- `cleared` — no override; the document follows the natural grouping.
+
+| Method | Path | Effect |
+|--------|------|--------|
+| POST   | `/api/series/{sender_id}/{kind_id}/members` | Add: clear an existing `exclude`, else `pin`. Body `{"document_id": int}` |
+| DELETE | `/api/series/{sender_id}/{kind_id}/members/{document_id}` | Remove: clear an existing `pin`, else `exclude` |
+
+Both accept an optional `?currency=` query parameter (the series currency
+bucket from the chart tile / document; omit it for the `NULL` bucket). Both
+return the resulting state:
+
+```json
+{"state": "pinned", "sender_id": 7, "kind_id": 2, "currency": "EUR", "document_id": 88}
+```
+
+**Cross-currency pins → FX conversion.** A pinned document whose own currency
+differs from the series is converted into the series currency using the seeded
+`fx_rates` reference table (base = USD), **date-aware**: the rate is the one
+with the greatest `as_of` on-or-before the document's date (falling back to the
+earliest). The seed is a researched *approximate* yearly snapshot (2015–2026)
+for the common currencies (EUR, GBP, CHF, JPY, CAD, AUD, SEK, NOK, DKK); add
+rows to refine it. A pinned document with no amount, or in a currency absent
+from `fx_rates`, stays out of the computed stats (it cannot contribute a
+meaningful point) and the omission is logged.
+
+**Notes & errors.** Excluding enough members can drop a series below
+`LIBRARY_SERIES_MIN_DOCUMENTS`, after which it reports `status:"insufficient"` —
+this is intended. With no overrides, output is byte-for-byte what it was before
+(additive, backward-compatible). `404` when the sender, kind, or document does
+not exist; `401` when unauthenticated.
+
+## 1.16 Projects — `/api/projects`
 
 First-class **collections**: a many-to-many grouping of documents
 (`projects` + `document_projects` tables, migration 0011), mirroring the
@@ -866,7 +924,7 @@ returns an array of them):
 `document_count` is the number of non-deleted documents in the project.
 Auth + CSRF apply exactly as elsewhere (§1.9).
 
-## 1.16 Notes — `/api/notes`
+## 1.17 Notes — `/api/notes`
 
 In-app **note authoring**: compose a Markdown note directly in Library and it
 becomes a first-class document (`source = "note"`, `mime_type =
@@ -898,7 +956,7 @@ tags, and kind. Each create/edit/restore also appends an ingestion event
 {"title": "Mortgage call notes", "body_markdown": "# Call with broker\n\n- rate 3.9% …"}
 ```
 
-## 1.17 Admin — `/api/admin`
+## 1.18 Admin — `/api/admin`
 
 Admin-only context and user management. Every endpoint requires the **admin**
 role (`require_admin`): anonymous → `401`, non-admin → `403`. Full design notes

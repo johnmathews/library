@@ -2,8 +2,9 @@
 /**
  * Charts dashboard (route `/charts`): one tile per recurring (sender, kind)
  * series with enough documents to summarise. Each tile shows the trend chart,
- * the cached LLM description, and citation links to the documents that make up
- * the series. Read-only — the data comes straight from GET /api/charts.
+ * the cached LLM description, and the editable list of documents that make up
+ * the series (add/remove persists as an override; see W8). The data comes from
+ * GET /api/charts; a membership change refetches the whole grid.
  */
 import { onMounted, ref } from 'vue'
 import { fetchCharts, type DocumentSeries } from '@/api/documents'
@@ -63,7 +64,13 @@ onMounted(load)
       data-testid="charts-grid"
       class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6"
     >
-      <SeriesChartTile v-for="s in series" :key="seriesKey(s)" :series="s" />
+      <SeriesChartTile
+        v-for="s in series"
+        :key="seriesKey(s)"
+        :series="s"
+        editable
+        @changed="load"
+      />
     </div>
   </div>
 </template>

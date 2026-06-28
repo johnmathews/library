@@ -213,14 +213,72 @@ describe('AskView', () => {
 
     const button = w.find('[data-testid="ask-submit"]')
     expect(button.attributes('disabled')).toBeDefined()
-    expect(button.text()).toContain('Asking')
+    expect(button.text()).toContain('Sending')
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
 
     resolve(sampleResponse({ thread_id: 1 }))
     await flushPromises()
 
     expect(w.find('[data-testid="ask-submit"]').attributes('disabled')).toBeUndefined()
-    expect(w.find('[data-testid="ask-submit"]').text()).toBe('Ask')
+    expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
+  })
+
+  it('uses the shared PageHeader and imposes no max-width cap (W10)', () => {
+    const w = mountView()
+    expect(w.find('[data-testid="page-header"]').exists()).toBe(true)
+    expect(w.find('#ask-page').classes()).not.toContain('max-w-6xl')
+  })
+
+  it('renders a bottom composer with a Send button (W10)', () => {
+    const w = mountView()
+    // Not position:sticky — a sticky bottom bar overlaps the last turn's
+    // citations on short viewports and intercepts their clicks.
+    const form = w.find('[data-testid="ask-form"]')
+    expect(form.exists()).toBe(true)
+    expect(form.classes()).not.toContain('sticky')
+    expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
+  })
+
+  it('shows an empty-state prompt before any question (W10)', () => {
+    const w = mountView()
+    expect(w.find('[data-testid="ask-empty"]').exists()).toBe(true)
+  })
+
+  async function attachImage(w: VueWrapper, name = 'receipt.png'): Promise<void> {
+    const file = new File(['hello'], name, { type: 'image/png' })
+    const input = w.find('[data-testid="ask-image-input"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    // FileReader.onload fires as a macrotask in jsdom — poll until the preview lands.
+    for (let i = 0; i < 5 && !w.find('[data-testid="ask-image-preview"]').exists(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await flushPromises()
+    }
+  }
+
+  it('previews an attached image and sends it with the question (W11)', async () => {
+    askQuestionMock.mockResolvedValue(sampleResponse({ thread_id: 1 }))
+    const w = mountView()
+    await attachImage(w)
+    expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(true)
+
+    await w.find('#ask-question').setValue('what is this?')
+    await w.find('[data-testid="ask-form"]').trigger('submit')
+    await flushPromises()
+
+    const call = askQuestionMock.mock.calls[0]!
+    // askQuestion(question, threadId, signal, images)
+    expect(call[3]).toEqual([{ media_type: 'image/png', data: 'aGVsbG8=' }])
+    // Cleared after a successful send.
+    expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(false)
+  })
+
+  it('removes a pending image before sending (W11)', async () => {
+    const w = mountView()
+    await attachImage(w)
+    expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(true)
+    await w.find('[data-testid="ask-image-remove"]').trigger('click')
+    expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(false)
   })
 })

@@ -426,6 +426,48 @@ export function fetchDocumentSeries(id: number, signal?: AbortSignal): Promise<D
   return apiFetch<DocumentSeries>(`/api/documents/${id}/series`, { signal })
 }
 
+/** Result of a series-membership toggle (POST/DELETE …/members). */
+export interface SeriesMemberResult {
+  state: 'pinned' | 'excluded' | 'cleared'
+  sender_id: number
+  kind_id: number
+  currency: string | null
+  document_id: number
+}
+
+/**
+ * POST /api/series/{senderId}/{kindId}/members — add a document to a series
+ * (clears an existing exclude, else pins). `currency` is the series bucket.
+ */
+export function addSeriesMember(
+  senderId: number,
+  kindId: number,
+  documentId: number,
+  currency?: string | null,
+): Promise<SeriesMemberResult> {
+  return apiFetch<SeriesMemberResult>(`/api/series/${senderId}/${kindId}/members`, {
+    method: 'POST',
+    body: { document_id: documentId },
+    query: { currency: currency ?? undefined },
+  })
+}
+
+/**
+ * DELETE /api/series/{senderId}/{kindId}/members/{documentId} — remove a
+ * document from a series (clears an existing pin, else excludes).
+ */
+export function removeSeriesMember(
+  senderId: number,
+  kindId: number,
+  documentId: number,
+  currency?: string | null,
+): Promise<SeriesMemberResult> {
+  return apiFetch<SeriesMemberResult>(
+    `/api/series/${senderId}/${kindId}/members/${documentId}`,
+    { method: 'DELETE', query: { currency: currency ?? undefined } },
+  )
+}
+
 /** Body of GET /api/charts — every eligible series, summarised for charting. */
 export interface ChartsResponse {
   series: DocumentSeries[]

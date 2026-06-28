@@ -1,11 +1,20 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { listThreads, deleteThread, type ThreadSummary } from '@/api/ask'
 
 const props = defineProps<{ activeThreadId: number | null }>()
 const emit = defineEmits<{ select: [number]; new: [] }>()
 
 const threads = ref<ThreadSummary[]>([])
+const query = ref('')
+
+// Client-side title filter over the loaded threads (the list is small; no need
+// for a server round-trip per keystroke).
+const filteredThreads = computed<ThreadSummary[]>(() => {
+  const q = query.value.trim().toLowerCase()
+  if (!q) return threads.value
+  return threads.value.filter((t) => (t.title ?? '').toLowerCase().includes(q))
+})
 
 async function refresh(): Promise<void> {
   threads.value = await listThreads()
@@ -30,7 +39,10 @@ defineExpose({ refresh })
 </script>
 
 <template>
-  <aside class="w-64 shrink-0 flex flex-col gap-2">
+  <aside
+    class="w-64 shrink-0 flex flex-col gap-2 sticky top-4 self-start max-h-[calc(100vh-2rem)]"
+    data-testid="conversation-sidebar"
+  >
     <button
       data-testid="new-conversation"
       type="button"
@@ -40,11 +52,28 @@ defineExpose({ refresh })
       New conversation
     </button>
 
+    <input
+      v-model="query"
+      type="search"
+      data-testid="thread-search"
+      placeholder="Search conversations…"
+      class="form-input w-full text-sm"
+      aria-label="Search conversations"
+    />
+
+    <p
+      v-if="threads.length && !filteredThreads.length"
+      data-testid="thread-search-empty"
+      class="px-1 text-xs text-gray-500 dark:text-gray-400"
+    >
+      No conversations match “{{ query }}”.
+    </p>
+
     <ul
-      class="divide-y divide-gray-200 dark:divide-gray-700/60 border border-gray-200 dark:border-gray-700/60 rounded-lg overflow-hidden"
+      class="divide-y divide-gray-200 dark:divide-gray-700/60 border border-gray-200 dark:border-gray-700/60 rounded-lg overflow-y-auto"
     >
       <li
-        v-for="thread in threads"
+        v-for="thread in filteredThreads"
         :key="thread.id"
         data-testid="thread-item"
         class="flex items-center justify-between gap-2 px-4 py-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"

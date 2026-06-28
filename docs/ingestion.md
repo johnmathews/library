@@ -970,7 +970,7 @@ from an upload in two ways: they are **edited in place** with a version history,
 and they **bypass content dedup**.
 
 The wire contract (POST / PATCH / versions / restore) is in
-[api.md §1.16](api.md); this section covers the storage and processing
+[api.md §1.17](api.md); this section covers the storage and processing
 mechanics.
 
 ### Dedup bypass via a salted sha
