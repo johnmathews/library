@@ -172,9 +172,12 @@ Document processing runs in the **worker**, but the UI lives in the **api**
 process. They are bridged by Postgres `LISTEN/NOTIFY`: as a document moves
 through the pipeline, `library.jobs.notify_document_event` emits a `NOTIFY` on
 the `library_doc_events` channel (best-effort — a notify failure never strands a
-document). The api process exposes a Server-Sent Events endpoint
-(`GET /api/events`, `library.api.events`) that holds a dedicated `LISTEN`
-connection and relays each notification to connected browsers.
+document). The api process runs a single process-wide events broker
+(`library.events_broker`) that holds *one* `LISTEN` connection and fans each
+notification out in-process to every connected client; the Server-Sent Events
+endpoint (`GET /api/events`, `library.api.events`) just drains a per-client
+queue. SSE Postgres usage is therefore capped at one connection per process
+regardless of how many browser tabs are streaming.
 
 On the frontend, a Pinia `jobs` store opens one `EventSource`, tracks in-flight
 documents (driving the navbar running-jobs indicator and the live `/jobs` view),

@@ -357,9 +357,13 @@ Jobs view polls for them while "Show system tasks" is on.)
 
 - **Transport.** The worker emits a Postgres `NOTIFY` on the `library_doc_events`
   channel each time a document changes pipeline stage (`status_changed`) or fails
-  (`failed`); this endpoint holds a dedicated `LISTEN` connection and relays each
-  notification. The worker→api hop crosses processes via Postgres itself, so both
-  must point at the same database (they do in the standard compose deployment).
+  (`failed`). The api process runs a single process-wide events broker
+  (`library.events_broker`) that holds *one* `LISTEN` connection for its whole
+  lifetime and fans each notification out in-process to every connected client;
+  this endpoint just drains a per-client queue. SSE Postgres usage is therefore
+  capped at one connection per process, not one per open tab. The worker→api hop
+  crosses processes via Postgres itself, so both must point at the same database
+  (they do in the standard compose deployment).
 - **Auth.** Same session cookie as the rest of `/api` (§1.9). A GET is CSRF-safe,
   so a browser `EventSource` — which cannot send headers — authenticates with the
   cookie alone. Unauthenticated requests get `401` before the stream opens.
@@ -370,9 +374,10 @@ Jobs view polls for them while "Show system tasks" is on.)
     `embed`→`indexed`, plus `failed` on a terminal error.
   - keep-alive comments every ~15 s so idle connections and proxies don't time
     out. The response sets `X-Accel-Buffering: no` to disable proxy buffering.
-- **Lifecycle.** The browser's `EventSource` reconnects automatically; the
-  server tears the `LISTEN` connection down when the client disconnects. Events
-  are not replayed on reconnect — fetch `GET /api/jobs` for the current snapshot.
+- **Lifecycle.** The browser's `EventSource` reconnects automatically; on
+  disconnect the server drops only that client's in-process queue — the shared
+  `LISTEN` connection lives on for the other clients. Events are not replayed on
+  reconnect — fetch `GET /api/jobs` for the current snapshot.
 
 ## 1.9 Authentication
 
