@@ -153,22 +153,49 @@ async function onSubmit(): Promise<void> {
       usedTools: res.used_tools,
       costUsd: res.cost_usd,
     })
-    threadId.value = res.thread_id
     question.value = ''
     pendingImages.value = []
-    // If we started on /ask (no threadId param), update the URL so the
-    // browser history and sidebar can track this conversation.
-    if (!route.params.threadId) {
-      await router.replace({ name: 'ask-thread', params: { threadId: res.thread_id } })
-    }
-    // Refresh the sidebar when a new thread was just created.
-    if (wasNewThread) {
-      sidebarRef.value?.refresh()
-    }
+    // The answer has rendered successfully. Everything below is a post-success
+    // side effect (track the thread in state, sync the URL, refresh the
+    // sidebar). A failure here — e.g. a malformed response missing thread_id,
+    // or a Vue Router navigation rejection — must NEVER be surfaced as an error
+    // on a valid answer, so it lives outside onSubmit's answer-error catch.
+    void syncThread(res.thread_id, wasNewThread)
   } catch (error: unknown) {
     errorMessage.value = friendlyError(error)
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * Post-success side effects after a turn has rendered: record the thread id,
+ * sync the URL to /ask/:threadId, and refresh the sidebar for a new thread.
+ *
+ * This is deliberately fire-and-forget and self-contained: it must never throw
+ * back into onSubmit, because by the time it runs the answer is already on
+ * screen. A missing/non-numeric thread_id (malformed response) is skipped, and
+ * a router rejection (e.g. a redundant navigation) is logged rather than shown
+ * as a spurious "Something went wrong" error on a successful ask.
+ */
+async function syncThread(newThreadId: unknown, wasNewThread: boolean): Promise<void> {
+  if (typeof newThreadId !== 'number' || !Number.isFinite(newThreadId)) {
+    console.warn('Ask response omitted a valid thread_id; skipping URL sync', newThreadId)
+    return
+  }
+  threadId.value = newThreadId
+  // If we started on /ask (no threadId param), update the URL so the
+  // browser history and sidebar can track this conversation.
+  if (!route.params.threadId) {
+    try {
+      await router.replace({ name: 'ask-thread', params: { threadId: newThreadId } })
+    } catch (navError: unknown) {
+      console.error('Failed to sync the Ask thread URL', navError)
+    }
+  }
+  // Refresh the sidebar when a new thread was just created.
+  if (wasNewThread) {
+    sidebarRef.value?.refresh()
   }
 }
 
