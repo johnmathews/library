@@ -22,7 +22,7 @@ describe('SettingsView', () => {
 
   it('renders the page heading', () => {
     const auth = useAuthStore()
-    auth.user = { id: 1, username: 'a', display_name: 'A', preferences: { dashboard_fields: ['kind'] } }
+    auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
     fetchMock.mockResolvedValue(jsonResponse({ dashboard_fields: ['kind'] }))
     const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
     expect(wrapper.find('h1').text()).toBe('Settings')
@@ -30,7 +30,7 @@ describe('SettingsView', () => {
 
   it('saves the selected fields and shows a confirmation', async () => {
     const auth = useAuthStore()
-    auth.user = { id: 1, username: 'a', display_name: 'A', preferences: { dashboard_fields: ['kind'] } }
+    auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
     fetchMock.mockResolvedValue(jsonResponse({ dashboard_fields: ['kind', 'tags'] }))
 
     const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
@@ -51,7 +51,7 @@ describe('SettingsView', () => {
 
   it('shows an error and leaves prefs unchanged on save failure', async () => {
     const auth = useAuthStore()
-    auth.user = { id: 1, username: 'a', display_name: 'A', preferences: { dashboard_fields: ['kind'] } }
+    auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
     fetchMock.mockResolvedValue(jsonResponse({ detail: 'boom' }, 500))
 
     const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
@@ -68,6 +68,7 @@ describe('SettingsView', () => {
       id: 1,
       username: 'a',
       display_name: 'A',
+      is_admin: false,
       preferences: { dashboard_fields: ['kind'], background_tone: 'neutral' },
     }
     fetchMock.mockResolvedValue(
@@ -96,6 +97,7 @@ describe('SettingsView', () => {
       id: 1,
       username: 'a',
       display_name: 'A',
+      is_admin: false,
       preferences: { dashboard_fields: ['kind'], background_tone: 'neutral', tile_preview: 'full_width' },
     }
     fetchMock.mockResolvedValue(
@@ -122,6 +124,7 @@ describe('SettingsView', () => {
       id: 1,
       username: 'a',
       display_name: 'A',
+      is_admin: false,
       preferences: { dashboard_fields: ['kind'], background_tone: 'neutral' },
     }
     fetchMock.mockResolvedValue(jsonResponse({ detail: 'boom' }, 500))
@@ -152,6 +155,7 @@ describe('SettingsView', () => {
         id: 1,
         username: 'a',
         display_name: 'A',
+        is_admin: false,
         preferences: { dashboard_fields: ['kind'], notifications: { ...emptyNotifications } },
       }
       fetchMock.mockResolvedValue(
@@ -200,6 +204,7 @@ describe('SettingsView', () => {
         id: 1,
         username: 'a',
         display_name: 'A',
+        is_admin: false,
         preferences: { dashboard_fields: ['kind'], notifications: { ...emptyNotifications } },
       }
       fetchMock.mockResolvedValue(
@@ -223,6 +228,7 @@ describe('SettingsView', () => {
         id: 1,
         username: 'a',
         display_name: 'A',
+        is_admin: false,
         preferences: {
           dashboard_fields: ['kind'],
           notifications: {

@@ -18,6 +18,7 @@ function makeRouter(): Router {
     routes: [
       { path: '/', name: 'documents', component: Stub },
       { path: '/login', name: 'login', component: Stub, meta: { public: true } },
+      { path: '/admin', name: 'admin', component: Stub, meta: { adminOnly: true } },
     ],
   })
   router.beforeEach(authGuard)
@@ -69,5 +70,27 @@ describe('authGuard', () => {
     await router.push('/login')
 
     expect(router.currentRoute.value.name).toBe('login')
+  })
+
+  it('redirects non-admins away from an admin-only route', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ id: 1, username: 'anna', display_name: 'Anna', is_admin: false, preferences: { dashboard_fields: [] } }),
+    )
+    const router = makeRouter()
+
+    await router.push('/admin')
+
+    expect(router.currentRoute.value.name).toBe('documents')
+  })
+
+  it('lets admins reach an admin-only route', async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ id: 2, username: 'root', display_name: 'Root', is_admin: true, preferences: { dashboard_fields: [] } }),
+    )
+    const router = makeRouter()
+
+    await router.push('/admin')
+
+    expect(router.currentRoute.value.name).toBe('admin')
   })
 })

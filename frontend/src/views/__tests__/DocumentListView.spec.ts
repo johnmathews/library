@@ -50,6 +50,7 @@ function seedPrefs(fields: DashboardField[]): void {
     id: 1,
     username: 'a',
     display_name: 'A',
+    is_admin: false,
     preferences: { dashboard_fields: fields },
   }
 }

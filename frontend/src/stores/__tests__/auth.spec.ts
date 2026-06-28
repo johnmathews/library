@@ -6,6 +6,7 @@ const me: User = {
   id: 1,
   username: 'anna',
   display_name: 'Anna',
+  is_admin: false,
   preferences: { dashboard_fields: [] },
 }
 
@@ -99,6 +100,7 @@ describe('useAuthStore', () => {
       id: 1,
       username: 'anna',
       display_name: 'Anna',
+      is_admin: false,
       preferences: { dashboard_fields: ['kind', 'tags'] },
     }
     fetchMock.mockResolvedValue(jsonResponse(meWithFields))
@@ -107,6 +109,27 @@ describe('useAuthStore', () => {
     await store.ensureLoaded()
 
     expect(store.dashboardFields).toEqual(['kind', 'tags'])
+  })
+
+  it('isAdmin is false when no user is loaded', () => {
+    const store = useAuthStore()
+    expect(store.isAdmin).toBe(false)
+  })
+
+  it('isAdmin reflects the loaded user flag', async () => {
+    const admin: User = {
+      id: 2,
+      username: 'root',
+      display_name: 'Root',
+      is_admin: true,
+      preferences: { dashboard_fields: [] },
+    }
+    fetchMock.mockResolvedValue(jsonResponse(admin))
+    const store = useAuthStore()
+
+    await store.ensureLoaded()
+
+    expect(store.isAdmin).toBe(true)
   })
 
   it('applyPreferences updates the field set', async () => {
