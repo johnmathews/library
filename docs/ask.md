@@ -254,6 +254,13 @@ rather than generated per request:
   (`settings.extraction_model`, the cheap Haiku tier) to write the prose, then
   upserts the row. It is best-effort: a disabled feature, a missing API key, or
   an insufficient series all skip quietly.
+- **Membership hints (W9).** If the owner has manually pinned/excluded documents
+  for this series (see [api.md §1.15](api.md)), up to
+  `MAX_OVERRIDE_EXAMPLES` examples per direction are appended to the prompt as a
+  labelled, authoritative "curated membership" block, and the system prompt is
+  told to weight them — so the description reflects the corrected series. The
+  cap bounds prompt size and cost; tests assert prompt construction only (no
+  live LLM call).
 - **Trigger.** The `library.jobs.generate_series_insight` Procrastinate task is
   deferred whenever a document reaches `indexed` with both a sender and a kind,
   so the description refreshes as the series grows.
