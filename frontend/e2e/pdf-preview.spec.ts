@@ -79,9 +79,18 @@ async function uploadAndOpenDetailPage(page: Page, marker: string): Promise<numb
     expect(doc.status).toBe('indexed')
   }).toPass({ timeout: 150_000, intervals: [2_000] })
 
-  // Navigate to the detail page.
-  await page.goto(`/documents/${id}`)
-  await expect(page.getByText('Status', { exact: true })).toBeVisible()
+  // Navigate to the detail page and wait for it to finish loading. "Status"
+  // (the always-present System group label) renders as soon as the document
+  // ref is populated, so it is the page-loaded gate. This is a COLD full-page
+  // navigation — fresh document load, JS bundle eval, Vue mount, then a
+  // getDocument round-trip — categorically slower than the in-app assertions
+  // the 15s global expect timeout targets. On desktop Firefox (the slowest
+  // matrix engine) this cold boot occasionally crept past 15s and flaked the
+  // job, so give this one navigation gate a generous, explicit budget. Start
+  // the wait as early as possible (domcontentloaded) so the budget covers the
+  // app boot rather than being eaten by Firefox's slower full `load` event.
+  await page.goto(`/documents/${id}`, { waitUntil: 'domcontentloaded' })
+  await expect(page.getByText('Status', { exact: true })).toBeVisible({ timeout: 30_000 })
 
   return id
 }
