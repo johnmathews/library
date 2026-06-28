@@ -110,6 +110,29 @@ describe('UploadView', () => {
     expect(w.find('h1').text()).toBe('Upload documents')
   })
 
+  it('does not cap the view root width', () => {
+    const w = mountView()
+    const root = w.find('#upload-page')
+    expect(root.exists()).toBe(true)
+    expect(root.classes()).not.toContain('max-w-2xl')
+    expect(root.classes().some((c) => c.startsWith('max-w-'))).toBe(false)
+  })
+
+  it('renders a PageHeader with the Upload action inside it', () => {
+    const w = mountView()
+    const header = w.find('[data-testid="page-header"]')
+    expect(header.exists()).toBe(true)
+    expect(header.find('[data-testid="upload-action"]').exists()).toBe(true)
+  })
+
+  it('fires the upload handler when the header Upload button is clicked', async () => {
+    const w = mountView()
+    await selectFiles(w, [makeFile()])
+    await w.find('[data-testid="page-header"] [data-testid="upload-action"]').trigger('click')
+    await flushPromises()
+    expect(FakeXHR.instances).toHaveLength(1)
+  })
+
   it('exposes a multi-file input accepting images, PDFs and text/markdown without capture', () => {
     const w = mountView()
     const input = w.find('input[type="file"]')

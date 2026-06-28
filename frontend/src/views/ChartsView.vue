@@ -61,7 +61,7 @@ onMounted(load)
     <div
       v-else
       data-testid="charts-grid"
-      class="grid grid-cols-1 lg:grid-cols-2 gap-6"
+      class="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6"
     >
       <SeriesChartTile v-for="s in series" :key="seriesKey(s)" :series="s" />
     </div>

@@ -28,6 +28,43 @@ describe('SettingsView', () => {
     expect(wrapper.find('h1').text()).toBe('Settings')
   })
 
+  it('uses the shared PageHeader for the title', () => {
+    const auth = useAuthStore()
+    auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
+    fetchMock.mockResolvedValue(jsonResponse({ dashboard_fields: ['kind'] }))
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+    const header = wrapper.find('[data-testid="page-header"]')
+    expect(header.exists()).toBe(true)
+    expect(header.find('h1').text()).toBe('Settings')
+  })
+
+  it('does not cap the page width on the view root', () => {
+    const auth = useAuthStore()
+    auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
+    fetchMock.mockResolvedValue(jsonResponse({ dashboard_fields: ['kind'] }))
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+    const root = wrapper.find('#settings-page')
+    expect(root.exists()).toBe(true)
+    const rootClasses = root.classes()
+    expect(rootClasses.some((cls) => cls.startsWith('max-w-'))).toBe(false)
+  })
+
+  it('switches between tabs', async () => {
+    const auth = useAuthStore()
+    auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
+    fetchMock.mockResolvedValue(jsonResponse({ dashboard_fields: ['kind'] }))
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+
+    expect(wrapper.find('[data-testid="tab-dashboard-btn"]').attributes('aria-selected')).toBe('true')
+
+    await wrapper.find('[data-testid="tab-appearance-btn"]').trigger('click')
+    expect(wrapper.find('[data-testid="tab-appearance-btn"]').attributes('aria-selected')).toBe('true')
+    expect(wrapper.find('[data-testid="tab-dashboard-btn"]').attributes('aria-selected')).toBe('false')
+
+    await wrapper.find('[data-testid="tab-notifications-btn"]').trigger('click')
+    expect(wrapper.find('[data-testid="tab-notifications-btn"]').attributes('aria-selected')).toBe('true')
+  })
+
   it('saves the selected fields and shows a confirmation', async () => {
     const auth = useAuthStore()
     auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }

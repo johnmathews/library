@@ -12,8 +12,11 @@
  *     wider than 1100px without overflow, and that the dashboard grid
  *     reaches its 4-column wide layout;
  *   - the dashboard document grid (app-doc-grid, docs/frontend.md §1.2.6)
- *     renders the expected column count per viewport: 1 at 375px,
- *     2 on iPad portrait (656px, tablet band) and 3 on the 1280px desktop.
+ *     renders the expected DEFAULT (Auto) column count per viewport: 1 at
+ *     375px, 2 on iPad portrait (656px, tablet band) and 3 on the 1280px
+ *     desktop — and, on chromium, that the per-machine "tiles per row"
+ *     preference (localStorage `library:doc-grid-cols`, W6) overrides the
+ *     desktop count when set.
  *
  * Same contract as library.spec.ts: requires the real stack and the `e2e`
  * user; skips itself entirely when E2E_BASE_URL is unset.
@@ -127,6 +130,22 @@ test('the dashboard grid has the expected column count per viewport', async ({
   await expect(page.locator('.app-doc-card').first()).toBeVisible()
   expect(await gridColumnCount(page)).toBe(expected)
   await expectNoHorizontalOverflow(page, `/ grid (${testInfo.project.name})`)
+})
+
+test('the tiles-per-row preference overrides the desktop column count', async ({
+  page,
+}, testInfo) => {
+  test.skip(testInfo.project.name !== 'chromium', 'tiles-per-row override is checked once, on the desktop project')
+
+  // Seed the per-machine preference before the app boots, then sign in.
+  await page.goto('/login')
+  await page.addInitScript(() => localStorage.setItem('library:doc-grid-cols', '5'))
+  await signIn(page) // lands on / (documents)
+
+  await expect(page.locator('.app-doc-card').first()).toBeVisible()
+  // 1280px desktop would default to 3; the stored preference forces 5.
+  expect(await gridColumnCount(page)).toBe(5)
+  await expectNoHorizontalOverflow(page, '/ grid (cols=5)')
 })
 
 /** Left edge x of #sidebar; negative when it is translated offscreen. */
