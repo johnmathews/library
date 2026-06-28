@@ -10,8 +10,9 @@
 import { computed, ref } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { useStorage } from '@vueuse/core'
 import { useRouter } from 'vue-router'
-import { AppButton, AppErrorSummary, AppInput, AppTextarea } from '@/components/app'
+import { AppButton, AppErrorSummary, AppInput, AppTextarea, PageHeader } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
 import { createNote } from '@/api/notes'
 import { ApiError } from '@/api/client'
@@ -22,6 +23,23 @@ const title = ref('')
 const body = ref('')
 const saving = ref(false)
 const submitError = ref<string | null>(null)
+
+/**
+ * Editor view mode. Split (editor + preview side-by-side) is the default and the
+ * best use of width on large screens; Edit / Preview are single-pane focus modes
+ * that also serve narrow screens. Persisted per-machine — a display-size
+ * preference (docs/frontend-view-principles.md §4).
+ */
+type EditorMode = 'edit' | 'split' | 'preview'
+const editorMode = useStorage<EditorMode>('library:note-editor-mode', 'split')
+const showEditor = computed(() => editorMode.value !== 'preview')
+const showPreview = computed(() => editorMode.value !== 'edit')
+
+const modes: { value: EditorMode; label: string; wideOnly: boolean }[] = [
+  { value: 'edit', label: 'Edit', wideOnly: false },
+  { value: 'split', label: 'Split', wideOnly: true },
+  { value: 'preview', label: 'Preview', wideOnly: false },
+]
 
 /** Sanitised HTML for the live preview — identical pipeline to the reader. */
 const previewHtml = computed(() =>
@@ -56,11 +74,40 @@ async function onSubmit(): Promise<void> {
 </script>
 
 <template>
-  <div id="new-note-page" class="max-w-4xl">
-    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">New note</h1>
-    <p class="text-gray-500 dark:text-gray-400 mb-6">
-      Write a markdown note. It becomes a document in your library, with full version history.
-    </p>
+  <div id="new-note-page">
+    <PageHeader
+      title="New note"
+      description="Write a markdown note. It becomes a document in your library, with full version history."
+    >
+      <template #actions>
+        <div
+          class="inline-flex rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 p-0.5"
+          role="group"
+          aria-label="Editor view"
+        >
+          <button
+            v-for="m in modes"
+            :key="m.value"
+            type="button"
+            :data-testid="`mode-${m.value}`"
+            :aria-pressed="editorMode === m.value"
+            class="px-3 py-1 text-sm font-medium rounded-md transition"
+            :class="[
+              editorMode === m.value
+                ? 'bg-violet-500 text-white'
+                : 'text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100',
+              m.wideOnly ? 'hidden lg:inline-flex' : 'inline-flex',
+            ]"
+            @click="editorMode = m.value"
+          >
+            {{ m.label }}
+          </button>
+        </div>
+        <AppButton id="note-save" type="button" :disabled="!canSave" @click="onSubmit">
+          {{ saving ? 'Saving…' : 'Save note' }}
+        </AppButton>
+      </template>
+    </PageHeader>
 
     <AppErrorSummary v-if="errorItems.length" :errors="errorItems" data-testid="error-summary" class="mb-6" />
 
@@ -72,15 +119,20 @@ async function onSubmit(): Promise<void> {
     >
       <div class="space-y-4">
         <AppInput id="note-title" v-model="title" label="Title" />
-        <div class="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <AppTextarea
-            id="note-body"
-            v-model="body"
-            label="Body (markdown)"
-            hint="Markdown is supported. The preview updates as you type."
-            :rows="16"
-          />
-          <div>
+        <div
+          class="grid grid-cols-1 gap-4"
+          :class="{ 'lg:grid-cols-2': editorMode === 'split' }"
+        >
+          <div v-if="showEditor" data-testid="note-editor-pane">
+            <AppTextarea
+              id="note-body"
+              v-model="body"
+              label="Body (markdown)"
+              hint="Markdown is supported. The preview updates as you type."
+              :rows="16"
+            />
+          </div>
+          <div v-if="showPreview" data-testid="note-preview-pane">
             <span class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Preview</span>
             <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in previewHtml -->
             <div
@@ -92,9 +144,6 @@ async function onSubmit(): Promise<void> {
           </div>
         </div>
       </div>
-      <AppButton id="note-save" type="submit" class="mt-4" :disabled="!canSave" @click="onSubmit">
-        {{ saving ? 'Saving…' : 'Save note' }}
-      </AppButton>
     </form>
   </div>
 </template>

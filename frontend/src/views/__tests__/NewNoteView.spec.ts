@@ -19,6 +19,7 @@ describe('NewNoteView', () => {
 
   beforeEach(() => {
     createNoteMock.mockReset()
+    localStorage.clear()
     router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -87,6 +88,36 @@ describe('NewNoteView', () => {
       body_markdown: 'Note body',
     })
     expect(push).toHaveBeenCalledWith({ name: 'document-detail', params: { id: 99 } })
+  })
+
+  it('defaults to split mode with both editor and preview panes present', async () => {
+    const w = await mountView()
+    expect(w.find('[data-testid="note-editor-pane"]').exists()).toBe(true)
+    expect(w.find('[data-testid="note-preview-pane"]').exists()).toBe(true)
+  })
+
+  it('shows only the editor in edit mode and only the preview in preview mode', async () => {
+    const w = await mountView()
+
+    await w.get('[data-testid="mode-edit"]').trigger('click')
+    expect(w.find('[data-testid="note-editor-pane"]').exists()).toBe(true)
+    expect(w.find('[data-testid="note-preview-pane"]').exists()).toBe(false)
+
+    await w.get('[data-testid="mode-preview"]').trigger('click')
+    expect(w.find('[data-testid="note-editor-pane"]').exists()).toBe(false)
+    expect(w.find('[data-testid="note-preview-pane"]').exists()).toBe(true)
+  })
+
+  it('persists the chosen editor mode to localStorage', async () => {
+    const w = await mountView()
+    await w.get('[data-testid="mode-preview"]').trigger('click')
+    expect(localStorage.getItem('library:note-editor-mode')).toContain('preview')
+  })
+
+  it('renders the Save action in the page header (reachable without scrolling)', async () => {
+    const w = await mountView()
+    const header = w.get('[data-testid="page-header"]')
+    expect(header.find('#note-save').exists()).toBe(true)
   })
 
   it('surfaces an API error and does not navigate', async () => {
