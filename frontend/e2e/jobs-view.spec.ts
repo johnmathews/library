@@ -33,7 +33,19 @@ async function signIn(page: Page): Promise<void> {
 test('upload surfaces the navbar indicator, a toast, and a /jobs row', async ({
   page,
 }, testInfo) => {
+  // The /api/events SSE stream is live-only — it LISTENs on a Postgres channel
+  // and never replays missed NOTIFYs (src/library/api/events.py). So the page
+  // must be connected BEFORE we trigger work, or it misses the brief in-flight
+  // window and the navbar indicator (v-if activeCount > 0) never appears. That
+  // is a race webkit loses for a fast-processing .txt (its EventSource handshake
+  // lands after the document is already indexed). Arm the wait before sign-in
+  // (the shell opens the stream on mount) and block on it before uploading.
+  const sseConnected = page.waitForResponse(
+    (r) => r.url().includes('/api/events') && r.status() === 200,
+    { timeout: 30_000 },
+  )
   await signIn(page)
+  await sseConnected
 
   // Upload via the API from the authenticated browser context so the page's
   // live SSE stream observes the new document being processed.
