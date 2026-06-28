@@ -1,18 +1,11 @@
 <script setup lang="ts">
 import { computed } from 'vue'
 import { RouterLink } from 'vue-router'
-import { Line } from 'vue-chartjs'
-import {
-  Chart as ChartJS,
-  CategoryScale,
-  LinearScale,
-  PointElement,
-  LineElement,
-  Tooltip,
-} from 'chart.js'
+import { Bar } from 'vue-chartjs'
+import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip } from 'chart.js'
 import type { DocumentSeries } from '@/api/documents'
 
-ChartJS.register(CategoryScale, LinearScale, PointElement, LineElement, Tooltip)
+ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip)
 
 const props = defineProps<{
   series: DocumentSeries
@@ -48,14 +41,16 @@ const trendText = computed<string>(() =>
 const chartData = computed(() => {
   const pts = points.value
   const active = activeIdx.value
+  // Bars, not a line: these are discrete recurring events (one document per
+  // bar), not a continuous signal. The active bar is highlighted red.
   return {
     labels: pts.map((p) => p.date),
     datasets: [
       {
         data: pts.map((p) => Number(p.amount)),
-        borderColor: '#2563eb',
-        pointBackgroundColor: pts.map((_, i) => (i === active ? '#dc2626' : '#2563eb')),
-        tension: 0.2,
+        backgroundColor: pts.map((_, i) => (i === active ? '#dc2626' : '#2563eb')),
+        borderRadius: 4,
+        maxBarThickness: 48,
       },
     ],
   }
@@ -104,7 +99,7 @@ function pointLabel(point: { title?: string | null; date: string }): string {
     </p>
 
     <div class="mt-3 h-40">
-      <Line :data="chartData" :options="chartOptions" />
+      <Bar :data="chartData" :options="chartOptions" />
     </div>
 
     <div v-if="points.length" class="mt-4">

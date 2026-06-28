@@ -3,8 +3,8 @@ import { mount } from '@vue/test-utils'
 
 const lineDataCapture = { data: null as unknown }
 vi.mock('vue-chartjs', () => ({
-  Line: {
-    name: 'Line',
+  Bar: {
+    name: 'Bar',
     props: ['data', 'options'],
     template: '<canvas data-testid="chart"/>',
     mounted() {
@@ -95,23 +95,23 @@ describe('SeriesChartTile', () => {
     expect(links[2]!.text()).toContain('2025-03-04')
   })
 
-  it('highlights the point matching highlightDocumentId, not the last point', () => {
+  it('highlights the bar matching highlightDocumentId, not the last bar', () => {
     mountTile(okSeries, 2)
     const captured = lineDataCapture.data as {
-      datasets: { pointBackgroundColor: string[] }[]
+      datasets: { backgroundColor: string[] }[]
     }
-    const colors = captured.datasets[0]!.pointBackgroundColor
+    const colors = captured.datasets[0]!.backgroundColor
     expect(colors[0]).toBe('#2563eb')
-    expect(colors[1]).toBe('#dc2626') // documentId=2 -> middle point highlighted
+    expect(colors[1]).toBe('#dc2626') // documentId=2 -> middle bar highlighted
     expect(colors[2]).toBe('#2563eb')
   })
 
-  it('highlights the last point when no highlightDocumentId is given', () => {
+  it('highlights the last bar when no highlightDocumentId is given', () => {
     mountTile(okSeries)
     const captured = lineDataCapture.data as {
-      datasets: { pointBackgroundColor: string[] }[]
+      datasets: { backgroundColor: string[] }[]
     }
-    const colors = captured.datasets[0]!.pointBackgroundColor
+    const colors = captured.datasets[0]!.backgroundColor
     expect(colors[2]).toBe('#dc2626')
   })
 })
