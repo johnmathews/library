@@ -1,4 +1,4 @@
-# W5 OCR benchmark — real document corpus (2026-06-10)
+# W5 OCR benchmark — real document corpus
 
 Benchmark of the W4 OCR pipeline over 16 of the user's real documents,
 and the routing/gate changes it forced. All sample identifiers are

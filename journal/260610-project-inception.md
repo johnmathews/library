@@ -1,4 +1,4 @@
-# 1. 2026-06-10 — Project inception
+# Project inception
 
 ## 1.1 What happened
 

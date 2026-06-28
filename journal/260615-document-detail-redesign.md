@@ -1,4 +1,4 @@
-# 2026-06-15 — Document detail view redesign
+# Document detail view redesign
 
 Reworked `/documents/:id` (`DocumentDetailView.vue`) to make the page feel more
 designed and to put the most important metadata front and centre. Also squared

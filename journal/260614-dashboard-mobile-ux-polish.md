@@ -1,4 +1,4 @@
-# 260614 — Dashboard & mobile UX polish
+# Dashboard & mobile UX polish
 
 A run of incremental UI fixes layered on top of the per-user tile-preview
 feature (see `260614-tile-preview-mode.md`), driven by testing on an actual

@@ -1,4 +1,4 @@
-# 1. Migrating from paperless-ngx
+# Migrating from paperless-ngx
 
 **Status:** active. **Last updated:** 2026-06-11.
 

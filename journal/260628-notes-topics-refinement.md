@@ -1,4 +1,4 @@
-# 1. Notes authoring + topics refinement
+# Notes authoring + topics refinement
 
 **Date:** 2026-06-28
 **Branch:** `feat/notes-topics-refinement` (plain feature branch, merged to `main`)

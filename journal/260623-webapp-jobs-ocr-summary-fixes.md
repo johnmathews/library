@@ -1,4 +1,4 @@
-# 1. Webapp fixes: jobs columns, OCR-confidence label, panel removal, English metadata
+# Webapp fixes: jobs columns, OCR-confidence label, panel removal, English metadata
 
 **Date:** 2026-06-23
 **Branch:** `fix/webapp-jobs-ocr-summary`

@@ -1,4 +1,4 @@
-# 2. MCP server
+# MCP server
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, Claude Desktop, the Anthropic API MCP
@@ -17,7 +17,7 @@ documents, fetch files, and ingest new documents.
   the FastAPI app at `/mcp` with a shared lifespan
   (`src/library/mcp_server.py`, wired in `src/library/app.py`).
 
-## 2.1 Getting a token
+## 1.1 Getting a token
 
 Log in to the web app or REST API and create a token (the secret is shown
 exactly once):
@@ -38,7 +38,7 @@ Revoke it any time with `DELETE /api/auth/tokens/{id}`; revocation takes
 effect immediately (the next MCP request gets `401`). User accounts are
 created with the `library user` CLI (`library user add anna`).
 
-## 2.2 Connecting clients
+## 1.2 Connecting clients
 
 ### Claude Code
 
@@ -76,7 +76,7 @@ header on every request. The server is stateless (no session affinity
 required) and responds with plain JSON. SSE-only (deprecated transport)
 clients are not supported.
 
-## 2.3 Tools
+## 1.3 Tools
 
 All tools require auth. Errors (unknown document, oversized file,
 unsupported type) come back as MCP tool errors with a human-readable
@@ -98,7 +98,7 @@ Search behaviour is identical to `GET /api/documents` — both run the same
 query builder (`src/library/search.py`); see [api.md §1.3.3](api.md) for
 the full search semantics.
 
-## 2.4 Security notes
+## 1.4 Security notes
 
 - **Token = full account access.** MCP tools run as the token's user;
   anything the user can do via REST (read, search, ingest) the connected

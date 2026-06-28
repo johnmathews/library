@@ -1,4 +1,4 @@
-# 1. Pushover notifications & email-in user attribution
+# Pushover notifications & email-in user attribution
 
 **Date:** 2026-06-23. **Engineering-team run:** `manual-20260623T182609Z`
 (evaluation + plan in `.engineering-team/runs/`).

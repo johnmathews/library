@@ -1,4 +1,4 @@
-# 260624 — Per-document series charts + `/charts` aggregate view
+# Per-document series charts + `/charts` aggregate view
 
 Implemented **item 5** of the deferred webapp improvement plan
 (`.engineering-team/runs/manual-20260624T080332Z/improvement-plan.md` §2.3) — the

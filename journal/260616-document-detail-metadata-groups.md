@@ -1,4 +1,4 @@
-# 2026-06-16 — Document detail: hide PDF toolbar (Firefox), panel the OCR text, group the metadata
+# Document detail: hide PDF toolbar (Firefox), panel the OCR text, group the metadata
 
 Follow-up polish on `/documents/:id` (`DocumentDetailView.vue`) after yesterday's
 redesign ([260615-document-detail-redesign](260615-document-detail-redesign.md)).

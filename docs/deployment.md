@@ -1,4 +1,4 @@
-# 1. Deployment
+# Deployment
 
 **Status:** active. **Last updated:** 2026-06-11.
 

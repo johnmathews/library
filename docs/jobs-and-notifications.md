@@ -1,4 +1,4 @@
-# 1. Jobs view & live notifications
+# Jobs view & live notifications
 
 How Library surfaces background work to the user: a **Jobs view**, **toasts**,
 and a **navbar running-jobs indicator**, all fed by a live Server-Sent Events

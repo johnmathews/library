@@ -1,4 +1,4 @@
-# 1. Ask — semantic question answering
+# Ask — semantic question answering
 
 **Status:** active. **Last updated:** 2026-06-24 (cached series descriptions + /charts view).
 

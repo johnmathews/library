@@ -1,4 +1,4 @@
-# 1. Semantic "Ask the archive" layer
+# Semantic "Ask the archive" layer
 
 **Date:** 2026-06-16. **Branch:** `worktree-eng-semantic-ask-layer`.
 **Workflow:** engineering-team discussion → build (W1–W8).

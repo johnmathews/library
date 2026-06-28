@@ -1,4 +1,4 @@
-# 1. Jobs view + live job notifications (2026-06-23)
+# Jobs view + live job notifications
 
 Built via the engineering-team workflow (evaluate → plan → develop → wrap-up).
 Run dir: `.engineering-team/runs/manual-20260622T221914Z/`.
