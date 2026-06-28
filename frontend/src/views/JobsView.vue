@@ -2,15 +2,16 @@
 /**
  * Jobs dashboard (route `/jobs`): one row per document being processed, showing
  * its current pipeline stage, extraction cost, and any error (the server
- * collapses a document's several jobs into its latest one). Split into Active
- * (queued or running) and Recent (finished) sections. Refetches whenever the
- * live jobs store reports a document finishing, so the history stays current
- * without a manual reload. Document-less system tasks (the email poll) are
- * hidden unless "Show system tasks" is on.
+ * collapses a document's several jobs into its latest one). A single table —
+ * in-progress jobs sort to the top and carry a spinner; finished jobs follow.
+ * Refetches whenever the live jobs store reports a document finishing, so the
+ * table stays current without a manual reload. Document-less system tasks (the
+ * email poll) are hidden — active and finished alike — unless "Show system
+ * tasks" is on.
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
-import { AppBadge, AppInput, AppSelect } from '@/components/app'
+import { AppBadge, AppInput, AppSelect, PageHeader } from '@/components/app'
 import {
   getDocument,
   listDocuments,
@@ -31,8 +32,15 @@ const error = ref<string | null>(null)
 // their constant successes don't bury document work; this toggles them back in.
 const showSystem = ref(false)
 
-const activeJobs = computed(() => jobs.value.filter((job) => job.active))
-const historicalJobs = computed(() => jobs.value.filter((job) => !job.active))
+// A single ordered list: active (queued/running) jobs first — that's the work a
+// user most wants to see — then finished jobs in the server's order. Active
+// system rows are already excluded server-side unless "Show system tasks" is on,
+// so merging them in needs no extra gating here.
+const orderedJobs = computed(() => {
+  const active = jobs.value.filter((job) => job.active)
+  const rest = jobs.value.filter((job) => !job.active)
+  return [...active, ...rest]
+})
 
 // --- Filters: document + task type ------------------------------------------
 //
@@ -405,7 +413,58 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 
 <template>
   <div id="jobs-view">
-    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-6">Jobs</h1>
+    <PageHeader title="Jobs">
+      <template #actions>
+        <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer">
+          <input
+            v-model="showSystem"
+            type="checkbox"
+            data-testid="jobs-show-system"
+            class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
+          />
+          Show system tasks
+        </label>
+
+        <!-- Column-visibility menu (governs the table) -->
+        <div ref="columnMenu" class="relative">
+          <button
+            type="button"
+            data-testid="jobs-columns-button"
+            class="flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+            @click="showColumnMenu = !showColumnMenu"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M9 4h6m-6 4h6m-6 4h6m-6 4h6M4 4v16m16-16v16"
+              />
+            </svg>
+            Columns
+          </button>
+          <div
+            v-if="showColumnMenu"
+            data-testid="jobs-columns-menu"
+            class="absolute right-0 mt-1 w-52 rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 shadow-lg z-40 py-1"
+          >
+            <label
+              v-for="col in COLUMNS"
+              :key="col.key"
+              class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+            >
+              <input
+                type="checkbox"
+                :checked="isVisible(col.key)"
+                :data-testid="`jobs-col-toggle-${col.key}`"
+                class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
+                @change="toggleColumn(col.key)"
+              />
+              {{ col.label }}
+            </label>
+          </div>
+        </div>
+      </template>
+    </PageHeader>
 
     <p v-if="loading" data-testid="jobs-loading" class="text-gray-600 dark:text-gray-300">
       Loading jobs…
@@ -421,324 +480,196 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
     </div>
 
     <template v-else>
-      <!-- Active -->
-      <section class="mb-8">
-        <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">
-          Active
-          <span class="text-gray-400 dark:text-gray-500 font-normal">({{ activeJobs.length }})</span>
-        </h2>
-        <p
-          v-if="activeJobs.length === 0"
-          data-testid="jobs-active-empty"
-          class="text-sm text-gray-500 dark:text-gray-400"
-        >
-          Nothing is processing right now.
-        </p>
-        <template v-else>
-          <!-- Active table (tablet & desktop) -->
-          <div class="hidden sm:block overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
-            <table class="table-fixed w-full text-sm">
-              <colgroup>
-                <col style="width: clamp(10rem, 30vw, 24rem)" />
-                <col style="width: 10rem" />
-                <col style="width: 8rem" />
-                <col style="width: 12rem" />
-              </colgroup>
-              <thead
-                class="text-xs uppercase text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700/60"
-              >
-                <tr>
-                  <th class="text-left font-semibold px-4 py-3">Document</th>
-                  <th class="text-left font-semibold px-4 py-3">Task</th>
-                  <th class="text-left font-semibold px-4 py-3">Status</th>
-                  <th class="text-left font-semibold px-4 py-3">Started</th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
-                <tr v-for="job in activeJobs" :key="job.id" data-testid="jobs-active-row">
-                  <td class="px-4 py-3">
-                    <RouterLink
-                      v-if="job.document_id !== null"
-                      :to="`/documents/${job.document_id}`"
-                      :title="documentLabel(job)"
-                      class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 block truncate"
-                      >{{ documentLabel(job) }}</RouterLink
-                    >
-                    <span
-                      v-else
-                      class="inline-flex items-center gap-1.5 min-w-0 text-gray-500 dark:text-gray-400"
-                      data-testid="jobs-system-label"
-                    >
-                      <AppBadge colour="grey">System</AppBadge>
-                      <span class="truncate">{{ taskLabel(job.task_name) }}</span>
-                    </span>
-                  </td>
-                  <td class="px-4 py-3 text-gray-600 dark:text-gray-300 truncate">{{ taskLabel(job.task_name) }}</td>
-                  <td class="px-4 py-3">
-                    <AppBadge :colour="statusColour(job)">{{ statusLabel(job) }}</AppBadge>
-                  </td>
-                  <td class="px-4 py-3 text-gray-600 dark:text-gray-300 whitespace-nowrap">
-                    {{ formatDateTime(job.started_at ?? job.scheduled_at) }}
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <!-- Active cards (mobile) -->
-          <ul
-            class="sm:hidden bg-white dark:bg-gray-800 rounded-lg shadow-xs divide-y divide-gray-100 dark:divide-gray-700/60"
-            data-testid="jobs-active-cards"
+      <!-- Filter bar: pick a task type, or a document to trace its full history.
+           Both are reflected in the URL query for deep-linking. The document
+           field grows to fit its hint on one line. -->
+      <div class="mb-4 flex flex-wrap items-end gap-4" data-testid="jobs-filter-bar">
+        <div class="w-full sm:w-48">
+          <AppSelect
+            id="jobs-task-filter"
+            v-model="taskFilter"
+            label="Task type"
+            :items="taskOptions"
+          />
+        </div>
+        <div class="w-full sm:flex-1 sm:min-w-[20rem] sm:max-w-xl">
+          <AppInput
+            id="jobs-document-filter"
+            v-model="documentInput"
+            label="Document"
+            hint="Type to find a document, then pick it to trace its history"
+            list="jobs-document-options"
+            @input="searchDocuments"
+            @change="applyTypedDocument"
+          />
+          <datalist id="jobs-document-options">
+            <option v-for="d in documentSuggestions" :key="d.id" :value="d.title" />
+          </datalist>
+        </div>
+        <div v-if="inHistoryMode" class="pb-1.5" data-testid="jobs-document-chip">
+          <span
+            class="inline-flex items-center gap-1.5 rounded-full bg-violet-100 dark:bg-violet-500/20 px-3 py-1 text-sm font-medium text-violet-700 dark:text-violet-300"
           >
-            <li v-for="job in activeJobs" :key="job.id" class="p-4" data-testid="jobs-active-card">
-              <div class="flex items-center justify-between gap-2">
-                <RouterLink
-                  v-if="job.document_id !== null"
-                  :to="`/documents/${job.document_id}`"
-                  class="font-medium text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
-                  >{{ documentLabel(job) }}</RouterLink
-                >
-                <span
-                  v-else
-                  class="inline-flex items-center gap-1.5 min-w-0 font-medium text-gray-500 dark:text-gray-400"
-                >
-                  <AppBadge colour="grey">System</AppBadge>
-                  <span class="truncate">{{ taskLabel(job.task_name) }}</span>
-                </span>
-                <AppBadge :colour="statusColour(job)" class="shrink-0">{{ statusLabel(job) }}</AppBadge>
-              </div>
-              <div class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                <div>
-                  <span class="text-gray-500 dark:text-gray-400">Task:</span>
-                  <span class="ml-1 text-gray-700 dark:text-gray-300">{{ taskLabel(job.task_name) }}</span>
-                </div>
-                <div>
-                  <span class="text-gray-500 dark:text-gray-400">Started:</span>
-                  <span class="ml-1 text-gray-700 dark:text-gray-300">{{
-                    formatDateTime(job.started_at ?? job.scheduled_at)
-                  }}</span>
-                </div>
-              </div>
-            </li>
-          </ul>
-        </template>
-      </section>
-
-      <!-- Recent / historical -->
-      <section>
-        <div class="flex items-center justify-between mb-3">
-          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
-            {{ inHistoryMode ? 'History' : 'Recent' }}
-            <span class="text-gray-400 dark:text-gray-500 font-normal"
-              >({{ historicalJobs.length }})</span
+            Document: {{ documentChipTitle }}
+            <button
+              type="button"
+              data-testid="jobs-document-chip-clear"
+              class="text-violet-500 hover:text-violet-700 dark:hover:text-violet-200"
+              aria-label="Clear document filter"
+              @click="clearDocumentFilter"
             >
-          </h2>
-          <div class="flex items-center gap-4">
-            <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer">
-              <input
-                v-model="showSystem"
-                type="checkbox"
-                data-testid="jobs-show-system"
-                class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
-              />
-              Show system tasks
-            </label>
+              ✕
+            </button>
+          </span>
+        </div>
+      </div>
 
-            <!-- Column-visibility menu (governs the Recent table only) -->
-            <div ref="columnMenu" class="relative">
-              <button
-                type="button"
-                data-testid="jobs-columns-button"
-                class="flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
-                @click="showColumnMenu = !showColumnMenu"
-              >
-                <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-                  <path
-                    stroke-linecap="round"
-                    stroke-linejoin="round"
-                    d="M9 4h6m-6 4h6m-6 4h6m-6 4h6M4 4v16m16-16v16"
-                  />
-                </svg>
-                Columns
-              </button>
-              <div
-                v-if="showColumnMenu"
-                data-testid="jobs-columns-menu"
-                class="absolute right-0 mt-1 w-52 rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 shadow-lg z-40 py-1"
-              >
-                <label
-                  v-for="col in COLUMNS"
+      <p
+        v-if="orderedJobs.length === 0"
+        data-testid="jobs-empty"
+        class="text-sm text-gray-500 dark:text-gray-400"
+      >
+        {{ inHistoryMode ? 'No jobs for this document yet.' : 'No jobs yet.' }}
+      </p>
+      <template v-else>
+        <!-- Jobs table (tablet & desktop) — table-fixed with per-column <col>
+             widths so the Document column clamps and stops dominating. Active
+             rows sort first and carry a spinner in the Status cell. -->
+        <div class="hidden sm:block overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
+          <table class="table-fixed w-full text-sm">
+            <colgroup>
+              <col v-for="col in visibleColumns" :key="col.key" :style="col.style" />
+            </colgroup>
+            <thead
+              class="text-xs uppercase text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700/60"
+            >
+              <tr>
+                <th
+                  v-for="col in visibleColumns"
                   :key="col.key"
-                  class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+                  :data-testid="`jobs-col-header-${col.key}`"
+                  class="text-left font-semibold px-4 py-3 whitespace-nowrap"
                 >
-                  <input
-                    type="checkbox"
-                    :checked="isVisible(col.key)"
-                    :data-testid="`jobs-col-toggle-${col.key}`"
-                    class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
-                    @change="toggleColumn(col.key)"
-                  />
                   {{ col.label }}
-                </label>
+                </th>
+              </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
+              <tr
+                v-for="job in orderedJobs"
+                :key="job.id"
+                data-testid="jobs-row"
+                :data-active="job.active ? 'true' : undefined"
+                :class="job.active ? 'bg-violet-50/40 dark:bg-violet-500/5' : undefined"
+              >
+                <td
+                  v-for="col in visibleColumns"
+                  :key="col.key"
+                  :data-testid="`jobs-col-cell-${col.key}`"
+                  class="px-4 py-3"
+                  :class="{
+                    'text-gray-600 dark:text-gray-300': col.key !== 'error',
+                    'text-red-600 dark:text-red-400 truncate': col.key === 'error',
+                    'whitespace-nowrap': col.key === 'finished' || col.key === 'duration' || col.key === 'cost',
+                  }"
+                  :title="col.key === 'error' ? (job.error ?? '') : undefined"
+                >
+                  <RouterLink
+                    v-if="col.key === 'document' && job.document_id !== null"
+                    :to="`/documents/${job.document_id}`"
+                    :title="documentLabel(job)"
+                    class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 block truncate"
+                    >{{ documentLabel(job) }}</RouterLink
+                  >
+                  <span
+                    v-else-if="col.key === 'document'"
+                    class="inline-flex items-center gap-1.5 min-w-0 text-gray-500 dark:text-gray-400"
+                    data-testid="jobs-system-label"
+                  >
+                    <AppBadge colour="grey">System</AppBadge>
+                    <span class="truncate">{{ taskLabel(job.task_name) }}</span>
+                  </span>
+                  <span v-else-if="col.key === 'status'" class="inline-flex items-center gap-1.5">
+                    <svg
+                      v-if="job.active"
+                      data-testid="jobs-active-indicator"
+                      class="w-3.5 h-3.5 animate-spin text-violet-500 shrink-0"
+                      fill="none"
+                      viewBox="0 0 24 24"
+                      aria-label="In progress"
+                      role="img"
+                    >
+                      <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                      <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z" />
+                    </svg>
+                    <AppBadge :colour="statusColour(job)">{{ statusLabel(job) }}</AppBadge>
+                  </span>
+                  <template v-else>{{ cellValue(col.key, job) }}</template>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- Jobs cards (mobile) — headline Document + Status, then the remaining
+             visible columns as a meta grid (respects column prefs). -->
+        <ul
+          class="sm:hidden bg-white dark:bg-gray-800 rounded-lg shadow-xs divide-y divide-gray-100 dark:divide-gray-700/60"
+          data-testid="jobs-cards"
+        >
+          <li
+            v-for="job in orderedJobs"
+            :key="job.id"
+            class="p-4"
+            data-testid="jobs-card"
+            :class="job.active ? 'bg-violet-50/40 dark:bg-violet-500/5' : undefined"
+          >
+            <div class="flex items-center justify-between gap-2">
+              <RouterLink
+                v-if="isVisible('document') && job.document_id !== null"
+                :to="`/documents/${job.document_id}`"
+                class="font-medium text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
+                >{{ documentLabel(job) }}</RouterLink
+              >
+              <span
+                v-else-if="isVisible('document')"
+                class="inline-flex items-center gap-1.5 min-w-0 font-medium text-gray-500 dark:text-gray-400"
+              >
+                <AppBadge colour="grey">System</AppBadge>
+                <span class="truncate">{{ taskLabel(job.task_name) }}</span>
+              </span>
+              <span v-else class="font-medium text-gray-800 dark:text-gray-100 truncate"
+                >Job #{{ job.id }}</span
+              >
+              <span v-if="isVisible('status')" class="inline-flex items-center gap-1.5 shrink-0">
+                <svg
+                  v-if="job.active"
+                  class="w-3.5 h-3.5 animate-spin text-violet-500 shrink-0"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                  aria-label="In progress"
+                  role="img"
+                >
+                  <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+                  <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.4 0 0 5.4 0 12h4z" />
+                </svg>
+                <AppBadge :colour="statusColour(job)">{{ statusLabel(job) }}</AppBadge>
+              </span>
+            </div>
+
+            <div v-if="cardMetaColumns.length" class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
+              <div v-for="col in cardMetaColumns" :key="col.key">
+                <span class="text-gray-500 dark:text-gray-400">{{ col.label }}:</span>
+                <span
+                  class="ml-1 break-words"
+                  :class="col.key === 'error' ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'"
+                  >{{ cellValue(col.key, job) }}</span
+                >
               </div>
             </div>
-          </div>
-        </div>
-
-        <!-- Filter bar: pick a task type, or a document to trace its full
-             history. Both are reflected in the URL query for deep-linking. -->
-        <div class="mb-4 flex flex-wrap items-end gap-3" data-testid="jobs-filter-bar">
-          <div class="w-44">
-            <AppSelect
-              id="jobs-task-filter"
-              v-model="taskFilter"
-              label="Task type"
-              :items="taskOptions"
-            />
-          </div>
-          <div class="w-72">
-            <AppInput
-              id="jobs-document-filter"
-              v-model="documentInput"
-              label="Document"
-              hint="Type to find a document, then pick it to trace its history"
-              list="jobs-document-options"
-              @input="searchDocuments"
-              @change="applyTypedDocument"
-            />
-            <datalist id="jobs-document-options">
-              <option v-for="d in documentSuggestions" :key="d.id" :value="d.title" />
-            </datalist>
-          </div>
-          <div v-if="inHistoryMode" class="pb-1.5" data-testid="jobs-document-chip">
-            <span
-              class="inline-flex items-center gap-1.5 rounded-full bg-violet-100 dark:bg-violet-500/20 px-3 py-1 text-sm font-medium text-violet-700 dark:text-violet-300"
-            >
-              Document: {{ documentChipTitle }}
-              <button
-                type="button"
-                data-testid="jobs-document-chip-clear"
-                class="text-violet-500 hover:text-violet-700 dark:hover:text-violet-200"
-                aria-label="Clear document filter"
-                @click="clearDocumentFilter"
-              >
-                ✕
-              </button>
-            </span>
-          </div>
-        </div>
-
-        <p
-          v-if="historicalJobs.length === 0"
-          data-testid="jobs-historical-empty"
-          class="text-sm text-gray-500 dark:text-gray-400"
-        >
-          No completed jobs yet.
-        </p>
-        <template v-else>
-          <!-- Recent table (tablet & desktop) — table-fixed with per-column
-               <col> widths so the Document column clamps and stops dominating. -->
-          <div class="hidden sm:block overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
-            <table class="table-fixed w-full text-sm">
-              <colgroup>
-                <col v-for="col in visibleColumns" :key="col.key" :style="col.style" />
-              </colgroup>
-              <thead
-                class="text-xs uppercase text-gray-400 dark:text-gray-500 border-b border-gray-100 dark:border-gray-700/60"
-              >
-                <tr>
-                  <th
-                    v-for="col in visibleColumns"
-                    :key="col.key"
-                    :data-testid="`jobs-col-header-${col.key}`"
-                    class="text-left font-semibold px-4 py-3 whitespace-nowrap"
-                  >
-                    {{ col.label }}
-                  </th>
-                </tr>
-              </thead>
-              <tbody class="divide-y divide-gray-100 dark:divide-gray-700/60">
-                <tr v-for="job in historicalJobs" :key="job.id" data-testid="jobs-historical-row">
-                  <td
-                    v-for="col in visibleColumns"
-                    :key="col.key"
-                    :data-testid="`jobs-col-cell-${col.key}`"
-                    class="px-4 py-3"
-                    :class="{
-                      'text-gray-600 dark:text-gray-300': col.key !== 'error',
-                      'text-red-600 dark:text-red-400 truncate': col.key === 'error',
-                      'whitespace-nowrap': col.key === 'finished' || col.key === 'duration' || col.key === 'cost',
-                    }"
-                    :title="col.key === 'error' ? (job.error ?? '') : undefined"
-                  >
-                    <RouterLink
-                      v-if="col.key === 'document' && job.document_id !== null"
-                      :to="`/documents/${job.document_id}`"
-                      :title="documentLabel(job)"
-                      class="text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 block truncate"
-                      >{{ documentLabel(job) }}</RouterLink
-                    >
-                    <span
-                      v-else-if="col.key === 'document'"
-                      class="inline-flex items-center gap-1.5 min-w-0 text-gray-500 dark:text-gray-400"
-                      data-testid="jobs-system-label"
-                    >
-                      <AppBadge colour="grey">System</AppBadge>
-                      <span class="truncate">{{ taskLabel(job.task_name) }}</span>
-                    </span>
-                    <AppBadge v-else-if="col.key === 'status'" :colour="statusColour(job)">{{
-                      statusLabel(job)
-                    }}</AppBadge>
-                    <template v-else>{{ cellValue(col.key, job) }}</template>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
-
-          <!-- Recent cards (mobile) — headline Document + Status, then the
-               remaining visible columns as a meta grid (respects column prefs). -->
-          <ul
-            class="sm:hidden bg-white dark:bg-gray-800 rounded-lg shadow-xs divide-y divide-gray-100 dark:divide-gray-700/60"
-            data-testid="jobs-historical-cards"
-          >
-            <li v-for="job in historicalJobs" :key="job.id" class="p-4" data-testid="jobs-historical-card">
-              <div class="flex items-center justify-between gap-2">
-                <RouterLink
-                  v-if="isVisible('document') && job.document_id !== null"
-                  :to="`/documents/${job.document_id}`"
-                  class="font-medium text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 truncate"
-                  >{{ documentLabel(job) }}</RouterLink
-                >
-                <span
-                  v-else-if="isVisible('document')"
-                  class="inline-flex items-center gap-1.5 min-w-0 font-medium text-gray-500 dark:text-gray-400"
-                >
-                  <AppBadge colour="grey">System</AppBadge>
-                  <span class="truncate">{{ taskLabel(job.task_name) }}</span>
-                </span>
-                <span v-else class="font-medium text-gray-800 dark:text-gray-100 truncate"
-                  >Job #{{ job.id }}</span
-                >
-                <AppBadge v-if="isVisible('status')" :colour="statusColour(job)" class="shrink-0">{{
-                  statusLabel(job)
-                }}</AppBadge>
-              </div>
-
-              <div v-if="cardMetaColumns.length" class="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-xs">
-                <div v-for="col in cardMetaColumns" :key="col.key">
-                  <span class="text-gray-500 dark:text-gray-400">{{ col.label }}:</span>
-                  <span
-                    class="ml-1 break-words"
-                    :class="col.key === 'error' ? 'text-red-600 dark:text-red-400' : 'text-gray-700 dark:text-gray-300'"
-                    >{{ cellValue(col.key, job) }}</span
-                  >
-                </div>
-              </div>
-            </li>
-          </ul>
-        </template>
-      </section>
+          </li>
+        </ul>
+      </template>
     </template>
   </div>
 </template>
