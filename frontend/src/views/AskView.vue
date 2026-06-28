@@ -17,7 +17,7 @@
  * like [#42]); it is rendered to sanitized HTML via marked + DOMPurify
  * before being set with v-html.
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -61,6 +61,20 @@ const threadId = ref<number | null>(null)
 const sidebarRef = ref<InstanceType<typeof ConversationSidebar> | null>(null)
 const pendingImages = ref<PendingImage[]>([])
 const imageInput = ref<HTMLInputElement | null>(null)
+const transcriptRef = ref<HTMLElement | null>(null)
+
+// Keep the latest turn in view: the transcript scrolls internally (chat layout),
+// so on every turn change (new answer or a rehydrated thread) jump it to the
+// bottom after the DOM updates.
+watch(
+  () => turns.value.length,
+  () => {
+    void nextTick(() => {
+      const el = transcriptRef.value
+      if (el) el.scrollTop = el.scrollHeight
+    })
+  },
+)
 
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -207,7 +221,17 @@ defineExpose({ resetConversation })
 </script>
 
 <template>
-  <div id="ask-page" class="flex gap-6 items-start">
+  <!-- Chat layout (Option A) — lg+ ONLY. On a wide column the page fills the
+       viewport below the shell header (100dvh − h-16 header − app-page py-8 =
+       8rem): the transcript scrolls INTERNALLY and the composer is pinned at the
+       bottom. On mobile/tablet (< lg) the 256px sidebar leaves the column too
+       narrow for a fixed-height internal-scroll region (it trapped citation
+       clicks on mobile-webkit), so there we fall back to normal page flow — the
+       layout that ships green on main. -->
+  <div
+    id="ask-page"
+    class="flex gap-6 items-start lg:items-stretch lg:h-[calc(100dvh-8rem)]"
+  >
     <ConversationSidebar
       ref="sidebarRef"
       :active-thread-id="threadId"
@@ -215,9 +239,9 @@ defineExpose({ resetConversation })
       @new="resetConversation"
     />
 
-    <!-- Answer column fills the width; the composer follows the transcript at
-         the bottom (natural flow, not sticky — see the composer comment). -->
-    <div class="flex-1 min-w-0">
+    <!-- Answer column. On lg+ it is a full-height flex column (transcript
+         scrolls, composer pinned); below lg it is a normal block. -->
+    <div class="flex-1 min-w-0 lg:flex lg:flex-col lg:min-h-0">
       <PageHeader
         title="Ask"
         description="Ask a question about your documents in plain language and get an answer with citations."
@@ -230,8 +254,14 @@ defineExpose({ resetConversation })
         class="mb-6"
       />
 
-      <!-- Transcript: wide rich-markdown answers, not chat bubbles. -->
-      <div>
+      <!-- Transcript: wide rich-markdown answers, not chat bubbles. On lg+ it
+           scrolls internally (so the composer below stays pinned); below lg it
+           flows normally and the page scrolls. -->
+      <div
+        ref="transcriptRef"
+        data-testid="ask-transcript"
+        class="lg:flex-1 lg:min-h-0 lg:overflow-y-auto"
+      >
         <div v-if="turns.length" class="space-y-6 mb-6">
           <section
             v-for="(turn, i) in turns"
@@ -303,14 +333,14 @@ defineExpose({ resetConversation })
         </p>
       </div>
 
-      <!-- Multi-line composer at the bottom of the column. (Not position:sticky:
-           a sticky bottom bar overlaps transcript content on short viewports and
-           intercepts clicks on the last turn's citations — see
-           e2e/ask-page-citation.spec.ts.) -->
+      <!-- Multi-line composer. On lg+ it is a shrink-0 flex sibling pinned below
+           the internally-scrolling transcript (NOT position:sticky, which would
+           float over the transcript and intercept citation clicks). Below lg it
+           is a normal block at the bottom of the page-scrolled column. -->
       <form
         id="ask-form"
         novalidate
-        class="mt-4"
+        class="shrink-0 mt-4"
         data-testid="ask-form"
         @submit.prevent="onSubmit"
       >

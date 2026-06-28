@@ -233,11 +233,23 @@ describe('AskView', () => {
   it('renders a bottom composer with a Send button (W10)', () => {
     const w = mountView()
     // Not position:sticky — a sticky bottom bar overlaps the last turn's
-    // citations on short viewports and intercepts their clicks.
+    // citations on short viewports and intercepts their clicks. In the chat
+    // layout it is a shrink-0 flex sibling below the scrolling transcript.
     const form = w.find('[data-testid="ask-form"]')
     expect(form.exists()).toBe(true)
     expect(form.classes()).not.toContain('sticky')
+    expect(form.classes()).toContain('shrink-0')
     expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
+  })
+
+  it('renders an internally-scrolling transcript at lg+ (chat layout, Option A)', () => {
+    const w = mountView()
+    const transcript = w.find('[data-testid="ask-transcript"]')
+    expect(transcript.exists()).toBe(true)
+    // Internal scroll is gated to lg+ — on mobile/tablet the transcript flows
+    // normally (a fixed-height internal-scroll column trapped citation clicks on
+    // mobile-webkit).
+    expect(transcript.classes()).toContain('lg:overflow-y-auto')
   })
 
   it('shows an empty-state prompt before any question (W10)', () => {
