@@ -70,6 +70,19 @@ async def test_user_document_tag_round_trip(session: AsyncSession) -> None:
     assert loaded.created_at is not None
 
 
+async def test_user_is_admin_defaults_false(session: AsyncSession) -> None:
+    user = User(username="defaults-check", password_hash="x" * 60)
+    session.add(user)
+    await session.commit()
+    session.expunge_all()
+
+    loaded = (
+        await session.execute(select(User).where(User.username == "defaults-check"))
+    ).scalar_one()
+    assert loaded.is_admin is False
+    assert loaded.is_active is True
+
+
 async def test_sha256_unique_enforced(session: AsyncSession) -> None:
     session.add(Document(sha256=SHA_B, mime_type="application/pdf", source=DocumentSource.API))
     await session.commit()

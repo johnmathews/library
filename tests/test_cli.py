@@ -203,6 +203,50 @@ def test_user_list_shows_users(cli_database_url: str) -> None:
     assert user.username in result.output
 
 
+def _is_admin(database_url: str, username: str) -> bool:
+    [(value,)] = fetch_all(
+        database_url, "SELECT is_admin FROM users WHERE username = :u", u=username
+    )
+    return value
+
+
+def test_user_add_admin_flag_creates_admin(cli_database_url: str) -> None:
+    username = unique_username()
+    result = runner.invoke(
+        app, ["user", "add", username, "--admin", "--password-stdin"], input="pw-pw-pw\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert _is_admin(cli_database_url, username) is True
+
+
+def test_user_add_without_admin_flag_is_not_admin(cli_database_url: str) -> None:
+    username = unique_username()
+    result = runner.invoke(
+        app, ["user", "add", username, "--password-stdin"], input="pw-pw-pw\n"
+    )
+    assert result.exit_code == 0, result.output
+    assert _is_admin(cli_database_url, username) is False
+
+
+def test_user_set_admin_grants_and_revokes(cli_database_url: str) -> None:
+    user = create_user(cli_database_url)
+    assert _is_admin(cli_database_url, user.username) is False
+
+    grant = runner.invoke(app, ["user", "set-admin", user.username])
+    assert grant.exit_code == 0, grant.output
+    assert _is_admin(cli_database_url, user.username) is True
+
+    revoke = runner.invoke(app, ["user", "set-admin", user.username, "--revoke"])
+    assert revoke.exit_code == 0, revoke.output
+    assert _is_admin(cli_database_url, user.username) is False
+
+
+def test_user_set_admin_unknown_user_fails(cli_database_url: str) -> None:
+    result = runner.invoke(app, ["user", "set-admin", "no-such-user-xyz"])
+    assert result.exit_code != 0
+    assert "no such user" in result.output
+
+
 def test_backfill_embeddings_enqueues_only_unindexed(cli_database_url: str) -> None:
     needs = _seed_document(cli_database_url, "needs", ocr_text="real text", with_chunk=False)
     no_text = _seed_document(cli_database_url, "no-text", ocr_text=None, with_chunk=False)

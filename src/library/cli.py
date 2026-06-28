@@ -93,6 +93,7 @@ async def _get_user(session: AsyncSession, username: str) -> User:
 def user_add(
     username: str,
     display_name: str = typer.Option("", "--display-name", help="Human-readable name."),
+    admin: bool = typer.Option(False, "--admin", help="Grant admin privileges."),
     password_stdin: bool = typer.Option(
         False, "--password-stdin", help="Read the password from stdin instead of prompting."
     ),
@@ -111,13 +112,34 @@ def user_add(
                 username=username,
                 password_hash=hash_password(password),
                 display_name=display_name,
+                is_admin=admin,
             )
         )
         await session.commit()
 
     password = _read_password(password_stdin=password_stdin)
     _run(operation)
-    typer.echo(f"created user {username}")
+    role = "admin user" if admin else "user"
+    typer.echo(f"created {role} {username}")
+
+
+@user_app.command("set-admin")
+def user_set_admin(
+    username: str,
+    revoke: bool = typer.Option(
+        False, "--revoke", help="Remove admin privileges instead of granting them."
+    ),
+) -> None:
+    """Grant (or, with --revoke, remove) admin privileges for a user."""
+
+    async def operation(session: AsyncSession) -> None:
+        user = await _get_user(session, username)
+        user.is_admin = not revoke
+        await session.commit()
+
+    _run(operation)
+    verb = "revoked admin from" if revoke else "granted admin to"
+    typer.echo(f"{verb} {username}")
 
 
 @user_app.command("passwd")
@@ -162,9 +184,11 @@ def user_list() -> None:
 
     for user in _run(operation):
         state = "active" if user.is_active else "disabled"
+        role = "admin" if user.is_admin else "user"
         display = f" ({user.display_name})" if user.display_name else ""
         typer.echo(
-            f"{user.id}\t{user.username}{display}\t{state}\tcreated {user.created_at:%Y-%m-%d}"
+            f"{user.id}\t{user.username}{display}\t{role}\t{state}"
+            f"\tcreated {user.created_at:%Y-%m-%d}"
         )
 
 

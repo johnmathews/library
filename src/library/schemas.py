@@ -551,6 +551,7 @@ class UserOut(BaseModel):
     id: int
     username: str
     display_name: str
+    is_admin: bool
     preferences: UserPreferences
 
 
