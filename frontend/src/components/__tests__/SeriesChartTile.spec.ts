@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
 
 const lineDataCapture = { data: null as unknown }
 vi.mock('vue-chartjs', () => ({
@@ -13,6 +13,15 @@ vi.mock('vue-chartjs', () => ({
   },
 }))
 
+// The tile imports these at runtime for the editable "documents in this series"
+// controls (W8). Mock the whole module; the type imports below are erased.
+const api = vi.hoisted(() => ({
+  addSeriesMember: vi.fn(),
+  removeSeriesMember: vi.fn(),
+  listDocuments: vi.fn(),
+}))
+vi.mock('@/api/documents', () => api)
+
 import SeriesChartTile from '../SeriesChartTile.vue'
 import type { DocumentSeries } from '@/api/documents'
 
@@ -24,6 +33,13 @@ const RouterLinkStub = {
 function mountTile(series: DocumentSeries, highlightDocumentId?: number) {
   return mount(SeriesChartTile, {
     props: { series, highlightDocumentId },
+    global: { stubs: { RouterLink: RouterLinkStub } },
+  })
+}
+
+function mountEditable(series: DocumentSeries = okSeries) {
+  return mount(SeriesChartTile, {
+    props: { series, editable: true },
     global: { stubs: { RouterLink: RouterLinkStub } },
   })
 }
@@ -113,5 +129,57 @@ describe('SeriesChartTile', () => {
     }
     const colors = captured.datasets[0]!.backgroundColor
     expect(colors[2]).toBe('#dc2626')
+  })
+})
+
+describe('SeriesChartTile editable membership (W8)', () => {
+  beforeEach(() => {
+    api.addSeriesMember.mockReset().mockResolvedValue({ state: 'pinned' })
+    api.removeSeriesMember.mockReset().mockResolvedValue({ state: 'excluded' })
+    api.listDocuments
+      .mockReset()
+      .mockResolvedValue({ items: [{ id: 42, title: 'Stray bill' }], total: 1, limit: 8, offset: 0 })
+  })
+
+  it('shows no edit controls when not editable', () => {
+    const wrapper = mountTile(okSeries)
+    expect(wrapper.find('[data-testid="series-remove"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="series-add-toggle"]').exists()).toBe(false)
+  })
+
+  it('shows no edit controls when editable but the series has no identity', () => {
+    const wrapper = mount(SeriesChartTile, {
+      props: { series: { ...okSeries, sender_id: null }, editable: true },
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    })
+    expect(wrapper.find('[data-testid="series-add-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="series-remove"]').exists()).toBe(false)
+  })
+
+  it('renders a remove control per document when editable', () => {
+    const wrapper = mountEditable()
+    expect(wrapper.findAll('[data-testid="series-remove"]')).toHaveLength(3)
+  })
+
+  it('removes a document with the series identity + currency, then emits changed', async () => {
+    const wrapper = mountEditable()
+    await wrapper.find('[data-testid="series-remove"]').trigger('click')
+    await flushPromises()
+    expect(api.removeSeriesMember).toHaveBeenCalledWith(7, 2, 1, 'EUR')
+    expect(wrapper.emitted('changed')).toBeTruthy()
+  })
+
+  it('searches then pins a picked document, then emits changed', async () => {
+    const wrapper = mountEditable()
+    await wrapper.find('[data-testid="series-add-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="series-add-search"]').setValue('stray')
+    await flushPromises()
+    expect(api.listDocuments).toHaveBeenCalledWith({ q: 'stray', limit: 8 })
+    const result = wrapper.find('[data-testid="series-add-result"]')
+    expect(result.exists()).toBe(true)
+    await result.trigger('click')
+    await flushPromises()
+    expect(api.addSeriesMember).toHaveBeenCalledWith(7, 2, 42, 'EUR')
+    expect(wrapper.emitted('changed')).toBeTruthy()
   })
 })
