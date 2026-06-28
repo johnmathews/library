@@ -12,6 +12,7 @@ Money is ``Decimal`` quantized to 2dp; percentages and z-scores are floats.
 from __future__ import annotations
 
 import itertools
+import logging
 import statistics
 from dataclasses import dataclass
 from datetime import date, timedelta
@@ -22,8 +23,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
-from library.models import Document, Kind, Sender, SeriesInsight
+from library.fx import convert_amount
+from library.models import (
+    Document,
+    Kind,
+    OverrideAction,
+    Sender,
+    SeriesInsight,
+    SeriesMembershipOverride,
+)
 from library.search import DocumentFilters, filter_conditions
+
+logger = logging.getLogger(__name__)
 
 _CENTS = Decimal("0.01")
 
@@ -273,6 +284,105 @@ async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list
     return max(groups.values(), key=len)
 
 
+async def _load_override_ids(
+    session: AsyncSession,
+    sender_id: int | None,
+    kind_id: int | None,
+    currency: str | None,
+) -> tuple[set[int], set[int]]:
+    """``(pinned_ids, excluded_ids)`` for one ``(sender, kind, currency)`` series.
+
+    The override table's ``sender_id``/``kind_id`` are NOT NULL, so a series with
+    no resolved identity simply matches nothing.
+    """
+    if sender_id is None or kind_id is None:
+        return set(), set()
+    currency_match = (
+        SeriesMembershipOverride.currency.is_(None)
+        if currency is None
+        else SeriesMembershipOverride.currency == currency
+    )
+    statement = select(SeriesMembershipOverride.document_id, SeriesMembershipOverride.action).where(
+        SeriesMembershipOverride.sender_id == sender_id,
+        SeriesMembershipOverride.kind_id == kind_id,
+        currency_match,
+    )
+    pinned: set[int] = set()
+    excluded: set[int] = set()
+    for document_id, action in (await session.execute(statement)).all():
+        (pinned if action == OverrideAction.PIN else excluded).add(document_id)
+    return pinned, excluded
+
+
+async def _load_pinned_members(
+    session: AsyncSession, document_ids: list[int], target_currency: str | None
+) -> list[_Member]:
+    """Load force-pinned documents as members of the ``target_currency`` bucket.
+
+    A pinned document is included by id regardless of its own sender/kind. Its
+    amount is FX-converted into ``target_currency`` at its own date; a document
+    with no amount or no resolvable rate is dropped from the stats (logged) — it
+    cannot contribute a meaningful data point.
+    """
+    if not document_ids:
+        return []
+    statement = (
+        select(
+            Document.id,
+            Sender.name,
+            Kind.slug,
+            Document.document_date,
+            Document.amount_total,
+            Document.currency,
+            Document.sender_id,
+            Document.kind_id,
+            Document.title,
+        )
+        .outerjoin(Sender, Document.sender_id == Sender.id)
+        .outerjoin(Kind, Document.kind_id == Kind.id)
+        .where(
+            Document.id.in_(document_ids),
+            Document.deleted_at.is_(None),
+            Document.amount_total.isnot(None),
+        )
+    )
+    rows = (await session.execute(statement)).all()
+    members: list[_Member] = []
+    for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
+        converted = await convert_amount(session, amount, currency, target_currency, ddate)
+        if converted is None:
+            logger.warning(
+                "series pin doc %s: no FX rate %s->%s; dropped from series stats",
+                did,
+                currency,
+                target_currency,
+            )
+            continue
+        members.append(
+            _Member(did, sname, kslug, ddate, _money(converted), target_currency, sid, kid, title)
+        )
+    return members
+
+
+async def _apply_overrides(
+    session: AsyncSession,
+    bucket: list[_Member],
+    *,
+    sender_id: int | None,
+    kind_id: int | None,
+    currency: str | None,
+) -> list[_Member]:
+    """Apply persisted pin/exclude overrides to a currency bucket."""
+    pinned_ids, excluded_ids = await _load_override_ids(session, sender_id, kind_id, currency)
+    if not pinned_ids and not excluded_ids:
+        return bucket
+    result = [m for m in bucket if m.document_id not in excluded_ids]
+    present = {m.document_id for m in result}
+    to_pin = [pid for pid in pinned_ids if pid not in present]
+    result.extend(await _load_pinned_members(session, to_pin, currency))
+    return result
+
+
 def _insufficient(members: list[_Member]) -> SeriesSummary:
     head = members[0] if members else None
     return SeriesSummary(
@@ -341,6 +451,17 @@ async def summarize_series(
     bucket = by_currency[currency]
     other_currencies = sorted(str(c) for c in by_currency if c != currency and c is not None)
 
+    # The series identity is the dominant natural group; all members share it.
+    # Capture it before overrides so pins (foreign docs) can't shift the labels.
+    series_head = members[0]
+    bucket = await _apply_overrides(
+        session,
+        bucket,
+        sender_id=series_head.sender_id,
+        kind_id=series_head.kind_id,
+        currency=currency,
+    )
+
     if len(bucket) < settings.series_min_documents:
         return _insufficient(bucket)
 
@@ -377,7 +498,7 @@ async def summarize_series(
             yoy_points.append((ref_date, ref_value, -1))
         yoy = year_over_year(yoy_points, ref_date, cadence)
 
-    head = bucket[0]
+    head = series_head
     description = await load_series_description(session, head.sender_id, head.kind_id, currency)
     return SeriesSummary(
         status="ok",
