@@ -221,9 +221,7 @@ def test_user_add_admin_flag_creates_admin(cli_database_url: str) -> None:
 
 def test_user_add_without_admin_flag_is_not_admin(cli_database_url: str) -> None:
     username = unique_username()
-    result = runner.invoke(
-        app, ["user", "add", username, "--password-stdin"], input="pw-pw-pw\n"
-    )
+    result = runner.invoke(app, ["user", "add", username, "--password-stdin"], input="pw-pw-pw\n")
     assert result.exit_code == 0, result.output
     assert _is_admin(cli_database_url, username) is False
 

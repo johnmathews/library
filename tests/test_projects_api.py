@@ -128,9 +128,7 @@ def test_projects_require_authentication(anon_client: TestClient) -> None:
     assert anon_client.get("/api/projects/anything").status_code == 401
 
 
-def test_project_mutations_require_admin(
-    api_client: TestClient, admin_client: TestClient
-) -> None:
+def test_project_mutations_require_admin(api_client: TestClient, admin_client: TestClient) -> None:
     """Normal authenticated users can read projects but cannot mutate them."""
     # A normal user can still list/read (GET is open to all authenticated users).
     assert api_client.get("/api/projects").status_code == 200
