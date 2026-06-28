@@ -50,10 +50,10 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/senders` | Senders with counts |
 | GET    | `/api/tags` | Tags with counts |
 | GET    | `/api/projects` | List projects/collections with counts |
-| POST   | `/api/projects` | Create a project |
+| POST   | `/api/projects` | Create a project (admin only) |
 | GET    | `/api/projects/{slug}` | Project detail |
-| PATCH  | `/api/projects/{slug}` | Edit a project (name/description/archived) |
-| DELETE | `/api/projects/{slug}` | Delete a project (memberships cascade) |
+| PATCH  | `/api/projects/{slug}` | Edit a project (name/description/archived) (admin only) |
+| DELETE | `/api/projects/{slug}` | Delete a project (memberships cascade) (admin only) |
 | GET    | `/api/jobs` | Recent background jobs (enriched with document state); filter by `task_name`/`document_id` |
 | GET    | `/api/jobs/task-names` | Distinct task names (for the task-type filter) |
 | GET    | `/api/events` | Live document-pipeline events (Server-Sent Events) |
@@ -61,6 +61,12 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | PUT    | `/api/settings` | Update your dashboard fields |
 | PUT    | `/api/settings/appearance` | Update your page-canvas tone and tile preview |
 | PUT    | `/api/settings/notifications` | Update your Pushover notifications + email forwarding addresses |
+| GET    | `/api/admin/system` | System & infra context: version, config, deployment, DB stats (admin only) |
+| GET    | `/api/admin/architecture` | Architecture docs as markdown (admin only) |
+| GET    | `/api/admin/coverage` | Latest CI-generated test coverage (admin only) |
+| GET    | `/api/admin/users` | List all users (admin only) |
+| POST   | `/api/admin/users` | Create a user (admin only) |
+| PATCH  | `/api/admin/users/{id}` | Promote/demote, activate/deactivate a user (admin only) |
 
 Soft-deleted documents return **404** from every per-document endpoint and
 never appear in lists. Other error shapes: `404` unknown document, `422`
