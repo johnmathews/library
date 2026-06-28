@@ -63,6 +63,20 @@ async def current_user(
     raise _unauthenticated()
 
 
+async def require_admin(user: Annotated[User, Depends(current_user)]) -> User:
+    """The authenticated user, but only if they are an admin; else 403.
+
+    Layers on top of ``current_user`` so anonymous requests still get a 401
+    (from ``current_user``) and merely non-admin requests get a 403.
+    """
+    if not user.is_admin:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="admin privileges required",
+        )
+    return user
+
+
 async def csrf_protect(request: Request) -> None:
     """Double-submit CSRF check for cookie-authenticated state changes.
 

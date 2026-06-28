@@ -41,6 +41,7 @@ def _user_out(user: User) -> UserOut:
         id=user.id,
         username=user.username,
         display_name=user.display_name,
+        is_admin=user.is_admin,
         preferences=resolve_preferences(user.preferences),
     )
 

@@ -119,6 +119,7 @@ class User(Base):
     password_hash: Mapped[str] = mapped_column(String(255))
     display_name: Mapped[str] = mapped_column(String(255), default="")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default=text("true"))
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     preferences: Mapped[dict[str, Any]] = mapped_column(
         JSONB, server_default=text("'{}'::jsonb"), default=dict

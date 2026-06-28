@@ -174,13 +174,21 @@ async def job_connector() -> AsyncIterator[InMemoryConnector]:
 
 
 async def _insert_user(
-    database_url: str, username: str, password: str, *, is_active: bool = True
+    database_url: str,
+    username: str,
+    password: str,
+    *,
+    is_active: bool = True,
+    is_admin: bool = False,
 ) -> int:
     engine = create_async_engine(database_url, poolclass=NullPool)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
             user = User(
-                username=username, password_hash=hash_password(password), is_active=is_active
+                username=username,
+                password_hash=hash_password(password),
+                is_active=is_active,
+                is_admin=is_admin,
             )
             session.add(user)
             await session.commit()
@@ -195,10 +203,13 @@ def create_user(
     password: str = "correct horse battery staple",
     *,
     is_active: bool = True,
+    is_admin: bool = False,
 ) -> AuthUser:
     """Insert a user (random unique username by default) from sync test code."""
     name = username or f"user-{uuid.uuid4().hex[:12]}"
-    user_id = asyncio.run(_insert_user(database_url, name, password, is_active=is_active))
+    user_id = asyncio.run(
+        _insert_user(database_url, name, password, is_active=is_active, is_admin=is_admin)
+    )
     return AuthUser(id=user_id, username=name, password=password)
 
 
@@ -206,6 +217,12 @@ def create_user(
 def auth_user(api_database_url: str) -> AuthUser:
     """A fresh active user in the API test database."""
     return create_user(api_database_url)
+
+
+@pytest.fixture
+def admin_user(api_database_url: str) -> AuthUser:
+    """A fresh active admin user in the API test database."""
+    return create_user(api_database_url, is_admin=True)
 
 
 def login(client: TestClient, user: AuthUser) -> None:
@@ -235,6 +252,17 @@ def api_client(
     connector = PsycopgConnector(conninfo=procrastinate_conninfo(api_database_url))
     with job_app.replace_connector(connector), TestClient(api_app) as test_client:
         login(test_client, auth_user)
+        yield test_client
+
+
+@pytest.fixture
+def admin_client(
+    api_app: FastAPI, api_database_url: str, admin_user: AuthUser
+) -> Iterator[TestClient]:
+    """Authenticated HTTP client logged in as an admin user."""
+    connector = PsycopgConnector(conninfo=procrastinate_conninfo(api_database_url))
+    with job_app.replace_connector(connector), TestClient(api_app) as test_client:
+        login(test_client, admin_user)
         yield test_client
 
 

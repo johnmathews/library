@@ -141,6 +141,34 @@ def test_me_returns_current_user(api_client: TestClient, auth_user: AuthUser) ->
     assert "password" not in body and "password_hash" not in body
 
 
+def test_me_reports_is_admin_false_for_normal_user(api_client: TestClient) -> None:
+    assert api_client.get("/api/auth/me").json()["is_admin"] is False
+
+
+def test_me_reports_is_admin_true_for_admin_user(admin_client: TestClient) -> None:
+    assert admin_client.get("/api/auth/me").json()["is_admin"] is True
+
+
+async def test_require_admin_allows_admin() -> None:
+    from library.auth.deps import require_admin
+    from library.models import User
+
+    admin = User(id=1, username="a", password_hash="x", is_admin=True)
+    assert await require_admin(admin) is admin
+
+
+async def test_require_admin_rejects_non_admin() -> None:
+    from fastapi import HTTPException
+
+    from library.auth.deps import require_admin
+    from library.models import User
+
+    normal = User(id=2, username="b", password_hash="x", is_admin=False)
+    with pytest.raises(HTTPException) as excinfo:
+        await require_admin(normal)
+    assert excinfo.value.status_code == 403
+
+
 def test_me_includes_default_preferences(api_client: TestClient) -> None:
     body = api_client.get("/api/auth/me").json()
     assert body["preferences"]["dashboard_fields"] == [
