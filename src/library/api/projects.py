@@ -18,8 +18,9 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library import projects as projects_service
+from library.auth.deps import require_admin
 from library.db import get_session
-from library.models import Document, Project, document_projects
+from library.models import Document, Project, User, document_projects
 
 router: APIRouter = APIRouter(tags=["projects"])
 
@@ -125,11 +126,15 @@ async def list_projects(
     response_model=ProjectOut,
     status_code=status.HTTP_201_CREATED,
     summary="Create a project",
-    responses={409: {"description": "A project with this slug already exists"}},
+    responses={
+        403: {"description": "Admin privileges required"},
+        409: {"description": "A project with this slug already exists"},
+    },
 )
 async def create_project(
     payload: ProjectCreate,
     session: Annotated[AsyncSession, Depends(get_session)],
+    _admin: Annotated[User, Depends(require_admin)],
 ) -> ProjectOut:
     """Create a project; the slug defaults to ``slugify(name)`` and is unique."""
     slug = projects_service.slugify(payload.slug or payload.name)
@@ -166,12 +171,16 @@ async def get_project(
     "/projects/{slug}",
     response_model=ProjectOut,
     summary="Edit a project",
-    responses={404: {"description": "Unknown project"}},
+    responses={
+        403: {"description": "Admin privileges required"},
+        404: {"description": "Unknown project"},
+    },
 )
 async def update_project(
     slug: str,
     payload: ProjectUpdate,
     session: Annotated[AsyncSession, Depends(get_session)],
+    _admin: Annotated[User, Depends(require_admin)],
 ) -> ProjectOut:
     """Update name/description and/or toggle archived; the slug never changes."""
     project = await _get_project_or_404(session, slug)
@@ -191,11 +200,15 @@ async def update_project(
     "/projects/{slug}",
     status_code=status.HTTP_204_NO_CONTENT,
     summary="Delete a project",
-    responses={404: {"description": "Unknown project"}},
+    responses={
+        403: {"description": "Admin privileges required"},
+        404: {"description": "Unknown project"},
+    },
 )
 async def delete_project(
     slug: str,
     session: Annotated[AsyncSession, Depends(get_session)],
+    _admin: Annotated[User, Depends(require_admin)],
 ) -> None:
     """Hard-delete a project; memberships cascade, documents are untouched."""
     project = await _get_project_or_404(session, slug)

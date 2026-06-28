@@ -60,6 +60,27 @@ COPY --from=builder --chown=app:app /app /app
 # found via the LIBRARY_FRONTEND_DIST default `frontend/dist` under /app).
 COPY --from=frontend --chown=app:app /frontend/dist /app/frontend/dist
 
+# Build metadata for the admin views (see docs/admin.md). GIT_SHA is supplied by
+# the CI docker build (`--build-arg GIT_SHA=...`); LIBRARY_GIT_SHA is the env the
+# app reads (library.config.Settings.git_sha).
+ARG GIT_SHA=""
+ENV LIBRARY_GIT_SHA=$GIT_SHA
+
+# Bake the unified CI coverage summary that scripts/coverage_summary.py writes
+# into the build context just before `docker build`. It lands at
+# /app/coverage-summary.json — the default relative path the backend reads
+# (Settings.coverage_summary_path); absent → the admin view reports "unavailable".
+# The bracket-glob makes the COPY optional for ad-hoc/local builds that lack the
+# file: pairing it with a file that always exists (pyproject.toml) means a
+# zero-match on coverage-summar[y].json does not fail the build. CI always writes
+# a real summary (or a null-pct placeholder) so the published image ships one.
+COPY --chown=app:app pyproject.toml coverage-summar[y].json /app/
+
+# The markdown docs the admin Architecture view renders read-only at runtime
+# (Settings.docs_dir default `docs` → /app/docs). Absent → the view degrades
+# gracefully (empty list).
+COPY --chown=app:app docs/ /app/docs/
+
 ENV PATH="/app/.venv/bin:$PATH"
 
 USER app
