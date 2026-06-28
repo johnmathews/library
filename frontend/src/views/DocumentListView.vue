@@ -13,7 +13,7 @@
  * docs/api.md §1.3.3 for why they must never hit v-html unescaped.
  */
 import { computed, reactive, ref, watch } from 'vue'
-import { useIntersectionObserver } from '@vueuse/core'
+import { useIntersectionObserver, useStorage } from '@vueuse/core'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { AppBadge, AppBanner } from '@/components/app'
 import DocumentFilterBar from '@/components/DocumentFilterBar.vue'
@@ -249,6 +249,16 @@ const amountLabels = computed<Map<number, string | null>>(() => {
   for (const item of items.value) labels.set(item.id, formatAmount(item))
   return labels
 })
+
+// Tiles-per-row preference. 'auto' keeps the responsive breakpoints (the W16
+// contract default); a number pins the desktop column count. Per-machine, since
+// it's a display-size choice (docs/frontend-view-principles.md §4): persisted in
+// localStorage and surfaced to .app-doc-grid as the --doc-grid-cols CSS var.
+const GRID_COLS_OPTIONS = ['auto', '3', '4', '5', '6'] as const
+const gridCols = useStorage<string>('library:doc-grid-cols', 'auto')
+const gridColsStyle = computed(() =>
+  gridCols.value === 'auto' ? {} : { '--doc-grid-cols': gridCols.value },
+)
 </script>
 
 <template>
@@ -285,13 +295,24 @@ const amountLabels = computed<Map<number, string | null>>(() => {
   </div>
 
   <template v-else-if="!loading">
-    <p
-      v-if="items.length"
-      class="text-sm text-gray-500 dark:text-gray-400 mb-4"
-      data-testid="result-count"
-    >
-      {{ total }} {{ total === 1 ? 'document' : 'documents' }}
-    </p>
+    <div v-if="items.length" class="flex items-center justify-between gap-3 mb-4">
+      <p class="text-sm text-gray-500 dark:text-gray-400" data-testid="result-count">
+        {{ total }} {{ total === 1 ? 'document' : 'documents' }}
+      </p>
+      <label class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
+        <span class="hidden sm:inline">Tiles per row</span>
+        <select
+          v-model="gridCols"
+          data-testid="grid-cols-select"
+          aria-label="Tiles per row"
+          class="form-select py-1 text-sm"
+        >
+          <option v-for="opt in GRID_COLS_OPTIONS" :key="opt" :value="opt">
+            {{ opt === 'auto' ? 'Auto' : opt }}
+          </option>
+        </select>
+      </label>
+    </div>
 
     <div
       v-if="!items.length && !isFiltered"
@@ -318,6 +339,7 @@ const amountLabels = computed<Map<number, string | null>>(() => {
       v-if="items.length"
       id="dashboard-grid"
       class="app-doc-grid"
+      :style="gridColsStyle"
     >
       <li
         v-for="item in items"

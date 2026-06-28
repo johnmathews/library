@@ -150,6 +150,22 @@ describe('DocumentListView', () => {
     expect(w.find('[data-testid="result-count"]').text()).toBe('1 document')
   })
 
+  it('lets the user choose tiles-per-row, persisted to localStorage and applied as a CSS var', async () => {
+    localStorage.removeItem('library:doc-grid-cols')
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+
+    const select = w.find('[data-testid="grid-cols-select"]')
+    expect(select.exists()).toBe(true)
+    // Default is Auto: no override var on the grid (responsive breakpoints win).
+    expect(w.find('#dashboard-grid').attributes('style') ?? '').not.toContain('--doc-grid-cols')
+
+    await select.setValue('5')
+    await flushPromises()
+    expect(w.find('#dashboard-grid').attributes('style')).toContain('--doc-grid-cols: 5')
+    expect(localStorage.getItem('library:doc-grid-cols')).toContain('5')
+  })
+
   it('makes the whole card clickable via a stretched title link', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()
