@@ -472,6 +472,93 @@ async def test_run_ask_replays_history(monkeypatch: pytest.MonkeyPatch) -> None:
     assert sent[-1]["content"][-1]["text"] == "and 2025?"
 
 
+@pytest.mark.asyncio
+async def test_run_ask_includes_image_blocks(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Attached images become base64 image content blocks on the user turn (W11)."""
+    from typing import cast
+
+    from library.ask.engine import run_ask
+    from library.config import get_settings
+
+    client = _FakeAnthropic(
+        [
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="It's a receipt.")],
+                usage=_Usage(5, 3),
+            )
+        ]
+    )
+    settings = get_settings()
+    await run_ask(
+        cast(Any, None),
+        question="what is this?",
+        settings=settings,
+        client=cast(Any, client),
+        images=[{"media_type": "image/png", "data": "aGVsbG8="}],
+    )
+
+    user_content = client.messages.calls[0]["messages"][-1]["content"]
+    text_blocks = [b for b in user_content if b["type"] == "text"]
+    image_blocks = [b for b in user_content if b["type"] == "image"]
+    assert text_blocks[0]["text"] == "what is this?"
+    assert len(image_blocks) == 1
+    assert image_blocks[0]["source"] == {
+        "type": "base64",
+        "media_type": "image/png",
+        "data": "aGVsbG8=",
+    }
+
+
+def test_ask_passes_images_to_engine(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The endpoint forwards uploaded images to run_ask (W11)."""
+    captured: dict[str, Any] = {}
+
+    async def fake_run_ask(
+        session: Any, *, question: str, settings: Any, client: Any, **kwargs: Any
+    ):
+        captured["images"] = kwargs.get("images")
+        from library.ask.engine import AskResult
+
+        return AskResult(
+            answer="A receipt.",
+            citations=[],
+            used_tools=[],
+            model=settings.ask_model,
+            turn_messages=[{"role": "user", "content": [{"type": "text", "text": question}]}],
+        )
+
+    monkeypatch.setattr(ask_module, "run_ask", fake_run_ask)
+    response = api_client.post(
+        "/api/ask",
+        json={
+            "question": "what is this?",
+            "images": [{"media_type": "image/png", "data": "aGVsbG8="}],
+        },
+    )
+    assert response.status_code == 200, response.text
+    assert captured["images"] == [{"media_type": "image/png", "data": "aGVsbG8="}]
+
+
+def test_ask_rejects_unsupported_image_media_type(api_client: TestClient) -> None:
+    response = api_client.post(
+        "/api/ask",
+        json={"question": "hi", "images": [{"media_type": "image/tiff", "data": "x"}]},
+    )
+    assert response.status_code == 422
+
+
+def test_ask_rejects_too_many_images(api_client: TestClient) -> None:
+    images = [{"media_type": "image/png", "data": "x"} for _ in range(6)]
+    response = api_client.post("/api/ask", json={"question": "hi", "images": images})
+    assert response.status_code == 422
+
+
 # --- Thread persistence tests -----------------------------------------------
 
 
@@ -512,6 +599,7 @@ def test_ask_follow_up_replays_prior_turn(
         settings: Any,
         client: Any,
         history_messages: list[dict[str, Any]] | None = None,
+        images: list[dict[str, str]] | None = None,
     ):
         captured["history"] = history_messages
         from library.ask.engine import AskResult

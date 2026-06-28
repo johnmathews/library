@@ -241,4 +241,41 @@ describe('AskView', () => {
     const w = mountView()
     expect(w.find('[data-testid="ask-empty"]').exists()).toBe(true)
   })
+
+  async function attachImage(w: VueWrapper, name = 'receipt.png'): Promise<void> {
+    const file = new File(['hello'], name, { type: 'image/png' })
+    const input = w.find('[data-testid="ask-image-input"]')
+    Object.defineProperty(input.element, 'files', { value: [file], configurable: true })
+    await input.trigger('change')
+    // FileReader.onload fires as a macrotask in jsdom — poll until the preview lands.
+    for (let i = 0; i < 5 && !w.find('[data-testid="ask-image-preview"]').exists(); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 0))
+      await flushPromises()
+    }
+  }
+
+  it('previews an attached image and sends it with the question (W11)', async () => {
+    askQuestionMock.mockResolvedValue(sampleResponse({ thread_id: 1 }))
+    const w = mountView()
+    await attachImage(w)
+    expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(true)
+
+    await w.find('#ask-question').setValue('what is this?')
+    await w.find('[data-testid="ask-form"]').trigger('submit')
+    await flushPromises()
+
+    const call = askQuestionMock.mock.calls[0]!
+    // askQuestion(question, threadId, signal, images)
+    expect(call[3]).toEqual([{ media_type: 'image/png', data: 'aGVsbG8=' }])
+    // Cleared after a successful send.
+    expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(false)
+  })
+
+  it('removes a pending image before sending (W11)', async () => {
+    const w = mountView()
+    await attachImage(w)
+    expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(true)
+    await w.find('[data-testid="ask-image-remove"]').trigger('click')
+    expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(false)
+  })
 })

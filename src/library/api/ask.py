@@ -6,7 +6,7 @@ Authentication is enforced at include level in app.py.
 """
 
 from datetime import datetime
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from anthropic import AsyncAnthropic
 from fastapi import APIRouter, Depends, HTTPException
@@ -22,12 +22,29 @@ from library.models import AskThread, AskTurn, User
 
 router: APIRouter = APIRouter(tags=["ask"])
 
+# Cap attachments per question — bounds the request body and the multimodal
+# token cost. The media types are the ones the Anthropic vision API accepts.
+MAX_ASK_IMAGES = 5
+AskImageMediaType = Literal["image/png", "image/jpeg", "image/gif", "image/webp"]
+
+
+class AskImage(BaseModel):
+    """A base64 image attached to a question (no ``data:`` prefix)."""
+
+    media_type: AskImageMediaType
+    data: str = Field(min_length=1, description="Base64-encoded image bytes.")
+
 
 class AskRequest(BaseModel):
     """Body of POST /api/ask."""
 
     question: str = Field(min_length=1, max_length=1000, description="The question to answer.")
     thread_id: int | None = Field(default=None, description="Continue an existing conversation.")
+    images: list[AskImage] = Field(
+        default_factory=list,
+        max_length=MAX_ASK_IMAGES,
+        description="Optional image attachments for the multimodal model.",
+    )
 
 
 class Citation(BaseModel):
@@ -130,6 +147,7 @@ async def ask(
 
     history = await _history_messages(session, thread.id, settings.ask_history_turns)
 
+    images = [{"media_type": image.media_type, "data": image.data} for image in request.images]
     async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as client:
         result = await run_ask(
             session,
@@ -137,6 +155,7 @@ async def ask(
             settings=settings,
             client=client,
             history_messages=history,
+            images=images,
         )
 
     session.add(

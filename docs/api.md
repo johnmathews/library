@@ -610,12 +610,20 @@ and conversational threading — is in [ask.md](ask.md); this is the wire contra
 ```json
 {
   "question": "<1..1000 chars>",
-  "thread_id": 42
+  "thread_id": 42,
+  "images": [{ "media_type": "image/png", "data": "<base64, no data: prefix>" }]
 }
 ```
 
 `thread_id` is optional. Omit it to start a new conversation; supply it to
 continue an existing one. Auth + CSRF apply (it is a `POST`).
+
+`images` is optional (W11): up to **5** base64 attachments for the multimodal
+model (`ask_model` = `claude-sonnet-4-6`). Each has a `media_type` of
+`image/png`, `image/jpeg`, `image/gif`, or `image/webp` and base64 `data` with
+no `data:` prefix. They become image content blocks on the question turn (and
+persist in `ask_turns.messages` for replay). `422` if more than 5 images or an
+unsupported `media_type`.
 
 **Response `200`:**
 

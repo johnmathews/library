@@ -23,7 +23,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { AppButton, AppErrorSummary, AppTextarea, PageHeader } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
-import { askQuestion, getThread, type AskCitation } from '@/api/ask'
+import { askQuestion, getThread, type AskCitation, type AskImage } from '@/api/ask'
 import { ApiError } from '@/api/client'
 import ConversationSidebar from '@/components/ask/ConversationSidebar.vue'
 
@@ -35,6 +35,21 @@ interface TurnVM {
   costUsd: number
 }
 
+// A picked-but-not-yet-sent image: the base64 payload plus a data URL for the
+// preview thumbnail and the original filename.
+interface PendingImage extends AskImage {
+  url: string
+  name: string
+}
+
+const MAX_IMAGES = 5
+const SUPPORTED_IMAGE_TYPES: AskImage['media_type'][] = [
+  'image/png',
+  'image/jpeg',
+  'image/gif',
+  'image/webp',
+]
+
 const route = useRoute()
 const router = useRouter()
 
@@ -44,6 +59,39 @@ const errorMessage = ref<string | null>(null)
 const turns = ref<TurnVM[]>([])
 const threadId = ref<number | null>(null)
 const sidebarRef = ref<InstanceType<typeof ConversationSidebar> | null>(null)
+const pendingImages = ref<PendingImage[]>([])
+const imageInput = ref<HTMLInputElement | null>(null)
+
+function readAsDataUrl(file: File): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => resolve(reader.result as string)
+    reader.onerror = () => reject(reader.error)
+    reader.readAsDataURL(file)
+  })
+}
+
+async function onImagesPicked(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement
+  for (const file of Array.from(input.files ?? [])) {
+    if (pendingImages.value.length >= MAX_IMAGES) break
+    const mediaType = file.type as AskImage['media_type']
+    if (!SUPPORTED_IMAGE_TYPES.includes(mediaType)) continue
+    const dataUrl = await readAsDataUrl(file)
+    pendingImages.value.push({
+      media_type: mediaType,
+      data: dataUrl.slice(dataUrl.indexOf(',') + 1),
+      url: dataUrl,
+      name: file.name,
+    })
+  }
+  // Reset so the same file can be re-picked after removal.
+  input.value = ''
+}
+
+function removeImage(index: number): void {
+  pendingImages.value.splice(index, 1)
+}
 
 const errors = computed<ErrorSummaryItem[]>(() =>
   errorMessage.value ? [{ text: errorMessage.value }] : [],
@@ -76,8 +124,14 @@ async function onSubmit(): Promise<void> {
   errorMessage.value = null
   const controller = new AbortController()
   const wasNewThread = threadId.value === null
+  const images: AskImage[] = pendingImages.value.map((image) => ({
+    media_type: image.media_type,
+    data: image.data,
+  }))
   try {
-    const res = await askQuestion(trimmed, threadId.value ?? undefined, controller.signal)
+    const res = images.length
+      ? await askQuestion(trimmed, threadId.value ?? undefined, controller.signal, images)
+      : await askQuestion(trimmed, threadId.value ?? undefined, controller.signal)
     turns.value.push({
       query: trimmed,
       answerHtml: renderAnswer(res.answer),
@@ -87,6 +141,7 @@ async function onSubmit(): Promise<void> {
     })
     threadId.value = res.thread_id
     question.value = ''
+    pendingImages.value = []
     // If we started on /ask (no threadId param), update the URL so the
     // browser history and sidebar can track this conversation.
     if (!route.params.threadId) {
@@ -266,7 +321,51 @@ defineExpose({ resetConversation })
             :rows="3"
             data-testid="ask-question"
           />
-          <div class="mt-3 flex justify-end">
+
+          <!-- Pending image attachments (W11): preview thumbnails + remove. -->
+          <ul
+            v-if="pendingImages.length"
+            data-testid="ask-image-previews"
+            class="mt-3 flex flex-wrap gap-2"
+          >
+            <li v-for="(image, i) in pendingImages" :key="i" class="relative">
+              <img
+                :src="image.url"
+                :alt="image.name"
+                data-testid="ask-image-preview"
+                class="h-16 w-16 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
+              />
+              <button
+                type="button"
+                data-testid="ask-image-remove"
+                :aria-label="`Remove ${image.name}`"
+                class="absolute -top-2 -right-2 h-5 w-5 flex items-center justify-center rounded-full bg-gray-700 text-white text-xs hover:bg-red-600"
+                @click="removeImage(i)"
+              >
+                ×
+              </button>
+            </li>
+          </ul>
+
+          <div class="mt-3 flex items-center justify-between gap-2">
+            <input
+              ref="imageInput"
+              type="file"
+              accept="image/png,image/jpeg,image/gif,image/webp"
+              multiple
+              class="hidden"
+              data-testid="ask-image-input"
+              @change="onImagesPicked"
+            />
+            <button
+              type="button"
+              data-testid="ask-image-attach"
+              class="btn-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+              :disabled="pendingImages.length >= MAX_IMAGES"
+              @click="imageInput?.click()"
+            >
+              Attach image
+            </button>
             <AppButton
               id="ask-submit"
               type="submit"

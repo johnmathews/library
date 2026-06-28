@@ -87,6 +87,13 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybri
    fragment); citations from documents without a markdown layer show only the
    title.
 
+**Image attachments (W11).** `ask_model` (`claude-sonnet-4-6`) is multimodal, so
+a question may carry up to 5 base64 images (see [api.md §1.11](api.md)). They are
+rendered as image content blocks on the question turn alongside the text, and the
+system prompt tells the model to read them as evidence and combine them with tool
+results. Attachments persist in `ask_turns.messages`, so they replay as history on
+follow-ups. The composer offers an **Attach image** control with preview + remove.
+
 ## 1.3 Configuration
 
 All settings use the `LIBRARY_` env prefix (see `.env.example` /

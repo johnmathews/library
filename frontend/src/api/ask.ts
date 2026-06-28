@@ -58,13 +58,21 @@ export interface ThreadDetail {
  * thread. Rejects with `ApiError` carrying `.detail` for the
  * 503 "no API key configured" case and any other non-2xx response.
  */
+/** A base64 image attached to a question (no `data:` prefix). */
+export interface AskImage {
+  media_type: 'image/png' | 'image/jpeg' | 'image/gif' | 'image/webp'
+  data: string
+}
+
 export function askQuestion(
   question: string,
   threadId?: number,
   signal?: AbortSignal,
+  images?: AskImage[],
 ): Promise<AskResponse> {
-  const body: { question: string; thread_id?: number } = { question }
+  const body: { question: string; thread_id?: number; images?: AskImage[] } = { question }
   if (threadId !== undefined) body.thread_id = threadId
+  if (images && images.length) body.images = images
   return apiFetch<AskResponse>('/api/ask', { method: 'POST', body, signal })
 }
 
