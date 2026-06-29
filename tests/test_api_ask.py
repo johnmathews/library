@@ -855,8 +855,12 @@ async def test_run_semantic_search_excerpt_concatenates_passages(
     ) -> list[float]:
         return _unit_vector(0)
 
-    multi_doc = SimpleNamespace(id=11, title="Long dossier", sender=None, document_date=None)
-    single_doc = SimpleNamespace(id=22, title="Invoice", sender=None, document_date=None)
+    multi_doc = SimpleNamespace(
+        id=11, title="Long dossier", sender=None, recipient=None, document_date=None
+    )
+    single_doc = SimpleNamespace(
+        id=22, title="Invoice", sender=None, recipient=None, document_date=None
+    )
 
     async def fake_search(
         session: Any, *, query: str, query_embedding: Any, top_k: int, chunks_per_doc: int = 1

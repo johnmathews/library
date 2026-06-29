@@ -271,6 +271,58 @@ def test_series_membership_overrides_table_exists(migrated_database_url: str) ->
     assert ("series_membership_overrides_series_document",) in unique
 
 
+def test_recipients_table_and_john_seeded(migrated_database_url: str) -> None:
+    """0016 adds the recipients lookup table and seeds a "John" row."""
+    cols = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type
+        FROM information_schema.columns
+        WHERE table_name = 'recipients'
+        ORDER BY column_name
+        """,
+    )
+    names = {name for name, _ in cols}
+    assert {"id", "name", "created_at"} <= names
+    unique = fetch_all(
+        migrated_database_url,
+        """
+        SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE rel.relname = 'recipients' AND con.contype = 'u'
+        """,
+    )
+    assert ("uq_recipients_name",) in unique
+    recipient_names = {
+        str(name)
+        for name in asyncio.run(
+            _fetch_scalars(migrated_database_url, "SELECT name FROM recipients")
+        )
+    }
+    assert "John" in recipient_names
+
+
+def test_documents_have_recipient_id_column_and_index(migrated_database_url: str) -> None:
+    """0016 adds a nullable documents.recipient_id FK plus its index."""
+    rows = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = 'documents' AND column_name = 'recipient_id'
+        """,
+    )
+    assert rows == [("recipient_id", "integer", "YES")]
+    indexes = asyncio.run(
+        _fetch_scalars(
+            migrated_database_url,
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'documents'",
+        )
+    )
+    assert "ix_documents_recipient_id" in {str(name) for name in indexes}
+
+
 def test_fx_rates_table_seeded(migrated_database_url: str) -> None:
     """0015 adds fx_rates and seeds a researched historical snapshot."""
     cols = fetch_all(

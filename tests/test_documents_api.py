@@ -30,6 +30,7 @@ from library.models import (
     DocumentStatus,
     Kind,
     Project,
+    Recipient,
     ReviewStatus,
     Sender,
     Tag,
@@ -48,6 +49,7 @@ async def _seed_document(
     *,
     kind_slug: str | None = None,
     sender_name: str | None = None,
+    recipient_name: str | None = None,
     tag_slugs: Iterable[str] = (),
     project_slugs: Iterable[str] = (),
     **fields: Any,
@@ -76,6 +78,15 @@ async def _seed_document(
                     session.add(sender)
                     await session.flush()
                 document.sender_id = sender.id
+            if recipient_name is not None:
+                recipient = (
+                    await session.execute(select(Recipient).where(Recipient.name == recipient_name))
+                ).scalar_one_or_none()
+                if recipient is None:
+                    recipient = Recipient(name=recipient_name)
+                    session.add(recipient)
+                    await session.flush()
+                document.recipient_id = recipient.id
             for slug in tag_slugs:
                 tag = (
                     await session.execute(select(Tag).where(Tag.slug == slug))
@@ -995,3 +1006,70 @@ def test_search_matches_topics(api_client: TestClient, api_database_url: str) ->
 
     body = list_docs(api_client, q="zzxytopicterm", tag="topics-search")
     assert [item["id"] for item in body["items"]] == [document_id]
+
+
+# --- Recipient (W2) ----------------------------------------------------------
+
+
+def test_recipient_in_list_and_detail(api_client: TestClient, api_database_url: str) -> None:
+    """Seeded recipient is expanded (id + name) on both list and detail."""
+    document_id = seed_document(
+        api_database_url,
+        "w2-recipient-shape",
+        tag_slugs=["w2-recipient-shape"],
+        recipient_name="W2 John",
+    )
+
+    (item,) = list_docs(api_client, tag="w2-recipient-shape")["items"]
+    assert item["recipient"]["name"] == "W2 John"
+    assert isinstance(item["recipient"]["id"], int)
+
+    detail = api_client.get(f"/api/documents/{document_id}").json()
+    assert detail["recipient"]["name"] == "W2 John"
+
+
+def test_patch_recipient_upserts_and_returns(api_client: TestClient, api_database_url: str) -> None:
+    """PATCH {recipient: 'Wife'} upserts and returns recipient:{id,name}."""
+    document_id = seed_document(api_database_url, "w2-recipient-patch")
+
+    response = api_client.patch(f"/api/documents/{document_id}", json={"recipient": "Wife"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["recipient"]["name"] == "Wife"
+    assert isinstance(body["recipient"]["id"], int)
+    # Storage-level marker recorded so re-extraction won't overwrite it.
+    assert "recipient_id" in body["user_edited_fields"]
+
+    # Clearing it with null removes the recipient.
+    cleared = api_client.patch(f"/api/documents/{document_id}", json={"recipient": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["recipient"] is None
+
+
+def test_list_filters_by_recipient_id(api_client: TestClient, api_database_url: str) -> None:
+    """?recipient_id=N returns only documents addressed to that recipient."""
+    mine = seed_document(
+        api_database_url,
+        "w2-recipient-filter-mine",
+        tag_slugs=["w2-recipient-filter"],
+        recipient_name="W2 Filter John",
+    )
+    seed_document(
+        api_database_url,
+        "w2-recipient-filter-other",
+        tag_slugs=["w2-recipient-filter"],
+        recipient_name="W2 Filter Wife",
+    )
+
+    recipient_id = next(
+        item["recipient"]["id"]
+        for item in list_docs(api_client, tag="w2-recipient-filter")["items"]
+        if item["id"] == mine
+    )
+    ids = [
+        item["id"]
+        for item in list_docs(api_client, tag="w2-recipient-filter", recipient_id=recipient_id)[
+            "items"
+        ]
+    ]
+    assert ids == [mine]

@@ -40,6 +40,7 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     summary: null,
     kind: { slug: 'invoice', name: 'Invoice' },
     sender: { id: 3, name: 'Eneco' },
+    recipient: { id: 5, name: 'John' },
     tags: [{ slug: 'energie', name: 'Energie' }],
     projects: [],
     topics: [],
@@ -76,6 +77,10 @@ const KINDS = [
   { slug: 'receipt', name: 'Receipt', document_count: 0 },
 ]
 const SENDERS = [{ id: 3, name: 'Eneco', document_count: 3 }]
+const RECIPIENTS = [
+  { id: 5, name: 'John', document_count: 7 },
+  { id: 6, name: 'Wife', document_count: 2 },
+]
 const PROJECTS = [{ slug: 'house-purchase', name: 'House purchase', document_count: 4 }]
 
 const Stub = { template: '<div />' }
@@ -107,6 +112,7 @@ describe('DocumentDetailView', () => {
       const method = init?.method ?? 'GET'
       if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
       if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
+      if (url === '/api/recipients') return Promise.resolve(jsonResponse(RECIPIENTS))
       if (url === '/api/tags') return Promise.resolve(jsonResponse([]))
       if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
       if (url === '/api/documents/12/extract' && method === 'POST') {
@@ -287,6 +293,57 @@ describe('DocumentDetailView', () => {
     expect(w.find('#edit-sender').attributes('list')).toBe('sender-options')
     const options = w.find('datalist#sender-options').findAll('option')
     expect(options.map((option) => option.attributes('value'))).toEqual(['Eneco'])
+  })
+
+  it('shows the recipient value in read mode', async () => {
+    detail = makeDetail({ recipient: { id: 5, name: 'John' } })
+    const w = await mountView()
+    expect(rowValue(w, 'recipient')).toBe('John')
+  })
+
+  it('recipient editor offers the fetched recipients and autosaves the chosen name', async () => {
+    const w = await mountView()
+    patchResponse = () => jsonResponse(makeDetail({ recipient: { id: 6, name: 'Wife' } }))
+
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    const options = w.find('#edit-recipient').findAll('option')
+    expect(options.map((option) => option.text())).toEqual([
+      'Not set',
+      'John',
+      'Wife',
+      'Add recipient…',
+    ])
+
+    await w.find('#edit-recipient').setValue('Wife') // <select> setValue emits change
+    await flushPromises()
+
+    expect(patchCalls()[0]!.body).toEqual({ recipient: 'Wife' })
+    expect((w.find('#edit-recipient').element as HTMLSelectElement).value).toBe('Wife')
+    expect(w.find('[data-testid="saved-recipient"]').exists()).toBe(true)
+  })
+
+  it('adds a new recipient inline (no blocking prompt) and PATCHes the typed name', async () => {
+    const w = await mountView()
+    patchResponse = () => jsonResponse(makeDetail({ recipient: { id: 7, name: 'Landlord' } }))
+
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+
+    // Picking the "Add recipient…" sentinel reveals an inline input + confirm.
+    await w.find('#edit-recipient').setValue('__add_recipient__')
+    await flushPromises()
+    expect(w.find('#recipient-add-input').exists()).toBe(true)
+    expect(w.find('#edit-recipient').exists()).toBe(false)
+
+    await w.find('#recipient-add-input').setValue('Landlord')
+    await w.find('[data-testid="recipient-add-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(patchCalls()[0]!.body).toEqual({ recipient: 'Landlord' })
+    // The inline input collapses back to the select, now holding the new name.
+    expect(w.find('#recipient-add-input').exists()).toBe(false)
+    expect((w.find('#edit-recipient').element as HTMLSelectElement).value).toBe('Landlord')
   })
 
   it('tags editor sends a comma-split full-replacement list', async () => {
@@ -844,6 +901,55 @@ describe('DocumentDetailView', () => {
         body_markdown: 'Updated note\nupdated body',
       })
       expect(w.find('h1').text()).toBe('Updated note')
+    })
+
+    it('toggles the editor view mode, showing/hiding the editor and preview panes', async () => {
+      localStorage.clear() // default mode is 'split'
+      detail = noteDetail()
+      markdownResponse = () =>
+        jsonResponse({
+          page_count: 1,
+          pages: [{ page_number: 1, markdown: '# Heading\n\nbody' }],
+        } satisfies DocumentMarkdownResponse)
+      const w = await mountView()
+
+      await w.find('[data-testid="note-edit-button"]').trigger('click')
+      await flushPromises()
+
+      // Split (default): both panes present, preview reflects the draft body.
+      expect(w.find('[data-testid="note-edit-editor-pane"]').exists()).toBe(true)
+      expect(w.find('[data-testid="note-edit-preview-pane"]').exists()).toBe(true)
+      expect(w.find('[data-testid="note-edit-preview"]').html()).toContain('<h1')
+
+      // Edit-only: textarea shown, preview hidden.
+      await w.get('[data-testid="note-edit-mode-edit"]').trigger('click')
+      expect(w.find('[data-testid="note-edit-editor-pane"]').exists()).toBe(true)
+      expect(w.find('[data-testid="note-edit-preview-pane"]').exists()).toBe(false)
+
+      // Preview-only: preview shown, textarea hidden.
+      await w.get('[data-testid="note-edit-mode-preview"]').trigger('click')
+      expect(w.find('[data-testid="note-edit-editor-pane"]').exists()).toBe(false)
+      expect(w.find('[data-testid="note-edit-preview-pane"]').exists()).toBe(true)
+
+      // Back to split: both panes again.
+      await w.get('[data-testid="note-edit-mode-split"]').trigger('click')
+      expect(w.find('[data-testid="note-edit-editor-pane"]').exists()).toBe(true)
+      expect(w.find('[data-testid="note-edit-preview-pane"]').exists()).toBe(true)
+    })
+
+    it('reflects live edits to the draft body in the preview pane', async () => {
+      localStorage.clear()
+      detail = noteDetail()
+      const w = await mountView()
+
+      await w.find('[data-testid="note-edit-button"]').trigger('click')
+      await flushPromises()
+      await w.find('#note-edit-body').setValue('# Live heading\n\nedited')
+      await flushPromises()
+
+      const preview = w.find('[data-testid="note-edit-preview"]')
+      expect(preview.html()).toContain('<h1')
+      expect(preview.text()).toContain('Live heading')
     })
 
     it('opens the version history, calling listNoteVersions', async () => {

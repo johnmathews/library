@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
-from library.extraction.apply import get_or_create_tag, upsert_sender
+from library.extraction.apply import get_or_create_tag, upsert_recipient, upsert_sender
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
 from library.jobs import extract_document
 from library.models import (
@@ -47,6 +47,7 @@ from library.schemas import (
     MarkdownPage,
     MarkdownResponse,
     ProjectRef,
+    RecipientOut,
     SenderOut,
     TagOut,
 )
@@ -59,7 +60,11 @@ router: APIRouter = APIRouter(tags=["documents"])
 
 # PATCH body field -> name recorded in extra["user_edited_fields"] (the
 # storage-level names the W6 extraction contract checks).
-_EDITED_FIELD_NAMES: dict[str, str] = {"kind_slug": "kind_id", "sender": "sender_id"}
+_EDITED_FIELD_NAMES: dict[str, str] = {
+    "kind_slug": "kind_id",
+    "sender": "sender_id",
+    "recipient": "recipient_id",
+}
 
 
 def _current_value(document: Document, name: str) -> Any:
@@ -68,6 +73,8 @@ def _current_value(document: Document, name: str) -> Any:
         return document.kind_id
     if name == "sender_id":
         return document.sender_id
+    if name == "recipient_id":
+        return document.recipient_id
     if name == "tags":
         return sorted(tag.slug for tag in document.tags)
     if name == "projects":
@@ -240,6 +247,7 @@ async def list_documents(
     ] = None,
     kind: Annotated[str | None, Query(description="Kind slug, e.g. `invoice`.")] = None,
     sender_id: Annotated[int | None, Query()] = None,
+    recipient_id: Annotated[int | None, Query()] = None,
     tag: Annotated[
         list[str] | None,
         Query(description="Tag slug; repeat the parameter to require all of them (AND)."),
@@ -270,6 +278,7 @@ async def list_documents(
         DocumentFilters(
             kind_slug=kind,
             sender_id=sender_id,
+            recipient_id=recipient_id,
             tag_slugs=tuple(tag or []),
             project_slug=project,
             language=language,
@@ -396,7 +405,11 @@ async def update_document(
 
     # Snapshot pre-edit values before any mutation so corrections are accurate.
     originals: dict[str, Any] = {}
-    for body_field, storage in (("kind_slug", "kind_id"), ("sender", "sender_id")):
+    for body_field, storage in (
+        ("kind_slug", "kind_id"),
+        ("sender", "sender_id"),
+        ("recipient", "recipient_id"),
+    ):
         if body_field in provided:
             originals[storage] = _current_value(document, storage)
     if "tags" in provided:
@@ -436,6 +449,10 @@ async def update_document(
         name = provided.pop("sender")
         document.sender_id = None if name is None else (await upsert_sender(session, name)).id
         edited.append(_EDITED_FIELD_NAMES["sender"])
+    if "recipient" in provided:
+        name = provided.pop("recipient")
+        document.recipient_id = None if name is None else (await upsert_recipient(session, name)).id
+        edited.append(_EDITED_FIELD_NAMES["recipient"])
     if "tags" in provided:
         slugs = provided.pop("tags")
         if slugs is None:
@@ -487,7 +504,7 @@ async def update_document(
             )
         )
     await session.commit()
-    await session.refresh(document, ["kind", "sender", "tags", "projects", "events"])
+    await session.refresh(document, ["kind", "sender", "recipient", "tags", "projects", "events"])
     return _detail(document)
 
 
@@ -659,6 +676,11 @@ def _list_item_fields(document: Document) -> dict[str, Any]:
         ),
         "sender": (
             SenderOut(id=document.sender.id, name=document.sender.name) if document.sender else None
+        ),
+        "recipient": (
+            RecipientOut(id=document.recipient.id, name=document.recipient.name)
+            if document.recipient
+            else None
         ),
         "tags": [
             TagOut(slug=tag.slug, name=tag.name)

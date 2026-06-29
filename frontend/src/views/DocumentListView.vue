@@ -97,10 +97,12 @@ function buildFilters(
   offset: number,
 ): DocumentFilters {
   const senderId = Number.parseInt(state.senderId, 10)
+  const recipientId = Number.parseInt(state.recipientId, 10)
   return {
     q: state.q || undefined,
     kind: state.kind || undefined,
     sender_id: Number.isInteger(senderId) ? senderId : undefined,
+    recipient_id: Number.isInteger(recipientId) ? recipientId : undefined,
     project: state.project || undefined,
     tag: state.tags.length ? state.tags : undefined,
     language: (state.language || undefined) as DocumentLanguage | undefined,

@@ -13,6 +13,7 @@ def payload(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {
         "kind_slug": "invoice",
         "sender_name": "Eneco",
+        "recipient_name": "John",
         "title": "Energierekening mei 2026",
         "summary": "Maandfactuur voor energie. Te betalen voor 1 juli 2026.",
         "document_date": "2026-05-15",
@@ -109,6 +110,17 @@ def test_tags_normalised_deduplicated_and_capped() -> None:
 
 def test_blank_sender_becomes_none() -> None:
     assert ExtractedMetadata.model_validate(payload(sender_name="   ")).sender_name is None
+
+
+def test_recipient_name_parses_and_trims() -> None:
+    assert (
+        ExtractedMetadata.model_validate(payload(recipient_name=" Wife ")).recipient_name == "Wife"
+    )
+    assert ExtractedMetadata.model_validate(payload(recipient_name=None)).recipient_name is None
+
+
+def test_blank_recipient_becomes_none() -> None:
+    assert ExtractedMetadata.model_validate(payload(recipient_name="   ")).recipient_name is None
 
 
 def test_topics_default_empty() -> None:

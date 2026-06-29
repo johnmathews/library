@@ -200,6 +200,26 @@ describe('AskView', () => {
     expect(answer.findAll('li')).toHaveLength(2)
   })
 
+  it('collapses citations behind a disclosure showing the count by default', async () => {
+    askQuestionMock.mockResolvedValueOnce(
+      sampleResponse({
+        citations: [
+          { document_id: 42, title: 'Energy bill', page_number: 3 },
+          { document_id: 43, title: 'Water bill', page_number: null },
+        ],
+        thread_id: 1,
+      }),
+    )
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+
+    const details = w.get('[data-testid="ask-citations-disclosure"] details')
+    // Collapsed by default: the native <details> has no `open` attribute.
+    expect(details.attributes('open')).toBeUndefined()
+    // Summary shows the citation count.
+    expect(details.get('summary').text()).toBe('Citations (2)')
+  })
+
   it('renders the page number on a citation and links with a page query', async () => {
     askQuestionMock.mockResolvedValueOnce(
       sampleResponse({
@@ -210,6 +230,8 @@ describe('AskView', () => {
     const w = mountView()
     await typeAndSubmit(w, 'which invoices are due?')
 
+    // jsdom renders <details> content regardless of the open state, so the
+    // citation link is queryable even though the disclosure is collapsed.
     const link = w.get('[data-testid="ask-citation"]')
     expect(link.text()).toContain('p. 3')
     expect(link.attributes('href')).toContain('page=3')
@@ -290,9 +312,25 @@ describe('AskView', () => {
     expect(transcript.classes()).toContain('lg:overflow-y-auto')
   })
 
-  it('shows an empty-state prompt before any question (W10)', () => {
+  it('shows the no-threads empty-state prompt when no conversations exist (W10)', async () => {
+    vi.mocked(listThreads).mockResolvedValue([])
     const w = mountView()
+    await flushPromises()
     expect(w.find('[data-testid="ask-empty"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ask-select-thread"]').exists()).toBe(false)
+  })
+
+  it('shows a "select a conversation" prompt when threads exist but none is selected (W5)', async () => {
+    vi.mocked(listThreads).mockResolvedValue([
+      { id: 1, title: 'Energy bills', created_at: '', updated_at: '', turn_count: 3, total_cost_usd: 0.05 },
+    ])
+    const w = mountView()
+    await flushPromises()
+    expect(w.find('[data-testid="ask-select-thread"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ask-select-thread"]').text()).toContain(
+      'Select a conversation from the sidebar',
+    )
+    expect(w.find('[data-testid="ask-empty"]').exists()).toBe(false)
   })
 
   async function attachImage(w: VueWrapper, name = 'receipt.png'): Promise<void> {

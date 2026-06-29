@@ -12,13 +12,13 @@
 import { computed, ref } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { useStorage } from '@vueuse/core'
 import { useRouter } from 'vue-router'
 import { AppButton, AppErrorSummary, AppTextarea, PageHeader } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
 import { createNote } from '@/api/notes'
 import { ApiError } from '@/api/client'
 import { deriveNoteTitle } from '@/utils/noteTitle'
+import { useMarkdownEditorMode } from '@/composables/useMarkdownEditorMode'
 
 const router = useRouter()
 
@@ -28,22 +28,9 @@ const title = computed(() => deriveNoteTitle(body.value))
 const saving = ref(false)
 const submitError = ref<string | null>(null)
 
-/**
- * Editor view mode. Split (editor + preview side-by-side) is the default and the
- * best use of width on large screens; Edit / Preview are single-pane focus modes
- * that also serve narrow screens. Persisted per-machine — a display-size
- * preference (docs/frontend-view-principles.md §4).
- */
-type EditorMode = 'edit' | 'split' | 'preview'
-const editorMode = useStorage<EditorMode>('library:note-editor-mode', 'split')
-const showEditor = computed(() => editorMode.value !== 'preview')
-const showPreview = computed(() => editorMode.value !== 'edit')
-
-const modes: { value: EditorMode; label: string; wideOnly: boolean }[] = [
-  { value: 'edit', label: 'Edit', wideOnly: false },
-  { value: 'split', label: 'Split', wideOnly: true },
-  { value: 'preview', label: 'Preview', wideOnly: false },
-]
+/** Editor view mode (edit / split / preview) — shared with the in-place note
+ * editor in DocumentDetailView via the persisted preference. */
+const { editorMode, showEditor, showPreview, modes } = useMarkdownEditorMode()
 
 /** Sanitised HTML for the live preview — identical pipeline to the reader. */
 const previewHtml = computed(() =>

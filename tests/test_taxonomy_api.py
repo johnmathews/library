@@ -50,6 +50,22 @@ def test_senders_ordered_by_name_with_counts(api_client: TestClient, api_databas
     assert isinstance(by_name["W11 Aaa Energie"]["id"], int)
 
 
+def test_recipients_ordered_by_name_with_counts(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    seed_document(api_database_url, "w2-tax-recipient-1", recipient_name="W2 Aaa John")
+    seed_document(api_database_url, "w2-tax-recipient-2", recipient_name="W2 Zzz Wife")
+    seed_document(api_database_url, "w2-tax-recipient-3", recipient_name="W2 Zzz Wife")
+
+    recipients = get_json(api_client, "/api/recipients")
+    names = [recipient["name"] for recipient in recipients]
+    assert names == sorted(names)
+    by_name = {recipient["name"]: recipient for recipient in recipients}
+    assert by_name["W2 Aaa John"]["document_count"] == 1
+    assert by_name["W2 Zzz Wife"]["document_count"] == 2
+    assert isinstance(by_name["W2 Aaa John"]["id"], int)
+
+
 def test_tags_ordered_by_name_count_excludes_deleted(
     api_client: TestClient, api_database_url: str
 ) -> None:
@@ -66,5 +82,5 @@ def test_tags_ordered_by_name_count_excludes_deleted(
 
 
 def test_taxonomy_requires_authentication(anon_client: TestClient) -> None:
-    for path in ("/api/kinds", "/api/senders", "/api/tags"):
+    for path in ("/api/kinds", "/api/senders", "/api/recipients", "/api/tags"):
         assert anon_client.get(path).status_code == 401, path

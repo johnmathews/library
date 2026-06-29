@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 # Bump whenever the system prompt or schema changes meaningfully; stored per
 # run so old-prompt documents can be found and re-extracted later.
-PROMPT_VERSION: str = "2026-06-28.1"
+PROMPT_VERSION: str = "2026-06-29.1"
 
 # USD per million tokens (input, output), June 2026 list prices.
 MODEL_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
@@ -74,6 +74,8 @@ Rules:
 - sender_name: the organisation or person that issued the document, in a
   short canonical form (e.g. "Eneco", not "Eneco Services B.V., afdeling
   facturatie"). null when unclear.
+- recipient_name: the household member this document is addressed to / is for
+  (e.g. "John", "Wife"), in short canonical form; null when unclear.
 - Dates are ISO YYYY-MM-DD strings; null when absent. document_date is the
   issue date of the document.
 - amount_total: the document's main total as a plain decimal string, e.g.

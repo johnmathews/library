@@ -29,6 +29,7 @@ from library.models import (
     DocumentLanguage,
     IngestionEvent,
     Kind,
+    Recipient,
     Sender,
     Tag,
 )
@@ -61,6 +62,22 @@ async def upsert_sender(session: AsyncSession, name: str) -> Sender:
     session.add(sender)
     await session.flush()
     return sender
+
+
+async def upsert_recipient(session: AsyncSession, name: str) -> Recipient:
+    """Find a recipient by case-insensitive name match, creating it if new."""
+    cleaned = name.strip()
+    existing = (
+        await session.execute(
+            select(Recipient).where(func.lower(Recipient.name) == cleaned.lower())
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+    recipient = Recipient(name=cleaned)
+    session.add(recipient)
+    await session.flush()
+    return recipient
 
 
 async def get_or_create_tag(session: AsyncSession, slug: str) -> Tag:
@@ -108,6 +125,11 @@ async def _apply_outcome(
         assert metadata.sender_name is not None
         document.sender_id = (await upsert_sender(session, metadata.sender_name)).id
         fields_set.append("sender_id")
+
+    if settable("recipient_id", metadata.recipient_name):
+        assert metadata.recipient_name is not None
+        document.recipient_id = (await upsert_recipient(session, metadata.recipient_name)).id
+        fields_set.append("recipient_id")
 
     scalar_values: dict[str, object | None] = {
         "title": metadata.title,

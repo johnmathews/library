@@ -187,6 +187,16 @@ class Sender(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class Recipient(Base):
+    """Document recipient (who a document was addressed to); lookup table mirroring ``Sender``."""
+
+    __tablename__ = "recipients"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), unique=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 class Tag(Base):
     __tablename__ = "tags"
 
@@ -316,6 +326,9 @@ class Document(Base):
     sender_id: Mapped[int | None] = mapped_column(
         ForeignKey("senders.id", ondelete="SET NULL"), index=True
     )
+    recipient_id: Mapped[int | None] = mapped_column(
+        ForeignKey("recipients.id", ondelete="SET NULL"), index=True
+    )
     kind_id: Mapped[int | None] = mapped_column(
         ForeignKey("kinds.id", ondelete="SET NULL"), index=True
     )
@@ -339,6 +352,7 @@ class Document(Base):
 
     uploader: Mapped[User | None] = relationship(lazy="selectin")
     sender: Mapped[Sender | None] = relationship(lazy="selectin")
+    recipient: Mapped[Recipient | None] = relationship(lazy="selectin")
     kind: Mapped[Kind | None] = relationship(lazy="selectin")
     tags: Mapped[list[Tag]] = relationship(secondary=document_tags, lazy="selectin")
     projects: Mapped[list[Project]] = relationship(secondary=document_projects, lazy="selectin")

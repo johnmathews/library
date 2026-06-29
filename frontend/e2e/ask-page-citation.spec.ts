@@ -156,6 +156,12 @@ test('ask citation deep-links to the cited PDF page', async ({ page }, testInfo)
   await page.locator('#ask-question').fill(TEST_QUESTION)
   await page.getByTestId('ask-submit').click()
 
+  // ── Expand the citations disclosure ─────────────────────────────────────────
+  // Citations are now collapsed by default behind an <AppDetails> disclosure,
+  // so open it (click the "Citations (N)" summary) before the citation link is
+  // visible/clickable.
+  await page.getByTestId('ask-citations-disclosure').getByText(/^Citations \(\d+\)$/).click()
+
   // ── Assert the citation shows "p. 2" ───────────────────────────────────────
   const citation = page.getByTestId('ask-citation').first()
   await expect(citation).toBeVisible()

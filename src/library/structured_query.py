@@ -57,6 +57,7 @@ class DocumentRef:
     id: int
     title: str | None
     sender: str | None
+    recipient: str | None
     kind: str | None
     document_date: date | None
     amount_total: str | None
@@ -103,6 +104,7 @@ async def list_documents(
             id=document.id,
             title=document.title,
             sender=document.sender.name if document.sender else None,
+            recipient=document.recipient.name if document.recipient else None,
             kind=document.kind.slug if document.kind else None,
             document_date=document.document_date,
             amount_total=str(document.amount_total) if document.amount_total is not None else None,

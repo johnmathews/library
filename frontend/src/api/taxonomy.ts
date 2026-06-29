@@ -18,6 +18,12 @@ export interface SenderOption {
   document_count: number
 }
 
+export interface RecipientOption {
+  id: number
+  name: string
+  document_count: number
+}
+
 export interface TagOption {
   slug: string
   name: string
@@ -32,6 +38,11 @@ export function listKinds(signal?: AbortSignal): Promise<KindOption[]> {
 /** GET /api/senders — all known senders, ordered by name. */
 export function listSenders(signal?: AbortSignal): Promise<SenderOption[]> {
   return apiFetch<SenderOption[]>('/api/senders', { signal })
+}
+
+/** GET /api/recipients — all known recipients, ordered by name. */
+export function listRecipients(signal?: AbortSignal): Promise<RecipientOption[]> {
+  return apiFetch<RecipientOption[]>('/api/recipients', { signal })
 }
 
 /** GET /api/tags — all tags, ordered by name. */

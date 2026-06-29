@@ -29,6 +29,7 @@ def make_metadata(**overrides: Any) -> ExtractedMetadata:
     base: dict[str, Any] = {
         "kind_slug": "invoice",
         "sender_name": "Eneco",
+        "recipient_name": "John",
         "title": "Energierekening mei 2026",
         "summary": "Maandfactuur voor energie.",
         "document_date": "2026-05-15",

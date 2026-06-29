@@ -1,10 +1,10 @@
-"""Taxonomy listing service: kinds, senders, and tags with document counts.
+"""Taxonomy listing service: kinds, senders, recipients, and tags with counts.
 
 One shared implementation behind two surfaces — the REST endpoints
-(``GET /api/kinds|senders|tags``, see ``library.api.taxonomy``) and the
-MCP ``list_kinds``/``list_senders``/``list_tags`` tools — so the counting
-rules (deleted documents excluded, zero-count entries included) cannot
-drift apart.
+(``GET /api/kinds|senders|recipients|tags``, see ``library.api.taxonomy``)
+and the MCP ``list_kinds``/``list_senders``/``list_recipients``/``list_tags``
+tools — so the counting rules (deleted documents excluded, zero-count
+entries included) cannot drift apart.
 """
 
 from dataclasses import dataclass
@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.models import Document, Kind, Sender, Tag, document_tags
+from library.models import Document, Kind, Recipient, Sender, Tag, document_tags
 
 
 @dataclass(frozen=True)
@@ -27,6 +27,15 @@ class KindCount:
 @dataclass(frozen=True)
 class SenderCount:
     """One sender with the number of (non-deleted) documents from it."""
+
+    id: int
+    name: str
+    document_count: int
+
+
+@dataclass(frozen=True)
+class RecipientCount:
+    """One recipient with the number of (non-deleted) documents addressed to it."""
 
     id: int
     name: str
@@ -74,6 +83,25 @@ async def list_senders(session: AsyncSession) -> list[SenderCount]:
     return [
         SenderCount(id=sender_id, name=name, document_count=count)
         for sender_id, name, count in rows
+    ]
+
+
+async def list_recipients(session: AsyncSession) -> list[RecipientCount]:
+    """All recipients ordered by name; counts exclude soft-deleted documents."""
+    statement = (
+        select(Recipient.id, Recipient.name, func.count(Document.id))
+        .join(
+            Document,
+            (Document.recipient_id == Recipient.id) & Document.deleted_at.is_(None),
+            isouter=True,
+        )
+        .group_by(Recipient.id)
+        .order_by(Recipient.name)
+    )
+    rows = (await session.execute(statement)).all()
+    return [
+        RecipientCount(id=recipient_id, name=name, document_count=count)
+        for recipient_id, name, count in rows
     ]
 
 

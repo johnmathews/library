@@ -63,6 +63,7 @@ EXPECTED_TOOLS = {
     "ingest_document",
     "list_kinds",
     "list_senders",
+    "list_recipients",
     "list_tags",
     "list_projects",
     "library_stats",
@@ -209,6 +210,7 @@ async def test_search_documents_dutch_stem(
         "mcp-search-nl",
         kind_slug="invoice",
         sender_name="MCP Energie BV",
+        recipient_name="MCP Klant Jan",
         tag_slugs=["mcp-search-nl"],
         topics=["betaling", "herinnering"],
         title="Energierekening mei",
@@ -227,6 +229,8 @@ async def test_search_documents_dutch_stem(
     assert item["title"] == "Energierekening mei"
     assert item["kind"] == {"slug": "invoice", "name": "Invoice"}
     assert item["sender"]["name"] == "MCP Energie BV"
+    assert item["recipient"]["name"] == "MCP Klant Jan"
+    assert isinstance(item["recipient"]["id"], int)
     assert item["tags"] == [{"slug": "mcp-search-nl", "name": "mcp-search-nl"}]
     assert item["topics"] == ["betaling", "herinnering"]
     assert item["language"] == "nld"
@@ -247,6 +251,26 @@ async def test_search_documents_sender_filter_without_query(
     async with mcp_connect() as session:
         result = payload(await session.call_tool("search_documents", {"sender": "waterbedrijf"}))
     assert [item["id"] for item in result["results"]] == [document_id]
+    assert result["results"][0]["snippet"] is None
+    assert result["results"][0]["rank"] is None
+
+
+async def test_search_documents_recipient_filter_without_query(
+    mcp_connect: McpConnector, api_database_url: str
+) -> None:
+    document_id = await _seed_document(
+        api_database_url,
+        "mcp-search-recipient",
+        recipient_name="MCP Recipient Smith",
+        tag_slugs=["mcp-search-recipient"],
+        title="Addressed document",
+    )
+    async with mcp_connect() as session:
+        result = payload(
+            await session.call_tool("search_documents", {"recipient": "recipient smith"})
+        )
+    assert [item["id"] for item in result["results"]] == [document_id]
+    assert result["results"][0]["recipient"]["name"] == "MCP Recipient Smith"
     assert result["results"][0]["snippet"] is None
     assert result["results"][0]["rank"] is None
 
@@ -453,11 +477,13 @@ async def test_list_kinds_senders_tags(mcp_connect: McpConnector, api_database_u
         "mcp-taxonomy",
         kind_slug="invoice",
         sender_name="MCP Taxonomie BV",
+        recipient_name="MCP Taxonomie Ontvanger",
         tag_slugs=["mcp-taxonomy-tag"],
     )
     async with mcp_connect() as session:
         kinds = payload(await session.call_tool("list_kinds", {}))["kinds"]
         senders = payload(await session.call_tool("list_senders", {}))["senders"]
+        recipients = payload(await session.call_tool("list_recipients", {}))["recipients"]
         tags = payload(await session.call_tool("list_tags", {}))["tags"]
 
     invoice = next(kind for kind in kinds if kind["slug"] == "invoice")
@@ -467,6 +493,10 @@ async def test_list_kinds_senders_tags(mcp_connect: McpConnector, api_database_u
     taxonomie = next(s for s in senders if s["name"] == "MCP Taxonomie BV")
     assert taxonomie["document_count"] == 1
     assert isinstance(taxonomie["id"], int)
+
+    ontvanger = next(r for r in recipients if r["name"] == "MCP Taxonomie Ontvanger")
+    assert ontvanger["document_count"] == 1
+    assert isinstance(ontvanger["id"], int)
 
     tag = next(t for t in tags if t["slug"] == "mcp-taxonomy-tag")
     assert tag["document_count"] == 1

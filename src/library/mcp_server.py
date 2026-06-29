@@ -69,7 +69,8 @@ English, made searchable by OCR and metadata extraction.
 Start with `search_documents` to find documents (full-text search with
 Dutch and English stemming, plus metadata filters), then `get_document`
 for the full text of one document. Use `list_kinds`, `list_senders`,
-`list_tags`, and `list_projects` to discover valid filter values,
+`list_recipients`, `list_tags`, and `list_projects` to discover valid
+filter values,
 `library_stats` for an overview, `get_document_file` to retrieve the
 actual file, and `ingest_document` to add a new document to the archive.
 """
@@ -149,6 +150,11 @@ def _document_summary(document: Document) -> dict[str, Any]:
         "sender": (
             {"id": document.sender.id, "name": document.sender.name} if document.sender else None
         ),
+        "recipient": (
+            {"id": document.recipient.id, "name": document.recipient.name}
+            if document.recipient
+            else None
+        ),
         "tags": [
             {"slug": tag.slug, "name": tag.name}
             for tag in sorted(document.tags, key=lambda tag: tag.slug)
@@ -196,6 +202,15 @@ async def search_documents(
             )
         ),
     ] = None,
+    recipient: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Filter by recipient name, case-insensitive substring match "
+                "('john' matches 'John Smith'). See list_recipients."
+            )
+        ),
+    ] = None,
     tag: Annotated[
         str | None,
         Field(description="Filter by tag slug (see list_tags)."),
@@ -223,8 +238,8 @@ async def search_documents(
 ) -> dict[str, Any]:
     """Search and filter the document archive; the primary way to find documents.
 
-    Returns the matching documents (id, title, summary, kind, sender, tags,
-    document_date, language) plus the total match count. With `query`,
+    Returns the matching documents (id, title, summary, kind, sender,
+    recipient, tags, document_date, language) plus the total match count. With `query`,
     results are ranked by relevance and each carries a `snippet` (matching
     OCR-text fragments, matches wrapped in <b>...</b>) and a `rank` score;
     without it, newest documents come first. All filters AND-combine.
@@ -235,6 +250,7 @@ async def search_documents(
         DocumentFilters(
             kind_slug=kind,
             sender_contains=sender,
+            recipient_contains=recipient,
             tag_slugs=(tag,) if tag else (),
             project_slug=project,
             language=language,
@@ -449,6 +465,18 @@ async def list_senders() -> dict[str, Any]:
     async with _session() as session:
         senders = await taxonomy.list_senders(session)
     return {"senders": [asdict(sender) for sender in senders]}
+
+
+@mcp.tool
+async def list_recipients() -> dict[str, Any]:
+    """List all known recipients (addressees) with per-recipient document counts.
+
+    Use the returned names with the `recipient` filter of search_documents
+    (case-insensitive substring match).
+    """
+    async with _session() as session:
+        recipients = await taxonomy.list_recipients(session)
+    return {"recipients": [asdict(recipient) for recipient in recipients]}
 
 
 @mcp.tool

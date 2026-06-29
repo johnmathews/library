@@ -21,7 +21,7 @@ import { computed, nextTick, onMounted, ref, watch } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { AppButton, AppErrorSummary, AppTextarea, PageHeader } from '@/components/app'
+import { AppButton, AppDetails, AppErrorSummary, AppTextarea, PageHeader } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
 import { askQuestion, getThread, type AskCitation, type AskImage } from '@/api/ask'
 import { ApiError } from '@/api/client'
@@ -59,6 +59,10 @@ const errorMessage = ref<string | null>(null)
 const turns = ref<TurnVM[]>([])
 const threadId = ref<number | null>(null)
 const sidebarRef = ref<InstanceType<typeof ConversationSidebar> | null>(null)
+// How many conversation threads exist (surfaced by the sidebar via its
+// `threads-changed` event). Lets the empty state tell "no conversations yet"
+// apart from "conversations exist but none is selected".
+const sidebarThreadCount = ref(0)
 const pendingImages = ref<PendingImage[]>([])
 const imageInput = ref<HTMLInputElement | null>(null)
 const transcriptRef = ref<HTMLElement | null>(null)
@@ -280,6 +284,7 @@ defineExpose({ resetConversation })
       :active-thread-id="threadId"
       @select="(id: number) => router.push({ name: 'ask-thread', params: { threadId: id } })"
       @new="resetConversation"
+      @threads-changed="(count: number) => (sidebarThreadCount = count)"
     />
 
     <!-- Answer column. On lg+ it is a full-height flex column (transcript
@@ -311,36 +316,35 @@ defineExpose({ resetConversation })
               v-html="turn.answerHtml"
             />
 
-            <div v-if="turn.citations.length" class="mt-5">
-              <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2">
-                Citations
-              </h3>
-              <ul
-                class="grid grid-cols-1 md:grid-cols-2 gap-2"
-                data-testid="ask-citations"
-              >
-                <li v-for="citation in turn.citations" :key="citation.document_id">
-                  <RouterLink
-                    class="flex items-center justify-between gap-3 px-4 py-3 border border-gray-200 dark:border-gray-700/60 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
-                    :to="{
-                      name: 'document-detail',
-                      params: { id: citation.document_id },
-                      query: citation.page_number ? { page: citation.page_number } : {},
-                    }"
-                    data-testid="ask-citation"
-                  >
-                    <span
-                      class="min-w-0 truncate text-sm text-violet-600 dark:text-violet-400 underline"
+            <div v-if="turn.citations.length" class="mt-5" data-testid="ask-citations-disclosure">
+              <AppDetails :summary="`Citations (${turn.citations.length})`" :open="false">
+                <ul
+                  class="grid grid-cols-1 md:grid-cols-2 gap-2"
+                  data-testid="ask-citations"
+                >
+                  <li v-for="citation in turn.citations" :key="citation.document_id">
+                    <RouterLink
+                      class="flex items-center justify-between gap-3 px-4 py-3 border border-gray-200 dark:border-gray-700/60 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
+                      :to="{
+                        name: 'document-detail',
+                        params: { id: citation.document_id },
+                        query: citation.page_number ? { page: citation.page_number } : {},
+                      }"
+                      data-testid="ask-citation"
                     >
-                      {{ citation.title ?? 'Untitled'
-                      }}<span v-if="citation.page_number">, p. {{ citation.page_number }}</span>
-                    </span>
-                    <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400"
-                      >#{{ citation.document_id }}</span
-                    >
-                  </RouterLink>
-                </li>
-              </ul>
+                      <span
+                        class="min-w-0 truncate text-sm text-violet-600 dark:text-violet-400 underline"
+                      >
+                        {{ citation.title ?? 'Untitled'
+                        }}<span v-if="citation.page_number">, p. {{ citation.page_number }}</span>
+                      </span>
+                      <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400"
+                        >#{{ citation.document_id }}</span
+                      >
+                    </RouterLink>
+                  </li>
+                </ul>
+              </AppDetails>
             </div>
 
             <p
@@ -354,6 +358,14 @@ defineExpose({ resetConversation })
             </p>
           </section>
         </div>
+
+        <p
+          v-else-if="sidebarThreadCount > 0 && threadId === null"
+          data-testid="ask-select-thread"
+          class="text-gray-500 dark:text-gray-400 mb-6"
+        >
+          Select a conversation from the sidebar, or ask a new question below.
+        </p>
 
         <p
           v-else

@@ -86,6 +86,7 @@ class ExtractedMetadata(BaseModel):
 
     kind_slug: KindSlug
     sender_name: str | None
+    recipient_name: str | None
     title: str
     summary: str
     document_date: OptionalIsoDate
@@ -99,7 +100,7 @@ class ExtractedMetadata(BaseModel):
     confidence: Literal["high", "medium", "low"]
     reasoning_note: str | None
 
-    @field_validator("sender_name", "reasoning_note", mode="after")
+    @field_validator("sender_name", "recipient_name", "reasoning_note", mode="after")
     @classmethod
     def _blank_to_none(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():

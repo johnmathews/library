@@ -217,6 +217,7 @@ async def _run_semantic_search(
                 "document_id": hit.document.id,
                 "title": hit.document.title,
                 "sender": hit.document.sender.name if hit.document.sender else None,
+                "recipient": hit.document.recipient.name if hit.document.recipient else None,
                 "document_date": (
                     hit.document.document_date.isoformat() if hit.document.document_date else None
                 ),

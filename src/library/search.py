@@ -33,6 +33,7 @@ from library.models import (
     DocumentStatus,
     Kind,
     Project,
+    Recipient,
     ReviewStatus,
     Sender,
     Tag,
@@ -61,6 +62,8 @@ class DocumentFilters:
     kind_slug: str | None = None
     sender_id: int | None = None
     sender_contains: str | None = None
+    recipient_id: int | None = None
+    recipient_contains: str | None = None
     tag_slugs: Sequence[str] = field(default_factory=tuple)
     project_slug: str | None = None
     language: DocumentLanguage | None = None
@@ -93,11 +96,18 @@ def filter_conditions(filters: DocumentFilters) -> list[Any]:
         conditions.append(Document.kind.has(Kind.slug == filters.kind_slug))
     if filters.sender_id is not None:
         conditions.append(Document.sender_id == filters.sender_id)
+    if filters.recipient_id is not None:
+        conditions.append(Document.recipient_id == filters.recipient_id)
     if filters.sender_contains is not None:
         escaped = (
             filters.sender_contains.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
         )
         conditions.append(Document.sender.has(Sender.name.ilike(f"%{escaped}%", escape="\\")))
+    if filters.recipient_contains is not None:
+        escaped = (
+            filters.recipient_contains.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+        )
+        conditions.append(Document.recipient.has(Recipient.name.ilike(f"%{escaped}%", escape="\\")))
     for slug in filters.tag_slugs:
         conditions.append(Document.tags.any(Tag.slug == slug))
     if filters.project_slug is not None:

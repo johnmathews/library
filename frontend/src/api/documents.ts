@@ -23,6 +23,11 @@ export interface SenderRef {
   name: string
 }
 
+export interface RecipientRef {
+  id: number
+  name: string
+}
+
 export interface TagRef {
   slug: string
   name: string
@@ -46,6 +51,7 @@ export interface DocumentListItem {
   summary: string | null
   kind: KindRef | null
   sender: SenderRef | null
+  recipient: RecipientRef | null
   tags: TagRef[]
   projects: ProjectRef[]
   document_date: string | null
@@ -116,6 +122,7 @@ export interface DocumentFilters {
   q?: string
   kind?: string
   sender_id?: number
+  recipient_id?: number
   /** Single project slug; AND-composes with the other filters. */
   project?: string
   /** Repeatable: every slug must match (AND). */
@@ -143,6 +150,8 @@ export interface DocumentUpdate {
   kind_slug?: string | null
   /** Sender name; upserted case-insensitively. */
   sender?: string | null
+  /** Recipient name; upserted case-insensitively. */
+  recipient?: string | null
   tags?: string[]
   /**
    * Full-replacement list of project names-or-slugs (`[]` clears). Unknown

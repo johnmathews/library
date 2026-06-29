@@ -10,6 +10,7 @@ const EMPTY: AppliedFilters = {
   q: '',
   kind: '',
   senderId: '',
+  recipientId: '',
   project: '',
   tags: [],
   language: '',
@@ -40,6 +41,7 @@ describe('parseDocumentQuery', () => {
       q: 'rekening',
       kind: 'invoice',
       senderId: '3',
+      recipientId: '',
       project: '',
       tags: [],
       language: 'nld',
@@ -49,6 +51,10 @@ describe('parseDocumentQuery', () => {
       review: '',
       page: 2,
     })
+  })
+
+  it('parses the recipient_id URL param into the recipientId field', () => {
+    expect(parseDocumentQuery({ recipient_id: '5' }).recipientId).toBe('5')
   })
 
   it('parses the project URL param into the project field', () => {
@@ -87,6 +93,7 @@ describe('buildDocumentQuery', () => {
       q: 'rekening',
       kind: 'invoice',
       senderId: '3',
+      recipientId: '5',
       project: 'house-purchase',
       tags: ['energie', 'wonen'],
       language: 'nld',
@@ -100,6 +107,7 @@ describe('buildDocumentQuery', () => {
       q: 'rekening',
       kind: 'invoice',
       sender_id: '3',
+      recipient_id: '5',
       project: 'house-purchase',
       tag: ['energie', 'wonen'],
       language: 'nld',
@@ -133,6 +141,7 @@ describe('hasActiveFilters', () => {
     expect(hasActiveFilters(EMPTY)).toBe(false)
     expect(hasActiveFilters({ ...EMPTY, q: 'x' })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, tags: ['energie'] })).toBe(true)
+    expect(hasActiveFilters({ ...EMPTY, recipientId: '5' })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, project: 'house-purchase' })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, status: 'failed' })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, page: 5 })).toBe(false)

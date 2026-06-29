@@ -8,6 +8,7 @@ const EMPTY: AppliedFilters = {
   q: '',
   kind: '',
   senderId: '',
+  recipientId: '',
   project: '',
   tags: [],
   language: '',
@@ -27,6 +28,7 @@ function jsonResponse(body: unknown, status = 200): Response {
 
 const KINDS = [{ slug: 'invoice', name: 'Invoice', document_count: 3 }]
 const SENDERS = [{ id: 3, name: 'Eneco', document_count: 3 }]
+const RECIPIENTS = [{ id: 5, name: 'John', document_count: 7 }]
 const TAGS = [
   { slug: 'energie', name: 'Energie', document_count: 2 },
   { slug: 'wonen', name: 'Wonen', document_count: 1 },
@@ -51,6 +53,7 @@ describe('DocumentFilterBar', () => {
       const url = String(input)
       if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
       if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
+      if (url === '/api/recipients') return Promise.resolve(jsonResponse(RECIPIENTS))
       if (url === '/api/tags') return Promise.resolve(jsonResponse(TAGS))
       if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
       return Promise.resolve(jsonResponse({ detail: `unexpected ${url}` }, 500))
@@ -99,6 +102,25 @@ describe('DocumentFilterBar', () => {
     await w.get('[data-testid="pill-kind"] [data-testid="filter-pill-button"]').trigger('click')
     await w.get('[data-testid="kind-option-invoice"]').trigger('click')
     expect(w.emitted('apply')!.at(-1)![0]).toEqual({ kind: 'invoice' })
+  })
+
+  it('selecting a recipient emits a push apply with the recipient id', async () => {
+    const w = mountBar()
+    await flushPromises() // taxonomy load
+    await w
+      .get('[data-testid="pill-recipient"] [data-testid="filter-pill-button"]')
+      .trigger('click')
+    await w.get('[data-testid="recipient-option-5"]').trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ recipient_id: '5' })
+  })
+
+  it('renders a removable recipient chip and clears the recipient on remove', async () => {
+    const w = mountBar({ ...EMPTY, recipientId: '5' })
+    await flushPromises()
+    const chip = w.get('[data-testid="chip-recipient"]')
+    expect(chip.text()).toContain('John')
+    await w.get('[data-testid="chip-remove-recipient"]').trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({})
   })
 
   it('selecting a project emits a push apply with the project slug', async () => {

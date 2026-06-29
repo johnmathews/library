@@ -33,6 +33,7 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     IngestionEvent,
+    Recipient,
     Sender,
     Tag,
 )
@@ -89,6 +90,7 @@ def make_metadata(**overrides: Any) -> ExtractedMetadata:
     base: dict[str, Any] = {
         "kind_slug": "invoice",
         "sender_name": "Eneco",
+        "recipient_name": "John",
         "title": "Energierekening mei 2026",
         "summary": "Maandfactuur voor energie. Te betalen voor 1 juli 2026.",
         "document_date": "2026-05-15",
@@ -190,6 +192,7 @@ async def test_dutch_invoice_outcome_populates_metadata(
         assert document is not None
         assert document.kind is not None and document.kind.slug == "invoice"
         assert document.sender is not None and document.sender.name == "Eneco"
+        assert document.recipient is not None and document.recipient.name == "John"
         assert document.title == "Energierekening mei 2026"
         assert document.document_date == date(2026, 5, 15)
         assert document.due_date == date(2026, 7, 1)
@@ -202,7 +205,13 @@ async def test_dutch_invoice_outcome_populates_metadata(
         assert extraction["model"] == "claude-haiku-4-5"
         assert extraction["confidence"] == "high"
         assert extraction["cost_usd"] == pytest.approx(0.002)
-        assert set(extraction["fields_set"]) >= {"kind_id", "sender_id", "title", "amount_total"}
+        assert set(extraction["fields_set"]) >= {
+            "kind_id",
+            "sender_id",
+            "recipient_id",
+            "title",
+            "amount_total",
+        }
 
     events = await get_events(session_factory, document_id)
     completed = [detail for event, detail in events if event == "extraction_completed"]
@@ -241,6 +250,70 @@ async def test_sender_upsert_is_case_insensitive(
         document = await session.get(Document, document_id)
         assert document is not None
         assert document.sender is not None and document.sender.name == "ENECO Services"
+
+
+async def test_recipient_upsert_is_case_insensitive(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        session.add(Recipient(name="Apply CI Recipient"))
+        await session.commit()
+
+    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name="apply ci recipient")))
+    document_id = await make_document(session_factory, "apply-recipient-ci")
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Recipient)
+                .where(func.lower(Recipient.name) == "apply ci recipient")
+            )
+        ).scalar_one()
+        assert count == 1
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient is not None and document.recipient.name == "Apply CI Recipient"
+
+
+async def test_user_edited_recipient_is_never_overwritten(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async with session_factory() as session:
+        locked = Recipient(name="Apply Locked Recipient")
+        session.add(locked)
+        await session.commit()
+        locked_id = locked.id
+
+    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name="John")))
+    document_id = await make_document(
+        session_factory,
+        "apply-recipient-locked",
+        recipient_id=locked_id,
+        extra={"user_edited_fields": ["recipient_id"]},
+    )
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert (
+            document.recipient is not None and document.recipient.name == "Apply Locked Recipient"
+        )
+        assert "recipient_id" not in document.extra["extraction"]["fields_set"]
 
 
 async def test_tags_are_created_once_and_reused(
@@ -435,6 +508,7 @@ async def test_apply_sets_needs_review_on_flagged_extraction(
     metadata = ExtractedMetadata(
         kind_slug="invoice",
         sender_name="Eneco",
+        recipient_name="John",
         title="t",
         summary="s",
         document_date=date(2099, 1, 1),
@@ -490,6 +564,7 @@ async def test_apply_sets_unreviewed_on_clean_extraction(
     metadata = ExtractedMetadata(
         kind_slug="invoice",
         sender_name="Eneco",
+        recipient_name="John",
         title="t",
         summary="s",
         document_date=date(2026, 5, 1),

@@ -31,7 +31,7 @@ const emit = defineEmits<{
   clear: []
 }>()
 
-const { kinds, senders, tags, projects, ensureLoaded } = useTaxonomyOptions()
+const { kinds, senders, recipients, tags, projects, ensureLoaded } = useTaxonomyOptions()
 void ensureLoaded()
 
 // Which pill popover is open (only one at a time); null = all closed.
@@ -99,6 +99,10 @@ function selectSender(id: string): void {
   emitWith({ senderId: id })
   openPill.value = null
 }
+function selectRecipient(id: string): void {
+  emitWith({ recipientId: id })
+  openPill.value = null
+}
 function selectProject(slug: string): void {
   emitWith({ project: slug })
   openPill.value = null
@@ -155,6 +159,11 @@ const senderLabel = computed(
     senders.value.find((s) => String(s.id) === props.applied.senderId)?.name ??
     props.applied.senderId,
 )
+const recipientLabel = computed(
+  () =>
+    recipients.value.find((r) => String(r.id) === props.applied.recipientId)?.name ??
+    props.applied.recipientId,
+)
 const projectLabel = computed(
   () =>
     projects.value.find((p) => p.slug === props.applied.project)?.name ?? props.applied.project,
@@ -191,6 +200,12 @@ const chips = computed<Chip[]>(() => {
       key: 'sender',
       label: `Sender: ${senderLabel.value}`,
       remove: () => emitWith({ senderId: '' }),
+    })
+  if (a.recipientId)
+    out.push({
+      key: 'recipient',
+      label: `Recipient: ${recipientLabel.value}`,
+      remove: () => emitWith({ recipientId: '' }),
     })
   if (a.project)
     out.push({
@@ -371,6 +386,39 @@ const statusOptions = DOCUMENT_STATUSES
               @click="selectSender(String(s.id))"
             >
               {{ s.name }}
+            </button>
+          </li>
+        </ul>
+      </FilterPill>
+
+      <FilterPill
+        data-testid="pill-recipient"
+        label="Recipient"
+        :active="Boolean(applied.recipientId)"
+        :value-label="recipientLabel"
+        :open="pillOpen('recipient')"
+        @update:open="setPillOpen('recipient', $event)"
+      >
+        <ul class="max-h-64 overflow-auto text-sm">
+          <li>
+            <button
+              type="button"
+              data-testid="recipient-option-any"
+              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
+              @click="selectRecipient('')"
+            >
+              All recipients
+            </button>
+          </li>
+          <li v-for="r in recipients" :key="r.id">
+            <button
+              type="button"
+              :data-testid="`recipient-option-${r.id}`"
+              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
+              :class="{ 'font-semibold text-violet-600 dark:text-violet-300': applied.recipientId === String(r.id) }"
+              @click="selectRecipient(String(r.id))"
+            >
+              {{ r.name }}
             </button>
           </li>
         </ul>

@@ -21,6 +21,12 @@ describe('ConversationSidebar', () => {
     expect(w.emitted('select')?.[0]).toEqual([1])
   })
 
+  it('emits threads-changed with the loaded thread count', async () => {
+    const w = mount(ConversationSidebar, { props: { activeThreadId: null } })
+    await flushPromises()
+    expect(w.emitted('threads-changed')?.[0]).toEqual([1])
+  })
+
   it('emits new when the new-conversation button is clicked', async () => {
     const w = mount(ConversationSidebar, { props: { activeThreadId: null } })
     await flushPromises()

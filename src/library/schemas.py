@@ -38,6 +38,13 @@ class SenderOut(BaseModel):
     name: str
 
 
+class RecipientOut(BaseModel):
+    """A recipient, expanded inline."""
+
+    id: int
+    name: str
+
+
 class TagOut(BaseModel):
     """A tag, expanded inline."""
 
@@ -68,6 +75,7 @@ class DocumentListItem(BaseModel):
     summary: str | None
     kind: KindOut | None
     sender: SenderOut | None
+    recipient: RecipientOut | None = None
     tags: list[TagOut] = Field(description="Sorted by slug.")
     topics: list[str] = Field(default_factory=list, description="Extracted free-text topics.")
     projects: list[ProjectRef] = Field(default_factory=list, description="Sorted by slug.")
@@ -144,6 +152,9 @@ class DocumentUpdate(BaseModel):
     kind_slug: str | None = Field(default=None, description="Must be an existing kind slug.")
     sender: str | None = Field(
         default=None, description="Sender name; upserted case-insensitively."
+    )
+    recipient: str | None = Field(
+        default=None, description="Recipient name; upserted case-insensitively."
     )
     tags: list[str] | None = Field(
         default=None, description="Full replacement list of tag slugs; created if unknown."

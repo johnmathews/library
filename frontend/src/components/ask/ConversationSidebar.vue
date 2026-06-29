@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue'
 import { listThreads, deleteThread, type ThreadSummary } from '@/api/ask'
 
 const props = defineProps<{ activeThreadId: number | null }>()
-const emit = defineEmits<{ select: [number]; new: [] }>()
+const emit = defineEmits<{ select: [number]; new: []; 'threads-changed': [number] }>()
 
 const threads = ref<ThreadSummary[]>([])
 const query = ref('')
@@ -18,6 +18,9 @@ const filteredThreads = computed<ThreadSummary[]>(() => {
 
 async function refresh(): Promise<void> {
   threads.value = await listThreads()
+  // Let the parent (AskView) distinguish "no conversations exist" from
+  // "conversations exist but none is selected" in its empty state.
+  emit('threads-changed', threads.value.length)
 }
 
 async function onDelete(thread: ThreadSummary): Promise<void> {

@@ -52,8 +52,16 @@ import {
   updateNote,
   type NoteVersion,
 } from '@/api/notes'
-import { listKinds, listSenders, type KindOption, type SenderOption } from '@/api/taxonomy'
-import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
+import {
+  listKinds,
+  listSenders,
+  listRecipients,
+  type KindOption,
+  type SenderOption,
+  type RecipientOption,
+} from '@/api/taxonomy'
+import { refreshTaxonomyOptions, useTaxonomyOptions } from '@/composables/taxonomyOptions'
+import { useMarkdownEditorMode } from '@/composables/useMarkdownEditorMode'
 import { ApiError } from '@/api/client'
 import { useJobsStore } from '@/stores/jobs'
 import { deriveNoteTitle } from '@/utils/noteTitle'
@@ -87,6 +95,7 @@ onBeforeUnmount(() => {
 
 const kinds = ref<KindOption[]>([])
 const senders = ref<SenderOption[]>([])
+const recipients = ref<RecipientOption[]>([])
 
 // Existing project names feed the projects editor's datalist (free text still
 // creates new projects via the backend upsert).
@@ -94,12 +103,27 @@ const { projects: projectOptions, ensureLoaded: ensureProjectsLoaded } = useTaxo
 void ensureProjectsLoaded()
 
 onMounted(async () => {
-  // Best-effort: without options the kind select still offers the current
-  // value and "Not set", and the sender input works without suggestions.
-  const [kindResult, senderResult] = await Promise.allSettled([listKinds(), listSenders()])
+  // Best-effort: without options the kind/recipient selects still offer the
+  // current value and "Not set", and the sender input works without suggestions.
+  const [kindResult, senderResult, recipientResult] = await Promise.allSettled([
+    listKinds(),
+    listSenders(),
+    listRecipients(),
+  ])
   if (kindResult.status === 'fulfilled') kinds.value = kindResult.value
   if (senderResult.status === 'fulfilled') senders.value = senderResult.value
+  if (recipientResult.status === 'fulfilled') recipients.value = recipientResult.value
 })
+
+/** Reload the recipient dropdown options (called after an inline add so a freshly
+ * created recipient appears in the list). Best-effort. */
+async function loadRecipients(): Promise<void> {
+  try {
+    recipients.value = await listRecipients()
+  } catch {
+    // Keep the current list; the new recipient still shows via recipientItems.
+  }
+}
 
 const kindItems = computed<SelectItem[]>(() => {
   const items: SelectItem[] = [
@@ -118,12 +142,34 @@ const languageItems: SelectItem[] = DOCUMENT_LANGUAGES.map((language) => ({
   text: language.text,
 }))
 
+/** Sentinel select value that reveals the inline "add a new recipient" input.
+ * Recipient is a controlled list (a dropdown), but new names can be added
+ * inline — picking this option swaps the select for a text input + confirm. */
+const RECIPIENT_ADD = '__add_recipient__'
+
+/** Recipient dropdown options: "Not set", every known recipient (by name, the
+ * value the PATCH upserts), the current value if it isn't in the list yet, and
+ * the inline "Add recipient…" affordance. Mirrors {@link kindItems}. */
+const recipientItems = computed<SelectItem[]>(() => {
+  const items: SelectItem[] = [
+    { value: '', text: 'Not set' },
+    ...recipients.value.map((recipient) => ({ value: recipient.name, text: recipient.name })),
+  ]
+  const current = doc.value?.recipient
+  if (current && !recipients.value.some((recipient) => recipient.name === current.name)) {
+    items.push({ value: current.name, text: current.name })
+  }
+  items.push({ value: RECIPIENT_ADD, text: 'Add recipient…' })
+  return items
+})
+
 // --- Summary rows -------------------------------------------------------------
 
 type EditableField =
   | 'title'
   | 'kind'
   | 'sender'
+  | 'recipient'
   | 'document_date'
   | 'language'
   | 'tags'
@@ -145,6 +191,7 @@ const rowConfigs: RowConfig[] = [
   { field: 'title', label: 'Title', display: (d) => d.title },
   { field: 'kind', label: 'Kind', display: (d) => d.kind?.name ?? null },
   { field: 'sender', label: 'Sender', display: (d) => d.sender?.name ?? null },
+  { field: 'recipient', label: 'Recipient', display: (d) => d.recipient?.name ?? null },
   { field: 'document_date', label: 'Document date', display: (d) => formatDate(d.document_date) },
   { field: 'language', label: 'Language', display: (d) => languageName(d.language) },
   {
@@ -195,9 +242,9 @@ const fieldGroups: FieldGroup[] = [
   { key: 'classification', label: 'Classification', accent: 'yellow', fields: ['kind', 'language'] },
   {
     key: 'parties',
-    label: 'Sender & dates',
+    label: 'Sender, recipient & dates',
     accent: 'sky',
-    fields: ['sender', 'document_date', 'due_date', 'expiry_date'],
+    fields: ['sender', 'recipient', 'document_date', 'due_date', 'expiry_date'],
   },
   { key: 'financial', label: 'Financial', accent: 'green', fields: ['amount'] },
 ]
@@ -330,6 +377,7 @@ type StringDraftField =
   | 'title'
   | 'summary'
   | 'sender'
+  | 'recipient'
   | 'tags'
   | 'projects'
   | 'kind'
@@ -341,6 +389,7 @@ const drafts = reactive<Record<StringDraftField, string>>({
   title: '',
   summary: '',
   sender: '',
+  recipient: '',
   tags: '',
   projects: '',
   kind: '',
@@ -378,6 +427,7 @@ function hydrateDrafts(): void {
   drafts.title = d.title ?? ''
   drafts.summary = d.summary ?? ''
   drafts.sender = d.sender?.name ?? ''
+  drafts.recipient = d.recipient?.name ?? ''
   drafts.tags = d.tags.map((tag) => tag.slug).join(', ')
   drafts.projects = d.projects.map((project) => project.name).join(', ')
   drafts.kind = d.kind?.slug ?? ''
@@ -398,6 +448,7 @@ function hydrateField(field: EditableField): void {
     case 'title': drafts.title = d.title ?? ''; break
     case 'summary': drafts.summary = d.summary ?? ''; break
     case 'sender': drafts.sender = d.sender?.name ?? ''; break
+    case 'recipient': drafts.recipient = d.recipient?.name ?? ''; break
     case 'tags': drafts.tags = d.tags.map((tag) => tag.slug).join(', '); break
     case 'projects': drafts.projects = d.projects.map((project) => project.name).join(', '); break
     case 'kind': drafts.kind = d.kind?.slug ?? ''; break
@@ -421,6 +472,8 @@ function toggleEditMode(): void {
 /** Leave edit mode and clear the transient per-field error / "Saved" state. */
 function resetEditState(): void {
   editMode.value = false
+  recipientAdding.value = false
+  recipientNewName.value = ''
   for (const key of Object.keys(fieldError)) fieldError[key] = null
   for (const key of Object.keys(savedField)) savedField[key] = false
 }
@@ -434,6 +487,7 @@ function fieldDirty(field: EditableField): boolean {
     case 'title': return (drafts.title.trim() || null) !== (d.title ?? null)
     case 'summary': return (drafts.summary.trim() || null) !== (d.summary ?? null)
     case 'sender': return (drafts.sender.trim() || null) !== (d.sender?.name ?? null)
+    case 'recipient': return (drafts.recipient.trim() || null) !== (d.recipient?.name ?? null)
     case 'kind': return (drafts.kind || null) !== (d.kind?.slug ?? null)
     case 'language': return drafts.language !== d.language
     case 'tags': {
@@ -470,6 +524,8 @@ function buildPatch(field: EditableField): DocumentUpdate | null {
       return { summary: drafts.summary.trim() || null }
     case 'sender':
       return { sender: drafts.sender.trim() || null }
+    case 'recipient':
+      return { recipient: drafts.recipient.trim() || null }
     case 'kind':
       return { kind_slug: drafts.kind || null }
     case 'language':
@@ -535,6 +591,51 @@ function onDateFocusOut(field: EditableField, event: FocusEvent): void {
   // Focus moved between the day/month/year inputs — still inside the group.
   if (group && next && group.contains(next)) return
   void saveField(field)
+}
+
+// --- Recipient inline add -----------------------------------------------------
+//
+// Recipient is a controlled list shown as a dropdown, but a brand-new recipient
+// can be created without leaving the page: picking "Add recipient…" reveals an
+// inline text input + confirm (no blocking window.prompt). Confirming sets the
+// draft to the typed name and runs the normal per-field autosave, which PATCHes
+// `{ recipient: <name> }` — the backend upserts case-insensitively by name.
+
+const recipientAdding = ref(false)
+const recipientNewName = ref('')
+
+/** Select-change handler for the recipient dropdown. The "Add recipient…"
+ * sentinel reveals the inline input (and reverts the select to the current
+ * value); any real option autosaves as usual. */
+function onRecipientChange(): void {
+  if (drafts.recipient === RECIPIENT_ADD) {
+    drafts.recipient = doc.value?.recipient?.name ?? ''
+    recipientNewName.value = ''
+    recipientAdding.value = true
+    return
+  }
+  recipientAdding.value = false
+  void saveField('recipient')
+}
+
+/** Confirm an inline-added recipient: set the draft to the typed name, autosave
+ * (the backend upserts), then refresh the dropdown so it lists the new name. */
+async function confirmAddRecipient(): Promise<void> {
+  const name = recipientNewName.value.trim()
+  if (!name) return
+  drafts.recipient = name
+  recipientAdding.value = false
+  recipientNewName.value = ''
+  await saveField('recipient')
+  await loadRecipients()
+  // Refresh the shared taxonomy cache so the list view's filter bar lists the
+  // newly created recipient without a full page reload.
+  await refreshTaxonomyOptions()
+}
+
+function cancelAddRecipient(): void {
+  recipientAdding.value = false
+  recipientNewName.value = ''
 }
 
 // --- Re-extraction ------------------------------------------------------------
@@ -626,6 +727,7 @@ const STORAGE_TO_UI_FIELD: Record<string, string> = {
   summary: 'summary',
   kind_id: 'kind',
   sender_id: 'sender',
+  recipient_id: 'recipient',
 }
 
 /** Findings indexed by UI field name. */
@@ -769,6 +871,14 @@ const noteEditMode = ref(false)
 const noteBodyDraft = ref('')
 const noteSaving = ref(false)
 const noteEditError = ref<string | null>(null)
+
+/** Editor view mode (edit / split / preview) — shared with the new-note view via
+ * the persisted preference. */
+const { editorMode, showEditor, showPreview, modes } = useMarkdownEditorMode()
+
+/** Sanitised HTML preview of the draft body so the preview reflects edits live
+ * (the reader's markdownPageHtml is bound to the saved body). */
+const noteDraftPreviewHtml = computed(() => markdownPageHtml(noteBodyDraft.value))
 
 /** The title is the first line of the body, mirroring the new-note authoring view. */
 const noteEditTitle = computed(() => deriveNoteTitle(noteBodyDraft.value))
@@ -1115,15 +1225,57 @@ watch(
           </div>
 
           <template v-if="noteEditMode">
-            <div class="space-y-4">
-              <AppTextarea
-                id="note-edit-body"
-                v-model="noteBodyDraft"
-                label="Note"
-                hint="The first line becomes the title. Markdown is supported."
-                :rows="12"
-                :error-message="noteEditError ?? undefined"
-              />
+            <div class="mb-4 flex justify-end">
+              <div
+                class="inline-flex rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 p-0.5"
+                role="group"
+                aria-label="Editor view"
+              >
+                <button
+                  v-for="m in modes"
+                  :key="m.value"
+                  type="button"
+                  :id="`note-edit-mode-${m.value}`"
+                  :data-testid="`note-edit-mode-${m.value}`"
+                  :aria-pressed="editorMode === m.value"
+                  :aria-label="`${m.label} view`"
+                  class="px-3 py-1 text-sm font-medium rounded-md transition"
+                  :class="[
+                    editorMode === m.value
+                      ? 'bg-violet-500 text-white'
+                      : 'text-gray-600 dark:text-gray-300 hover:text-gray-800 dark:hover:text-gray-100',
+                    m.wideOnly ? 'hidden lg:inline-flex' : 'inline-flex',
+                  ]"
+                  @click="editorMode = m.value"
+                >
+                  {{ m.label }}
+                </button>
+              </div>
+            </div>
+            <div
+              class="grid grid-cols-1 gap-4"
+              :class="{ 'lg:grid-cols-2': editorMode === 'split' }"
+            >
+              <div v-if="showEditor" data-testid="note-edit-editor-pane">
+                <AppTextarea
+                  id="note-edit-body"
+                  v-model="noteBodyDraft"
+                  label="Note"
+                  hint="The first line becomes the title. Markdown is supported."
+                  :rows="12"
+                  :error-message="noteEditError ?? undefined"
+                />
+              </div>
+              <div v-if="showPreview" data-testid="note-edit-preview-pane">
+                <span class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Preview</span>
+                <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in noteDraftPreviewHtml -->
+                <div
+                  class="doc-markdown form-textarea w-full min-h-40 overflow-auto text-gray-800 dark:text-gray-100"
+                  data-testid="note-edit-preview"
+                  v-html="noteDraftPreviewHtml"
+                />
+                <!-- eslint-enable vue/no-v-html -->
+              </div>
             </div>
             <div class="mt-4 flex flex-wrap gap-3">
               <AppButton
@@ -1361,6 +1513,49 @@ watch(
                       <datalist id="sender-options">
                         <option v-for="sender in senders" :key="sender.id" :value="sender.name" />
                       </datalist>
+                    </template>
+                    <template v-else-if="field === 'recipient'">
+                      <!-- Recipient is a controlled list (dropdown). "Add
+                           recipient…" reveals an inline input + confirm instead
+                           of a blocking prompt; confirming autosaves the name,
+                           which the backend upserts. -->
+                      <AppSelect
+                        v-if="!recipientAdding"
+                        id="edit-recipient"
+                        v-model="drafts.recipient"
+                        label="Recipient"
+                        :items="recipientItems"
+                        :error-message="fieldError.recipient ?? undefined"
+                        @change="onRecipientChange"
+                      />
+                      <div v-else>
+                        <AppInput
+                          id="recipient-add-input"
+                          v-model="recipientNewName"
+                          label="New recipient"
+                          hint="Type a name, then confirm to add it"
+                          :error-message="fieldError.recipient ?? undefined"
+                          @keyup.enter="confirmAddRecipient"
+                        />
+                        <div class="mt-2 flex gap-2">
+                          <button
+                            type="button"
+                            class="btn-sm border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300 dark:border-violet-500/40 dark:bg-violet-500/15 dark:text-violet-300"
+                            data-testid="recipient-add-confirm"
+                            @click="confirmAddRecipient"
+                          >
+                            Add recipient
+                          </button>
+                          <button
+                            type="button"
+                            class="btn-sm border-gray-200 text-gray-700 hover:border-gray-300 dark:border-gray-700/60 dark:text-gray-300"
+                            data-testid="recipient-add-cancel"
+                            @click="cancelAddRecipient"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
                     </template>
                     <AppSelect
                       v-else-if="field === 'language'"

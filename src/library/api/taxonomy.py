@@ -1,4 +1,4 @@
-"""Taxonomy REST endpoints: kinds, senders, and tags with document counts.
+"""Taxonomy REST endpoints: kinds, senders, recipients, and tags with document counts.
 
 Backed by the shared ``library.taxonomy`` service (also used by the MCP
 list tools). Authentication is enforced at include level in app.py
@@ -33,6 +33,14 @@ class SenderWithCount(BaseModel):
     document_count: int = Field(description="Non-deleted documents from this sender.")
 
 
+class RecipientWithCount(BaseModel):
+    """One row of GET /api/recipients."""
+
+    id: int
+    name: str
+    document_count: int = Field(description="Non-deleted documents addressed to this recipient.")
+
+
 class TagWithCount(BaseModel):
     """One row of GET /api/tags."""
 
@@ -60,6 +68,17 @@ async def list_senders(
     return [
         SenderWithCount.model_validate(sender, from_attributes=True)
         for sender in await taxonomy.list_senders(session)
+    ]
+
+
+@router.get("/recipients", response_model=list[RecipientWithCount], summary="List recipients")
+async def list_recipients(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[RecipientWithCount]:
+    """All known recipients, ordered by name, with document counts."""
+    return [
+        RecipientWithCount.model_validate(recipient, from_attributes=True)
+        for recipient in await taxonomy.list_recipients(session)
     ]
 
 
