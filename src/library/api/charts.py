@@ -88,6 +88,13 @@ async def list_charts(
 
     # Authored (user-curated) series live alongside the emergent ones, newest
     # first. They have no minimum-document gate, so every authored series shows.
+    #
+    # Intentionally NOT scoped to the current user. Library is a single shared
+    # family archive (architecture.md §1.5): every authenticated member sees and
+    # edits the same documents, senders, kinds and emergent charts. Authored
+    # series follow that model — `owner_id` records who created one (provenance),
+    # not an access boundary — so the list is unscoped, exactly like the emergent
+    # charts above. Endpoints still require authentication (router dependency).
     authored_ids = (
         (
             await session.execute(
@@ -259,6 +266,10 @@ class AuthoredMemberRequest(BaseModel):
 
 
 async def _get_authored_or_404(session: AsyncSession, authored_id: int) -> AuthoredSeries:
+    # Deliberately no owner check: Library is a single shared family archive, so
+    # any authenticated member may view and edit any authored series, just as
+    # they can any shared document or emergent chart. `owner_id` is provenance,
+    # not an access boundary. See the note in list_charts.
     authored = await session.get(AuthoredSeries, authored_id)
     if authored is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown series")
