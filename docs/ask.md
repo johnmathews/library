@@ -74,6 +74,14 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybri
    ids for citation; document refs also expose `title`, `sender`, `recipient`,
    `kind`, `document_date`, and `amount_total`. Aggregation citations have no text location, so their
    `page_number` is always `None`.
+
+   **Quotes are not expenditure.** Documents of kind `quote` (estimates not yet
+   incurred) are **excluded from `sum_amount` spend totals by default**, so a
+   question like "what have I spent in the last 3 months?" ignores quotes. To
+   total quotes specifically, the model passes `kind="quote"` (also surfaced via
+   the concept→kind hints `quote`/`estimate` → `quote`). The exclusion lives in
+   `structured_query.sum_amount`, not the prompt, so it holds regardless of how
+   the question is phrased.
 4. **Series comparison** (`compare_to_series`). Statistical summary of a
    recurring-document series — see §1.7 for details. Returns distribution
    (count/mean/median/stdev/min/max), a reference-vs-usual verdict, a trend

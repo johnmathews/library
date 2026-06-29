@@ -110,7 +110,9 @@ TOOLS: list[dict[str, Any]] = [
                     "enum": ["list", "distinct_senders", "sum_amount"],
                     "description": (
                         "distinct_senders: unique senders (e.g. providers). "
-                        "sum_amount: total amounts. list: matching documents."
+                        "sum_amount: total amounts (real expenditure — quotes/"
+                        "estimates are excluded automatically; pass kind='quote' "
+                        "to total quotes instead). list: matching documents."
                     ),
                 },
                 "kind": {"type": "string", "description": "Kind slug filter, e.g. utility-bill."},

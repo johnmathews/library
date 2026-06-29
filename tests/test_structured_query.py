@@ -130,6 +130,27 @@ async def test_sum_amount_groups_by_currency(session: AsyncSession) -> None:
     assert totals == {("EUR", "150.50"), ("USD", "10.00")}
 
 
+async def test_sum_amount_excludes_quotes_from_spend(session: AsyncSession) -> None:
+    """Quotes are not real expenditure: excluded from spend totals by default."""
+    await seed(session, "real", kind_slug="invoice", amount="100.00", currency="EUR")
+    await seed(session, "quote", kind_slug="quote", amount="999.00", currency="EUR")
+
+    groups = await sum_amount(session, filters=DocumentFilters())
+
+    # Only the invoice counts; the quote is ignored.
+    assert {(g.currency, g.total) for g in groups} == {("EUR", "100.00")}
+
+
+async def test_sum_amount_can_total_quotes_when_requested(session: AsyncSession) -> None:
+    """Explicitly filtering kind='quote' totals the quotes themselves."""
+    await seed(session, "real", kind_slug="invoice", amount="100.00", currency="EUR")
+    await seed(session, "quote", kind_slug="quote", amount="999.00", currency="EUR")
+
+    groups = await sum_amount(session, filters=DocumentFilters(kind_slug="quote"))
+
+    assert {(g.currency, g.total) for g in groups} == {("EUR", "999.00")}
+
+
 async def test_sum_amount_grouped_by_sender(session: AsyncSession) -> None:
     await seed(session, "s1", sender_name="Acme", amount="20.00", currency="EUR")
     await seed(session, "s2", sender_name="Acme", amount="30.00", currency="EUR")

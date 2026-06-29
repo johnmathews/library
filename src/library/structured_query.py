@@ -44,6 +44,8 @@ CONCEPT_TO_KIND: dict[str, str] = {
     "warranty": "warranty",
     "contract": "contract",
     "parking": "parking-ticket",
+    "quote": "quote",
+    "estimate": "quote",
 }
 
 Aggregate = Literal["list", "distinct_senders", "sum_amount"]
@@ -142,8 +144,17 @@ async def sum_amount(
     Always grouped by currency (amounts in different currencies cannot be
     added); optionally also by sender or kind. Documents without an amount are
     excluded.
+
+    Quotes/estimates are **not** actual expenditure, so documents of kind
+    ``quote`` are excluded from spend totals unless the caller explicitly
+    filters for ``kind="quote"`` (e.g. "how much have my quotes come to?").
     """
     conditions = [*filter_conditions(filters), Document.amount_total.isnot(None)]
+    if filters.kind_slug != "quote":
+        is_quote = (
+            select(1).where(Kind.id == Document.kind_id, Kind.slug == "quote").exists()
+        )
+        conditions.append(~is_quote)
     key_column = None
     statement = select(
         func.sum(Document.amount_total),
