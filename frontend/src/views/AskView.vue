@@ -248,16 +248,32 @@ defineExpose({ resetConversation })
 </script>
 
 <template>
-  <!-- Chat layout (Option A) — lg+ ONLY. On a wide column the page fills the
-       viewport below the shell header (100dvh − h-16 header − app-page py-8 =
-       8rem): the transcript scrolls INTERNALLY and the composer is pinned at the
-       bottom. On mobile/tablet (< lg) the 256px sidebar leaves the column too
-       narrow for a fixed-height internal-scroll region (it trapped citation
-       clicks on mobile-webkit), so there we fall back to normal page flow — the
-       layout that ships green on main. -->
+  <!-- Standard layout: the page title + description sit at the top, full width;
+       the conversation sidebar and the answer column form the two-pane working
+       area BELOW them (not beside the title). -->
+  <PageHeader
+    title="Ask"
+    description="Ask a question about your documents in plain language and get an answer with citations."
+  />
+
+  <AppErrorSummary
+    v-if="errors.length"
+    :errors="errors"
+    data-testid="error-summary"
+    class="mb-6"
+  />
+
+  <!-- Working area. Below lg it STACKS (flex-col): the conversation sidebar +
+       search sit full-width directly under the title/description, with the
+       transcript and composer beneath them — no cramped side-by-side column on a
+       phone. On lg+ it becomes the two-pane chat layout (Option A): a fixed-width
+       sidebar beside a full-height answer column that fills the viewport below
+       the shell header AND the page header above it (100dvh − h-16 shell header −
+       app-page py-8 − the ~6rem PageHeader block ≈ 14rem), so the transcript
+       scrolls INTERNALLY and the composer is pinned at the bottom. -->
   <div
     id="ask-page"
-    class="flex gap-6 items-start lg:items-stretch lg:h-[calc(100dvh-8rem)]"
+    class="flex flex-col lg:flex-row gap-6 lg:items-stretch lg:h-[calc(100dvh-14rem)]"
   >
     <ConversationSidebar
       ref="sidebarRef"
@@ -269,18 +285,6 @@ defineExpose({ resetConversation })
     <!-- Answer column. On lg+ it is a full-height flex column (transcript
          scrolls, composer pinned); below lg it is a normal block. -->
     <div class="flex-1 min-w-0 lg:flex lg:flex-col lg:min-h-0">
-      <PageHeader
-        title="Ask"
-        description="Ask a question about your documents in plain language and get an answer with citations."
-      />
-
-      <AppErrorSummary
-        v-if="errors.length"
-        :errors="errors"
-        data-testid="error-summary"
-        class="mb-6"
-      />
-
       <!-- Transcript: wide rich-markdown answers, not chat bubbles. On lg+ it
            scrolls internally (so the composer below stays pinned); below lg it
            flows normally and the page scrolls. -->

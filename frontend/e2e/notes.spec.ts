@@ -43,14 +43,15 @@ test('create a note, edit it, then restore the original version', async ({ page 
   await openNewNotePage(page)
 
   const stamp = `${testInfo.project.name}-${Date.now()}`
-  const title = `Note ${stamp}`
+  // The note's title is the first line of the body (markdown heading marker
+  // stripped), not a separate field.
+  const title = `Heading ${stamp}`
   const origBody = `# Heading ${stamp}\n\nOriginal body marker origbody-${stamp}.`
   const origMarker = `origbody-${stamp}`
   const newBody = `# Heading ${stamp}\n\nEdited body marker editbody-${stamp}.`
   const newMarker = `editbody-${stamp}`
 
   // Compose the note; the live preview renders the markdown as you type.
-  await page.locator('#note-title').fill(title)
   await page.locator('#note-body').fill(origBody)
   await expect(page.getByTestId('note-preview').filter({ hasText: origMarker })).toBeVisible()
 

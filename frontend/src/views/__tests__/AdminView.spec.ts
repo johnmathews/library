@@ -49,8 +49,20 @@ const architecture = {
 
 const coverageAvailable = {
   available: true,
-  backend: { pct: 95.2, threshold: 85 },
-  frontend: { pct: 88, threshold: 85 },
+  backend: {
+    pct: 95.2,
+    threshold: 85,
+    files_total: 42,
+    files_below_gate: 1,
+    worst_files: [{ path: 'src/library/series.py', pct: 71.0 }],
+  },
+  frontend: {
+    pct: 88,
+    threshold: 85,
+    files_total: 30,
+    files_below_gate: 0,
+    worst_files: [],
+  },
   generated_at: '2026-06-28T00:00:00Z',
   git_sha: 'deadbeef',
 }
@@ -132,13 +144,20 @@ describe('AdminView', () => {
     expect(wrapper.find('[data-testid="arch-content"]').html()).toContain('Data')
   })
 
-  it('renders coverage figures with their gates when available', async () => {
+  it('renders coverage figures, gate verdicts and worst files when available', async () => {
     const wrapper = mountView()
     await flushPromises()
 
     await wrapper.find('[data-testid="admin-tab-coverage-btn"]').trigger('click')
-    expect(wrapper.find('[data-testid="coverage-backend"]').text()).toBe('95.2% (gate 85%)')
-    expect(wrapper.find('[data-testid="coverage-frontend"]').text()).toBe('88% (gate 85%)')
+    expect(wrapper.find('[data-testid="coverage-backend"]').text()).toBe('95.2%')
+    expect(wrapper.find('[data-testid="coverage-frontend"]').text()).toBe('88%')
+    // Backend card shows the gate, file counts and the one below-gate file.
+    const backendCard = wrapper.find('[data-testid="coverage-card-backend"]')
+    expect(backendCard.text()).toContain('Gate 85%')
+    expect(backendCard.text()).toContain('42 files')
+    expect(backendCard.text()).toContain('1 below gate')
+    expect(backendCard.text()).toContain('src/library/series.py')
+    expect(backendCard.text()).toContain('71%')
     expect(wrapper.find('[data-testid="coverage-unavailable"]').exists()).toBe(false)
   })
 

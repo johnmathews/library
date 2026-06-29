@@ -87,11 +87,25 @@ class SystemInfo(BaseModel):
     stats: DbStats
 
 
+class CoverageFile(BaseModel):
+    """One file's line-coverage percentage (for the worst-offenders list)."""
+
+    path: str
+    pct: float
+
+
 class CoverageSide(BaseModel):
-    """One side (backend/frontend) of the coverage summary."""
+    """One side (backend/frontend) of the coverage summary.
+
+    The per-file fields are optional and default to empty so older baked
+    summaries (totals-only) still validate.
+    """
 
     pct: float | None
     threshold: float | None = None
+    files_total: int | None = None
+    files_below_gate: int | None = None
+    worst_files: list[CoverageFile] = []
 
 
 class CoverageInfo(BaseModel):

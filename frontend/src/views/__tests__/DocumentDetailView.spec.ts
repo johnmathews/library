@@ -830,17 +830,18 @@ describe('DocumentDetailView', () => {
 
       await w.find('[data-testid="note-edit-button"]').trigger('click')
       await flushPromises()
-      // The body editor is pre-filled with the current markdown body.
+      // The body editor is pre-filled with the current markdown body, and there
+      // is no separate title input — the title is the first line of the body.
       expect((w.find('#note-edit-body').element as HTMLTextAreaElement).value).toBe('original body')
+      expect(w.find('#note-edit-title').exists()).toBe(false)
 
-      await w.find('#note-edit-title').setValue('Updated note')
-      await w.find('#note-edit-body').setValue('updated body')
+      await w.find('#note-edit-body').setValue('Updated note\nupdated body')
       await w.find('[data-testid="note-edit-save"]').trigger('click')
       await flushPromises()
 
       expect(updateNoteMock).toHaveBeenCalledWith(12, {
         title: 'Updated note',
-        body_markdown: 'updated body',
+        body_markdown: 'Updated note\nupdated body',
       })
       expect(w.find('h1').text()).toBe('Updated note')
     })

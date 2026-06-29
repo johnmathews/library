@@ -125,4 +125,18 @@ else at normal priority.
 because a duplicate never enters the worker pipeline. Both are **best-effort**:
 the Pushover HTTP call (async `httpx`) runs after the document state is committed,
 and any failure is logged and swallowed — it can never fail a job or an upload.
-Set `LIBRARY_PUBLIC_BASE_URL` to deep-link each push back to its document.
+
+### 1.5.4 Deep-linking pushes to the document
+
+Set `LIBRARY_PUBLIC_BASE_URL` to the web app's public URL (no trailing slash,
+e.g. `https://library.example.com`) to make every push carry a link straight to
+the document it refers to. The dispatcher attaches it as Pushover's
+supplementary URL (`url` + `url_title` "Open in Library"), pointing at
+`{LIBRARY_PUBLIC_BASE_URL}/documents/{id}` — so tapping the notification on your
+phone opens that document in the app.
+
+When the variable is **unset** the feature silently no-ops: notifications still
+go out, but without a link. Because that looks like a bug ("my notifications
+have no link"), the API logs a one-line `WARNING` at startup whenever it is
+unset. Set it on the live host (the deployment's env/compose file) to turn the
+links on — no other configuration is required, the linking code is always on.

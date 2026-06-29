@@ -191,10 +191,13 @@ See [api.md](api.md) §1.11 for the full wire contract.
 
 ### Web UI
 
-The Ask view (`/ask`) is a chat interface: a scrollable transcript of Q&A pairs,
-a follow-up input pinned below, and a conversation sidebar listing past threads
-(by title and relative time) with resume and delete actions. `/ask/:threadId`
-loads an existing thread. **"New conversation"** clears to an empty thread.
+The Ask view (`/ask`) is a chat interface: the page title and description sit
+full-width at the top, with the working area below — a conversation sidebar
+listing past threads (by title and relative time) with resume and delete
+actions, a scrollable transcript of Q&A pairs, and a follow-up input pinned
+below. On a phone the sidebar stacks beneath the title/description; on wide
+screens it sits beside the answer column. `/ask/:threadId` loads an existing
+thread. **"New conversation"** clears to an empty thread.
 
 ## 1.7 Document series + comparative queries
 

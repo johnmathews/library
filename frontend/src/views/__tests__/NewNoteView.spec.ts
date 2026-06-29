@@ -42,9 +42,9 @@ describe('NewNoteView', () => {
     return wrapper
   }
 
-  it('renders the title and body inputs and the preview panel', async () => {
+  it('renders the body input and the preview panel, with no separate title input', async () => {
     const w = await mountView()
-    expect(w.find('#note-title').exists()).toBe(true)
+    expect(w.find('#note-title').exists()).toBe(false)
     expect(w.find('#note-body').exists()).toBe(true)
     expect(w.find('[data-testid="note-preview"]').exists()).toBe(true)
   })
@@ -58,34 +58,33 @@ describe('NewNoteView', () => {
     expect(preview.text()).toContain('Hello')
   })
 
-  it('disables save while the title or body is empty', async () => {
+  it('disables save until the body has a non-empty first line', async () => {
     const w = await mountView()
-    const save = w.find('#note-save')
-    expect(save.attributes('disabled')).toBeDefined()
+    expect(w.find('#note-save').attributes('disabled')).toBeDefined()
 
-    await w.find('#note-title').setValue('My note')
+    // Whitespace-only body → no derivable title → still disabled.
+    await w.find('#note-body').setValue('   \n  ')
     await flushPromises()
     expect(w.find('#note-save').attributes('disabled')).toBeDefined()
 
-    await w.find('#note-body').setValue('Some body')
+    await w.find('#note-body').setValue('My note\nand its body')
     await flushPromises()
     expect(w.find('#note-save').attributes('disabled')).toBeUndefined()
   })
 
-  it('creates the note and navigates to its detail page on save', async () => {
+  it('derives the title from the first line of the body on save', async () => {
     createNoteMock.mockResolvedValue({ id: 99 } as never)
     const push = vi.spyOn(router, 'push')
     const w = await mountView()
 
-    await w.find('#note-title').setValue('My note')
-    await w.find('#note-body').setValue('Note body')
+    await w.find('#note-body').setValue('# My note\nNote body')
     await flushPromises()
     await w.find('#note-save').trigger('click')
     await flushPromises()
 
     expect(createNoteMock).toHaveBeenCalledWith({
       title: 'My note',
-      body_markdown: 'Note body',
+      body_markdown: '# My note\nNote body',
     })
     expect(push).toHaveBeenCalledWith({ name: 'document-detail', params: { id: 99 } })
   })
@@ -125,8 +124,7 @@ describe('NewNoteView', () => {
     const push = vi.spyOn(router, 'push')
     const w = await mountView()
 
-    await w.find('#note-title').setValue('My note')
-    await w.find('#note-body').setValue('Note body')
+    await w.find('#note-body').setValue('My note\nNote body')
     await flushPromises()
     await w.find('#note-save').trigger('click')
     await flushPromises()

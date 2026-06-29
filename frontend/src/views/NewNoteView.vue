@@ -2,25 +2,29 @@
 /**
  * New note page (route `/notes/new`).
  *
- * Authoring view for a markdown note: a title, a markdown body, and a live
- * preview of the rendered body (sanitised via DOMPurify, mirroring the reader
- * in DocumentDetailView). On submit the note is created and the user is taken
- * to its detail page. API failures land in a GOV.UK-style error summary.
+ * Authoring view for a markdown note: a markdown body and a live preview of the
+ * rendered body (sanitised via DOMPurify, mirroring the reader in
+ * DocumentDetailView). There is no separate title field — the note's title is
+ * the first line of the body (see deriveNoteTitle). On submit the note is
+ * created and the user is taken to its detail page. API failures land in a
+ * GOV.UK-style error summary.
  */
 import { computed, ref } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { useStorage } from '@vueuse/core'
 import { useRouter } from 'vue-router'
-import { AppButton, AppErrorSummary, AppInput, AppTextarea, PageHeader } from '@/components/app'
+import { AppButton, AppErrorSummary, AppTextarea, PageHeader } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
 import { createNote } from '@/api/notes'
 import { ApiError } from '@/api/client'
+import { deriveNoteTitle } from '@/utils/noteTitle'
 
 const router = useRouter()
 
-const title = ref('')
 const body = ref('')
+/** The note title is the first line of the body, not a separate field. */
+const title = computed(() => deriveNoteTitle(body.value))
 const saving = ref(false)
 const submitError = ref<string | null>(null)
 
@@ -46,7 +50,7 @@ const previewHtml = computed(() =>
   DOMPurify.sanitize(marked.parse(body.value, { async: false }) as string),
 )
 
-const canSave = computed(() => title.value.trim() !== '' && body.value.trim() !== '' && !saving.value)
+const canSave = computed(() => title.value !== '' && !saving.value)
 
 const errorItems = computed<ErrorSummaryItem[]>(() =>
   submitError.value ? [{ text: submitError.value }] : [],
@@ -58,7 +62,7 @@ async function onSubmit(): Promise<void> {
   submitError.value = null
   try {
     const created = await createNote({
-      title: title.value.trim(),
+      title: title.value,
       body_markdown: body.value,
     })
     await router.push({ name: 'document-detail', params: { id: created.id } })
@@ -118,7 +122,6 @@ async function onSubmit(): Promise<void> {
       @submit.prevent="onSubmit"
     >
       <div class="space-y-4">
-        <AppInput id="note-title" v-model="title" label="Title" />
         <div
           class="grid grid-cols-1 gap-4"
           :class="{ 'lg:grid-cols-2': editorMode === 'split' }"
@@ -127,8 +130,8 @@ async function onSubmit(): Promise<void> {
             <AppTextarea
               id="note-body"
               v-model="body"
-              label="Body (markdown)"
-              hint="Markdown is supported. The preview updates as you type."
+              label="Note"
+              hint="The first line becomes the title. Markdown is supported; the preview updates as you type."
               :rows="16"
             />
           </div>
@@ -192,5 +195,22 @@ async function onSubmit(): Promise<void> {
 }
 .dark .doc-markdown :deep(code) {
   background: rgb(255 255 255 / 0.08);
+}
+/* Fenced code blocks scroll horizontally inside the block rather than
+   overflowing the card and the viewport. */
+.doc-markdown :deep(pre) {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: rgb(0 0 0 / 0.06);
+  overflow-x: auto;
+}
+.dark .doc-markdown :deep(pre) {
+  background: rgb(255 255 255 / 0.08);
+}
+.doc-markdown :deep(pre code) {
+  padding: 0;
+  background: none;
+  white-space: pre;
 }
 </style>

@@ -27,6 +27,9 @@ import json
 from pathlib import Path
 
 THRESHOLD = 85.0
+# How many lowest-covered files to surface per side in the admin view. The full
+# per-file report is large; the admin panel only needs the worst offenders.
+MAX_WORST_FILES = 10
 
 
 def _read_json(path: Path | None) -> dict | None:
@@ -36,20 +39,51 @@ def _read_json(path: Path | None) -> dict | None:
     return json.loads(path.read_text(encoding="utf-8"))
 
 
-def _backend_pct(path: Path | None) -> float | None:
-    """Extract `totals.percent_covered` (1 dp) from a `coverage json` report."""
+def _side(pct: float, per_file: list[tuple[str, float]]) -> dict:
+    """Assemble one side's summary: headline pct, gate, and per-file detail.
+
+    `per_file` is `(path, pct)` for every measured file. We keep the gate counts
+    and only the `MAX_WORST_FILES` lowest-covered files (ascending) so the baked
+    summary — and the admin payload — stays small.
+    """
+    worst = sorted(per_file, key=lambda item: item[1])[:MAX_WORST_FILES]
+    return {
+        "pct": pct,
+        "threshold": THRESHOLD,
+        "files_total": len(per_file) if per_file else None,
+        "files_below_gate": (
+            sum(1 for _, file_pct in per_file if file_pct < THRESHOLD) if per_file else None
+        ),
+        "worst_files": [{"path": path, "pct": file_pct} for path, file_pct in worst],
+    }
+
+
+def _backend_side(path: Path | None) -> dict | None:
+    """Build the backend side from a `coverage json` report (totals + per-file)."""
     data = _read_json(path)
     if data is None:
         return None
-    return round(float(data["totals"]["percent_covered"]), 1)
+    pct = round(float(data["totals"]["percent_covered"]), 1)
+    per_file = [
+        (name, round(float(info["summary"]["percent_covered"]), 1))
+        for name, info in (data.get("files") or {}).items()
+    ]
+    return _side(pct, per_file)
 
 
-def _frontend_pct(path: Path | None) -> float | None:
-    """Extract `total.lines.pct` from an istanbul json-summary report."""
+def _frontend_side(path: Path | None) -> dict | None:
+    """Build the frontend side from an istanbul json-summary report.
+
+    Every key except `total` is a file path; each carries `lines.pct`.
+    """
     data = _read_json(path)
     if data is None:
         return None
-    return float(data["total"]["lines"]["pct"])
+    pct = float(data["total"]["lines"]["pct"])
+    per_file = [
+        (name, float(info["lines"]["pct"])) for name, info in data.items() if name != "total"
+    ]
+    return _side(pct, per_file)
 
 
 def build_summary(
@@ -61,8 +95,8 @@ def build_summary(
 ) -> dict:
     """Build the unified coverage summary dict (pure: no clock, no IO beyond reads)."""
     return {
-        "backend": {"pct": _backend_pct(backend_json), "threshold": THRESHOLD},
-        "frontend": {"pct": _frontend_pct(frontend_json), "threshold": THRESHOLD},
+        "backend": _backend_side(backend_json) or {"pct": None, "threshold": THRESHOLD},
+        "frontend": _frontend_side(frontend_json) or {"pct": None, "threshold": THRESHOLD},
         "generated_at": generated_at,
         "git_sha": git_sha,
     }
