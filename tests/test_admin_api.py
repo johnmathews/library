@@ -12,6 +12,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from tests.conftest import AuthUser, create_user
+from tests.test_documents_api import seed_document
 
 pytestmark = pytest.mark.integration
 
@@ -266,3 +267,165 @@ def test_coverage_malformed_json_unavailable(
     get_settings.cache_clear()
     assert admin_client.get("/api/admin/coverage").json()["available"] is False
     get_settings.cache_clear()
+
+
+# --------------------------------------------------- recipient management (W1)
+
+
+def _recipients(client: TestClient) -> dict[str, dict[str, object]]:
+    """Map recipient name -> {id, name, document_count} from GET /api/recipients."""
+    response = client.get("/api/recipients")
+    assert response.status_code == 200, response.text
+    return {item["name"]: item for item in response.json()}
+
+
+def test_rename_recipient_no_collision(admin_client: TestClient, api_database_url: str) -> None:
+    seed_document(api_database_url, "w1-rename", recipient_name="W1 Rename Old")
+    rid = _recipients(admin_client)["W1 Rename Old"]["id"]
+
+    resp = admin_client.patch(f"/api/admin/recipients/{rid}", json={"name": "W1 Rename New"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"id": rid, "name": "W1 Rename New"}
+
+    recs = _recipients(admin_client)
+    assert "W1 Rename Old" not in recs
+    assert recs["W1 Rename New"]["id"] == rid
+
+
+def test_rename_recipient_casing_only(admin_client: TestClient, api_database_url: str) -> None:
+    """A pure casing change is not a self-collision; it updates in place."""
+    seed_document(api_database_url, "w1-casing", recipient_name="W1 Casing john")
+    rid = _recipients(admin_client)["W1 Casing john"]["id"]
+
+    resp = admin_client.patch(f"/api/admin/recipients/{rid}", json={"name": "W1 Casing John"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"id": rid, "name": "W1 Casing John"}
+
+
+def test_rename_collision_then_merge(admin_client: TestClient, api_database_url: str) -> None:
+    seed_document(api_database_url, "w1-merge-src", recipient_name="W1 Merge Jon")
+    seed_document(api_database_url, "w1-merge-tgt-1", recipient_name="W1 Merge John")
+    seed_document(api_database_url, "w1-merge-tgt-2", recipient_name="W1 Merge John")
+    recs = _recipients(admin_client)
+    src = recs["W1 Merge Jon"]["id"]
+    tgt = recs["W1 Merge John"]["id"]
+
+    # merge=false (default): collision reported, nothing changes.
+    conflict = admin_client.patch(f"/api/admin/recipients/{src}", json={"name": "w1 merge john"})
+    assert conflict.status_code == 409, conflict.text
+    body = conflict.json()
+    assert isinstance(body["detail"], str) and body["detail"]
+    assert body["target_id"] == tgt
+    assert body["target_name"] == "W1 Merge John"
+    assert body["target_document_count"] == 2
+    assert "W1 Merge Jon" in _recipients(admin_client)  # untouched
+
+    # merge=true: src's documents move to tgt, src is deleted, tgt returned.
+    merged = admin_client.patch(
+        f"/api/admin/recipients/{src}", json={"name": "W1 Merge John", "merge": True}
+    )
+    assert merged.status_code == 200, merged.text
+    assert merged.json() == {"id": tgt, "name": "W1 Merge John"}
+
+    recs2 = _recipients(admin_client)
+    assert "W1 Merge Jon" not in recs2
+    assert recs2["W1 Merge John"]["document_count"] == 3
+
+
+def test_delete_recipient_zero_docs(admin_client: TestClient, api_database_url: str) -> None:
+    """A recipient with no live documents is deleted outright (no target needed)."""
+    doc_id = seed_document(api_database_url, "w1-del-zero", recipient_name="W1 Del Zero")
+    assert admin_client.delete(f"/api/documents/{doc_id}").status_code == 204
+    rid = _recipients(admin_client)["W1 Del Zero"]["id"]  # still listed, count 0
+
+    resp = admin_client.delete(f"/api/admin/recipients/{rid}")
+    assert resp.status_code == 204, resp.text
+    assert "W1 Del Zero" not in _recipients(admin_client)
+
+
+def test_delete_in_use_without_target_409(admin_client: TestClient, api_database_url: str) -> None:
+    seed_document(api_database_url, "w1-inuse-1", recipient_name="W1 InUse")
+    seed_document(api_database_url, "w1-inuse-2", recipient_name="W1 InUse")
+    rid = _recipients(admin_client)["W1 InUse"]["id"]
+
+    resp = admin_client.delete(f"/api/admin/recipients/{rid}")
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert isinstance(body["detail"], str) and body["detail"]
+    assert body["document_count"] == 2
+    assert "W1 InUse" in _recipients(admin_client)  # not deleted
+
+
+def test_delete_in_use_with_target_reassigns(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    src_doc = seed_document(api_database_url, "w1-move-src", recipient_name="W1 Move Src")
+    seed_document(api_database_url, "w1-move-tgt", recipient_name="W1 Move Tgt")
+    recs = _recipients(admin_client)
+    src = recs["W1 Move Src"]["id"]
+    tgt = recs["W1 Move Tgt"]["id"]
+
+    resp = admin_client.delete(f"/api/admin/recipients/{src}?reassign_to={tgt}")
+    assert resp.status_code == 204, resp.text
+
+    recs2 = _recipients(admin_client)
+    assert "W1 Move Src" not in recs2
+    assert recs2["W1 Move Tgt"]["document_count"] == 2
+    # the moved document now points at the target
+    assert admin_client.get(f"/api/documents/{src_doc}").json()["recipient"]["id"] == tgt
+
+
+def test_delete_in_use_with_null_target_nulls(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    doc_id = seed_document(api_database_url, "w1-null", recipient_name="W1 Null Me")
+    seed_document(api_database_url, "w1-null-2", recipient_name="W1 Null Me")
+    rid = _recipients(admin_client)["W1 Null Me"]["id"]
+
+    # explicit empty reassign_to => null the documents, then delete the recipient.
+    resp = admin_client.delete(f"/api/admin/recipients/{rid}?reassign_to=")
+    assert resp.status_code == 204, resp.text
+    assert "W1 Null Me" not in _recipients(admin_client)
+    # documents survive but lose their recipient
+    assert admin_client.get(f"/api/documents/{doc_id}").json()["recipient"] is None
+
+
+def test_delete_self_reassign_400(admin_client: TestClient, api_database_url: str) -> None:
+    seed_document(api_database_url, "w1-self", recipient_name="W1 Self")
+    rid = _recipients(admin_client)["W1 Self"]["id"]
+    resp = admin_client.delete(f"/api/admin/recipients/{rid}?reassign_to={rid}")
+    assert resp.status_code == 400, resp.text
+
+
+def test_rename_empty_name_400(admin_client: TestClient, api_database_url: str) -> None:
+    seed_document(api_database_url, "w1-empty", recipient_name="W1 Empty Name")
+    rid = _recipients(admin_client)["W1 Empty Name"]["id"]
+    assert (
+        admin_client.patch(f"/api/admin/recipients/{rid}", json={"name": "   "}).status_code == 400
+    )
+
+
+def test_rename_unknown_recipient_404(admin_client: TestClient) -> None:
+    resp = admin_client.patch("/api/admin/recipients/99999999", json={"name": "X"})
+    assert resp.status_code == 404
+
+
+def test_delete_unknown_recipient_404(admin_client: TestClient) -> None:
+    assert admin_client.delete("/api/admin/recipients/99999999").status_code == 404
+
+
+def test_delete_unknown_target_404(admin_client: TestClient, api_database_url: str) -> None:
+    seed_document(api_database_url, "w1-bad-tgt", recipient_name="W1 Bad Tgt")
+    rid = _recipients(admin_client)["W1 Bad Tgt"]["id"]
+    resp = admin_client.delete(f"/api/admin/recipients/{rid}?reassign_to=99999999")
+    assert resp.status_code == 404, resp.text
+
+
+def test_recipient_mgmt_rejects_non_admin(api_client: TestClient) -> None:
+    assert api_client.patch("/api/admin/recipients/1", json={"name": "x"}).status_code == 403
+    assert api_client.delete("/api/admin/recipients/1").status_code == 403
+
+
+def test_recipient_mgmt_rejects_anonymous(anon_client: TestClient) -> None:
+    assert anon_client.patch("/api/admin/recipients/1", json={"name": "x"}).status_code == 401
+    assert anon_client.delete("/api/admin/recipients/1").status_code == 401

@@ -9,12 +9,19 @@
 export class ApiError extends Error {
   readonly status: number
   readonly detail: string
+  /**
+   * The parsed JSON error body, when the server returned a JSON object (e.g. a
+   * 409 conflict that carries extra fields beyond `detail`). `null` when the
+   * body was empty or not JSON. Callers narrow it to a known shape per endpoint.
+   */
+  readonly body: Record<string, unknown> | null
 
-  constructor(status: number, detail: string) {
+  constructor(status: number, detail: string, body: Record<string, unknown> | null = null) {
     super(`API error ${status}: ${detail}`)
     this.name = 'ApiError'
     this.status = status
     this.detail = detail
+    this.body = body
   }
 }
 
@@ -83,7 +90,8 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   })
 
   if (!response.ok) {
-    throw new ApiError(response.status, await readDetail(response))
+    const { detail, body } = await readError(response)
+    throw new ApiError(response.status, detail, body)
   }
   if (response.status === 204) {
     return undefined as T
@@ -91,16 +99,27 @@ export async function apiFetch<T>(path: string, options: RequestOptions = {}): P
   return (await response.json()) as T
 }
 
-async function readDetail(response: Response): Promise<string> {
+/**
+ * Read an error response once, returning both the normalised `detail` string
+ * and the full parsed JSON body (when it was a JSON object) so callers can read
+ * endpoint-specific conflict fields off `ApiError.body`.
+ */
+async function readError(
+  response: Response,
+): Promise<{ detail: string; body: Record<string, unknown> | null }> {
+  let body: Record<string, unknown> | null = null
   try {
     const data: unknown = await response.json()
-    if (data && typeof data === 'object' && 'detail' in data) {
-      const detail = (data as { detail: unknown }).detail
-      if (typeof detail === 'string') return detail
-      return JSON.stringify(detail)
+    if (data && typeof data === 'object') {
+      body = data as Record<string, unknown>
+      if ('detail' in body) {
+        const detail = body.detail
+        if (typeof detail === 'string') return { detail, body }
+        return { detail: JSON.stringify(detail), body }
+      }
     }
   } catch {
     // fall through to status text
   }
-  return response.statusText || `HTTP ${response.status}`
+  return { detail: response.statusText || `HTTP ${response.status}`, body }
 }

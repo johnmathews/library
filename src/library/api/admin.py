@@ -12,7 +12,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Any
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -23,6 +24,13 @@ from library.auth.service import revoke_all_credentials
 from library.config import Settings, get_settings
 from library.db import get_session
 from library.models import Document, DocumentStatus, User
+from library.schemas import RecipientOut
+from library.taxonomy import (
+    UNSET,
+    _Unset,
+    reassign_and_delete_recipient,
+    rename_recipient,
+)
 
 router: APIRouter = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -394,3 +402,156 @@ async def update_user(
         await revoke_all_credentials(session, user.id)
     await session.refresh(user)
     return _user_out(user)
+
+
+# ---------------------------------------------------------- recipient management
+
+
+class RecipientRenameIn(BaseModel):
+    """Body of PATCH /api/admin/recipients/{id}."""
+
+    name: Annotated[str, StringConstraints(max_length=255)]
+    merge: bool = Field(
+        default=False,
+        description="Confirm merging into an existing recipient on a name collision.",
+    )
+
+
+class RecipientRenameConflict(BaseModel):
+    """409 body when a rename would collide with an existing recipient.
+
+    The client warns the user, then re-PATCHes with ``merge=true`` to merge this
+    recipient into ``target_id``.
+    """
+
+    detail: str
+    target_id: int
+    target_name: str
+    target_document_count: int
+
+
+class RecipientDeleteConflict(BaseModel):
+    """409 body when deleting an in-use recipient without a reassignment target."""
+
+    detail: str
+    document_count: int
+
+
+@router.patch(
+    "/recipients/{recipient_id}",
+    response_model=RecipientOut,
+    summary="Rename (or merge) a recipient",
+    responses={
+        400: {"description": "Empty name"},
+        404: {"description": "Unknown recipient"},
+        409: {
+            "model": RecipientRenameConflict,
+            "description": "Name collides with another recipient",
+        },
+    },
+)
+async def rename_recipient_route(
+    recipient_id: int,
+    payload: RecipientRenameIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> RecipientOut | JSONResponse:
+    """Rename a recipient; on a case-insensitive name collision, merge when confirmed.
+
+    Without ``merge`` a collision returns 409 carrying the target's id/name/count
+    (the client warns, then retries with ``merge=true``, which reassigns this
+    recipient's documents to the target and deletes this recipient).
+    """
+    result = await rename_recipient(session, recipient_id, payload.name, payload.merge)
+    if result.status == "empty_name":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="name must not be empty"
+        )
+    if result.status == "not_found":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="recipient not found")
+    if result.status == "collision":
+        assert result.recipient is not None
+        # Flat 409 body (matches RecipientRenameConflict): the conflict fields sit
+        # at the top level alongside `detail`, so the client reads them straight
+        # off `ApiError.body` without a FastAPI HTTPException envelope nesting them.
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "detail": (
+                    f"a recipient named {result.recipient.name!r} already exists; "
+                    "retry with merge=true to merge into it"
+                ),
+                "target_id": result.recipient.id,
+                "target_name": result.recipient.name,
+                "target_document_count": result.document_count,
+            },
+        )
+    assert result.recipient is not None
+    return RecipientOut(id=result.recipient.id, name=result.recipient.name)
+
+
+@router.delete(
+    "/recipients/{recipient_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    # The success path is an empty 204; the 409 branch returns a JSONResponse
+    # directly. Pin response_model to None so FastAPI does not infer a body model
+    # from the `None | JSONResponse` return annotation (a 204 may carry no body).
+    response_model=None,
+    summary="Delete a recipient, reassigning its documents",
+    responses={
+        400: {"description": "Self-reassignment"},
+        404: {"description": "Unknown recipient or reassignment target"},
+        409: {"model": RecipientDeleteConflict, "description": "Recipient in use; no target given"},
+    },
+)
+async def delete_recipient_route(
+    recipient_id: int,
+    request: Request,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> None | JSONResponse:
+    """Delete a recipient. If it still has documents, a ``reassign_to`` target is
+    required: ``?reassign_to=<id>`` moves them, ``?reassign_to=`` (empty/null)
+    nulls them, and omitting it entirely on an in-use recipient returns 409.
+    """
+    # Three-state from the raw query string: absent (UNSET), explicit-null, or an id.
+    reassign_to: int | None | _Unset
+    if "reassign_to" not in request.query_params:
+        reassign_to = UNSET
+    else:
+        raw = request.query_params["reassign_to"]
+        if raw == "" or raw.lower() == "null":
+            reassign_to = None
+        else:
+            try:
+                reassign_to = int(raw)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    detail="reassign_to must be an integer, empty, or 'null'",
+                ) from None
+
+    result = await reassign_and_delete_recipient(session, recipient_id, reassign_to)
+    if result.status == "not_found":
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="recipient not found")
+    if result.status == "target_not_found":
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="reassignment target not found"
+        )
+    if result.status == "self_reassign":
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="cannot reassign a recipient to itself"
+        )
+    if result.status == "in_use":
+        # Flat 409 body (matches RecipientDeleteConflict): `document_count` sits at
+        # the top level alongside `detail` for the client to read off
+        # `ApiError.body` directly (no HTTPException envelope nesting it).
+        return JSONResponse(
+            status_code=status.HTTP_409_CONFLICT,
+            content={
+                "detail": (
+                    f"recipient has {result.document_count} document(s); "
+                    "provide reassign_to to move them before deleting"
+                ),
+                "document_count": result.document_count,
+            },
+        )
+    return None

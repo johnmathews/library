@@ -10,29 +10,35 @@
  *   - Users: list every user, toggle admin/active, and create new users.
  * Tab selection is local state (no sub-routes).
  */
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { AppBadge, AppButton, AppInput } from '@/components/app'
+import { AppBadge, AppButton, AppInput, AppSelect } from '@/components/app'
+import type { SelectItem } from '@/components/app'
 import { ApiError } from '@/api/client'
 import {
   createUser,
+  deleteRecipient,
   getArchitecture,
   getCoverage,
   getSystemInfo,
+  listRecipients,
   listUsers,
+  renameRecipient,
   updateUser,
   type AdminUser,
   type ArchitectureDoc,
   type CoverageInfo,
   type CoverageSide,
+  type RecipientOption,
   type SystemInfo,
 } from '@/api/admin'
+import { refreshTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 
-type Tab = 'system' | 'architecture' | 'coverage' | 'users'
+type Tab = 'system' | 'architecture' | 'coverage' | 'users' | 'metadata'
 const tab = ref<Tab>('system')
 
 const TABS: { id: Tab; label: string }[] = [
@@ -40,6 +46,7 @@ const TABS: { id: Tab; label: string }[] = [
   { id: 'architecture', label: 'Architecture' },
   { id: 'coverage', label: 'Coverage' },
   { id: 'users', label: 'Users' },
+  { id: 'metadata', label: 'Metadata' },
 ]
 
 // --- System -----------------------------------------------------------------
@@ -255,6 +262,160 @@ async function onCreateUser(): Promise<void> {
     creating.value = false
   }
 }
+
+// --- Metadata: recipients ---------------------------------------------------
+
+const recipients = ref<RecipientOption[]>([])
+const recipientsLoading = ref(false)
+const recipientsLoaded = ref(false)
+const recipientsError = ref<string | null>(null)
+// Per-row action state, keyed by recipient id (mirrors the users panel).
+const recipientPendingIds = ref<Set<number>>(new Set())
+const recipientRowError = ref<Record<number, string>>({})
+// Inline rename state: at most one row in edit mode at a time.
+const renameId = ref<number | null>(null)
+const renameValue = ref('')
+// When a rename hits a 409, the proposed merge target for the editing row.
+const mergeTarget = ref<{
+  target_id: number
+  target_name: string
+  target_document_count: number
+} | null>(null)
+// Inline delete state: at most one row in confirm mode at a time.
+const deleteId = ref<number | null>(null)
+// Selected reassign target: '' means "None (clear)", otherwise a recipient id.
+const reassignValue = ref('')
+
+function setRecipientPending(id: number, pending: boolean): void {
+  const next = new Set(recipientPendingIds.value)
+  if (pending) next.add(id)
+  else next.delete(id)
+  recipientPendingIds.value = next
+}
+
+function setRecipientError(id: number, message: string | null): void {
+  const next = { ...recipientRowError.value }
+  if (message) next[id] = message
+  else delete next[id]
+  recipientRowError.value = next
+}
+
+/** Reassign options for a row: every other recipient, plus "None (clear)". */
+function reassignItems(row: RecipientOption): SelectItem[] {
+  const others = recipients.value
+    .filter((r) => r.id !== row.id)
+    .map((r) => ({ value: String(r.id), text: `${r.name} (${r.document_count})` }))
+  return [{ value: '', text: 'None (clear recipient)' }, ...others]
+}
+
+async function loadRecipients(): Promise<void> {
+  recipientsLoading.value = true
+  recipientsError.value = null
+  try {
+    recipients.value = await listRecipients()
+    recipientsLoaded.value = true
+  } catch {
+    recipientsError.value = 'Could not load recipients. Try refreshing the page.'
+  } finally {
+    recipientsLoading.value = false
+  }
+}
+
+/** After any successful mutation: reload the panel and the shared taxonomy cache
+ * so document dropdowns/filters elsewhere reflect the change. */
+async function afterRecipientMutation(): Promise<void> {
+  await loadRecipients()
+  void refreshTaxonomyOptions()
+}
+
+function startRename(row: RecipientOption): void {
+  cancelDelete()
+  renameId.value = row.id
+  renameValue.value = row.name
+  mergeTarget.value = null
+  setRecipientError(row.id, null)
+}
+
+function cancelRename(): void {
+  renameId.value = null
+  renameValue.value = ''
+  mergeTarget.value = null
+}
+
+/** Save a rename. On a 409 collision (without `merge`), reveal the merge prompt
+ * instead of erroring; the merge-confirm button re-calls with `merge: true`. */
+async function saveRename(row: RecipientOption, merge = false): Promise<void> {
+  const name = renameValue.value.trim()
+  if (!name) {
+    setRecipientError(row.id, 'Enter a name.')
+    return
+  }
+  setRecipientPending(row.id, true)
+  setRecipientError(row.id, null)
+  try {
+    await renameRecipient(row.id, name, merge)
+    cancelRename()
+    await afterRecipientMutation()
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409 && error.body && !merge) {
+      mergeTarget.value = {
+        target_id: Number(error.body.target_id),
+        target_name: String(error.body.target_name),
+        target_document_count: Number(error.body.target_document_count),
+      }
+    } else {
+      setRecipientError(
+        row.id,
+        error instanceof ApiError ? error.detail : 'Could not rename the recipient. Try again.',
+      )
+    }
+  } finally {
+    setRecipientPending(row.id, false)
+  }
+}
+
+function startDelete(row: RecipientOption): void {
+  cancelRename()
+  deleteId.value = row.id
+  reassignValue.value = ''
+  setRecipientError(row.id, null)
+}
+
+function cancelDelete(): void {
+  deleteId.value = null
+  reassignValue.value = ''
+}
+
+/** Confirm a delete. In-use recipients reassign (to the chosen id, or null to
+ * clear); zero-document recipients delete outright. */
+async function confirmDelete(row: RecipientOption): Promise<void> {
+  setRecipientPending(row.id, true)
+  setRecipientError(row.id, null)
+  try {
+    if (row.document_count > 0) {
+      const chosen = reassignValue.value === '' ? null : Number(reassignValue.value)
+      await deleteRecipient(row.id, chosen)
+    } else {
+      await deleteRecipient(row.id)
+    }
+    cancelDelete()
+    await afterRecipientMutation()
+  } catch (error) {
+    setRecipientError(
+      row.id,
+      error instanceof ApiError ? error.detail : 'Could not delete the recipient. Try again.',
+    )
+  } finally {
+    setRecipientPending(row.id, false)
+  }
+}
+
+// Lazily load the recipients the first time the Metadata tab is opened.
+watch(tab, (current) => {
+  if (current === 'metadata' && !recipientsLoaded.value && !recipientsLoading.value) {
+    void loadRecipients()
+  }
+})
 
 onMounted(() => {
   void loadSystem()
@@ -698,6 +859,179 @@ const tabClass = (active: boolean): string =>
               {{ creating ? 'Creating…' : 'Create user' }}
             </AppButton>
           </form>
+        </div>
+      </div>
+    </section>
+
+    <!-- Metadata tab (recipients management) -->
+    <section v-show="tab === 'metadata'" role="tabpanel" data-testid="admin-tab-metadata">
+      <p
+        v-if="recipientsLoading"
+        data-testid="recipients-loading"
+        class="text-gray-600 dark:text-gray-300"
+      >
+        Loading recipients…
+      </p>
+      <div
+        v-else-if="recipientsError"
+        data-testid="recipients-error"
+        role="alert"
+        class="bg-white dark:bg-gray-800 border-l-4 border-red-500 rounded-lg px-4 py-3 shadow-xs text-gray-700 dark:text-gray-200"
+      >
+        {{ recipientsError }}
+      </div>
+      <div v-else class="space-y-6">
+        <div :class="cardClass">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Recipients</h2>
+          <p
+            v-if="recipients.length === 0"
+            data-testid="recipients-empty"
+            class="text-sm text-gray-500 dark:text-gray-400"
+          >
+            No recipients yet.
+          </p>
+          <ul
+            v-else
+            class="divide-y divide-gray-100 dark:divide-gray-700/60"
+            data-testid="recipient-list"
+          >
+            <li
+              v-for="r in recipients"
+              :key="r.id"
+              :data-testid="`recipient-row-${r.id}`"
+              class="py-3"
+            >
+              <!-- Display row -->
+              <div v-if="renameId !== r.id" class="flex items-center justify-between gap-3">
+                <span class="min-w-0 truncate font-medium text-gray-800 dark:text-gray-100">
+                  {{ r.name }}
+                </span>
+                <div class="flex shrink-0 items-center gap-2">
+                  <AppBadge colour="grey">{{ r.document_count }} docs</AppBadge>
+                  <button
+                    type="button"
+                    data-testid="recipient-rename"
+                    :disabled="recipientPendingIds.has(r.id)"
+                    class="rounded-md border border-gray-200 dark:border-gray-700/60 px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
+                    @click="startRename(r)"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="recipient-delete"
+                    :disabled="recipientPendingIds.has(r.id)"
+                    class="rounded-md border border-red-200 dark:border-red-500/40 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50 cursor-pointer"
+                    @click="startDelete(r)"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              <!-- Rename editor -->
+              <div v-else class="space-y-2">
+                <div class="flex items-end gap-2">
+                  <div class="flex-1">
+                    <AppInput
+                      :id="`recipient-rename-input-${r.id}`"
+                      v-model="renameValue"
+                      label="Recipient name"
+                      autocomplete="off"
+                      data-testid="recipient-rename-input"
+                      @keyup.enter="saveRename(r)"
+                    />
+                  </div>
+                  <AppButton
+                    type="button"
+                    data-testid="recipient-rename-save"
+                    :disabled="recipientPendingIds.has(r.id)"
+                    @click="saveRename(r)"
+                  >
+                    Save
+                  </AppButton>
+                  <AppButton
+                    type="button"
+                    variant="secondary"
+                    data-testid="recipient-rename-cancel"
+                    @click="cancelRename()"
+                  >
+                    Cancel
+                  </AppButton>
+                </div>
+
+                <!-- Merge prompt (shown when the rename collides, 409) -->
+                <div
+                  v-if="mergeTarget"
+                  data-testid="recipient-merge-warning"
+                  role="alert"
+                  class="border-l-4 border-yellow-500 bg-yellow-50 dark:bg-yellow-500/10 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+                >
+                  <p>
+                    '{{ r.name }}' will be merged into '{{ mergeTarget.target_name }}'
+                    ({{ mergeTarget.target_document_count }} documents) and removed.
+                  </p>
+                  <AppButton
+                    type="button"
+                    class="mt-2"
+                    data-testid="recipient-merge-confirm"
+                    :disabled="recipientPendingIds.has(r.id)"
+                    @click="saveRename(r, true)"
+                  >
+                    Merge and remove
+                  </AppButton>
+                </div>
+              </div>
+
+              <!-- Delete confirm / reassign -->
+              <div
+                v-if="deleteId === r.id"
+                data-testid="recipient-delete-confirm-box"
+                class="mt-2 border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+              >
+                <template v-if="r.document_count > 0">
+                  <p class="mb-2">
+                    '{{ r.name }}' still has {{ r.document_count }} documents. Choose where to move
+                    them (or clear the recipient) before deleting.
+                  </p>
+                  <AppSelect
+                    :id="`recipient-reassign-${r.id}`"
+                    v-model="reassignValue"
+                    label="Reassign documents to"
+                    :items="reassignItems(r)"
+                    data-testid="recipient-reassign-select"
+                  />
+                </template>
+                <p v-else class="mb-2">Delete '{{ r.name }}'? This cannot be undone.</p>
+                <div class="mt-2 flex gap-2">
+                  <AppButton
+                    type="button"
+                    data-testid="recipient-delete-confirm"
+                    :disabled="recipientPendingIds.has(r.id)"
+                    @click="confirmDelete(r)"
+                  >
+                    Delete
+                  </AppButton>
+                  <AppButton
+                    type="button"
+                    variant="secondary"
+                    data-testid="recipient-delete-cancel"
+                    @click="cancelDelete()"
+                  >
+                    Cancel
+                  </AppButton>
+                </div>
+              </div>
+
+              <p
+                v-if="recipientRowError[r.id]"
+                :data-testid="`recipient-error-${r.id}`"
+                class="mt-1 text-xs text-red-600 dark:text-red-400"
+              >
+                {{ recipientRowError[r.id] }}
+              </p>
+            </li>
+          </ul>
         </div>
       </div>
     </section>

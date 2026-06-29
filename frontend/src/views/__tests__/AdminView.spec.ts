@@ -9,16 +9,27 @@ vi.mock('@/api/admin', () => ({
   listUsers: vi.fn(),
   createUser: vi.fn(),
   updateUser: vi.fn(),
+  listRecipients: vi.fn(),
+  renameRecipient: vi.fn(),
+  deleteRecipient: vi.fn(),
+}))
+
+vi.mock('@/composables/taxonomyOptions', () => ({
+  refreshTaxonomyOptions: vi.fn().mockResolvedValue(undefined),
 }))
 
 import {
   createUser,
+  deleteRecipient,
   getArchitecture,
   getCoverage,
   getSystemInfo,
+  listRecipients,
   listUsers,
+  renameRecipient,
   updateUser,
 } from '@/api/admin'
+import { refreshTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { ApiError } from '@/api/client'
 import AdminView from '../AdminView.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -86,11 +97,18 @@ const userList = [
   },
 ]
 
+const recipientList = [
+  { id: 10, name: 'Alice', document_count: 0 },
+  { id: 11, name: 'Bob', document_count: 3 },
+  { id: 12, name: 'Carol', document_count: 1 },
+]
+
 function seedDefaults(): void {
   vi.mocked(getSystemInfo).mockResolvedValue(systemInfo)
   vi.mocked(getArchitecture).mockResolvedValue(architecture)
   vi.mocked(getCoverage).mockResolvedValue(coverageAvailable)
   vi.mocked(listUsers).mockResolvedValue(structuredClone(userList))
+  vi.mocked(listRecipients).mockResolvedValue(structuredClone(recipientList))
 }
 
 function mountView() {
@@ -274,5 +292,119 @@ describe('AdminView', () => {
     await flushPromises()
 
     expect(wrapper.find('[data-testid="system-error"]').exists()).toBe(true)
+  })
+
+  // --- Metadata tab: recipients ---------------------------------------------
+
+  async function openMetadataTab() {
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('[data-testid="admin-tab-metadata-btn"]').trigger('click')
+    await flushPromises()
+    return wrapper
+  }
+
+  it('loads recipients on first opening the Metadata tab, with document counts', async () => {
+    const wrapper = await openMetadataTab()
+
+    expect(listRecipients).toHaveBeenCalledTimes(1)
+    const row = wrapper.find('[data-testid="recipient-row-11"]')
+    expect(row.text()).toContain('Bob')
+    expect(row.text()).toContain('3 docs')
+  })
+
+  it('renames a recipient and refreshes the list and taxonomy cache', async () => {
+    vi.mocked(renameRecipient).mockResolvedValue({ id: 10, name: 'Alicia' })
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="recipient-row-10"]')
+    await row.find('[data-testid="recipient-rename"]').trigger('click')
+    await wrapper.find('#recipient-rename-input-10').setValue('Alicia')
+    await wrapper.find('[data-testid="recipient-rename-save"]').trigger('click')
+    await flushPromises()
+
+    expect(renameRecipient).toHaveBeenCalledWith(10, 'Alicia', false)
+    // listRecipients: once on tab open, once after the successful rename.
+    expect(listRecipients).toHaveBeenCalledTimes(2)
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a merge prompt on a 409 collision and merges on confirm', async () => {
+    vi.mocked(renameRecipient)
+      .mockRejectedValueOnce(
+        new ApiError(409, 'name in use', {
+          detail: 'name in use',
+          target_id: 11,
+          target_name: 'Bob',
+          target_document_count: 3,
+        }),
+      )
+      .mockResolvedValueOnce({ id: 11, name: 'Bob' })
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="recipient-row-10"]')
+    await row.find('[data-testid="recipient-rename"]').trigger('click')
+    await wrapper.find('#recipient-rename-input-10').setValue('Bob')
+    await wrapper.find('[data-testid="recipient-rename-save"]').trigger('click')
+    await flushPromises()
+
+    // The collision surfaces an inline merge warning, not an error.
+    const warning = wrapper.find('[data-testid="recipient-merge-warning"]')
+    expect(warning.exists()).toBe(true)
+    expect(warning.text()).toContain('Bob')
+    expect(warning.text()).toContain('3 documents')
+
+    await wrapper.find('[data-testid="recipient-merge-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(renameRecipient).toHaveBeenNthCalledWith(1, 10, 'Bob', false)
+    expect(renameRecipient).toHaveBeenNthCalledWith(2, 10, 'Bob', true)
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('deletes a zero-document recipient after an inline confirm', async () => {
+    vi.mocked(deleteRecipient).mockResolvedValue()
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="recipient-row-10"]')
+    await row.find('[data-testid="recipient-delete"]').trigger('click')
+    // No reassign picker for a zero-document recipient.
+    expect(wrapper.find('[data-testid="recipient-reassign-select"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="recipient-delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteRecipient).toHaveBeenCalledWith(10)
+    expect(listRecipients).toHaveBeenCalledTimes(2)
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('deletes an in-use recipient by reassigning its documents', async () => {
+    vi.mocked(deleteRecipient).mockResolvedValue()
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="recipient-row-11"]')
+    await row.find('[data-testid="recipient-delete"]').trigger('click')
+    // An in-use recipient reveals the reassign picker.
+    const select = wrapper.find('[data-testid="recipient-reassign-select"]')
+    expect(select.exists()).toBe(true)
+    await wrapper.find('#recipient-reassign-11').setValue('12')
+    await wrapper.find('[data-testid="recipient-delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteRecipient).toHaveBeenCalledWith(11, 12)
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('clears the recipient on its documents when "None" is chosen', async () => {
+    vi.mocked(deleteRecipient).mockResolvedValue()
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="recipient-row-11"]')
+    await row.find('[data-testid="recipient-delete"]').trigger('click')
+    // Leave the select on its default "None (clear)" option (value '').
+    await wrapper.find('[data-testid="recipient-delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteRecipient).toHaveBeenCalledWith(11, null)
   })
 })

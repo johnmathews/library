@@ -9,6 +9,12 @@
 
 import { apiFetch } from './client'
 
+// The recipients management panel reuses the public list endpoint rather than
+// duplicating it; re-exported here so the panel imports everything from one
+// module (and so a single mock of `@/api/admin` covers the whole panel).
+export { listRecipients } from './taxonomy'
+export type { RecipientOption } from './taxonomy'
+
 /** Aggregate counts for the system dashboard. */
 export interface DbStats {
   documents_total: number
@@ -128,4 +134,66 @@ export function createUser(body: CreateUserBody): Promise<AdminUser> {
 /** PATCH /api/admin/users/{id} — toggle a user's admin/active flags. */
 export function updateUser(id: number, body: UpdateUserBody): Promise<AdminUser> {
   return apiFetch<AdminUser>(`/api/admin/users/${id}`, { method: 'PATCH', body })
+}
+
+// --- Recipients -------------------------------------------------------------
+
+/** The renamed recipient (or the merge target, when a merge was performed). */
+export interface RecipientRef {
+  id: number
+  name: string
+}
+
+/**
+ * Body of the 409 returned by `renameRecipient` when the new name collides
+ * (case-insensitive) with another recipient and `merge` was not set. Re-call
+ * with `merge: true` to fold this recipient into the named target.
+ * Read off `ApiError.body` (see `client.ts`).
+ */
+export interface RecipientRenameConflict {
+  detail: string
+  target_id: number
+  target_name: string
+  target_document_count: number
+}
+
+/**
+ * Body of the 409 returned by `deleteRecipient` when the recipient still owns
+ * documents and `reassignTo` was omitted. Read off `ApiError.body`.
+ */
+export interface RecipientDeleteConflict {
+  detail: string
+  document_count: number
+}
+
+/**
+ * PATCH /api/admin/recipients/{id} — rename a recipient, or (when `merge`)
+ * fold it into the existing recipient with the target name. Without `merge`, a
+ * name collision rejects with a 409 carrying a `RecipientRenameConflict` body.
+ */
+export function renameRecipient(id: number, name: string, merge = false): Promise<RecipientRef> {
+  return apiFetch<RecipientRef>(`/api/admin/recipients/${id}`, {
+    method: 'PATCH',
+    body: merge ? { name, merge: true } : { name },
+  })
+}
+
+/**
+ * DELETE /api/admin/recipients/{id}.
+ *
+ * The `reassign_to` query param encodes three intents:
+ *   - `reassignTo` omitted (`undefined`) → the param is left off entirely, which
+ *     triggers the 409 guard (`RecipientDeleteConflict`) when the recipient
+ *     still has documents.
+ *   - `reassignTo === null` → sends `reassign_to=` (empty), clearing the
+ *     recipient on its documents before deleting.
+ *   - `reassignTo` a number → sends `reassign_to=<id>`, moving the documents to
+ *     that recipient before deleting.
+ */
+export function deleteRecipient(id: number, reassignTo?: number | null): Promise<void> {
+  const query: Record<string, string | number | undefined> = {}
+  if (reassignTo !== undefined) {
+    query.reassign_to = reassignTo === null ? '' : reassignTo
+  }
+  return apiFetch<void>(`/api/admin/recipients/${id}`, { method: 'DELETE', query })
 }

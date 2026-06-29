@@ -8,8 +8,9 @@ entries included) cannot drift apart.
 """
 
 from dataclasses import dataclass
+from typing import Literal
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.models import Document, Kind, Recipient, Sender, Tag, document_tags
@@ -103,6 +104,154 @@ async def list_recipients(session: AsyncSession) -> list[RecipientCount]:
         RecipientCount(id=recipient_id, name=name, document_count=count)
         for recipient_id, name, count in rows
     ]
+
+
+# --------------------------------------------------------- recipient management
+#
+# Admin-only mutations behind PATCH/DELETE /api/admin/recipients (see
+# library.api.admin). Both services own their transaction (explicit commit,
+# mirroring the users CRUD) and return a small result object so the route can
+# map the outcome onto the right HTTP status without leaking HTTP concerns here.
+
+
+@dataclass(frozen=True)
+class RenameResult:
+    """Outcome of :func:`rename_recipient`.
+
+    - ``renamed`` — name updated in place (``recipient`` is the renamed row).
+    - ``merged`` — collided with ``merge=True``; ``recipient`` is the surviving
+      target the documents were moved onto (this recipient was deleted).
+    - ``collision`` — collided with ``merge=False``; ``recipient`` is the
+      conflicting target and ``document_count`` its visible document count.
+    - ``not_found`` — no recipient with ``recipient_id``.
+    - ``empty_name`` — the new name was blank after trimming.
+    """
+
+    status: Literal["renamed", "merged", "collision", "not_found", "empty_name"]
+    recipient: Recipient | None = None
+    document_count: int = 0
+
+
+class _Unset:
+    """Sentinel for ``reassign_to``: the caller supplied no target at all.
+
+    Distinct from an explicit ``None`` (null the documents): a missing target on
+    an in-use recipient is refused, whereas an explicit ``None`` nulls and deletes.
+    """
+
+
+UNSET = _Unset()
+
+
+@dataclass(frozen=True)
+class DeleteResult:
+    """Outcome of :func:`reassign_and_delete_recipient`.
+
+    - ``deleted`` — documents reassigned (or nulled) and the recipient removed.
+    - ``not_found`` — no recipient with ``recipient_id``.
+    - ``target_not_found`` — ``reassign_to`` does not name a recipient.
+    - ``self_reassign`` — ``reassign_to`` equals ``recipient_id``.
+    - ``in_use`` — recipient still has ``document_count`` documents and no
+      reassignment target was supplied.
+    """
+
+    status: Literal["deleted", "not_found", "target_not_found", "self_reassign", "in_use"]
+    document_count: int = 0
+
+
+async def _recipient_document_count(session: AsyncSession, recipient_id: int) -> int:
+    """Non-deleted documents addressed to a recipient (matches list_recipients)."""
+    return (
+        await session.execute(
+            select(func.count())
+            .select_from(Document)
+            .where(Document.recipient_id == recipient_id, Document.deleted_at.is_(None))
+        )
+    ).scalar_one()
+
+
+async def rename_recipient(
+    session: AsyncSession, recipient_id: int, new_name: str, merge: bool
+) -> RenameResult:
+    """Rename a recipient, merging into an existing name on collision when asked.
+
+    A case-insensitive name match against any *other* recipient is a collision:
+    with ``merge=False`` it is reported (the caller warns the user); with
+    ``merge=True`` this recipient's documents are reassigned to the matched
+    target, this recipient is deleted, and the target is returned. With no
+    collision the name is updated in place (a pure casing change included).
+    """
+    cleaned = new_name.strip()
+    if not cleaned:
+        return RenameResult(status="empty_name")
+    recipient = await session.get(Recipient, recipient_id)
+    if recipient is None:
+        return RenameResult(status="not_found")
+
+    target = (
+        await session.execute(
+            select(Recipient).where(
+                func.lower(Recipient.name) == cleaned.lower(),
+                Recipient.id != recipient_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if target is not None:
+        if not merge:
+            count = await _recipient_document_count(session, target.id)
+            return RenameResult(status="collision", recipient=target, document_count=count)
+        # Reassign every document (incl. soft-deleted, so nothing is orphaned by
+        # the FK's ON DELETE SET NULL) onto the surviving target, then drop this one.
+        await session.execute(
+            update(Document)
+            .where(Document.recipient_id == recipient_id)
+            .values(recipient_id=target.id)
+        )
+        await session.delete(recipient)
+        await session.commit()
+        return RenameResult(status="merged", recipient=target)
+
+    recipient.name = cleaned
+    await session.commit()
+    return RenameResult(status="renamed", recipient=recipient)
+
+
+async def reassign_and_delete_recipient(
+    session: AsyncSession, recipient_id: int, reassign_to: int | None | _Unset = UNSET
+) -> DeleteResult:
+    """Delete a recipient, first moving its documents to ``reassign_to`` (or NULL).
+
+    ``reassign_to`` is three-state: a recipient id (move the documents there),
+    explicit ``None`` (null the documents), or :data:`UNSET` (no target given).
+    A recipient with no documents is deleted outright. One that still has
+    documents requires an *explicit* choice: with :data:`UNSET` the deletion is
+    refused (``in_use``); otherwise the documents are moved (to the target, or to
+    NULL) and the recipient removed.
+    """
+    recipient = await session.get(Recipient, recipient_id)
+    if recipient is None:
+        return DeleteResult(status="not_found")
+
+    provided = not isinstance(reassign_to, _Unset)
+    target_id: int | None = reassign_to if isinstance(reassign_to, int) else None
+    if target_id is not None:
+        if target_id == recipient_id:
+            return DeleteResult(status="self_reassign")
+        if await session.get(Recipient, target_id) is None:
+            return DeleteResult(status="target_not_found")
+
+    count = await _recipient_document_count(session, recipient_id)
+    if count > 0 and not provided:
+        return DeleteResult(status="in_use", document_count=count)
+
+    # Move every document (incl. soft-deleted) off this recipient before deleting.
+    await session.execute(
+        update(Document).where(Document.recipient_id == recipient_id).values(recipient_id=target_id)
+    )
+    await session.delete(recipient)
+    await session.commit()
+    return DeleteResult(status="deleted")
 
 
 async def list_tags(session: AsyncSession) -> list[TagCount]:
