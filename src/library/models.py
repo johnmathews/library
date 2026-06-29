@@ -642,6 +642,43 @@ class SeriesMembershipOverride(Base):
     )
 
 
+class SeriesMetaOverride(Base):
+    """A user override for a recurring series' *title* and/or *description*.
+
+    A series is one ``(sender_id, kind_id, currency)`` group (see
+    ``library.series``). Its title is normally derived (``sender · cadence
+    series``) and its description is the read-only, auto-refreshed cached LLM
+    prose (``SeriesInsight``). This table lets a user pin their own title and/or
+    description for a series, applied on every ``summarize_series`` call. It is
+    kept deliberately separate from ``SeriesInsight`` so user edits are never
+    clobbered by the background insight refresh (W12). One row per series
+    identity: the unique key treats a NULL currency as a single bucket.
+    """
+
+    __tablename__ = "series_meta_overrides"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    sender_id: Mapped[int] = mapped_column(ForeignKey("senders.id", ondelete="CASCADE"), index=True)
+    kind_id: Mapped[int] = mapped_column(ForeignKey("kinds.id", ondelete="CASCADE"), index=True)
+    currency: Mapped[str | None] = mapped_column(CHAR(3))
+    title: Mapped[str | None] = mapped_column(Text)
+    description: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            "sender_id",
+            "kind_id",
+            "currency",
+            name="series_meta_overrides_series",
+            postgresql_nulls_not_distinct=True,
+        ),
+    )
+
+
 class FxRate(Base):
     """A reference foreign-exchange rate, base = USD.
 

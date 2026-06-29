@@ -411,8 +411,11 @@ export interface DocumentSeries {
   cadence: 'monthly' | 'quarterly' | 'yearly' | 'irregular'
   count: number
   document_ids: number[]
-  /** Cached LLM prose summary of the series; absent until precomputed. */
-  description?: string
+  /** User title override (SeriesMetaOverride); absent unless set. The chart tile
+   *  prefers it over the derived `sender · cadence series` heading. */
+  title?: string | null
+  /** Cached LLM prose summary, or a user description override when set. */
+  description?: string | null
   mean?: string
   median?: string
   stdev?: string
@@ -485,6 +488,34 @@ export interface ChartsResponse {
 /** GET /api/charts — all chartable (sender, kind) series. */
 export function fetchCharts(signal?: AbortSignal): Promise<ChartsResponse> {
   return apiFetch<ChartsResponse>('/api/charts', { signal })
+}
+
+/**
+ * The stable, URL-safe id for a series identity: `{sender}-{kind}-{currency}`,
+ * with `none` for the NULL-currency bucket. Mirrors the backend's
+ * `encode_series_id`, so it round-trips through `/api/charts/{seriesId}`.
+ */
+export function seriesId(s: Pick<DocumentSeries, 'sender_id' | 'kind_id' | 'currency'>): string {
+  return `${s.sender_id}-${s.kind_id}-${s.currency ?? 'none'}`
+}
+
+/** GET /api/charts/{seriesId} — one series by its stable id (single-chart page). */
+export function fetchChart(id: string, signal?: AbortSignal): Promise<DocumentSeries> {
+  return apiFetch<DocumentSeries>(`/api/charts/${id}`, { signal })
+}
+
+/** Body of PUT /api/charts/{seriesId}/meta (omit a field to leave it unchanged). */
+export interface SeriesMetaUpdate {
+  title?: string | null
+  description?: string | null
+}
+
+/**
+ * PUT /api/charts/{seriesId}/meta — override a series' title and/or description.
+ * Returns the refreshed single-series body.
+ */
+export function updateSeriesMeta(id: string, body: SeriesMetaUpdate): Promise<DocumentSeries> {
+  return apiFetch<DocumentSeries>(`/api/charts/${id}/meta`, { method: 'PUT', body })
 }
 
 function parseDetail(text: string, status: number): string {

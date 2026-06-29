@@ -1,7 +1,13 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
-vi.mock('@/api/documents', () => ({ fetchCharts: vi.fn() }))
+vi.mock('@/api/documents', () => ({
+  fetchCharts: vi.fn(),
+  // The view imports seriesId for the per-tile key + deep link; keep the real
+  // shape so keys stay stable.
+  seriesId: (s: { sender_id: number; kind_id: number; currency: string | null }) =>
+    `${s.sender_id}-${s.kind_id}-${s.currency ?? 'none'}`,
+}))
 
 import { fetchCharts } from '@/api/documents'
 import ChartsView from '../ChartsView.vue'
@@ -10,7 +16,14 @@ import ChartsView from '../ChartsView.vue'
 // fetch/render orchestration only.
 const TileStub = {
   name: 'SeriesChartTile',
-  props: ['series', 'highlightDocumentId'],
+  // Typed so valueless boolean attributes (`editable`, `detail-link`) coerce to
+  // true rather than the empty string.
+  props: {
+    series: { type: Object, required: true },
+    highlightDocumentId: Number,
+    editable: Boolean,
+    detailLink: Boolean,
+  },
   template: '<div data-testid="tile-stub">{{ series.sender }}</div>',
 }
 
@@ -49,6 +62,10 @@ describe('ChartsView', () => {
     expect(tiles).toHaveLength(2)
     expect(wrapper.find('[data-testid="charts-grid"]').exists()).toBe(true)
     expect(tiles.map((t) => t.text())).toEqual(['Vattenfall', 'Eneco'])
+    // Tiles get the detail-link prop so each links to its single-chart page.
+    const stubs = wrapper.findAllComponents(TileStub)
+    expect(stubs[0]!.props('detailLink')).toBe(true)
+    expect(stubs[0]!.props('editable')).toBe(true)
   })
 
   it('shows an empty state when no series are eligible', async () => {

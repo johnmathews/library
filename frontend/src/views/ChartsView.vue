@@ -7,16 +7,15 @@
  * GET /api/charts; a membership change refetches the whole grid.
  */
 import { onMounted, ref } from 'vue'
-import { fetchCharts, type DocumentSeries } from '@/api/documents'
+import { fetchCharts, seriesId, type DocumentSeries } from '@/api/documents'
 import SeriesChartTile from '@/components/SeriesChartTile.vue'
 
 const series = ref<DocumentSeries[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 
-function seriesKey(s: DocumentSeries): string {
-  return `${s.sender_id}-${s.kind_id}-${s.currency ?? 'none'}`
-}
+// Stable per-tile key + deep-link id; shared with the backend (seriesId()).
+const seriesKey = seriesId
 
 async function load(): Promise<void> {
   error.value = null
@@ -69,6 +68,7 @@ onMounted(load)
         :key="seriesKey(s)"
         :series="s"
         editable
+        detail-link
         @changed="load"
       />
     </div>

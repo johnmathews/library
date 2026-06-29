@@ -24,6 +24,10 @@ const api = vi.hoisted(() => ({
   addSeriesMember: vi.fn(),
   removeSeriesMember: vi.fn(),
   listDocuments: vi.fn(),
+  updateSeriesMeta: vi.fn(),
+  // Real shape — the tile uses it for its id + deep link.
+  seriesId: (s: { sender_id: number; kind_id: number; currency: string | null }) =>
+    `${s.sender_id}-${s.kind_id}-${s.currency ?? 'none'}`,
 }))
 vi.mock('@/api/documents', () => api)
 
@@ -238,5 +242,75 @@ describe('SeriesChartTile documents list (W8)', () => {
     expect(rows[0]!.find('[data-testid="series-citation"]').text()).toContain('January bill')
     expect(rows[0]!.text()).toContain('2025-01-03')
     expect(rows[0]!.text()).toContain('100.00')
+  })
+})
+
+describe('SeriesChartTile title/description + single-chart link (W12)', () => {
+  beforeEach(() => {
+    api.updateSeriesMeta.mockReset().mockResolvedValue({ ...okSeries })
+  })
+
+  it('uses the derived heading when no title override is set', () => {
+    const wrapper = mountTile(okSeries)
+    expect(wrapper.find('[data-testid="series-heading"]').text()).toContain(
+      'Vattenfall · monthly series',
+    )
+  })
+
+  it('prefers an override title over the derived heading', () => {
+    const wrapper = mountTile({ ...okSeries, title: 'Main flat — energy' })
+    const heading = wrapper.find('[data-testid="series-heading"]').text()
+    expect(heading).toContain('Main flat — energy')
+    expect(heading).not.toContain('monthly series')
+  })
+
+  it('shows the deep link only when detailLink is set', () => {
+    expect(mountTile(okSeries).find('[data-testid="series-detail-link"]').exists()).toBe(false)
+    const wrapper = mount(SeriesChartTile, {
+      props: { series: okSeries, detailLink: true },
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    })
+    const link = wrapper.find('[data-testid="series-detail-link"]')
+    expect(link.exists()).toBe(true)
+    // Stable id: sender-kind-currency.
+    expect(link.attributes('href')).toBe('/charts/7-2-EUR')
+  })
+
+  it('shows no meta editor unless editable', () => {
+    expect(mountTile(okSeries).find('[data-testid="series-meta-edit"]').exists()).toBe(false)
+  })
+
+  it('opens an editor prefilled from the current values and saves the override', async () => {
+    const wrapper = mountEditable()
+    await wrapper.find('[data-testid="series-meta-edit"]').trigger('click')
+    const titleInput = wrapper.find('[data-testid="series-title-input"]')
+    const descInput = wrapper.find('[data-testid="series-description-input"]')
+    expect(titleInput.exists()).toBe(true)
+    // Description prefills from the current (cached) description.
+    expect((descInput.element as HTMLTextAreaElement).value).toContain('risen about 30%')
+
+    await titleInput.setValue('Main flat — energy')
+    await descInput.setValue('Switched tariff in March.')
+    await wrapper.find('[data-testid="series-meta-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(api.updateSeriesMeta).toHaveBeenCalledWith('7-2-EUR', {
+      title: 'Main flat — energy',
+      description: 'Switched tariff in March.',
+    })
+    expect(wrapper.emitted('changed')).toBeTruthy()
+  })
+
+  it('clears an override by saving blank inputs (sends null)', async () => {
+    const wrapper = mountEditable({ ...okSeries, title: 'Old title' })
+    await wrapper.find('[data-testid="series-meta-edit"]').trigger('click')
+    await wrapper.find('[data-testid="series-title-input"]').setValue('')
+    await wrapper.find('[data-testid="series-description-input"]').setValue('')
+    await wrapper.find('[data-testid="series-meta-form"]').trigger('submit')
+    await flushPromises()
+    expect(api.updateSeriesMeta).toHaveBeenCalledWith('7-2-EUR', {
+      title: null,
+      description: null,
+    })
   })
 })

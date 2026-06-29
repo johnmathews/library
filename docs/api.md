@@ -46,6 +46,8 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/notes/{id}/versions` | A note's version history (newest first) |
 | POST   | `/api/notes/{id}/versions/{version_no}/restore` | Restore a note to a previous version |
 | GET    | `/api/charts` | Every eligible recurring `(sender, kind)` series, summarised |
+| GET    | `/api/charts/{series_id}` | One series by its stable id (single-chart deep link) |
+| PUT    | `/api/charts/{series_id}/meta` | Override a series' title and/or description |
 | POST   | `/api/series/{sender_id}/{kind_id}/members` | Pin a document into a series (or clear an exclude) |
 | DELETE | `/api/series/{sender_id}/{kind_id}/members/{document_id}` | Exclude a document from a series (or clear a pin) |
 | GET    | `/api/kinds` | Document kinds with counts |
@@ -870,6 +872,45 @@ dominant currency bucket is too small are omitted, so every returned entry is
 There is no per-document reference point here, so `reference`/`year_over_year`
 are anchored on the latest member. Use `sender_id`-`kind_id`-`currency` as a
 stable key.
+
+### 1.14.1 Single series + editable meta — `/api/charts/{series_id}`
+
+A series has a **stable id** so a single chart can be deep-linked and shared. The
+id encodes the series identity as `{sender_id}-{kind_id}-{currency}`, where
+`currency` is the three-letter bucket code or the literal `none` for the `NULL`
+bucket — e.g. `7-2-EUR` or `7-2-none`. This matches the key the `/charts` grid
+uses per tile, so the two are interchangeable.
+
+| Method | Path | Effect |
+|--------|------|--------|
+| GET | `/api/charts/{series_id}` | The single series, summarised exactly like one `/api/charts` entry (`points` included). |
+| PUT | `/api/charts/{series_id}/meta` | Set a user override for the series `title` and/or `description`. |
+
+`GET` returns the same `status:"ok"` body as one element of `/api/charts`
+(§1.14). It is `404` when the id is malformed, the sender/kind do not exist, or
+the identity does not resolve to a chartable (`status:"ok"`) series.
+
+**Editable title & description.** A series' title is normally *derived*
+(`sender · cadence series`) and its description is the read-only cached LLM prose
+(`series_insights`, auto-refreshed). `PUT …/meta` lets a user override either,
+persisted in the `series_meta_overrides` table (keyed by the series identity,
+separate from the auto-managed `series_insights` so user edits are never
+clobbered by a background refresh).
+
+Body — both fields optional; **only the fields present are applied** (omit a
+field to leave it unchanged; send `null` to clear an existing override):
+
+```json
+{"title": "Energy — main flat", "description": "Switched tariff in March 2025."}
+```
+
+When a `title` override is set it is exposed as a `title` field on the series
+body (the chart tile prefers it over the derived heading); a `description`
+override **replaces** the cached LLM `description`. `PUT` returns the updated
+single-series body (same shape as `GET`). It is `404` when the id is malformed
+or the sender/kind do not exist; `401` when unauthenticated. Any authenticated
+user may edit, mirroring the series-membership endpoints (§1.15) that edit the
+same tile.
 
 ## 1.15 Series membership overrides — `/api/series/{sender_id}/{kind_id}/members`
 

@@ -3,14 +3,37 @@
 from datetime import date
 from decimal import Decimal
 
+import pytest
+
 from library.series import (
     Distribution,
     classify_cadence,
     compare_reference,
     compute_trend,
+    decode_series_id,
     distribution,
+    encode_series_id,
     year_over_year,
 )
+
+
+def test_encode_series_id_with_currency() -> None:
+    assert encode_series_id(7, 2, "EUR") == "7-2-EUR"
+
+
+def test_encode_series_id_null_currency() -> None:
+    assert encode_series_id(7, 2, None) == "7-2-none"
+
+
+def test_decode_series_id_roundtrip() -> None:
+    assert decode_series_id("7-2-EUR") == (7, 2, "EUR")
+    assert decode_series_id("7-2-none") == (7, 2, None)
+
+
+def test_decode_series_id_rejects_malformed() -> None:
+    for bad in ("", "7-2", "a-2-EUR", "7-2-EUR-extra", "not-a-series"):
+        with pytest.raises(ValueError):
+            decode_series_id(bad)
 
 
 def test_distribution_basic() -> None:

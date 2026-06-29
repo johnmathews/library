@@ -31,6 +31,7 @@ from library.models import (
     Sender,
     SeriesInsight,
     SeriesMembershipOverride,
+    SeriesMetaOverride,
 )
 from library.search import DocumentFilters, filter_conditions
 
@@ -52,6 +53,32 @@ _CADENCE_BANDS: tuple[tuple[Cadence, int, int], ...] = (
 
 def _money(value: Decimal) -> Decimal:
     return value.quantize(_CENTS)
+
+
+# Sentinel for the NULL currency bucket in a URL-safe series id.
+_NO_CURRENCY = "none"
+
+
+def encode_series_id(sender_id: int, kind_id: int, currency: str | None) -> str:
+    """A stable, URL-safe id for a series identity: ``{sender}-{kind}-{currency}``.
+
+    The currency is the bucket's 3-letter code, or ``none`` for the NULL bucket.
+    Mirrors ``ChartsView.seriesKey`` on the frontend so the two are
+    interchangeable (deep links, single-chart fetch).
+    """
+    return f"{sender_id}-{kind_id}-{currency if currency is not None else _NO_CURRENCY}"
+
+
+def decode_series_id(series_id: str) -> tuple[int, int, str | None]:
+    """Inverse of ``encode_series_id``; raises ``ValueError`` on a malformed id."""
+    parts = series_id.split("-")
+    if len(parts) != 3:
+        raise ValueError(f"malformed series id: {series_id!r}")
+    sender_part, kind_part, currency_part = parts
+    sender_id = int(sender_part)  # raises ValueError on non-numeric
+    kind_id = int(kind_part)
+    currency = None if currency_part == _NO_CURRENCY else currency_part
+    return sender_id, kind_id, currency
 
 
 @dataclass(frozen=True, slots=True)
@@ -250,7 +277,11 @@ class SeriesSummary:
     # document_id -> title, for per-point citation links on the chart.
     titles: dict[int, str | None]
     # Cached LLM prose summary of the series, or None when not yet generated.
+    # A user description override (SeriesMetaOverride) replaces it when present.
     description: str | None
+    # A user title override (SeriesMetaOverride); None when no override is set,
+    # in which case the frontend falls back to the derived heading.
+    title: str | None = None
 
 
 async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list[_Member]:
@@ -426,6 +457,35 @@ async def load_series_description(
     return (await session.execute(statement)).scalar_one_or_none()
 
 
+async def load_series_meta_override(
+    session: AsyncSession,
+    sender_id: int | None,
+    kind_id: int | None,
+    currency: str | None,
+) -> tuple[str | None, str | None]:
+    """The user ``(title, description)`` override for one series, if any.
+
+    Each is ``None`` when no override row exists or that column is unset. A
+    series with no resolved identity (no sender/kind) matches nothing.
+    """
+    if sender_id is None or kind_id is None:
+        return None, None
+    currency_match = (
+        SeriesMetaOverride.currency.is_(None)
+        if currency is None
+        else SeriesMetaOverride.currency == currency
+    )
+    statement = select(SeriesMetaOverride.title, SeriesMetaOverride.description).where(
+        SeriesMetaOverride.sender_id == sender_id,
+        SeriesMetaOverride.kind_id == kind_id,
+        currency_match,
+    )
+    row = (await session.execute(statement)).first()
+    if row is None:
+        return None, None
+    return row[0], row[1]
+
+
 async def summarize_series(
     session: AsyncSession,
     *,
@@ -500,6 +560,12 @@ async def summarize_series(
 
     head = series_head
     description = await load_series_description(session, head.sender_id, head.kind_id, currency)
+    # User overrides win over the derived heading / cached LLM description.
+    title_override, description_override = await load_series_meta_override(
+        session, head.sender_id, head.kind_id, currency
+    )
+    if description_override is not None:
+        description = description_override
     return SeriesSummary(
         status="ok",
         sender=head.sender,
@@ -518,6 +584,7 @@ async def summarize_series(
         points=points,
         titles={m.document_id: m.title for m in bucket},
         description=description,
+        title=title_override,
     )
 
 
@@ -539,6 +606,8 @@ def serialise_summary(summary: SeriesSummary, *, include_points: bool = False) -
         "count": summary.count,
         "document_ids": summary.document_ids,
     }
+    if summary.title is not None:
+        body["title"] = summary.title
     if summary.description is not None:
         body["description"] = summary.description
     if summary.distribution is not None:

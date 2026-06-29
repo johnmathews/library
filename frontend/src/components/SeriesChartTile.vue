@@ -9,6 +9,8 @@ import {
   addSeriesMember,
   removeSeriesMember,
   listDocuments,
+  seriesId,
+  updateSeriesMeta,
   type DocumentSeries,
   type DocumentListItem,
 } from '@/api/documents'
@@ -20,9 +22,13 @@ const props = defineProps<{
   // Highlight the point for this document (e.g. the one being viewed). When
   // omitted the most recent point is highlighted.
   highlightDocumentId?: number
-  // Show add/remove controls for "documents in this series" (W8). Only takes
-  // effect when the series has a resolved identity (sender_id + kind_id).
+  // Show add/remove controls for "documents in this series" (W8) plus the
+  // inline title/description editor (W12). Only takes effect when the series
+  // has a resolved identity (sender_id + kind_id).
   editable?: boolean
+  // Render a deep link to this series' own single-chart page (/charts/:id).
+  // Off on the single-chart view itself (it would link to itself).
+  detailLink?: boolean
 }>()
 
 // Emitted after a successful add/remove so the parent can refetch the series.
@@ -39,10 +45,54 @@ const canEdit = computed(
     props.series.kind_id != null,
 )
 
+// Stable id for this series + its single-chart deep link.
+const id = computed(() => seriesId(props.series))
+const detailHref = computed(() => `/charts/${id.value}`)
+
+// Heading prefers a user title override (W12) over the derived label.
+const headingMain = computed<string>(() =>
+  props.series.title?.trim()
+    ? props.series.title
+    : `${props.series.sender} · ${props.series.cadence} series`,
+)
+
 const busy = ref(false)
 const showAdd = ref(false)
 const query = ref('')
 const results = ref<DocumentListItem[]>([])
+
+// Inline title/description editing (W12). Open the form prefilled from the
+// current (possibly overridden) values; saving PUTs the meta override.
+const editingMeta = ref(false)
+const metaTitle = ref('')
+const metaDescription = ref('')
+
+function onEditMeta(): void {
+  metaTitle.value = props.series.title ?? ''
+  metaDescription.value = props.series.description ?? ''
+  editingMeta.value = true
+}
+
+function onCancelMeta(): void {
+  editingMeta.value = false
+}
+
+async function onSaveMeta(): Promise<void> {
+  if (!canEdit.value || busy.value) return
+  busy.value = true
+  try {
+    // Empty inputs clear the override (send null), so a user can revert to the
+    // derived heading / cached description.
+    await updateSeriesMeta(id.value, {
+      title: metaTitle.value.trim() || null,
+      description: metaDescription.value.trim() || null,
+    })
+    editingMeta.value = false
+    emit('changed')
+  } finally {
+    busy.value = false
+  }
+}
 
 // "Documents in this series" is collapsed by default — the list can be long and
 // dominates the card otherwise (W8). The toggle reveals it.
@@ -192,16 +242,37 @@ function pointLabel(point: { title?: string | null; date: string }): string {
     class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
   >
     <header>
-      <h3
-        class="text-sm font-semibold text-gray-800 dark:text-gray-100"
-        data-testid="series-heading"
-      >
-        {{ series.sender }} · {{ series.cadence }} series
-        <span class="text-gray-400 dark:text-gray-500 font-normal">
-          ({{ series.count }} documents<span v-if="series.currency">, {{ series.currency }}</span
-          >)
-        </span>
-      </h3>
+      <div class="flex items-start justify-between gap-2">
+        <h3
+          class="text-sm font-semibold text-gray-800 dark:text-gray-100"
+          data-testid="series-heading"
+        >
+          {{ headingMain }}
+          <span class="text-gray-400 dark:text-gray-500 font-normal">
+            ({{ series.count }} documents<span v-if="series.currency">, {{ series.currency }}</span
+            >)
+          </span>
+        </h3>
+        <div class="flex shrink-0 items-center gap-2">
+          <button
+            v-if="canEdit && !editingMeta"
+            type="button"
+            data-testid="series-meta-edit"
+            class="text-xs text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300"
+            @click="onEditMeta"
+          >
+            Edit
+          </button>
+          <RouterLink
+            v-if="detailLink"
+            :to="detailHref"
+            data-testid="series-detail-link"
+            class="text-xs text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:underline"
+          >
+            Open chart
+          </RouterLink>
+        </div>
+      </div>
       <p v-if="verdictText || trendText" class="mt-0.5 text-sm text-gray-600 dark:text-gray-400">
         <span v-if="verdictText">{{ verdictText }}</span>
         <span v-if="verdictText && trendText"> · </span>
@@ -209,8 +280,50 @@ function pointLabel(point: { title?: string | null; date: string }): string {
       </p>
     </header>
 
+    <!-- Inline title/description editor (W12). -->
+    <form
+      v-if="editingMeta"
+      data-testid="series-meta-form"
+      class="mt-3 space-y-2"
+      @submit.prevent="onSaveMeta"
+    >
+      <input
+        v-model="metaTitle"
+        type="text"
+        data-testid="series-title-input"
+        placeholder="Title (leave blank to use the default)"
+        class="form-input w-full text-sm"
+      />
+      <textarea
+        v-model="metaDescription"
+        data-testid="series-description-input"
+        rows="3"
+        placeholder="Description"
+        class="form-textarea w-full text-sm"
+      ></textarea>
+      <div class="flex justify-end gap-2">
+        <button
+          type="button"
+          data-testid="series-meta-cancel"
+          class="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+          :disabled="busy"
+          @click="onCancelMeta"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          data-testid="series-meta-save"
+          class="text-xs font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 disabled:opacity-50"
+          :disabled="busy"
+        >
+          Save
+        </button>
+      </div>
+    </form>
+
     <p
-      v-if="series.description"
+      v-else-if="series.description"
       data-testid="series-description"
       class="mt-3 text-sm text-gray-700 dark:text-gray-300"
     >
