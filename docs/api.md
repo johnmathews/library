@@ -1,6 +1,6 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-06-29 (recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Status:** active. **Last updated:** 2026-06-29 (admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}` — rename/merge + reassign-then-delete, §1.18.1–§1.18.2; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -70,6 +70,8 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/admin/users` | List all users (admin only) |
 | POST   | `/api/admin/users` | Create a user (admin only) |
 | PATCH  | `/api/admin/users/{id}` | Promote/demote, activate/deactivate a user (admin only) |
+| PATCH  | `/api/admin/recipients/{id}` | Rename or merge a recipient (admin only) |
+| DELETE | `/api/admin/recipients/{id}` | Delete a recipient, reassigning its documents (admin only) |
 
 Soft-deleted documents return **404** from every per-document endpoint and
 never appear in lists. Other error shapes: `404` unknown document, `422`
@@ -982,6 +984,52 @@ in [admin.md](admin.md).
 | GET | `/api/admin/users` | Every user: `[{id, username, display_name, is_admin, is_active, created_at}]`. |
 | POST | `/api/admin/users` | Body `{username, password, display_name?, is_admin?}`. `201`; `409` if the username exists. |
 | PATCH | `/api/admin/users/{id}` | Body `{is_admin?, is_active?}`. Promote/demote, activate/deactivate. `404` unknown; `409` if it would remove the **last active admin**. Deactivating also revokes the user's sessions and tokens. |
+| PATCH | `/api/admin/recipients/{id}` | Rename or merge a recipient. See §1.18.1. |
+| DELETE | `/api/admin/recipients/{id}` | Delete a recipient, reassigning its documents. See §1.18.2. |
 
 The system `config` view exposes only a curated, secret-free subset of settings
 — never API keys, passwords, or internal URLs.
+
+### 1.18.1 `PATCH /api/admin/recipients/{id}` — rename / merge
+
+Body `{name, merge?}` (`name` trimmed, ≤255 chars; `merge` default `false`).
+Recipients are a shared taxonomy, so this is admin-only.
+
+- **`200`** → `{id, name}`. The name was updated in place. The collision check is
+  **case-insensitive but excludes the recipient itself**, so a pure casing change
+  (`john` → `John`) succeeds here.
+- **`400`** → name was blank after trimming.
+- **`404`** → no such recipient.
+- **`409`** → the (case-insensitive) name matches **another** recipient and
+  `merge` was not set. Body:
+
+  ```json
+  {"detail": "…", "target_id": 7, "target_name": "John", "target_document_count": 4}
+  ```
+
+  The conflict fields sit at the **top level** alongside the human-readable
+  `detail` string (a flat body, returned via `JSONResponse` so FastAPI does not
+  nest them). Re-send with `{name, "merge": true}` to reassign this recipient's
+  documents onto `target_id`, delete this recipient, and return the surviving
+  target `{id, name}` (`200`).
+
+### 1.18.2 `DELETE /api/admin/recipients/{id}` — reassign-then-delete
+
+Deletes a recipient, first moving its documents off it. The `reassign_to` query
+param is **three-state**:
+
+| `reassign_to` | Effect |
+|---|---|
+| *omitted* | Zero-document recipient → deleted (`204`). In-use recipient → `409` (see below). |
+| `=<id>` | Move this recipient's documents to recipient `<id>`, then delete (`204`). |
+| `=` (empty / `null`) | Clear the recipient on its documents (set NULL), then delete (`204`). |
+
+All reassignments move **every** document, soft-deleted included. Responses:
+
+- **`204`** → deleted (with documents reassigned/cleared as above).
+- **`400`** → `reassign_to` equals the recipient being deleted (self-reassign).
+- **`404`** → unknown recipient, or unknown `reassign_to` target.
+- **`409`** → recipient still has documents and `reassign_to` was omitted. Body
+  is flat (top-level fields, returned via `JSONResponse`):
+  `{"detail": "…", "document_count": 4}`.
+- **`422`** → `reassign_to` was neither an integer, empty, nor `null`.

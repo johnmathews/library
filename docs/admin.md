@@ -57,6 +57,8 @@ All under `require_admin`:
 | `GET /api/admin/users` | every user (role + active state, no secrets) |
 | `POST /api/admin/users` | create a user (optionally admin) |
 | `PATCH /api/admin/users/{id}` | promote/demote and activate/deactivate |
+| `PATCH /api/admin/recipients/{id}` | rename a recipient, or merge it into another (§1.2.3) |
+| `DELETE /api/admin/recipients/{id}` | delete a recipient, reassigning its documents first (§1.2.3) |
 
 The system config view only exposes a curated, secret-free subset of settings —
 never API keys, passwords, or internal URLs.
@@ -65,15 +67,55 @@ never API keys, passwords, or internal URLs.
 zero active admins, so an admin cannot lock everyone out. Deactivating a user
 also revokes their sessions and API tokens (same as `library user disable`).
 
+### 1.2.3 Recipient (metadata) management
+
+Recipients are a global, shared taxonomy, so curating them (fixing typos,
+folding duplicates, removing dead entries) is admin-only. Two endpoints back the
+**Metadata** admin tab (§1.3); the services live in `library/taxonomy.py` and own
+their own transaction (a single commit per call). Document counts here exclude
+soft-deleted documents (matching `GET /api/recipients`), but every reassignment
+moves **all** rows — soft-deleted included — so nothing is left orphaned by the
+`recipient_id` FK's `ON DELETE SET NULL`.
+
+**Rename / merge** — `PATCH /api/admin/recipients/{id}` with `{name, merge?}`:
+
+- The name is trimmed; a blank name is rejected (`400`).
+- The collision check is **case-insensitive and excludes the recipient itself**,
+  so a pure casing change (e.g. `john` → `John`) renames in place rather than
+  reporting a self-collision.
+- If the new name matches **another** recipient and `merge` is not set, the call
+  returns `409` whose flat (top-level) body carries the target's `target_id`,
+  `target_name`, and `target_document_count` so the UI can warn before merging.
+- Re-sending with `merge=true` reassigns this recipient's documents onto the
+  target and deletes this recipient (the target row is returned).
+
+**Reassign-then-delete** — `DELETE /api/admin/recipients/{id}` with an optional
+`reassign_to` query param that is **three-state**:
+
+- **omitted** — a recipient with zero documents is deleted outright; an in-use
+  recipient returns `409` (`document_count`) rather than silently nulling FKs.
+- **`reassign_to=<id>`** — move this recipient's documents to that recipient,
+  then delete. Targeting itself is `400`; an unknown target is `404`.
+- **`reassign_to=`** (empty / `null`) — clear the recipient on its documents
+  (set to NULL), then delete.
+
+These mutations move the FK directly; they bypass per-document
+`extra["user_edited_fields"]` locks (the recipient row is being deleted, so its
+documents must move regardless). After any mutation the frontend refreshes the
+shared taxonomy cache so other views' recipient dropdowns/filters update.
+
 ## 1.3 The admin views (frontend)
 
 A single `/admin` route (`AdminView.vue`), reachable from an admin-only sidebar
-link, with four tabs backed by the endpoints above: **System**, **Architecture**
+link, with five tabs backed by the endpoints above: **System**, **Architecture**
 (markdown → sanitised HTML via the shared marked + DOMPurify pipeline),
-**Coverage**, and **Users** (promote/demote/activate + create, with inline
-last-admin error handling). The router's `authGuard` redirects non-admins away
-from `meta.adminOnly` routes, so the page is unreachable without the role even
-by deep link.
+**Coverage**, **Users** (promote/demote/activate + create, with inline
+last-admin error handling), and **Metadata** (recipient management, §1.2.3) —
+each recipient row has an inline **Rename** (revealing a merge prompt on a `409`
+collision) and an inline **Delete** (with a reassign-target picker for in-use
+recipients). The router's `authGuard` redirects non-admins away from
+`meta.adminOnly` routes, so the page is unreachable without the role even by deep
+link.
 
 ## 1.4 Test-coverage pipeline
 
