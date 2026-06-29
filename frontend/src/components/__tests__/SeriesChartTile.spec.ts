@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 
-const lineDataCapture = { data: null as unknown }
+const lineDataCapture = { data: null as unknown, options: null as unknown }
 vi.mock('vue-chartjs', () => ({
   Bar: {
     name: 'Bar',
@@ -9,9 +9,14 @@ vi.mock('vue-chartjs', () => ({
     template: '<canvas data-testid="chart"/>',
     mounted() {
       lineDataCapture.data = (this as unknown as { data: unknown }).data
+      lineDataCapture.options = (this as unknown as { options: unknown }).options
     },
   },
 }))
+
+// chartjs-adapter-date-fns registers itself as a side effect; stub it so the
+// import resolves under jsdom without pulling the real adapter.
+vi.mock('chartjs-adapter-date-fns', () => ({}))
 
 // The tile imports these at runtime for the editable "documents in this series"
 // controls (W8). Mock the whole module; the type imports below are erased.
@@ -129,6 +134,18 @@ describe('SeriesChartTile', () => {
     }
     const colors = captured.datasets[0]!.backgroundColor
     expect(colors[2]).toBe('#dc2626')
+  })
+
+  it('plots a temporal x-axis with {x: date, y: amount} points (W9)', () => {
+    mountTile(okSeries)
+    const options = lineDataCapture.options as { scales: { x: { type: string } } }
+    expect(options.scales.x.type).toBe('time')
+    const data = lineDataCapture.data as { datasets: { data: { x: string; y: number }[] }[] }
+    expect(data.datasets[0]!.data).toEqual([
+      { x: '2025-01-03', y: 100 },
+      { x: '2025-02-02', y: 100 },
+      { x: '2025-03-04', y: 130 },
+    ])
   })
 })
 

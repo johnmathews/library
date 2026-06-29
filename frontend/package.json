@@ -18,6 +18,8 @@
   "dependencies": {
     "@vueuse/core": "^12.5.0",
     "chart.js": "^4.5.1",
+    "chartjs-adapter-date-fns": "^3.0.0",
+    "date-fns": "^4.4.0",
     "dompurify": "^3.4.11",
     "marked": "^18.0.5",
     "pdfjs-dist": "^6.0.227",

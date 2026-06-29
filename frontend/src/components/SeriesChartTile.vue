@@ -2,7 +2,9 @@
 import { computed, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { Bar } from 'vue-chartjs'
-import { Chart as ChartJS, CategoryScale, LinearScale, BarElement, Tooltip } from 'chart.js'
+import { Chart as ChartJS, TimeScale, LinearScale, BarElement, Tooltip } from 'chart.js'
+// Date adapter for chart.js's time scale (registered as a side effect).
+import 'chartjs-adapter-date-fns'
 import {
   addSeriesMember,
   removeSeriesMember,
@@ -11,7 +13,7 @@ import {
   type DocumentListItem,
 } from '@/api/documents'
 
-ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip)
+ChartJS.register(TimeScale, LinearScale, BarElement, Tooltip)
 
 const props = defineProps<{
   series: DocumentSeries
@@ -144,15 +146,16 @@ const chartData = computed(() => {
   const pts = points.value
   const active = activeIdx.value
   // Bars, not a line: these are discrete recurring events (one document per
-  // bar), not a continuous signal. The active bar is highlighted red.
+  // bar), not a continuous signal. The active bar is highlighted red. Points
+  // carry {x: date, y: amount} so the time axis spaces them by real elapsed
+  // time, not evenly (W9).
   return {
-    labels: pts.map((p) => p.date),
     datasets: [
       {
-        data: pts.map((p) => Number(p.amount)),
+        data: pts.map((p) => ({ x: p.date, y: Number(p.amount) })),
         backgroundColor: pts.map((_, i) => (i === active ? '#dc2626' : '#2563eb')),
         borderRadius: 4,
-        maxBarThickness: 48,
+        maxBarThickness: 32,
       },
     ],
   }
@@ -161,7 +164,21 @@ const chartData = computed(() => {
 const chartOptions = {
   responsive: true,
   maintainAspectRatio: false,
-  plugins: { legend: { display: false } },
+  plugins: {
+    legend: { display: false },
+    tooltip: { callbacks: {} },
+  },
+  scales: {
+    // Temporal x-axis: the gap between two events reflects the real time
+    // between them (3 months apart sit ~3× farther than 1 month apart).
+    x: {
+      type: 'time' as const,
+      time: { tooltipFormat: 'yyyy-MM-dd' },
+      grid: { display: false },
+      ticks: { maxRotation: 45, minRotation: 0, autoSkip: true, font: { size: 10 } },
+    },
+    y: { beginAtZero: true, ticks: { font: { size: 10 } } },
+  },
 }
 
 function pointLabel(point: { title?: string | null; date: string }): string {
