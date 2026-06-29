@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import (
 
 from library.config import Settings, get_settings
 from library.extraction import apply as apply_module
-from library.extraction.apply import apply_extraction, todays_spend_usd
+from library.extraction.apply import apply_extraction, todays_spend_usd, upsert_recipient
 from library.extraction.extractor import (
     PROMPT_VERSION,
     CallUsage,
@@ -36,6 +36,7 @@ from library.models import (
     Recipient,
     Sender,
     Tag,
+    User,
 )
 from library.ocr import router as ocr_router
 from library.ocr.base import OcrResult
@@ -621,3 +622,52 @@ async def test_extract_document_task_registered_and_deferrable() -> None:
         job = next(iter(connector.jobs.values()))
         assert job["task_name"] == "library.jobs.extract_document"
         assert job["args"] == {"document_id": 7}
+
+
+# ----------------------------------------- dual-name recipient resolution (W13)
+
+
+async def test_upsert_recipient_matches_username(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A name equal to a user's username resolves to that user's linked recipient."""
+    async with session_factory() as session:
+        user = User(username="alice", password_hash="x", display_name="Alice Smith")
+        session.add(user)
+        await session.flush()
+
+        recipient = await upsert_recipient(session, "Alice")  # case-insensitive username
+        await session.commit()
+
+        assert recipient.user_id == user.id
+        # Named by the display name, not the matched username.
+        assert recipient.name == "Alice Smith"
+
+
+async def test_upsert_recipient_matches_display_name_same_row(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """Username and display name resolve to one and the same recipient row."""
+    async with session_factory() as session:
+        user = User(username="bob", password_hash="x", display_name="Bob Jones")
+        session.add(user)
+        await session.flush()
+
+        by_username = await upsert_recipient(session, "bob")
+        by_display = await upsert_recipient(session, "BOB JONES")
+        await session.commit()
+
+        assert by_username.id == by_display.id
+        assert by_display.user_id == user.id
+
+
+async def test_upsert_recipient_plain_name_unlinked(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A name matching no user upserts a plain, user-less recipient."""
+    async with session_factory() as session:
+        recipient = await upsert_recipient(session, "Acme Logistics BV")
+        await session.commit()
+
+        assert recipient.user_id is None
+        assert recipient.name == "Acme Logistics BV"

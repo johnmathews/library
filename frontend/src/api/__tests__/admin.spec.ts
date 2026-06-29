@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   createUser,
+  deleteUser,
   getArchitecture,
   getCoverage,
   getSystemInfo,
@@ -143,6 +144,23 @@ describe('admin API', () => {
     await expect(updateUser(1, { is_admin: false })).rejects.toMatchObject({
       status: 409,
       detail: 'cannot remove the last active admin',
+    })
+  })
+
+  it('deleteUser DELETEs /api/admin/users/{id} with the CSRF header', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }))
+    await deleteUser(7)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/admin/users/7')
+    expect(init.method).toBe('DELETE')
+    expect((init.headers as Headers).get('X-CSRF-Token')).toBe('csrf-xyz')
+  })
+
+  it('surfaces a 400 from deleteUser as an ApiError with the detail', async () => {
+    respondWith({ detail: 'cannot delete your own account' }, 400)
+    await expect(deleteUser(1)).rejects.toMatchObject({
+      status: 400,
+      detail: 'cannot delete your own account',
     })
   })
 })

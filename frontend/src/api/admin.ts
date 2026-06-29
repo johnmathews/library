@@ -136,6 +136,17 @@ export function updateUser(id: number, body: UpdateUserBody): Promise<AdminUser>
   return apiFetch<AdminUser>(`/api/admin/users/${id}`, { method: 'PATCH', body })
 }
 
+/**
+ * DELETE /api/admin/users/{id} — permanently delete a user.
+ *
+ * Guarded server-side: deleting your own account is `400` and deleting the last
+ * active admin is `409` (both surfaced via `ApiError`). The user's linked
+ * recipient survives (its `user_id` is nulled), so addressed documents are kept.
+ */
+export function deleteUser(id: number): Promise<void> {
+  return apiFetch<void>(`/api/admin/users/${id}`, { method: 'DELETE' })
+}
+
 // --- Recipients -------------------------------------------------------------
 
 /** The renamed recipient (or the merge target, when a merge was performed). */

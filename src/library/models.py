@@ -188,13 +188,25 @@ class Sender(Base):
 
 
 class Recipient(Base):
-    """Document recipient (who a document was addressed to); lookup table mirroring ``Sender``."""
+    """Document recipient (who a document was addressed to); lookup table mirroring ``Sender``.
+
+    Optionally linked to a :class:`User` via ``user_id`` (nullable FK, migration
+    0020): creating a user auto-links a recipient named by their display name,
+    and ingestion resolves a document to that recipient when the extracted name
+    matches the user's username *or* display name. ``ON DELETE SET NULL`` keeps
+    the recipient (and the documents addressed to it) when its user is deleted.
+    """
 
     __tablename__ = "recipients"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True)
+    user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    user: Mapped["User | None"] = relationship(lazy="selectin")
 
 
 class Tag(Base):

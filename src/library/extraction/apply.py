@@ -13,7 +13,7 @@ from decimal import Decimal
 from typing import Any
 
 from anthropic import AsyncAnthropic
-from sqlalchemy import Numeric, func, select
+from sqlalchemy import Numeric, and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
@@ -32,6 +32,7 @@ from library.models import (
     Recipient,
     Sender,
     Tag,
+    User,
 )
 
 logger = logging.getLogger(__name__)
@@ -64,9 +65,78 @@ async def upsert_sender(session: AsyncSession, name: str) -> Sender:
     return sender
 
 
+async def get_or_create_user_recipient(session: AsyncSession, user: User) -> Recipient:
+    """Return the :class:`Recipient` linked to ``user``, creating/linking if needed.
+
+    A user's recipient is named by their display name, falling back to the
+    username when the display name is empty. If a recipient with that name
+    already exists but is not yet linked to any user, it is *adopted* (its
+    ``user_id`` set) rather than duplicated — keeping ``recipients.name`` unique.
+    A name already linked to a *different* user is returned as-is (the name is
+    shared) rather than risking a duplicate-name insert.
+    """
+    existing = (
+        await session.execute(select(Recipient).where(Recipient.user_id == user.id))
+    ).scalar_one_or_none()
+    if existing is not None:
+        return existing
+
+    name = (user.display_name or "").strip() or user.username
+    by_name = (
+        await session.execute(select(Recipient).where(func.lower(Recipient.name) == name.lower()))
+    ).scalar_one_or_none()
+    if by_name is not None:
+        if by_name.user_id is None:
+            by_name.user_id = user.id
+            await session.flush()
+        return by_name
+
+    recipient = Recipient(name=name, user_id=user.id)
+    session.add(recipient)
+    await session.flush()
+    return recipient
+
+
+async def _match_user(session: AsyncSession, name: str) -> User | None:
+    """Find a user whose username or (non-empty) display name equals ``name``.
+
+    Case-insensitive; the lowest user id wins on the (rare) overlap where one
+    user's username equals another's display name, for deterministic resolution.
+    """
+    return (
+        (
+            await session.execute(
+                select(User)
+                .where(
+                    or_(
+                        func.lower(User.username) == name.lower(),
+                        and_(
+                            User.display_name != "",
+                            func.lower(User.display_name) == name.lower(),
+                        ),
+                    )
+                )
+                .order_by(User.id)
+            )
+        )
+        .scalars()
+        .first()
+    )
+
+
 async def upsert_recipient(session: AsyncSession, name: str) -> Recipient:
-    """Find a recipient by case-insensitive name match, creating it if new."""
+    """Resolve an extracted recipient name to a :class:`Recipient` row.
+
+    A name matching a user's **username or display name** (case-insensitive)
+    resolves to that user's linked recipient (created/adopted as needed), so a
+    document addressed to either name maps to one recipient. Any other name
+    upserts a plain recipient by case-insensitive name match, creating if new.
+    """
     cleaned = name.strip()
+    user = await _match_user(session, cleaned)
+    if user is not None:
+        return await get_or_create_user_recipient(session, user)
+
     existing = (
         await session.execute(
             select(Recipient).where(func.lower(Recipient.name) == cleaned.lower())

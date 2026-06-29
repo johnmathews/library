@@ -1,6 +1,6 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-06-29 (recipient field added to the document data model).
+**Status:** active. **Last updated:** 2026-06-30 (recipient↔user link added to the document data model).
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The full decision record (with research and
@@ -140,7 +140,11 @@ re-derivable artifact.
 
 - `senders` — who a document is from.
 - `recipients` — who it is addressed to (mirrors `senders`, nullable FK;
-  migration 0016 seeds a "John" recipient and backfills existing docs).
+  migration 0016 seeds a "John" recipient and backfills existing docs). An
+  optional `recipients.user_id` (migration 0020) links a recipient to a user:
+  creating a user auto-links a recipient named by their display name, and
+  ingestion resolves a document to that recipient when the extracted name
+  matches the user's username **or** display name (see admin.md §1.2.4).
 - `kinds` — document type. Seeded: invoice, receipt, certificate, utility
   bill, parking ticket, warranty, manual, reference, research, note, letter,
   contract, ticket, other (general-reference kinds added in migration 0010

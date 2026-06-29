@@ -20,6 +20,7 @@ from sqlalchemy.pool import NullPool
 from library.auth.passwords import hash_password
 from library.auth.service import revoke_all_credentials
 from library.config import get_settings
+from library.extraction.apply import get_or_create_user_recipient
 from library.extraction.eval import (
     combine,
     flywheel_accuracy,
@@ -107,14 +108,17 @@ def user_add(
         if existing is not None:
             typer.echo(f"error: user already exists: {username}")
             raise typer.Exit(code=1)
-        session.add(
-            User(
-                username=username,
-                password_hash=hash_password(password),
-                display_name=display_name,
-                is_admin=admin,
-            )
+        user = User(
+            username=username,
+            password_hash=hash_password(password),
+            display_name=display_name,
+            is_admin=admin,
         )
+        session.add(user)
+        # Auto-link a recipient (named by display name, else username) so
+        # documents addressed to this person resolve to it — mirrors create_user.
+        await session.flush()
+        await get_or_create_user_recipient(session, user)
         await session.commit()
 
     password = _read_password(password_stdin=password_stdin)

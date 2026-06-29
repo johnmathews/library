@@ -19,10 +19,12 @@ from sqlalchemy import func, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 import library
+from library.auth.deps import current_user
 from library.auth.passwords import hash_password
 from library.auth.service import revoke_all_credentials
 from library.config import Settings, get_settings
 from library.db import get_session
+from library.extraction.apply import get_or_create_user_recipient
 from library.models import Document, DocumentStatus, User
 from library.schemas import RecipientOut
 from library.taxonomy import (
@@ -322,7 +324,12 @@ async def create_user(
     payload: AdminUserCreate,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> AdminUserOut:
-    """Create a user (optionally admin). Mirrors the `library user add` CLI."""
+    """Create a user (optionally admin), auto-linking a recipient.
+
+    Mirrors the `library user add` CLI. A recipient named by the user's display
+    name (falling back to the username) is created and linked via ``user_id`` so
+    documents addressed to either name resolve to it (see docs/admin.md §1.2.4).
+    """
     existing = (
         await session.execute(select(User).where(User.username == payload.username))
     ).scalar_one_or_none()
@@ -338,6 +345,8 @@ async def create_user(
         is_admin=payload.is_admin,
     )
     session.add(user)
+    await session.flush()  # assign user.id before linking the recipient
+    await get_or_create_user_recipient(session, user)
     await session.commit()
     await session.refresh(user)
     return _user_out(user)
@@ -402,6 +411,57 @@ async def update_user(
         await revoke_all_credentials(session, user.id)
     await session.refresh(user)
     return _user_out(user)
+
+
+@router.delete(
+    "/users/{user_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=None,
+    summary="Delete a user",
+    responses={
+        400: {"description": "Cannot delete your own account"},
+        404: {"description": "Unknown user"},
+        409: {"description": "Would remove the last active admin"},
+    },
+)
+async def delete_user(
+    user_id: int,
+    current: Annotated[User, Depends(current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    """Permanently delete a user.
+
+    Guards (checked under the same advisory lock as role changes so the count is
+    race-safe): deleting the **last active admin** is refused (409), and deleting
+    **your own account** is refused (400). The last-admin check runs first, so a
+    sole admin trying to remove themselves gets the clearer 409.
+
+    The deleted user's linked recipient survives — ``recipients.user_id`` is
+    ``ON DELETE SET NULL``, so it is merely unlinked and documents addressed to
+    that person stay addressed. Sessions and API tokens cascade away with the row.
+    """
+    await session.execute(
+        text("SELECT pg_advisory_xact_lock(:key)"), {"key": _ADMIN_MUTATION_LOCK_KEY}
+    )
+    user = (await session.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
+    if user is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+
+    if user.is_admin and user.is_active and await _active_admin_count(session) <= 1:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="cannot delete the last active admin",
+        )
+    if user.id == current.id:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="cannot delete your own account",
+        )
+
+    await session.delete(user)
+    await session.commit()
 
 
 # ---------------------------------------------------------- recipient management

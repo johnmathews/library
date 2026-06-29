@@ -9,6 +9,7 @@ vi.mock('@/api/admin', () => ({
   listUsers: vi.fn(),
   createUser: vi.fn(),
   updateUser: vi.fn(),
+  deleteUser: vi.fn(),
   listRecipients: vi.fn(),
   renameRecipient: vi.fn(),
   deleteRecipient: vi.fn(),
@@ -21,6 +22,7 @@ vi.mock('@/composables/taxonomyOptions', () => ({
 import {
   createUser,
   deleteRecipient,
+  deleteUser,
   getArchitecture,
   getCoverage,
   getSystemInfo,
@@ -301,6 +303,66 @@ describe('AdminView', () => {
     const err = wrapper.find('[data-testid="create-user-error"]')
     expect(err.exists()).toBe(true)
     expect(err.text()).toContain('username already taken')
+  })
+
+  it('offers Delete for other users but not the current user', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="admin-tab-users-btn"]').trigger('click')
+    // The current user (id 1) shows no Delete button.
+    expect(wrapper.find('[data-testid="user-delete-1"]').exists()).toBe(false)
+    // Another user does.
+    expect(wrapper.find('[data-testid="user-delete-2"]').exists()).toBe(true)
+  })
+
+  it('two-step deletes a user via deleteUser and drops the row', async () => {
+    vi.mocked(deleteUser).mockResolvedValue()
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="admin-tab-users-btn"]').trigger('click')
+    // First click arms the confirm; it does not call the API yet.
+    await wrapper.find('[data-testid="user-delete-2"]').trigger('click')
+    expect(deleteUser).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="user-delete-confirm-2"]').exists()).toBe(true)
+
+    // Confirm performs the delete and removes the row.
+    await wrapper.find('[data-testid="user-delete-confirm-2"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteUser).toHaveBeenCalledWith(2)
+    expect(wrapper.find('[data-testid="user-row-2"]').exists()).toBe(false)
+  })
+
+  it('cancels an armed delete without calling the API', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="admin-tab-users-btn"]').trigger('click')
+    await wrapper.find('[data-testid="user-delete-2"]').trigger('click')
+    await wrapper.find('[data-testid="user-delete-cancel-2"]').trigger('click')
+
+    expect(deleteUser).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="user-delete-2"]').exists()).toBe(true)
+  })
+
+  it('surfaces a delete guard error inline and keeps the row', async () => {
+    vi.mocked(deleteUser).mockRejectedValue(
+      new ApiError(409, 'cannot delete the last active admin'),
+    )
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="admin-tab-users-btn"]').trigger('click')
+    await wrapper.find('[data-testid="user-delete-2"]').trigger('click')
+    await wrapper.find('[data-testid="user-delete-confirm-2"]').trigger('click')
+    await flushPromises()
+
+    const err = wrapper.find('[data-testid="user-error-2"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('cannot delete the last active admin')
+    expect(wrapper.find('[data-testid="user-row-2"]').exists()).toBe(true)
   })
 
   it('shows an error when system data fails to load', async () => {

@@ -55,8 +55,9 @@ All under `require_admin`:
 | `GET /api/admin/architecture` | `docs/architecture.md` + `docs/ingestion.md` as markdown (rendered client-side) |
 | `GET /api/admin/coverage` | backend + frontend coverage % vs gate, plus per-file detail (file counts, lowest-covered files), from the CI-baked summary (§1.4) |
 | `GET /api/admin/users` | every user (role + active state, no secrets) |
-| `POST /api/admin/users` | create a user (optionally admin) |
+| `POST /api/admin/users` | create a user (optionally admin); also links a recipient (§1.2.4) |
 | `PATCH /api/admin/users/{id}` | promote/demote and activate/deactivate |
+| `DELETE /api/admin/users/{id}` | delete a user (guarded: not yourself, not the last admin) (§1.2.4) |
 | `PATCH /api/admin/recipients/{id}` | rename a recipient, or merge it into another (§1.2.3) |
 | `DELETE /api/admin/recipients/{id}` | delete a recipient, reassigning its documents first (§1.2.3) |
 
@@ -104,13 +105,46 @@ These mutations move the FK directly; they bypass per-document
 documents must move regardless). After any mutation the frontend refreshes the
 shared taxonomy cache so other views' recipient dropdowns/filters update.
 
+### 1.2.4 Users ↔ recipients (auto-link, dual-name matching, delete)
+
+Each user is paired with a **recipient** (the "who a document is addressed to"
+lookup, §1.2.3) via `recipients.user_id` (nullable FK → `users.id`,
+`ON DELETE SET NULL`, migration `0020`). This lets one recipient row stand in
+for a user under either of their names.
+
+- **Auto-create on user create.** `POST /api/admin/users` (and `library user
+  add`) upsert a recipient named by the user's **display name** — falling back
+  to the **username** when the display name is empty — and link it via
+  `user_id`. If a recipient with that name already exists *unlinked*, it is
+  adopted (its `user_id` is set) rather than duplicated.
+- **Dual-name matching at ingestion.** When extraction resolves a document's
+  recipient (`upsert_recipient`), a name matching a user's **username OR display
+  name** (case-insensitive) resolves to that user's linked recipient (created or
+  adopted as needed). So a document addressed to `john` and one addressed to
+  `John Smith` both land on the same recipient when that user has username
+  `john` / display name `John Smith`. Any name that matches no user upserts a
+  plain recipient by case-insensitive name, exactly as before.
+
+**Delete a user** — `DELETE /api/admin/users/{id}`:
+
+- Deleting **yourself** is rejected (`400`) — an admin cannot remove their own
+  account out from under their session.
+- Deleting the **last active admin** is rejected (`409`), mirroring the
+  last-admin `PATCH` guard, so the deployment can never be left without an
+  admin. The guard is serialised by the same advisory lock as role changes.
+- A user's linked recipient **survives** the delete — the `ON DELETE SET NULL`
+  FK just unlinks it (`user_id` → NULL), so documents addressed to that person
+  stay addressed. Deletion of the user row itself is irreversible (sessions and
+  API tokens cascade away with it).
+
 ## 1.3 The admin views (frontend)
 
 A single `/admin` route (`AdminView.vue`), reachable from an admin-only sidebar
 link, with five tabs backed by the endpoints above: **System**, **Architecture**
 (markdown → sanitised HTML via the shared marked + DOMPurify pipeline),
-**Coverage**, **Users** (promote/demote/activate + create, with inline
-last-admin error handling), and **Metadata** (recipient management, §1.2.3) —
+**Coverage**, **Users** (promote/demote/activate + create + delete, with inline
+last-admin error handling; each row offers a two-step **Delete** confirm except
+your own, which shows "You" instead), and **Metadata** (recipient management, §1.2.3) —
 each recipient row has an inline **Rename** (revealing a merge prompt on a `409`
 collision) and an inline **Delete** (with a reassign-target picker for in-use
 recipients). The router's `authGuard` redirects non-admins away from

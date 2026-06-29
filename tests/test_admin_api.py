@@ -256,6 +256,102 @@ def test_deactivate_user_revokes_their_session(
         assert victim.get("/api/auth/me").status_code == 401
 
 
+# --------------------------------------------------- user ↔ recipient (W13)
+
+
+def test_create_user_creates_linked_recipient(admin_client: TestClient) -> None:
+    """Creating a user auto-creates a recipient named by the display name."""
+    created = admin_client.post(
+        "/api/admin/users",
+        json={
+            "username": "w13-display",
+            "password": "a-strong-pw-12345",
+            "display_name": "Wanda Display",
+        },
+    )
+    assert created.status_code == 201, created.text
+    assert "Wanda Display" in _recipients(admin_client)
+
+
+def test_create_user_recipient_falls_back_to_username(admin_client: TestClient) -> None:
+    """With no display name, the auto-created recipient is named by username."""
+    created = admin_client.post(
+        "/api/admin/users",
+        json={"username": "w13-nodisplay", "password": "a-strong-pw-12345"},
+    )
+    assert created.status_code == 201, created.text
+    assert "w13-nodisplay" in _recipients(admin_client)
+
+
+def test_delete_normal_user(admin_client: TestClient, api_database_url: str) -> None:
+    target = create_user(api_database_url)
+    resp = admin_client.delete(f"/api/admin/users/{target.id}")
+    assert resp.status_code == 204, resp.text
+    users = admin_client.get("/api/admin/users").json()
+    assert all(u["id"] != target.id for u in users)
+
+
+def test_delete_non_last_admin(admin_client: TestClient, api_database_url: str) -> None:
+    """An admin can delete another admin while an active admin still remains."""
+    other_admin = create_user(api_database_url, is_admin=True)
+    resp = admin_client.delete(f"/api/admin/users/{other_admin.id}")
+    assert resp.status_code == 204, resp.text
+
+
+def test_delete_user_unknown_404(admin_client: TestClient) -> None:
+    assert admin_client.delete("/api/admin/users/99999999").status_code == 404
+
+
+def test_cannot_delete_self(
+    admin_client: TestClient, admin_user: AuthUser, api_database_url: str
+) -> None:
+    """Deleting your own account is rejected (400), even with other admins present."""
+    create_user(api_database_url, is_admin=True)  # ensure the caller is not the last admin
+    resp = admin_client.delete(f"/api/admin/users/{admin_user.id}")
+    assert resp.status_code == 400, resp.text
+    assert admin_client.get("/api/admin/users").status_code == 200  # still authorized
+
+
+def test_cannot_delete_last_active_admin(api_app: object, api_database_url: str) -> None:
+    """In a DB with exactly one active admin, deleting them is rejected (409)."""
+    from procrastinate import PsycopgConnector
+
+    from library.jobs import job_app, procrastinate_conninfo
+    from tests.conftest import login
+
+    sole = create_user(api_database_url, is_admin=True)
+    connector = PsycopgConnector(conninfo=procrastinate_conninfo(api_database_url))
+    with job_app.replace_connector(connector), TestClient(api_app) as client:  # type: ignore[arg-type]
+        login(client, sole)
+        users = client.get("/api/admin/users").json()
+        for other in users:
+            if other["id"] != sole.id and other["is_admin"] and other["is_active"]:
+                client.patch(f"/api/admin/users/{other['id']}", json={"is_admin": False})
+        # The last active admin cannot delete themselves (last-admin guard, 409).
+        response = client.delete(f"/api/admin/users/{sole.id}")
+        assert response.status_code == 409, response.text
+        assert client.get("/api/admin/users").json()  # still authorized → still admin
+
+
+def test_deleted_user_recipient_survives_unlinked(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    """Deleting a user keeps their recipient (FK SET NULL), so docs stay addressed."""
+    created = admin_client.post(
+        "/api/admin/users",
+        json={
+            "username": "w13-survivor",
+            "password": "a-strong-pw-12345",
+            "display_name": "Survivor Rec",
+        },
+    ).json()
+    assert "Survivor Rec" in _recipients(admin_client)
+    resp = admin_client.delete(f"/api/admin/users/{created['id']}")
+    assert resp.status_code == 204, resp.text
+    # The recipient row outlives the user (merely unlinked).
+    assert "Survivor Rec" in _recipients(admin_client)
+
+
 def test_coverage_malformed_json_unavailable(
     admin_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

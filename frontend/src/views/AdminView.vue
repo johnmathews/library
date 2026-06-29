@@ -20,6 +20,7 @@ import { ApiError } from '@/api/client'
 import {
   createUser,
   deleteRecipient,
+  deleteUser,
   getArchitecture,
   getCoverage,
   getSystemInfo,
@@ -225,6 +226,43 @@ function toggleAdmin(user: AdminUser): void {
 
 function toggleActive(user: AdminUser): void {
   void patchUser(user, { is_active: !user.is_active })
+}
+
+// Inline two-step delete: the id of the user whose Delete button was armed (so
+// a second click confirms), rather than a native blocking confirm() dialog.
+const confirmingDeleteId = ref<number | null>(null)
+
+function requestDeleteUser(user: AdminUser): void {
+  confirmingDeleteId.value = user.id
+}
+
+function cancelDeleteUser(): void {
+  confirmingDeleteId.value = null
+}
+
+/** Delete a user, surfacing a guard error (400 self / 409 last-admin) in-row. */
+async function confirmDeleteUser(user: AdminUser): Promise<void> {
+  const next = new Set(pendingIds.value)
+  next.add(user.id)
+  pendingIds.value = next
+  const nextErrors = { ...rowError.value }
+  delete nextErrors[user.id]
+  rowError.value = nextErrors
+  try {
+    await deleteUser(user.id)
+    users.value = users.value.filter((u) => u.id !== user.id)
+    confirmingDeleteId.value = null
+  } catch (error) {
+    rowError.value = {
+      ...rowError.value,
+      [user.id]:
+        error instanceof ApiError ? error.detail : 'Could not delete the user. Try again.',
+    }
+  } finally {
+    const after = new Set(pendingIds.value)
+    after.delete(user.id)
+    pendingIds.value = after
+  }
 }
 
 // --- Create-user form -------------------------------------------------------
@@ -806,6 +844,36 @@ const tabClass = (active: boolean): string =>
                       @click="toggleActive(user)"
                     >
                       {{ user.is_active ? 'Deactivate' : 'Activate' }}
+                    </button>
+                    <template v-if="confirmingDeleteId === user.id">
+                      <button
+                        type="button"
+                        :data-testid="`user-delete-confirm-${user.id}`"
+                        :disabled="pendingIds.has(user.id)"
+                        class="rounded-md border border-red-500 bg-red-500 px-2.5 py-1 text-xs font-medium text-white hover:bg-red-600 disabled:opacity-50 cursor-pointer"
+                        @click="confirmDeleteUser(user)"
+                      >
+                        Confirm delete
+                      </button>
+                      <button
+                        type="button"
+                        :data-testid="`user-delete-cancel-${user.id}`"
+                        :disabled="pendingIds.has(user.id)"
+                        class="rounded-md border border-gray-200 dark:border-gray-700/60 px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
+                        @click="cancelDeleteUser"
+                      >
+                        Cancel
+                      </button>
+                    </template>
+                    <button
+                      v-else
+                      type="button"
+                      :data-testid="`user-delete-${user.id}`"
+                      :disabled="pendingIds.has(user.id)"
+                      class="rounded-md border border-red-200 dark:border-red-500/40 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50 cursor-pointer"
+                      @click="requestDeleteUser(user)"
+                    >
+                      Delete
                     </button>
                   </div>
                   <p
