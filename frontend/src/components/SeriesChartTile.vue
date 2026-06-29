@@ -10,7 +10,11 @@ import {
   removeSeriesMember,
   listDocuments,
   seriesId,
+  authoredSeriesId,
   updateSeriesMeta,
+  updateAuthoredSeries,
+  addAuthoredMember,
+  removeAuthoredMember,
   type DocumentSeries,
   type DocumentListItem,
 } from '@/api/documents'
@@ -36,17 +40,24 @@ const emit = defineEmits<{ changed: [] }>()
 
 const points = computed(() => props.series.points ?? [])
 
-// Membership can only be edited for a series with a concrete identity; the
-// override store is keyed by (sender_id, kind_id, currency).
+// An authored (user-curated) series carries its own id; it has no
+// sender/kind identity and edits its own row rather than an override.
+const isAuthored = computed(() => props.series.authored_id != null)
+
+// Membership can be edited for an emergent series with a concrete identity
+// (the override store is keyed by (sender_id, kind_id, currency)) or for any
+// authored series (membership is explicit rows).
 const canEdit = computed(
   () =>
     props.editable === true &&
-    props.series.sender_id != null &&
-    props.series.kind_id != null,
+    (isAuthored.value ||
+      (props.series.sender_id != null && props.series.kind_id != null)),
 )
 
 // Stable id for this series + its single-chart deep link.
-const id = computed(() => seriesId(props.series))
+const id = computed(() =>
+  isAuthored.value ? authoredSeriesId(props.series.authored_id!) : seriesId(props.series),
+)
 const detailHref = computed(() => `/charts/${id.value}`)
 
 // Heading prefers a user title override (W12) over the derived label.
@@ -81,12 +92,22 @@ async function onSaveMeta(): Promise<void> {
   if (!canEdit.value || busy.value) return
   busy.value = true
   try {
-    // Empty inputs clear the override (send null), so a user can revert to the
-    // derived heading / cached description.
-    await updateSeriesMeta(id.value, {
-      title: metaTitle.value.trim() || null,
-      description: metaDescription.value.trim() || null,
-    })
+    if (isAuthored.value) {
+      // The authored series' title IS its name (required). A blank title leaves
+      // the name unchanged; the description clears with null.
+      const name = metaTitle.value.trim()
+      await updateAuthoredSeries(props.series.authored_id!, {
+        ...(name ? { name } : {}),
+        description: metaDescription.value.trim() || null,
+      })
+    } else {
+      // Empty inputs clear the override (send null), so a user can revert to the
+      // derived heading / cached description.
+      await updateSeriesMeta(id.value, {
+        title: metaTitle.value.trim() || null,
+        description: metaDescription.value.trim() || null,
+      })
+    }
     editingMeta.value = false
     emit('changed')
   } finally {
@@ -106,12 +127,16 @@ async function onRemove(documentId: number, label: string): Promise<void> {
   if (!canEdit.value || busy.value) return
   busy.value = true
   try {
-    await removeSeriesMember(
-      props.series.sender_id!,
-      props.series.kind_id!,
-      documentId,
-      props.series.currency,
-    )
+    if (isAuthored.value) {
+      await removeAuthoredMember(props.series.authored_id!, documentId)
+    } else {
+      await removeSeriesMember(
+        props.series.sender_id!,
+        props.series.kind_id!,
+        documentId,
+        props.series.currency,
+      )
+    }
     lastRemoved.value = { id: documentId, label }
     emit('changed')
   } finally {
@@ -124,12 +149,16 @@ async function onUndoRemove(): Promise<void> {
   if (!removed || !canEdit.value || busy.value) return
   busy.value = true
   try {
-    await addSeriesMember(
-      props.series.sender_id!,
-      props.series.kind_id!,
-      removed.id,
-      props.series.currency,
-    )
+    if (isAuthored.value) {
+      await addAuthoredMember(props.series.authored_id!, removed.id)
+    } else {
+      await addSeriesMember(
+        props.series.sender_id!,
+        props.series.kind_id!,
+        removed.id,
+        props.series.currency,
+      )
+    }
     lastRemoved.value = null
     emit('changed')
   } finally {
@@ -151,12 +180,16 @@ async function onAdd(documentId: number): Promise<void> {
   if (!canEdit.value || busy.value) return
   busy.value = true
   try {
-    await addSeriesMember(
-      props.series.sender_id!,
-      props.series.kind_id!,
-      documentId,
-      props.series.currency,
-    )
+    if (isAuthored.value) {
+      await addAuthoredMember(props.series.authored_id!, documentId)
+    } else {
+      await addSeriesMember(
+        props.series.sender_id!,
+        props.series.kind_id!,
+        documentId,
+        props.series.currency,
+      )
+    }
     query.value = ''
     results.value = []
     showAdd.value = false

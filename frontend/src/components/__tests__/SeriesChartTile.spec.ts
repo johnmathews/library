@@ -25,6 +25,11 @@ const api = vi.hoisted(() => ({
   removeSeriesMember: vi.fn(),
   listDocuments: vi.fn(),
   updateSeriesMeta: vi.fn(),
+  // Authored (W14) branch.
+  updateAuthoredSeries: vi.fn(),
+  addAuthoredMember: vi.fn(),
+  removeAuthoredMember: vi.fn(),
+  authoredSeriesId: (id: number) => `a-${id}`,
   // Real shape — the tile uses it for its id + deep link.
   seriesId: (s: { sender_id: number; kind_id: number; currency: string | null }) =>
     `${s.sender_id}-${s.kind_id}-${s.currency ?? 'none'}`,
@@ -84,6 +89,7 @@ const okSeries: DocumentSeries = {
 describe('SeriesChartTile', () => {
   beforeEach(() => {
     lineDataCapture.data = null
+    vi.clearAllMocks()
   })
 
   it('renders the chart, heading and verdict', () => {
@@ -248,6 +254,10 @@ describe('SeriesChartTile documents list (W8)', () => {
 describe('SeriesChartTile title/description + single-chart link (W12)', () => {
   beforeEach(() => {
     api.updateSeriesMeta.mockReset().mockResolvedValue({ ...okSeries })
+    api.updateAuthoredSeries.mockReset().mockResolvedValue({ ...okSeries })
+    api.addAuthoredMember.mockReset().mockResolvedValue({ ...okSeries })
+    api.addSeriesMember.mockReset().mockResolvedValue({ ...okSeries })
+    api.listDocuments.mockReset().mockResolvedValue({ items: [] })
   })
 
   it('uses the derived heading when no title override is set', () => {
@@ -312,5 +322,56 @@ describe('SeriesChartTile title/description + single-chart link (W12)', () => {
       title: null,
       description: null,
     })
+  })
+
+  it('edits an authored series via the authored endpoint (PATCH), not the meta override', async () => {
+    const authored: DocumentSeries = {
+      ...okSeries,
+      sender: null,
+      sender_id: null,
+      kind_id: null,
+      authored_id: 5,
+      title: 'My energy',
+      description: 'Hand-picked bills.',
+    }
+    const wrapper = mountEditable(authored)
+    // Heading falls back to the authored name (no sender/cadence label).
+    expect(wrapper.find('[data-testid="series-heading"]').text()).toContain('My energy')
+    // Deep link uses the authored id scheme.
+    expect(wrapper.find('[data-testid="series-detail-link"]').exists()).toBe(false)
+
+    await wrapper.find('[data-testid="series-meta-edit"]').trigger('click')
+    await wrapper.find('[data-testid="series-title-input"]').setValue('Renamed')
+    await wrapper.find('[data-testid="series-description-input"]').setValue('New notes')
+    await wrapper.find('[data-testid="series-meta-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(api.updateAuthoredSeries).toHaveBeenCalledWith(5, {
+      name: 'Renamed',
+      description: 'New notes',
+    })
+    expect(api.updateSeriesMeta).not.toHaveBeenCalled()
+    expect(wrapper.emitted('changed')).toBeTruthy()
+  })
+
+  it('adds a member to an authored series via the authored endpoint', async () => {
+    const authored: DocumentSeries = {
+      ...okSeries,
+      sender: null,
+      sender_id: null,
+      kind_id: null,
+      authored_id: 5,
+    }
+    api.listDocuments.mockResolvedValue({ items: [{ id: 99, title: 'New doc' }] })
+    const wrapper = mountEditable(authored)
+    await wrapper.find('[data-testid="series-docs-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="series-add-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="series-add-search"]').setValue('new')
+    await wrapper.find('[data-testid="series-add-search"]').trigger('input')
+    await flushPromises()
+    await wrapper.find('[data-testid="series-add-result"]').trigger('click')
+    await flushPromises()
+    expect(api.addAuthoredMember).toHaveBeenCalledWith(5, 99)
+    expect(api.addSeriesMember).not.toHaveBeenCalled()
   })
 })

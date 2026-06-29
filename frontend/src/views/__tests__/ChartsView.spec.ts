@@ -7,9 +7,12 @@ vi.mock('@/api/documents', () => ({
   // shape so keys stay stable.
   seriesId: (s: { sender_id: number; kind_id: number; currency: string | null }) =>
     `${s.sender_id}-${s.kind_id}-${s.currency ?? 'none'}`,
+  authoredSeriesId: (id: number) => `a-${id}`,
+  createAuthoredSeries: vi.fn(),
+  listDocuments: vi.fn(),
 }))
 
-import { fetchCharts } from '@/api/documents'
+import { fetchCharts, createAuthoredSeries, listDocuments } from '@/api/documents'
 import ChartsView from '../ChartsView.vue'
 
 // Stub the tile (it pulls in chart.js + router); this spec covers the view's
@@ -82,5 +85,54 @@ describe('ChartsView', () => {
     await flushPromises()
     expect(wrapper.find('[data-testid="charts-error"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="charts-grid"]').exists()).toBe(false)
+  })
+
+  it('creates an authored series via the create flow', async () => {
+    vi.mocked(fetchCharts).mockResolvedValue({ series: [] } as never)
+    vi.mocked(listDocuments).mockResolvedValue({
+      items: [{ id: 42, title: 'Invoice A' }],
+    } as never)
+    vi.mocked(createAuthoredSeries).mockResolvedValue({ authored_id: 5 } as never)
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Open the form.
+    await wrapper.find('[data-testid="charts-create-button"]').trigger('click')
+    expect(wrapper.find('[data-testid="charts-create-form"]').exists()).toBe(true)
+
+    // Fill the name + currency.
+    await wrapper.find('[data-testid="charts-create-name"]').setValue('My series')
+    await wrapper.find('[data-testid="charts-create-currency"]').setValue('eur')
+
+    // Search and add a document.
+    await wrapper.find('[data-testid="charts-create-search"]').setValue('inv')
+    await wrapper.find('[data-testid="charts-create-search"]').trigger('input')
+    await flushPromises()
+    await wrapper.find('[data-testid="charts-create-result"]').trigger('click')
+    expect(wrapper.find('[data-testid="charts-create-selected"]').text()).toContain('Invoice A')
+
+    // Submit.
+    await wrapper.find('[data-testid="charts-create-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(createAuthoredSeries).toHaveBeenCalledWith({
+      name: 'My series',
+      currency: 'EUR',
+      document_ids: [42],
+    })
+    // Form closes + the grid reloads (fetchCharts called again).
+    expect(wrapper.find('[data-testid="charts-create-form"]').exists()).toBe(false)
+    expect(fetchCharts).toHaveBeenCalledTimes(2)
+  })
+
+  it('requires a name before creating', async () => {
+    vi.mocked(fetchCharts).mockResolvedValue({ series: [] } as never)
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('[data-testid="charts-create-button"]').trigger('click')
+    await wrapper.find('[data-testid="charts-create-form"]').trigger('submit')
+    await flushPromises()
+    expect(createAuthoredSeries).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="charts-create-error"]').exists()).toBe(true)
   })
 })

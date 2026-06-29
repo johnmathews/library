@@ -679,6 +679,60 @@ class SeriesMetaOverride(Base):
     )
 
 
+class AuthoredSeries(Base):
+    """A user-curated (*authored*) recurring series (W14).
+
+    Emergent series are detected on the fly as ``(sender_id, kind_id, currency)``
+    groups (see ``library.series``). An authored series instead lets a user name
+    a series, pick a currency, and add documents explicitly — producing a chart
+    even without a natural ≥3-document emergent seed. The membership is the
+    explicit set of ``AuthoredSeriesMember`` rows; the statistics are computed on
+    the fly by ``summarize_authored_series`` using the authored ``name`` as the
+    series title and ``description`` as its prose.
+    """
+
+    __tablename__ = "authored_series"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(255))
+    description: Mapped[str | None] = mapped_column(Text)
+    currency: Mapped[str | None] = mapped_column(CHAR(3))
+    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    members: Mapped[list["AuthoredSeriesMember"]] = relationship(
+        back_populates="series", cascade="all, delete-orphan", lazy="selectin"
+    )
+
+
+class AuthoredSeriesMember(Base):
+    """One document's membership in an :class:`AuthoredSeries` (deduped per series)."""
+
+    __tablename__ = "authored_series_members"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    authored_series_id: Mapped[int] = mapped_column(
+        ForeignKey("authored_series.id", ondelete="CASCADE"), index=True
+    )
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    series: Mapped[AuthoredSeries] = relationship(back_populates="members")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "authored_series_id",
+            "document_id",
+            name="authored_series_members_series_document",
+        ),
+    )
+
+
 class FxRate(Base):
     """A reference foreign-exchange rate, base = USD.
 

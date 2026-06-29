@@ -406,6 +406,10 @@ export interface DocumentSeries {
   kind: string | null
   sender_id?: number | null
   kind_id?: number | null
+  /** Present only for authored (user-curated) series (W14). When set the tile
+   *  edits this series via the authored endpoints (PATCH) rather than the
+   *  emergent meta-override endpoint. */
+  authored_id?: number | null
   currency: string | null
   other_currencies: string[]
   cadence: 'monthly' | 'quarterly' | 'yearly' | 'irregular'
@@ -516,6 +520,61 @@ export interface SeriesMetaUpdate {
  */
 export function updateSeriesMeta(id: string, body: SeriesMetaUpdate): Promise<DocumentSeries> {
   return apiFetch<DocumentSeries>(`/api/charts/${id}/meta`, { method: 'PUT', body })
+}
+
+/** The stable, URL-safe id for an authored (user-curated) series: `a-{id}`. */
+export function authoredSeriesId(id: number): string {
+  return `a-${id}`
+}
+
+/** Body of POST /api/charts/authored. */
+export interface AuthoredSeriesCreate {
+  name: string
+  currency?: string | null
+  description?: string | null
+  document_ids?: number[]
+}
+
+/**
+ * POST /api/charts/authored — create an authored (manual) series, optionally
+ * seeding its membership. Returns the series summarised like one /api/charts entry.
+ */
+export function createAuthoredSeries(body: AuthoredSeriesCreate): Promise<DocumentSeries> {
+  return apiFetch<DocumentSeries>('/api/charts/authored', { method: 'POST', body })
+}
+
+/** Body of PATCH /api/charts/authored/{id} (omit a field to leave it unchanged). */
+export interface AuthoredSeriesUpdate {
+  name?: string
+  description?: string | null
+}
+
+/** PATCH /api/charts/authored/{id} — rename / re-describe an authored series. */
+export function updateAuthoredSeries(
+  id: number,
+  body: AuthoredSeriesUpdate,
+): Promise<DocumentSeries> {
+  return apiFetch<DocumentSeries>(`/api/charts/authored/${id}`, { method: 'PATCH', body })
+}
+
+/** DELETE /api/charts/authored/{id} — delete an authored series (204). */
+export function deleteAuthoredSeries(id: number): Promise<void> {
+  return apiFetch<void>(`/api/charts/authored/${id}`, { method: 'DELETE' })
+}
+
+/** POST /api/charts/authored/{id}/members — add a document (idempotent). */
+export function addAuthoredMember(id: number, documentId: number): Promise<DocumentSeries> {
+  return apiFetch<DocumentSeries>(`/api/charts/authored/${id}/members`, {
+    method: 'POST',
+    body: { document_id: documentId },
+  })
+}
+
+/** DELETE /api/charts/authored/{id}/members/{documentId} — remove a document. */
+export function removeAuthoredMember(id: number, documentId: number): Promise<DocumentSeries> {
+  return apiFetch<DocumentSeries>(`/api/charts/authored/${id}/members/${documentId}`, {
+    method: 'DELETE',
+  })
 }
 
 function parseDetail(text: string, status: number): string {

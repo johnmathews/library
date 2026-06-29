@@ -25,6 +25,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.config import Settings
 from library.fx import convert_amount
 from library.models import (
+    AuthoredSeries,
+    AuthoredSeriesMember,
     Document,
     Kind,
     OverrideAction,
@@ -79,6 +81,32 @@ def decode_series_id(series_id: str) -> tuple[int, int, str | None]:
     kind_id = int(kind_part)
     currency = None if currency_part == _NO_CURRENCY else currency_part
     return sender_id, kind_id, currency
+
+
+# Prefix marking an *authored* (user-curated) series id, distinguishing it from
+# an emergent ``{sender}-{kind}-{currency}`` id. Authored ids are ``a-{id}``
+# (two parts), so they never collide with the three-part emergent scheme.
+_AUTHORED_PREFIX = "a-"
+
+
+def encode_authored_series_id(authored_id: int) -> str:
+    """A stable, URL-safe id for an authored series: ``a-{id}``."""
+    return f"{_AUTHORED_PREFIX}{authored_id}"
+
+
+def decode_authored_series_id(series_id: str) -> int | None:
+    """The authored-series id if ``series_id`` is an ``a-{id}`` token, else ``None``.
+
+    Returns ``None`` (rather than raising) for any non-authored id so callers can
+    fall back to the emergent ``decode_series_id`` scheme.
+    """
+    if not series_id.startswith(_AUTHORED_PREFIX):
+        return None
+    rest = series_id[len(_AUTHORED_PREFIX) :]
+    try:
+        return int(rest)
+    except ValueError:
+        return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -282,6 +310,11 @@ class SeriesSummary:
     # A user title override (SeriesMetaOverride); None when no override is set,
     # in which case the frontend falls back to the derived heading.
     title: str | None = None
+    # The authored-series id when this summary is a user-curated (authored)
+    # series (W14); None for emergent ``(sender, kind, currency)`` series. The
+    # frontend branches on this: an authored series edits its own row (PATCH)
+    # rather than the meta-override endpoint.
+    authored_id: int | None = None
 
 
 async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list[_Member]:
@@ -486,6 +519,88 @@ async def load_series_meta_override(
     return row[0], row[1]
 
 
+def _summarize_members(
+    members: list[_Member],
+    *,
+    currency: str | None,
+    settings: Settings,
+    sender: str | None = None,
+    kind: str | None = None,
+    sender_id: int | None = None,
+    kind_id: int | None = None,
+    other_currencies: list[str] | None = None,
+    reference: Decimal | Literal["latest"] | None = "latest",
+    reference_date: date | None = None,
+    description: str | None = None,
+    title: str | None = None,
+    authored_id: int | None = None,
+) -> SeriesSummary:
+    """Build a ``SeriesSummary`` from an already-resolved set of ``members``.
+
+    ``members`` are the documents of one currency bucket (all amounts in
+    ``currency``); membership/grouping/override resolution has already happened.
+    Shared by emergent ``summarize_series`` and authored
+    ``summarize_authored_series`` so both produce identical distribution / trend
+    / reference / year-over-year math. The caller supplies the identity labels,
+    the resolved ``description``/``title``, and (for authored series)
+    ``authored_id``.
+    """
+    dated = sorted(
+        (m for m in members if m.document_date is not None), key=lambda m: m.document_date
+    )
+    points = [(m.document_date, m.amount, m.document_id) for m in dated]
+    trend_points = [(m.document_date, m.amount) for m in dated]
+    amounts = [m.amount for m in members]
+    dist = distribution(amounts)
+    cadence = classify_cadence([m.document_date for m in dated])
+    trend = compute_trend(trend_points, settings.series_flat_pct)
+
+    # Resolve the reference value + anchor date.
+    ref_value: Decimal | None
+    ref_date = reference_date
+    if reference == "latest":
+        ref_value = dated[-1].amount if dated else None
+        ref_date = ref_date or (dated[-1].document_date if dated else None)
+    elif isinstance(reference, Decimal):
+        ref_value = reference
+    else:
+        ref_value = None
+
+    comparison = (
+        compare_reference(ref_value, dist, settings.series_typical_pct)
+        if ref_value is not None
+        else None
+    )
+    yoy = None
+    if ref_date is not None:
+        yoy_points = [(m.document_date, m.amount, m.document_id) for m in dated]
+        if ref_value is not None and ref_date not in {p[0] for p in points}:
+            yoy_points.append((ref_date, ref_value, -1))
+        yoy = year_over_year(yoy_points, ref_date, cadence)
+
+    return SeriesSummary(
+        status="ok",
+        sender=sender,
+        kind=kind,
+        sender_id=sender_id,
+        kind_id=kind_id,
+        currency=currency,
+        other_currencies=other_currencies or [],
+        cadence=cadence,
+        count=len(members),
+        distribution=dist,
+        reference=comparison,
+        trend=trend,
+        year_over_year=yoy,
+        document_ids=sorted(m.document_id for m in members)[:MAX_CITED_IDS],
+        points=points,
+        titles={m.document_id: m.title for m in members},
+        description=description,
+        title=title,
+        authored_id=authored_id,
+    )
+
+
 async def summarize_series(
     session: AsyncSession,
     *,
@@ -525,39 +640,6 @@ async def summarize_series(
     if len(bucket) < settings.series_min_documents:
         return _insufficient(bucket)
 
-    dated = sorted(
-        (m for m in bucket if m.document_date is not None), key=lambda m: m.document_date
-    )
-    points = [(m.document_date, m.amount, m.document_id) for m in dated]
-    trend_points = [(m.document_date, m.amount) for m in dated]
-    amounts = [m.amount for m in bucket]
-    dist = distribution(amounts)
-    cadence = classify_cadence([m.document_date for m in dated])
-    trend = compute_trend(trend_points, settings.series_flat_pct)
-
-    # Resolve the reference value + anchor date.
-    ref_value: Decimal | None
-    ref_date = reference_date
-    if reference == "latest":
-        ref_value = dated[-1].amount if dated else None
-        ref_date = ref_date or (dated[-1].document_date if dated else None)
-    elif isinstance(reference, Decimal):
-        ref_value = reference
-    else:
-        ref_value = None
-
-    comparison = (
-        compare_reference(ref_value, dist, settings.series_typical_pct)
-        if ref_value is not None
-        else None
-    )
-    yoy = None
-    if ref_date is not None:
-        yoy_points = [(m.document_date, m.amount, m.document_id) for m in dated]
-        if ref_value is not None and ref_date not in {p[0] for p in points}:
-            yoy_points.append((ref_date, ref_value, -1))
-        yoy = year_over_year(yoy_points, ref_date, cadence)
-
     head = series_head
     description = await load_series_description(session, head.sender_id, head.kind_id, currency)
     # User overrides win over the derived heading / cached LLM description.
@@ -566,25 +648,110 @@ async def summarize_series(
     )
     if description_override is not None:
         description = description_override
-    return SeriesSummary(
-        status="ok",
+    return _summarize_members(
+        bucket,
+        currency=currency,
+        settings=settings,
         sender=head.sender,
         kind=head.kind,
         sender_id=head.sender_id,
         kind_id=head.kind_id,
-        currency=currency,
         other_currencies=other_currencies,
-        cadence=cadence,
-        count=len(bucket),
-        distribution=dist,
-        reference=comparison,
-        trend=trend,
-        year_over_year=yoy,
-        document_ids=sorted(m.document_id for m in bucket)[:MAX_CITED_IDS],
-        points=points,
-        titles={m.document_id: m.title for m in bucket},
+        reference=reference,
+        reference_date=reference_date,
         description=description,
         title=title_override,
+    )
+
+
+async def _load_authored_members(session: AsyncSession, authored_series_id: int) -> list[_Member]:
+    """Amount-bearing, non-deleted members of an authored series."""
+    statement = (
+        select(
+            Document.id,
+            Sender.name,
+            Kind.slug,
+            Document.document_date,
+            Document.amount_total,
+            Document.currency,
+            Document.sender_id,
+            Document.kind_id,
+            Document.title,
+        )
+        .join(AuthoredSeriesMember, AuthoredSeriesMember.document_id == Document.id)
+        .outerjoin(Sender, Document.sender_id == Sender.id)
+        .outerjoin(Kind, Document.kind_id == Kind.id)
+        .where(
+            AuthoredSeriesMember.authored_series_id == authored_series_id,
+            Document.deleted_at.is_(None),
+            Document.amount_total.isnot(None),
+        )
+    )
+    rows = (await session.execute(statement)).all()
+    return [
+        _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title)
+        for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows
+    ]
+
+
+def _empty_authored_summary(authored: AuthoredSeries) -> SeriesSummary:
+    """Summary for an authored series with no amount-bearing members yet.
+
+    Distribution stats need at least one amount, so a fresh/empty authored
+    series renders as an ``ok`` chart with no points rather than erroring out.
+    """
+    return SeriesSummary(
+        status="ok",
+        sender=None,
+        kind=None,
+        sender_id=None,
+        kind_id=None,
+        currency=authored.currency,
+        other_currencies=[],
+        cadence="irregular",
+        count=0,
+        distribution=None,
+        reference=None,
+        trend=None,
+        year_over_year=None,
+        document_ids=[],
+        points=[],
+        titles={},
+        description=authored.description,
+        title=authored.name,
+        authored_id=authored.id,
+    )
+
+
+async def summarize_authored_series(
+    session: AsyncSession,
+    authored_series_id: int,
+    settings: Settings,
+    *,
+    reference: Decimal | Literal["latest"] | None = "latest",
+) -> SeriesSummary | None:
+    """Summarise a user-curated (authored) series, or ``None`` if it doesn't exist.
+
+    Loads the explicit membership (amount-bearing, non-deleted documents) and
+    runs the same statistics as an emergent series via ``_summarize_members``,
+    using the authored row's ``name`` as the title and ``description`` as the
+    prose. Unlike emergent series there is no minimum-document gate — a single
+    amount-bearing member already produces a bar chart.
+    """
+    authored = await session.get(AuthoredSeries, authored_series_id)
+    if authored is None:
+        return None
+    members = await _load_authored_members(session, authored_series_id)
+    if not members:
+        return _empty_authored_summary(authored)
+    return _summarize_members(
+        members,
+        currency=authored.currency,
+        settings=settings,
+        reference=reference,
+        description=authored.description,
+        title=authored.name,
+        authored_id=authored.id,
     )
 
 
@@ -606,6 +773,8 @@ def serialise_summary(summary: SeriesSummary, *, include_points: bool = False) -
         "count": summary.count,
         "document_ids": summary.document_ids,
     }
+    if summary.authored_id is not None:
+        body["authored_id"] = summary.authored_id
     if summary.title is not None:
         body["title"] = summary.title
     if summary.description is not None:

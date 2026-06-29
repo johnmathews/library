@@ -1,6 +1,6 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-06-29 (admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}` — rename/merge + reassign-then-delete, §1.18.1–§1.18.2; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Status:** active. **Last updated:** 2026-06-30 (authored series: `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2. Earlier: admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}` — rename/merge + reassign-then-delete, §1.18.1–§1.18.2; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -48,6 +48,11 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/charts` | Every eligible recurring `(sender, kind)` series, summarised |
 | GET    | `/api/charts/{series_id}` | One series by its stable id (single-chart deep link) |
 | PUT    | `/api/charts/{series_id}/meta` | Override a series' title and/or description |
+| POST   | `/api/charts/authored` | Create an authored (manual) series |
+| PATCH  | `/api/charts/authored/{id}` | Rename / re-describe an authored series |
+| DELETE | `/api/charts/authored/{id}` | Delete an authored series |
+| POST   | `/api/charts/authored/{id}/members` | Add a document to an authored series |
+| DELETE | `/api/charts/authored/{id}/members/{document_id}` | Remove a document from an authored series |
 | POST   | `/api/series/{sender_id}/{kind_id}/members` | Pin a document into a series (or clear an exclude) |
 | DELETE | `/api/series/{sender_id}/{kind_id}/members/{document_id}` | Exclude a document from a series (or clear a pin) |
 | GET    | `/api/kinds` | Document kinds with counts |
@@ -911,6 +916,43 @@ single-series body (same shape as `GET`). It is `404` when the id is malformed
 or the sender/kind do not exist; `401` when unauthenticated. Any authenticated
 user may edit, mirroring the series-membership endpoints (§1.15) that edit the
 same tile.
+
+### 1.14.2 Authored (manual) series — `/api/charts/authored`
+
+Emergent series are detected automatically; an **authored** series is one a user
+curates by hand — name it, pick an optional currency, and add documents
+explicitly — producing a chart even without a natural ≥3-document emergent seed
+(emergent detection is unchanged; authored series live alongside it). They are
+stored in `authored_series` (+ `authored_series_members`) and summarised by the
+same statistics as emergent series, so an authored series over the same
+documents as an emergent one yields the same distribution/trend.
+
+An authored series has its own **stable id** `a-{id}` (two-part, so it never
+collides with the three-part emergent `{sender}-{kind}-{currency}` scheme).
+`GET /api/charts/{series_id}` and the `/charts` grid resolve both. An authored
+entry carries `authored_id` (and `sender_id`/`kind_id` are `null`); its `title`
+is the authored name and `description` is the authored description. There is no
+minimum-document gate — a single amount-bearing member already charts.
+
+| Method | Path | Effect |
+|--------|------|--------|
+| POST | `/api/charts/authored` | Create. Body: `{name, currency?, description?, document_ids?}`. Returns the summarised series (`201`). |
+| PATCH | `/api/charts/authored/{id}` | Update `name` and/or `description` (omit a field to leave it). |
+| DELETE | `/api/charts/authored/{id}` | Delete the series (membership cascades) — `204`. |
+| POST | `/api/charts/authored/{id}/members` | Add a document — body `{document_id}` (idempotent). |
+| DELETE | `/api/charts/authored/{id}/members/{document_id}` | Remove a document (idempotent). |
+
+Create body (`document_ids` optional initial membership; unknown/deleted ids are
+silently ignored):
+
+```json
+{"name": "Energy — main flat", "currency": "EUR", "document_ids": [12, 19, 27]}
+```
+
+All mutating endpoints return the refreshed single-series body (same shape as one
+`/api/charts` entry, with `authored_id` set). The owner is recorded as the
+creating user (`owner_id`). `404` when the series id is unknown (or, for add, the
+document is unknown/deleted); `401` when unauthenticated.
 
 ## 1.15 Series membership overrides — `/api/series/{sender_id}/{kind_id}/members`
 
