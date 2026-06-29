@@ -5,7 +5,7 @@
  *  - A normal user (`e2e`) sees no Admin sidebar link, and navigating straight
  *    to /admin bounces them back to the documents dashboard.
  *  - An admin user (`e2e-admin`) sees the link, reaches /admin, and the four
- *    tabs (System / Architecture / Coverage / Users) render real data.
+ *    tabs (Users / Metadata / Architecture / Coverage / System) render real data.
  *
  * Requires the real stack (docker compose db/migrate/api/worker + the built
  * frontend behind `vite preview`'s /api proxy), a normal `e2e` user, and an
@@ -59,18 +59,24 @@ test('an admin reaches /admin and the four tabs render', async ({ page }) => {
   await page.goto('/admin')
   await expect(page).toHaveURL(/\/admin$/)
 
-  // System tab is the default panel and is visible on arrival.
-  await expect(page.getByTestId('admin-tab-system')).toBeVisible()
+  // Users tab is the default panel and is visible on arrival.
+  const usersPanel = page.getByTestId('admin-tab-users')
+  await expect(usersPanel).toBeVisible()
 
   // Each of the other tabs is reachable and reveals its own panel.
+  await page.getByTestId('admin-tab-metadata-btn').click()
+  await expect(page.getByTestId('admin-tab-metadata')).toBeVisible()
+
   await page.getByTestId('admin-tab-architecture-btn').click()
   await expect(page.getByTestId('admin-tab-architecture')).toBeVisible()
 
   await page.getByTestId('admin-tab-coverage-btn').click()
   await expect(page.getByTestId('admin-tab-coverage')).toBeVisible()
 
+  await page.getByTestId('admin-tab-system-btn').click()
+  await expect(page.getByTestId('admin-tab-system')).toBeVisible()
+
   await page.getByTestId('admin-tab-users-btn').click()
-  const usersPanel = page.getByTestId('admin-tab-users')
   await expect(usersPanel).toBeVisible()
   // The admin themself appears in the user list. Scope the lookup to the Users
   // panel: the raw username also renders in the header user-menu dropdown

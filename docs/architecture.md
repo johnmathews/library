@@ -3,8 +3,8 @@
 **Status:** active. **Last updated:** 2026-06-29 (recipient field added to the document data model).
 
 Library is a self-hosted personal/family document archive. This document
-describes the system design and tracks which parts exist. The full
-decision record (with research and rejected alternatives) lives in
+describes the system design. The full decision record (with research and
+rejected alternatives) lives in
 `.engineering-team/runs/manual-20260610-154616/` and the development
 journal in `journal/`.
 
@@ -121,40 +121,63 @@ at any stage, with the reason in `ingestion_events`).
 
 ## 1.3 Data model (summary)
 
-`documents` (hash, mime, lifecycle status, `review_status` enum, title,
-summary, document_date, language, amounts/expiry, `topics` JSONB list of
-human-readable subject phrases for general-reference material, `extra` JSONB for
-kind-specific fields plus `extra["validation"]` + `extra["corrections"]`,
-OCR text + confidence, uploader, source channel) with FKs to `senders`,
-`recipients` (who a document is addressed to — a lookup table mirroring
-`senders`, nullable FK, migration 0016 which seeds a "John" recipient and
-backfills existing documents to it), and `kinds`
-(seeded: invoice, receipt, certificate, utility bill, parking ticket,
-warranty, manual, reference, research, note, letter, contract, ticket, other —
-the last group of general-reference kinds added in migration 0010 alongside
-`topics`), many-to-many `tags`, many-to-many `projects` (first-class
-collections — `projects` + `document_projects`, migration 0011; soft-archived
-via `archived_at`, documents survive a project delete),
-per-page markdown renderings (`document_pages`, PK `(document_id, page_number)`),
-per-chunk embeddings (`document_chunks`, pgvector + HNSW; each chunk carries
-`page_number` when generated from `document_pages`, `NULL` when falling back to
-`ocr_text`), append-only `ingestion_events` audit trail, append-only
-`note_versions` (one (title, body) snapshot per edit/restore of an in-app note —
-`source = note`, migration 0013, which also adds `note` to the `document_source`
-CHECK), Ask conversation
-persistence (`ask_threads` — one conversation per owner; `ask_turns` — one
-Q&A turn per thread, storing cost/provenance and the serialized Anthropic
-message blocks used to replay prior tool results into follow-up questions),
-cached per-series prose descriptions (`series_insights`, one row per
-`(sender_id, kind_id, currency)` — see [ask.md §1.7](ask.md)), durable manual
-series-membership overrides (`series_membership_overrides`, migration 0015 —
-`pin`/`exclude` keyed by `(sender_id, kind_id, currency, document_id)`, applied
-on every series computation; see [api.md §1.15](api.md)) with a small reference
-FX snapshot (`fx_rates`, USD base, date-aware) used to convert cross-currency
-pins, and
-auth tables (`users`, `sessions`, `api_tokens`). Originals on disk are
-immutable; everything else (including embeddings and page markdown) is a
+The central table is `documents`; everything else hangs off it. Originals on
+disk are immutable — every other table (embeddings, page markdown, etc.) is a
 re-derivable artifact.
+
+**`documents`** — one row per ingested file. Key columns:
+
+- Identity & lifecycle: `hash`, `mime`, lifecycle `status`, `review_status`
+  enum, uploader, source channel.
+- Extracted metadata: `title`, `summary`, `document_date`, `language`,
+  `amounts`/`expiry`, OCR text + confidence.
+- `topics` — JSONB list of human-readable subject phrases (general-reference
+  material).
+- `extra` — JSONB for kind-specific fields, plus `extra["validation"]` and
+  `extra["corrections"]`.
+
+**Lookup tables** (FKs from `documents`):
+
+- `senders` — who a document is from.
+- `recipients` — who it is addressed to (mirrors `senders`, nullable FK;
+  migration 0016 seeds a "John" recipient and backfills existing docs).
+- `kinds` — document type. Seeded: invoice, receipt, certificate, utility
+  bill, parking ticket, warranty, manual, reference, research, note, letter,
+  contract, ticket, other (general-reference kinds added in migration 0010
+  alongside `topics`).
+
+**Collections:**
+
+- `tags` — many-to-many.
+- `projects` — first-class collections (`projects` + `document_projects`,
+  migration 0011). Soft-archived via `archived_at`; documents survive a
+  project delete.
+
+**Derived artifacts** (rebuildable from the original):
+
+- `document_pages` — per-page markdown renderings, PK `(document_id, page_number)`.
+- `document_chunks` — per-chunk embeddings (pgvector + HNSW). Each chunk carries
+  `page_number` when generated from `document_pages`, `NULL` when falling back
+  to `ocr_text`.
+- `ingestion_events` — append-only audit trail.
+- `note_versions` — append-only; one (title, body) snapshot per edit/restore of
+  an in-app note (`source = note`, migration 0013, which also adds `note` to the
+  `document_source` CHECK).
+
+**Ask & series:**
+
+- `ask_threads` — one conversation per owner.
+- `ask_turns` — one Q&A turn per thread; stores cost/provenance and the
+  serialized Anthropic message blocks replayed into follow-up questions.
+- `series_insights` — cached per-series prose, one row per
+  `(sender_id, kind_id, currency)` (see [ask.md §1.7](ask.md)).
+- `series_membership_overrides` — durable manual `pin`/`exclude` keyed by
+  `(sender_id, kind_id, currency, document_id)`, applied on every series
+  computation (migration 0015; see [api.md §1.15](api.md)).
+- `fx_rates` — small reference FX snapshot (USD base, date-aware) for
+  converting cross-currency pins.
+
+**Auth:** `users`, `sessions`, `api_tokens`.
 
 ## 1.4 Interfaces
 
@@ -165,9 +188,10 @@ re-derivable artifact.
   natural-language **Ask** (`POST /api/ask`, see [ask.md](ask.md)).
 - **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens.
   Tools for searching, reading, and ingesting documents from LLM clients.
-- **Web app** — Vue 3 SPA following GOV.UK design principles (content
-  first, responsive 320px-up, accessible). Typeface is self-hosted Inter:
-  GDS Transport and the crown are licence-restricted to gov.uk services.
+- **Web app** — Vue 3 SPA using the **Mosaic** (Cruip) theme: violet accent,
+  soft rounded-xl cards, dark mode, self-hosted Inter. Content-first,
+  responsive 320px-up, accessible. (Reskinned from GOV.UK — see
+  [frontend.md](frontend.md) and `journal/260613-mosaic-reskin.md`.)
 
 ### 1.4.1 Live job events
 
@@ -199,30 +223,3 @@ hashed, individually revocable.
 A single boolean **admin** role (`users.is_admin`) layers on top: admins
 gate global project mutations and an admin-only views surface
 (`/api/admin/*`, the `/admin` page). See [admin.md](admin.md).
-
-## 1.6 Implementation status
-
-| Area | Unit | Status |
-|------|------|--------|
-| Scaffold, CI, Docker skeleton | W1 | **done** |
-| DB schema + migrations | W2 | **done** |
-| Storage + ingestion + queue | W3 | **done** — see [ingestion.md](ingestion.md) |
-| OCR pipeline | W4 | **done** — see [ingestion.md](ingestion.md), "OCR" section |
-| OCR benchmark (real samples) | W5 | **done** — see [benchmarks/260610-ocr-benchmark.md](benchmarks/260610-ocr-benchmark.md); scan-aware routing + gate fix landed |
-| Claude metadata extraction | W6 | **done** — see [ingestion.md](ingestion.md), "Extraction" section |
-| REST API + search + thumbnails | W7 | **done** — see [api.md](api.md) |
-| Auth | W8 | **done** — see [api.md](api.md) §1.9 |
-| Frontend foundation (design system) | W9 | **done** — see [frontend.md](frontend.md) |
-| Frontend: list, search, upload | W10 | **done** — see [frontend.md](frontend.md) §1.4–1.6; Playwright e2e in CI |
-| Frontend: document detail + editing | W11 | **done** — see [frontend.md](frontend.md) §1.4.2; added `GET /api/kinds\|senders\|tags` + `POST /api/documents/{id}/extract` ([api.md](api.md) §1.8.2, §1.8.4) |
-| Consume watcher | W12 | **done** — see [ingestion.md](ingestion.md), "Consume folder" section |
-| MCP server | W13 | **done** — see [mcp.md](mcp.md) |
-| Email-in | W14 | **done** — see [ingestion.md](ingestion.md), "Email-in" section |
-| paperless-ngx importer | W15 | **done** — see [migration.md](migration.md) |
-| Mobile/PWA polish | W16 | **done** — see [frontend.md](frontend.md) §1.8 (manifest + monogram icons, safe areas, ≥44px touch targets, 3-project Playwright matrix, on-device checklist) |
-| Deployment hardening + full docs | W17 | **done** — see [deployment.md](deployment.md); compose smoke job in CI; v0.1.0 ([CHANGELOG](../CHANGELOG.md)) |
-| Semantic Ask (pgvector, embedder, hybrid retrieval, `/api/ask`) | — | **done** — see [ask.md](ask.md) |
-| Extraction quality (validation, review queue, eval harness) | — | **done** — see [ingestion.md](ingestion.md) "Extraction quality" and [api.md](api.md) §1.3/1.4/1.8.3 |
-| Markdown layer (vision per-page rendering, page-aware embed, page citations in Ask) | — | **done** — see [ingestion.md](ingestion.md) "Markdown layer" and [ask.md](ask.md) |
-| Conversational Ask (multi-turn threads, history replay, prompt caching, chat UI) | — | **done** — see [ask.md](ask.md) §1.6 and [api.md](api.md) §1.11–1.12 |
-| Notes authoring + topics refinement (in-app notes w/ version history, `topics` read-only + in FTS, `library backfill`) | — | **done** — see [api.md §1.17](api.md), [ingestion.md](ingestion.md) "Notes" + "Backfill (stale prompt version)", and [frontend.md](frontend.md) |

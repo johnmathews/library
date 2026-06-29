@@ -2,12 +2,13 @@
 /**
  * Admin console (route `/admin`, admin-only via the router guard).
  *
- * Four tabs, each backed by an /api/admin/* endpoint:
- *   - System: version/build, deployment topology, runtime config, DB stats.
+ * Tabs (in display order), each backed by an /api/admin/* endpoint:
+ *   - Users: list every user, toggle admin/active, create and delete users.
+ *   - Metadata: senders / recipients / kinds management.
  *   - Architecture: the project's architecture docs, markdown → sanitised HTML
  *     (same marked + DOMPurify pipeline as the note authoring/reader views).
- *   - Coverage: the latest CI-generated backend/frontend coverage figures.
- *   - Users: list every user, toggle admin/active, and create new users.
+ *   - Coverage: the latest CI-generated coverage figures per test type.
+ *   - System: version/build, deployment topology, runtime config, DB stats.
  * Tab selection is local state (no sub-routes).
  */
 import { computed, onMounted, ref, watch } from 'vue'
@@ -38,15 +39,15 @@ import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 
-type Tab = 'system' | 'architecture' | 'coverage' | 'users' | 'metadata'
-const tab = ref<Tab>('system')
+type Tab = 'users' | 'metadata' | 'architecture' | 'coverage' | 'system'
+const tab = ref<Tab>('users')
 
 const TABS: { id: Tab; label: string }[] = [
-  { id: 'system', label: 'System' },
-  { id: 'architecture', label: 'Architecture' },
-  { id: 'coverage', label: 'Coverage' },
   { id: 'users', label: 'Users' },
   { id: 'metadata', label: 'Metadata' },
+  { id: 'architecture', label: 'Architecture' },
+  { id: 'coverage', label: 'Coverage' },
+  { id: 'system', label: 'System' },
 ]
 
 // --- System -----------------------------------------------------------------

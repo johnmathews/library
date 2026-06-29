@@ -135,6 +135,16 @@ describe('AdminView', () => {
     vi.restoreAllMocks()
   })
 
+  it('orders the tabs Users · Metadata · Architecture · Coverage · System with Users selected by default', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const labels = wrapper.findAll('[role="tab"]').map((t) => t.text())
+    expect(labels).toEqual(['Users', 'Metadata', 'Architecture', 'Coverage', 'System'])
+    // Users is the default selected tab.
+    const usersTab = wrapper.find('[data-testid="admin-tab-users-btn"]')
+    expect(usersTab.attributes('aria-selected')).toBe('true')
+  })
+
   it('renders the heading and the System tab data', async () => {
     const wrapper = mountView()
     await flushPromises()
