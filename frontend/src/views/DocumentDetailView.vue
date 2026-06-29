@@ -295,14 +295,6 @@ const ACCENT: Record<Accent, { bar: string; text: string; border: string; bg: st
   },
 }
 
-/** Status pill colour: green when fully processed, red on failure, neutral
- * otherwise. */
-function statusAccent(status: string): string {
-  if (status === 'indexed') return 'bg-green-100 text-green-800 dark:bg-green-500/15 dark:text-green-300'
-  if (status === 'failed') return 'bg-red-100 text-red-800 dark:bg-red-500/15 dark:text-red-300'
-  return 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300'
-}
-
 const dateFormat = new Intl.DateTimeFormat('en-GB', {
   day: 'numeric',
   month: 'long',
@@ -1734,13 +1726,10 @@ watch(
                   <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
                     Status
                   </dt>
-                  <dd class="mt-1.5">
-                    <span
-                      class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium capitalize"
-                      :class="statusAccent(doc.status)"
-                      >{{ doc.status }}</span
-                    >
-                  </dd>
+                  <dd
+                    class="mt-1 text-base capitalize text-gray-800 dark:text-gray-100"
+                    data-testid="status-value"
+                  >{{ doc.status }}</dd>
                 </div>
                 <div>
                   <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">

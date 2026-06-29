@@ -195,6 +195,18 @@ describe('DocumentDetailView', () => {
     expect(w.find('h1').text()).toBe('Untitled document')
   })
 
+  it('renders the system status as plain text, not a coloured pill', async () => {
+    detail = makeDetail({ status: 'indexed' })
+    const w = await mountView()
+    const status = w.find('[data-testid="status-value"]')
+    expect(status.exists()).toBe(true)
+    expect(status.element.tagName).toBe('DD')
+    expect(status.text()).toBe('indexed')
+    // Plain text — no pill (rounded-full / inline-flex / coloured background).
+    expect(status.classes()).not.toContain('rounded-full')
+    expect(status.classes()).not.toContain('inline-flex')
+  })
+
   it('shows the OCR confidence percentage when a value is present', async () => {
     detail = makeDetail({ ocr_confidence: 91.4 })
     const w = await mountView()
