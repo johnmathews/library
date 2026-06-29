@@ -49,6 +49,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | POST   | `/api/series/{sender_id}/{kind_id}/members` | Pin a document into a series (or clear an exclude) |
 | DELETE | `/api/series/{sender_id}/{kind_id}/members/{document_id}` | Exclude a document from a series (or clear a pin) |
 | GET    | `/api/kinds` | Document kinds with counts |
+| POST   | `/api/kinds` | Create a document kind (dedupes / rejects near-duplicates) |
 | GET    | `/api/senders` | Senders with counts |
 | GET    | `/api/recipients` | Recipients with counts |
 | GET    | `/api/tags` | Tags with counts |
@@ -346,13 +347,36 @@ MCP `list_*` tools return (one shared service, `library.taxonomy`).
 Counts exclude soft-deleted documents; zero-count entries are included.
 
 - `GET /api/kinds` → `[{slug, name, document_count}, …]`, ordered by
-  slug. Kinds are the fixed seeded set.
+  slug. The seeded set plus any kinds created via `POST /api/kinds`.
 - `GET /api/senders` → `[{id, name, document_count}, …]`, ordered by
   name.
 - `GET /api/recipients` → `[{id, name, document_count}, …]`, ordered by
   name.
 - `GET /api/tags` → `[{slug, name, document_count}, …]`, ordered by
   name.
+
+### 1.8.4.1 Create a kind — `POST /api/kinds`
+
+Adds a new document kind so users aren't limited to the seeded set (e.g.
+a `quote` kind alongside `invoice`/`receipt`). Available to any
+authenticated user, mirroring how senders/recipients/tags are created
+inline through a document edit.
+
+- **Body.** `{"name": "Quote"}` — the human display name (1–255 chars).
+- **Slug.** Derived from the name (`slugify`: lowercased, non-alphanumeric
+  runs → hyphens), so `"Bank statement"` → slug `bank-statement`.
+- **Casing.** The stored display name is standardised to sentence case
+  (first letter upper, rest lower, internal whitespace collapsed) to match
+  the seeded names — `"BANK STATEMENT"` → `"Bank statement"`.
+- **Exact dedupe.** A name/slug that matches an existing kind
+  case- and whitespace-insensitively returns that kind with **`200`**
+  (no duplicate row created).
+- **Near-duplicate guard.** A name within a small edit distance of an
+  existing kind (e.g. `"Quotes"` vs `"Quote"`) is refused with **`409`**;
+  the flat body carries `detail`, `existing_slug`, and `existing_name` so
+  the client can point the user at the existing kind.
+- **Success.** A genuinely new kind is created and returned as
+  `{slug, name}` with **`201`**.
 
 ## 1.8.5 Live job events (SSE) — `GET /api/events`
 

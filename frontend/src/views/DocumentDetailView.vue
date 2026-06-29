@@ -54,6 +54,7 @@ import {
 } from '@/api/notes'
 import {
   listKinds,
+  createKind,
   listSenders,
   listRecipients,
   type KindOption,
@@ -125,6 +126,21 @@ async function loadRecipients(): Promise<void> {
   }
 }
 
+/** Reload the kind dropdown options (called after an inline add so a freshly
+ * created kind appears in the list). Best-effort. */
+async function loadKinds(): Promise<void> {
+  try {
+    kinds.value = await listKinds()
+  } catch {
+    // Keep the current list; the new kind still shows via kindItems.
+  }
+}
+
+/** Sentinel select value that reveals the inline "add a new kind" input. Kind is
+ * a controlled list (a dropdown over the seeded set), but new kinds can be added
+ * inline — picking this option swaps the select for a text input + confirm. */
+const KIND_ADD = '__add_kind__'
+
 const kindItems = computed<SelectItem[]>(() => {
   const items: SelectItem[] = [
     { value: '', text: 'Not set' },
@@ -134,6 +150,7 @@ const kindItems = computed<SelectItem[]>(() => {
   if (current && !kinds.value.some((kind) => kind.slug === current.slug)) {
     items.push({ value: current.slug, text: current.name })
   }
+  items.push({ value: KIND_ADD, text: 'Add kind…' })
   return items
 })
 
@@ -466,6 +483,8 @@ function resetEditState(): void {
   editMode.value = false
   recipientAdding.value = false
   recipientNewName.value = ''
+  kindAdding.value = false
+  kindNewName.value = ''
   for (const key of Object.keys(fieldError)) fieldError[key] = null
   for (const key of Object.keys(savedField)) savedField[key] = false
 }
@@ -628,6 +647,66 @@ async function confirmAddRecipient(): Promise<void> {
 function cancelAddRecipient(): void {
   recipientAdding.value = false
   recipientNewName.value = ''
+}
+
+// Kind is a controlled list shown as a dropdown, but a brand-new kind can be
+// created without leaving the page: picking "Add kind…" reveals an inline text
+// input + confirm. Confirming POSTs /api/kinds (which slugifies, sentence-cases,
+// dedupes, and rejects near-duplicates), then selects the returned slug and runs
+// the normal per-field autosave (PATCH `{ kind_slug }`).
+
+const kindAdding = ref(false)
+const kindNewName = ref('')
+
+/** Select-change handler for the kind dropdown. The "Add kind…" sentinel reveals
+ * the inline input (and reverts the select to the current value); any real
+ * option autosaves as usual. */
+function onKindChange(): void {
+  if (drafts.kind === KIND_ADD) {
+    drafts.kind = doc.value?.kind?.slug ?? ''
+    kindNewName.value = ''
+    fieldError.kind = null
+    kindAdding.value = true
+    return
+  }
+  kindAdding.value = false
+  void saveField('kind')
+}
+
+/** Confirm an inline-added kind: create it on the backend, add it to the local
+ * options, select its slug, then autosave. A near-duplicate (409) or other error
+ * keeps the input open with the surfaced message. */
+async function confirmAddKind(): Promise<void> {
+  const name = kindNewName.value.trim()
+  if (!name) return
+  fieldError.kind = null
+  let created
+  try {
+    created = await createKind(name)
+  } catch (err) {
+    fieldError.kind =
+      err instanceof ApiError ? err.detail : 'Could not add the kind — try again later'
+    return
+  }
+  // Surface the new (or deduped existing) kind in the dropdown immediately, then
+  // select it and run the normal autosave.
+  if (!kinds.value.some((kind) => kind.slug === created.slug)) {
+    kinds.value = [...kinds.value, { ...created, document_count: 0 }]
+  }
+  drafts.kind = created.slug
+  kindAdding.value = false
+  kindNewName.value = ''
+  await saveField('kind')
+  await loadKinds()
+  // Refresh the shared taxonomy cache so the list view's filter bar lists the
+  // newly created kind without a full page reload.
+  await refreshTaxonomyOptions()
+}
+
+function cancelAddKind(): void {
+  kindAdding.value = false
+  kindNewName.value = ''
+  fieldError.kind = null
 }
 
 // --- Re-extraction ------------------------------------------------------------
@@ -1484,16 +1563,51 @@ watch(
                       :error-message="fieldError.summary ?? undefined"
                       @change="saveField('summary')"
                     />
-                    <AppSelect
-                      v-else-if="field === 'kind'"
-                      id="edit-kind"
-                      v-model="drafts.kind"
-                      label="Kind"
-                      hide-label
-                      :items="kindItems"
-                      :error-message="fieldError.kind ?? undefined"
-                      @change="saveField('kind')"
-                    />
+                    <template v-else-if="field === 'kind'">
+                      <!-- Kind is a controlled list (dropdown). "Add kind…"
+                           reveals an inline input + confirm instead of a
+                           blocking prompt; confirming POSTs /api/kinds (which
+                           dedupes and rejects near-duplicates), then selects and
+                           autosaves the new slug. -->
+                      <AppSelect
+                        v-if="!kindAdding"
+                        id="edit-kind"
+                        v-model="drafts.kind"
+                        label="Kind"
+                        hide-label
+                        :items="kindItems"
+                        :error-message="fieldError.kind ?? undefined"
+                        @change="onKindChange"
+                      />
+                      <div v-else>
+                        <AppInput
+                          id="kind-add-input"
+                          v-model="kindNewName"
+                          label="New kind"
+                          hint="Type a kind name, then confirm to add it"
+                          :error-message="fieldError.kind ?? undefined"
+                          @keyup.enter="confirmAddKind"
+                        />
+                        <div class="mt-2 flex gap-2">
+                          <button
+                            type="button"
+                            class="btn-sm border-violet-200 bg-violet-50 text-violet-700 hover:border-violet-300 dark:border-violet-500/40 dark:bg-violet-500/15 dark:text-violet-300"
+                            data-testid="kind-add-confirm"
+                            @click="confirmAddKind"
+                          >
+                            Add kind
+                          </button>
+                          <button
+                            type="button"
+                            class="btn-sm border-gray-200 text-gray-700 hover:border-gray-300 dark:border-gray-700/60 dark:text-gray-300"
+                            data-testid="kind-add-cancel"
+                            @click="cancelAddKind"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    </template>
                     <template v-else-if="field === 'sender'">
                       <AppInput
                         id="edit-sender"

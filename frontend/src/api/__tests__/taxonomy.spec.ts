@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { listKinds, listSenders, listTags } from '../taxonomy'
+import { createKind, listKinds, listSenders, listTags } from '../taxonomy'
+import { ApiError } from '../client'
 
 describe('taxonomy API', () => {
   const fetchMock = vi.fn()
@@ -39,5 +40,33 @@ describe('taxonomy API', () => {
     const tags = await listTags()
     expect(String(fetchMock.mock.calls[0]![0])).toBe('/api/tags')
     expect(tags[0]).toMatchObject({ slug: 'energie' })
+  })
+
+  it('POSTs /api/kinds with the name and returns the created kind', async () => {
+    respondWith({ slug: 'quote', name: 'Quote' })
+    const kind = await createKind('Quote')
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('/api/kinds')
+    expect((init as RequestInit).method).toBe('POST')
+    expect(JSON.parse(String((init as RequestInit).body))).toEqual({ name: 'Quote' })
+    expect(kind).toEqual({ slug: 'quote', name: 'Quote' })
+  })
+
+  it('throws an ApiError carrying the conflict body on a near-duplicate (409)', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          detail: "a similar kind named 'Quote' already exists",
+          existing_slug: 'quote',
+          existing_name: 'Quote',
+        }),
+        { status: 409, headers: { 'Content-Type': 'application/json' } },
+      ),
+    )
+    await expect(createKind('Quotes')).rejects.toMatchObject({
+      status: 409,
+      body: { existing_slug: 'quote', existing_name: 'Quote' },
+    })
+    await expect(createKind('Quotes')).rejects.toBeInstanceOf(ApiError)
   })
 })

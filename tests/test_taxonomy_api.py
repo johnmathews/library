@@ -84,3 +84,54 @@ def test_tags_ordered_by_name_count_excludes_deleted(
 def test_taxonomy_requires_authentication(anon_client: TestClient) -> None:
     for path in ("/api/kinds", "/api/senders", "/api/recipients", "/api/tags"):
         assert anon_client.get(path).status_code == 401, path
+
+
+def test_create_kind_adds_a_new_kind(api_client: TestClient) -> None:
+    response = api_client.post("/api/kinds", json={"name": "Brochure"})
+    assert response.status_code == 201, response.text
+    assert response.json() == {"slug": "brochure", "name": "Brochure"}
+
+    # It now shows up in the listing (the seeded set is not a fixed list).
+    slugs = {kind["slug"] for kind in get_json(api_client, "/api/kinds")}
+    assert "brochure" in slugs
+
+
+def test_create_kind_standardizes_casing_and_slug(api_client: TestClient) -> None:
+    response = api_client.post("/api/kinds", json={"name": "  BANK   STATEMENT  "})
+    assert response.status_code == 201, response.text
+    # Whitespace collapsed, sentence-cased name, slugified slug (matches seeds).
+    assert response.json() == {"slug": "bank-statement", "name": "Bank statement"}
+
+
+def test_create_kind_dedupes_case_and_whitespace_insensitively(api_client: TestClient) -> None:
+    # "quote" is seeded by migration 0017; re-adding any casing/spacing variant
+    # returns the existing row with 200 (no duplicate created).
+    response = api_client.post("/api/kinds", json={"name": "  QuOtE  "})
+    assert response.status_code == 200, response.text
+    assert response.json() == {"slug": "quote", "name": "Quote"}
+
+    quote_rows = [kind for kind in get_json(api_client, "/api/kinds") if kind["slug"] == "quote"]
+    assert len(quote_rows) == 1
+
+
+def test_create_kind_rejects_near_duplicate(api_client: TestClient) -> None:
+    # "Quotes" is one edit from the seeded "Quote" → refused with the match.
+    response = api_client.post("/api/kinds", json={"name": "Quotes"})
+    assert response.status_code == 409, response.text
+    body = response.json()
+    assert body["existing_slug"] == "quote"
+    assert body["existing_name"] == "Quote"
+    assert "Quote" in body["detail"]
+
+    # Nothing was created.
+    slugs = {kind["slug"] for kind in get_json(api_client, "/api/kinds")}
+    assert "quotes" not in slugs
+
+
+def test_create_kind_rejects_blank_name(api_client: TestClient) -> None:
+    # Pydantic min_length rejects an empty string before the service runs.
+    assert api_client.post("/api/kinds", json={"name": "   "}).status_code in (409, 422)
+
+
+def test_create_kind_requires_authentication(anon_client: TestClient) -> None:
+    assert anon_client.post("/api/kinds", json={"name": "Quote"}).status_code == 401

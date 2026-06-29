@@ -94,12 +94,20 @@ describe('DocumentDetailView', () => {
   let detail: DocumentDetail
   /** What PATCH returns; defaults to echoing `detail`. */
   let patchResponse: () => Response
+  /** What POST /api/kinds returns; defaults to echoing the posted name as a
+   * created kind. Tests override it to assert dedupe/near-duplicate handling. */
+  let createKindResponse: (init?: RequestInit) => Response
   /** What GET /api/documents/12/markdown returns; tests may override. */
   let markdownResponse: () => Response
 
   beforeEach(async () => {
     detail = makeDetail()
     patchResponse = () => jsonResponse(detail)
+    createKindResponse = (init?: RequestInit) => {
+      const name = (JSON.parse(String(init?.body ?? '{}')) as { name?: string }).name ?? ''
+      const slug = name.trim().toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '')
+      return jsonResponse({ slug, name: name.trim() }, 201)
+    }
     markdownResponse = () =>
       jsonResponse({ page_count: 1, pages: [{ page_number: 1, markdown: '# Invoice\n\nTotal: €123.45' }] } satisfies DocumentMarkdownResponse)
     vi.stubGlobal('fetch', fetchMock)
@@ -110,6 +118,7 @@ describe('DocumentDetailView', () => {
     fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
       const url = String(input)
       const method = init?.method ?? 'GET'
+      if (url === '/api/kinds' && method === 'POST') return Promise.resolve(createKindResponse(init))
       if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
       if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
       if (url === '/api/recipients') return Promise.resolve(jsonResponse(RECIPIENTS))
@@ -312,12 +321,73 @@ describe('DocumentDetailView', () => {
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
     const options = w.find('#edit-kind').findAll('option')
-    expect(options.map((option) => option.text())).toEqual(['Not set', 'Invoice', 'Receipt'])
+    expect(options.map((option) => option.text())).toEqual([
+      'Not set',
+      'Invoice',
+      'Receipt',
+      'Add kind…',
+    ])
 
     await w.find('#edit-kind').setValue('receipt') // <select> setValue emits change
     await flushPromises()
 
     expect(patchCalls()[0]!.body).toEqual({ kind_slug: 'receipt' })
+  })
+
+  it('adds a new kind inline (no blocking prompt), POSTs it, then PATCHes the slug', async () => {
+    const w = await mountView()
+    patchResponse = () => jsonResponse(makeDetail({ kind: { slug: 'quote', name: 'Quote' } }))
+
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+
+    // Picking the "Add kind…" sentinel reveals an inline input + confirm.
+    await w.find('#edit-kind').setValue('__add_kind__')
+    await flushPromises()
+    expect(w.find('#kind-add-input').exists()).toBe(true)
+    expect(w.find('#edit-kind').exists()).toBe(false)
+
+    await w.find('#kind-add-input').setValue('Quote')
+    await w.find('[data-testid="kind-add-confirm"]').trigger('click')
+    await flushPromises()
+
+    // The new kind was created on the backend, then the slug was autosaved.
+    const postCall = fetchMock.mock.calls.find(
+      ([url, init]) => String(url) === '/api/kinds' && (init as RequestInit | undefined)?.method === 'POST',
+    )
+    expect(postCall).toBeDefined()
+    expect(JSON.parse(String((postCall![1] as RequestInit).body))).toEqual({ name: 'Quote' })
+    expect(patchCalls()[0]!.body).toEqual({ kind_slug: 'quote' })
+
+    // The inline input collapses back to the select, now holding the new slug.
+    expect(w.find('#kind-add-input').exists()).toBe(false)
+    expect((w.find('#edit-kind').element as HTMLSelectElement).value).toBe('quote')
+  })
+
+  it('keeps the add-kind input open and shows the conflict on a near-duplicate (409)', async () => {
+    const w = await mountView()
+    createKindResponse = () =>
+      jsonResponse(
+        {
+          detail: "a similar kind named 'Quote' already exists; select it instead",
+          existing_slug: 'quote',
+          existing_name: 'Quote',
+        },
+        409,
+      )
+
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    await w.find('#edit-kind').setValue('__add_kind__')
+    await flushPromises()
+    await w.find('#kind-add-input').setValue('Quotes')
+    await w.find('[data-testid="kind-add-confirm"]').trigger('click')
+    await flushPromises()
+
+    // No PATCH ran, the input stays open, and the conflict message is shown.
+    expect(patchCalls()).toHaveLength(0)
+    expect(w.find('#kind-add-input').exists()).toBe(true)
+    expect(w.find('#kind-add-input-error').text()).toContain('Quote')
   })
 
   it('sender editor has a datalist fed by /api/senders', async () => {

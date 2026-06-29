@@ -30,9 +30,26 @@ export interface TagOption {
   document_count: number
 }
 
-/** GET /api/kinds — the seeded kind set, ordered by slug. */
+/** A kind as returned by POST /api/kinds (created or deduped existing). */
+export interface CreatedKind {
+  slug: string
+  name: string
+}
+
+/** GET /api/kinds — all known kinds (seeded set + any created), ordered by slug. */
 export function listKinds(signal?: AbortSignal): Promise<KindOption[]> {
   return apiFetch<KindOption[]>('/api/kinds', { signal })
+}
+
+/**
+ * POST /api/kinds — create a document kind from a display name.
+ *
+ * The backend slugifies + sentence-cases the name, dedupes an exact match
+ * (returning the existing kind), and rejects a near-duplicate with a 409 whose
+ * body carries `existing_slug`/`existing_name` (read off `ApiError.body`).
+ */
+export function createKind(name: string): Promise<CreatedKind> {
+  return apiFetch<CreatedKind>('/api/kinds', { method: 'POST', body: { name } })
 }
 
 /** GET /api/senders — all known senders, ordered by name. */

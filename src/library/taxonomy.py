@@ -7,6 +7,7 @@ tools — so the counting rules (deleted documents excluded, zero-count
 entries included) cannot drift apart.
 """
 
+import re
 from dataclasses import dataclass
 from typing import Literal
 
@@ -14,6 +15,68 @@ from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.models import Document, Kind, Recipient, Sender, Tag, document_tags
+
+_NON_ALNUM = re.compile(r"[^a-z0-9]+")
+
+
+def slugify_kind(value: str) -> str:
+    """Lowercase, non-alphanumeric runs to hyphens, trimmed, max 64 chars.
+
+    Mirrors ``library.projects.slugify`` (same rules so behaviour can't drift),
+    but falls back to ``"kind"`` when nothing usable remains.
+    """
+    slug = _NON_ALNUM.sub("-", value.lower()).strip("-")
+    slug = slug[:64].strip("-")
+    return slug or "kind"
+
+
+def standardize_kind_name(value: str) -> str:
+    """Collapse internal whitespace and apply sentence case.
+
+    Matches the seeded display-name convention ("Invoice", "Utility bill",
+    "Parking ticket"): the first character is upper-cased and the rest
+    lower-cased, so casing variants of one kind ("QUOTE", "quote") all store
+    the same name.
+    """
+    cleaned = " ".join(value.split())
+    return cleaned[:1].upper() + cleaned[1:].lower()
+
+
+def _levenshtein(a: str, b: str) -> int:
+    """Edit distance between two strings (insertions/deletions/substitutions).
+
+    A small standalone implementation (no extra dependency) used only to flag
+    near-duplicate kind names, where the inputs are short.
+    """
+    if a == b:
+        return 0
+    if not a:
+        return len(b)
+    if not b:
+        return len(a)
+    previous = list(range(len(b) + 1))
+    for i, ca in enumerate(a, start=1):
+        current = [i]
+        for j, cb in enumerate(b, start=1):
+            cost = 0 if ca == cb else 1
+            current.append(min(previous[j] + 1, current[j - 1] + 1, previous[j - 1] + cost))
+        previous = current
+    return previous[-1]
+
+
+def _is_near_duplicate(a: str, b: str) -> bool:
+    """Whether two normalised names are confusably similar but not identical.
+
+    The threshold scales down for very short names so genuinely distinct short
+    kinds aren't wrongly blocked: distance ≤ 1 when the shorter name is ≤ 4
+    characters, otherwise ≤ 2. (Identical names are an exact dedupe, not a
+    near-duplicate.)
+    """
+    distance = _levenshtein(a, b)
+    if distance == 0:
+        return False
+    threshold = 1 if min(len(a), len(b)) <= 4 else 2
+    return distance <= threshold
 
 
 @dataclass(frozen=True)
@@ -66,6 +129,57 @@ async def list_kinds(session: AsyncSession) -> list[KindCount]:
     )
     rows = (await session.execute(statement)).all()
     return [KindCount(slug=slug, name=name, document_count=count) for slug, name, count in rows]
+
+
+@dataclass(frozen=True)
+class CreateKindResult:
+    """Outcome of :func:`create_kind`.
+
+    - ``created`` — a brand-new kind was added (``kind`` is the new row).
+    - ``exists`` — an exact (case/whitespace-insensitive) match was found;
+      ``kind`` is the existing row, no row was created.
+    - ``near_duplicate`` — the name is confusably similar to an existing kind;
+      nothing was created and ``existing`` names the matched kind so the caller
+      can surface it.
+    - ``empty_name`` — the name was blank after trimming.
+    """
+
+    status: Literal["created", "exists", "near_duplicate", "empty_name"]
+    kind: Kind | None = None
+    existing: Kind | None = None
+
+
+async def create_kind(session: AsyncSession, name: str) -> CreateKindResult:
+    """Create a document kind from a human name, deduping and casing it.
+
+    The name is whitespace-collapsed and slugified (mirroring
+    ``projects.slugify``); the stored display name is sentence-cased to match
+    the seeded set. An exact match on slug or normalised name returns the
+    existing kind (``exists``) rather than creating a duplicate. A name within a
+    small edit distance of an existing kind is refused (``near_duplicate``) so
+    typos/plurals don't fragment the taxonomy. Owns its transaction (commits on
+    create), mirroring the recipient CRUD services.
+    """
+    cleaned = " ".join(name.split())
+    if not cleaned:
+        return CreateKindResult(status="empty_name")
+
+    slug = slugify_kind(cleaned)
+    normalised = cleaned.lower()
+    existing_kinds = (await session.execute(select(Kind))).scalars().all()
+
+    for kind in existing_kinds:
+        if kind.slug == slug or kind.name.lower() == normalised:
+            return CreateKindResult(status="exists", kind=kind)
+    for kind in existing_kinds:
+        if _is_near_duplicate(kind.name.lower(), normalised):
+            return CreateKindResult(status="near_duplicate", existing=kind)
+
+    kind = Kind(slug=slug, name=standardize_kind_name(cleaned))
+    session.add(kind)
+    await session.commit()
+    await session.refresh(kind)
+    return CreateKindResult(status="created", kind=kind)
 
 
 async def list_senders(session: AsyncSession) -> list[SenderCount]:
