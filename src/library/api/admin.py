@@ -118,12 +118,29 @@ class CoverageSide(BaseModel):
     worst_files: list[CoverageFile] = []
 
 
+class CoverageTestType(BaseModel):
+    """One CI test type (mirrors a job in .github/workflows/ci.yml).
+
+    ``has_coverage`` is true for the two unit suites that report line coverage
+    (backend/frontend, detailed in the matching ``CoverageSide``); false for
+    e2e and compose-smoke, which are pass/fail gates with no line coverage.
+    """
+
+    key: str
+    label: str
+    runner: str
+    has_coverage: bool
+    description: str
+
+
 class CoverageInfo(BaseModel):
     """Test coverage, read from the CI-baked summary (see docs/admin.md)."""
 
     available: bool
     backend: CoverageSide | None = None
     frontend: CoverageSide | None = None
+    # Empty for older baked summaries that predate the test-type enumeration.
+    test_types: list[CoverageTestType] = []
     generated_at: str | None = None
     git_sha: str | None = None
 
@@ -299,6 +316,7 @@ async def coverage() -> CoverageInfo:
         available=True,
         backend=CoverageSide.model_validate(data["backend"]) if data.get("backend") else None,
         frontend=CoverageSide.model_validate(data["frontend"]) if data.get("frontend") else None,
+        test_types=[CoverageTestType.model_validate(t) for t in data.get("test_types") or []],
         generated_at=data.get("generated_at"),
         git_sha=data.get("git_sha"),
     )

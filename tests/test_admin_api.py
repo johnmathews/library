@@ -112,6 +112,42 @@ def test_coverage_reads_baked_summary(
     # A totals-only (older) summary still validates: per-file fields default empty.
     assert body["backend"]["worst_files"] == []
     assert body["backend"]["files_total"] is None
+    # An older summary with no test_types list still validates (defaults empty).
+    assert body["test_types"] == []
+    get_settings.cache_clear()
+
+
+def test_coverage_surfaces_ci_test_types(
+    admin_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The coverage endpoint passes through the CI test-type enumeration."""
+    from library.config import get_settings
+
+    summary = tmp_path / "coverage-summary.json"
+    summary.write_text(
+        json.dumps(
+            {
+                "backend": {"pct": 95.0, "threshold": 85.0},
+                "frontend": {"pct": 88.0, "threshold": 85.0},
+                "test_types": [
+                    {
+                        "key": "e2e",
+                        "label": "End-to-end",
+                        "runner": "Playwright",
+                        "has_coverage": False,
+                        "description": "Browser flows; pass/fail gate.",
+                    },
+                ],
+                "generated_at": None,
+                "git_sha": None,
+            }
+        )
+    )
+    monkeypatch.setenv("LIBRARY_COVERAGE_SUMMARY_PATH", str(summary))
+    get_settings.cache_clear()
+    body = admin_client.get("/api/admin/coverage").json()
+    assert body["test_types"][0]["key"] == "e2e"
+    assert body["test_types"][0]["has_coverage"] is False
     get_settings.cache_clear()
 
 

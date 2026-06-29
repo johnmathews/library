@@ -163,14 +163,20 @@ into the image:
    (`backend`, `frontend`) carries its headline `pct` and `threshold` plus
    per-file detail: `files_total`, `files_below_gate`, and `worst_files` (the
    up-to-`MAX_WORST_FILES` lowest-covered files, ascending, each `{path, pct}`).
-   The top level also has `generated_at` and `git_sha`. Older totals-only
-   summaries still validate (the per-file fields default to null/empty).
+   The summary also carries `test_types` — the four kinds of test the CI
+   pipeline runs (`backend`/`frontend` unit suites with line coverage, plus
+   `e2e` (Playwright) and `compose-smoke`, which are pass/fail gates with no line
+   coverage; `has_coverage` distinguishes them). The top level also has
+   `generated_at` and `git_sha`. Older summaries without `test_types` or per-file
+   detail still validate (those fields default to empty/null).
 3. The `Dockerfile` `COPY`s it to `/app/coverage-summary.json` (the default
    `LIBRARY_COVERAGE_SUMMARY_PATH`) and sets `LIBRARY_GIT_SHA` from a build arg.
 4. `GET /api/admin/coverage` reads that file; when absent (local dev) it reports
-   `available: false`. The Coverage view renders one card per side — the
-   headline %, a gate **Pass / Below gate** badge, the file counts, and the
-   lowest-covered files — plus a footer with when/which build produced them.
+   `available: false`. The Coverage view renders one card per CI **test type**
+   (in pipeline order): the two unit suites show the headline %, a gate
+   **Pass / Below gate** badge, file counts and the lowest-covered files; `e2e`
+   and `compose-smoke` show what they exercise and a **CI gate** badge (no line
+   coverage). A footer records when/which build produced the numbers.
 
 ## 1.5 Configuration
 

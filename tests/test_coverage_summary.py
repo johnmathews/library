@@ -59,9 +59,26 @@ def test_build_summary_both_present(tmp_path: Path) -> None:
             "files_below_gate": None,
             "worst_files": [],
         },
+        "test_types": coverage_summary.TEST_TYPES,
         "generated_at": "2026-06-28T12:00:00Z",
         "git_sha": "abc123",
     }
+
+
+def test_build_summary_enumerates_ci_test_types(tmp_path: Path) -> None:
+    """All four CI test types are listed; e2e/compose-smoke carry no coverage."""
+    summary = coverage_summary.build_summary(
+        backend_json=None,
+        frontend_json=None,
+        generated_at=None,
+        git_sha=None,
+    )
+    by_key = {t["key"]: t for t in summary["test_types"]}
+    assert set(by_key) == {"backend", "frontend", "e2e", "compose-smoke"}
+    assert by_key["backend"]["has_coverage"] is True
+    assert by_key["frontend"]["has_coverage"] is True
+    assert by_key["e2e"]["has_coverage"] is False
+    assert by_key["compose-smoke"]["has_coverage"] is False
 
 
 def test_build_summary_includes_per_file_detail(tmp_path: Path) -> None:

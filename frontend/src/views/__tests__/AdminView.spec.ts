@@ -80,6 +80,30 @@ const coverageAvailable = {
     files_below_gate: 0,
     worst_files: [],
   },
+  test_types: [
+    { key: 'backend', label: 'Backend unit', runner: 'pytest', has_coverage: true, description: '' },
+    {
+      key: 'frontend',
+      label: 'Frontend unit',
+      runner: 'Vitest',
+      has_coverage: true,
+      description: '',
+    },
+    {
+      key: 'e2e',
+      label: 'End-to-end',
+      runner: 'Playwright',
+      has_coverage: false,
+      description: 'Full-stack browser flows. Pass/fail gate in CI; no line coverage.',
+    },
+    {
+      key: 'compose-smoke',
+      label: 'Deployment smoke',
+      runner: 'docker compose',
+      has_coverage: false,
+      description: 'Boots the production stack and verifies health + login.',
+    },
+  ],
   generated_at: '2026-06-28T00:00:00Z',
   git_sha: 'deadbeef',
 }
@@ -198,11 +222,27 @@ describe('AdminView', () => {
     expect(wrapper.find('[data-testid="coverage-unavailable"]').exists()).toBe(false)
   })
 
+  it('shows all four CI test types, with e2e/smoke as no-coverage gates', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    await wrapper.find('[data-testid="admin-tab-coverage-btn"]').trigger('click')
+    // One card per CI test type.
+    for (const key of ['backend', 'frontend', 'e2e', 'compose-smoke']) {
+      expect(wrapper.find(`[data-testid="coverage-card-${key}"]`).exists()).toBe(true)
+    }
+    // e2e/compose-smoke have no line coverage — they show a description note,
+    // not a percentage.
+    expect(wrapper.find('[data-testid="coverage-e2e"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="coverage-note-e2e"]').text()).toContain('Pass/fail gate')
+    expect(wrapper.find('[data-testid="coverage-note-compose-smoke"]').exists()).toBe(true)
+  })
+
   it('shows a clear message when coverage is unavailable', async () => {
     vi.mocked(getCoverage).mockResolvedValue({
       available: false,
       backend: null,
       frontend: null,
+      test_types: [],
       generated_at: null,
       git_sha: null,
     })

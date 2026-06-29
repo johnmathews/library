@@ -31,6 +31,49 @@ THRESHOLD = 85.0
 # per-file report is large; the admin panel only needs the worst offenders.
 MAX_WORST_FILES = 10
 
+# The test types the CI pipeline runs (.github/workflows/ci.yml), mirrored in the
+# admin Coverage view so it reflects every kind of test, not just the two with
+# line coverage. backend/frontend carry line coverage (the `backend`/`frontend`
+# sides below); e2e and compose-smoke are pass/fail gates in CI with no line
+# coverage (the published image is built in parallel with them, so their live
+# result isn't known here — they are enumerated, not scored).
+TEST_TYPES: list[dict[str, object]] = [
+    {
+        "key": "backend",
+        "label": "Backend unit",
+        "runner": "pytest",
+        "has_coverage": True,
+        "description": "Python unit + integration tests with line coverage.",
+    },
+    {
+        "key": "frontend",
+        "label": "Frontend unit",
+        "runner": "Vitest",
+        "has_coverage": True,
+        "description": "Vue component, store and API-client unit tests with line coverage.",
+    },
+    {
+        "key": "e2e",
+        "label": "End-to-end",
+        "runner": "Playwright",
+        "has_coverage": False,
+        "description": (
+            "Full-stack browser flows across Chromium, Firefox and WebKit "
+            "against the built stack. Pass/fail gate in CI; no line coverage."
+        ),
+    },
+    {
+        "key": "compose-smoke",
+        "label": "Deployment smoke",
+        "runner": "docker compose",
+        "has_coverage": False,
+        "description": (
+            "Boots the production compose stack and verifies health + login. "
+            "Pass/fail gate in CI; no line coverage."
+        ),
+    },
+]
+
 
 def _read_json(path: Path | None) -> dict | None:
     """Return the parsed JSON at `path`, or None if it is unset/missing."""
@@ -97,6 +140,7 @@ def build_summary(
     return {
         "backend": _backend_side(backend_json) or {"pct": None, "threshold": THRESHOLD},
         "frontend": _frontend_side(frontend_json) or {"pct": None, "threshold": THRESHOLD},
+        "test_types": TEST_TYPES,
         "generated_at": generated_at,
         "git_sha": git_sha,
     }
