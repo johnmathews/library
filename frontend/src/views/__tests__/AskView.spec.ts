@@ -259,6 +259,15 @@ describe('AskView', () => {
     expect(w.find('#ask-page').classes()).not.toContain('max-w-6xl')
   })
 
+  it('places the title/description above the sidebar working area, not inside it', () => {
+    const w = mountView()
+    // The header is a sibling above #ask-page (which holds the sidebar +
+    // answer column), so it spans full width on top — the standard layout.
+    expect(w.find('#ask-page [data-testid="page-header"]').exists()).toBe(false)
+    const html = w.html()
+    expect(html.indexOf('data-testid="page-header"')).toBeLessThan(html.indexOf('id="ask-page"'))
+  })
+
   it('renders a bottom composer with a Send button (W10)', () => {
     const w = mountView()
     // Not position:sticky — a sticky bottom bar overlaps the last turn's

@@ -1,5 +1,6 @@
 """FastAPI application factory for the Library backend."""
 
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -28,6 +29,8 @@ from library.config import get_settings
 from library.events_broker import EventsBroker
 from library.jobs import job_app, procrastinate_conninfo
 from library.mcp_server import create_mcp_http_app
+
+logger = logging.getLogger(__name__)
 
 API_DESCRIPTION = """\
 Self-hosted document archive. Upload scans and files, let OCR and Claude
@@ -102,6 +105,22 @@ OPENAPI_TAGS: list[dict[str, str]] = [
 _BACKEND_PREFIXES = frozenset({"api", "mcp", "healthz", "docs", "redoc", "openapi.json"})
 
 
+def warn_if_no_public_base_url(public_base_url: str | None) -> None:
+    """Log a startup warning when document deep-links are disabled.
+
+    Pushover notifications only link back to a document when
+    LIBRARY_PUBLIC_BASE_URL is set (see notifications.py). When it is unset
+    the feature silently no-ops, which looks like a bug ("my notifications
+    have no link") — so we say so loudly, once, at startup.
+    """
+    if not public_base_url:
+        logger.warning(
+            "LIBRARY_PUBLIC_BASE_URL is unset — Pushover notifications will not "
+            "include a link to the document. Set it to the web app's public URL "
+            "(e.g. https://library.example.com) to enable deep-links."
+        )
+
+
 class HashedStaticFiles(StaticFiles):
     """Vite's content-hashed bundles under /assets never change: cache forever."""
 
@@ -150,6 +169,7 @@ def create_app() -> FastAPI:
         """Open the Procrastinate connection (so defer() works), start the
         process-wide SSE events broker (one shared Postgres LISTEN connection
         fanned out to all clients), and run the mounted MCP app's lifespan."""
+        warn_if_no_public_base_url(get_settings().public_base_url)
         broker = EventsBroker(procrastinate_conninfo(get_settings().database_url))
         await broker.start()
         app.state.events_broker = broker

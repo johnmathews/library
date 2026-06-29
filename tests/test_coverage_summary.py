@@ -14,13 +14,21 @@ coverage_summary = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(coverage_summary)
 
 
-def _write_backend(path: Path, pct: float) -> Path:
-    path.write_text(json.dumps({"totals": {"percent_covered": pct}}), encoding="utf-8")
+def _write_backend(path: Path, pct: float, files: dict[str, float] | None = None) -> Path:
+    payload: dict = {"totals": {"percent_covered": pct}}
+    if files is not None:
+        payload["files"] = {
+            name: {"summary": {"percent_covered": file_pct}} for name, file_pct in files.items()
+        }
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 
-def _write_frontend(path: Path, pct: float) -> Path:
-    path.write_text(json.dumps({"total": {"lines": {"pct": pct}}}), encoding="utf-8")
+def _write_frontend(path: Path, pct: float, files: dict[str, float] | None = None) -> Path:
+    payload: dict = {"total": {"lines": {"pct": pct}}}
+    for name, file_pct in (files or {}).items():
+        payload[name] = {"lines": {"pct": file_pct}}
+    path.write_text(json.dumps(payload), encoding="utf-8")
     return path
 
 
@@ -35,12 +43,75 @@ def test_build_summary_both_present(tmp_path: Path) -> None:
         git_sha="abc123",
     )
 
+    # Totals-only sources (no per-file data) → null file counts, empty worst list.
     assert summary == {
-        "backend": {"pct": 94.6, "threshold": 85.0},
-        "frontend": {"pct": 88.2, "threshold": 85.0},
+        "backend": {
+            "pct": 94.6,
+            "threshold": 85.0,
+            "files_total": None,
+            "files_below_gate": None,
+            "worst_files": [],
+        },
+        "frontend": {
+            "pct": 88.2,
+            "threshold": 85.0,
+            "files_total": None,
+            "files_below_gate": None,
+            "worst_files": [],
+        },
         "generated_at": "2026-06-28T12:00:00Z",
         "git_sha": "abc123",
     }
+
+
+def test_build_summary_includes_per_file_detail(tmp_path: Path) -> None:
+    backend = _write_backend(
+        tmp_path / "coverage.json",
+        92.0,
+        files={"a.py": 100.0, "b.py": 70.0, "c.py": 40.0},
+    )
+    frontend = _write_frontend(
+        tmp_path / "coverage-summary.json",
+        88.0,
+        files={"x.ts": 95.0, "y.ts": 60.0},
+    )
+
+    summary = coverage_summary.build_summary(
+        backend_json=backend,
+        frontend_json=frontend,
+        generated_at=None,
+        git_sha=None,
+    )
+
+    backend_side = summary["backend"]
+    assert backend_side["files_total"] == 3
+    assert backend_side["files_below_gate"] == 2  # b.py (70) and c.py (40)
+    # Worst files are ascending by pct: c.py is the single lowest.
+    assert backend_side["worst_files"][0] == {"path": "c.py", "pct": 40.0}
+    assert [f["path"] for f in backend_side["worst_files"]] == ["c.py", "b.py", "a.py"]
+
+    frontend_side = summary["frontend"]
+    assert frontend_side["files_total"] == 2
+    assert frontend_side["files_below_gate"] == 1  # y.ts (60)
+    assert frontend_side["worst_files"][0] == {"path": "y.ts", "pct": 60.0}
+
+
+def test_worst_files_is_capped(tmp_path: Path) -> None:
+    files = {f"mod_{i}.py": float(i) for i in range(20)}
+    backend = _write_backend(tmp_path / "coverage.json", 50.0, files=files)
+
+    summary = coverage_summary.build_summary(
+        backend_json=backend,
+        frontend_json=tmp_path / "missing.json",
+        generated_at=None,
+        git_sha=None,
+    )
+
+    worst = summary["backend"]["worst_files"]
+    assert len(worst) == coverage_summary.MAX_WORST_FILES
+    # The very lowest-covered file comes first.
+    assert worst[0] == {"path": "mod_0.py", "pct": 0.0}
+    assert summary["backend"]["files_total"] == 20
 
 
 def test_build_summary_missing_backend(tmp_path: Path) -> None:

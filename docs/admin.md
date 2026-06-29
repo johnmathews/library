@@ -53,7 +53,7 @@ All under `require_admin`:
 |---|---|
 | `GET /api/admin/system` | app version + git sha, redacted operational config, deployment topology, live DB stats (documents by status, users, job-queue depth, total extraction spend) |
 | `GET /api/admin/architecture` | `docs/architecture.md` + `docs/ingestion.md` as markdown (rendered client-side) |
-| `GET /api/admin/coverage` | backend + frontend coverage % vs gate, from the CI-baked summary (§1.4) |
+| `GET /api/admin/coverage` | backend + frontend coverage % vs gate, plus per-file detail (file counts, lowest-covered files), from the CI-baked summary (§1.4) |
 | `GET /api/admin/users` | every user (role + active state, no secrets) |
 | `POST /api/admin/users` | create a user (optionally admin) |
 | `PATCH /api/admin/users/{id}` | promote/demote and activate/deactivate |
@@ -83,12 +83,18 @@ into the image:
 1. The backend and frontend jobs produce `coverage.json` and
    `frontend/coverage/coverage-summary.json`.
 2. The image build job runs `scripts/coverage_summary.py` to merge them into a
-   single `coverage-summary.json` (`{backend, frontend, generated_at,
-   git_sha}`), written into the build context.
+   single `coverage-summary.json`, written into the build context. Each side
+   (`backend`, `frontend`) carries its headline `pct` and `threshold` plus
+   per-file detail: `files_total`, `files_below_gate`, and `worst_files` (the
+   up-to-`MAX_WORST_FILES` lowest-covered files, ascending, each `{path, pct}`).
+   The top level also has `generated_at` and `git_sha`. Older totals-only
+   summaries still validate (the per-file fields default to null/empty).
 3. The `Dockerfile` `COPY`s it to `/app/coverage-summary.json` (the default
    `LIBRARY_COVERAGE_SUMMARY_PATH`) and sets `LIBRARY_GIT_SHA` from a build arg.
 4. `GET /api/admin/coverage` reads that file; when absent (local dev) it reports
-   `available: false`.
+   `available: false`. The Coverage view renders one card per side — the
+   headline %, a gate **Pass / Below gate** badge, the file counts, and the
+   lowest-covered files — plus a footer with when/which build produced them.
 
 ## 1.5 Configuration
 

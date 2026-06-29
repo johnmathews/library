@@ -108,6 +108,40 @@ def test_coverage_reads_baked_summary(
     assert body["backend"]["pct"] == 95.2
     assert body["frontend"]["pct"] == 88.1
     assert body["git_sha"] == "abc1234"
+    # A totals-only (older) summary still validates: per-file fields default empty.
+    assert body["backend"]["worst_files"] == []
+    assert body["backend"]["files_total"] is None
+    get_settings.cache_clear()
+
+
+def test_coverage_surfaces_per_file_detail(
+    admin_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from library.config import get_settings
+
+    summary = tmp_path / "coverage-summary.json"
+    summary.write_text(
+        json.dumps(
+            {
+                "backend": {
+                    "pct": 92.0,
+                    "threshold": 85.0,
+                    "files_total": 3,
+                    "files_below_gate": 1,
+                    "worst_files": [{"path": "src/library/series.py", "pct": 71.0}],
+                },
+                "frontend": {"pct": 88.1, "threshold": 85.0},
+                "generated_at": "2026-06-29T00:00:00Z",
+                "git_sha": "abc1234",
+            }
+        )
+    )
+    monkeypatch.setenv("LIBRARY_COVERAGE_SUMMARY_PATH", str(summary))
+    get_settings.cache_clear()
+    body = admin_client.get("/api/admin/coverage").json()
+    assert body["backend"]["files_total"] == 3
+    assert body["backend"]["files_below_gate"] == 1
+    assert body["backend"]["worst_files"] == [{"path": "src/library/series.py", "pct": 71.0}]
     get_settings.cache_clear()
 
 

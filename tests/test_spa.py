@@ -7,7 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 from procrastinate.testing import InMemoryConnector
 
-from library.app import create_app
+from library.app import create_app, warn_if_no_public_base_url
 from library.config import get_settings
 from library.jobs import job_app
 
@@ -108,3 +108,22 @@ def test_no_dist_means_no_spa(no_dist_client: TestClient) -> None:
     response = no_dist_client.get("/")
     assert response.status_code == 404
     assert response.headers["content-type"] == "application/json"
+
+
+@pytest.mark.parametrize("unset_value", [None, ""])
+def test_warns_when_public_base_url_unset(
+    unset_value: str | None, caplog: pytest.LogCaptureFixture
+) -> None:
+    """An unset base URL means linkless pushes: say so loudly, once, at startup."""
+    with caplog.at_level("WARNING", logger="library.app"):
+        warn_if_no_public_base_url(unset_value)
+    assert any(
+        "LIBRARY_PUBLIC_BASE_URL is unset" in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    )
+
+
+def test_no_warning_when_public_base_url_set(caplog: pytest.LogCaptureFixture) -> None:
+    with caplog.at_level("WARNING", logger="library.app"):
+        warn_if_no_public_base_url("https://library.example.com")
+    assert not [r for r in caplog.records if "LIBRARY_PUBLIC_BASE_URL" in r.message]

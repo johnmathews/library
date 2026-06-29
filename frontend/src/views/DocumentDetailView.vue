@@ -56,6 +56,7 @@ import { listKinds, listSenders, type KindOption, type SenderOption } from '@/ap
 import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { ApiError } from '@/api/client'
 import { useJobsStore } from '@/stores/jobs'
+import { deriveNoteTitle } from '@/utils/noteTitle'
 import DocumentSeriesTrend from '@/components/DocumentSeriesTrend.vue'
 import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 
@@ -765,13 +766,15 @@ const noteBody = computed(() =>
 )
 
 const noteEditMode = ref(false)
-const noteTitleDraft = ref('')
 const noteBodyDraft = ref('')
 const noteSaving = ref(false)
 const noteEditError = ref<string | null>(null)
 
+/** The title is the first line of the body, mirroring the new-note authoring view. */
+const noteEditTitle = computed(() => deriveNoteTitle(noteBodyDraft.value))
+const canSaveNote = computed(() => noteEditTitle.value !== '' && !noteSaving.value)
+
 function openNoteEditor(): void {
-  noteTitleDraft.value = doc.value?.title ?? ''
   noteBodyDraft.value = noteBody.value
   noteEditError.value = null
   noteEditMode.value = true
@@ -783,13 +786,13 @@ function cancelNoteEdit(): void {
 }
 
 async function saveNote(): Promise<void> {
-  if (!doc.value || noteSaving.value) return
+  if (!doc.value || !canSaveNote.value) return
   noteSaving.value = true
   noteEditError.value = null
   try {
     const id = doc.value.id
     doc.value = await updateNote(id, {
-      title: noteTitleDraft.value.trim(),
+      title: noteEditTitle.value,
       body_markdown: noteBodyDraft.value,
     })
     await loadMarkdown(id)
@@ -849,7 +852,6 @@ async function restoreVersion(versionNo: number): Promise<void> {
 function resetNoteState(): void {
   noteEditMode.value = false
   noteEditError.value = null
-  noteTitleDraft.value = ''
   noteBodyDraft.value = ''
   noteVersions.value = []
   noteVersionsOpen.value = false
@@ -1114,11 +1116,11 @@ watch(
 
           <template v-if="noteEditMode">
             <div class="space-y-4">
-              <AppInput id="note-edit-title" v-model="noteTitleDraft" label="Title" />
               <AppTextarea
                 id="note-edit-body"
                 v-model="noteBodyDraft"
-                label="Body (markdown)"
+                label="Note"
+                hint="The first line becomes the title. Markdown is supported."
                 :rows="12"
                 :error-message="noteEditError ?? undefined"
               />
@@ -1126,7 +1128,7 @@ watch(
             <div class="mt-4 flex flex-wrap gap-3">
               <AppButton
                 type="button"
-                :disabled="noteSaving"
+                :disabled="!canSaveNote"
                 data-testid="note-edit-save"
                 @click="saveNote"
               >
@@ -1733,5 +1735,22 @@ watch(
 }
 .dark .doc-markdown :deep(code) {
   background: rgb(255 255 255 / 0.08);
+}
+/* Fenced code blocks scroll horizontally inside the block rather than
+   overflowing the card and the viewport. */
+.doc-markdown :deep(pre) {
+  margin: 0.75rem 0;
+  padding: 0.75rem 1rem;
+  border-radius: 0.5rem;
+  background: rgb(0 0 0 / 0.06);
+  overflow-x: auto;
+}
+.dark .doc-markdown :deep(pre) {
+  background: rgb(255 255 255 / 0.08);
+}
+.doc-markdown :deep(pre code) {
+  padding: 0;
+  background: none;
+  white-space: pre;
 }
 </style>
