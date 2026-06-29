@@ -313,8 +313,8 @@ and re-raises (so the standard `failed` handling also applies).
 ## Extraction (`library.extraction`)
 
 The `extract` pipeline stage turns OCR text into structured metadata
-with Claude (decision 3 in the improvement plan): kind, sender, title,
-summary, dates, total amount + currency, language, suggested tags. The
+with Claude (decision 3 in the improvement plan): kind, sender, recipient,
+title, summary, dates, total amount + currency, language, suggested tags. The
 guiding invariant is that **extraction is best-effort**: whatever
 happens here — API failure, unusable input, budget exhausted, feature
 disabled — the document still reaches `indexed` and stays searchable by
@@ -340,6 +340,7 @@ the SDK converts the model to a JSON schema (with
 | --- | --- | --- |
 | `kind_slug` | enum | The 14 seeded kind slugs (`invoice` … `other`, including the general-reference kinds `reference`, `research`, `note`); enforced by the JSON schema, so the model cannot invent kinds. |
 | `sender_name` | `str \| None` | Canonical short organisation/person name. |
+| `recipient_name` | `str \| None` | The household member the document is addressed to / is for, in short canonical form (e.g. "John", "Wife"). `None` when unclear. |
 | `title`, `summary` | `str` | Always in **English** (translated from the source language if needed — prompt-enforced); summary ≤ 2 sentences (also prompt-enforced — string length constraints are not supported in structured-output schemas). |
 | `document_date`, `due_date`, `expiry_date` | `date \| None` | Wire format is an ISO `YYYY-MM-DD` string; a before-validator trims it and maps empty/placeholder values to `None`, so sloppy-but-harmless output degrades to "no date" while a truly malformed date raises (and triggers escalation). |
 | `amount_total` | `str \| None` | Decimal string, parsed defensively (currency symbols stripped, `12,50` → `12.50`); unparseable values become `None` rather than failing the document. Converted to `Decimal` when applied. |
@@ -396,6 +397,8 @@ change can identify documents extracted with an older prompt.
 On success:
 
 - **Sender** is upserted by case-insensitive name match (create if new).
+- **Recipient** is upserted by case-insensitive name match (create if new),
+  identically to sender; skipped when a user has already edited `recipient_id`.
 - **Kind** is resolved by slug to the seeded `kinds` row.
 - **Tags** are get-or-created by slug and merged into the document's
   tag set (never removed).

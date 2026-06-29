@@ -1,6 +1,6 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-06-24 (cached series descriptions + /charts view).
+**Status:** active. **Last updated:** 2026-06-29 (recipient in answer context; citations collapsed by default; empty-state distinguishes no-conversations from none-selected).
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -57,7 +57,9 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybri
    **Reciprocal Rank Fusion** (RRF, k=60), so exact-term matches (invoice
    numbers, names) and paraphrase matches both surface. Each result carries its
    nearest chunk as the citation excerpt and, when the chunk came from a
-   page-aware document, its `page_number`. The FTS leg uses `ts_rank`
+   page-aware document, its `page_number`. Each result also exposes the
+   document's metadata to the model (title, **sender**, **recipient**,
+   document date) so it can attribute and group answers. The FTS leg uses `ts_rank`
    **length normalization** (Postgres bitmask `1`: divide rank by `1 + log(length)`),
    so a long, multi-topic document cannot out-rank a short on-topic invoice
    merely by repeating the matched term — score reflects match *density*. For
@@ -69,7 +71,8 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybri
 3. **Structured query** (`query_documents`). Aggregations over the extracted
    columns: distinct senders, summed amounts (by currency, optionally grouped by
    sender/kind), and document lists. Every row carries the contributing document
-   ids for citation. Aggregation citations have no text location, so their
+   ids for citation; document refs also expose `title`, `sender`, `recipient`,
+   `kind`, `document_date`, and `amount_total`. Aggregation citations have no text location, so their
    `page_number` is always `None`.
 4. **Series comparison** (`compare_to_series`). Statistical summary of a
    recurring-document series — see §1.7 for details. Returns distribution
@@ -82,10 +85,11 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybri
    to say plainly when the archive doesn't contain the answer, and to cite the
    document ids it used. The endpoint returns the answer, the citations
    (document id + title + `page_number`), the tools used, and the estimated cost.
-   The web UI renders each citation as `Title, p. N` when a page number is
-   available and deep-links the PDF iframe to that page (`#page=N` in the URL
-   fragment); citations from documents without a markdown layer show only the
-   title.
+   The web UI **collapses the citations by default** behind an `AppDetails`
+   disclosure ("Citations (N)") under each answer, and renders each citation as
+   `Title, p. N` when a page number is available and deep-links the PDF iframe to
+   that page (`#page=N` in the URL fragment); citations from documents without a
+   markdown layer show only the title.
 
 **Image attachments (W11).** `ask_model` (`claude-sonnet-4-6`) is multimodal, so
 a question may carry up to 5 base64 images (see [api.md §1.11](api.md)). They are
@@ -197,7 +201,11 @@ listing past threads (by title and relative time) with resume and delete
 actions, a scrollable transcript of Q&A pairs, and a follow-up input pinned
 below. On a phone the sidebar stacks beneath the title/description; on wide
 screens it sits beside the answer column. `/ask/:threadId` loads an existing
-thread. **"New conversation"** clears to an empty thread.
+thread. **"New conversation"** clears to an empty thread. The empty state
+distinguishes two cases: when **no conversations exist yet** it invites the user
+to ask a first question, whereas when **conversations exist but none is selected**
+it prompts the user to pick one from the sidebar or start a new one
+(`[data-testid="ask-select-thread"]`).
 
 ## 1.7 Document series + comparative queries
 

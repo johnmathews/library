@@ -1,6 +1,6 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-06-28 (in-app notes `/api/notes` + version history; `topics` now read-only and searchable).
+**Status:** active. **Last updated:** 2026-06-29 (recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -50,6 +50,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | DELETE | `/api/series/{sender_id}/{kind_id}/members/{document_id}` | Exclude a document from a series (or clear a pin) |
 | GET    | `/api/kinds` | Document kinds with counts |
 | GET    | `/api/senders` | Senders with counts |
+| GET    | `/api/recipients` | Recipients with counts |
 | GET    | `/api/tags` | Tags with counts |
 | GET    | `/api/projects` | List projects/collections with counts |
 | POST   | `/api/projects` | Create a project (admin only) |
@@ -93,6 +94,7 @@ ingestion semantics are documented in [ingestion.md](ingestion.md).
 | `q` | string | Full-text search, [websearch syntax](https://www.postgresql.org/docs/current/textsearch-controls.html) (quoted phrases, `OR`, `-exclusion`) |
 | `kind` | string | Kind slug (e.g. `invoice`) |
 | `sender_id` | int | Sender id |
+| `recipient_id` | int | Recipient id |
 | `tag` | string, repeatable | Tag slug; repeating the parameter ANDs them (`?tag=energie&tag=wonen` requires both) |
 | `project` | string | Project slug; only documents that belong to this project |
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown` |
@@ -114,6 +116,7 @@ All filters compose (AND), including with `q`.
       "id": 12, "title": "Energierekening mei 2026", "summary": "…",
       "kind": {"slug": "invoice", "name": "Invoice"},
       "sender": {"id": 3, "name": "Eneco"},
+      "recipient": {"id": 1, "name": "John"},
       "tags": [{"slug": "energie", "name": "Energie"}],
       "projects": [{"slug": "house-purchase", "name": "House purchase"}],
       "document_date": "2026-05-15", "language": "nld",
@@ -197,6 +200,7 @@ JSON body; only the fields present in the body change. Editable fields:
 | `document_date`, `due_date`, `expiry_date` | ISO dates, `null` clears |
 | `kind_slug` | Must be an existing kind slug (`422` otherwise); `null` clears the kind |
 | `sender` | Sender **name**; upserted case-insensitively (same rule extraction uses); `null` clears |
+| `recipient` | Recipient **name**; upserted case-insensitively (same rule extraction uses); `null` clears |
 | `tags` | **Full replacement** list of slugs; unknown slugs are created; `[]` clears; `null` is rejected |
 | `projects` | **Full replacement** list of project slugs *or names*; unknown identifiers are upserted (a name becomes a new project, slugified); `[]` clears membership; `null` is rejected. Also appends a `project_changed` ingestion event |
 | `language` | `nld` / `eng` / `mixed` / `unknown`; `null` rejected |
@@ -204,7 +208,8 @@ JSON body; only the fields present in the body change. Editable fields:
 | `currency` | 3-letter code, normalized to upper case; `null` clears |
 
 Every edited field is appended to `extra["user_edited_fields"]` (mapped to
-storage names: `kind_slug`→`kind_id`, `sender`→`sender_id`). Re-extraction
+storage names: `kind_slug`→`kind_id`, `sender`→`sender_id`,
+`recipient`→`recipient_id`). Re-extraction
 (W6) honours this list and never overwrites user-edited fields. An
 ingestion event `user_edited` is recorded with the changed field names.
 Returns the updated document detail.
@@ -332,7 +337,7 @@ Use this after reviewing a document's metadata in the detail view and
 confirming it is correct. The `review_status` can return to `needs_review`
 if extraction is re-run and new findings are produced.
 
-## 1.8.4 Taxonomy — `GET /api/kinds`, `/api/senders`, `/api/tags`
+## 1.8.4 Taxonomy — `GET /api/kinds`, `/api/senders`, `/api/recipients`, `/api/tags`
 
 Plain JSON arrays for filter options and edit forms; the same data the
 MCP `list_*` tools return (one shared service, `library.taxonomy`).
@@ -341,6 +346,8 @@ Counts exclude soft-deleted documents; zero-count entries are included.
 - `GET /api/kinds` → `[{slug, name, document_count}, …]`, ordered by
   slug. Kinds are the fixed seeded set.
 - `GET /api/senders` → `[{id, name, document_count}, …]`, ordered by
+  name.
+- `GET /api/recipients` → `[{id, name, document_count}, …]`, ordered by
   name.
 - `GET /api/tags` → `[{slug, name, document_count}, …]`, ordered by
   name.

@@ -4,8 +4,8 @@ A self-hosted personal/family document archive — a faster, more flexible
 take on paperless-ngx. Library ingests scans, photos and digital documents
 (PDF, JPG, PNG, HEIC, TIFF, text), digitises them with a routed OCR
 pipeline (Tesseract for scans, neural OCR for photos), enriches them with
-structured metadata via the Claude API (kind, sender, dates, amounts,
-tags, summary), and makes everything searchable in Dutch and English.
+structured metadata via the Claude API (kind, sender, recipient, dates,
+amounts, tags, summary), and makes everything searchable in Dutch and English.
 
 **Status: v0.1.0 — feature-complete first release.** Everything below
 works today (see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
@@ -20,8 +20,8 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
   get OpenCV perspective correction + RapidOCR; a confidence gate retries
   weak results on the other engine.
 - **Claude metadata extraction:** structured outputs (Haiku 4.5,
-  escalating to Sonnet 4.6 on low confidence) fill kind, sender, title,
-  summary, dates, amounts, language and tags — with a daily budget cap,
+  escalating to Sonnet 4.6 on low confidence) fill kind, sender, recipient,
+  title, summary, dates, amounts, language and tags — with a daily budget cap,
   full provenance, and user edits always winning.
 - **Search:** Postgres FTS with both Dutch and English stemming,
   websearch syntax, filters, ranked snippets.

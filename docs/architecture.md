@@ -1,6 +1,6 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-06-28.
+**Status:** active. **Last updated:** 2026-06-29 (recipient field added to the document data model).
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design and tracks which parts exist. The full
@@ -125,7 +125,10 @@ at any stage, with the reason in `ingestion_events`).
 summary, document_date, language, amounts/expiry, `topics` JSONB list of
 human-readable subject phrases for general-reference material, `extra` JSONB for
 kind-specific fields plus `extra["validation"]` + `extra["corrections"]`,
-OCR text + confidence, uploader, source channel) with FKs to `senders` and `kinds`
+OCR text + confidence, uploader, source channel) with FKs to `senders`,
+`recipients` (who a document is addressed to — a lookup table mirroring
+`senders`, nullable FK, migration 0016 which seeds a "John" recipient and
+backfills existing documents to it), and `kinds`
 (seeded: invoice, receipt, certificate, utility bill, parking ticket,
 warranty, manual, reference, research, note, letter, contract, ticket, other —
 the last group of general-reference kinds added in migration 0010 alongside
