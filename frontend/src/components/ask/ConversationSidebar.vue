@@ -42,55 +42,72 @@ defineExpose({ refresh })
 </script>
 
 <template>
+  <!-- Conversation rail. Lives INSIDE the unified Ask panel: it owns no card
+       chrome of its own — just an internal divider separating it from the
+       thread (a bottom divider when stacked on mobile, a right divider beside
+       the thread on lg+). -->
   <aside
-    class="flex flex-col gap-2 w-full lg:w-64 lg:shrink-0 lg:min-h-0"
+    class="flex flex-col border-b border-gray-200 dark:border-gray-700/60 lg:border-b-0 lg:border-r lg:w-72 lg:shrink-0 lg:min-h-0"
     data-testid="conversation-sidebar"
   >
-    <button
-      data-testid="new-conversation"
-      type="button"
-      class="w-full text-left px-4 py-2 rounded-lg bg-violet-600 hover:bg-violet-700 text-white text-sm font-medium transition"
-      @click="emit('new')"
-    >
-      New conversation
-    </button>
+    <div class="flex flex-col gap-2 p-3 border-b border-gray-200 dark:border-gray-700/60">
+      <button
+        data-testid="new-conversation"
+        type="button"
+        class="btn-sm w-full bg-violet-600 hover:bg-violet-700 text-white"
+        @click="emit('new')"
+      >
+        <svg class="w-4 h-4 shrink-0 fill-current opacity-80 mr-1" viewBox="0 0 16 16">
+          <path d="M15 7H9V1c0-.6-.4-1-1-1S7 .4 7 1v6H1c-.6 0-1 .4-1 1s.4 1 1 1h6v6c0 .6.4 1 1 1s1-.4 1-1V9h6c.6 0 1-.4 1-1s-.4-1-1-1z" />
+        </svg>
+        New conversation
+      </button>
 
-    <input
-      v-model="query"
-      type="search"
-      data-testid="thread-search"
-      placeholder="Search conversations…"
-      class="form-input w-full text-sm"
-      aria-label="Search conversations"
-    />
+      <input
+        v-model="query"
+        type="search"
+        data-testid="thread-search"
+        placeholder="Search conversations…"
+        class="form-input w-full text-sm"
+        aria-label="Search conversations"
+      />
 
-    <p
-      v-if="threads.length && !filteredThreads.length"
-      data-testid="thread-search-empty"
-      class="px-1 text-xs text-gray-500 dark:text-gray-400"
-    >
-      No conversations match “{{ query }}”.
-    </p>
+      <p
+        v-if="threads.length && !filteredThreads.length"
+        data-testid="thread-search-empty"
+        class="px-1 text-xs text-gray-500 dark:text-gray-400"
+      >
+        No conversations match “{{ query }}”.
+      </p>
+    </div>
 
     <!-- On mobile the list is capped so it can't dominate the screen above the
-         answer; on lg+ it flexes to fill the sidebar's height. -->
+         thread; on lg+ it flexes to fill the rail's height and scrolls. -->
     <ul
-      class="max-lg:max-h-72 lg:flex-1 lg:min-h-0 divide-y divide-gray-200 dark:divide-gray-700/60 border border-gray-200 dark:border-gray-700/60 rounded-lg overflow-y-auto"
+      class="max-lg:max-h-64 lg:flex-1 lg:min-h-0 divide-y divide-gray-200 dark:divide-gray-700/60 overflow-y-auto no-scrollbar"
     >
       <li
         v-for="thread in filteredThreads"
         :key="thread.id"
         data-testid="thread-item"
-        class="flex items-center justify-between gap-2 px-4 py-3 cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
-        :class="{
-          'bg-violet-50 dark:bg-violet-900/20': thread.id === activeThreadId,
-        }"
+        class="flex items-center justify-between gap-2 px-4 py-3 cursor-pointer transition"
+        :class="
+          thread.id === activeThreadId
+            ? 'bg-violet-50 dark:bg-violet-900/20 border-l-2 border-violet-500'
+            : 'border-l-2 border-transparent hover:bg-gray-50 dark:hover:bg-gray-700/40'
+        "
         @click="emit('select', thread.id)"
       >
         <span class="min-w-0 flex-1">
-          <span class="block truncate text-sm text-gray-800 dark:text-gray-100">{{
-            thread.title
-          }}</span>
+          <span
+            class="block truncate text-sm"
+            :class="
+              thread.id === activeThreadId
+                ? 'text-violet-700 dark:text-violet-300 font-medium'
+                : 'text-gray-800 dark:text-gray-100'
+            "
+            >{{ thread.title }}</span
+          >
           <span class="block text-xs text-gray-500 dark:text-gray-400">{{
             formatDate(thread.updated_at)
           }}</span>
@@ -103,6 +120,13 @@ defineExpose({ refresh })
         >
           Delete
         </button>
+      </li>
+
+      <li
+        v-if="!threads.length"
+        class="px-4 py-6 text-center text-xs text-gray-500 dark:text-gray-400"
+      >
+        No conversations yet.
       </li>
     </ul>
   </aside>

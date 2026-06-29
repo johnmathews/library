@@ -252,143 +252,155 @@ defineExpose({ resetConversation })
 </script>
 
 <template>
-  <!-- Standard layout: the page title + description sit at the top, full width;
-       the conversation sidebar and the answer column form the two-pane working
-       area BELOW them (not beside the title). -->
-  <PageHeader
-    title="Ask"
-    description="Ask a question about your documents in plain language and get an answer with citations."
-  />
-
-  <AppErrorSummary
-    v-if="errors.length"
-    :errors="errors"
-    data-testid="error-summary"
-    class="mb-6"
-  />
-
-  <!-- Working area. Below lg it STACKS (flex-col): the conversation sidebar +
-       search sit full-width directly under the title/description, with the
-       transcript and composer beneath them — no cramped side-by-side column on a
-       phone. On lg+ it becomes the two-pane chat layout (Option A): a fixed-width
-       sidebar beside a full-height answer column that fills the viewport below
-       the shell header AND the page header above it (100dvh − h-16 shell header −
-       app-page py-8 − the ~6rem PageHeader block ≈ 14rem), so the transcript
-       scrolls INTERNALLY and the composer is pinned at the bottom. -->
-  <div
-    id="ask-page"
-    class="flex flex-col lg:flex-row gap-6 lg:items-stretch lg:h-[calc(100dvh-14rem)]"
-  >
-    <ConversationSidebar
-      ref="sidebarRef"
-      :active-thread-id="threadId"
-      @select="(id: number) => router.push({ name: 'ask-thread', params: { threadId: id } })"
-      @new="resetConversation"
-      @threads-changed="(count: number) => (sidebarThreadCount = count)"
+  <!-- The whole Ask view is a flex column that fills the shell's content box:
+       100dvh − the h-16 shell header − the app-page py-8 = 100dvh − 8rem. The
+       title block and error summary take their natural height and the chat panel
+       (#ask-page) flexes to fill the rest, so we no longer guess the header's
+       height with a brittle calc() magic number. Below lg the column is a plain
+       block and the page scrolls normally. -->
+  <div class="lg:flex lg:flex-col lg:h-[calc(100dvh-8rem)]">
+    <!-- Standard layout: the page title + description sit at the top, full
+         width, ABOVE the chat panel (a sibling, never inside it). -->
+    <PageHeader
+      title="Ask"
+      description="Ask a question about your documents in plain language and get an answer with citations."
     />
 
-    <!-- Answer column. On lg+ it is a full-height flex column (transcript
-         scrolls, composer pinned); below lg it is a normal block. -->
-    <div class="flex-1 min-w-0 lg:flex lg:flex-col lg:min-h-0">
-      <!-- Transcript: wide rich-markdown answers, not chat bubbles. On lg+ it
-           scrolls internally (so the composer below stays pinned); below lg it
-           flows normally and the page scrolls. -->
-      <div
-        ref="transcriptRef"
-        data-testid="ask-transcript"
-        class="lg:flex-1 lg:min-h-0 lg:overflow-y-auto"
-      >
-        <div v-if="turns.length" class="space-y-6 mb-6">
-          <section
-            v-for="(turn, i) in turns"
-            :key="i"
-            data-testid="ask-turn"
-            class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-6"
-          >
-            <h2 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-4">
-              {{ turn.query }}
-            </h2>
+    <AppErrorSummary
+      v-if="errors.length"
+      :errors="errors"
+      data-testid="error-summary"
+      class="mb-6"
+    />
 
-            <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in renderAnswer -->
-            <div
-              class="ask-answer text-gray-800 dark:text-gray-100"
-              data-testid="ask-answer"
-              v-html="turn.answerHtml"
-            />
+    <!-- One cohesive chat panel: the conversation rail, the scrolling message
+         thread and the docked composer all share a single Mosaic surface with
+         internal dividers — not three separate floating cards. On lg+ it is a
+         two-pane row (rail | thread) that fills the column's height; below lg it
+         stacks (rail above, then thread, composer last) and the page scrolls. -->
+    <div
+      id="ask-page"
+      class="flex flex-col lg:flex-row overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 shadow-xs lg:flex-1 lg:min-h-0"
+    >
+      <ConversationSidebar
+        ref="sidebarRef"
+        :active-thread-id="threadId"
+        @select="(id: number) => router.push({ name: 'ask-thread', params: { threadId: id } })"
+        @new="resetConversation"
+        @threads-changed="(count: number) => (sidebarThreadCount = count)"
+      />
 
-            <div v-if="turn.citations.length" class="mt-5" data-testid="ask-citations-disclosure">
-              <AppDetails :summary="`Citations (${turn.citations.length})`" :open="false">
-                <ul
-                  class="grid grid-cols-1 md:grid-cols-2 gap-2"
-                  data-testid="ask-citations"
+      <!-- Thread + composer column. On lg+ it is a full-height flex column (the
+           thread scrolls internally, the composer stays docked); below lg it is
+           a normal block. -->
+      <div class="flex flex-col flex-1 min-w-0 lg:min-h-0">
+        <!-- Message thread: the user's question as a violet chat bubble, the
+             answer as wide rich markdown beneath it. On lg+ it scrolls
+             internally (so the docked composer stays put); below lg it flows
+             and the page scrolls. -->
+        <div
+          ref="transcriptRef"
+          data-testid="ask-transcript"
+          class="min-h-[18rem] lg:min-h-0 lg:flex-1 lg:overflow-y-auto no-scrollbar p-5 sm:p-6"
+        >
+          <div v-if="turns.length" class="space-y-8">
+            <section
+              v-for="(turn, i) in turns"
+              :key="i"
+              data-testid="ask-turn"
+              class="space-y-3"
+            >
+              <!-- User question — right-aligned chat bubble in the violet accent. -->
+              <div class="flex justify-end">
+                <p
+                  class="max-w-[85%] rounded-2xl rounded-tr-sm bg-violet-600 text-white px-4 py-2 text-sm whitespace-pre-wrap break-words"
                 >
-                  <li v-for="citation in turn.citations" :key="citation.document_id">
-                    <RouterLink
-                      class="flex items-center justify-between gap-3 px-4 py-3 border border-gray-200 dark:border-gray-700/60 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
-                      :to="{
-                        name: 'document-detail',
-                        params: { id: citation.document_id },
-                        query: citation.page_number ? { page: citation.page_number } : {},
-                      }"
-                      data-testid="ask-citation"
-                    >
-                      <span
-                        class="min-w-0 truncate text-sm text-violet-600 dark:text-violet-400 underline"
+                  {{ turn.query }}
+                </p>
+              </div>
+
+              <!-- Assistant answer — full-width sanitized markdown. -->
+              <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in renderAnswer -->
+              <div
+                class="ask-answer text-gray-800 dark:text-gray-100"
+                data-testid="ask-answer"
+                v-html="turn.answerHtml"
+              />
+
+              <div v-if="turn.citations.length" data-testid="ask-citations-disclosure">
+                <AppDetails :summary="`Citations (${turn.citations.length})`" :open="false">
+                  <ul
+                    class="grid grid-cols-1 md:grid-cols-2 gap-2"
+                    data-testid="ask-citations"
+                  >
+                    <li v-for="citation in turn.citations" :key="citation.document_id">
+                      <RouterLink
+                        class="flex items-center justify-between gap-3 px-4 py-3 border border-gray-200 dark:border-gray-700/60 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
+                        :to="{
+                          name: 'document-detail',
+                          params: { id: citation.document_id },
+                          query: citation.page_number ? { page: citation.page_number } : {},
+                        }"
+                        data-testid="ask-citation"
                       >
-                        {{ citation.title ?? 'Untitled'
-                        }}<span v-if="citation.page_number">, p. {{ citation.page_number }}</span>
-                      </span>
-                      <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400"
-                        >#{{ citation.document_id }}</span
-                      >
-                    </RouterLink>
-                  </li>
-                </ul>
-              </AppDetails>
-            </div>
+                        <span
+                          class="min-w-0 truncate text-sm text-violet-600 dark:text-violet-400 underline"
+                        >
+                          {{ citation.title ?? 'Untitled'
+                          }}<span v-if="citation.page_number">, p. {{ citation.page_number }}</span>
+                        </span>
+                        <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400"
+                          >#{{ citation.document_id }}</span
+                        >
+                      </RouterLink>
+                    </li>
+                  </ul>
+                </AppDetails>
+              </div>
+
+              <p
+                v-if="turn.usedTools.length || turn.costUsd"
+                class="text-xs text-gray-500 dark:text-gray-400"
+                data-testid="ask-meta"
+              >
+                <span v-if="turn.usedTools.length">Tools: {{ turn.usedTools.join(', ') }}</span>
+                <span v-if="turn.usedTools.length && turn.costUsd"> · </span>
+                <span v-if="turn.costUsd">Estimated cost: ${{ turn.costUsd.toFixed(4) }}</span>
+              </p>
+            </section>
+          </div>
+
+          <!-- Empty states — centred in the thread area so the panel never looks
+               broken before the first question. -->
+          <div v-else class="h-full flex items-center justify-center text-center">
+            <p
+              v-if="sidebarThreadCount > 0 && threadId === null"
+              data-testid="ask-select-thread"
+              class="max-w-sm text-gray-500 dark:text-gray-400"
+            >
+              Select a conversation from the sidebar, or ask a new question below.
+            </p>
 
             <p
-              v-if="turn.usedTools.length || turn.costUsd"
-              class="mt-4 text-xs text-gray-500 dark:text-gray-400"
-              data-testid="ask-meta"
+              v-else
+              data-testid="ask-empty"
+              class="max-w-sm text-gray-500 dark:text-gray-400"
             >
-              <span v-if="turn.usedTools.length">Tools: {{ turn.usedTools.join(', ') }}</span>
-              <span v-if="turn.usedTools.length && turn.costUsd"> · </span>
-              <span v-if="turn.costUsd">Estimated cost: ${{ turn.costUsd.toFixed(4) }}</span>
+              No questions yet. Ask one below — for example, “which invoices are due this month?”
             </p>
-          </section>
+          </div>
         </div>
 
-        <p
-          v-else-if="sidebarThreadCount > 0 && threadId === null"
-          data-testid="ask-select-thread"
-          class="text-gray-500 dark:text-gray-400 mb-6"
-        >
-          Select a conversation from the sidebar, or ask a new question below.
-        </p>
-
-        <p
-          v-else
-          data-testid="ask-empty"
-          class="text-gray-500 dark:text-gray-400 mb-6"
-        >
-          No questions yet. Ask one below — for example, “which invoices are due this month?”
-        </p>
-      </div>
-
-      <!-- Multi-line composer. On lg+ it is a shrink-0 flex sibling pinned below
-           the internally-scrolling transcript (NOT position:sticky, which would
-           float over the transcript and intercept citation clicks). Below lg it
-           is a normal block at the bottom of the page-scrolled column. -->
-      <form
-        id="ask-form"
-        novalidate
-        class="shrink-0 mt-4"
-        data-testid="ask-form"
-        @submit.prevent="onSubmit"
-      >
-        <div
-          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-4"
+        <!-- Docked composer. A shrink-0 flex sibling below the internally
+             scrolling thread, divided from it by a top border (NOT
+             position:sticky, which would float over the thread and intercept
+             citation clicks). Below lg it sits at the bottom of the panel. -->
+        <form
+          id="ask-form"
+          novalidate
+          class="shrink-0 border-t border-gray-200 dark:border-gray-700/60 p-4"
+          data-testid="ask-form"
+          @submit.prevent="onSubmit"
         >
           <AppTextarea
             id="ask-question"
@@ -452,8 +464,8 @@ defineExpose({ resetConversation })
               {{ loading ? 'Sending…' : 'Send' }}
             </AppButton>
           </div>
-        </div>
-      </form>
+        </form>
+      </div>
     </div>
   </div>
 </template>
