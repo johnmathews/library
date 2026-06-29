@@ -388,24 +388,26 @@ const tabClass = (active: boolean): string =>
           <div class="space-y-5">
             <AppInput
               id="pushover-app-token"
-              type="password"
+              revealable
               label="Pushover application token"
               autocomplete="off"
+              :placeholder="notifAppTokenSet ? '••••••••••••••••' : ''"
               :hint="
                 notifAppTokenSet
-                  ? 'Saved — leave blank to keep the current token.'
+                  ? 'Saved — type a new token to replace it, or leave blank to keep it.'
                   : 'The API token from your Pushover application.'
               "
               v-model="notifAppToken"
             />
             <AppInput
               id="pushover-user-key"
-              type="password"
+              revealable
               label="Pushover user key"
               autocomplete="off"
+              :placeholder="notifUserKeySet ? '••••••••••••••••' : ''"
               :hint="
                 notifUserKeySet
-                  ? 'Saved — leave blank to keep the current key.'
+                  ? 'Saved — type a new key to replace it, or leave blank to keep it.'
                   : 'Your Pushover user (or group) key.'
               "
               v-model="notifUserKey"

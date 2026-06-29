@@ -286,9 +286,38 @@ describe('SettingsView', () => {
       // The secret is never returned, so the entry fields stay blank...
       expect(tokenInput.value).toBe('')
       expect(keyInput.value).toBe('')
-      // ...but the hint tells the user a value is already stored.
+      // ...but a masked placeholder shows a value is already stored (instead
+      // of an empty box), and the hint explains how to replace/keep it.
+      expect(tokenInput.placeholder).toContain('•')
+      expect(keyInput.placeholder).toContain('•')
       expect(wrapper.find('#pushover-app-token-hint').text()).toContain('leave blank to keep')
       expect(wrapper.find('#pushover-user-key-hint').text()).toContain('leave blank to keep')
+    })
+
+    it('eye toggle reveals what the user types in the secret fields', async () => {
+      const auth = useAuthStore()
+      auth.user = {
+        id: 1,
+        username: 'a',
+        display_name: 'A',
+        is_admin: false,
+        preferences: {
+          dashboard_fields: ['kind'],
+          notifications: { ...emptyNotifications, pushover_app_token_set: true },
+        },
+      }
+      fetchMock.mockResolvedValue(jsonResponse({ dashboard_fields: ['kind'] }))
+
+      const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+      await wrapper.find('[data-testid="tab-notifications-btn"]').trigger('click')
+
+      const tokenInput = wrapper.find('#pushover-app-token').element as HTMLInputElement
+      // Starts hidden (password), toggles to visible (text) and back.
+      expect(tokenInput.type).toBe('password')
+      await wrapper.find('[data-testid="pushover-app-token-reveal"]').trigger('click')
+      expect(tokenInput.type).toBe('text')
+      await wrapper.find('[data-testid="pushover-app-token-reveal"]').trigger('click')
+      expect(tokenInput.type).toBe('password')
     })
   })
 })
