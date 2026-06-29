@@ -58,7 +58,10 @@ test('create a note, edit it, then restore the original version', async ({ page 
   // Save → land on the new note's detail page; the reader shows the body.
   await page.locator('#note-save').click()
   await expect(page).toHaveURL(/\/documents\/\d+$/)
-  await expect(page.getByRole('heading', { level: 1, name: title })).toBeVisible()
+  // Target the page-title element specifically: the title is the body's first
+  // line, which the markdown reader ALSO renders as an <h1>, so a by-role
+  // heading lookup would match two elements.
+  await expect(page.locator('#document-title')).toHaveText(title)
   await expect(page.getByTestId('markdown-content').filter({ hasText: origMarker })).toBeVisible()
 
   // Edit in place via the note card's editor; the reader reflects the new body.
