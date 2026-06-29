@@ -151,9 +151,7 @@ async def sum_amount(
     """
     conditions = [*filter_conditions(filters), Document.amount_total.isnot(None)]
     if filters.kind_slug != "quote":
-        is_quote = (
-            select(1).where(Kind.id == Document.kind_id, Kind.slug == "quote").exists()
-        )
+        is_quote = select(1).where(Kind.id == Document.kind_id, Kind.slug == "quote").exists()
         conditions.append(~is_quote)
     key_column = None
     statement = select(
