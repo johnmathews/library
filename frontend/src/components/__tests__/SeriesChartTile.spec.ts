@@ -182,4 +182,44 @@ describe('SeriesChartTile editable membership (W8)', () => {
     expect(api.addSeriesMember).toHaveBeenCalledWith(7, 2, 42, 'EUR')
     expect(wrapper.emitted('changed')).toBeTruthy()
   })
+
+  it('undo after a remove re-adds the document, clearing the override', async () => {
+    const wrapper = mountEditable()
+    expect(wrapper.find('[data-testid="series-undo"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="series-remove"]').trigger('click')
+    await flushPromises()
+    const undo = wrapper.find('[data-testid="series-undo"]')
+    expect(undo.exists()).toBe(true)
+    expect(undo.text()).toContain('January bill')
+    await wrapper.find('[data-testid="series-undo-button"]').trigger('click')
+    await flushPromises()
+    // Re-adding the removed doc clears the exclude override.
+    expect(api.addSeriesMember).toHaveBeenCalledWith(7, 2, 1, 'EUR')
+    expect(wrapper.find('[data-testid="series-undo"]').exists()).toBe(false)
+  })
+})
+
+describe('SeriesChartTile documents list (W8)', () => {
+  it('keeps the documents list collapsed by default and toggles it open', async () => {
+    const wrapper = mountTile(okSeries)
+    const docs = wrapper.find('[data-testid="series-docs"]')
+    // Present in the DOM but hidden (v-show) until toggled.
+    expect(docs.attributes('style')).toContain('display: none')
+    const toggle = wrapper.find('[data-testid="series-docs-toggle"]')
+    expect(toggle.text()).toContain('(3)')
+    await toggle.trigger('click')
+    expect(wrapper.find('[data-testid="series-docs"]').attributes('style')).not.toContain(
+      'display: none',
+    )
+  })
+
+  it('renders each document as a row with title, date and amount columns', () => {
+    const wrapper = mountTile(okSeries)
+    const rows = wrapper.findAll('[data-testid="series-citations"] > li')
+    expect(rows).toHaveLength(3)
+    // First row: title link + its date + its amount, each in its own cell.
+    expect(rows[0]!.find('[data-testid="series-citation"]').text()).toContain('January bill')
+    expect(rows[0]!.text()).toContain('2025-01-03')
+    expect(rows[0]!.text()).toContain('100.00')
+  })
 })

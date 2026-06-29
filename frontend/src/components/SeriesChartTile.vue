@@ -42,7 +42,15 @@ const showAdd = ref(false)
 const query = ref('')
 const results = ref<DocumentListItem[]>([])
 
-async function onRemove(documentId: number): Promise<void> {
+// "Documents in this series" is collapsed by default — the list can be long and
+// dominates the card otherwise (W8). The toggle reveals it.
+const showDocs = ref(false)
+
+// The most recently removed document, kept so the user can undo. The override
+// toggle is self-reversing: re-adding a removed doc clears the exclude (W8).
+const lastRemoved = ref<{ id: number; label: string } | null>(null)
+
+async function onRemove(documentId: number, label: string): Promise<void> {
   if (!canEdit.value || busy.value) return
   busy.value = true
   try {
@@ -52,6 +60,25 @@ async function onRemove(documentId: number): Promise<void> {
       documentId,
       props.series.currency,
     )
+    lastRemoved.value = { id: documentId, label }
+    emit('changed')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function onUndoRemove(): Promise<void> {
+  const removed = lastRemoved.value
+  if (!removed || !canEdit.value || busy.value) return
+  busy.value = true
+  try {
+    await addSeriesMember(
+      props.series.sender_id!,
+      props.series.kind_id!,
+      removed.id,
+      props.series.currency,
+    )
+    lastRemoved.value = null
     emit('changed')
   } finally {
     busy.value = false
@@ -178,80 +205,125 @@ function pointLabel(point: { title?: string | null; date: string }): string {
     </div>
 
     <div v-if="points.length" class="mt-4">
-      <div class="flex items-center justify-between">
-        <h4 class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
-          Documents in this series
-        </h4>
-        <button
-          v-if="canEdit"
-          type="button"
-          data-testid="series-add-toggle"
-          class="text-xs text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300"
-          @click="showAdd = !showAdd"
-        >
-          {{ showAdd ? 'Close' : '+ Add document' }}
-        </button>
-      </div>
-
-      <form
-        v-if="canEdit && showAdd"
-        data-testid="series-add"
-        class="mt-2"
-        @submit.prevent="onSearch"
+      <!-- Collapsed by default: a toggle row showing the count. Expanding
+           reveals the add control and the columnar document list. -->
+      <button
+        type="button"
+        data-testid="series-docs-toggle"
+        class="flex w-full items-center justify-between text-xs font-medium uppercase tracking-wide text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+        :aria-expanded="showDocs"
+        @click="showDocs = !showDocs"
       >
-        <div class="flex gap-2">
-          <input
-            v-model="query"
-            type="search"
-            data-testid="series-add-search"
-            placeholder="Search documents to add…"
-            class="form-input flex-1 min-w-0 text-sm"
-            @input="onSearch"
+        <span>Documents in this series ({{ points.length }})</span>
+        <svg
+          class="h-4 w-4 transition-transform"
+          :class="{ 'rotate-180': showDocs }"
+          viewBox="0 0 20 20"
+          fill="currentColor"
+          aria-hidden="true"
+        >
+          <path
+            fill-rule="evenodd"
+            d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z"
+            clip-rule="evenodd"
           />
+        </svg>
+      </button>
+
+      <div v-show="showDocs" data-testid="series-docs" class="mt-2">
+        <div v-if="canEdit" class="flex justify-end">
+          <button
+            type="button"
+            data-testid="series-add-toggle"
+            class="text-xs text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300"
+            @click="showAdd = !showAdd"
+          >
+            {{ showAdd ? 'Close' : '+ Add document' }}
+          </button>
         </div>
-        <ul v-if="results.length" data-testid="series-add-results" class="mt-2 space-y-1">
-          <li v-for="doc in results" :key="doc.id">
-            <button
-              type="button"
-              data-testid="series-add-result"
-              class="text-sm text-left text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:underline disabled:opacity-50"
-              :disabled="busy"
-              @click="onAdd(doc.id)"
+
+        <form
+          v-if="canEdit && showAdd"
+          data-testid="series-add"
+          class="mt-2"
+          @submit.prevent="onSearch"
+        >
+          <div class="flex gap-2">
+            <input
+              v-model="query"
+              type="search"
+              data-testid="series-add-search"
+              placeholder="Search documents to add…"
+              class="form-input flex-1 min-w-0 text-sm"
+              @input="onSearch"
+            />
+          </div>
+          <ul v-if="results.length" data-testid="series-add-results" class="mt-2 space-y-1">
+            <li v-for="doc in results" :key="doc.id">
+              <button
+                type="button"
+                data-testid="series-add-result"
+                class="text-sm text-left text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:underline disabled:opacity-50"
+                :disabled="busy"
+                @click="onAdd(doc.id)"
+              >
+                + {{ resultLabel(doc) }}
+              </button>
+            </li>
+          </ul>
+        </form>
+
+        <!-- Undo banner: re-adds the last-removed document (the override toggle
+             is self-reversing). -->
+        <div
+          v-if="canEdit && lastRemoved"
+          data-testid="series-undo"
+          class="mt-2 flex items-center justify-between gap-2 rounded-md bg-gray-50 dark:bg-gray-700/40 px-3 py-1.5 text-xs text-gray-600 dark:text-gray-300"
+        >
+          <span class="min-w-0 truncate">Removed “{{ lastRemoved.label }}”.</span>
+          <button
+            type="button"
+            data-testid="series-undo-button"
+            class="shrink-0 font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 disabled:opacity-50"
+            :disabled="busy"
+            @click="onUndoRemove"
+          >
+            Undo
+          </button>
+        </div>
+
+        <!-- One document per row, aligned in columns: title | date | amount. -->
+        <ul data-testid="series-citations" class="mt-2 divide-y divide-gray-100 dark:divide-gray-700/60">
+          <li
+            v-for="point in points"
+            :key="point.document_id"
+            class="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-baseline gap-x-3 py-1"
+          >
+            <RouterLink
+              :to="`/documents/${point.document_id}`"
+              data-testid="series-citation"
+              class="min-w-0 truncate text-sm text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:underline"
+              :title="pointLabel(point)"
             >
-              + {{ resultLabel(doc) }}
+              {{ pointLabel(point) }}
+            </RouterLink>
+            <span class="text-xs tabular-nums text-gray-400 dark:text-gray-500">{{ point.date }}</span>
+            <span class="text-sm tabular-nums text-right text-gray-700 dark:text-gray-300">{{ point.amount }}</span>
+            <button
+              v-if="canEdit"
+              type="button"
+              data-testid="series-remove"
+              class="text-gray-400 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
+              :disabled="busy"
+              :aria-label="`Remove ${pointLabel(point)} from this series`"
+              @click="onRemove(point.document_id, pointLabel(point))"
+            >
+              ×
             </button>
+            <span v-else aria-hidden="true"></span>
           </li>
         </ul>
-      </form>
-
-      <ul data-testid="series-citations" class="mt-2 flex flex-wrap gap-x-3 gap-y-1">
-        <li
-          v-for="point in points"
-          :key="point.document_id"
-          class="inline-flex items-center gap-1"
-        >
-          <RouterLink
-            :to="`/documents/${point.document_id}`"
-            data-testid="series-citation"
-            class="text-sm text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:underline"
-            :title="`${point.date} · ${point.amount}`"
-          >
-            {{ pointLabel(point) }}
-            <span class="text-gray-400 dark:text-gray-500">· {{ point.amount }}</span>
-          </RouterLink>
-          <button
-            v-if="canEdit"
-            type="button"
-            data-testid="series-remove"
-            class="text-gray-400 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
-            :disabled="busy"
-            :aria-label="`Remove ${pointLabel(point)} from this series`"
-            @click="onRemove(point.document_id)"
-          >
-            ×
-          </button>
-        </li>
-      </ul>
+      </div>
     </div>
   </section>
 </template>
