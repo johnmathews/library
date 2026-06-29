@@ -1,6 +1,6 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-06-30 (recipient↔user link added to the document data model).
+**Status:** active. **Last updated:** 2026-06-30 (quote kind, chart title/description overrides, authored series, recipient↔user link).
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The full decision record (with research and
@@ -148,7 +148,10 @@ re-derivable artifact.
 - `kinds` — document type. Seeded: invoice, receipt, certificate, utility
   bill, parking ticket, warranty, manual, reference, research, note, letter,
   contract, ticket, other (general-reference kinds added in migration 0010
-  alongside `topics`).
+  alongside `topics`), and `quote` (migration 0017). Users can add kinds
+  inline via `POST /api/kinds` (slugified, case-insensitively deduped, with a
+  near-duplicate guard). Quotes are estimates, **not** real expenditure, so
+  they are excluded from spend totals (see [ask.md](ask.md)).
 
 **Collections:**
 
@@ -178,6 +181,15 @@ re-derivable artifact.
 - `series_membership_overrides` — durable manual `pin`/`exclude` keyed by
   `(sender_id, kind_id, currency, document_id)`, applied on every series
   computation (migration 0015; see [api.md §1.15](api.md)).
+- `series_meta_overrides` — user-set title/description override per emergent
+  series, keyed by `(sender_id, kind_id, currency)` (migration 0018). Powers
+  the editable chart title/description and the single-chart route
+  `/charts/:seriesId`.
+- `authored_series` + `authored_series_members` — user-curated ("manual")
+  series: a named, optionally-currency-scoped collection of documents that
+  produces its own chart even without a natural emergent seed (migration 0019).
+  Addressed as `a-{id}`; summarised through the same code path as emergent
+  series.
 - `fx_rates` — small reference FX snapshot (USD base, date-aware) for
   converting cross-currency pins.
 
