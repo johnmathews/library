@@ -10,6 +10,8 @@ const props = withDefaults(
     hint?: string
     errorMessage?: string
     autocomplete?: string
+    /** Visually hide the label (kept for screen readers); see AppInput. */
+    hideLabel?: boolean
   }>(),
   { rows: 5 },
 )
@@ -27,7 +29,7 @@ const describedBy = computed(() => {
 <template>
   <div>
     <label
-      class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300"
+      :class="props.hideLabel ? 'sr-only' : 'block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300'"
       :for="props.id"
     >{{ props.label }}</label>
     <p

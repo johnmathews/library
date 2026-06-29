@@ -243,6 +243,28 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="row-title"] [data-testid="row-value"]').exists()).toBe(true)
   })
 
+  it('keeps panels multi-column in edit mode (narrow fields do not span both columns)', async () => {
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    // kind + language are narrow fields: in edit mode they must keep the
+    // two-column grid, not collapse to a single full-width column.
+    expect(w.find('[data-testid="row-kind"]').classes()).not.toContain('sm:col-span-2')
+    expect(w.find('[data-testid="row-language"]').classes()).not.toContain('sm:col-span-2')
+    // Wide fields still span both columns.
+    expect(w.find('[data-testid="row-title"]').classes()).toContain('sm:col-span-2')
+  })
+
+  it('does not duplicate the field label in edit mode (inline editor label is sr-only)', async () => {
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    // The <dt> uppercase label remains the single visible label; the editor's
+    // own <label> is present for a11y but visually hidden.
+    expect(w.find('label[for="edit-kind"]').classes()).toContain('sr-only')
+    expect(w.find('label[for="edit-title"]').classes()).toContain('sr-only')
+  })
+
   it('autosaves a text field on change, PATCHing only that field', async () => {
     const w = await mountView()
     patchResponse = () => jsonResponse(makeDetail({ title: 'Nieuwe titel' }))

@@ -1425,7 +1425,7 @@ watch(
                 <div
                   v-if="editMode || rowByField[field].display(doc) !== null"
                   :data-testid="`row-${field}`"
-                  :class="WIDE_FIELDS.has(field) || editMode ? 'sm:col-span-2' : ''"
+                  :class="WIDE_FIELDS.has(field) ? 'sm:col-span-2' : ''"
                 >
                   <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
                     {{ rowByField[field].label }}
@@ -1477,6 +1477,7 @@ watch(
                       id="edit-title"
                       v-model="drafts.title"
                       label="Title"
+                      hide-label
                       :error-message="fieldError.title ?? undefined"
                       @change="saveField('title')"
                       @keyup.enter="saveField('title')"
@@ -1486,6 +1487,7 @@ watch(
                       id="edit-summary"
                       v-model="drafts.summary"
                       label="Summary"
+                      hide-label
                       :rows="4"
                       :error-message="fieldError.summary ?? undefined"
                       @change="saveField('summary')"
@@ -1495,6 +1497,7 @@ watch(
                       id="edit-kind"
                       v-model="drafts.kind"
                       label="Kind"
+                      hide-label
                       :items="kindItems"
                       :error-message="fieldError.kind ?? undefined"
                       @change="saveField('kind')"
@@ -1504,6 +1507,7 @@ watch(
                         id="edit-sender"
                         v-model="drafts.sender"
                         label="Sender"
+                        hide-label
                         hint="Start typing to see known senders"
                         list="sender-options"
                         :error-message="fieldError.sender ?? undefined"
@@ -1524,6 +1528,7 @@ watch(
                         id="edit-recipient"
                         v-model="drafts.recipient"
                         label="Recipient"
+                        hide-label
                         :items="recipientItems"
                         :error-message="fieldError.recipient ?? undefined"
                         @change="onRecipientChange"
@@ -1562,6 +1567,7 @@ watch(
                       id="edit-language"
                       v-model="drafts.language"
                       label="Language"
+                      hide-label
                       :items="languageItems"
                       :error-message="fieldError.language ?? undefined"
                       @change="saveField('language')"
@@ -1571,6 +1577,7 @@ watch(
                       id="edit-tags"
                       v-model="drafts.tags"
                       label="Tags"
+                      hide-label
                       hint="Separate tags with commas"
                       :error-message="fieldError.tags ?? undefined"
                       @change="saveField('tags')"
@@ -1581,6 +1588,7 @@ watch(
                         id="edit-projects"
                         v-model="drafts.projects"
                         label="Projects"
+                        hide-label
                         hint="Separate projects with commas"
                         list="project-options"
                         :error-message="fieldError.projects ?? undefined"
@@ -1604,6 +1612,7 @@ watch(
                         id="edit-amount"
                         v-model="drafts.amount"
                         label="Amount"
+                        hide-label
                         inputmode="decimal"
                         width-class="w-40"
                         :error-message="fieldError.amount ?? undefined"
@@ -1623,6 +1632,7 @@ watch(
                       id="edit-document-date"
                       v-model="dateDrafts.document_date"
                       :legend="rowByField[field].label"
+                      hide-legend
                       :error-message="fieldError.document_date ?? undefined"
                       @focusout="onDateFocusOut('document_date', $event)"
                     />
@@ -1631,6 +1641,7 @@ watch(
                       id="edit-due-date"
                       v-model="dateDrafts.due_date"
                       :legend="rowByField[field].label"
+                      hide-legend
                       :error-message="fieldError.due_date ?? undefined"
                       @focusout="onDateFocusOut('due_date', $event)"
                     />
@@ -1639,6 +1650,7 @@ watch(
                       id="edit-expiry-date"
                       v-model="dateDrafts.expiry_date"
                       :legend="rowByField[field].label"
+                      hide-legend
                       :error-message="fieldError.expiry_date ?? undefined"
                       @focusout="onDateFocusOut('expiry_date', $event)"
                     />

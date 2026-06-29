@@ -11,6 +11,8 @@ const props = defineProps<{
   legend: string
   hint?: string
   errorMessage?: string
+  /** Visually hide the legend (kept for screen readers); see AppInput. */
+  hideLegend?: boolean
 }>()
 
 const model = defineModel<string | null>({ default: null })
@@ -65,7 +67,7 @@ const describedBy = computed(() => {
 
 <template>
   <fieldset role="group" :aria-describedby="describedBy">
-    <legend class="text-sm font-semibold mb-2">{{ props.legend }}</legend>
+    <legend :class="props.hideLegend ? 'sr-only' : 'text-sm font-semibold mb-2'">{{ props.legend }}</legend>
     <p
       v-if="props.hint"
       :id="`${props.id}-hint`"
