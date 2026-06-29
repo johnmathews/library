@@ -12,25 +12,32 @@ ingestion (W14), and in-app note authoring.
 
 ## Flow overview
 
-```
-POST /api/documents (multipart)
-  │
-  ├─ size check (LIBRARY_MAX_UPLOAD_BYTES, default 100 MB) ──► 413
-  ├─ MIME detection (sniff content, fall back to client type) ─► 415 if unsupported
-  ├─ sha256(content)
-  ├─ duplicate? (non-deleted document with same sha256)
-  │    └─ yes ─► log "duplicate_upload" event ─► 200 {duplicate: true}
-  ├─ store original at /data/originals/ab/cd/<sha256>   (atomic, idempotent)
-  ├─ HEIC/HEIF? ─► convert to JPEG ─► /data/derived/ab/cd/<sha256>/converted.jpg
-  ├─ INSERT documents row (status=received) + "received" ingestion_event
-  ├─ COMMIT, then defer process_document(document_id)
-  └─ 201 {id, sha256, status, duplicate: false}
+Two stages: a synchronous **upload request** that stores the file and records a
+row, then an asynchronous **worker pipeline** that processes it.
 
-worker (python -m library.worker)
-  └─ process_document(document_id)
-       received ─► ocr ─► extract ─► markdown ─► embed ─► indexed   (one ingestion_event per transition)
-                └─ any error ─► failed (+ "failed" event with error detail)
-```
+### Upload request — `POST /api/documents` (multipart)
+
+The request handler runs these steps in order:
+
+1. **Size check** — reject over `LIBRARY_MAX_UPLOAD_BYTES` (default 100 MB) with `413`.
+2. **MIME detection** — sniff content, fall back to the client-declared type; `415` if unsupported.
+3. **Hash** — compute `sha256(content)`.
+4. **Duplicate check** — a non-deleted document with the same `sha256`? If so, log a `duplicate_upload` event and return `200 {duplicate: true}`.
+5. **Store original** — atomic, idempotent write to `/data/originals/ab/cd/<sha256>`.
+6. **HEIC/HEIF** — if needed, convert to JPEG at `/data/derived/ab/cd/<sha256>/converted.jpg`.
+7. **Insert row** — `documents` row with `status=received` + a `received` ingestion event.
+8. **Commit & defer** — commit, then defer `process_document(document_id)`.
+9. **Respond** — `201 {id, sha256, status, duplicate: false}`.
+
+### Worker pipeline — `process_document(document_id)`
+
+Runs in the `worker` process (`python -m library.worker`). The document moves
+through one status per stage, emitting one `ingestion_event` per transition:
+
+`received → ocr → extract → markdown → embed → indexed`
+
+Any error at any stage moves the document to `failed` and writes a `failed`
+event with the error detail.
 
 ## Content-addressed storage (`library.storage`)
 

@@ -1101,4 +1101,34 @@ const tabClass = (active: boolean): string =>
   background: none;
   white-space: pre;
 }
+/* GFM tables: marked emits real <table> markup, but Tailwind preflight strips
+   borders/spacing so they collapse to unstyled text. Restore borders, padding,
+   a header tint, and horizontal scroll for wide tables on a phone. */
+.doc-markdown :deep(table) {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  margin: 0.75rem 0;
+  border-collapse: collapse;
+  font-size: 0.9375em;
+}
+.doc-markdown :deep(th),
+.doc-markdown :deep(td) {
+  border: 1px solid rgb(0 0 0 / 0.12);
+  padding: 0.375rem 0.625rem;
+  text-align: left;
+  vertical-align: top;
+}
+.dark .doc-markdown :deep(th),
+.dark .doc-markdown :deep(td) {
+  border-color: rgb(255 255 255 / 0.15);
+}
+.doc-markdown :deep(th) {
+  font-weight: 600;
+  background: rgb(0 0 0 / 0.04);
+}
+.dark .doc-markdown :deep(th) {
+  background: rgb(255 255 255 / 0.06);
+}
 </style>

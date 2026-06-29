@@ -53,7 +53,11 @@ const systemInfo = {
 
 const architecture = {
   docs: [
-    { name: 'overview', title: 'Overview', markdown: '# Overview\n\nThe **stack**.' },
+    {
+      name: 'overview',
+      title: 'Overview',
+      markdown: '# Overview\n\nThe **stack**.\n\n| Col A | Col B |\n| --- | --- |\n| a | b |\n',
+    },
     { name: 'data', title: 'Data model', markdown: '## Data' },
   ],
 }
@@ -167,6 +171,9 @@ describe('AdminView', () => {
     const content = wrapper.find('[data-testid="arch-content"]')
     expect(content.html()).toContain('<strong>stack</strong>')
     expect(content.html()).toContain('<h1')
+    // GFM tables render as real <table> markup (styled via .doc-markdown CSS).
+    expect(content.find('table').exists()).toBe(true)
+    expect(content.findAll('th')).toHaveLength(2)
 
     await wrapper.find('[data-testid="arch-doc-data"]').trigger('click')
     expect(wrapper.find('[data-testid="arch-content"]').html()).toContain('Data')
