@@ -775,7 +775,11 @@ def test_list_item_includes_amount(api_client: TestClient, api_database_url: str
         f"/api/documents/{doc_id}", json={"amount_total": "92.50", "currency": "EUR"}
     )
     assert resp.status_code == 200, resp.text
-    item = next(d for d in api_client.get("/api/documents").json()["items"] if d["id"] == doc_id)
+    # Scope the list by this test's unique tag (per the module docstring): the
+    # shared session DB + default page (limit 25, newest-first) can otherwise
+    # omit this row once other test files have seeded enough documents.
+    listing = api_client.get("/api/documents", params={"tag": "w7-list-amount"}).json()
+    item = next(d for d in listing["items"] if d["id"] == doc_id)
     assert Decimal(item["amount_total"]) == Decimal("92.50")
     assert item["currency"] == "EUR"
 

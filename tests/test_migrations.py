@@ -52,6 +52,7 @@ EXPECTED_KIND_SLUGS: set[str] = {
     "contract",
     "ticket",
     "other",
+    "quote",
 }
 
 
@@ -95,7 +96,7 @@ def test_upgrade_downgrade_upgrade_cycle(admin_database_url: str) -> None:
 
 def test_kinds_seeded(migrated_database_url: str) -> None:
     slugs = asyncio.run(_fetch_scalars(migrated_database_url, "SELECT slug FROM kinds"))
-    assert len(slugs) == 14
+    assert len(slugs) == 15
     assert {str(slug) for slug in slugs} == EXPECTED_KIND_SLUGS
 
 
