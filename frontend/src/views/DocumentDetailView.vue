@@ -896,6 +896,19 @@ const markdownData = ref<DocumentMarkdownResponse | null>(null)
 const markdownLoading = ref(false)
 const markdownError = ref(false)
 
+// On small screens the document text sits above the metadata column (summary,
+// amount, …), so a long document forces the reader to scroll past all of it to
+// reach the metadata. Collapse the text by default below lg and offer a toggle;
+// at lg+ the text and metadata are side by side, so it stays expanded (the
+// toggle is hidden and the body is forced visible via `lg:!block`). Initialised
+// at setup so the first render is already correct on mobile (no expand→collapse
+// flash). matchMedia is absent in jsdom → defaults to expanded under test.
+const textExpanded = ref(
+  typeof window !== 'undefined' && typeof window.matchMedia === 'function'
+    ? window.matchMedia('(min-width: 1024px)').matches
+    : true,
+)
+
 function markdownPageHtml(md: string): string {
   return DOMPurify.sanitize(marked.parse(md, { async: false }) as string)
 }
@@ -1220,44 +1233,65 @@ watch(
         </div>
 
         <!-- Document text: a first-class long-form reader. The extracted text is
-             the primary content for files with no PDF/image preview, so it is
-             rendered directly rather than hidden behind a disclosure. -->
+             the primary content for files with no PDF/image preview, so at lg+
+             it is rendered directly (beside the metadata column). On small
+             screens it stacks above the metadata, so it collapses by default
+             behind a Show/Hide toggle to keep the metadata reachable. -->
         <div
           id="document-markdown-card"
           class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
         >
-          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">Document text</h2>
-          <div v-if="markdownLoading" class="text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-loading">
-            Loading…
-          </div>
-          <div v-else-if="markdownError" class="text-sm text-red-600 dark:text-red-400" data-testid="markdown-error">
-            Could not load markdown — try again later.
-          </div>
-          <div v-else-if="markdownData && markdownData.page_count === 0" class="text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-empty">
-            No markdown content is available for this document yet.
-          </div>
-          <template v-else-if="markdownData">
-            <div
-              v-for="page in markdownData.pages"
-              :key="page.page_number"
-              class="mt-3 first:mt-0"
-              data-testid="markdown-page"
+          <div class="flex items-center justify-between gap-3 mb-3">
+            <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Document text</h2>
+            <!-- Mobile-only collapse toggle: at lg+ the text sits beside the
+                 metadata (no scroll problem) so the body is always shown. -->
+            <button
+              type="button"
+              class="lg:hidden btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
+              data-testid="markdown-toggle"
+              :aria-expanded="textExpanded"
+              aria-controls="document-markdown-body"
+              @click="textExpanded = !textExpanded"
             >
-              <p
-                v-if="markdownData.page_count > 1"
-                class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
-              >
-                Page {{ page.page_number }}
-              </p>
-              <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in markdownPageHtml -->
-              <div
-                class="doc-markdown text-gray-800 dark:text-gray-100"
-                data-testid="markdown-content"
-                v-html="markdownPageHtml(page.markdown)"
-              />
-              <!-- eslint-enable vue/no-v-html -->
+              {{ textExpanded ? 'Hide' : 'Show' }}
+            </button>
+          </div>
+          <!-- v-show keeps the body in the DOM (so deep-links/anchors resolve)
+               but hides it on mobile when collapsed; `lg:!block` overrides the
+               inline display:none at lg+ so it is always visible there. -->
+          <div id="document-markdown-body" v-show="textExpanded" class="lg:!block">
+            <div v-if="markdownLoading" class="text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-loading">
+              Loading…
             </div>
-          </template>
+            <div v-else-if="markdownError" class="text-sm text-red-600 dark:text-red-400" data-testid="markdown-error">
+              Could not load markdown — try again later.
+            </div>
+            <div v-else-if="markdownData && markdownData.page_count === 0" class="text-sm text-gray-500 dark:text-gray-400" data-testid="markdown-empty">
+              No markdown content is available for this document yet.
+            </div>
+            <template v-else-if="markdownData">
+              <div
+                v-for="page in markdownData.pages"
+                :key="page.page_number"
+                class="mt-3 first:mt-0"
+                data-testid="markdown-page"
+              >
+                <p
+                  v-if="markdownData.page_count > 1"
+                  class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
+                >
+                  Page {{ page.page_number }}
+                </p>
+                <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in markdownPageHtml -->
+                <div
+                  class="doc-markdown text-gray-800 dark:text-gray-100"
+                  data-testid="markdown-content"
+                  v-html="markdownPageHtml(page.markdown)"
+                />
+                <!-- eslint-enable vue/no-v-html -->
+              </div>
+            </template>
+          </div>
         </div>
 
         <DocumentSeriesTrend v-if="doc" :document-id="doc.id" />

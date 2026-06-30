@@ -883,6 +883,28 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="markdown-content"]').html()).toContain('Invoice')
   })
 
+  it('collapses the document text behind a toggle (mobile reachability fix)', async () => {
+    const w = await mountView()
+    const toggle = w.find('[data-testid="markdown-toggle"]')
+    const bodyStyle = () => w.find('#document-markdown-body').attributes('style') ?? ''
+
+    // jsdom has no matchMedia → defaults to expanded; the body is shown.
+    expect(toggle.exists()).toBe(true)
+    expect(bodyStyle()).not.toContain('display: none')
+    expect(toggle.text()).toBe('Hide')
+
+    // Collapsing hides the body (v-show) but keeps it in the DOM.
+    await toggle.trigger('click')
+    expect(bodyStyle()).toContain('display: none')
+    expect(w.find('[data-testid="markdown-content"]').exists()).toBe(true)
+    expect(toggle.text()).toBe('Show')
+
+    // …and it expands again.
+    await toggle.trigger('click')
+    expect(bodyStyle()).not.toContain('display: none')
+    expect(toggle.text()).toBe('Hide')
+  })
+
   it('shows the empty state when page_count is 0', async () => {
     markdownResponse = () => jsonResponse({ page_count: 0, pages: [] } satisfies DocumentMarkdownResponse)
     const w = await mountView()

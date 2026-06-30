@@ -88,7 +88,7 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybri
    direction, and a year-over-year comparison. All members contribute their ids
    to the citation set.
 5. **Answer** (`ask.engine`). Claude (`ask_model`, default
-   `claude-sonnet-4-6`) is given the three tools and a bounded number of turns
+   `claude-opus-4-8`) is given the three tools and a bounded number of turns
    (`ask_max_tool_turns`). It is instructed to answer **only** from tool results,
    to say plainly when the archive doesn't contain the answer, and to cite the
    document ids it used. The endpoint returns the answer, the citations
@@ -99,7 +99,7 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybri
    that page (`#page=N` in the URL fragment); citations from documents without a
    markdown layer show only the title.
 
-**Image attachments (W11).** `ask_model` (`claude-sonnet-4-6`) is multimodal, so
+**Image attachments (W11).** `ask_model` (`claude-opus-4-8`) is multimodal, so
 a question may carry up to 5 base64 images (see [api.md §1.11](api.md)). They are
 rendered as image content blocks on the question turn alongside the text, and the
 system prompt tells the model to read them as evidence and combine them with tool
@@ -120,7 +120,7 @@ All settings use the `LIBRARY_` env prefix (see `.env.example` /
 | `LIBRARY_EMBEDDING_CHUNK_OVERLAP` | `200` | Overlap carried between chunks. |
 | `LIBRARY_RETRIEVE_TOP_K` | `10` | Documents returned by hybrid retrieval. |
 | `LIBRARY_RETRIEVE_CHUNKS_PER_DOC` | `3` | Nearest passages per document folded into the Ask excerpt (best-first, `[…]`-joined); `1` = legacy single-chunk. Does not affect candidate ranking or citations. |
-| `LIBRARY_ASK_MODEL` | `claude-sonnet-4-6` | Answer model. |
+| `LIBRARY_ASK_MODEL` | `claude-opus-4-8` | Answer model. |
 | `LIBRARY_ASK_MAX_TOOL_TURNS` | `4` | Tool-use loop bound per turn. |
 | `LIBRARY_ASK_MAX_ANSWER_TOKENS` | `1024` | Max answer length. |
 | `LIBRARY_ASK_HISTORY_TURNS` | `3` | Prior turns re-fed into the loop for follow-ups; `0` disables history (each turn answered cold, still recorded). |

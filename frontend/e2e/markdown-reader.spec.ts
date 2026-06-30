@@ -93,5 +93,8 @@ test('upload a markdown file, see it indexed, reader card renders it', async ({
   await expect(reader.getByRole('heading', { name: /Zwaluwnest report/ })).toBeVisible({
     timeout: 60_000,
   })
+  // On small viewports the document text is collapsed by default — expand it.
+  const expandText = reader.getByTestId('markdown-toggle')
+  if (await expandText.isVisible()) await expandText.click()
   await expect(reader.getByTestId('markdown-content').filter({ hasText: marker })).toBeVisible()
 })

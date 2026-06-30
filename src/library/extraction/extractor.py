@@ -30,6 +30,7 @@ PROMPT_VERSION: str = "2026-06-29.1"
 MODEL_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
     "claude-haiku-4-5": (1.0, 5.0),
     "claude-sonnet-4-6": (3.0, 15.0),
+    "claude-opus-4-8": (5.0, 25.0),
 }
 
 # Short OCR text (<= this many characters) is sent whole: metadata lives on

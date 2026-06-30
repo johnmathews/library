@@ -62,6 +62,10 @@ test('create a note, edit it, then restore the original version', async ({ page 
   // line, which the markdown reader ALSO renders as an <h1>, so a by-role
   // heading lookup would match two elements.
   await expect(page.locator('#document-title')).toHaveText(title)
+  // On small viewports the document text is collapsed by default — expand it
+  // once; the toggle state persists across the in-place edits below.
+  const expandText = page.getByTestId('markdown-toggle')
+  if (await expandText.isVisible()) await expandText.click()
   await expect(page.getByTestId('markdown-content').filter({ hasText: origMarker })).toBeVisible()
 
   // Edit in place via the note card's editor; the reader reflects the new body.
