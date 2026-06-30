@@ -90,11 +90,17 @@ test('upload a markdown file, see it indexed, reader card renders it', async ({
   // sanitised markdown content. Poll the reader (its rows are filled by a
   // background extraction job that may lag the indexed status).
   const reader = page.locator('#document-markdown-card')
+  // The card (its "Document text" header) renders as soon as the document
+  // loads, before the markdown body fills in — wait for it so the toggle check
+  // below isn't racing the async document fetch.
+  await expect(reader).toBeVisible({ timeout: 60_000 })
+  // On small viewports the document text (heading + body) is collapsed by
+  // default — expand it first, before asserting the heading inside the body is
+  // visible. The toggle lives in the always-rendered card header.
+  const expandText = reader.getByTestId('markdown-toggle')
+  if (await expandText.isVisible()) await expandText.click()
   await expect(reader.getByRole('heading', { name: /Zwaluwnest report/ })).toBeVisible({
     timeout: 60_000,
   })
-  // On small viewports the document text is collapsed by default — expand it.
-  const expandText = reader.getByTestId('markdown-toggle')
-  if (await expandText.isVisible()) await expandText.click()
   await expect(reader.getByTestId('markdown-content').filter({ hasText: marker })).toBeVisible()
 })
