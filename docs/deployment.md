@@ -312,7 +312,10 @@ it runs a custom compose that co-hosts paperless-ngx. Concrete details:
    `environment:`, not `.env`.
 4. **Deploy command** (routine code changes): `cd /srv/apps && docker compose
    up -d --pull always library-migrate library-webserver library-worker`
-   (never `stop` the db; always include `library-migrate`).
+   (never `stop` the db; always include `library-migrate`). This is automated by
+   **`scripts/deploy.sh`** (run `make deploy` from the repo root), which also
+   verifies the migrate exit code and `/healthz` — see the focused
+   [deploy runbook](runbooks/deploy.md).
 
 ## 1.8 Troubleshooting
 

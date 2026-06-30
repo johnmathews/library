@@ -94,5 +94,7 @@ cd frontend && npm run lint && npm run type-check && npm run test:unit
 
 Project documentation lives in [`docs/`](docs/) — architecture,
 deployment, API, MCP, ingestion, frontend, admin role & views, jobs &
-notifications, paperless migration, and the OCR benchmark. The development
+notifications, paperless migration, and the OCR benchmark. Operational
+runbooks live in [`docs/runbooks/`](docs/runbooks/) — e.g. the
+[deploy runbook](docs/runbooks/deploy.md) (`make deploy`). The development
 journal (decisions, progress, context) lives in [`journal/`](journal/).
