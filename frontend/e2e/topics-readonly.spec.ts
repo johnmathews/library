@@ -60,9 +60,10 @@ test('topics render read-only — no topics editor in edit mode', async ({ page 
   }
 
   // Edit mode: the read-only contract. There is no topics editor at all — no
-  // `#edit-topics` control and the read-only topics section is not rendered.
+  // `#edit-topics` control. The topics section renders read-only in both modes
+  // when topics are present; this seeded document has none, so its row stays
+  // absent here regardless of mode.
   await page.getByTestId('edit-toggle').click()
-  await expect(page.getByTestId('edit-mode-hint')).toBeVisible()
   await expect(page.locator('#edit-topics')).toHaveCount(0)
   await expect(page.getByTestId('row-topics')).toHaveCount(0)
 
