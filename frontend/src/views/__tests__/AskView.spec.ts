@@ -111,7 +111,7 @@ describe('AskView', () => {
     })
     await typeAndSubmit(w, 'and then?')
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(2)
-    expect(askQuestionMock).toHaveBeenLastCalledWith('and then?', 42, expect.anything())
+    expect(askQuestionMock).toHaveBeenLastCalledWith('and then?', 42, expect.anything(), undefined)
   })
 
   it('loads a thread when mounted on /ask/:threadId', async () => {
@@ -250,7 +250,7 @@ describe('AskView', () => {
     expect(w.get('[data-testid="ask-citation"]').text()).not.toContain('p.')
   })
 
-  it('disables the button and shows progress while the request is pending', async () => {
+  it('optimistically shows the question with a thinking indicator while pending (W2)', async () => {
     let resolve!: (value: AskResponse) => void
     askQuestionMock.mockReturnValue(
       new Promise<AskResponse>((r) => {
@@ -262,16 +262,70 @@ describe('AskView', () => {
     await w.find('[data-testid="ask-form"]').trigger('submit')
     await flushPromises()
 
+    // The user's question is on screen immediately (optimistic) and the input
+    // has been cleared — "sending" is instant, distinct from the LLM thinking.
+    const turns = w.findAll('[data-testid="ask-turn"]')
+    expect(turns).toHaveLength(1)
+    expect(turns[0]!.text()).toContain('which invoices are due?')
+    expect(w.find('[data-testid="ask-thinking"]').exists()).toBe(true)
+    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe('')
+
+    // The primary action is a live Stop control, not a greyed-out button.
     const button = w.find('[data-testid="ask-submit"]')
-    expect(button.attributes('disabled')).toBeDefined()
-    expect(button.text()).toContain('Sending')
-    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
+    expect(button.attributes('disabled')).toBeUndefined()
+    expect(button.text()).toContain('Stop')
 
     resolve(sampleResponse({ thread_id: 1 }))
     await flushPromises()
 
-    expect(w.find('[data-testid="ask-submit"]').attributes('disabled')).toBeUndefined()
+    expect(w.find('[data-testid="ask-thinking"]').exists()).toBe(false)
     expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
+    expect(w.find('[data-testid="ask-answer"]').text()).toContain('Two invoices are due')
+  })
+
+  it('aborts an in-flight request and removes the optimistic turn when Stop is clicked (W2)', async () => {
+    let reject!: (reason: unknown) => void
+    askQuestionMock.mockReturnValue(
+      new Promise<AskResponse>((_resolve, r) => {
+        reject = r
+      }),
+    )
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
+
+    await w.find('[data-testid="ask-submit"]').trigger('click')
+    // The component aborts; simulate the fetch rejecting with an AbortError.
+    reject(new DOMException('aborted', 'AbortError'))
+    await flushPromises()
+
+    // The optimistic turn is gone and no error alert is shown for a user abort.
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
+    expect(w.find('[data-testid="error-summary"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
+  })
+
+  it('removes the optimistic turn and restores the question on an API error (W2)', async () => {
+    askQuestionMock.mockRejectedValueOnce(new ApiError(500, 'boom'))
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+
+    // No dangling question turn, error surfaced, and the text is back in the box.
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
+    expect(w.find('[data-testid="error-summary"]').exists()).toBe(true)
+    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe(
+      'which invoices are due?',
+    )
+  })
+
+  it('submits on Cmd/Ctrl+Enter in the textarea (W2)', async () => {
+    askQuestionMock.mockResolvedValueOnce(sampleResponse({ thread_id: 1 }))
+    const w = mountView()
+    await w.find('#ask-question').setValue('which invoices are due?')
+    await w.find('#ask-question').trigger('keydown', { key: 'Enter', metaKey: true })
+    await flushPromises()
+    expect(askQuestionMock).toHaveBeenCalledTimes(1)
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
   })
 

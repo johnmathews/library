@@ -33,6 +33,9 @@ interface TurnVM {
   citations: AskCitation[]
   usedTools: string[]
   costUsd: number
+  // True while the question is on screen but its answer is still generating.
+  // The turn renders a thinking indicator instead of an answer body.
+  pending?: boolean
 }
 
 // A picked-but-not-yet-sent image: the base64 payload plus a data URL for the
@@ -54,7 +57,12 @@ const route = useRoute()
 const router = useRouter()
 
 const question = ref('')
-const loading = ref(false)
+// True from the moment a request is dispatched until its answer lands or fails.
+// Distinct from "sending": the question and the user's optimistic turn appear
+// instantly; isAnswering only gates the in-flight LLM call.
+const isAnswering = ref(false)
+// The controller for the in-flight ask, so the Stop button can cancel it.
+let inFlight: AbortController | null = null
 const errorMessage = ref<string | null>(null)
 const turns = ref<TurnVM[]>([])
 const threadId = ref<number | null>(null)
@@ -68,17 +76,15 @@ const imageInput = ref<HTMLInputElement | null>(null)
 const transcriptRef = ref<HTMLElement | null>(null)
 
 // Keep the latest turn in view: the transcript scrolls internally (chat layout),
-// so on every turn change (new answer or a rehydrated thread) jump it to the
-// bottom after the DOM updates.
-watch(
-  () => turns.value.length,
-  () => {
-    void nextTick(() => {
-      const el = transcriptRef.value
-      if (el) el.scrollTop = el.scrollHeight
-    })
-  },
-)
+// so jump it to the bottom after the DOM updates. Called on a new optimistic
+// turn, on a resolving answer (length unchanged, so a watcher would miss it),
+// and on a rehydrated thread.
+function scrollToBottom(): void {
+  void nextTick(() => {
+    const el = transcriptRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
 
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -132,33 +138,64 @@ function friendlyError(error: unknown): string {
   return 'Something went wrong — try again.'
 }
 
+function isAbortError(error: unknown): boolean {
+  return error instanceof DOMException && error.name === 'AbortError'
+}
+
 async function onSubmit(): Promise<void> {
+  // One question at a time: ignore a submit while an answer is generating (the
+  // primary action is a Stop button in that state, not a second Send).
+  if (isAnswering.value) return
   const trimmed = question.value.trim()
   if (!trimmed) {
     errorMessage.value = 'Enter a question to ask'
     return
   }
-  loading.value = true
   errorMessage.value = null
-  const controller = new AbortController()
+  isAnswering.value = true
+
   const wasNewThread = threadId.value === null
-  const images: AskImage[] = pendingImages.value.map((image) => ({
+  const sentImages = pendingImages.value
+  const apiImages: AskImage[] = sentImages.map((image) => ({
     media_type: image.media_type,
     data: image.data,
   }))
+
+  // Optimistically render the question with a thinking placeholder and clear the
+  // composer immediately. Sending is instant and visibly distinct from the LLM
+  // thinking that follows (the placeholder turn), per the Claude-app pattern.
+  turns.value.push({
+    query: trimmed,
+    answerHtml: '',
+    citations: [],
+    usedTools: [],
+    costUsd: 0,
+    pending: true,
+  })
+  const pendingIndex = turns.value.length - 1
+  question.value = ''
+  pendingImages.value = []
+  scrollToBottom()
+
+  const controller = new AbortController()
+  inFlight = controller
   try {
-    const res = images.length
-      ? await askQuestion(trimmed, threadId.value ?? undefined, controller.signal, images)
-      : await askQuestion(trimmed, threadId.value ?? undefined, controller.signal)
-    turns.value.push({
+    const res = await askQuestion(
+      trimmed,
+      threadId.value ?? undefined,
+      controller.signal,
+      apiImages.length ? apiImages : undefined,
+    )
+    // Fill the placeholder turn in place (its position in the transcript is
+    // already correct) with the rendered answer.
+    turns.value[pendingIndex] = {
       query: trimmed,
       answerHtml: renderAnswer(res.answer),
       citations: res.citations,
       usedTools: res.used_tools,
       costUsd: res.cost_usd,
-    })
-    question.value = ''
-    pendingImages.value = []
+    }
+    scrollToBottom()
     // The answer has rendered successfully. Everything below is a post-success
     // side effect (track the thread in state, sync the URL, refresh the
     // sidebar). A failure here — e.g. a malformed response missing thread_id,
@@ -166,9 +203,31 @@ async function onSubmit(): Promise<void> {
     // on a valid answer, so it lives outside onSubmit's answer-error catch.
     void syncThread(res.thread_id, wasNewThread)
   } catch (error: unknown) {
-    errorMessage.value = friendlyError(error)
+    // Drop the optimistic turn and restore the question + images so the user can
+    // edit and resend. A user-initiated Stop (AbortError) is silent; any other
+    // failure surfaces the friendly error.
+    turns.value.splice(pendingIndex, 1)
+    question.value = trimmed
+    pendingImages.value = sentImages
+    if (!isAbortError(error)) {
+      errorMessage.value = friendlyError(error)
+    }
   } finally {
-    loading.value = false
+    isAnswering.value = false
+    inFlight = null
+  }
+}
+
+/** Cancel the in-flight ask (wired to the Stop button while answering). */
+function stopAnswering(): void {
+  inFlight?.abort()
+}
+
+/** Cmd/Ctrl+Enter sends from the textarea, matching the Claude-app composer. */
+function onComposerKeydown(event: KeyboardEvent): void {
+  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+    event.preventDefault()
+    void onSubmit()
   }
 }
 
@@ -215,6 +274,7 @@ async function loadThread(id: number): Promise<void> {
       costUsd: t.cost_usd,
     }))
     threadId.value = id
+    scrollToBottom()
   } catch (error: unknown) {
     errorMessage.value = friendlyError(error)
   }
@@ -319,15 +379,31 @@ defineExpose({ resetConversation })
                 </p>
               </div>
 
-              <!-- Assistant answer — full-width sanitized markdown. -->
-              <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in renderAnswer -->
+              <!-- While the answer generates, the turn shows a thinking
+                   indicator in the answer slot (instead of the answer body). -->
               <div
-                class="ask-answer text-gray-800 dark:text-gray-100"
-                data-testid="ask-answer"
-                v-html="turn.answerHtml"
-              />
+                v-if="turn.pending"
+                data-testid="ask-thinking"
+                class="flex items-center gap-1.5 text-gray-400 dark:text-gray-500"
+                aria-live="polite"
+                aria-busy="true"
+              >
+                <span class="sr-only">Generating answer…</span>
+                <span class="ask-dot"></span>
+                <span class="ask-dot" style="animation-delay: 0.15s"></span>
+                <span class="ask-dot" style="animation-delay: 0.3s"></span>
+              </div>
 
-              <div v-if="turn.citations.length" data-testid="ask-citations-disclosure">
+              <template v-else>
+                <!-- Assistant answer — full-width sanitized markdown. -->
+                <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in renderAnswer -->
+                <div
+                  class="ask-answer text-gray-800 dark:text-gray-100"
+                  data-testid="ask-answer"
+                  v-html="turn.answerHtml"
+                />
+
+                <div v-if="turn.citations.length" data-testid="ask-citations-disclosure">
                 <AppDetails :summary="`Citations (${turn.citations.length})`" :open="false">
                   <ul
                     class="grid grid-cols-1 md:grid-cols-2 gap-2"
@@ -367,6 +443,7 @@ defineExpose({ resetConversation })
                 <span v-if="turn.usedTools.length && turn.costUsd"> · </span>
                 <span v-if="turn.costUsd">Estimated cost: ${{ turn.costUsd.toFixed(4) }}</span>
               </p>
+              </template>
             </section>
           </div>
 
@@ -406,9 +483,10 @@ defineExpose({ resetConversation })
             id="ask-question"
             v-model="question"
             :label="turns.length ? 'Follow-up question' : 'Your question'"
-            hint="For example: which invoices are due this month?"
+            hint="For example: which invoices are due this month? (⌘/Ctrl + Enter to send)"
             :rows="3"
             data-testid="ask-question"
+            @keydown="onComposerKeydown"
           />
 
           <!-- Pending image attachments (W11): preview thumbnails + remove. -->
@@ -455,13 +533,26 @@ defineExpose({ resetConversation })
             >
               Attach image
             </button>
+            <!-- While answering, the primary action is a live Stop control, not
+                 a greyed-out button — the request is cancellable, and the UI is
+                 never a dead rectangle. Same data-testid on both states. -->
             <AppButton
+              v-if="isAnswering"
+              id="ask-submit"
+              type="button"
+              variant="warning"
+              data-testid="ask-submit"
+              @click="stopAnswering"
+            >
+              Stop
+            </AppButton>
+            <AppButton
+              v-else
               id="ask-submit"
               type="submit"
               data-testid="ask-submit"
-              :disabled="loading"
             >
-              {{ loading ? 'Sending…' : 'Send' }}
+              Send
             </AppButton>
           </div>
         </form>
@@ -471,6 +562,35 @@ defineExpose({ resetConversation })
 </template>
 
 <style scoped>
+/* Thinking indicator: three dots that pulse in sequence while the answer
+   generates. */
+.ask-dot {
+  display: inline-block;
+  width: 0.4rem;
+  height: 0.4rem;
+  border-radius: 9999px;
+  background: currentColor;
+  animation: ask-bounce 1.2s infinite ease-in-out both;
+}
+@keyframes ask-bounce {
+  0%,
+  80%,
+  100% {
+    transform: scale(0.6);
+    opacity: 0.4;
+  }
+  40% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .ask-dot {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
 /* The answer is rendered markdown (v-html). Tailwind's preflight strips
    default styling from these elements, so restore readable prose spacing,
    emphasis and lists for the answer body only. */

@@ -34,15 +34,52 @@ describe('ConversationSidebar', () => {
     expect(w.emitted('new')).toBeTruthy()
   })
 
-  it('deletes a thread and refreshes', async () => {
+  it('requires confirmation before deleting, then deletes and refreshes (W3)', async () => {
     vi.mocked(deleteThread).mockResolvedValue()
     const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
     await flushPromises()
+
+    // First click only asks for confirmation — nothing is deleted yet.
     await w.find('[data-testid="thread-delete"]').trigger('click')
+    expect(deleteThread).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="thread-delete-confirm"]').exists()).toBe(true)
+
+    // Confirming performs the delete and refreshes.
+    await w.find('[data-testid="thread-delete-confirm"]').trigger('click')
     await flushPromises()
     expect(deleteThread).toHaveBeenCalledWith(1)
     expect(listThreads).toHaveBeenCalledTimes(2)
     expect(w.emitted('new')).toBeTruthy()
+  })
+
+  it('cancels a pending delete without calling the API (W3)', async () => {
+    vi.mocked(deleteThread).mockResolvedValue()
+    const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
+    await flushPromises()
+    await w.find('[data-testid="thread-delete"]').trigger('click')
+    await w.find('[data-testid="thread-delete-cancel"]').trigger('click')
+    expect(deleteThread).not.toHaveBeenCalled()
+    // Back to the plain Delete affordance.
+    expect(w.find('[data-testid="thread-delete"]').exists()).toBe(true)
+    expect(w.find('[data-testid="thread-delete-confirm"]').exists()).toBe(false)
+  })
+
+  it('marks the active thread with a full-perimeter ring, not a left-only bar (W1)', async () => {
+    const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
+    await flushPromises()
+    const item = w.find('[data-testid="thread-item"]')
+    // A ring draws on all four sides; the old left-accent bar is gone.
+    expect(item.classes()).toContain('ring-1')
+    expect(item.classes()).toContain('ring-violet-500')
+    expect(item.classes()).not.toContain('border-l-2')
+  })
+
+  it('does not ring an inactive thread (W1)', async () => {
+    const w = mount(ConversationSidebar, { props: { activeThreadId: 999 } })
+    await flushPromises()
+    const item = w.find('[data-testid="thread-item"]')
+    expect(item.classes()).toContain('ring-transparent')
+    expect(item.classes()).not.toContain('ring-violet-500')
   })
 
   it('filters threads by the search query (W10)', async () => {

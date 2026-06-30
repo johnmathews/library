@@ -7,6 +7,9 @@ const emit = defineEmits<{ select: [number]; new: []; 'threads-changed': [number
 
 const threads = ref<ThreadSummary[]>([])
 const query = ref('')
+// Which thread is awaiting delete confirmation (inline two-step delete). Null
+// when no row is in the confirming state.
+const confirmingId = ref<number | null>(null)
 
 // Client-side title filter over the loaded threads (the list is small; no need
 // for a server round-trip per keystroke).
@@ -17,13 +20,26 @@ const filteredThreads = computed<ThreadSummary[]>(() => {
 })
 
 async function refresh(): Promise<void> {
+  confirmingId.value = null
   threads.value = await listThreads()
   // Let the parent (AskView) distinguish "no conversations exist" from
   // "conversations exist but none is selected" in its empty state.
   emit('threads-changed', threads.value.length)
 }
 
-async function onDelete(thread: ThreadSummary): Promise<void> {
+// Inline two-step delete: the first click arms the confirm/cancel affordance,
+// the confirm click actually deletes. Prevents a single misclick on the small
+// "Delete" link from destroying a conversation with no undo.
+function requestDelete(thread: ThreadSummary): void {
+  confirmingId.value = thread.id
+}
+
+function cancelDelete(): void {
+  confirmingId.value = null
+}
+
+async function confirmDelete(thread: ThreadSummary): Promise<void> {
+  confirmingId.value = null
   await deleteThread(thread.id)
   await refresh()
   if (thread.id === props.activeThreadId) {
@@ -84,17 +100,17 @@ defineExpose({ refresh })
     <!-- On mobile the list is capped so it can't dominate the screen above the
          thread; on lg+ it flexes to fill the rail's height and scrolls. -->
     <ul
-      class="max-lg:max-h-64 lg:flex-1 lg:min-h-0 divide-y divide-gray-200 dark:divide-gray-700/60 overflow-y-auto no-scrollbar"
+      class="max-lg:max-h-64 lg:flex-1 lg:min-h-0 overflow-y-auto no-scrollbar p-2 space-y-1"
     >
       <li
         v-for="thread in filteredThreads"
         :key="thread.id"
         data-testid="thread-item"
-        class="flex items-center justify-between gap-2 px-4 py-3 cursor-pointer transition"
+        class="flex items-center justify-between gap-2 px-3 py-2.5 rounded-lg ring-1 cursor-pointer transition"
         :class="
           thread.id === activeThreadId
-            ? 'bg-violet-50 dark:bg-violet-900/20 border-l-2 border-violet-500'
-            : 'border-l-2 border-transparent hover:bg-gray-50 dark:hover:bg-gray-700/40'
+            ? 'bg-violet-50 dark:bg-violet-900/20 ring-violet-500'
+            : 'ring-transparent hover:bg-gray-50 dark:hover:bg-gray-700/40'
         "
         @click="emit('select', thread.id)"
       >
@@ -112,14 +128,35 @@ defineExpose({ refresh })
             formatDate(thread.updated_at)
           }}</span>
         </span>
-        <button
-          data-testid="thread-delete"
-          type="button"
-          class="shrink-0 text-xs text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition"
-          @click.stop="onDelete(thread)"
-        >
-          Delete
-        </button>
+        <div class="shrink-0 flex items-center gap-2">
+          <template v-if="confirmingId === thread.id">
+            <button
+              data-testid="thread-delete-confirm"
+              type="button"
+              class="text-xs font-medium text-red-500 hover:text-red-600 dark:hover:text-red-400 transition"
+              @click.stop="confirmDelete(thread)"
+            >
+              Confirm
+            </button>
+            <button
+              data-testid="thread-delete-cancel"
+              type="button"
+              class="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition"
+              @click.stop="cancelDelete"
+            >
+              Cancel
+            </button>
+          </template>
+          <button
+            v-else
+            data-testid="thread-delete"
+            type="button"
+            class="text-xs text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition"
+            @click.stop="requestDelete(thread)"
+          >
+            Delete
+          </button>
+        </div>
       </li>
 
       <li

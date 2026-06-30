@@ -209,7 +209,20 @@ listing past threads (by title and relative time) with resume and delete
 actions, a scrollable transcript of Q&A pairs, and a follow-up input pinned
 below. On a phone the sidebar stacks beneath the title/description; on wide
 screens it sits beside the answer column. `/ask/:threadId` loads an existing
-thread. **"New conversation"** clears to an empty thread. The empty state
+thread. **"New conversation"** clears to an empty thread.
+
+Sending is asynchronous and follows the Claude-app pattern: on submit the
+question appears in the transcript **immediately** as an optimistic turn and the
+composer clears, while the answer slot shows a **thinking indicator** until the
+answer lands. The primary action becomes a live **Stop** button that cancels the
+in-flight request (it is never a greyed-out, inert control); a user-initiated
+stop or an API error removes the optimistic turn and restores the question to the
+composer for editing/resend. **Cmd/Ctrl+Enter** sends from the textarea. The
+selected conversation in the sidebar is marked with a full-perimeter ring, and
+**Delete** is a two-step inline confirm (Delete → Confirm/Cancel) so a single
+misclick cannot destroy a thread.
+
+The empty state
 distinguishes two cases: when **no conversations exist yet** it invites the user
 to ask a first question, whereas when **conversations exist but none is selected**
 it prompts the user to pick one from the sidebar or start a new one
