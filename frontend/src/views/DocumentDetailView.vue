@@ -269,14 +269,6 @@ const fieldGroups: FieldGroup[] = [
 /** Fields that read better spanning the full width of the two-column grid. */
 const WIDE_FIELDS = new Set<EditableField>(['title', 'summary', 'tags', 'projects', 'amount'])
 
-/** True when any field in the group has a non-null display value. Used to hide a
- * whole group in read mode when it would otherwise show only em-dashes. */
-function groupHasValue(group: FieldGroup): boolean {
-  const d = doc.value
-  if (!d) return false
-  return group.fields.some((field) => rowByField[field].display(d) !== null)
-}
-
 /** Static Tailwind class strings per accent (kept literal so the build's content
  * scan keeps them). `border` is left-only so it never fights a shorthand. */
 const ACCENT: Record<Accent, { bar: string; text: string; border: string; bg: string }> = {
@@ -1462,23 +1454,17 @@ watch(
               {{ editMode ? 'Done' : 'Edit' }}
             </button>
           </div>
-          <p
-            v-if="editMode"
-            class="mb-4 text-xs text-gray-500 dark:text-gray-400"
-            data-testid="edit-mode-hint"
-          >
-            Editing — changes save automatically as you leave each field.
-          </p>
 
           <div id="document-details-list" class="space-y-3">
             <!-- One themed panel per metadata group: accent rail + tint + heading
                  make each kind of metadata distinguishable at a glance, and the
                  two-column grid uses the width instead of one tall column. -->
-            <!-- v-for on a wrapper template so the per-group v-if doesn't sit on
-                 the same element as v-for (vue/no-use-v-if-with-v-for). -->
+            <!-- v-for on a wrapper template keeps the per-group key off the same
+                 element as the section content. Every group renders in both read
+                 and edit modes (value-less fields show an em-dash) so a field
+                 keeps its position when the Edit toggle flips. -->
             <template v-for="group in fieldGroups" :key="group.key">
             <section
-              v-if="editMode || groupHasValue(group)"
               class="rounded-lg border-l-4 px-4 py-3.5"
               :class="[ACCENT[group.accent].border, ACCENT[group.accent].bg]"
             >
@@ -1494,7 +1480,6 @@ watch(
               <dl class="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
                 <template v-for="field in group.fields" :key="field">
                 <div
-                  v-if="editMode || rowByField[field].display(doc) !== null"
                   :data-testid="`row-${field}`"
                   :class="WIDE_FIELDS.has(field) ? 'sm:col-span-2' : ''"
                 >
@@ -1515,8 +1500,8 @@ watch(
                   <!-- Projects render as badges that link to the project-filtered
                        dashboard, rather than a plain comma-joined string. -->
                   <dd
-                    v-if="!editMode && field === 'projects'"
-                    class="mt-1 flex flex-wrap gap-2"
+                    v-if="!editMode && field === 'projects' && doc.projects.length"
+                    class="mt-2 flex flex-wrap gap-2"
                     data-testid="row-value"
                   >
                     <RouterLink
@@ -1531,7 +1516,7 @@ watch(
                   </dd>
                   <dd
                     v-else-if="!editMode"
-                    class="mt-1 min-w-0 break-words leading-snug text-gray-800 dark:text-gray-100"
+                    class="mt-2 min-w-0 break-words leading-snug text-gray-800 dark:text-gray-100"
                     :class="field === 'amount' ? 'text-2xl font-semibold tracking-tight' : 'text-base'"
                     data-testid="row-value"
                     >{{ rowByField[field].display(doc) ?? EMPTY }}</dd
@@ -1788,9 +1773,10 @@ watch(
             </template>
 
             <!-- Topics: auto-extracted subject phrases, shown read-only as badge
-                 pills (no editor). Hidden in edit mode and when there are none. -->
+                 pills (no editor). Rendered in both read and edit modes so the
+                 System panel below keeps its position; hidden only when none. -->
             <section
-              v-if="!editMode && doc.topics.length"
+              v-if="doc.topics.length"
               class="rounded-lg border-l-4 px-4 py-3.5"
               :class="[ACCENT.violet.border, ACCENT.violet.bg]"
             >

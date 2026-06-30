@@ -180,7 +180,7 @@ describe('DocumentDetailView', () => {
       }))
   }
 
-  it('renders rows with values and hides value-less rows in read mode', async () => {
+  it('renders rows with values; value-less rows show an em-dash placeholder in read mode', async () => {
     detail = makeDetail({ title: null, summary: null, due_date: null, ocr_confidence: null })
     const w = await mountView()
 
@@ -191,10 +191,11 @@ describe('DocumentDetailView', () => {
     expect(rowValue(w, 'language')).toBe('Dutch')
     expect(rowValue(w, 'tags')).toBe('Energie')
     expect(rowValue(w, 'amount')).toBe('123.45 EUR')
-    // Value-less fields are hidden in read mode — no dead em-dashes.
-    expect(w.find('[data-testid="row-title"]').exists()).toBe(false)
-    expect(w.find('[data-testid="row-due_date"]').exists()).toBe(false)
-    expect(w.find('[data-testid="row-summary"]').exists()).toBe(false)
+    // Value-less fields still render, showing an em-dash, so a field keeps its
+    // position when the Edit toggle flips.
+    expect(rowValue(w, 'title')).toBe('—')
+    expect(rowValue(w, 'due_date')).toBe('—')
+    expect(rowValue(w, 'summary')).toBe('—')
     // Read-only system rows still render: status, source, and OCR confidence —
     // which for a born-digital doc (null confidence) reads "Not applicable".
     const text = w.text()
@@ -509,10 +510,11 @@ describe('DocumentDetailView', () => {
     expect(badges[1]!.attributes('href')).toBe('/?project=taxes')
   })
 
-  it('hides the projects row in read mode when there are none', async () => {
+  it('shows the projects row with an em-dash in read mode when there are none', async () => {
     detail = makeDetail({ projects: [] })
     const w = await mountView()
-    expect(w.find('[data-testid="row-projects"]').exists()).toBe(false)
+    expect(w.find('[data-testid="row-projects"]').exists()).toBe(true)
+    expect(rowValue(w, 'projects')).toBe('—')
   })
 
   it('shows an inline field error and keeps editing on a 422', async () => {
@@ -610,7 +612,7 @@ describe('DocumentDetailView', () => {
     expect(stats).not.toContain('—')
   })
 
-  it('hides value-less hero stats and metadata groups in read mode, shows them when editing', async () => {
+  it('hides value-less hero stats, but renders value-less metadata rows/groups in both modes', async () => {
     // A general document: a kind and a date, but no sender and no amount.
     detail = makeDetail({
       title: 'Brief van de gemeente',
@@ -629,14 +631,16 @@ describe('DocumentDetailView', () => {
     expect(stats).not.toContain('Sender')
     expect(stats).not.toContain('Amount')
 
-    // The Financial group (amount only) and the Sender row are absent in read mode.
-    expect(w.text()).not.toContain('Financial')
-    expect(w.find('[data-testid="row-amount"]').exists()).toBe(false)
-    expect(w.find('[data-testid="row-sender"]').exists()).toBe(false)
-    // The "Sender & dates" group itself still shows because the date has a value.
+    // The Financial group and the Sender row now render in read mode too (with an
+    // em-dash) so the details list keeps the same shape across the Edit toggle.
+    expect(w.text()).toContain('Financial')
+    expect(w.find('[data-testid="row-amount"]').exists()).toBe(true)
+    expect(rowValue(w, 'amount')).toBe('—')
+    expect(w.find('[data-testid="row-sender"]').exists()).toBe(true)
+    expect(rowValue(w, 'sender')).toBe('—')
     expect(w.find('[data-testid="row-document_date"]').exists()).toBe(true)
 
-    // Edit mode reveals every field and group again.
+    // Edit mode still shows every field and group.
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
     expect(w.text()).toContain('Financial')
