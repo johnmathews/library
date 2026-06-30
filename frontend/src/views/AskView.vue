@@ -74,6 +74,25 @@ const sidebarThreadCount = ref(0)
 const pendingImages = ref<PendingImage[]>([])
 const imageInput = ref<HTMLInputElement | null>(null)
 const transcriptRef = ref<HTMLElement | null>(null)
+const composerRef = ref<HTMLElement | null>(null)
+// On small screens the composer used to sit far below the sidebar + transcript,
+// so asking a question meant scrolling past everything to find it. It is now
+// hidden on mobile (`max-lg:hidden`) until the user opens it — via "New
+// conversation" or by opening a thread. At lg+ it is always docked beside the
+// thread, so this flag is a no-op there.
+const composerOpen = ref(false)
+
+/** Reveal the composer (on mobile), focus the question box, and bring it into
+ * view. Wired to "New conversation" so that prominent button does something
+ * visible instead of silently clearing state off-screen. */
+function openComposer(): void {
+  composerOpen.value = true
+  void nextTick(() => {
+    const field = document.getElementById('ask-question') as HTMLTextAreaElement | null
+    field?.focus()
+    composerRef.value?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
+  })
+}
 
 // Keep the latest turn in view: the transcript scrolls internally (chat layout),
 // so jump it to the bottom after the DOM updates. Called on a new optimistic
@@ -274,19 +293,24 @@ async function loadThread(id: number): Promise<void> {
       costUsd: t.cost_usd,
     }))
     threadId.value = id
+    // Viewing a thread → the composer (for follow-ups) is relevant, so reveal
+    // it on mobile. Don't steal focus: the user is reading the answer first.
+    composerOpen.value = true
     scrollToBottom()
   } catch (error: unknown) {
     errorMessage.value = friendlyError(error)
   }
 }
 
-/** Clear state and navigate to /ask — wired to the sidebar "New conversation" in Task 7. */
+/** Clear to a fresh conversation and open the composer ready to type. Wired to
+ * the sidebar "New conversation" button. */
 function resetConversation(): void {
   turns.value = []
   threadId.value = null
   question.value = ''
   errorMessage.value = null
   router.push({ name: 'ask' })
+  openComposer()
 }
 
 // Resume a thread when the route param is present (including sidebar navigation
@@ -455,7 +479,7 @@ defineExpose({ resetConversation })
               data-testid="ask-select-thread"
               class="max-w-sm text-gray-500 dark:text-gray-400"
             >
-              Select a conversation from the sidebar, or ask a new question below.
+              Select a conversation from the sidebar, or tap “New conversation” to ask one.
             </p>
 
             <p
@@ -463,7 +487,8 @@ defineExpose({ resetConversation })
               data-testid="ask-empty"
               class="max-w-sm text-gray-500 dark:text-gray-400"
             >
-              No questions yet. Ask one below — for example, “which invoices are due this month?”
+              No questions yet. Tap “New conversation” to ask one — for example, “which invoices
+              are due this month?”
             </p>
           </div>
         </div>
@@ -471,11 +496,15 @@ defineExpose({ resetConversation })
         <!-- Docked composer. A shrink-0 flex sibling below the internally
              scrolling thread, divided from it by a top border (NOT
              position:sticky, which would float over the thread and intercept
-             citation clicks). Below lg it sits at the bottom of the panel. -->
+             citation clicks). Below lg it is hidden until opened (via "New
+             conversation" or opening a thread) so it isn't a far-off box the
+             user must scroll to find; at lg+ it is always docked. -->
         <form
           id="ask-form"
+          ref="composerRef"
           novalidate
           class="shrink-0 border-t border-gray-200 dark:border-gray-700/60 p-4"
+          :class="{ 'max-lg:hidden': !composerOpen }"
           data-testid="ask-form"
           @submit.prevent="onSubmit"
         >

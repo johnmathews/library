@@ -356,6 +356,30 @@ describe('AskView', () => {
     expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
   })
 
+  it('hides the composer on mobile and reveals + focuses it on New conversation (W12)', async () => {
+    vi.mocked(listThreads).mockResolvedValue([])
+    const w = mountView()
+    await flushPromises()
+
+    // Collapsed on mobile by default (the gate is a no-op at lg+), so the user
+    // never has to scroll past the sidebar to find a far-off input box.
+    expect(w.find('[data-testid="ask-form"]').classes()).toContain('max-lg:hidden')
+
+    // The prominent "New conversation" button now reveals + focuses the composer.
+    await w.find('[data-testid="new-conversation"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="ask-form"]').classes()).not.toContain('max-lg:hidden')
+    expect(document.activeElement).toBe(w.find('#ask-question').element)
+  })
+
+  it('reveals the composer when a thread is opened (W12)', async () => {
+    getThreadMock.mockResolvedValue({ id: 7, title: 'X', turns: [] })
+    await router.push('/ask/7')
+    const w = mountView()
+    await flushPromises()
+    expect(w.find('[data-testid="ask-form"]').classes()).not.toContain('max-lg:hidden')
+  })
+
   it('renders an internally-scrolling transcript at lg+ (chat layout, Option A)', () => {
     const w = mountView()
     const transcript = w.find('[data-testid="ask-transcript"]')

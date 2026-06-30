@@ -153,6 +153,10 @@ test('ask citation deep-links to the cited PDF page', async ({ page }, testInfo)
 
   // ── Ask a question ──────────────────────────────────────────────────────────
   await page.goto('/ask')
+  // The composer is collapsed by default on small viewports — "New conversation"
+  // reveals + focuses it (a no-op for visibility at lg+). Open it before typing
+  // so this works on the mobile/tablet projects too.
+  await page.getByTestId('new-conversation').click()
   await page.locator('#ask-question').fill(TEST_QUESTION)
   await page.getByTestId('ask-submit').click()
 
