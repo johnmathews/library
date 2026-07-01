@@ -19,13 +19,17 @@ from decimal import Decimal, InvalidOperation
 from typing import Any
 
 from anthropic import AsyncAnthropic
+from fastapi import HTTPException
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
+from library.documents_service import apply_document_update
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
 from library.models import Document
+from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, semantic_search
 from library.series import serialise_summary, summarize_series
 from library.structured_query import CONCEPT_TO_KIND, query_documents
@@ -47,6 +51,15 @@ Use the tools to find evidence, then answer:
   who/how-many/how-much/which-over-time questions.
 - compare_to_series: compare a recurring bill to its usual values / last year /
   trend (e.g. "is this electricity bill higher than usual?").
+- update_document_metadata: update a document's metadata (title, summary,
+  sender, recipient, kind, tags, projects, dates, amount, currency, language).
+  You may only edit a document that a tool surfaced earlier in THIS
+  conversation. It is confirmation-gated: FIRST call it with confirmed=false to
+  preview the change (nothing is written), then state the exact proposed change
+  to the user in prose and wait for their explicit agreement. Only AFTER the
+  user agrees in a later message may you call it again with confirmed=true to
+  save. Never edit a document that was not surfaced in this conversation, and
+  never set confirmed=true before the user has explicitly agreed.
 
 The user may attach one or more images (a photo or scan of a document) with the
 question. Read them directly as evidence, and combine what they show with tool
@@ -152,7 +165,79 @@ TOOLS: list[dict[str, Any]] = [
             "required": [],
         },
     },
+    {
+        "name": "update_document_metadata",
+        "description": (
+            "Update the metadata of a document that was surfaced by another tool "
+            "in THIS conversation. Two-phase, confirmation-gated:\n"
+            "1. Call with confirmed=false (the default) to PREVIEW — this writes "
+            "nothing and returns the current vs proposed value for each field.\n"
+            "2. State the exact change to the user in prose and wait for their "
+            "explicit agreement. Only AFTER they agree, call again with "
+            "confirmed=true to persist it.\n"
+            "Never call with confirmed=true until the user has agreed in a later "
+            "message. Only fields you provide change; tags and projects are "
+            "full-replacement lists. You may only edit a document_id that a tool "
+            "returned earlier in this conversation."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "document_id": {
+                    "type": "integer",
+                    "description": "Id of a document surfaced earlier in this conversation.",
+                },
+                "confirmed": {
+                    "type": "boolean",
+                    "description": (
+                        "false (default) previews without writing; true persists the "
+                        "change and is only allowed after the user explicitly agrees."
+                    ),
+                },
+                "title": {"type": "string"},
+                "summary": {"type": "string"},
+                "recipient": {"type": "string", "description": "Recipient name (upserted)."},
+                "sender": {"type": "string", "description": "Sender name (upserted)."},
+                "kind_slug": {"type": "string", "description": "Existing kind slug."},
+                "tags": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Full replacement list of tag slugs.",
+                },
+                "projects": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Full replacement list of project slugs/names.",
+                },
+                "document_date": {"type": "string", "description": "ISO date (YYYY-MM-DD)."},
+                "due_date": {"type": "string", "description": "ISO date (YYYY-MM-DD)."},
+                "expiry_date": {"type": "string", "description": "ISO date (YYYY-MM-DD)."},
+                "amount_total": {"type": "number"},
+                "currency": {"type": "string", "description": "3-letter ISO currency code."},
+                "language": {"type": "string", "description": "e.g. nld or eng."},
+            },
+            "required": ["document_id"],
+        },
+    },
 ]
+
+# Editable metadata fields the write tool forwards to DocumentUpdate. A safe
+# subset of DocumentUpdate (no status/review fields) that mirrors the PATCH body.
+_WRITABLE_FIELDS: tuple[str, ...] = (
+    "title",
+    "summary",
+    "recipient",
+    "sender",
+    "kind_slug",
+    "tags",
+    "projects",
+    "document_date",
+    "due_date",
+    "expiry_date",
+    "amount_total",
+    "currency",
+    "language",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -279,6 +364,97 @@ async def _run_compare_to_series(
     return serialise_summary(summary)
 
 
+def _preview_current(document: Document, field: str) -> Any:
+    """Human-readable current value of an editable field (names/slugs, not ids)."""
+    if field == "sender":
+        return document.sender.name if document.sender else None
+    if field == "recipient":
+        return document.recipient.name if document.recipient else None
+    if field == "kind_slug":
+        return document.kind.slug if document.kind else None
+    if field == "tags":
+        return sorted(tag.slug for tag in document.tags)
+    if field == "projects":
+        return sorted(project.slug for project in document.projects)
+    return getattr(document, field, None)
+
+
+async def _run_update_document(
+    session: AsyncSession,
+    args: dict[str, Any],
+    editable_ids: set[int],
+    previewed_ids: set[int],
+) -> dict[str, Any]:
+    """Propose-then-confirm write of a surfaced document's metadata.
+
+    Guardrails: (1) refuses any ``document_id`` not surfaced by a read tool in
+    this conversation; (2) ``confirmed=true`` is refused unless the same document
+    was previewed in an EARLIER turn (``previewed_ids`` is seeded only from thread
+    history, never from previews made in the current turn) — so the user has
+    actually seen the proposal and replied before anything is written, enforced
+    in code rather than only by the system prompt. ``confirmed=false`` returns a
+    current-vs-proposed preview and writes nothing; ``confirmed=true`` applies the
+    edit (edited_by="ask") and commits.
+    """
+    raw_id = args.get("document_id")
+    try:
+        document_id = int(raw_id)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return {"error": "document_id is required and must be an integer"}
+    if document_id not in editable_ids:
+        return {"error": "can only edit documents found in this conversation"}
+
+    document = await session.get(Document, document_id)
+    if document is None or document.deleted_at is not None:
+        return {"error": f"document {document_id} not found"}
+
+    fields = {name: args[name] for name in _WRITABLE_FIELDS if name in args}
+    if not fields:
+        return {"error": "no editable fields provided"}
+
+    if not bool(args.get("confirmed", False)):
+        preview = {
+            name: {"current": _preview_current(document, name), "proposed": value}
+            for name, value in fields.items()
+        }
+        # Deliberately does NOT record the id as previewed: a confirmed write is
+        # only allowed once the preview has been shown to the user AND they have
+        # replied — which only happens on a later question (the preview lands in
+        # the thread history). Recording it here would let the model preview and
+        # confirm in the same turn, before the user ever sees the proposal.
+        return {
+            "status": "preview",
+            "document_id": document_id,
+            "changes": preview,
+            "note": (
+                "Nothing was written. Tell the user this exact change and END your "
+                "turn. Only if they reply agreeing, on a later message, call this "
+                "again with confirmed=true."
+            ),
+        }
+
+    if document_id not in previewed_ids:
+        return {
+            "error": (
+                "preview required first: call with confirmed=false, show the user "
+                "the proposed change, end your turn, and only confirm after they "
+                "reply agreeing"
+            )
+        }
+
+    try:
+        update = DocumentUpdate(**fields)
+    except ValidationError as exc:
+        return {"error": "invalid field value", "detail": exc.errors(include_url=False)}
+
+    try:
+        edited = await apply_document_update(session, document, update, edited_by="ask")
+    except HTTPException as exc:
+        return {"error": str(exc.detail)}
+    await session.commit()
+    return {"status": "updated", "document_id": document_id, "updated_fields": edited}
+
+
 async def _dispatch_tool(
     session: AsyncSession,
     settings: Settings,
@@ -286,14 +462,90 @@ async def _dispatch_tool(
     args: dict[str, Any],
     cited: set[int],
     pages: dict[int, int],
+    editable_ids: set[int],
+    previewed_ids: set[int],
 ) -> dict[str, Any]:
     if name == "semantic_search":
-        return await _run_semantic_search(session, settings, args, cited, pages)
+        result = await _run_semantic_search(session, settings, args, cited, pages)
+        editable_ids.update(cited)
+        return result
     if name == "query_documents":
-        return await _run_query_documents(session, args, cited)
+        result = await _run_query_documents(session, args, cited)
+        editable_ids.update(cited)
+        return result
     if name == "compare_to_series":
-        return await _run_compare_to_series(session, settings, args, cited)
+        result = await _run_compare_to_series(session, settings, args, cited)
+        editable_ids.update(cited)
+        return result
+    if name == "update_document_metadata":
+        return await _run_update_document(session, args, editable_ids, previewed_ids)
     return {"error": f"unknown tool {name}"}
+
+
+def _collect_document_ids(value: Any, ids: set[int]) -> None:
+    """Recursively gather document ids from a decoded tool_result payload."""
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in ("document_id", "id") and isinstance(item, int):
+                ids.add(item)
+            elif key == "document_ids" and isinstance(item, list):
+                ids.update(i for i in item if isinstance(i, int))
+            else:
+                _collect_document_ids(item, ids)
+    elif isinstance(value, list):
+        for item in value:
+            _collect_document_ids(item, ids)
+
+
+def _ids_from_history(history: list[dict[str, Any]]) -> set[int]:
+    """Document ids surfaced by tool results in replayed prior turns, so the
+    write tool may edit documents cited earlier in the thread."""
+    ids: set[int] = set()
+    for message in history:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            raw = block.get("content")
+            if not isinstance(raw, str):
+                continue
+            try:
+                payload = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            _collect_document_ids(payload, ids)
+    return ids
+
+
+def _previewed_ids_from_history(history: list[dict[str, Any]]) -> set[int]:
+    """Document ids that were shown to the user as a write *preview* in replayed
+    prior turns. A confirmed write is only allowed for an id that was previewed
+    first, making propose-then-confirm a code invariant rather than a prompt
+    contract the model could skip."""
+    ids: set[int] = set()
+    for message in history:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            raw = block.get("content")
+            if not isinstance(raw, str):
+                continue
+            try:
+                payload = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if (
+                isinstance(payload, dict)
+                and payload.get("status") == "preview"
+                and isinstance(payload.get("document_id"), int)
+            ):
+                ids.add(payload["document_id"])
+    return ids
 
 
 async def _citations_for(
@@ -363,6 +615,12 @@ async def run_ask(
     used: list[str] = []
 
     history = list(history_messages or [])
+    # Documents the write tool is allowed to edit: those surfaced by a read tool
+    # earlier in the thread, plus any surfaced this turn (kept in sync below).
+    editable_ids: set[int] = _ids_from_history(history)
+    # Ids already shown to the user as a write preview earlier in the thread; a
+    # confirmed write requires the id to be in here (preview-then-confirm gate).
+    previewed_ids: set[int] = _previewed_ids_from_history(history)
     question_content: list[dict[str, Any]] = [{"type": "text", "text": question}]
     for image in images or []:
         question_content.append(
@@ -419,7 +677,14 @@ async def run_ask(
                 continue
             used.append(block.name)
             output = await _dispatch_tool(
-                session, settings, block.name, dict(block.input), cited, pages
+                session,
+                settings,
+                block.name,
+                dict(block.input),
+                cited,
+                pages,
+                editable_ids,
+                previewed_ids,
             )
             tool_results.append(
                 {

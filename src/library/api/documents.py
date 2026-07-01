@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
-from library.extraction.apply import get_or_create_tag, upsert_recipient, upsert_sender
+from library.documents_service import apply_document_update
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
 from library.jobs import extract_document
 from library.models import (
@@ -29,12 +29,10 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     IngestionEvent,
-    Kind,
     ReviewStatus,
     User,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
-from library.projects import get_or_create_project
 from library.schemas import (
     DocumentDetail,
     DocumentListItem,
@@ -57,69 +55,6 @@ from library.storage import derived_path, path_for
 from library.thumbnails import THUMBNAIL_NAME
 
 router: APIRouter = APIRouter(tags=["documents"])
-
-# PATCH body field -> name recorded in extra["user_edited_fields"] (the
-# storage-level names the W6 extraction contract checks).
-_EDITED_FIELD_NAMES: dict[str, str] = {
-    "kind_slug": "kind_id",
-    "sender": "sender_id",
-    "recipient": "recipient_id",
-}
-
-
-def _current_value(document: Document, name: str) -> Any:
-    """Read a storage-named field's current value off the document."""
-    if name == "kind_id":
-        return document.kind_id
-    if name == "sender_id":
-        return document.sender_id
-    if name == "recipient_id":
-        return document.recipient_id
-    if name == "tags":
-        return sorted(tag.slug for tag in document.tags)
-    if name == "projects":
-        return sorted(project.slug for project in document.projects)
-    return getattr(document, name, None)
-
-
-def _correction_records(
-    document: Document, originals: dict[str, Any], edited: list[str]
-) -> list[dict[str, Any]]:
-    """Build mining-ready correction records for the fields just edited.
-
-    ``originals`` maps storage field name -> value before the edit. Values are
-    JSON-stringified (dates/Decimals -> str) so the records survive in JSONB.
-    """
-    extraction = document.extra.get("extraction") or {}
-    text = document.ocr_text or ""
-
-    def jsonable(value: Any) -> Any:
-        return None if value is None else str(value)
-
-    def excerpt(value: Any) -> str:
-        needle = "" if value is None else str(value)
-        idx = text.find(needle) if needle else -1
-        if idx < 0:
-            return ""
-        start, end = max(0, idx - 40), min(len(text), idx + len(needle) + 40)
-        return text[start:end]
-
-    records: list[dict[str, Any]] = []
-    now = datetime.now(UTC).isoformat()
-    for name in edited:
-        new_value = _current_value(document, name)
-        records.append(
-            {
-                "field": name,
-                "original_value": jsonable(originals.get(name)),
-                "corrected_value": jsonable(new_value),
-                "source_excerpt": excerpt(originals.get(name)),
-                "prompt_version": extraction.get("prompt_version"),
-                "model": extraction.get("model"),
-                "corrected_at": now,
-            }
-        )
-    return records
 
 
 # ?disposition= on the file endpoints: `attachment` (default) downloads,
@@ -400,110 +335,9 @@ async def update_document(
     event records the change.
     """
     document = await _get_document_or_404(session, document_id)
-    provided = payload.model_dump(exclude_unset=True)
-    if not provided:
+    edited = await apply_document_update(session, document, payload, edited_by="user")
+    if not edited:
         return _detail(document)
-
-    # Snapshot pre-edit values before any mutation so corrections are accurate.
-    originals: dict[str, Any] = {}
-    for body_field, storage in (
-        ("kind_slug", "kind_id"),
-        ("sender", "sender_id"),
-        ("recipient", "recipient_id"),
-    ):
-        if body_field in provided:
-            originals[storage] = _current_value(document, storage)
-    if "tags" in provided:
-        originals["tags"] = _current_value(document, "tags")
-    if "projects" in provided:
-        originals["projects"] = _current_value(document, "projects")
-    for body_field in (
-        "title",
-        "summary",
-        "document_date",
-        "due_date",
-        "expiry_date",
-        "amount_total",
-        "currency",
-        "language",
-    ):
-        if body_field in provided:
-            originals[body_field] = _current_value(document, body_field)
-
-    edited: list[str] = []
-    if "kind_slug" in provided:
-        slug = provided.pop("kind_slug")
-        if slug is None:
-            document.kind_id = None
-        else:
-            kind = (
-                await session.execute(select(Kind).where(Kind.slug == slug))
-            ).scalar_one_or_none()
-            if kind is None:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=f"unknown kind slug: {slug!r}",
-                )
-            document.kind_id = kind.id
-        edited.append(_EDITED_FIELD_NAMES["kind_slug"])
-    if "sender" in provided:
-        name = provided.pop("sender")
-        document.sender_id = None if name is None else (await upsert_sender(session, name)).id
-        edited.append(_EDITED_FIELD_NAMES["sender"])
-    if "recipient" in provided:
-        name = provided.pop("recipient")
-        document.recipient_id = None if name is None else (await upsert_recipient(session, name)).id
-        edited.append(_EDITED_FIELD_NAMES["recipient"])
-    if "tags" in provided:
-        slugs = provided.pop("tags")
-        if slugs is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="tags cannot be null; send [] to clear them",
-            )
-        document.tags = [await get_or_create_tag(session, slug) for slug in dict.fromkeys(slugs)]
-        edited.append("tags")
-    if "projects" in provided:
-        identifiers = provided.pop("projects")
-        if identifiers is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="projects cannot be null; send [] to clear them",
-            )
-        document.projects = [
-            await get_or_create_project(session, identifier)
-            for identifier in dict.fromkeys(identifiers)
-        ]
-        edited.append("projects")
-    if provided.get("language", "") is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="language cannot be null",
-        )
-    for field, value in provided.items():
-        setattr(document, field, value)
-        edited.append(field)
-
-    user_edited = list(document.extra.get("user_edited_fields", []))
-    user_edited.extend(name for name in edited if name not in user_edited)
-    corrections = list(document.extra.get("corrections", []))
-    corrections.extend(_correction_records(document, originals, edited))
-    document.extra = {
-        **document.extra,
-        "user_edited_fields": user_edited,
-        "corrections": corrections,
-    }
-    session.add(
-        IngestionEvent(document_id=document.id, event="user_edited", detail={"fields": edited})
-    )
-    if "projects" in edited:
-        session.add(
-            IngestionEvent(
-                document_id=document.id,
-                event="project_changed",
-                detail={"projects": _current_value(document, "projects")},
-            )
-        )
     await session.commit()
     # updated_at has a SQL onupdate (func.now()); SQLAlchemy expires it after the
     # UPDATE since it can't know the server-computed value — refresh it eagerly
