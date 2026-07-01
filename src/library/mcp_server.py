@@ -170,6 +170,7 @@ def _document_summary(document: Document) -> dict[str, Any]:
         "mime_type": document.mime_type,
         "page_count": document.page_count,
         "created_at": document.created_at.isoformat(),
+        "updated_at": document.updated_at.isoformat(),
     }
 
 

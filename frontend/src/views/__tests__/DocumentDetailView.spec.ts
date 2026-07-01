@@ -50,6 +50,7 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     mime_type: 'application/pdf',
     page_count: 2,
     created_at: '2026-06-10T12:00:00Z',
+    updated_at: '2026-06-11T09:30:00Z',
     has_searchable_pdf: true,
     has_thumbnail: true,
     snippet: null,
@@ -607,6 +608,11 @@ describe('DocumentDetailView', () => {
     expect(stats).toContain('Invoice') // kind
     expect(stats).toContain('Eneco') // sender
     expect(stats).toContain('15 May 2026') // document date
+    // The read-only ingestion date and last-edited timestamp round out the trio.
+    expect(stats).toContain('Ingested')
+    expect(stats).toContain('10 June 2026') // created_at, formatted
+    expect(stats).toContain('Last edited')
+    expect(stats).toContain('11 June 2026') // updated_at, formatted
     // A null amount is dropped from the hero entirely — no em-dash placeholder.
     expect(stats).not.toContain('Amount')
     expect(stats).not.toContain('—')

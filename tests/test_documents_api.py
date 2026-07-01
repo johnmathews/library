@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import io
 from collections.abc import Iterable
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any
 
@@ -952,6 +952,44 @@ def test_patch_null_projects_rejected(api_client: TestClient, api_database_url: 
     document_id = seed_document(api_database_url, "w6-proj-null")
     response = api_client.patch(f"/api/documents/{document_id}", json={"projects": None})
     assert response.status_code == 422
+
+
+# --- Timestamps: ingestion date / last edited --------------------------------
+
+
+def test_detail_exposes_created_and_updated_at(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Detail surfaces both created_at (ingestion) and updated_at (last edited)."""
+    document_id = seed_document(api_database_url, "w-dates-detail")
+    body = api_client.get(f"/api/documents/{document_id}").json()
+    assert "created_at" in body and "updated_at" in body
+    # Freshly ingested and never edited: updated_at is not before ingestion.
+    assert datetime.fromisoformat(body["updated_at"]) >= datetime.fromisoformat(body["created_at"])
+
+
+def test_patch_projects_only_bumps_last_edited(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A projects-only edit advances updated_at past created_at.
+
+    "Last edited" must reflect *any* change, including membership-only edits
+    that touch the join table rather than a mapped document column.
+    """
+    document_id = seed_document(api_database_url, "w-dates-bump")
+    before = api_client.get(f"/api/documents/{document_id}").json()
+    created_at = datetime.fromisoformat(before["created_at"])
+    updated_before = datetime.fromisoformat(before["updated_at"])
+
+    response = api_client.patch(
+        f"/api/documents/{document_id}", json={"projects": ["w-dates-bump-proj"]}
+    )
+    assert response.status_code == 200, response.text
+    updated_after = datetime.fromisoformat(response.json()["updated_at"])
+
+    # The membership edit happened in a later transaction than the insert.
+    assert updated_after > created_at
+    assert updated_after > updated_before
 
 
 # --- Topics ------------------------------------------------------------------

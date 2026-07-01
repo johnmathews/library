@@ -355,6 +355,10 @@ const heroStats = computed<{ label: string; value: string }[]>(() => {
   if (d.sender?.name) stats.push({ label: 'Sender', value: d.sender.name })
   const documentDate = formatDate(d.document_date)
   if (documentDate) stats.push({ label: 'Document date', value: documentDate })
+  // Ingestion date (created_at) and last edited (updated_at) are always present
+  // and read-only — the three dates read as a distinct trio in the hero.
+  stats.push({ label: 'Ingested', value: formatDateTime(d.created_at) })
+  stats.push({ label: 'Last edited', value: formatDateTime(d.updated_at) })
   if (d.amount_total !== null) {
     const amount = [d.amount_total, d.currency].filter(Boolean).join(' ')
     if (amount) stats.push({ label: 'Amount', value: amount })

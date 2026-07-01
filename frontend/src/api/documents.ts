@@ -108,6 +108,8 @@ export interface DocumentDetail extends DocumentListItem {
   ocr_confidence: number | null
   due_date: string | null
   expiry_date: string | null
+  /** Last time the document was edited; bumps on any change, including tags/projects. */
+  updated_at: string
   source: DocumentSource
   original_filename: string | null
   sha256: string

@@ -504,7 +504,12 @@ async def update_document(
             )
         )
     await session.commit()
-    await session.refresh(document, ["kind", "sender", "recipient", "tags", "projects", "events"])
+    # updated_at has a SQL onupdate (func.now()); SQLAlchemy expires it after the
+    # UPDATE since it can't know the server-computed value — refresh it eagerly
+    # here so _detail() doesn't trigger a lazy load in this sync context.
+    await session.refresh(
+        document, ["kind", "sender", "recipient", "tags", "projects", "events", "updated_at"]
+    )
     return _detail(document)
 
 
@@ -713,6 +718,7 @@ def _detail(document: Document) -> DocumentDetail:
         ocr_confidence=document.ocr_confidence,
         due_date=document.due_date,
         expiry_date=document.expiry_date,
+        updated_at=document.updated_at,
         source=document.source,
         original_filename=document.original_filename,
         sha256=document.sha256,

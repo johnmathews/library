@@ -119,6 +119,9 @@ class DocumentDetail(DocumentListItem):
     ocr_confidence: float | None
     due_date: date | None
     expiry_date: date | None
+    updated_at: datetime = Field(
+        description="Last edit time; bumps on any change, including tags/projects."
+    )
     source: DocumentSource
     original_filename: str | None
     sha256: str
