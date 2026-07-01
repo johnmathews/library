@@ -406,6 +406,13 @@ On success:
 - **Sender** is upserted by case-insensitive name match (create if new).
 - **Recipient** is upserted by case-insensitive name match (create if new),
   identically to sender; skipped when a user has already edited `recipient_id`.
+  When the LLM returns **no** recipient, a fallback fires: `resolve_recipient_from_email`
+  (`extraction/apply.py`) matches the email `To:` addresses stashed on
+  `extra["email_to"]` against users' `email_forward_addresses`
+  (case-insensitive, via `match_user_by_email`) and, on a hit, sets the
+  recipient to that user's linked recipient. This is **fill-only** — an
+  LLM-extracted recipient always wins, and a user's manual edit still wins over
+  both (the whole recipient step is skipped once `recipient_id` is user-edited).
 - **Kind** is resolved by slug to the seeded `kinds` row.
 - **Tags** are get-or-created by slug and merged into the document's
   tag set (never removed).
@@ -940,6 +947,17 @@ Details and decisions:
   [jobs-and-notifications.md](jobs-and-notifications.md) §1.5. Note: if
   you forward from your own mail client the `From:` header becomes *your*
   address, so list the addresses you forward *from* in your settings.
+- **Recipient auto-fill from `To:`.** The message's `To:` address(es) are
+  captured onto `document.extra["email_to"]` (`_to_addresses` / `_event_detail`
+  in `email_ingest.py`, seeded into `Document.extra` via `ingest_file`'s
+  `extra_document` parameter). During extraction, when the LLM does **not**
+  determine a recipient, the pipeline resolves that `To:` address against every
+  user's configured `email_forward_addresses` (case-insensitive) and, on a
+  match, sets the recipient to that user's linked recipient — see the
+  recipient fallback under "Applying results" in the Extraction section above.
+  It is **fill-only** (an LLM-extracted recipient or a user's manual edit always
+  wins) and reuses the same `email_forward_addresses` as sender→owner
+  attribution — no new configuration.
 - **Allowlist.** `LIBRARY_EMAIL_ALLOWED_SENDERS` is comma-separated and
   case-insensitive; empty (default) accepts mail from anyone, so set it
   whenever the address is guessable. Rejected mail stays in the inbox

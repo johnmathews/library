@@ -232,6 +232,12 @@ storage names: `kind_slug`→`kind_id`, `sender`→`sender_id`,
 ingestion event `user_edited` is recorded with the changed field names.
 Returns the updated document detail.
 
+This route now delegates the mutation to the shared **`apply_document_update`**
+service (`src/library/documents_service.py`) with `edited_by="user"`; the same
+service backs the Ask agent's `update_document_metadata` write tool
+(`edited_by="ask"` — see [ask.md §1.8](ask.md)), so both surfaces apply edits,
+record provenance, and lock fields against re-extraction identically.
+
 > **`topics` is read-only.** The auto-extracted `topics` list is **not** in this
 > body (it was removed from `DocumentUpdate` and the detail editor). It still
 > appears on every list/detail response (and the MCP document summary) and is
@@ -696,8 +702,10 @@ unsupported `media_type`.
   the archive does not contain the answer (then `citations` is empty).
 - `citations` — documents the answer relied on (`document_id`, `title`,
   `page_number`); link these to `GET /api/documents/{id}`.
-- `used_tools` — which retrieval tools the engine invoked
-  (`semantic_search`, `query_documents`, `compare_to_series`).
+- `used_tools` — which tools the engine invoked: the retrieval tools
+  (`semantic_search`, `query_documents`, `compare_to_series`) and the
+  metadata write tool (`update_document_metadata`) when the turn previewed or
+  saved a metadata edit (see [ask.md §1.8](ask.md)).
 - `cost_usd` — estimated answer cost for this turn (recorded in `ask_turns`,
   not gated; thread total = sum of its turns).
 - `thread_id` — the conversation thread this turn belongs to (new or existing).
