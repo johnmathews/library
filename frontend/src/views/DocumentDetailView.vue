@@ -369,6 +369,28 @@ const heroStats = computed<{ label: string; value: string }[]>(() => {
   return stats
 })
 
+/** Pre-filled text for the "Ask about this document" button. It just names the
+ * current document so the existing Ask RAG retrieval surfaces it — there is no
+ * backend change. Kind/sender/date are folded into a parenthetical, and any
+ * missing part is omitted gracefully (no empty `()`). */
+const askPrompt = computed<string>(() => {
+  const d = doc.value
+  if (!d) return ''
+  const title = d.title?.trim() || d.original_filename?.trim() || ''
+  // kind + sender read as one phrase ("Invoice from Eneco"); the date is a
+  // separate comma-delimited part ("…, 15 May 2026").
+  const descriptor: string[] = []
+  if (d.kind?.name) descriptor.push(d.kind.name)
+  if (d.sender?.name) descriptor.push(`from ${d.sender.name}`)
+  const parenParts = [descriptor.join(' '), formatDate(d.document_date)].filter(
+    (part): part is string => Boolean(part),
+  )
+  const parenthetical = parenParts.length ? ` (${parenParts.join(', ')})` : ''
+  return title
+    ? `Tell me about the document "${title}"${parenthetical}: `
+    : `Tell me about this document${parenthetical}: `
+})
+
 // --- Page-wide edit mode (per-field autosave) ---------------------------------
 //
 // A single "Edit" toggle reveals an inline editor for every field at once,
@@ -1998,6 +2020,18 @@ watch(
             >
               {{ extracting ? 'Extraction running…' : 'Re-run extraction' }}
             </AppButton>
+            <!-- Opens the Ask view in a new tab with the composer pre-filled to
+                 name this document. AppButton has no `target`, so this is a
+                 plain RouterLink styled to match the secondary buttons. -->
+            <RouterLink
+              :to="{ name: 'ask', query: { q: askPrompt } }"
+              target="_blank"
+              rel="noopener"
+              data-testid="ask-about-document"
+              class="btn border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-800 dark:text-gray-300"
+            >
+              Ask about this document
+            </RouterLink>
             <AppButton
               variant="warning"
               :to="`/documents/${doc.id}/delete`"

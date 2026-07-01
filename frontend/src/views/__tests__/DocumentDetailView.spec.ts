@@ -148,6 +148,7 @@ describe('DocumentDetailView', () => {
         { path: '/documents/:id', name: 'document-detail', component: DocumentDetailView },
         { path: '/documents/:id/delete', name: 'document-delete', component: Stub },
         { path: '/jobs', name: 'jobs', component: Stub },
+        { path: '/ask', name: 'ask', component: Stub },
       ],
     })
   })
@@ -1025,6 +1026,26 @@ describe('DocumentDetailView', () => {
     const link = w.find('[data-testid="view-job-history"]')
     expect(link.exists()).toBe(true)
     expect(link.attributes('href')).toBe('/jobs?document_id=12')
+  })
+
+  it('links "Ask about this document" to /ask in a new tab, seeding the title (W1)', async () => {
+    const w = await mountView()
+    const link = w.find('[data-testid="ask-about-document"]')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('target')).toBe('_blank')
+    const href = link.attributes('href')!
+    const q = new URL(href, 'http://localhost').searchParams.get('q') ?? ''
+    expect(q).toContain('Energierekening mei 2026')
+  })
+
+  it('omits the parenthetical entirely when kind/sender/date are all missing (W1)', async () => {
+    detail = makeDetail({ kind: null, sender: null, document_date: null })
+    const w = await mountView()
+    const href = w.find('[data-testid="ask-about-document"]').attributes('href')!
+    const q = new URL(href, 'http://localhost').searchParams.get('q') ?? ''
+    // No empty parenthetical and no dangling open-paren at all.
+    expect(q).not.toContain('()')
+    expect(q).not.toContain('(')
   })
 
   describe('note editing and version history', () => {

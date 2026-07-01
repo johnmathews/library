@@ -347,6 +347,16 @@ onMounted(() => {
   const id = route.params.threadId
   if (id) {
     loadThread(Number(id))
+    return
+  }
+  // On a fresh /ask (no thread to resume), pre-fill the composer from ?q= —
+  // e.g. the document detail view's "Ask about this document" button. Vue
+  // Router already URL-decodes query values, so seed as-is. Only on the initial
+  // mount, so it isn't clobbered by the empty default or a later reset.
+  const seed = route.query.q
+  if (typeof seed === 'string' && seed.length > 0) {
+    question.value = seed
+    openComposer()
   }
 })
 

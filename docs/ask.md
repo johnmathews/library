@@ -216,6 +216,15 @@ thread. **"New conversation"** clears to an empty thread; when the view is alrea
 an empty new conversation (no thread selected, no turns) the button is greyed out
 and disabled, since starting a new one there would do nothing.
 
+On a **fresh `/ask`** the view reads a **`?q=` query parameter** on initial mount:
+when present (and not resuming a `/ask/:threadId` thread) it seeds the composer
+textarea with that text and opens/focuses the composer, ready to send or edit.
+This is what the document detail view's **"Ask about this document"** button uses
+(see [frontend.md §1.5](frontend.md)) — it links to `/ask?q=<prompt>` in a new
+tab with a prompt naming the document. It is **pre-fill only**: there is no
+backend change and no document scoping — the named document is surfaced by the
+ordinary Ask retrieval.
+
 Each turn is visually layered so the panel, the question, and the answer are
 distinguishable: the question is a right-aligned violet bubble, and the answer
 (with its citations disclosure and tools/cost meta) sits on a subtle surface card

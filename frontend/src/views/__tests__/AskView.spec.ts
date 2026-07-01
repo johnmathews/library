@@ -498,4 +498,49 @@ describe('AskView', () => {
     await w.find('[data-testid="ask-image-remove"]').trigger('click')
     expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(false)
   })
+
+  it('seeds the composer from ?q= and reveals + focuses it (W1)', async () => {
+    // The "Ask about this document" button opens /ask?q=… in a new tab; the
+    // (already URL-decoded) query pre-fills the composer, ready to send.
+    await router.push('/ask?q=Hello%20world')
+    const w = mountView()
+    await flushPromises()
+
+    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe('Hello world')
+    // The composer is revealed (not hidden on mobile) and focused.
+    expect(w.find('[data-testid="ask-form"]').classes()).not.toContain('max-lg:hidden')
+    expect(document.activeElement).toBe(w.find('#ask-question').element)
+  })
+
+  it('leaves the composer empty when no ?q= is present (W1)', async () => {
+    const w = mountView()
+    await flushPromises()
+    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe('')
+  })
+
+  it('resumes a thread on /ask/:threadId and ignores an absent ?q= (W1)', async () => {
+    getThreadMock.mockResolvedValue({
+      id: 7,
+      title: 'Energy',
+      turns: [
+        {
+          id: 1,
+          query: 'who?',
+          answer: 'Vattenfall [#3].',
+          citations: [],
+          used_tools: [],
+          cost_usd: 0.02,
+          created_at: '',
+        },
+      ],
+    })
+    await router.push('/ask/7')
+    const w = mountView()
+    await flushPromises()
+
+    expect(getThreadMock).toHaveBeenCalledWith(7)
+    // The thread resumes; the composer is not seeded (no q) and stays empty.
+    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe('')
+    expect(w.text()).toContain('Vattenfall')
+  })
 })
