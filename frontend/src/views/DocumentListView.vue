@@ -227,9 +227,10 @@ function isLockedPdf(item: DocumentListItem): boolean {
   return item.mime_type === 'application/pdf' && !item.has_thumbnail
 }
 
-// text/markdown docs (ingested email) have no visual to thumbnail. Instead of a
-// bare "Text" label we render a small metadata "facsimile" in the preview box —
-// a stand-in that echoes the header of a real document (sender, addressee,
+// Text documents / email notes (text/*, e.g. text/plain and text/markdown) have
+// no visual to thumbnail. Instead of a bare "Text" label we render a small
+// metadata "facsimile" in the preview box — a stand-in that echoes the header
+// of a real document (sender, addressee,
 // date). Empty fields are dropped so the box never shows dangling labels. The
 // title is rendered separately as the heading line (see the template).
 function previewMetadata(item: DocumentListItem): { label: string; value: string }[] {
@@ -401,10 +402,11 @@ const gridColsStyle = computed(() =>
               </svg>
               <span class="text-xs">Protected PDF</span>
             </template>
-            <template v-else-if="item.mime_type === 'text/markdown' && hasPreviewMetadata(item)">
-              <!-- Metadata facsimile: a stand-in "document header" for email
-                   notes, which have no page image to thumbnail. One field per
-                   line; title as the heading, the rest as label/value rows. -->
+            <template v-else-if="item.mime_type.startsWith('text/') && hasPreviewMetadata(item)">
+              <!-- Metadata facsimile: a stand-in "document header" for text
+                   documents / email notes, which have no page image to
+                   thumbnail. One field per line; title as the heading, the
+                   rest as label/value rows. -->
               <span
                 class="block w-full px-4 py-3 text-left font-normal not-italic text-gray-500 dark:text-gray-400"
                 data-testid="markdown-preview"

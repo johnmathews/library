@@ -200,12 +200,16 @@ describe('DocumentListView', () => {
     expect(w.find('.app-doc-card__thumbnail-fallback').text()).toContain('Protected PDF')
   })
 
-  it('shows the plain file-type label for a non-PDF without a thumbnail', async () => {
+  it('shows the generic "File" label for a non-text file without a thumbnail', async () => {
     listResponse = () =>
-      jsonResponse(listBody([makeItem({ has_thumbnail: false, mime_type: 'text/plain' })]))
+      jsonResponse(
+        listBody([makeItem({ has_thumbnail: false, mime_type: 'application/octet-stream' })]),
+      )
     const w = await mountView()
     expect(w.find('[data-testid="thumbnail-locked"]').exists()).toBe(false)
-    expect(w.find('.app-doc-card__thumbnail-fallback').text()).toBe('Text')
+    // A non-text type never renders the metadata facsimile, even with metadata.
+    expect(w.find('[data-testid="markdown-preview"]').exists()).toBe(false)
+    expect(w.find('.app-doc-card__thumbnail-fallback').text()).toBe('File')
   })
 
   it('renders a metadata facsimile (not "Text") for a text/markdown tile', async () => {
@@ -260,10 +264,47 @@ describe('DocumentListView', () => {
     expect(preview.text()).not.toContain('To')
   })
 
-  it('still shows "Text" for a text/plain tile', async () => {
+  it('renders a metadata facsimile (not "Text") for a text/plain tile with metadata', async () => {
     listResponse = () =>
-      jsonResponse(listBody([makeItem({ has_thumbnail: false, mime_type: 'text/plain' })]))
+      jsonResponse(
+        listBody([
+          makeItem({
+            has_thumbnail: false,
+            mime_type: 'text/plain',
+            title: 'Meterstanden 2026',
+            kind: { slug: 'invoice', name: 'Invoice' },
+            sender: { id: 3, name: 'Eneco' },
+          }),
+        ]),
+      )
     const w = await mountView()
+    const preview = w.find('[data-testid="markdown-preview"]')
+    expect(preview.exists()).toBe(true)
+    const text = preview.text()
+    expect(text).toContain('Meterstanden 2026')
+    expect(text).toContain('Invoice')
+    expect(text).toContain('Eneco')
+    // The generic "Text" placeholder is gone.
+    expect(w.find('.app-doc-card__thumbnail-fallback').text()).not.toBe('Text')
+  })
+
+  it('falls through to "Text" for a text tile with no title or metadata', async () => {
+    listResponse = () =>
+      jsonResponse(
+        listBody([
+          makeItem({
+            has_thumbnail: false,
+            mime_type: 'text/plain',
+            title: null,
+            kind: null,
+            sender: null,
+            recipient: null,
+            document_date: null,
+          }),
+        ]),
+      )
+    const w = await mountView()
+    // hasPreviewMetadata is false, so no facsimile — just the bare "Text" label.
     expect(w.find('[data-testid="markdown-preview"]').exists()).toBe(false)
     expect(w.find('.app-doc-card__thumbnail-fallback').text()).toBe('Text')
   })
