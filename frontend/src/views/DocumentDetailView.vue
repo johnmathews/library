@@ -1140,12 +1140,42 @@ watch(
       id="document-hero"
       class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5 sm:p-6 mb-6"
     >
-      <h1
-        id="document-title"
-        class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold break-words app-detail-title"
-      >
-        {{ doc.title ?? 'Untitled document' }}
-      </h1>
+      <!-- Title + primary call-to-action. On mobile the button stacks under the
+           title; from `sm` up it floats to the top-right so "Ask" is the first
+           action a reader sees. `min-w-0` lets the title wrap instead of
+           shoving the button off-screen. -->
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <h1
+          id="document-title"
+          class="min-w-0 text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold break-words app-detail-title"
+        >
+          {{ doc.title ?? 'Untitled document' }}
+        </h1>
+        <AppButton
+          variant="primary"
+          :to="{ name: 'ask', query: { q: askPrompt } }"
+          target="_blank"
+          class="shrink-0 gap-1.5 self-start"
+          data-testid="ask-about-document"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="1.5"
+            stroke="currentColor"
+            class="w-4 h-4"
+            aria-hidden="true"
+          >
+            <path
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z"
+            />
+          </svg>
+          Ask about this document
+        </AppButton>
+      </div>
       <dl
         v-if="heroStats.length"
         class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3"
@@ -2020,18 +2050,6 @@ watch(
             >
               {{ extracting ? 'Extraction running…' : 'Re-run extraction' }}
             </AppButton>
-            <!-- Opens the Ask view in a new tab with the composer pre-filled to
-                 name this document. AppButton has no `target`, so this is a
-                 plain RouterLink styled to match the secondary buttons. -->
-            <RouterLink
-              :to="{ name: 'ask', query: { q: askPrompt } }"
-              target="_blank"
-              rel="noopener"
-              data-testid="ask-about-document"
-              class="btn border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-800 dark:text-gray-300"
-            >
-              Ask about this document
-            </RouterLink>
             <AppButton
               variant="warning"
               :to="`/documents/${doc.id}/delete`"

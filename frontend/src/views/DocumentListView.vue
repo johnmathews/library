@@ -227,6 +227,25 @@ function isLockedPdf(item: DocumentListItem): boolean {
   return item.mime_type === 'application/pdf' && !item.has_thumbnail
 }
 
+// text/markdown docs (ingested email) have no visual to thumbnail. Instead of a
+// bare "Text" label we render a small metadata "facsimile" in the preview box —
+// a stand-in that echoes the header of a real document (sender, addressee,
+// date). Empty fields are dropped so the box never shows dangling labels. The
+// title is rendered separately as the heading line (see the template).
+function previewMetadata(item: DocumentListItem): { label: string; value: string }[] {
+  const rows: { label: string; value: string }[] = []
+  if (item.kind) rows.push({ label: 'Kind', value: item.kind.name })
+  if (item.sender) rows.push({ label: 'From', value: item.sender.name })
+  if (item.recipient) rows.push({ label: 'To', value: item.recipient.name })
+  if (item.document_date) rows.push({ label: 'Date', value: formatDate(item.document_date) })
+  return rows
+}
+
+// Show the metadata facsimile only when there is something worth showing.
+function hasPreviewMetadata(item: DocumentListItem): boolean {
+  return Boolean(item.title) || previewMetadata(item).length > 0
+}
+
 function formatAmount(item: DocumentListItem): string | null {
   if (item.amount_total === null) return null
   if (item.currency) {
@@ -382,12 +401,28 @@ const gridColsStyle = computed(() =>
               </svg>
               <span class="text-xs">Protected PDF</span>
             </template>
-            <template v-else-if="item.mime_type === 'text/markdown' && item.preview_excerpt">
+            <template v-else-if="item.mime_type === 'text/markdown' && hasPreviewMetadata(item)">
+              <!-- Metadata facsimile: a stand-in "document header" for email
+                   notes, which have no page image to thumbnail. One field per
+                   line; title as the heading, the rest as label/value rows. -->
               <span
-                class="block w-full px-3 py-2 text-left text-xs font-normal leading-snug text-gray-500 dark:text-gray-400 line-clamp-5"
+                class="block w-full px-4 py-3 text-left font-normal not-italic text-gray-500 dark:text-gray-400"
                 data-testid="markdown-preview"
-                >{{ item.preview_excerpt }}</span
               >
+                <span
+                  v-if="item.title"
+                  class="block text-xs font-semibold text-gray-600 dark:text-gray-300 line-clamp-2"
+                  >{{ item.title }}</span
+                >
+                <span
+                  v-for="row in previewMetadata(item)"
+                  :key="row.label"
+                  class="mt-1 block truncate text-[11px] leading-snug"
+                >
+                  <span class="text-gray-400 dark:text-gray-500">{{ row.label }}</span>
+                  {{ row.value }}
+                </span>
+              </span>
             </template>
             <template v-else>{{ fileTypeLabel(item) }}</template>
           </span>

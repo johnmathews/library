@@ -40,7 +40,6 @@ function makeItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
     snippet: null,
     rank: null,
     review_status: 'unreviewed',
-    preview_excerpt: null,
     ...overrides,
   }
 }
@@ -209,32 +208,61 @@ describe('DocumentListView', () => {
     expect(w.find('.app-doc-card__thumbnail-fallback').text()).toBe('Text')
   })
 
-  it('renders a body excerpt (not "Text") for a text/markdown tile with preview_excerpt', async () => {
+  it('renders a metadata facsimile (not "Text") for a text/markdown tile', async () => {
     listResponse = () =>
       jsonResponse(
         listBody([
           makeItem({
             has_thumbnail: false,
             mime_type: 'text/markdown',
-            preview_excerpt: 'Your electricity bill for May is due.',
+            title: 'Energierekening mei 2026',
+            kind: { slug: 'invoice', name: 'Invoice' },
+            sender: { id: 3, name: 'Eneco' },
+            recipient: { id: 5, name: 'John' },
+            document_date: '2026-05-15',
           }),
         ]),
       )
     const w = await mountView()
     const preview = w.find('[data-testid="markdown-preview"]')
     expect(preview.exists()).toBe(true)
-    expect(preview.text()).toBe('Your electricity bill for May is due.')
-    // The generic "Text" placeholder is replaced by the excerpt.
+    const text = preview.text()
+    // Title heading + one line per non-empty field (kind / sender / recipient / date).
+    expect(text).toContain('Energierekening mei 2026')
+    expect(text).toContain('Invoice')
+    expect(text).toContain('Eneco')
+    expect(text).toContain('John')
+    // The generic "Text" placeholder is gone.
     expect(w.find('.app-doc-card__thumbnail-fallback').text()).not.toBe('Text')
   })
 
-  it('still shows "Text" for a text/markdown tile without a preview_excerpt', async () => {
+  it('omits empty metadata rows in the facsimile', async () => {
     listResponse = () =>
       jsonResponse(
         listBody([
-          makeItem({ has_thumbnail: false, mime_type: 'text/markdown', preview_excerpt: null }),
+          makeItem({
+            has_thumbnail: false,
+            mime_type: 'text/markdown',
+            title: 'Just a title',
+            kind: null,
+            sender: null,
+            recipient: null,
+            document_date: null,
+          }),
         ]),
       )
+    const w = await mountView()
+    const preview = w.find('[data-testid="markdown-preview"]')
+    expect(preview.exists()).toBe(true)
+    expect(preview.text()).toContain('Just a title')
+    // No dangling field labels when their values are absent.
+    expect(preview.text()).not.toContain('From')
+    expect(preview.text()).not.toContain('To')
+  })
+
+  it('still shows "Text" for a text/plain tile', async () => {
+    listResponse = () =>
+      jsonResponse(listBody([makeItem({ has_thumbnail: false, mime_type: 'text/plain' })]))
     const w = await mountView()
     expect(w.find('[data-testid="markdown-preview"]').exists()).toBe(false)
     expect(w.find('.app-doc-card__thumbnail-fallback').text()).toBe('Text')

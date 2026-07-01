@@ -23,6 +23,24 @@ describe('AppButton', () => {
     const wrapper = mount(AppButton, { props: { href: 'https://x' }, slots: { default: 'Go' } })
     expect(wrapper.find('a').attributes('href')).toBe('https://x')
   })
+  it('passes target through and pairs _blank with rel="noopener" on the <a> branch', () => {
+    const wrapper = mount(AppButton, {
+      props: { href: 'https://x', target: '_blank' },
+      slots: { default: 'Go' },
+    })
+    const a = wrapper.get('a')
+    expect(a.attributes('target')).toBe('_blank')
+    expect(a.attributes('rel')).toBe('noopener')
+  })
+  it('does not add rel when target is not _blank', () => {
+    const wrapper = mount(AppButton, {
+      props: { href: 'https://x', target: '_self' },
+      slots: { default: 'Go' },
+    })
+    const a = wrapper.get('a')
+    expect(a.attributes('target')).toBe('_self')
+    expect(a.attributes('rel')).toBeUndefined()
+  })
   it('maps the secondary variant to grey border styling', () => {
     const wrapper = mount(AppButton, { props: { variant: 'secondary' }, slots: { default: 'X' } })
     expect(wrapper.get('button').classes().join(' ')).toContain('border-gray-200')

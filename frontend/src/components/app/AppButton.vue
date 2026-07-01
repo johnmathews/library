@@ -1,13 +1,17 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, type RouteLocationRaw } from 'vue-router'
 
 const props = withDefaults(
   defineProps<{
     variant?: 'primary' | 'secondary' | 'warning' | 'inverse'
     type?: 'submit' | 'button' | 'reset'
-    to?: string
+    to?: RouteLocationRaw
     href?: string
+    /** Link target, e.g. `_blank` to open in a new tab. Applies only to the
+     * `to` (RouterLink) and `href` (anchor) forms; ignored for the `<button>`.
+     * `_blank` automatically gets `rel="noopener"`. */
+    target?: string
     disabled?: boolean
     preventDoubleClick?: boolean
   }>(),
@@ -30,6 +34,10 @@ const classes = computed(() => [
   { 'pointer-events-none opacity-60': props.disabled },
 ])
 
+// Opening a new tab without `rel="noopener"` lets the opened page reach back
+// through `window.opener`; pair the two so callers can't forget.
+const linkRel = computed(() => (props.target === '_blank' ? 'noopener' : undefined))
+
 let lastClick = 0
 
 function onClick(event: MouseEvent): void {
@@ -46,6 +54,8 @@ function onClick(event: MouseEvent): void {
   <RouterLink
     v-if="props.to"
     :to="props.to"
+    :target="props.target"
+    :rel="linkRel"
     :class="classes"
     :aria-disabled="props.disabled || undefined"
     @click="props.disabled ? $event.preventDefault() : onClick($event)"
@@ -56,6 +66,8 @@ function onClick(event: MouseEvent): void {
     v-else-if="props.href"
     :href="props.href"
     role="button"
+    :target="props.target"
+    :rel="linkRel"
     :class="classes"
     :aria-disabled="props.disabled || undefined"
     @click="props.disabled ? $event.preventDefault() : onClick($event)"

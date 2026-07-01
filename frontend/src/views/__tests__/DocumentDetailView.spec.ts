@@ -1033,9 +1033,19 @@ describe('DocumentDetailView', () => {
     const link = w.find('[data-testid="ask-about-document"]')
     expect(link.exists()).toBe(true)
     expect(link.attributes('target')).toBe('_blank')
+    // Guard against tab-napping regressing on the RouterLink (new-tab) branch.
+    expect(link.attributes('rel')).toBe('noopener')
     const href = link.attributes('href')!
     const q = new URL(href, 'http://localhost').searchParams.get('q') ?? ''
     expect(q).toContain('Energierekening mei 2026')
+  })
+
+  it('places the "Ask about this document" button in the hero, not the Actions panel', async () => {
+    const w = await mountView()
+    const hero = w.find('#document-hero')
+    expect(hero.find('[data-testid="ask-about-document"]').exists()).toBe(true)
+    // Exactly one — it was moved out of the Actions panel, not duplicated.
+    expect(w.findAll('[data-testid="ask-about-document"]')).toHaveLength(1)
   })
 
   it('omits the parenthetical entirely when kind/sender/date are all missing (W1)', async () => {
