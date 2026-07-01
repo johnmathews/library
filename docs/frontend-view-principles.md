@@ -44,6 +44,11 @@ Before a view is "done", every box is ticked:
 10. **Keep tests green and update contracts.** Some layout facts are acceptance
     contracts (e.g. the dashboard column counts in `e2e/responsive.spec.ts`). If
     you change one, change the contract and its test deliberately.
+11. **One field pattern per bar; prefer native controls.** In any filter/control
+    row, every control shares the same label recipe and `.form-*` class, laid out
+    with `flex flex-wrap items-end gap-3` (§5). Prefer native inputs
+    (`<input type="date">`, `<select>`) over hand-rolled multi-field widgets
+    where they suffice.
 
 ## 2. Why width is a per-view discipline problem
 
@@ -79,6 +84,10 @@ Defined in `assets/main.css` (`@theme` tokens) and
 - **Type:** Inter; headings `text-2xl md:text-3xl font-bold` for page titles.
 - **Badges/pills:** `AppBadge`, `FilterPill`. **Empty/loading/error states:**
   reuse existing view patterns (e.g. `DocumentListView`).
+- **Field rows / filter bars:** one label recipe + `.form-*` controls in a
+  `flex flex-wrap items-end gap-3` row; prefer native `<input type="date">` /
+  `<select>` over hand-rolled widgets. See §5 and the reference implementation
+  `components/charts/ChartControls.vue`.
 
 Full `App*` inventory: `components/app/index.ts`.
 
@@ -97,7 +106,43 @@ preferences (what *fields* show on a tile, notification settings) = server-side
 user profile via the settings API. Choose by asking "is this about this screen,
 or about this user everywhere?"
 
-## 5. When you add a new view
+## 5. Field rows, filter bars, and native inputs
+
+Filter/control bars (search toolbars, the charts control bar, list filters) are
+where inconsistency shows most: several labelled controls sit side by side, so the
+eye compares them directly. Use one pattern for all of them.
+
+- **The row:** `flex flex-wrap items-end gap-3` — controls bottom-aligned so
+  labels and inputs line up; wraps cleanly on narrow screens.
+- **The label (identical on every control):**
+  `block text-xs uppercase text-gray-600 dark:text-gray-300 font-semibold mb-1`.
+  Mixing label styles within one bar (one control `text-sm font-medium`, the next
+  a `<legend>`) is the single thing that made the pre-2026-07-01 `/charts` bar look
+  "weird" even though each control worked in isolation.
+- **The controls:** `.form-input` / `.form-select` already carry border, bg,
+  `rounded-lg`, `text-base sm:text-sm`, and dark mode — add the class, don't
+  re-spec padding/border per control.
+- **Prefer native inputs where they suffice.** A native `<input type="date">`
+  styled with `.form-input` gives a calendar popup, correct locale display, and
+  accessibility for free — and is *less* code than a hand-rolled widget. The
+  `/charts` From/To fields were three cramped Day/Month/Year boxes (`AppDateInput`);
+  replacing them with native date inputs matched the look and deleted logic. Reach
+  for a bespoke multi-field control only when the native one genuinely can't do the
+  job (`AppDateInput` remains for partial-date entry, e.g. `DocumentFilterBar`).
+
+**Reference implementation:** `components/charts/ChartControls.vue` (2026-07-01).
+The sister project `journal/webapp` (same Mosaic stack) uses the identical pattern
+in its Search view; when a Library bar looks off, compare against it.
+
+**Why this holds.** The design language's quality is *systemic*, not per-view
+inspiration: tokens defined once (`@theme` in `main.css`), a small shared CSS
+component layer (`utility-patterns.css`), one naming vocabulary (`data-testid`),
+all enforced by lint/format/coverage gates. You get "right the first time" by
+*applying* the system, not re-deciding padding, colour, and radius each view.
+Because tests assert on `data-testid` (not classes), a bar can be fully restyled
+without breaking contracts — so consistency is cheap to maintain.
+
+## 6. When you add a new view
 
 1. Start from `DocumentDetailView.vue` as the structural template (header,
    no root cap, responsive grid).
