@@ -90,6 +90,13 @@ class DocumentListItem(BaseModel):
     review_status: ReviewStatus
     amount_total: Decimal | None = None
     currency: str | None = None
+    preview_excerpt: str | None = Field(
+        default=None,
+        description=(
+            "Plain-text excerpt of the body for text/markdown (email) documents; "
+            "null for every other MIME type. Rendered on the dashboard tile."
+        ),
+    )
     snippet: str | None = Field(
         default=None,
         description=(

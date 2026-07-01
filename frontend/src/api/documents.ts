@@ -66,6 +66,11 @@ export interface DocumentListItem {
   currency: string | null
   review_status: ReviewStatus
   /**
+   * Plain-text body excerpt for email-ingested `text/markdown` tiles; null for
+   * every other MIME type (which keep the generic file-type placeholder).
+   */
+  preview_excerpt?: string | null
+  /**
    * Only non-null with `?q=`. ts_headline fragments with <b>/</b> markers
    * over raw (NOT HTML-escaped) OCR text — render via `renderSnippet`,
    * never as-is.

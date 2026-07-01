@@ -40,6 +40,7 @@ function makeItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
     snippet: null,
     rank: null,
     review_status: 'unreviewed',
+    preview_excerpt: null,
     ...overrides,
   }
 }
@@ -205,6 +206,37 @@ describe('DocumentListView', () => {
       jsonResponse(listBody([makeItem({ has_thumbnail: false, mime_type: 'text/plain' })]))
     const w = await mountView()
     expect(w.find('[data-testid="thumbnail-locked"]').exists()).toBe(false)
+    expect(w.find('.app-doc-card__thumbnail-fallback').text()).toBe('Text')
+  })
+
+  it('renders a body excerpt (not "Text") for a text/markdown tile with preview_excerpt', async () => {
+    listResponse = () =>
+      jsonResponse(
+        listBody([
+          makeItem({
+            has_thumbnail: false,
+            mime_type: 'text/markdown',
+            preview_excerpt: 'Your electricity bill for May is due.',
+          }),
+        ]),
+      )
+    const w = await mountView()
+    const preview = w.find('[data-testid="markdown-preview"]')
+    expect(preview.exists()).toBe(true)
+    expect(preview.text()).toBe('Your electricity bill for May is due.')
+    // The generic "Text" placeholder is replaced by the excerpt.
+    expect(w.find('.app-doc-card__thumbnail-fallback').text()).not.toBe('Text')
+  })
+
+  it('still shows "Text" for a text/markdown tile without a preview_excerpt', async () => {
+    listResponse = () =>
+      jsonResponse(
+        listBody([
+          makeItem({ has_thumbnail: false, mime_type: 'text/markdown', preview_excerpt: null }),
+        ]),
+      )
+    const w = await mountView()
+    expect(w.find('[data-testid="markdown-preview"]').exists()).toBe(false)
     expect(w.find('.app-doc-card__thumbnail-fallback').text()).toBe('Text')
   })
 

@@ -382,6 +382,13 @@ const gridColsStyle = computed(() =>
               </svg>
               <span class="text-xs">Protected PDF</span>
             </template>
+            <template v-else-if="item.mime_type === 'text/markdown' && item.preview_excerpt">
+              <span
+                class="block w-full px-3 py-2 text-left text-xs font-normal leading-snug text-gray-500 dark:text-gray-400 line-clamp-5"
+                data-testid="markdown-preview"
+                >{{ item.preview_excerpt }}</span
+              >
+            </template>
             <template v-else>{{ fileTypeLabel(item) }}</template>
           </span>
           <!-- Soften the hard cut where a full-width crop meets the white body:
