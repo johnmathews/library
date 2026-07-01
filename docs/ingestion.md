@@ -885,7 +885,10 @@ is rejected by MIME sniffing and lands in `failed/`.
 A periodic Procrastinate task (`library.jobs.poll_email_inbox`) polls an
 IMAP mailbox and ingests every supported attachment through the same
 `ingest_file` service as an upload (`source=email`; the uploader is
-resolved from the sender — see "Sender → owner attribution" below). The
+resolved from the sender — see "Sender → owner attribution" below). When a
+message has no ingestable attachment, the email body itself is ingested
+instead (see "Body ingestion" below), so a mail that *is* the invoice works
+too. The
 feature is off until `LIBRARY_EMAIL_HOST` is set — the schedule still
 ticks (cron built from `LIBRARY_EMAIL_POLL_MINUTES`, default
 `*/10 * * * *`), but the task returns immediately.
@@ -905,8 +908,11 @@ poll_email_inbox fires (every LIBRARY_EMAIL_POLL_MINUTES minutes)
        │   LIBRARY_MAX_UPLOAD_BYTES ─► ingest_file(source=email) — new
        │   document or `duplicate_upload` on the existing one; anything
        │   else is skipped with a log line
+       ├─ if no attachment produced a document ─► ingest the email BODY
+       │   (HTML body converted to Markdown as text/markdown, else the
+       │   plain text as text/plain); a genuinely empty body creates nothing
        ├─ move the message to LIBRARY_EMAIL_PROCESSED_FOLDER (also for
-       │   body-only mails — v1 ingests attachments only)
+       │   empty-bodied mails)
        └─ any per-message error ─► logged, message left in place for
            the next poll; the run continues with the next message
 ```
@@ -939,9 +945,22 @@ Details and decisions:
   whenever the address is guessable. Rejected mail stays in the inbox
   (it would otherwise vanish silently on a sender typo) — expect a
   warning log per poll until it is dealt with.
-- **Attachments only (v1).** Body-only mails create no document; they
-  are still moved to the processed folder. HTML-to-PDF of mail bodies
-  was considered and deferred (improvement plan §1.3.14).
+- **Body ingestion when there's no attachment.** When a message yields no
+  attachment document — nothing attached, or nothing of a supported type —
+  the email body itself is ingested as a document. The **HTML** body is
+  preferred and **converted to Markdown** (stored as `text/markdown`) so
+  invoice tables/formatting survive extraction, chunking (`chunk_markdown`),
+  and the viewer, which renders Markdown; `script`/`style` subtrees are
+  dropped first. When there is no HTML part, the **plain-text** body is stored
+  as `text/plain`. (Storing raw `text/html` was rejected: the OCR router and
+  markdown passthrough only handle `text/plain`/`text/markdown`, so a
+  `text/html` document would fail extraction — see `run_ocr`.) The synthetic
+  filename is the subject with a `.md`/`.txt` suffix (the suffix is what
+  `detect_mime` reads to classify the body — see `_body_filename`). Body
+  ingestion only fires when attachments produced *zero* documents, so an
+  invoice PDF with a "see attached" cover note does not also spawn a body
+  document. A genuinely empty-bodied mail still creates nothing and is
+  filed away.
 - **Sync IMAP off the worker loop.** imap-tools is synchronous; the
   poll runs in a thread (`asyncio.to_thread`) while each ingest call is
   marshalled back onto the worker's event loop, so the database session

@@ -5,9 +5,12 @@ A periodic Procrastinate task (``library.jobs.poll_email_inbox``) polls
 feeds every supported attachment through the same ``ingest_file`` service
 as an upload (``source=email``; the uploader is resolved from the sender
 via ``resolve_sender_owner``), attaching the sender, subject, and
-Message-ID to the recorded ingestion event. v1 ingests attachments only —
-body-only mails are filed away without creating a document (see
-docs/ingestion.md, "Email-in").
+Message-ID to the recorded ingestion event. When a message yields **no**
+attachment document (none attached, or none of a supported type), the email
+body itself is ingested instead — the HTML body converted to Markdown
+(``text/markdown``), or the plain-text body (``text/plain``) when there is no
+HTML — so "the email is the invoice" works too (see docs/ingestion.md,
+"Email-in"). Only a truly empty-bodied mail is filed away without a document.
 
 Idempotency is folder-based: every fully processed message is moved to
 ``LIBRARY_EMAIL_PROCESSED_FOLDER`` (created on first use), so a message
@@ -23,12 +26,15 @@ ingest calls themselves are marshalled back onto the event loop.
 
 import asyncio
 import logging
+import re
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import Any, Protocol
 
+from bs4 import BeautifulSoup
 from imap_tools import MailBox, MailMessage
+from markdownify import markdownify
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -57,8 +63,8 @@ class EmailPollSummary:
 
 
 @dataclass(frozen=True, slots=True)
-class AttachmentCandidate:
-    """One supported attachment, ready for ingestion."""
+class IngestCandidate:
+    """One unit of email content ready for ingestion: an attachment or the body."""
 
     content: bytes
     filename: str | None
@@ -67,7 +73,7 @@ class AttachmentCandidate:
 
 
 #: Synchronous bridge into ``ingest_file`` (poll_mailbox runs off-loop).
-IngestCallable = Callable[[AttachmentCandidate], IngestResult]
+IngestCallable = Callable[[IngestCandidate], IngestResult]
 
 
 class _FolderManagerProtocol(Protocol):
@@ -105,6 +111,15 @@ def _message_id(message: MailMessage) -> str | None:
     return raw.strip() if raw else None
 
 
+def _event_detail(message: MailMessage) -> dict[str, object]:
+    """Sender/subject/Message-ID provenance recorded against every ingest."""
+    return {
+        "email_from": message.from_,
+        "email_subject": message.subject,
+        "email_message_id": _message_id(message),
+    }
+
+
 def _ingest_attachments(
     message: MailMessage, ingest: IngestCallable, max_bytes: int
 ) -> tuple[int, int]:
@@ -116,11 +131,7 @@ def _ingest_attachments(
     Anything else (database down, ...) propagates so the caller leaves
     the message in place for the next poll.
     """
-    detail: dict[str, object] = {
-        "email_from": message.from_,
-        "email_subject": message.subject,
-        "email_message_id": _message_id(message),
-    }
+    detail = _event_detail(message)
     new = duplicates = 0
     for attachment in message.attachments:
         content = attachment.payload
@@ -142,7 +153,7 @@ def _ingest_attachments(
                 mime,
             )
             continue
-        candidate = AttachmentCandidate(
+        candidate = IngestCandidate(
             content=content,
             filename=attachment.filename or None,
             mime=attachment.content_type,
@@ -160,22 +171,84 @@ def _ingest_attachments(
     return new, duplicates
 
 
+def _body_filename(subject: str | None, extension: str) -> str:
+    """A safe synthetic filename for a body document.
+
+    The suffix (``.md``/``.txt``) is load-bearing: ``detect_mime`` reads it to
+    classify the UTF-8 body (see ``library.ingest``). Path separators and
+    control characters are collapsed so the name is safe to store.
+    """
+    stem = re.sub(r"[/\\\r\n\t]+", "-", (subject or "").strip())[:200].rstrip(". ")
+    return f"{stem or 'email'}.{extension}"
+
+
+def _html_to_markdown(html: str) -> str:
+    """Convert an HTML email body to Markdown, dropping script/style noise.
+
+    Markdown is a first-class type downstream (extraction passthrough,
+    ``chunk_markdown``, and the viewer renders it), so invoice tables/formatting
+    survive where raw ``text/html`` — which the pipeline cannot process — would
+    not. ``script``/``style`` subtrees are removed first so their contents don't
+    leak into the text.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    for tag in soup(["script", "style"]):
+        tag.decompose()
+    return markdownify(str(soup), heading_style="ATX").strip()
+
+
+def _body_candidate(message: MailMessage, max_bytes: int) -> IngestCandidate | None:
+    """Build a candidate from the email body: HTML (as Markdown) preferred, else text.
+
+    The HTML body is converted to Markdown and stored as ``text/markdown``; a
+    plain-text-only body is stored as ``text/plain``. Returns ``None`` when the
+    message has no non-blank body (nothing to ingest), when the HTML converts to
+    nothing usable, or when the chosen body exceeds ``max_bytes`` (skipped with a
+    log line). Called only when no attachment produced a document.
+    """
+    if (message.html or "").strip():
+        markdown = _html_to_markdown(message.html)
+        if not markdown:
+            return None
+        body, mime, extension = markdown, "text/markdown", "md"
+    elif (message.text or "").strip():
+        body, mime, extension = message.text, "text/plain", "txt"
+    else:
+        return None
+    content = body.encode("utf-8")
+    if len(content) > max_bytes:
+        logger.warning(
+            "email: body of message %r is %d bytes (limit %d); skipped",
+            message.subject,
+            len(content),
+            max_bytes,
+        )
+        return None
+    return IngestCandidate(
+        content=content,
+        filename=_body_filename(message.subject, extension),
+        mime=mime,
+        event_detail=_event_detail(message),
+    )
+
+
 def poll_mailbox(
     settings: Settings,
     ingest: IngestCallable,
     *,
     mailbox_factory: Callable[[], AbstractContextManager[MailboxProtocol]] | None = None,
 ) -> EmailPollSummary:
-    """Poll the configured mailbox once and ingest attachment documents.
+    """Poll the configured mailbox once and ingest its documents.
 
     Fetches every message in ``email_folder`` (``ALL``, not unseen-only —
     the seen flag is fragile when a human also reads the mailbox) and, per
     message: rejects senders outside ``email_allowed_senders`` (when
     non-empty; the mail stays in place, visible to the operator), ingests
-    each supported attachment via ``ingest``, then moves the message to
-    ``email_processed_folder`` — the move is what makes polling
-    idempotent. Errors are isolated per message: the mail is left in
-    place for the next poll and the run continues.
+    each supported attachment via ``ingest`` and — when no attachment
+    produced a document — the email body itself (HTML preferred, else plain
+    text), then moves the message to ``email_processed_folder`` — the move is
+    what makes polling idempotent. Errors are isolated per message: the mail
+    is left in place for the next poll and the run continues.
 
     No-op (empty summary) when ``email_host`` is unset. ``mailbox_factory``
     exists for tests; the default connects per ``settings``.
@@ -204,6 +277,20 @@ def poll_mailbox(
                     skipped += 1
                     continue
                 new, dups = _ingest_attachments(message, ingest, settings.max_upload_bytes)
+                if new == 0 and dups == 0:
+                    body = _body_candidate(message, settings.max_upload_bytes)
+                    if body is not None:
+                        try:
+                            result = ingest(body)
+                        except IngestError as exc:
+                            logger.warning(
+                                "email: body of message %r rejected (%s)", message.subject, exc
+                            )
+                        else:
+                            if result.duplicate:
+                                dups += 1
+                            else:
+                                new += 1
                 ingested += new
                 duplicates += dups
                 mailbox.move(message.uid, settings.email_processed_folder)
@@ -258,7 +345,7 @@ async def resolve_sender_owner(
 
 async def _ingest_candidate(
     session_factory: async_sessionmaker[AsyncSession],
-    candidate: AttachmentCandidate,
+    candidate: IngestCandidate,
     *,
     default_owner_username: str | None = None,
 ) -> IngestResult:
@@ -296,7 +383,7 @@ async def poll_mailbox_async(
     loop = asyncio.get_running_loop()
     default_owner = settings.email_default_owner
 
-    def ingest_on_loop(candidate: AttachmentCandidate) -> IngestResult:
+    def ingest_on_loop(candidate: IngestCandidate) -> IngestResult:
         future = asyncio.run_coroutine_threadsafe(
             _ingest_candidate(session_factory, candidate, default_owner_username=default_owner),
             loop,

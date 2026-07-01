@@ -32,6 +32,7 @@ dependencies = [
     "watchfiles>=1.2.0",
     "imap-tools>=1.13.0",
     "sse-starlette>=2.1",
+    "markdownify>=1.2.3",
 ]
 
 [dependency-groups]

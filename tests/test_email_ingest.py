@@ -88,6 +88,34 @@ def make_raw_mail(
     return message.as_bytes()
 
 
+def make_body_mail(
+    *,
+    from_addr: str = "john@example.com",
+    subject: str = "Invoice",
+    message_id: str | None = None,
+    text: str | None = None,
+    html: str | None = None,
+) -> bytes:
+    """Raw RFC822 bytes for a body-only mail (no attachments).
+
+    ``text`` and/or ``html`` populate the alternative parts; passing neither
+    yields a genuinely empty-bodied message.
+    """
+    message = EmailMessage()
+    message["From"] = from_addr
+    message["To"] = "library@example.test"
+    message["Subject"] = subject
+    message["Message-ID"] = message_id or f"<{uuid.uuid4().hex}@example.com>"
+    if text is not None:
+        message.set_content(text)
+    if html is not None:
+        if text is not None:
+            message.add_alternative(html, subtype="html")
+        else:
+            message.set_content(html, subtype="html")
+    return message.as_bytes()
+
+
 def mail_message(raw: bytes, uid: str) -> MailMessage:
     """A real imap-tools MailMessage with the (fetch-derived) uid injected."""
     message = MailMessage.from_bytes(raw)
@@ -324,18 +352,119 @@ async def test_duplicate_attachment_moved_without_new_document(
     )
 
 
-async def test_body_only_mail_moved_without_ingest(
+def test_html_to_markdown_preserves_tables_and_drops_noise() -> None:
+    from library.email_ingest import _html_to_markdown
+
+    html = (
+        "<html><head><style>.x{color:red}</style></head><body>"
+        "<h1>Invoice</h1>"
+        "<table><tr><th>Item</th><th>Total</th></tr>"
+        "<tr><td>Widget</td><td>42</td></tr></table>"
+        "<script>alert(1)</script></body></html>"
+    )
+    md = _html_to_markdown(html)
+    assert "# Invoice" in md  # heading survives
+    assert "| Item | Total |" in md and "| Widget | 42 |" in md  # table survives
+    assert "alert(1)" not in md  # <script> contents dropped
+    assert "color:red" not in md  # <style> contents dropped
+
+
+async def test_html_body_creates_document_when_no_attachment(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
     data_dir: Path,
     job_connector: InMemoryConnector,
 ) -> None:
-    raw = make_raw_mail(subject="just words, no files")
+    tag = uuid.uuid4().hex[:8]
+    subject = f"html invoice {tag}"
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_body_mail(
+        from_addr="Jane Voorbeeld <jane@example.org>",
+        subject=subject,
+        message_id=message_id,
+        html=f"<html><body><h1>Invoice {tag}</h1><p>Total 42</p></body></html>",
+    )
     mailbox = FakeMailBox([mail_message(raw, uid="3")])
 
     summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
 
+    # HTML body is converted to Markdown and stored as a first-class text type.
+    documents = await documents_named(session_factory, f"{subject}.md")
+    assert len(documents) == 1
+    document = documents[0]
+    assert document.mime_type == "text/markdown"
+    assert document.source is DocumentSource.EMAIL
+    # Body ingestion carries the same provenance as an attachment would.
+    events = await events_for(session_factory, document.id, "received")
+    assert events[0].detail["email_from"] == "jane@example.org"
+    assert events[0].detail["email_subject"] == subject
+    assert events[0].detail["email_message_id"] == message_id
     assert mailbox.moved == [("3", PROCESSED_FOLDER)]
+    assert summary == EmailPollSummary(
+        messages_seen=1, messages_processed=1, attachments_ingested=1
+    )
+
+
+async def test_text_body_creates_document_when_no_html(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    tag = uuid.uuid4().hex[:8]
+    subject = f"plain invoice {tag}"
+    raw = make_body_mail(subject=subject, text=f"Plain-text invoice {tag}, total 42")
+    mailbox = FakeMailBox([mail_message(raw, uid="3")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    documents = await documents_named(session_factory, f"{subject}.txt")
+    assert len(documents) == 1
+    assert documents[0].mime_type == "text/plain"
+    assert summary == EmailPollSummary(
+        messages_seen=1, messages_processed=1, attachments_ingested=1
+    )
+
+
+async def test_body_not_ingested_when_attachment_produces_document(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # A cover-note body alongside a real attachment must not spawn a 2nd document.
+    tag = uuid.uuid4().hex[:8]
+    subject = f"cover note {tag}"
+    name = f"real-{tag}.pdf"
+    raw = make_raw_mail(subject=subject, attachments=[(name, make_pdf(), "application", "pdf")])
+    mailbox = FakeMailBox([mail_message(raw, uid="3")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert len(await documents_named(session_factory, name)) == 1
+    assert await documents_named(session_factory, f"{subject}.txt") == []
+    assert await documents_named(session_factory, f"{subject}.md") == []
+    assert summary == EmailPollSummary(
+        messages_seen=1, messages_processed=1, attachments_ingested=1
+    )
+
+
+async def test_empty_body_mail_moved_without_ingest(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    tag = uuid.uuid4().hex[:8]
+    subject = f"empty {tag}"
+    raw = make_body_mail(subject=subject)  # no text, no html, no attachments
+    mailbox = FakeMailBox([mail_message(raw, uid="3")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert await documents_named(session_factory, f"{subject}.txt") == []
+    assert await documents_named(session_factory, f"{subject}.md") == []
+    assert mailbox.moved == [("3", PROCESSED_FOLDER)]  # still filed away
     assert summary == EmailPollSummary(messages_seen=1, messages_processed=1)
 
 
