@@ -103,7 +103,7 @@ function buildFilters(
     kind: state.kind || undefined,
     sender_id: Number.isInteger(senderId) ? senderId : undefined,
     recipient_id: Number.isInteger(recipientId) ? recipientId : undefined,
-    project: state.project || undefined,
+    project: state.projects.length ? state.projects : undefined,
     tag: state.tags.length ? state.tags : undefined,
     language: (state.language || undefined) as DocumentLanguage | undefined,
     status: (state.status || undefined) as DocumentListItem['status'] | undefined,

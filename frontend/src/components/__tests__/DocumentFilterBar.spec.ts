@@ -9,7 +9,7 @@ const EMPTY: AppliedFilters = {
   kind: '',
   senderId: '',
   recipientId: '',
-  project: '',
+  projects: [],
   tags: [],
   language: '',
   status: '',
@@ -33,7 +33,10 @@ const TAGS = [
   { slug: 'energie', name: 'Energie', document_count: 2 },
   { slug: 'wonen', name: 'Wonen', document_count: 1 },
 ]
-const PROJECTS = [{ slug: 'house-purchase', name: 'House purchase', document_count: 4 }]
+const PROJECTS = [
+  { slug: 'house-purchase', name: 'House purchase', document_count: 4 },
+  { slug: 'taxes', name: 'Taxes', document_count: 2 },
+]
 
 function mountBar(applied: AppliedFilters = EMPTY): VueWrapper {
   return mount(DocumentFilterBar, {
@@ -123,20 +126,22 @@ describe('DocumentFilterBar', () => {
     expect(w.emitted('apply')!.at(-1)![0]).toEqual({})
   })
 
-  it('selecting a project emits a push apply with the project slug', async () => {
+  it('selecting projects emits repeated project (OR)', async () => {
     const w = mountBar()
     await flushPromises() // taxonomy load
     await w.get('[data-testid="pill-project"] [data-testid="filter-pill-button"]').trigger('click')
-    await w.get('[data-testid="project-option-house-purchase"]').trigger('click')
-    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ project: 'house-purchase' })
+    // AppCheckboxes renders one input per project; check them within the pill panel.
+    await w.get('[data-testid="pill-project"]').get('input[value="house-purchase"]').setValue(true)
+    await w.get('[data-testid="pill-project"]').get('input[value="taxes"]').setValue(true)
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ project: ['house-purchase', 'taxes'] })
   })
 
-  it('renders a removable project chip and clears the project on remove', async () => {
-    const w = mountBar({ ...EMPTY, project: 'house-purchase' })
+  it('renders a removable project chip per project and drops it on remove', async () => {
+    const w = mountBar({ ...EMPTY, projects: ['house-purchase'] })
     await flushPromises()
-    const chip = w.get('[data-testid="chip-project"]')
+    const chip = w.get('[data-testid="chip-project-house-purchase"]')
     expect(chip.text()).toContain('House purchase')
-    await w.get('[data-testid="chip-remove-project"]').trigger('click')
+    await w.get('[data-testid="chip-remove-project-house-purchase"]').trigger('click')
     expect(w.emitted('apply')!.at(-1)![0]).toEqual({})
   })
 

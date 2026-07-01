@@ -125,8 +125,8 @@ export interface DocumentFilters {
   kind?: string
   sender_id?: number
   recipient_id?: number
-  /** Single project slug; AND-composes with the other filters. */
-  project?: string
+  /** Repeatable: a document in any of these project slugs matches (OR). */
+  project?: string[]
   /** Repeatable: every slug must match (AND). */
   tag?: string[]
   language?: DocumentLanguage
@@ -222,15 +222,17 @@ export const DOCUMENT_STATUSES: readonly { value: DocumentStatus; text: string }
 
 /**
  * Serialise filters to a query string. Built by hand (not apiFetch's
- * `query` option) because `tag` repeats: ?tag=a&tag=b ANDs both.
+ * `query` option) because `tag` and `project` repeat: ?tag=a&tag=b ANDs
+ * both; ?project=a&project=b ORs both.
  */
 export function documentQueryString(filters: DocumentFilters): string {
   const params = new URLSearchParams()
-  const { tag, ...scalars } = filters
+  const { tag, project, ...scalars } = filters
   for (const [key, value] of Object.entries(scalars)) {
     if (value !== undefined && value !== '') params.set(key, String(value))
   }
   for (const slug of tag ?? []) params.append('tag', slug)
+  for (const slug of project ?? []) params.append('project', slug)
   return params.toString()
 }
 

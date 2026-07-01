@@ -65,7 +65,10 @@ class DocumentFilters:
     recipient_id: int | None = None
     recipient_contains: str | None = None
     tag_slugs: Sequence[str] = field(default_factory=tuple)
-    project_slug: str | None = None
+    # Projects OR-compose (a document in ANY of these slugs matches), unlike
+    # tags which AND-compose — see docs/api.md. A document rarely belongs to
+    # several projects, so intersection would usually return nothing.
+    project_slugs: Sequence[str] = field(default_factory=tuple)
     language: DocumentLanguage | None = None
     status: DocumentStatus | None = None
     source: DocumentSource | None = None
@@ -110,8 +113,9 @@ def filter_conditions(filters: DocumentFilters) -> list[Any]:
         conditions.append(Document.recipient.has(Recipient.name.ilike(f"%{escaped}%", escape="\\")))
     for slug in filters.tag_slugs:
         conditions.append(Document.tags.any(Tag.slug == slug))
-    if filters.project_slug is not None:
-        conditions.append(Document.projects.any(Project.slug == filters.project_slug))
+    if filters.project_slugs:
+        # OR/union: a document in any of the selected projects matches.
+        conditions.append(Document.projects.any(Project.slug.in_(tuple(filters.project_slugs))))
     if filters.language is not None:
         conditions.append(Document.language == filters.language)
     if filters.status is not None:

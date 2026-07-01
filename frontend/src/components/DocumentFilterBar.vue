@@ -103,10 +103,6 @@ function selectRecipient(id: string): void {
   emitWith({ recipientId: id })
   openPill.value = null
 }
-function selectProject(slug: string): void {
-  emitWith({ project: slug })
-  openPill.value = null
-}
 // The "More" pill holds two independent choices (language + status), so —
 // unlike the single-choice Kind/Sender pills — selecting one does NOT close
 // the pill; the user can set both before dismissing it.
@@ -139,6 +135,26 @@ const tagItems = computed<ChoiceItem[]>(() =>
   tags.value.map((t) => ({ value: t.slug, text: t.name })),
 )
 
+// Project multi-select via AppCheckboxes, mirroring the tag pill. Projects
+// OR-compose (a document in any selected project matches) — see docs/api.md.
+const localProjects = ref<string[]>([...props.applied.projects])
+watch(
+  () => props.applied.projects,
+  (next) => {
+    localProjects.value = [...next]
+  },
+)
+const projectModel = computed<string[]>({
+  get: () => localProjects.value,
+  set: (next) => {
+    localProjects.value = next
+    emitWith({ projects: next })
+  },
+})
+const projectItems = computed<ChoiceItem[]>(() =>
+  projects.value.map((p) => ({ value: p.slug, text: p.name })),
+)
+
 // Date range via two AppDateInputs.
 const dateFromModel = computed<string | null>({
   get: () => props.applied.dateFrom || null,
@@ -164,14 +180,18 @@ const recipientLabel = computed(
     recipients.value.find((r) => String(r.id) === props.applied.recipientId)?.name ??
     props.applied.recipientId,
 )
-const projectLabel = computed(
-  () =>
-    projects.value.find((p) => p.slug === props.applied.project)?.name ?? props.applied.project,
-)
 const tagPillLabel = computed(() => {
   const n = props.applied.tags.length
   if (!n) return ''
   const first = tags.value.find((t) => t.slug === props.applied.tags[0])?.name ?? props.applied.tags[0]
+  return n > 1 ? `${first} +${n - 1}` : first
+})
+const projectPillLabel = computed(() => {
+  const n = props.applied.projects.length
+  if (!n) return ''
+  const first =
+    projects.value.find((p) => p.slug === props.applied.projects[0])?.name ??
+    props.applied.projects[0]
   return n > 1 ? `${first} +${n - 1}` : first
 })
 const dateActive = computed(() => Boolean(props.applied.dateFrom || props.applied.dateTo))
@@ -207,12 +227,14 @@ const chips = computed<Chip[]>(() => {
       label: `Recipient: ${recipientLabel.value}`,
       remove: () => emitWith({ recipientId: '' }),
     })
-  if (a.project)
+  for (const slug of a.projects) {
+    const name = projects.value.find((p) => p.slug === slug)?.name ?? slug
     out.push({
-      key: 'project',
-      label: `Project: ${projectLabel.value}`,
-      remove: () => emitWith({ project: '' }),
+      key: `project-${slug}`,
+      label: `Project: ${name}`,
+      remove: () => emitWith({ projects: a.projects.filter((s) => s !== slug) }),
     })
+  }
   for (const slug of a.tags) {
     const name = tags.value.find((t) => t.slug === slug)?.name ?? slug
     out.push({
@@ -457,34 +479,18 @@ const statusOptions = DOCUMENT_STATUSES
       <FilterPill
         data-testid="pill-project"
         label="Project"
-        :active="Boolean(applied.project)"
-        :value-label="projectLabel"
+        :active="Boolean(applied.projects.length)"
+        :value-label="projectPillLabel"
         :open="pillOpen('project')"
         @update:open="setPillOpen('project', $event)"
       >
-        <ul class="max-h-64 overflow-auto text-sm">
-          <li>
-            <button
-              type="button"
-              data-testid="project-option-any"
-              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
-              @click="selectProject('')"
-            >
-              All projects
-            </button>
-          </li>
-          <li v-for="p in projects" :key="p.slug">
-            <button
-              type="button"
-              :data-testid="`project-option-${p.slug}`"
-              class="block w-full rounded px-2 py-1 text-left hover:bg-gray-100 dark:hover:bg-gray-700/60"
-              :class="{ 'font-semibold text-violet-600 dark:text-violet-300': applied.project === p.slug }"
-              @click="selectProject(p.slug)"
-            >
-              {{ p.name }}
-            </button>
-          </li>
-        </ul>
+        <AppCheckboxes
+          id="filter-projects"
+          legend="Projects"
+          legend-size="s"
+          :items="projectItems"
+          v-model="projectModel"
+        />
       </FilterPill>
 
       <FilterPill

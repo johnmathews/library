@@ -183,7 +183,7 @@ async def test_list_documents_narrows_by_project_slug(session: AsyncSession) -> 
     document.projects = [Project(slug="renovation", name="Renovation")]
     await session.commit()
 
-    refs = await list_documents(session, filters=DocumentFilters(project_slug="renovation"))
+    refs = await list_documents(session, filters=DocumentFilters(project_slugs=("renovation",)))
 
     assert [ref.id for ref in refs] == [in_project]
 

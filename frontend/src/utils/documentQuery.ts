@@ -7,6 +7,8 @@
  * the param names and parsing rules live in exactly one place.
  *
  * `tag` repeats in the URL (?tag=a&tag=b) and ANDs — hence `tags: string[]`.
+ * `project` also repeats (?project=a&project=b) but ORs (documents in any) —
+ * hence `projects: string[]`.
  */
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
 
@@ -15,7 +17,7 @@ export interface AppliedFilters {
   kind: string
   senderId: string
   recipientId: string
-  project: string
+  projects: string[]
   tags: string[]
   language: string
   status: string
@@ -43,7 +45,7 @@ export function parseDocumentQuery(query: LocationQuery): AppliedFilters {
     kind: asString(query.kind),
     senderId: asString(query.sender_id),
     recipientId: asString(query.recipient_id),
-    project: asString(query.project),
+    projects: asStringArray(query.project),
     tags: asStringArray(query.tag),
     language: asString(query.language),
     status: asString(query.status),
@@ -67,7 +69,7 @@ export function buildDocumentQuery(
   if (applied.kind) query.kind = applied.kind
   if (applied.senderId) query.sender_id = applied.senderId
   if (applied.recipientId) query.recipient_id = applied.recipientId
-  if (applied.project) query.project = applied.project
+  if (applied.projects.length) query.project = [...applied.projects]
   if (applied.tags.length) query.tag = [...applied.tags]
   if (applied.language) query.language = applied.language
   if (applied.status) query.status = applied.status
@@ -85,7 +87,7 @@ export function hasActiveFilters(applied: AppliedFilters): boolean {
       applied.kind ||
       applied.senderId ||
       applied.recipientId ||
-      applied.project ||
+      applied.projects.length ||
       applied.tags.length ||
       applied.language ||
       applied.status ||

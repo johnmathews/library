@@ -920,6 +920,29 @@ def test_list_item_includes_projects_and_project_filter(
     assert [item["id"] for item in filtered["items"]] == [in_project]
 
 
+def test_project_filter_or_composes(api_client: TestClient, api_database_url: str) -> None:
+    """Repeating ?project= returns the UNION (documents in any of the projects)."""
+    in_alpha = seed_document(
+        api_database_url,
+        "w-multiproj-a",
+        tag_slugs=["w-multiproj"],
+        project_slugs=["w-multiproj-alpha"],
+    )
+    in_beta = seed_document(
+        api_database_url,
+        "w-multiproj-b",
+        tag_slugs=["w-multiproj"],
+        project_slugs=["w-multiproj-beta"],
+    )
+    seed_document(api_database_url, "w-multiproj-c", tag_slugs=["w-multiproj"])  # in neither
+
+    body = list_docs(
+        api_client, tag="w-multiproj", project=["w-multiproj-alpha", "w-multiproj-beta"]
+    )
+    # Union: both members appear, the non-member does not.
+    assert sorted(item["id"] for item in body["items"]) == sorted([in_alpha, in_beta])
+
+
 def test_patch_sets_and_clears_projects(api_client: TestClient, api_database_url: str) -> None:
     """PATCH projects upserts unknown projects by name, then [] clears them."""
     document_id = seed_document(api_database_url, "w6-proj-patch", tag_slugs=["w6-proj-patch"])

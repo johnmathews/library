@@ -253,7 +253,8 @@ async def list_documents(
         Query(description="Tag slug; repeat the parameter to require all of them (AND)."),
     ] = None,
     project: Annotated[
-        str | None, Query(description="Project slug; only documents in this project.")
+        list[str] | None,
+        Query(description="Project slug; repeat the parameter for OR (documents in any of them)."),
     ] = None,
     language: Annotated[DocumentLanguage | None, Query()] = None,
     status_filter: Annotated[DocumentStatus | None, Query(alias="status")] = None,
@@ -280,7 +281,7 @@ async def list_documents(
             sender_id=sender_id,
             recipient_id=recipient_id,
             tag_slugs=tuple(tag or []),
-            project_slug=project,
+            project_slugs=tuple(project or []),
             language=language,
             status=status_filter,
             review_status=review_status,

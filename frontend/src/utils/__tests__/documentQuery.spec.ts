@@ -11,7 +11,7 @@ const EMPTY: AppliedFilters = {
   kind: '',
   senderId: '',
   recipientId: '',
-  project: '',
+  projects: [],
   tags: [],
   language: '',
   status: '',
@@ -42,7 +42,7 @@ describe('parseDocumentQuery', () => {
       kind: 'invoice',
       senderId: '3',
       recipientId: '',
-      project: '',
+      projects: [],
       tags: [],
       language: 'nld',
       status: 'indexed',
@@ -57,8 +57,12 @@ describe('parseDocumentQuery', () => {
     expect(parseDocumentQuery({ recipient_id: '5' }).recipientId).toBe('5')
   })
 
-  it('parses the project URL param into the project field', () => {
-    expect(parseDocumentQuery({ project: 'house-purchase' }).project).toBe('house-purchase')
+  it('parses repeated project URL params into the projects field', () => {
+    expect(parseDocumentQuery({ project: 'house-purchase' }).projects).toEqual(['house-purchase'])
+    expect(parseDocumentQuery({ project: ['house-purchase', 'taxes'] }).projects).toEqual([
+      'house-purchase',
+      'taxes',
+    ])
   })
 
   it('parses review URL param into the review field', () => {
@@ -94,7 +98,7 @@ describe('buildDocumentQuery', () => {
       kind: 'invoice',
       senderId: '3',
       recipientId: '5',
-      project: 'house-purchase',
+      projects: ['house-purchase', 'taxes'],
       tags: ['energie', 'wonen'],
       language: 'nld',
       status: 'indexed',
@@ -108,7 +112,7 @@ describe('buildDocumentQuery', () => {
       kind: 'invoice',
       sender_id: '3',
       recipient_id: '5',
-      project: 'house-purchase',
+      project: ['house-purchase', 'taxes'],
       tag: ['energie', 'wonen'],
       language: 'nld',
       status: 'indexed',
@@ -142,7 +146,7 @@ describe('hasActiveFilters', () => {
     expect(hasActiveFilters({ ...EMPTY, q: 'x' })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, tags: ['energie'] })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, recipientId: '5' })).toBe(true)
-    expect(hasActiveFilters({ ...EMPTY, project: 'house-purchase' })).toBe(true)
+    expect(hasActiveFilters({ ...EMPTY, projects: ['house-purchase'] })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, status: 'failed' })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, page: 5 })).toBe(false)
     expect(hasActiveFilters({ ...EMPTY, review: 'verified' })).toBe(true)

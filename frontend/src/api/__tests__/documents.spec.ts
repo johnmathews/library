@@ -36,9 +36,11 @@ describe('documentQueryString', () => {
     expect(documentQueryString({ q: '', kind: undefined })).toBe('')
   })
 
-  it('serialises the scalar project filter', () => {
-    const params = new URLSearchParams(documentQueryString({ project: 'house-purchase' }))
-    expect(params.get('project')).toBe('house-purchase')
+  it('serialises repeated project filters (OR)', () => {
+    const params = new URLSearchParams(
+      documentQueryString({ project: ['house-purchase', 'taxes'] }),
+    )
+    expect(params.getAll('project')).toEqual(['house-purchase', 'taxes'])
   })
 })
 

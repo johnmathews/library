@@ -157,7 +157,7 @@ async def test_project_slug_filter_restricts_results(session: AsyncSession) -> N
         session,
         query="",
         query_embedding=unit_vector(0),
-        filters=DocumentFilters(project_slug="audit"),
+        filters=DocumentFilters(project_slugs=("audit",)),
         top_k=10,
     )
 

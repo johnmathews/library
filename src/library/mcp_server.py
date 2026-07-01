@@ -253,7 +253,7 @@ async def search_documents(
             sender_contains=sender,
             recipient_contains=recipient,
             tag_slugs=(tag,) if tag else (),
-            project_slug=project,
+            project_slugs=(project,) if project else (),
             language=language,
             date_from=date_from,
             date_to=date_to,
