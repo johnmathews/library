@@ -165,53 +165,6 @@ def test_list_item_shape_and_expansions(api_client: TestClient, api_database_url
     assert "ocr_text" not in item and "events" not in item
 
 
-def test_list_preview_excerpt_only_for_markdown(
-    api_client: TestClient, api_database_url: str
-) -> None:
-    markdown_id = seed_document(
-        api_database_url,
-        "w2-preview-md",
-        tag_slugs=["w2-preview"],
-        mime_type="text/markdown",
-        ocr_text="# Invoice 42\n\nYour **electricity** bill for *May* is due.\n\n- EUR 12.34",
-    )
-    plain_id = seed_document(
-        api_database_url,
-        "w2-preview-plain",
-        tag_slugs=["w2-preview"],
-        mime_type="text/plain",
-        ocr_text="Just some plain text body.",
-    )
-    pdf_id = seed_document(
-        api_database_url,
-        "w2-preview-pdf",
-        tag_slugs=["w2-preview"],
-        mime_type="application/pdf",
-        ocr_text="A scanned invoice body.",
-    )
-    empty_md_id = seed_document(
-        api_database_url,
-        "w2-preview-md-empty",
-        tag_slugs=["w2-preview"],
-        mime_type="text/markdown",
-        ocr_text=None,
-    )
-
-    body = list_docs(api_client, tag="w2-preview")
-    excerpts = {item["id"]: item["preview_excerpt"] for item in body["items"]}
-
-    md_excerpt = excerpts[markdown_id]
-    assert md_excerpt is not None
-    assert "#" not in md_excerpt and "*" not in md_excerpt
-    assert "\n" not in md_excerpt
-    assert "Invoice 42" in md_excerpt
-    assert "electricity" in md_excerpt
-
-    assert excerpts[plain_id] is None
-    assert excerpts[pdf_id] is None
-    assert excerpts[empty_md_id] is None
-
-
 def test_list_pagination_and_default_ordering(
     api_client: TestClient, api_database_url: str
 ) -> None:

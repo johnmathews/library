@@ -54,7 +54,6 @@ from library.schemas import (
 from library.search import DocumentFilters, build_document_query
 from library.series import serialise_summary, summarize_series
 from library.storage import derived_path, path_for
-from library.text_preview import markdown_excerpt
 from library.thumbnails import THUMBNAIL_NAME
 
 router: APIRouter = APIRouter(tags=["documents"])
@@ -709,13 +708,6 @@ def _list_item_fields(document: Document) -> dict[str, Any]:
         "review_status": document.review_status,
         "amount_total": document.amount_total,
         "currency": document.currency,
-        # Only email-ingested markdown gets a body excerpt on the tile; every
-        # other MIME type keeps the generic "Text"/type placeholder (null here).
-        # ``ocr_text`` is a non-deferred column already loaded on every list row,
-        # so reading it for markdown rows adds no extra query.
-        "preview_excerpt": (
-            markdown_excerpt(document.ocr_text) if document.mime_type == "text/markdown" else None
-        ),
     }
 
 
