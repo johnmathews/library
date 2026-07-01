@@ -34,6 +34,17 @@ describe('ConversationSidebar', () => {
     expect(w.emitted('new')).toBeTruthy()
   })
 
+  it('disables the new-conversation button and does not emit new when newDisabled (item 2)', async () => {
+    const w = mount(ConversationSidebar, { props: { activeThreadId: null, newDisabled: true } })
+    await flushPromises()
+    const btn = w.find('[data-testid="new-conversation"]')
+    // The button carries the real disabled attribute (keyboard/AT inert), and a
+    // click cannot start a redundant "new conversation" from the fresh state.
+    expect((btn.element as HTMLButtonElement).disabled).toBe(true)
+    await btn.trigger('click')
+    expect(w.emitted('new')).toBeFalsy()
+  })
+
   it('requires confirmation before deleting, then deletes and refreshes (W3)', async () => {
     vi.mocked(deleteThread).mockResolvedValue()
     const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })

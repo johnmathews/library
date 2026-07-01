@@ -154,10 +154,17 @@ test('ask citation deep-links to the cited PDF page', async ({ page }, testInfo)
   // ── Ask a question ──────────────────────────────────────────────────────────
   await page.goto('/ask')
   // The composer is collapsed by default on small viewports — "New conversation"
-  // reveals + focuses it (a no-op for visibility at lg+). Open it before typing
-  // so this works on the mobile/tablet projects too.
-  await page.getByTestId('new-conversation').click()
-  await page.locator('#ask-question').fill(TEST_QUESTION)
+  // reveals + focuses it. At lg+ the composer is always docked, so from this
+  // fresh state "New conversation" is redundant and disabled (item 2); only click
+  // it (to reveal the composer) on the mobile/tablet projects where it's hidden.
+  // Wait for the view to mount (the sidebar button is present on every viewport)
+  // before probing composer visibility, so the check isn't racing hydration.
+  await expect(page.getByTestId('new-conversation')).toBeVisible()
+  const composer = page.locator('#ask-question')
+  if (!(await composer.isVisible())) {
+    await page.getByTestId('new-conversation').click()
+  }
+  await composer.fill(TEST_QUESTION)
   await page.getByTestId('ask-submit').click()
 
   // ── Expand the citations disclosure ─────────────────────────────────────────

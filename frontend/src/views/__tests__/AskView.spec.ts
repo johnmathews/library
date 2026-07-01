@@ -54,7 +54,25 @@ describe('AskView', () => {
   afterEach(() => {
     wrapper?.unmount()
     wrapper = undefined
+    // Some tests stub matchMedia to simulate the lg (desktop) breakpoint; reset
+    // so others fall back to the mobile default (jsdom leaves matchMedia unset).
+    vi.unstubAllGlobals()
   })
+
+  /** Simulate the lg+ (desktop) breakpoint for useMediaQuery. jsdom leaves
+   * matchMedia undefined, which vueuse treats as "no match" (mobile). */
+  function stubDesktopViewport(): void {
+    vi.stubGlobal('matchMedia', (query: string) => ({
+      matches: true,
+      media: query,
+      onchange: null,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+      addListener: () => {},
+      removeListener: () => {},
+      dispatchEvent: () => false,
+    }))
+  }
 
   function mountView(): VueWrapper {
     wrapper = mount(AskView, { global: { plugins: [router] }, attachTo: document.body })
@@ -70,6 +88,20 @@ describe('AskView', () => {
   it('renders the page heading', () => {
     const w = mountView()
     expect(w.find('h1').text()).toBe('Ask')
+  })
+
+  it('disables New conversation in the fresh state and enables it after an ask (item 2)', async () => {
+    // Desktop: the composer is always docked, so from a fresh state "New
+    // conversation" is redundant and greyed out.
+    stubDesktopViewport()
+    askQuestionMock.mockResolvedValue(sampleResponse())
+    const w = mountView()
+    await flushPromises()
+    const btn = () => w.find('[data-testid="new-conversation"]').element as HTMLButtonElement
+    expect(btn().disabled).toBe(true)
+    // Once a conversation exists it is enabled again (starting a new one is real).
+    await typeAndSubmit(w, 'which invoices are due?')
+    expect(btn().disabled).toBe(false)
   })
 
   it('appends a turn to the transcript after a successful ask', async () => {
@@ -175,6 +207,21 @@ describe('AskView', () => {
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
     // …and no error alert appears.
     expect(w.find('[data-testid="error-summary"]').exists()).toBe(false)
+  })
+
+  it('renders the answer on a distinct surface card (item 4)', async () => {
+    askQuestionMock.mockResolvedValueOnce(sampleResponse())
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+    // The answer sits inside a bordered, shaded surface card that is separate
+    // from the panel background — so panel, question, and answer read as three
+    // distinct layers.
+    const surface = w.find('[data-testid="ask-answer-surface"]')
+    expect(surface.exists()).toBe(true)
+    expect(surface.classes()).toContain('bg-gray-50')
+    expect(surface.classes()).toContain('border')
+    // The answer body lives inside the card.
+    expect(surface.find('[data-testid="ask-answer"]').exists()).toBe(true)
   })
 
   it('validates an empty question without calling the API', async () => {
@@ -388,6 +435,10 @@ describe('AskView', () => {
     // normally (a fixed-height internal-scroll column trapped citation clicks on
     // mobile-webkit).
     expect(transcript.classes()).toContain('lg:overflow-y-auto')
+    // The scroll region shows a subtle scrollbar (affordance that it scrolls),
+    // rather than hiding it entirely — no-scrollbar removed the affordance (item 3).
+    expect(transcript.classes()).toContain('thin-scrollbar')
+    expect(transcript.classes()).not.toContain('no-scrollbar')
   })
 
   it('shows the no-threads empty-state prompt when no conversations exist (W10)', async () => {

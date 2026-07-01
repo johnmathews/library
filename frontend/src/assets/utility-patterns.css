@@ -142,6 +142,41 @@ input[type='search']::-webkit-search-results-decoration {
 }
 
 /*
+ * Subtle scrollbar for internal scroll regions (e.g. the Ask transcript and
+ * conversation list). Unlike .no-scrollbar it KEEPS a thin, unobtrusive bar so
+ * the region visibly reads as independently scrollable — the established pattern
+ * for a scroll pane nested inside a larger view. Track stays transparent; only a
+ * rounded thumb shows, tinted for light/dark. Firefox uses scrollbar-width/color.
+ */
+.thin-scrollbar {
+  scrollbar-width: thin; /* Firefox */
+  scrollbar-color: rgb(0 0 0 / 0.2) transparent; /* thumb, track */
+}
+.dark .thin-scrollbar {
+  scrollbar-color: rgb(255 255 255 / 0.2) transparent;
+}
+.thin-scrollbar::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.thin-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.thin-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgb(0 0 0 / 0.2);
+  border-radius: 9999px;
+}
+.dark .thin-scrollbar::-webkit-scrollbar-thumb {
+  background-color: rgb(255 255 255 / 0.2);
+}
+.thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(0 0 0 / 0.32);
+}
+.dark .thin-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: rgb(255 255 255 / 0.32);
+}
+
+/*
  * Dashboard document grid. The DEFAULT column count per viewport is a product
  * acceptance contract (W16, covered by e2e/responsive.spec.ts): 1 column on
  * mobile, 2 from the tablet breakpoint (641px), 3 from desktop (769px), and 4

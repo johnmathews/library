@@ -18,6 +18,7 @@
  * before being set with v-html.
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
@@ -135,6 +136,24 @@ async function onImagesPicked(event: Event): Promise<void> {
 function removeImage(index: number): void {
   pendingImages.value.splice(index, 1)
 }
+
+// The composer is docked at lg+ but hidden on mobile until revealed
+// (composerOpen). Track the lg breakpoint so we know whether the composer is
+// already on screen.
+const isLargeScreen = useMediaQuery('(min-width: 1024px)')
+
+// "New conversation" is redundant only when the view is already an empty new
+// conversation (no thread, no turns) AND the composer is already visible — i.e.
+// at lg+, or on mobile once the composer has been opened. There the button does
+// nothing, so the sidebar greys it out. On a fresh mobile load the composer is
+// still hidden, so the button stays enabled: it reveals the composer (its real
+// job) rather than stranding the user with no way to start typing.
+const newConversationRedundant = computed<boolean>(
+  () =>
+    threadId.value === null &&
+    turns.value.length === 0 &&
+    (isLargeScreen.value || composerOpen.value),
+)
 
 const errors = computed<ErrorSummaryItem[]>(() =>
   errorMessage.value ? [{ text: errorMessage.value }] : [],
@@ -369,6 +388,7 @@ defineExpose({ resetConversation })
       <ConversationSidebar
         ref="sidebarRef"
         :active-thread-id="threadId"
+        :new-disabled="newConversationRedundant"
         @select="(id: number) => router.push({ name: 'ask-thread', params: { threadId: id } })"
         @new="resetConversation"
         @threads-changed="(count: number) => (sidebarThreadCount = count)"
@@ -378,14 +398,14 @@ defineExpose({ resetConversation })
            thread scrolls internally, the composer stays docked); below lg it is
            a normal block. -->
       <div class="flex flex-col flex-1 min-w-0 lg:min-h-0">
-        <!-- Message thread: the user's question as a violet chat bubble, the
-             answer as wide rich markdown beneath it. On lg+ it scrolls
-             internally (so the docked composer stays put); below lg it flows
-             and the page scrolls. -->
+        <!-- Message thread: the user's question as a right-aligned violet chat
+             bubble, the answer beneath it on a subtle surface card. On lg+ it
+             scrolls internally (so the docked composer stays put); below lg it
+             flows and the page scrolls. -->
         <div
           ref="transcriptRef"
           data-testid="ask-transcript"
-          class="min-h-[18rem] lg:min-h-0 lg:flex-1 lg:overflow-y-auto no-scrollbar p-5 sm:p-6"
+          class="min-h-[18rem] lg:min-h-0 lg:flex-1 lg:overflow-y-auto thin-scrollbar p-5 sm:p-6"
         >
           <div v-if="turns.length" class="space-y-8">
             <section
@@ -403,71 +423,81 @@ defineExpose({ resetConversation })
                 </p>
               </div>
 
-              <!-- While the answer generates, the turn shows a thinking
-                   indicator in the answer slot (instead of the answer body). -->
+              <!-- Assistant answer sits on a subtle surface card (item 4): a
+                   lightly shaded, bordered block, distinct from the panel
+                   background and from the violet question bubble. It wraps both
+                   the pending indicator and the resolved answer so the surface
+                   does not pop into existence when the answer lands. -->
               <div
-                v-if="turn.pending"
-                data-testid="ask-thinking"
-                class="flex items-center gap-1.5 text-gray-400 dark:text-gray-500"
-                aria-live="polite"
-                aria-busy="true"
+                data-testid="ask-answer-surface"
+                class="space-y-3 rounded-2xl rounded-tl-sm border border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-gray-900/40 px-4 py-3"
               >
-                <span class="sr-only">Generating answer…</span>
-                <span class="ask-dot"></span>
-                <span class="ask-dot" style="animation-delay: 0.15s"></span>
-                <span class="ask-dot" style="animation-delay: 0.3s"></span>
-              </div>
-
-              <template v-else>
-                <!-- Assistant answer — full-width sanitized markdown. -->
-                <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in renderAnswer -->
+                <!-- While the answer generates, the turn shows a thinking
+                     indicator in the answer slot (instead of the answer body). -->
                 <div
-                  class="ask-answer text-gray-800 dark:text-gray-100"
-                  data-testid="ask-answer"
-                  v-html="turn.answerHtml"
-                />
+                  v-if="turn.pending"
+                  data-testid="ask-thinking"
+                  class="flex items-center gap-1.5 text-gray-400 dark:text-gray-500"
+                  aria-live="polite"
+                  aria-busy="true"
+                >
+                  <span class="sr-only">Generating answer…</span>
+                  <span class="ask-dot"></span>
+                  <span class="ask-dot" style="animation-delay: 0.15s"></span>
+                  <span class="ask-dot" style="animation-delay: 0.3s"></span>
+                </div>
 
-                <div v-if="turn.citations.length" data-testid="ask-citations-disclosure">
-                <AppDetails :summary="`Citations (${turn.citations.length})`" :open="false">
-                  <ul
-                    class="grid grid-cols-1 md:grid-cols-2 gap-2"
-                    data-testid="ask-citations"
-                  >
-                    <li v-for="citation in turn.citations" :key="citation.document_id">
-                      <RouterLink
-                        class="flex items-center justify-between gap-3 px-4 py-3 border border-gray-200 dark:border-gray-700/60 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/40 transition"
-                        :to="{
-                          name: 'document-detail',
-                          params: { id: citation.document_id },
-                          query: citation.page_number ? { page: citation.page_number } : {},
-                        }"
-                        data-testid="ask-citation"
+                <template v-else>
+                  <!-- Sanitized markdown answer body, on the surface card. -->
+                  <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in renderAnswer -->
+                  <div
+                    class="ask-answer text-gray-800 dark:text-gray-100"
+                    data-testid="ask-answer"
+                    v-html="turn.answerHtml"
+                  />
+
+                  <div v-if="turn.citations.length" data-testid="ask-citations-disclosure">
+                    <AppDetails :summary="`Citations (${turn.citations.length})`" :open="false">
+                      <ul
+                        class="grid grid-cols-1 md:grid-cols-2 gap-2"
+                        data-testid="ask-citations"
                       >
-                        <span
-                          class="min-w-0 truncate text-sm text-violet-600 dark:text-violet-400 underline"
-                        >
-                          {{ citation.title ?? 'Untitled'
-                          }}<span v-if="citation.page_number">, p. {{ citation.page_number }}</span>
-                        </span>
-                        <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400"
-                          >#{{ citation.document_id }}</span
-                        >
-                      </RouterLink>
-                    </li>
-                  </ul>
-                </AppDetails>
-              </div>
+                        <li v-for="citation in turn.citations" :key="citation.document_id">
+                          <RouterLink
+                            class="flex items-center justify-between gap-3 px-4 py-3 border border-gray-200 dark:border-gray-700/60 rounded-lg hover:bg-white dark:hover:bg-gray-700/40 transition"
+                            :to="{
+                              name: 'document-detail',
+                              params: { id: citation.document_id },
+                              query: citation.page_number ? { page: citation.page_number } : {},
+                            }"
+                            data-testid="ask-citation"
+                          >
+                            <span
+                              class="min-w-0 truncate text-sm text-violet-600 dark:text-violet-400 underline"
+                            >
+                              {{ citation.title ?? 'Untitled'
+                              }}<span v-if="citation.page_number">, p. {{ citation.page_number }}</span>
+                            </span>
+                            <span class="shrink-0 text-xs text-gray-500 dark:text-gray-400"
+                              >#{{ citation.document_id }}</span
+                            >
+                          </RouterLink>
+                        </li>
+                      </ul>
+                    </AppDetails>
+                  </div>
 
-              <p
-                v-if="turn.usedTools.length || turn.costUsd"
-                class="text-xs text-gray-500 dark:text-gray-400"
-                data-testid="ask-meta"
-              >
-                <span v-if="turn.usedTools.length">Tools: {{ turn.usedTools.join(', ') }}</span>
-                <span v-if="turn.usedTools.length && turn.costUsd"> · </span>
-                <span v-if="turn.costUsd">Estimated cost: ${{ turn.costUsd.toFixed(4) }}</span>
-              </p>
-              </template>
+                  <p
+                    v-if="turn.usedTools.length || turn.costUsd"
+                    class="text-xs text-gray-500 dark:text-gray-400"
+                    data-testid="ask-meta"
+                  >
+                    <span v-if="turn.usedTools.length">Tools: {{ turn.usedTools.join(', ') }}</span>
+                    <span v-if="turn.usedTools.length && turn.costUsd"> · </span>
+                    <span v-if="turn.costUsd">Estimated cost: ${{ turn.costUsd.toFixed(4) }}</span>
+                  </p>
+                </template>
+              </div>
             </section>
           </div>
 

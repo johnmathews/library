@@ -207,9 +207,19 @@ The Ask view (`/ask`) is a chat interface: the page title and description sit
 full-width at the top, with the working area below — a conversation sidebar
 listing past threads (by title and relative time) with resume and delete
 actions, a scrollable transcript of Q&A pairs, and a follow-up input pinned
-below. On a phone the sidebar stacks beneath the title/description; on wide
+below. At lg+ the transcript scrolls internally (the header and composer stay
+put) and both the transcript and the thread list show a subtle thin scrollbar
+(`.thin-scrollbar`) so the scroll region reads as independently scrollable —
+rather than hiding the bar, which removed that affordance. On a phone the sidebar stacks beneath the title/description; on wide
 screens it sits beside the answer column. `/ask/:threadId` loads an existing
-thread. **"New conversation"** clears to an empty thread.
+thread. **"New conversation"** clears to an empty thread; when the view is already
+an empty new conversation (no thread selected, no turns) the button is greyed out
+and disabled, since starting a new one there would do nothing.
+
+Each turn is visually layered so the panel, the question, and the answer are
+distinguishable: the question is a right-aligned violet bubble, and the answer
+(with its citations disclosure and tools/cost meta) sits on a subtle surface card
+— a lightly shaded, bordered block distinct from the panel background.
 
 Sending is asynchronous and follows the Claude-app pattern: on submit the
 question appears in the transcript **immediately** as an optimistic turn and the

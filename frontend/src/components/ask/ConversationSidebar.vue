@@ -2,7 +2,10 @@
 import { computed, onMounted, ref } from 'vue'
 import { listThreads, deleteThread, type ThreadSummary } from '@/api/ask'
 
-const props = defineProps<{ activeThreadId: number | null }>()
+// `newDisabled` greys out "New conversation" when the view is already an empty
+// new conversation (no thread, no turns): starting a new one is redundant there,
+// so the button is inert rather than a dead affordance that does nothing.
+const props = defineProps<{ activeThreadId: number | null; newDisabled?: boolean }>()
 const emit = defineEmits<{ select: [number]; new: []; 'threads-changed': [number] }>()
 
 const threads = ref<ThreadSummary[]>([])
@@ -70,8 +73,14 @@ defineExpose({ refresh })
       <button
         data-testid="new-conversation"
         type="button"
-        class="btn-sm w-full bg-violet-600 hover:bg-violet-700 text-white"
-        @click="emit('new')"
+        class="btn-sm w-full"
+        :class="
+          newDisabled
+            ? 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
+            : 'bg-violet-600 hover:bg-violet-700 text-white'
+        "
+        :disabled="newDisabled"
+        @click="!newDisabled && emit('new')"
       >
         <svg class="w-4 h-4 shrink-0 fill-current opacity-80 mr-1" viewBox="0 0 16 16">
           <path d="M15 7H9V1c0-.6-.4-1-1-1S7 .4 7 1v6H1c-.6 0-1 .4-1 1s.4 1 1 1h6v6c0 .6.4 1 1 1s1-.4 1-1V9h6c.6 0 1-.4 1-1s-.4-1-1-1z" />
@@ -100,7 +109,7 @@ defineExpose({ refresh })
     <!-- On mobile the list is capped so it can't dominate the screen above the
          thread; on lg+ it flexes to fill the rail's height and scrolls. -->
     <ul
-      class="max-lg:max-h-64 lg:flex-1 lg:min-h-0 overflow-y-auto no-scrollbar p-2 space-y-1"
+      class="max-lg:max-h-64 lg:flex-1 lg:min-h-0 overflow-y-auto thin-scrollbar p-2 space-y-1"
     >
       <li
         v-for="thread in filteredThreads"
