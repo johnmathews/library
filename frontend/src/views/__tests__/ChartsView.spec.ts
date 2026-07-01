@@ -28,6 +28,7 @@ const TileStub = {
     detailLink: Boolean,
     axisMin: { type: [String, null], default: null },
     axisMax: { type: [String, null], default: null },
+    grouping: { type: String, default: 'none' },
   },
   template: '<div data-testid="tile-stub">{{ series.sender }}</div>',
 }
@@ -93,12 +94,44 @@ describe('ChartsView', () => {
     expect(stub.props('axisMax')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
   })
 
+  it('drops a tile from the grid when it emits "deleted"', async () => {
+    vi.mocked(fetchCharts).mockResolvedValue({
+      series: [makeSeries('Vattenfall', 1, 2), makeSeries('Eneco', 3, 2)],
+    } as never)
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.findAll('[data-testid="tile-stub"]')).toHaveLength(2)
+
+    // The first tile reports its series was deleted.
+    wrapper.findAllComponents(TileStub)[0]!.vm.$emit('deleted')
+    await flushPromises()
+
+    const remaining = wrapper.findAll('[data-testid="tile-stub"]')
+    expect(remaining).toHaveLength(1)
+    expect(remaining[0]!.text()).toBe('Eneco')
+    // Removal is local — no refetch needed.
+    expect(fetchCharts).toHaveBeenCalledTimes(1)
+  })
+
   it('shows an empty state when no series are eligible', async () => {
     vi.mocked(fetchCharts).mockResolvedValue({ series: [] } as never)
     const wrapper = mountView()
     await flushPromises()
     expect(wrapper.find('[data-testid="charts-empty"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="tile-stub"]').exists()).toBe(false)
+  })
+
+  it('applies the chosen grouping to every tile', async () => {
+    localStorage.clear()
+    vi.mocked(fetchCharts).mockResolvedValue({
+      series: [makeSeries('Vattenfall', 1, 2)],
+    } as never)
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.findComponent(TileStub).props('grouping')).toBe('none')
+
+    await wrapper.find('[data-testid="charts-grouping"]').setValue('month')
+    expect(wrapper.findComponent(TileStub).props('grouping')).toBe('month')
   })
 
   it('shows an error state when the fetch fails', async () => {

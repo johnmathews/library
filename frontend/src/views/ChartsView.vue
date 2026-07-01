@@ -18,10 +18,21 @@ import {
 } from '@/api/documents'
 import SeriesChartTile from '@/components/SeriesChartTile.vue'
 import CurrencySelect from '@/components/CurrencySelect.vue'
+import ChartControls from '@/components/charts/ChartControls.vue'
 import { useChartsTimeframe } from '@/composables/useChartsTimeframe'
+import { useChartsGrouping } from '@/composables/useChartsGrouping'
 
-// Shared time-axis window across every tile (W4). Display-only.
-const { timeframe, options: timeframeOptions, bounds: axisBounds } = useChartsTimeframe()
+// Shared time-range window + grouping across every tile (W4/W5). Display-only.
+const {
+  timeframe,
+  customFrom,
+  customTo,
+  options: timeframeOptions,
+  bounds: axisBounds,
+  selectTimeframe,
+  setCustom,
+} = useChartsTimeframe()
+const { grouping, options: groupingOptions } = useChartsGrouping()
 
 const series = ref<DocumentSeries[]>([])
 const loading = ref(true)
@@ -31,6 +42,11 @@ const error = ref<string | null>(null)
 // scheme; emergent series use the shared `{sender}-{kind}-{currency}` id.
 function tileKey(s: DocumentSeries): string {
   return s.authored_id != null ? authoredSeriesId(s.authored_id) : seriesId(s)
+}
+
+// Drop a deleted tile from the grid without a full refetch (W4).
+function onTileDeleted(s: DocumentSeries): void {
+  series.value = series.value.filter((x) => tileKey(x) !== tileKey(s))
 }
 
 async function load(): Promise<void> {
@@ -141,31 +157,30 @@ onMounted(load)
   <div id="charts-view">
     <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
       <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold">Charts</h1>
-      <div class="flex items-center gap-3">
-        <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
-          <span class="hidden sm:inline">Time axis</span>
-          <select
-            v-model="timeframe"
-            data-testid="charts-timeframe"
-            class="form-select text-sm"
-            aria-label="Shared time axis across all charts"
-          >
-            <option v-for="opt in timeframeOptions" :key="opt.value" :value="opt.value">
-              {{ opt.label }}
-            </option>
-          </select>
-        </label>
-        <button
-          v-if="!showCreate"
-          type="button"
-          data-testid="charts-create-button"
-          class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm"
-          @click="openCreate"
-        >
-          + Create a new series
-        </button>
-      </div>
+      <button
+        v-if="!showCreate"
+        type="button"
+        data-testid="charts-create-button"
+        class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm"
+        @click="openCreate"
+      >
+        + Create a new series
+      </button>
     </div>
+
+    <!-- Shared time-range + grouping applied to every tile (W5). -->
+    <ChartControls
+      class="mb-6"
+      :timeframe="timeframe"
+      :timeframe-options="timeframeOptions"
+      :custom-from="customFrom"
+      :custom-to="customTo"
+      :grouping="grouping"
+      :grouping-options="groupingOptions"
+      @select-timeframe="selectTimeframe"
+      @set-custom="setCustom"
+      @update:grouping="grouping = $event"
+    />
 
     <!-- Create-a-series form (W14). -->
     <form
@@ -322,7 +337,9 @@ onMounted(load)
         detail-link
         :axis-min="axisBounds.min"
         :axis-max="axisBounds.max"
+        :grouping="grouping"
         @changed="load"
+        @deleted="onTileDeleted(s)"
       />
     </div>
   </div>
