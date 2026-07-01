@@ -29,6 +29,11 @@ const api = vi.hoisted(() => ({
   updateAuthoredSeries: vi.fn(),
   addAuthoredMember: vi.fn(),
   removeAuthoredMember: vi.fn(),
+  // Smart features (suggestions / odd-ones-out).
+  fetchAuthoredSuggestions: vi.fn(),
+  acceptAuthoredSuggestion: vi.fn(),
+  dismissAuthoredSuggestion: vi.fn(),
+  fetchAuthoredOddOnesOut: vi.fn(),
   authoredSeriesId: (id: number) => `a-${id}`,
   // Real shape — the tile uses it for its id + deep link.
   seriesId: (s: { sender_id: number; kind_id: number; currency: string | null }) =>
@@ -373,5 +378,91 @@ describe('SeriesChartTile title/description + single-chart link (W12)', () => {
     await flushPromises()
     expect(api.addAuthoredMember).toHaveBeenCalledWith(5, 99)
     expect(api.addSeriesMember).not.toHaveBeenCalled()
+  })
+
+  // --- Smart features: suggestions & odd-ones-out ---------------------------
+
+  const authoredWithCounts: DocumentSeries = {
+    ...okSeries,
+    sender: null,
+    sender_id: null,
+    kind_id: null,
+    authored_id: 5,
+    suggestion_count: 2,
+    odd_one_out_count: 1,
+  }
+
+  it('shows the suggestions badge only for authored series with matches', () => {
+    // Emergent series never show the badge, even with a stray count.
+    const emergent = mountTile({ ...okSeries, suggestion_count: 3 })
+    expect(emergent.find('[data-testid="series-suggestions"]').exists()).toBe(false)
+
+    const authored = mountEditable(authoredWithCounts)
+    expect(authored.find('[data-testid="series-suggestions"]').exists()).toBe(true)
+    expect(authored.find('[data-testid="series-suggestions-toggle"]').text()).toContain('2')
+  })
+
+  it('lazily loads suggestions and accepts one', async () => {
+    api.fetchAuthoredSuggestions.mockResolvedValue({
+      suggestions: [
+        { id: 20, title: 'Bill 20', sender: 'V', kind: 'utility-bill', currency: 'EUR', document_date: '2026-06-01', amount: '101.00' },
+      ],
+      count: 1,
+    })
+    api.acceptAuthoredSuggestion.mockResolvedValue({ ...authoredWithCounts })
+    const wrapper = mountEditable(authoredWithCounts)
+
+    // Not fetched until the panel is opened.
+    expect(api.fetchAuthoredSuggestions).not.toHaveBeenCalled()
+    await wrapper.find('[data-testid="series-suggestions-toggle"]').trigger('click')
+    await flushPromises()
+    expect(api.fetchAuthoredSuggestions).toHaveBeenCalledWith(5)
+    expect(wrapper.find('[data-testid="series-suggestion"]').text()).toContain('Bill 20')
+
+    await wrapper.find('[data-testid="series-suggestion-accept"]').trigger('click')
+    await flushPromises()
+    expect(api.acceptAuthoredSuggestion).toHaveBeenCalledWith(5, 20)
+    expect(wrapper.emitted('changed')).toBeTruthy()
+    // The accepted row leaves the local list.
+    expect(wrapper.find('[data-testid="series-suggestion"]').exists()).toBe(false)
+  })
+
+  it('dismisses a suggestion', async () => {
+    api.fetchAuthoredSuggestions.mockResolvedValue({
+      suggestions: [
+        { id: 21, title: 'Bill 21', sender: 'V', kind: 'utility-bill', currency: 'EUR', document_date: '2026-06-01', amount: '99.00' },
+      ],
+      count: 1,
+    })
+    api.dismissAuthoredSuggestion.mockResolvedValue({ count: 0 })
+    const wrapper = mountEditable(authoredWithCounts)
+    await wrapper.find('[data-testid="series-suggestions-toggle"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="series-suggestion-dismiss"]').trigger('click')
+    await flushPromises()
+    expect(api.dismissAuthoredSuggestion).toHaveBeenCalledWith(5, 21)
+    expect(wrapper.find('[data-testid="series-suggestion"]').exists()).toBe(false)
+  })
+
+  it('lazily loads odd-ones-out with the LLM reason and can remove one', async () => {
+    api.fetchAuthoredOddOnesOut.mockResolvedValue({
+      members: [
+        { id: 30, title: 'Odd doc', sender: 'Other', kind: 'utility-bill', currency: 'EUR', document_date: '2026-05-01', amount: '80.00', axis: 'sender', reason: 'This is from a different sender than the rest.' },
+      ],
+    })
+    api.removeAuthoredMember.mockResolvedValue({ ...authoredWithCounts })
+    const wrapper = mountEditable(authoredWithCounts)
+
+    expect(api.fetchAuthoredOddOnesOut).not.toHaveBeenCalled()
+    await wrapper.find('[data-testid="series-odd-toggle"]').trigger('click')
+    await flushPromises()
+    expect(api.fetchAuthoredOddOnesOut).toHaveBeenCalledWith(5)
+    const member = wrapper.find('[data-testid="series-odd-member"]')
+    expect(member.text()).toContain('Odd doc')
+    expect(member.text()).toContain('different sender')
+
+    await wrapper.find('[data-testid="series-odd-remove"]').trigger('click')
+    await flushPromises()
+    expect(api.removeAuthoredMember).toHaveBeenCalledWith(5, 30)
   })
 })

@@ -27,6 +27,7 @@ from library.fx import convert_amount
 from library.models import (
     AuthoredSeries,
     AuthoredSeriesMember,
+    AuthoredSeriesSuggestion,
     Document,
     Kind,
     OverrideAction,
@@ -283,6 +284,26 @@ class _Member:
     sender_id: int | None
     kind_id: int | None
     title: str | None
+
+
+@dataclass(frozen=True, slots=True)
+class SeriesSignature:
+    """The mechanical identity of a series: its dominant member triple + dominance.
+
+    ``(sender_id, kind_id, currency)`` is the most common triple across a
+    series' members; ``dominance`` is the fraction of members that share it
+    (``dominant_count / member_count``). A high dominance means the series has a
+    clear, consistent identity that a new document can be matched against
+    (auto-continue); a low one means the membership is mixed and no confident
+    match is possible.
+    """
+
+    sender_id: int | None
+    kind_id: int | None
+    currency: str | None
+    member_count: int
+    dominant_count: int
+    dominance: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -753,6 +774,132 @@ async def summarize_authored_series(
         title=authored.name,
         authored_id=authored.id,
     )
+
+
+def derive_signature(members: list[_Member]) -> SeriesSignature | None:
+    """The dominant ``(sender_id, kind_id, currency)`` triple over ``members``.
+
+    Pure. ``None`` for an empty membership. Counts each distinct triple and picks
+    the most common one; ``dominance`` is that count over the total member count
+    (so a homogeneous series has dominance ``1.0``).
+    """
+    if not members:
+        return None
+    counts: dict[tuple[int | None, int | None, str | None], int] = {}
+    for member in members:
+        key = (member.sender_id, member.kind_id, member.currency)
+        counts[key] = counts.get(key, 0) + 1
+    (sender_id, kind_id, currency), dominant_count = max(counts.items(), key=lambda kv: kv[1])
+    member_count = len(members)
+    return SeriesSignature(
+        sender_id=sender_id,
+        kind_id=kind_id,
+        currency=currency,
+        member_count=member_count,
+        dominant_count=dominant_count,
+        dominance=dominant_count / member_count,
+    )
+
+
+async def load_authored_signature(
+    session: AsyncSession, authored_series_id: int
+) -> SeriesSignature | None:
+    """The :class:`SeriesSignature` of an authored series' current membership."""
+    members = await _load_authored_members(session, authored_series_id)
+    return derive_signature(members)
+
+
+async def suggest_signature_matches(
+    session: AsyncSession,
+    authored_series_id: int,
+    settings: Settings,
+    *,
+    limit: int | None = None,
+) -> list[_Member]:
+    """Amount-bearing documents that match an authored series' signature.
+
+    Returns ``[]`` unless the series has a confident signature: a resolved
+    sender and kind and a dominance at or above
+    ``settings.series_autocontinue_min_dominance``. Matches share the signature's
+    ``(sender_id, kind_id, currency)`` (NULL currency matched NULL-aware) and are
+    not already members, nor already carry a suggestion row (pending OR
+    dismissed) for this series. Newest first, capped at ``limit`` (default
+    ``settings.series_suggestion_limit``).
+    """
+    signature = await load_authored_signature(session, authored_series_id)
+    if (
+        signature is None
+        or signature.sender_id is None
+        or signature.kind_id is None
+        or signature.dominance < settings.series_autocontinue_min_dominance
+    ):
+        return []
+
+    member_ids = select(AuthoredSeriesMember.document_id).where(
+        AuthoredSeriesMember.authored_series_id == authored_series_id
+    )
+    suggested_ids = select(AuthoredSeriesSuggestion.document_id).where(
+        AuthoredSeriesSuggestion.authored_series_id == authored_series_id
+    )
+    currency_match = (
+        Document.currency.is_(None)
+        if signature.currency is None
+        else Document.currency == signature.currency
+    )
+    statement = (
+        select(
+            Document.id,
+            Sender.name,
+            Kind.slug,
+            Document.document_date,
+            Document.amount_total,
+            Document.currency,
+            Document.sender_id,
+            Document.kind_id,
+            Document.title,
+        )
+        .outerjoin(Sender, Document.sender_id == Sender.id)
+        .outerjoin(Kind, Document.kind_id == Kind.id)
+        .where(
+            Document.deleted_at.is_(None),
+            Document.amount_total.isnot(None),
+            Document.sender_id == signature.sender_id,
+            Document.kind_id == signature.kind_id,
+            currency_match,
+            Document.id.not_in(member_ids),
+            Document.id.not_in(suggested_ids),
+        )
+        .order_by(Document.document_date.desc().nullslast(), Document.id.desc())
+        .limit(limit or settings.series_suggestion_limit)
+    )
+    rows = (await session.execute(statement)).all()
+    return [
+        _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title)
+        for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows
+    ]
+
+
+def odd_ones_out(members: list[_Member], signature: SeriesSignature) -> list[tuple[_Member, str]]:
+    """Members whose triple differs from ``signature``'s dominant one, each labelled.
+
+    Pure. The label names the *first* differing axis in priority order
+    ``sender → kind → currency`` (a document can differ on several; naming the
+    highest-priority one keeps the rationale focused, since a different sender is
+    usually the most telling reason a document doesn't belong).
+    """
+    dominant = (signature.sender_id, signature.kind_id, signature.currency)
+    result: list[tuple[_Member, str]] = []
+    for member in members:
+        if (member.sender_id, member.kind_id, member.currency) == dominant:
+            continue
+        if member.sender_id != signature.sender_id:
+            axis = "sender"
+        elif member.kind_id != signature.kind_id:
+            axis = "kind"
+        else:
+            axis = "currency"
+        result.append((member, axis))
+    return result
 
 
 def _pct(fraction: float) -> str:

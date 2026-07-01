@@ -26,6 +26,8 @@ const TileStub = {
     highlightDocumentId: Number,
     editable: Boolean,
     detailLink: Boolean,
+    axisMin: { type: [String, null], default: null },
+    axisMax: { type: [String, null], default: null },
   },
   template: '<div data-testid="tile-stub">{{ series.sender }}</div>',
 }
@@ -71,6 +73,26 @@ describe('ChartsView', () => {
     expect(stubs[0]!.props('editable')).toBe(true)
   })
 
+  it('passes the shared time-axis bounds to each tile when a timeframe is chosen', async () => {
+    localStorage.clear()
+    vi.mocked(fetchCharts).mockResolvedValue({
+      series: [makeSeries('Vattenfall', 1, 2)],
+    } as never)
+    const wrapper = mountView()
+    await flushPromises()
+
+    // Default "all" → open axis (null bounds).
+    let stub = wrapper.findComponent(TileStub)
+    expect(stub.props('axisMin')).toBeNull()
+    expect(stub.props('axisMax')).toBeNull()
+
+    // Choosing a bounded window clamps the axis on every tile.
+    await wrapper.find('[data-testid="charts-timeframe"]').setValue('12m')
+    stub = wrapper.findComponent(TileStub)
+    expect(stub.props('axisMin')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+    expect(stub.props('axisMax')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  })
+
   it('shows an empty state when no series are eligible', async () => {
     vi.mocked(fetchCharts).mockResolvedValue({ series: [] } as never)
     const wrapper = mountView()
@@ -90,7 +112,7 @@ describe('ChartsView', () => {
   it('creates an authored series via the create flow', async () => {
     vi.mocked(fetchCharts).mockResolvedValue({ series: [] } as never)
     vi.mocked(listDocuments).mockResolvedValue({
-      items: [{ id: 42, title: 'Invoice A' }],
+      items: [{ id: 42, title: 'Invoice A', currency: 'EUR' }],
     } as never)
     vi.mocked(createAuthoredSeries).mockResolvedValue({ authored_id: 5 } as never)
     const wrapper = mountView()
@@ -100,9 +122,10 @@ describe('ChartsView', () => {
     await wrapper.find('[data-testid="charts-create-button"]').trigger('click')
     expect(wrapper.find('[data-testid="charts-create-form"]').exists()).toBe(true)
 
-    // Fill the name + currency.
+    // Fill the name, currency (dropdown) + subtitle.
     await wrapper.find('[data-testid="charts-create-name"]').setValue('My series')
-    await wrapper.find('[data-testid="charts-create-currency"]').setValue('eur')
+    await wrapper.find('[data-testid="currency-select"]').setValue('EUR')
+    await wrapper.find('[data-testid="charts-create-description"]').setValue('Why this matters')
 
     // Search and add a document.
     await wrapper.find('[data-testid="charts-create-search"]').setValue('inv')
@@ -118,11 +141,52 @@ describe('ChartsView', () => {
     expect(createAuthoredSeries).toHaveBeenCalledWith({
       name: 'My series',
       currency: 'EUR',
+      description: 'Why this matters',
       document_ids: [42],
     })
     // Form closes + the grid reloads (fetchCharts called again).
     expect(wrapper.find('[data-testid="charts-create-form"]').exists()).toBe(false)
     expect(fetchCharts).toHaveBeenCalledTimes(2)
+  })
+
+  it('warns when a selected document currency differs from the chart currency', async () => {
+    vi.mocked(fetchCharts).mockResolvedValue({ series: [] } as never)
+    vi.mocked(listDocuments).mockResolvedValue({
+      items: [{ id: 7, title: 'GBP Invoice', currency: 'GBP' }],
+    } as never)
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="charts-create-button"]').trigger('click')
+    await wrapper.find('[data-testid="currency-select"]').setValue('EUR')
+    await wrapper.find('[data-testid="charts-create-search"]').setValue('inv')
+    await wrapper.find('[data-testid="charts-create-search"]').trigger('input')
+    await flushPromises()
+    await wrapper.find('[data-testid="charts-create-result"]').trigger('click')
+
+    const warning = wrapper.find('[data-testid="charts-create-currency-warning"]')
+    expect(warning.exists()).toBe(true)
+    expect(warning.text()).toContain('GBP')
+    expect(warning.text()).toContain('EUR')
+  })
+
+  it('adds a custom currency code to the dropdown', async () => {
+    localStorage.clear()
+    vi.mocked(fetchCharts).mockResolvedValue({ series: [] } as never)
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="charts-create-button"]').trigger('click')
+    // Choosing the sentinel reveals the add-a-code input.
+    await wrapper.find('[data-testid="currency-select"]').setValue('__add__')
+    await wrapper.find('[data-testid="currency-add-input"]').setValue('chf')
+    await wrapper.find('[data-testid="currency-add-confirm"]').trigger('click')
+    await flushPromises()
+
+    // The new code is now the selected option in the dropdown.
+    const select = wrapper.find('[data-testid="currency-select"]')
+    expect(select.text()).toContain('CHF')
+    expect((select.element as HTMLSelectElement).value).toBe('CHF')
   })
 
   it('requires a name before creating', async () => {

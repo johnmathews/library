@@ -1,6 +1,6 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-06-30 (authored series: `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2. Earlier: admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}` — rename/merge + reassign-then-delete, §1.18.1–§1.18.2; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Status:** active. **Last updated:** 2026-07-01 (authored-series smart features: `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with LLM reason; additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -53,6 +53,11 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | DELETE | `/api/charts/authored/{id}` | Delete an authored series |
 | POST   | `/api/charts/authored/{id}/members` | Add a document to an authored series |
 | DELETE | `/api/charts/authored/{id}/members/{document_id}` | Remove a document from an authored series |
+| GET    | `/api/charts/authored/{id}/signature` | The authored series' mechanical `(sender, kind, currency)` signature |
+| GET    | `/api/charts/authored/{id}/suggestions` | Documents matching the signature, awaiting review |
+| POST   | `/api/charts/authored/{id}/suggestions/{document_id}/accept` | Accept a suggestion as a member |
+| POST   | `/api/charts/authored/{id}/suggestions/{document_id}/dismiss` | Dismiss a suggestion (tombstone) |
+| GET    | `/api/charts/authored/{id}/odd-ones-out` | Members that break the signature, with a reason |
 | POST   | `/api/series/{sender_id}/{kind_id}/members` | Pin a document into a series (or clear an exclude) |
 | DELETE | `/api/series/{sender_id}/{kind_id}/members/{document_id}` | Exclude a document from a series (or clear a pin) |
 | GET    | `/api/kinds` | Document kinds with counts |
@@ -953,6 +958,41 @@ All mutating endpoints return the refreshed single-series body (same shape as on
 `/api/charts` entry, with `authored_id` set). The owner is recorded as the
 creating user (`owner_id`). `404` when the series id is unknown (or, for add, the
 document is unknown/deleted); `401` when unauthenticated.
+
+### 1.14.3 Authored-series smart features — signature, suggestions, odd-ones-out
+
+Each authored series has a mechanical **signature**: the dominant
+`(sender_id, kind_id, currency)` triple across its current members, plus a
+`dominance` fraction (`dominant_count / member_count`). Three features build on
+it (matching is purely mechanical; the LLM is used **only** to phrase one
+odd-one-out sentence):
+
+- **Suggestions (propose-for-review auto-continue).** Documents that match the
+  signature but aren't members yet. When a document is indexed, the
+  `evaluate_series_autocontinue` job records it as a `pending` row in
+  `authored_series_suggestions` for every series it matches — it is **never**
+  silently added as a member. The suggestion list is also computed live on read.
+- **Odd-ones-out.** Current members whose `(sender, kind, currency)` differs from
+  the dominant signature, each with a mechanical `axis` (`sender` → `kind` →
+  `currency`, first difference) and an LLM-generated one-sentence `reason`
+  (`null` when extraction is disabled).
+
+Suggestions surface only when the signature is confident: a resolved sender/kind
+and `dominance ≥ series_autocontinue_min_dominance` (default `0.6`). A dismissed
+suggestion writes a `dismissed` tombstone so it is never re-proposed.
+
+| Method | Path | Effect |
+|--------|------|--------|
+| GET | `/api/charts/authored/{id}/signature` | The `{sender_id, kind_id, currency, member_count, dominant_count, dominance}` signature (nulls/zeros for an empty series). |
+| GET | `/api/charts/authored/{id}/suggestions` | `{suggestions: [{id, title, sender, kind, currency, document_date, amount}], count}` — signature-matching non-members, newest first, capped at `series_suggestion_limit` (default 20). |
+| POST | `/api/charts/authored/{id}/suggestions/{document_id}/accept` | Promote to a member (idempotent); clears the suggestion row; returns the refreshed series body. |
+| POST | `/api/charts/authored/{id}/suggestions/{document_id}/dismiss` | Write a `dismissed` tombstone; returns `{count}` — remaining live matches. |
+| GET | `/api/charts/authored/{id}/odd-ones-out` | `{members: [{id, title, sender, kind, currency, document_date, amount, axis, reason}]}` — members breaking the signature. The `reason` call runs the LLM per member, so fetch lazily. |
+
+Additively, each **authored** entry in `GET /api/charts` and
+`GET /api/charts/{id}` carries three extra keys the dashboard reads without a
+follow-up fetch: `signature` (object or `null`), `suggestion_count` (int, pending
+matches), and `odd_one_out_count` (int).
 
 ## 1.15 Series membership overrides — `/api/series/{sender_id}/{kind_id}/members`
 

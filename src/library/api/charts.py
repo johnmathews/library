@@ -9,9 +9,11 @@ whose dominant currency bucket is too small are skipped.
 
 from typing import Annotated
 
+from anthropic import AsyncAnthropic
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.auth.deps import current_user
@@ -20,21 +22,31 @@ from library.db import get_session
 from library.models import (
     AuthoredSeries,
     AuthoredSeriesMember,
+    AuthoredSeriesSuggestion,
     Document,
     Kind,
     Sender,
     SeriesMetaOverride,
+    SuggestionState,
     User,
 )
 from library.search import DocumentFilters
 from library.series import (
+    SeriesSignature,
     SeriesSummary,
+    _load_authored_members,
+    _Member,
     decode_authored_series_id,
     decode_series_id,
+    derive_signature,
+    load_authored_signature,
+    odd_ones_out,
     serialise_summary,
+    suggest_signature_matches,
     summarize_authored_series,
     summarize_series,
 )
+from library.series_match import generate_reason
 
 router = APIRouter()
 
@@ -108,7 +120,9 @@ async def list_charts(
         summary = await summarize_authored_series(session, authored_id, settings)
         if summary is None:
             continue
-        series.append(serialise_summary(summary, include_points=True))
+        body = serialise_summary(summary, include_points=True)
+        body |= await _authored_signature_extras(session, settings, authored_id)
+        series.append(body)
     return {"series": series}
 
 
@@ -163,7 +177,9 @@ async def get_chart(
         summary = await summarize_authored_series(session, authored_id, settings)
         if summary is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown series")
-        return serialise_summary(summary, include_points=True)
+        body = serialise_summary(summary, include_points=True)
+        body |= await _authored_signature_extras(session, settings, authored_id)
+        return body
     sender_id, kind_id, currency = _decode_or_404(series_id)
     summary = await _summarize_one(session, settings, sender_id, kind_id, currency)
     if summary is None:
@@ -316,6 +332,60 @@ async def _authored_body(
     return serialise_summary(summary, include_points=True)
 
 
+def _serialise_signature(signature: SeriesSignature | None) -> dict[str, object] | None:
+    """A JSON-friendly signature dict, or ``None`` for an empty (memberless) series."""
+    if signature is None:
+        return None
+    return {
+        "sender_id": signature.sender_id,
+        "kind_id": signature.kind_id,
+        "currency": signature.currency,
+        "member_count": signature.member_count,
+        "dominant_count": signature.dominant_count,
+        "dominance": round(signature.dominance, 4),
+    }
+
+
+def _serialise_member(member: _Member) -> dict[str, object]:
+    """A compact JSON dict for one suggestion/odd-one-out member row."""
+    return {
+        "id": member.document_id,
+        "title": member.title,
+        "sender": member.sender,
+        "kind": member.kind,
+        "currency": member.currency,
+        "document_date": (
+            member.document_date.isoformat() if member.document_date is not None else None
+        ),
+        "amount": str(member.amount),
+    }
+
+
+async def _authored_signature_extras(
+    session: AsyncSession, settings: Settings, authored_id: int
+) -> dict[str, object]:
+    """Additive signature/suggestion/odd-one-out keys for an authored ``/charts`` entry.
+
+    ``signature`` is the serialised :class:`SeriesSignature` (or ``None``);
+    ``suggestion_count`` is the number of live signature matches awaiting review
+    (the same set ``GET .../suggestions`` returns — pending, not yet
+    accepted/dismissed); ``odd_one_out_count`` is how many current members break
+    the signature. Computed here in the endpoint layer, not threaded through
+    ``SeriesSummary``.
+    """
+    members = await _load_authored_members(session, authored_id)
+    signature = derive_signature(members)
+    extras: dict[str, object] = {"signature": _serialise_signature(signature)}
+    if signature is None:
+        extras["suggestion_count"] = 0
+        extras["odd_one_out_count"] = 0
+        return extras
+    matches = await suggest_signature_matches(session, authored_id, settings)
+    extras["suggestion_count"] = len(matches)
+    extras["odd_one_out_count"] = len(odd_ones_out(members, signature))
+    return extras
+
+
 @router.post(
     "/charts/authored",
     status_code=status.HTTP_201_CREATED,
@@ -430,3 +500,167 @@ async def remove_authored_member(
         await session.delete(member)
         await session.commit()
     return await _authored_body(session, settings, authored_id)
+
+
+# --- Signature matching, suggestions, and odd-ones-out (authored series) -----
+
+
+@router.get(
+    "/charts/authored/{authored_id}/signature",
+    summary="The mechanical (sender, kind, currency) signature of an authored series",
+    responses={404: {"description": "Unknown series"}},
+)
+async def get_authored_signature(
+    authored_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> dict[str, object]:
+    """The series' dominant ``(sender_id, kind_id, currency)`` triple and dominance.
+
+    An empty (memberless) series reports a null signature: all identity fields
+    ``null`` and the counts/dominance zero."""
+    await _get_authored_or_404(session, authored_id)
+    signature = await load_authored_signature(session, authored_id)
+    serialised = _serialise_signature(signature)
+    if serialised is None:
+        return {
+            "sender_id": None,
+            "kind_id": None,
+            "currency": None,
+            "member_count": 0,
+            "dominant_count": 0,
+            "dominance": 0.0,
+        }
+    return serialised
+
+
+@router.get(
+    "/charts/authored/{authored_id}/suggestions",
+    summary="Documents that match an authored series' signature (propose-for-review)",
+    responses={404: {"description": "Unknown series"}},
+)
+async def list_authored_suggestions(
+    authored_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, object]:
+    """Amount-bearing non-member documents matching the signature, newest first.
+
+    Empty unless the series has a confident signature (resolved sender/kind and
+    dominance ≥ the configured threshold). Excludes documents already accepted
+    (members) or dismissed (tombstoned)."""
+    await _get_authored_or_404(session, authored_id)
+    matches = await suggest_signature_matches(session, authored_id, settings)
+    return {"suggestions": [_serialise_member(m) for m in matches], "count": len(matches)}
+
+
+@router.post(
+    "/charts/authored/{authored_id}/suggestions/{document_id}/accept",
+    summary="Accept a suggested document as a member of the authored series",
+    responses={404: {"description": "Unknown series or document"}},
+)
+async def accept_authored_suggestion(
+    authored_id: int,
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, object]:
+    """Promote a suggestion to a real member (idempotent) and clear any suggestion
+    row for it; returns the refreshed authored body."""
+    await _get_authored_or_404(session, authored_id)
+    document = await session.get(Document, document_id)
+    if document is None or document.deleted_at is not None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document")
+    if document_id not in await _authored_member_ids(session, authored_id):
+        session.add(AuthoredSeriesMember(authored_series_id=authored_id, document_id=document_id))
+    # The document is now a member; drop any pending/dismissed suggestion row.
+    await session.execute(
+        delete(AuthoredSeriesSuggestion).where(
+            AuthoredSeriesSuggestion.authored_series_id == authored_id,
+            AuthoredSeriesSuggestion.document_id == document_id,
+        )
+    )
+    await session.commit()
+    return await _authored_body(session, settings, authored_id)
+
+
+@router.post(
+    "/charts/authored/{authored_id}/suggestions/{document_id}/dismiss",
+    summary="Dismiss a suggested document (tombstone so it is not re-suggested)",
+    responses={404: {"description": "Unknown series or document"}},
+)
+async def dismiss_authored_suggestion(
+    authored_id: int,
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, object]:
+    """Record a ``dismissed`` tombstone for ``document_id`` (upsert on the unique
+    ``(series, document)`` key) so it is never suggested for this series again.
+    Returns ``{"count": N}`` — the number of live signature matches still awaiting
+    review after the dismissal (the same set ``GET .../suggestions`` returns)."""
+    await _get_authored_or_404(session, authored_id)
+    document = await session.get(Document, document_id)
+    if document is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document")
+    statement = (
+        pg_insert(AuthoredSeriesSuggestion)
+        .values(
+            authored_series_id=authored_id,
+            document_id=document_id,
+            state=SuggestionState.DISMISSED.value,
+        )
+        .on_conflict_do_update(
+            constraint="authored_series_suggestions_series_document",
+            set_={"state": SuggestionState.DISMISSED.value, "updated_at": func.now()},
+        )
+    )
+    await session.execute(statement)
+    await session.commit()
+    remaining = await suggest_signature_matches(session, authored_id, settings)
+    return {"count": len(remaining)}
+
+
+@router.get(
+    "/charts/authored/{authored_id}/odd-ones-out",
+    summary="Members that break the series signature, with a one-sentence reason",
+    responses={404: {"description": "Unknown series"}},
+)
+async def get_authored_odd_ones_out(
+    authored_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> dict[str, object]:
+    """Current members whose ``(sender, kind, currency)`` differs from the dominant
+    signature, each with a mechanical ``axis`` label and an LLM ``reason``.
+
+    The match is purely mechanical; the ``reason`` sentence is generated only when
+    extraction is enabled and an API key is configured (mirroring the series-
+    insight guards), otherwise ``reason`` is ``null``."""
+    await _get_authored_or_404(session, authored_id)
+    members = await _load_authored_members(session, authored_id)
+    signature = derive_signature(members)
+    if signature is None:
+        return {"members": []}
+    odd = odd_ones_out(members, signature)
+
+    use_llm = settings.extraction_enabled and settings.anthropic_api_key is not None
+    client: AsyncAnthropic | None = None
+    if use_llm:
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
+    try:
+        result: list[dict[str, object]] = []
+        for member, axis in odd:
+            reason: str | None = None
+            if client is not None:
+                reason, _, _ = await generate_reason(
+                    client,
+                    settings.extraction_model,
+                    signature=signature,
+                    candidate=member,
+                    mechanical_axis=axis,
+                )
+            result.append({**_serialise_member(member), "axis": axis, "reason": reason})
+    finally:
+        if client is not None:
+            await client.close()
+    return {"members": result}

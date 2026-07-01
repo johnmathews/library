@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     series_min_documents: int = 3  # min members before stats are reported
     series_typical_pct: float = 0.10  # half-width of the "typical" band vs median
     series_flat_pct: float = 0.05  # |first→last change| at/below which trend is flat
+    # Authored-series auto-continue (propose-for-review). A newly-indexed
+    # document mechanically matching an authored series' dominant
+    # (sender, kind, currency) signature is recorded as a pending suggestion.
+    series_autocontinue_enabled: bool = True
+    series_autocontinue_min_dominance: float = 0.6  # min signature dominance to match
+    series_suggestion_limit: int = 20  # cap on suggested matches returned/considered
     # Consume folder watcher (see docs/ingestion.md, "Consume folder" section).
     consume_dir: Path | None = None  # unset = watcher off
     consume_force_polling: bool = False  # required for NFS/SMB mounts (no inotify)

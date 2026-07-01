@@ -6,7 +6,7 @@
  * an optional currency, search & add documents) and rendered alongside the
  * emergent ones. The data comes from GET /api/charts; any change refetches.
  */
-import { onMounted, ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import {
   fetchCharts,
   seriesId,
@@ -17,6 +17,11 @@ import {
   type DocumentListItem,
 } from '@/api/documents'
 import SeriesChartTile from '@/components/SeriesChartTile.vue'
+import CurrencySelect from '@/components/CurrencySelect.vue'
+import { useChartsTimeframe } from '@/composables/useChartsTimeframe'
+
+// Shared time-axis window across every tile (W4). Display-only.
+const { timeframe, options: timeframeOptions, bounds: axisBounds } = useChartsTimeframe()
 
 const series = ref<DocumentSeries[]>([])
 const loading = ref(true)
@@ -45,11 +50,26 @@ async function load(): Promise<void> {
 const showCreate = ref(false)
 const newName = ref('')
 const newCurrency = ref('')
+const newDescription = ref('')
 const createQuery = ref('')
 const createResults = ref<DocumentListItem[]>([])
-const selectedDocs = ref<{ id: number; label: string }[]>([])
+const selectedDocs = ref<{ id: number; label: string; currency: string | null }[]>([])
 const creating = ref(false)
 const createError = ref<string | null>(null)
+
+// Mechanical currency-consistency check: warn when the chosen chart currency
+// disagrees with the currencies of the selected documents. Documents with no
+// currency don't count as a conflict. Purely advisory — creation is not blocked.
+const currencyMismatch = computed<{ currencies: string[]; count: number } | null>(() => {
+  const chosen = newCurrency.value.trim().toUpperCase()
+  if (!chosen) return null
+  const conflicting = selectedDocs.value.filter(
+    (d) => d.currency && d.currency.toUpperCase() !== chosen,
+  )
+  if (conflicting.length === 0) return null
+  const currencies = [...new Set(conflicting.map((d) => d.currency!.toUpperCase()))].sort()
+  return { currencies, count: conflicting.length }
+})
 
 function openCreate(): void {
   showCreate.value = true
@@ -59,6 +79,7 @@ function resetCreate(): void {
   showCreate.value = false
   newName.value = ''
   newCurrency.value = ''
+  newDescription.value = ''
   createQuery.value = ''
   createResults.value = []
   selectedDocs.value = []
@@ -81,7 +102,7 @@ async function onCreateSearch(): Promise<void> {
 
 function addSelected(doc: DocumentListItem): void {
   if (!selectedDocs.value.some((d) => d.id === doc.id)) {
-    selectedDocs.value.push({ id: doc.id, label: docLabel(doc) })
+    selectedDocs.value.push({ id: doc.id, label: docLabel(doc), currency: doc.currency })
   }
 }
 
@@ -101,6 +122,7 @@ async function submitCreate(): Promise<void> {
     await createAuthoredSeries({
       name,
       currency: newCurrency.value.trim().toUpperCase() || null,
+      description: newDescription.value.trim() || null,
       document_ids: selectedDocs.value.map((d) => d.id),
     })
     resetCreate()
@@ -117,17 +139,32 @@ onMounted(load)
 
 <template>
   <div id="charts-view">
-    <div class="flex items-center justify-between mb-6">
+    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
       <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold">Charts</h1>
-      <button
-        v-if="!showCreate"
-        type="button"
-        data-testid="charts-create-button"
-        class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm"
-        @click="openCreate"
-      >
-        + Create a new series
-      </button>
+      <div class="flex items-center gap-3">
+        <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+          <span class="hidden sm:inline">Time axis</span>
+          <select
+            v-model="timeframe"
+            data-testid="charts-timeframe"
+            class="form-select text-sm"
+            aria-label="Shared time axis across all charts"
+          >
+            <option v-for="opt in timeframeOptions" :key="opt.value" :value="opt.value">
+              {{ opt.label }}
+            </option>
+          </select>
+        </label>
+        <button
+          v-if="!showCreate"
+          type="button"
+          data-testid="charts-create-button"
+          class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm"
+          @click="openCreate"
+        >
+          + Create a new series
+        </button>
+      </div>
     </div>
 
     <!-- Create-a-series form (W14). -->
@@ -138,7 +175,7 @@ onMounted(load)
       @submit.prevent="submitCreate"
     >
       <h2 class="text-sm font-semibold text-gray-800 dark:text-gray-100">Create a new series</h2>
-      <div class="grid grid-cols-1 sm:grid-cols-[1fr_8rem] gap-3">
+      <div class="grid grid-cols-1 sm:grid-cols-[1fr_10rem] gap-3">
         <input
           v-model="newName"
           type="text"
@@ -146,15 +183,16 @@ onMounted(load)
           placeholder="Series name"
           class="form-input w-full text-sm"
         />
-        <input
-          v-model="newCurrency"
-          type="text"
-          maxlength="3"
-          data-testid="charts-create-currency"
-          placeholder="Currency"
-          class="form-input w-full text-sm uppercase"
-        />
+        <CurrencySelect v-model="newCurrency" data-testid="charts-create-currency" />
       </div>
+
+      <textarea
+        v-model="newDescription"
+        data-testid="charts-create-description"
+        rows="2"
+        placeholder="Subtitle or context (optional) — e.g. what this series tracks and why"
+        class="form-textarea w-full text-sm"
+      ></textarea>
 
       <input
         v-model="createQuery"
@@ -203,6 +241,26 @@ onMounted(load)
           </button>
         </li>
       </ul>
+
+      <p
+        v-if="currencyMismatch"
+        data-testid="charts-create-currency-warning"
+        role="alert"
+        class="flex items-start gap-2 rounded-md bg-amber-50 dark:bg-amber-500/10 border border-amber-300 dark:border-amber-500/30 px-3 py-2 text-sm text-amber-800 dark:text-amber-300"
+      >
+        <svg class="mt-0.5 h-4 w-4 shrink-0 fill-current" viewBox="0 0 16 16" aria-hidden="true">
+          <path
+            d="M8 1a1 1 0 0 1 .87.5l6 10.5A1 1 0 0 1 14 13.5H2a1 1 0 0 1-.87-1.5l6-10.5A1 1 0 0 1 8 1Zm0 4a1 1 0 0 0-1 1v2a1 1 0 1 0 2 0V6a1 1 0 0 0-1-1Zm0 6a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"
+          />
+        </svg>
+        <span>
+          {{ currencyMismatch.count }}
+          {{ currencyMismatch.count === 1 ? 'selected document is' : 'selected documents are' }}
+          in {{ currencyMismatch.currencies.join(', ') }}, but this series is set to
+          {{ newCurrency.trim().toUpperCase() }}. You can still create it — amounts in another
+          currency are handled separately.
+        </span>
+      </p>
 
       <p v-if="createError" data-testid="charts-create-error" role="alert" class="text-sm text-red-600 dark:text-red-400">
         {{ createError }}
@@ -262,6 +320,8 @@ onMounted(load)
         :series="s"
         editable
         detail-link
+        :axis-min="axisBounds.min"
+        :axis-max="axisBounds.max"
         @changed="load"
       />
     </div>

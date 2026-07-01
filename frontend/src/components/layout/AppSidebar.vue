@@ -28,7 +28,13 @@ const route = useRoute()
 //
 // Guarded for SSR / test environments where `window.matchMedia`
 // may be missing — fall back to `false` rather than crashing.
-const storedSidebarExpanded = localStorage.getItem('sidebar-expanded')
+//
+// Persisted under the app's `library:` key convention; the bare
+// `sidebar-expanded` key predates it, so read it once as a fallback to
+// preserve an existing preference on first load after this change.
+const SIDEBAR_EXPANDED_KEY = 'library:sidebar-expanded'
+const storedSidebarExpanded =
+  localStorage.getItem(SIDEBAR_EXPANDED_KEY) ?? localStorage.getItem('sidebar-expanded')
 
 function defaultSidebarExpanded(): boolean {
   if (typeof window === 'undefined' || !window.matchMedia) return false
@@ -76,7 +82,7 @@ onUnmounted(() => {
 watch(
   sidebarExpanded,
   () => {
-    localStorage.setItem('sidebar-expanded', String(sidebarExpanded.value))
+    localStorage.setItem(SIDEBAR_EXPANDED_KEY, String(sidebarExpanded.value))
     const body = document.querySelector('body')
     if (!body) return
     if (sidebarExpanded.value) {
@@ -102,7 +108,7 @@ watch(
     <div
       id="sidebar"
       ref="sidebar"
-      class="flex lg:flex! flex-col absolute z-40 left-0 top-0 lg:static lg:left-auto lg:top-auto lg:translate-x-0 h-[100dvh] overflow-y-scroll lg:overflow-y-auto no-scrollbar w-64 max-[400px]:w-full lg:w-20 lg:sidebar-expanded:!w-64 2xl:w-64! shrink-0 bg-white dark:bg-gray-800 p-4 transition-all duration-200 ease-in-out rounded-r-lg shadow-xs"
+      class="flex lg:flex! flex-col absolute z-40 left-0 top-0 lg:static lg:left-auto lg:top-auto lg:translate-x-0 h-[100dvh] overflow-y-scroll lg:overflow-y-auto no-scrollbar w-64 max-[400px]:w-full lg:w-20 lg:sidebar-expanded:!w-64 shrink-0 bg-white dark:bg-gray-800 p-4 transition-all duration-200 ease-in-out rounded-r-lg shadow-xs"
       :class="sidebarOpen ? 'translate-x-0' : '-translate-x-full'"
     >
       <!-- Sidebar header -->
@@ -111,7 +117,7 @@ watch(
         <RouterLink class="block" to="/" aria-label="Library home">
           <div>
             <h1
-              class="text-2xl md:text-xl md:pl-2 text-gray-800 dark:text-gray-100 font-bold lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200 lg:whitespace-nowrap lg:sidebar-expanded:whitespace-normal 2xl:whitespace-normal overflow-hidden"
+              class="text-2xl md:text-xl md:pl-2 text-gray-800 dark:text-gray-100 font-bold lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200 lg:whitespace-nowrap lg:sidebar-expanded:whitespace-normal overflow-hidden"
             >
               LIBRARY
             </h1>
@@ -161,7 +167,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Documents</span
                     >
                   </div>
@@ -207,7 +213,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Upload</span
                     >
                   </div>
@@ -253,7 +259,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >New note</span
                     >
                   </div>
@@ -299,7 +305,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Ask</span
                     >
                   </div>
@@ -349,7 +355,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Settings</span
                     >
                   </div>
@@ -393,7 +399,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Jobs</span
                     >
                   </div>
@@ -435,7 +441,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Charts</span
                     >
                   </div>
@@ -477,7 +483,7 @@ watch(
                       />
                     </svg>
                     <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 2xl:opacity-100 duration-200"
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
                       >Admin</span
                     >
                   </div>
@@ -489,7 +495,7 @@ watch(
       </div>
 
       <!-- Expand / collapse button -->
-      <div class="pt-3 hidden lg:inline-flex 2xl:hidden justify-end mt-auto">
+      <div class="pt-3 hidden lg:inline-flex justify-end mt-auto">
         <div class="w-12 pl-4 pr-3 py-2">
           <button
             id="sidebar-collapse-toggle"

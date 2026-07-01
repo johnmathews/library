@@ -39,6 +39,7 @@ from library.notifications import (
 from library.ocr import router as ocr_router
 from library.schemas import NotificationEvent
 from library.series_insight import refresh_series_insight
+from library.series_match import propose_authored_matches
 from library.storage import derived_dir, path_for
 
 logger = logging.getLogger(__name__)
@@ -356,6 +357,16 @@ async def advance_pipeline(
                         document.id,
                         exc_info=True,
                     )
+                # It may also match an authored series' signature: propose it for
+                # review (never a silent membership). Best-effort, same as above.
+                try:
+                    await evaluate_series_autocontinue.defer_async(document_id=document.id)
+                except Exception:
+                    logger.warning(
+                        "could not queue series autocontinue for document %s; continuing",
+                        document.id,
+                        exc_info=True,
+                    )
         except Exception as exc:
             await session.rollback()
             failed_in = document.status
@@ -484,6 +495,18 @@ async def generate_series_insight(sender_id: int, kind_id: int) -> None:
     """
     async with get_sessionmaker()() as session:
         await refresh_series_insight(session, get_settings(), sender_id, kind_id)
+
+
+@job_app.task(name="library.jobs.evaluate_series_autocontinue")
+async def evaluate_series_autocontinue(document_id: int) -> None:
+    """Background task: propose an indexed document for any authored series it matches.
+
+    Deferred when a document reaches ``indexed`` with both a sender and a kind.
+    PROPOSE-FOR-REVIEW: records pending suggestions only, never adds a member.
+    Best-effort and idempotent (skips docs already suggested/dismissed/member).
+    """
+    async with get_sessionmaker()() as session:
+        await propose_authored_matches(session, get_settings(), document_id)
 
 
 def email_poll_cron(minutes: int) -> str:

@@ -33,6 +33,7 @@ function seedAuth(admin: boolean): void {
 beforeEach(() => {
   setActivePinia(createPinia())
   localStorage.clear()
+  document.body.classList.remove('sidebar-expanded')
   if (!window.matchMedia) {
     window.matchMedia = (() => ({
       matches: false,
@@ -89,6 +90,50 @@ describe('AppSidebar', () => {
     expect(chartsLink.exists()).toBe(true)
     expect(chartsLink.attributes('href')).toBe('/charts')
     expect(chartsLink.text()).toContain('Charts')
+  })
+
+  it('renders the desktop expand/collapse toggle', async () => {
+    seedAuth(false)
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    // The toggle is available on all desktop widths (no 2xl gate).
+    expect(wrapper.find('#sidebar-collapse-toggle').exists()).toBe(true)
+  })
+
+  it('toggles the body sidebar-expanded class and persists the choice', async () => {
+    seedAuth(false)
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    // Default (matchMedia stubbed to false) starts collapsed.
+    expect(document.body.classList.contains('sidebar-expanded')).toBe(false)
+
+    await wrapper.find('#sidebar-collapse-toggle').trigger('click')
+    expect(document.body.classList.contains('sidebar-expanded')).toBe(true)
+    expect(localStorage.getItem('library:sidebar-expanded')).toBe('true')
+
+    await wrapper.find('#sidebar-collapse-toggle').trigger('click')
+    expect(document.body.classList.contains('sidebar-expanded')).toBe(false)
+    expect(localStorage.getItem('library:sidebar-expanded')).toBe('false')
+  })
+
+  it('honours a legacy sidebar-expanded preference on load', async () => {
+    localStorage.setItem('sidebar-expanded', 'true')
+    seedAuth(false)
+    router.push('/')
+    await router.isReady()
+    mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    expect(document.body.classList.contains('sidebar-expanded')).toBe(true)
   })
 
   it('hides the Admin nav link from non-admins', async () => {

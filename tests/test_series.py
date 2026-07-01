@@ -7,14 +7,39 @@ import pytest
 
 from library.series import (
     Distribution,
+    SeriesSignature,
+    _Member,
     classify_cadence,
     compare_reference,
     compute_trend,
     decode_series_id,
+    derive_signature,
     distribution,
     encode_series_id,
+    odd_ones_out,
     year_over_year,
 )
+
+
+def _member(
+    document_id: int,
+    *,
+    sender_id: int | None = 1,
+    kind_id: int | None = 2,
+    currency: str | None = "EUR",
+) -> _Member:
+    """A minimal ``_Member`` for signature/odd-one-out tests (identity only)."""
+    return _Member(
+        document_id=document_id,
+        sender="Sender",
+        kind="utility-bill",
+        document_date=date(2025, 1, document_id % 28 + 1),
+        amount=Decimal("100.00"),
+        currency=currency,
+        sender_id=sender_id,
+        kind_id=kind_id,
+        title=f"doc-{document_id}",
+    )
 
 
 def test_encode_series_id_with_currency() -> None:
@@ -185,3 +210,65 @@ def test_year_over_year_zero_reference() -> None:
     yoy = year_over_year(pts, reference_date=date(2025, 3, 1), cadence="monthly")
     assert yoy is not None
     assert yoy.change_pct == -1.0
+
+
+def test_derive_signature_empty_is_none() -> None:
+    assert derive_signature([]) is None
+
+
+def test_derive_signature_homogeneous_dominance_one() -> None:
+    members = [_member(i) for i in range(1, 5)]
+    sig = derive_signature(members)
+    assert sig is not None
+    assert (sig.sender_id, sig.kind_id, sig.currency) == (1, 2, "EUR")
+    assert sig.member_count == 4
+    assert sig.dominant_count == 4
+    assert sig.dominance == 1.0
+
+
+def test_derive_signature_mixed_picks_dominant() -> None:
+    members = [
+        _member(1),
+        _member(2),
+        _member(3),
+        _member(4, sender_id=9),  # odd one out
+    ]
+    sig = derive_signature(members)
+    assert sig is not None
+    assert (sig.sender_id, sig.kind_id, sig.currency) == (1, 2, "EUR")
+    assert sig.member_count == 4
+    assert sig.dominant_count == 3
+    assert sig.dominance == 0.75
+
+
+def test_derive_signature_null_currency_bucket() -> None:
+    members = [_member(i, currency=None) for i in range(1, 4)]
+    sig = derive_signature(members)
+    assert sig is not None
+    assert sig.currency is None
+    assert sig.dominance == 1.0
+
+
+def test_odd_ones_out_classifies_axis() -> None:
+    signature = SeriesSignature(
+        sender_id=1,
+        kind_id=2,
+        currency="EUR",
+        member_count=6,
+        dominant_count=3,
+        dominance=0.5,
+    )
+    members = [
+        _member(1),  # matches -> excluded
+        _member(2, sender_id=9),  # sender axis
+        _member(3, kind_id=8),  # kind axis
+        _member(4, currency="GBP"),  # currency axis
+        _member(5, sender_id=9, kind_id=8),  # differs on both -> sender wins (first axis)
+    ]
+    odd = odd_ones_out(members, signature)
+    by_id = {member.document_id: axis for member, axis in odd}
+    assert 1 not in by_id  # the matching member is not odd
+    assert by_id[2] == "sender"
+    assert by_id[3] == "kind"
+    assert by_id[4] == "currency"
+    assert by_id[5] == "sender"

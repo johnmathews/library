@@ -435,6 +435,24 @@ export interface DocumentSeries {
   trend?: { direction: 'rising' | 'falling' | 'flat'; change_pct: string }
   year_over_year?: { prior_value: string; change_pct: string; document_id: number }
   points?: SeriesPoint[]
+  /** Authored series only: the dominant (sender, kind, currency) signature of the
+   *  current membership, or null for an empty series. Drives the smart features. */
+  signature?: SeriesSignature | null
+  /** Authored series only: how many non-member documents match the signature and
+   *  are awaiting review (propose-for-review auto-continue). */
+  suggestion_count?: number
+  /** Authored series only: how many current members break the signature. */
+  odd_one_out_count?: number
+}
+
+/** The mechanical identity of an authored series (backend `SeriesSignature`). */
+export interface SeriesSignature {
+  sender_id: number | null
+  kind_id: number | null
+  currency: string | null
+  member_count: number
+  dominant_count: number
+  dominance: number
 }
 
 /** GET /api/documents/{id}/series — recurring-series stats + comparison. */
@@ -575,6 +593,60 @@ export function removeAuthoredMember(id: number, documentId: number): Promise<Do
   return apiFetch<DocumentSeries>(`/api/charts/authored/${id}/members/${documentId}`, {
     method: 'DELETE',
   })
+}
+
+// --- Authored-series smart features: suggestions & odd-ones-out --------------
+
+/** One candidate document proposed for an authored series (GET …/suggestions). */
+export interface SeriesSuggestion {
+  id: number
+  title: string | null
+  sender: string | null
+  kind: string | null
+  currency: string | null
+  document_date: string | null
+  amount: string
+}
+
+/** A member that breaks the signature, with a one-sentence reason (…/odd-ones-out). */
+export interface SeriesOddOneOut extends SeriesSuggestion {
+  /** The first differing axis: 'sender' | 'kind' | 'currency'. */
+  axis: string
+  /** LLM-generated rationale, or null when extraction is disabled. */
+  reason: string | null
+}
+
+/** GET /api/charts/authored/{id}/suggestions — docs matching the signature. */
+export function fetchAuthoredSuggestions(
+  id: number,
+  signal?: AbortSignal,
+): Promise<{ suggestions: SeriesSuggestion[]; count: number }> {
+  return apiFetch(`/api/charts/authored/${id}/suggestions`, { signal })
+}
+
+/** POST …/suggestions/{documentId}/accept — add the doc; returns refreshed series. */
+export function acceptAuthoredSuggestion(id: number, documentId: number): Promise<DocumentSeries> {
+  return apiFetch<DocumentSeries>(`/api/charts/authored/${id}/suggestions/${documentId}/accept`, {
+    method: 'POST',
+  })
+}
+
+/** POST …/suggestions/{documentId}/dismiss — tombstone; returns remaining count. */
+export function dismissAuthoredSuggestion(
+  id: number,
+  documentId: number,
+): Promise<{ count: number }> {
+  return apiFetch(`/api/charts/authored/${id}/suggestions/${documentId}/dismiss`, {
+    method: 'POST',
+  })
+}
+
+/** GET …/odd-ones-out — members that break the signature (lazy: may trigger LLM). */
+export function fetchAuthoredOddOnesOut(
+  id: number,
+  signal?: AbortSignal,
+): Promise<{ members: SeriesOddOneOut[] }> {
+  return apiFetch(`/api/charts/authored/${id}/odd-ones-out`, { signal })
 }
 
 function parseDetail(text: string, status: number): string {

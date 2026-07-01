@@ -112,6 +112,18 @@ class OverrideAction(enum.StrEnum):
     EXCLUDE = "exclude"
 
 
+class SuggestionState(enum.StrEnum):
+    """Lifecycle of a proposed authored-series membership (see ``AuthoredSeriesSuggestion``).
+
+    A signature-matching document is recorded as a ``pending`` suggestion for the
+    owner to review; ``dismiss``-ing it writes a ``dismissed`` tombstone so the
+    same document is never re-suggested for that series.
+    """
+
+    PENDING = "pending"
+    DISMISSED = "dismissed"
+
+
 class Base(DeclarativeBase):
     """Declarative base with deterministic constraint names for Alembic."""
 
@@ -718,6 +730,9 @@ class AuthoredSeries(Base):
     members: Mapped[list["AuthoredSeriesMember"]] = relationship(
         back_populates="series", cascade="all, delete-orphan", lazy="selectin"
     )
+    suggestions: Mapped[list["AuthoredSeriesSuggestion"]] = relationship(
+        back_populates="series", cascade="all, delete-orphan", lazy="selectin"
+    )
 
 
 class AuthoredSeriesMember(Base):
@@ -741,6 +756,65 @@ class AuthoredSeriesMember(Base):
             "authored_series_id",
             "document_id",
             name="authored_series_members_series_document",
+        ),
+    )
+
+
+class AuthoredSeriesSuggestion(Base):
+    """A proposed (auto-continue) membership for an :class:`AuthoredSeries`.
+
+    When a newly-indexed document mechanically matches an authored series'
+    *signature* — the dominant ``(sender_id, kind_id, currency)`` triple of its
+    existing members (see ``library.series.derive_signature``) — it is recorded
+    here as a ``pending`` suggestion rather than silently added as a member
+    (PROPOSE-FOR-REVIEW). The owner then accepts (promoting it to an
+    ``AuthoredSeriesMember``) or dismisses it (leaving a ``dismissed`` tombstone
+    so it is never re-suggested for this series). The ``signature_*`` columns
+    snapshot the matched signature at proposal time; the LLM ``reason``/token
+    columns are reserved for the odd-one-out rationale flow and are normally
+    NULL for a plain match. One row per ``(series, document)``.
+    """
+
+    __tablename__ = "authored_series_suggestions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    authored_series_id: Mapped[int] = mapped_column(
+        ForeignKey("authored_series.id", ondelete="CASCADE"), index=True
+    )
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    state: Mapped[SuggestionState] = mapped_column(
+        Enum(
+            SuggestionState,
+            name="suggestion_state",
+            native_enum=False,
+            length=16,
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        default=SuggestionState.PENDING,
+        server_default=SuggestionState.PENDING.value,
+    )
+    reason: Mapped[str | None] = mapped_column(Text)
+    signature_sender_id: Mapped[int | None] = mapped_column(Integer)
+    signature_kind_id: Mapped[int | None] = mapped_column(Integer)
+    signature_currency: Mapped[str | None] = mapped_column(CHAR(3))
+    model: Mapped[str | None] = mapped_column(String(64))
+    input_tokens: Mapped[int | None] = mapped_column(Integer)
+    output_tokens: Mapped[int | None] = mapped_column(Integer)
+    cost_usd: Mapped[float | None] = mapped_column(Float)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    series: Mapped[AuthoredSeries] = relationship(back_populates="suggestions")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "authored_series_id",
+            "document_id",
+            name="authored_series_suggestions_series_document",
         ),
     )
 

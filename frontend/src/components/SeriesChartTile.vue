@@ -15,8 +15,14 @@ import {
   updateAuthoredSeries,
   addAuthoredMember,
   removeAuthoredMember,
+  fetchAuthoredSuggestions,
+  acceptAuthoredSuggestion,
+  dismissAuthoredSuggestion,
+  fetchAuthoredOddOnesOut,
   type DocumentSeries,
   type DocumentListItem,
+  type SeriesSuggestion,
+  type SeriesOddOneOut,
 } from '@/api/documents'
 
 ChartJS.register(TimeScale, LinearScale, BarElement, Tooltip)
@@ -33,6 +39,11 @@ const props = defineProps<{
   // Render a deep link to this series' own single-chart page (/charts/:id).
   // Off on the single-chart view itself (it would link to itself).
   detailLink?: boolean
+  // Shared time-axis window (W4). When set, the chart's x-axis is clamped to
+  // [axisMin, axisMax] (ISO yyyy-mm-dd) so every tile on /charts shares the
+  // same window. Null/omitted leaves the axis auto-fitted to this series' data.
+  axisMin?: string | null
+  axisMax?: string | null
 }>()
 
 // Emitted after a successful add/remove so the parent can refetch the series.
@@ -166,6 +177,87 @@ async function onUndoRemove(): Promise<void> {
   }
 }
 
+// --- Smart features: suggestions & odd-ones-out (authored series only) -------
+//
+// Counts arrive with the series body (suggestion_count / odd_one_out_count), so
+// the badges render without a fetch. The lists themselves are loaded lazily on
+// expand — odd-ones-out in particular triggers a per-member LLM call server-side,
+// so we only ask for it when the user opens the panel.
+
+const suggestionCount = computed<number>(() => props.series.suggestion_count ?? 0)
+const oddOneOutCount = computed<number>(() => props.series.odd_one_out_count ?? 0)
+
+// Only authored series that the user can edit expose these affordances.
+const canSuggest = computed(() => canEdit.value && isAuthored.value)
+
+const showSuggestions = ref(false)
+const suggestions = ref<SeriesSuggestion[]>([])
+const loadingSuggestions = ref(false)
+
+async function loadSuggestions(): Promise<void> {
+  if (!isAuthored.value) return
+  loadingSuggestions.value = true
+  try {
+    const response = await fetchAuthoredSuggestions(props.series.authored_id!)
+    suggestions.value = response.suggestions
+  } finally {
+    loadingSuggestions.value = false
+  }
+}
+
+async function onToggleSuggestions(): Promise<void> {
+  showSuggestions.value = !showSuggestions.value
+  if (showSuggestions.value) await loadSuggestions()
+}
+
+async function onAcceptSuggestion(documentId: number): Promise<void> {
+  if (!canSuggest.value || busy.value) return
+  busy.value = true
+  try {
+    await acceptAuthoredSuggestion(props.series.authored_id!, documentId)
+    suggestions.value = suggestions.value.filter((s) => s.id !== documentId)
+    emit('changed')
+  } finally {
+    busy.value = false
+  }
+}
+
+async function onDismissSuggestion(documentId: number): Promise<void> {
+  if (!canSuggest.value || busy.value) return
+  busy.value = true
+  try {
+    await dismissAuthoredSuggestion(props.series.authored_id!, documentId)
+    suggestions.value = suggestions.value.filter((s) => s.id !== documentId)
+    emit('changed')
+  } finally {
+    busy.value = false
+  }
+}
+
+const showOddOnesOut = ref(false)
+const oddOnesOut = ref<SeriesOddOneOut[]>([])
+const loadingOddOnesOut = ref(false)
+
+async function loadOddOnesOut(): Promise<void> {
+  if (!isAuthored.value) return
+  loadingOddOnesOut.value = true
+  try {
+    const response = await fetchAuthoredOddOnesOut(props.series.authored_id!)
+    oddOnesOut.value = response.members
+  } finally {
+    loadingOddOnesOut.value = false
+  }
+}
+
+async function onToggleOddOnesOut(): Promise<void> {
+  showOddOnesOut.value = !showOddOnesOut.value
+  if (showOddOnesOut.value && oddOnesOut.value.length === 0) await loadOddOnesOut()
+}
+
+function suggestionLabel(s: SeriesSuggestion): string {
+  return s.title?.trim() ? s.title : `Document #${s.id}`
+}
+
 async function onSearch(): Promise<void> {
   const q = query.value.trim()
   if (!q) {
@@ -244,7 +336,7 @@ const chartData = computed(() => {
   }
 })
 
-const chartOptions = {
+const chartOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
@@ -253,16 +345,19 @@ const chartOptions = {
   },
   scales: {
     // Temporal x-axis: the gap between two events reflects the real time
-    // between them (3 months apart sit ~3× farther than 1 month apart).
+    // between them (3 months apart sit ~3× farther than 1 month apart). When a
+    // shared window is supplied (W4), clamp min/max so every tile lines up.
     x: {
       type: 'time' as const,
       time: { tooltipFormat: 'yyyy-MM-dd' },
       grid: { display: false },
       ticks: { maxRotation: 45, minRotation: 0, autoSkip: true, font: { size: 10 } },
+      ...(props.axisMin ? { min: props.axisMin } : {}),
+      ...(props.axisMax ? { max: props.axisMax } : {}),
     },
     y: { beginAtZero: true, ticks: { font: { size: 10 } } },
   },
-}
+}))
 
 function pointLabel(point: { title?: string | null; date: string }): string {
   return point.title?.trim() ? point.title : point.date
@@ -365,6 +460,167 @@ function pointLabel(point: { title?: string | null; date: string }): string {
 
     <div class="mt-3 h-40">
       <Bar :data="chartData" :options="chartOptions" />
+    </div>
+
+    <!-- Smart features (authored series): propose-for-review suggestions and
+         odd-one-out warnings. Counts come with the series body; lists load on
+         expand. -->
+    <div v-if="canSuggest && (suggestionCount > 0 || oddOneOutCount > 0)" class="mt-3 space-y-2">
+      <!-- Suggestions: documents that match the signature, awaiting review. -->
+      <div
+        v-if="suggestionCount > 0"
+        data-testid="series-suggestions"
+        class="rounded-md border border-violet-200 dark:border-violet-500/30 bg-violet-50 dark:bg-violet-500/10"
+      >
+        <button
+          type="button"
+          data-testid="series-suggestions-toggle"
+          class="flex w-full items-center justify-between gap-2 px-3 py-2 text-sm font-medium text-violet-700 dark:text-violet-300"
+          :aria-expanded="showSuggestions"
+          @click="onToggleSuggestions"
+        >
+          <span>
+            {{ suggestionCount }}
+            {{ suggestionCount === 1 ? 'document looks' : 'documents look' }} like they belong —
+            review
+          </span>
+          <svg
+            class="h-4 w-4 shrink-0 transition-transform"
+            :class="{ 'rotate-180': showSuggestions }"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fill-rule="evenodd"
+              d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z"
+              clip-rule="evenodd"
+            />
+          </svg>
+        </button>
+        <div v-show="showSuggestions" class="px-3 pb-2">
+          <p
+            v-if="loadingSuggestions"
+            data-testid="series-suggestions-loading"
+            class="py-1 text-xs text-gray-500 dark:text-gray-400"
+          >
+            Finding matches…
+          </p>
+          <ul v-else class="divide-y divide-violet-100 dark:divide-violet-500/20">
+            <li
+              v-for="s in suggestions"
+              :key="s.id"
+              data-testid="series-suggestion"
+              class="grid grid-cols-[minmax(0,1fr)_auto] items-center gap-x-3 py-1.5"
+            >
+              <RouterLink
+                :to="`/documents/${s.id}`"
+                class="min-w-0 truncate text-sm text-gray-700 dark:text-gray-200 hover:underline"
+                :title="suggestionLabel(s)"
+              >
+                {{ suggestionLabel(s) }}
+                <span class="text-xs text-gray-400 dark:text-gray-500">
+                  · {{ s.document_date ?? '—' }} · {{ s.amount }}{{ s.currency ? ` ${s.currency}` : '' }}
+                </span>
+              </RouterLink>
+              <span class="flex shrink-0 items-center gap-2">
+                <button
+                  type="button"
+                  data-testid="series-suggestion-accept"
+                  class="text-xs font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 disabled:opacity-50"
+                  :disabled="busy"
+                  @click="onAcceptSuggestion(s.id)"
+                >
+                  Add
+                </button>
+                <button
+                  type="button"
+                  data-testid="series-suggestion-dismiss"
+                  class="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 disabled:opacity-50"
+                  :disabled="busy"
+                  @click="onDismissSuggestion(s.id)"
+                >
+                  Dismiss
+                </button>
+              </span>
+            </li>
+          </ul>
+        </div>
+      </div>
+
+      <!-- Odd-ones-out: current members that break the signature. Loaded lazily
+           because the reason sentence is generated server-side by the LLM. -->
+      <div
+        v-if="oddOneOutCount > 0"
+        data-testid="series-odd-ones-out"
+        class="rounded-md border border-amber-300 dark:border-amber-500/30 bg-amber-50 dark:bg-amber-500/10"
+      >
+        <button
+          type="button"
+          data-testid="series-odd-toggle"
+          class="flex w-full items-center justify-between gap-2 px-3 py-2 text-sm font-medium text-amber-800 dark:text-amber-300"
+          :aria-expanded="showOddOnesOut"
+          @click="onToggleOddOnesOut"
+        >
+          <span>
+            {{ oddOneOutCount }}
+            {{ oddOneOutCount === 1 ? 'member looks' : 'members look' }} unlike the rest
+          </span>
+          <svg
+            class="h-4 w-4 shrink-0 transition-transform"
+            :class="{ 'rotate-180': showOddOnesOut }"
+            viewBox="0 0 20 20"
+            fill="currentColor"
+            aria-hidden="true"
+          >
+            <path
+              fill-rule="evenodd"
+              d="M5.23 7.21a.75.75 0 0 1 1.06.02L10 11.17l3.71-3.94a.75.75 0 1 1 1.08 1.04l-4.25 4.5a.75.75 0 0 1-1.08 0l-4.25-4.5a.75.75 0 0 1 .02-1.06Z"
+              clip-rule="evenodd"
+            />
+          </svg>
+        </button>
+        <div v-show="showOddOnesOut" class="px-3 pb-2">
+          <p
+            v-if="loadingOddOnesOut"
+            data-testid="series-odd-loading"
+            class="py-1 text-xs text-gray-500 dark:text-gray-400"
+          >
+            Checking the collection…
+          </p>
+          <ul v-else class="divide-y divide-amber-100 dark:divide-amber-500/20">
+            <li
+              v-for="m in oddOnesOut"
+              :key="m.id"
+              data-testid="series-odd-member"
+              class="grid grid-cols-[minmax(0,1fr)_auto] items-start gap-x-3 py-1.5"
+            >
+              <div class="min-w-0">
+                <RouterLink
+                  :to="`/documents/${m.id}`"
+                  class="block min-w-0 truncate text-sm text-gray-700 dark:text-gray-200 hover:underline"
+                  :title="suggestionLabel(m)"
+                >
+                  {{ suggestionLabel(m) }}
+                </RouterLink>
+                <p class="text-xs text-amber-700 dark:text-amber-300/90">
+                  {{ m.reason ?? `Different ${m.axis} from the rest of the series.` }}
+                </p>
+              </div>
+              <button
+                v-if="canEdit"
+                type="button"
+                data-testid="series-odd-remove"
+                class="shrink-0 text-xs text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400 disabled:opacity-50"
+                :disabled="busy"
+                @click="onRemove(m.id, suggestionLabel(m))"
+              >
+                Remove
+              </button>
+            </li>
+          </ul>
+        </div>
+      </div>
     </div>
 
     <div v-if="points.length" class="mt-4">

@@ -68,7 +68,7 @@ async function onSubmit(): Promise<void> {
   <div id="new-note-page">
     <PageHeader
       title="New note"
-      description="Write a markdown note. It becomes a document in your library, with full version history."
+      description="Write a markdown note. It becomes a document in your library, with full version history. The first line becomes the title; Markdown is supported and the preview updates as you type."
     >
       <template #actions>
         <div
@@ -114,13 +114,7 @@ async function onSubmit(): Promise<void> {
           :class="{ 'lg:grid-cols-2': editorMode === 'split' }"
         >
           <div v-if="showEditor" data-testid="note-editor-pane">
-            <AppTextarea
-              id="note-body"
-              v-model="body"
-              label="Note"
-              hint="The first line becomes the title. Markdown is supported; the preview updates as you type."
-              :rows="16"
-            />
+            <AppTextarea id="note-body" v-model="body" label="Note" :rows="16" />
           </div>
           <div v-if="showPreview" data-testid="note-preview-pane">
             <span class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300">Preview</span>
