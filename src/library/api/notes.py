@@ -47,7 +47,15 @@ router: APIRouter = APIRouter(tags=["notes"])
 # The attributes ``_detail`` reads that a commit can expire; refreshed after the
 # commit so the response never triggers an (async-illegal) implicit lazy load.
 # ``updated_at`` has a SQL ``onupdate`` so it is expired by any UPDATE.
-_DETAIL_REFRESH_ATTRS: list[str] = ["kind", "sender", "tags", "projects", "events", "updated_at"]
+_DETAIL_REFRESH_ATTRS: list[str] = [
+    "kind",
+    "sender",
+    "recipient",
+    "tags",
+    "projects",
+    "events",
+    "updated_at",
+]
 
 
 def _salted_sha256(body_bytes: bytes) -> str:

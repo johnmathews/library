@@ -387,7 +387,6 @@ type StringDraftField =
   | 'sender'
   | 'recipient'
   | 'tags'
-  | 'projects'
   | 'kind'
   | 'language'
   | 'amount'
@@ -399,24 +398,14 @@ const drafts = reactive<Record<StringDraftField, string>>({
   sender: '',
   recipient: '',
   tags: '',
-  projects: '',
   kind: '',
   language: '',
   amount: '',
 })
-/** The projects draft as a list, backed by the comma-joined `drafts.projects`
- * string so fieldDirty/buildPatch/hydrateField keep working unchanged. The
- * multiselect edits this array; the string stays the source of truth. */
-const projectsDraftList = computed<string[]>({
-  get: () =>
-    drafts.projects
-      .split(',')
-      .map((project) => project.trim())
-      .filter(Boolean),
-  set: (values) => {
-    drafts.projects = values.join(', ')
-  },
-})
+/** Projects draft as a discrete list (not a comma-joined string): project names
+ * are free text and may contain commas, so the multiselect binds this array
+ * directly — no encode/decode round-trip that a comma would corrupt. */
+const projectsDraft = ref<string[]>([])
 /** Draft ISO date strings for the date fields. */
 const dateDrafts = reactive<{
   document_date: string | null
@@ -450,7 +439,7 @@ function hydrateDrafts(): void {
   drafts.sender = d.sender?.name ?? ''
   drafts.recipient = d.recipient?.name ?? ''
   drafts.tags = d.tags.map((tag) => tag.slug).join(', ')
-  drafts.projects = d.projects.map((project) => project.name).join(', ')
+  projectsDraft.value = d.projects.map((project) => project.name)
   drafts.kind = d.kind?.slug ?? ''
   drafts.language = d.language
   drafts.amount = d.amount_total ?? ''
@@ -471,7 +460,7 @@ function hydrateField(field: EditableField): void {
     case 'sender': drafts.sender = d.sender?.name ?? ''; break
     case 'recipient': drafts.recipient = d.recipient?.name ?? ''; break
     case 'tags': drafts.tags = d.tags.map((tag) => tag.slug).join(', '); break
-    case 'projects': drafts.projects = d.projects.map((project) => project.name).join(', '); break
+    case 'projects': projectsDraft.value = d.projects.map((project) => project.name); break
     case 'kind': drafts.kind = d.kind?.slug ?? ''; break
     case 'language': drafts.language = d.language; break
     case 'amount':
@@ -521,9 +510,11 @@ function fieldDirty(field: EditableField): boolean {
     }
     case 'projects': {
       // Projects are an unordered set, full-replaced by name; compare sorted
-      // names so a reorder-only edit isn't seen as a change.
-      const next = drafts.projects.split(',').map((p) => p.trim()).filter(Boolean).sort()
-      return next.join(',') !== d.projects.map((p) => p.name).sort().join(',')
+      // names element-wise (not a joined string, which a comma in a name would
+      // make ambiguous) so a reorder-only edit isn't seen as a change.
+      const next = [...projectsDraft.value].sort()
+      const current = d.projects.map((p) => p.name).sort()
+      return next.length !== current.length || next.some((name, i) => name !== current[i])
     }
     case 'document_date': return (dateDrafts.document_date ?? null) !== (d.document_date ?? null)
     case 'due_date': return (dateDrafts.due_date ?? null) !== (d.due_date ?? null)
@@ -556,7 +547,7 @@ function buildPatch(field: EditableField): DocumentUpdate | null {
     case 'tags':
       return { tags: drafts.tags.split(',').map((tag) => tag.trim()).filter(Boolean) }
     case 'projects':
-      return { projects: drafts.projects.split(',').map((project) => project.trim()).filter(Boolean) }
+      return { projects: [...projectsDraft.value] }
     case 'document_date':
       return { document_date: dateDrafts.document_date }
     case 'due_date':
@@ -1734,7 +1725,7 @@ watch(
                     <AppMultiSelect
                       v-else-if="field === 'projects'"
                       id="edit-projects"
-                      v-model="projectsDraftList"
+                      v-model="projectsDraft"
                       label="Projects"
                       :options="projectOptionNames"
                       placeholder="Select or add a project…"

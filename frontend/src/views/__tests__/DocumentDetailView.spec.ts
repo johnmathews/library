@@ -498,6 +498,22 @@ describe('DocumentDetailView', () => {
     expect(patchCalls()[0]!.body).toEqual({ projects: [] })
   })
 
+  it('treats a project name containing a comma as a single project', async () => {
+    // Project names are free text (may contain commas), so the draft must not
+    // round-trip through a comma-joined string.
+    detail = makeDetail({ projects: [{ slug: 'smith-jones', name: 'Smith, Jones' }] })
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    // One chip, not two — the comma is part of the name, not a separator.
+    expect(w.findAll('[data-testid="edit-projects-chip"]')).toHaveLength(1)
+    // Adding another project PATCHes both names intact (the comma name unsplit).
+    await w.find('#edit-projects').setValue('Taxes')
+    await w.find('#edit-projects').trigger('keydown.enter')
+    await flushPromises()
+    expect(patchCalls()[0]!.body).toEqual({ projects: ['Smith, Jones', 'Taxes'] })
+  })
+
   it('has no topics editor in edit mode (topics are read-only)', async () => {
     detail = makeDetail({ topics: ['thermostat installation', 'boiler maintenance'] })
     const w = await mountView()
