@@ -376,10 +376,6 @@ function pointLabel(point: { title?: string | null; date: string }): string {
           data-testid="series-heading"
         >
           {{ headingMain }}
-          <span class="text-gray-400 dark:text-gray-500 font-normal">
-            ({{ series.count }} documents<span v-if="series.currency">, {{ series.currency }}</span
-            >)
-          </span>
         </h3>
         <div class="flex shrink-0 items-center gap-2">
           <button
@@ -401,11 +397,6 @@ function pointLabel(point: { title?: string | null; date: string }): string {
           </RouterLink>
         </div>
       </div>
-      <p v-if="verdictText || trendText" class="mt-0.5 text-sm text-gray-600 dark:text-gray-400">
-        <span v-if="verdictText">{{ verdictText }}</span>
-        <span v-if="verdictText && trendText"> · </span>
-        <span v-if="trendText">{{ trendText }}</span>
-      </p>
     </header>
 
     <!-- Inline title/description editor (W12). -->
@@ -453,10 +444,28 @@ function pointLabel(point: { title?: string | null; date: string }): string {
     <p
       v-else-if="series.description"
       data-testid="series-description"
-      class="mt-3 text-sm text-gray-700 dark:text-gray-300"
+      class="mt-2 text-sm text-gray-700 dark:text-gray-300"
     >
       {{ series.description }}
     </p>
+
+    <!-- Metadata, below the title + description: the count/currency and the
+         trend analysis each on their own line for quick scanning. -->
+    <div class="mt-3 space-y-0.5 text-sm" data-testid="series-meta">
+      <p class="text-gray-500 dark:text-gray-400" data-testid="series-meta-count">
+        {{ series.count }} {{ series.count === 1 ? 'document' : 'documents'
+        }}<span v-if="series.currency"> · {{ series.currency }}</span>
+      </p>
+      <p
+        v-if="verdictText || trendText"
+        class="text-gray-600 dark:text-gray-400"
+        data-testid="series-meta-analysis"
+      >
+        <span v-if="verdictText">{{ verdictText }}</span>
+        <span v-if="verdictText && trendText"> · </span>
+        <span v-if="trendText">{{ trendText }}</span>
+      </p>
+    </div>
 
     <div class="mt-3 h-40">
       <Bar :data="chartData" :options="chartOptions" />

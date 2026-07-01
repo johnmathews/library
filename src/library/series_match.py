@@ -1,8 +1,7 @@
-"""Authored-series signature matching, odd-one-out rationale, and auto-continue.
+"""Authored-series signature matching and auto-continue (propose-for-review).
 
-Two related, deliberately-conservative features sit on top of an authored
-series' mechanical *signature* (its dominant ``(sender_id, kind_id, currency)``
-triple — see ``library.series.derive_signature``):
+Sits on top of an authored series' mechanical *signature* (its dominant
+``(sender_id, kind_id, currency)`` triple — see ``library.series.derive_signature``):
 
 - **Auto-continue (PROPOSE-FOR-REVIEW).** When a newly-indexed document matches
   an authored series' signature, ``propose_authored_matches`` records it as a
@@ -10,16 +9,14 @@ triple — see ``library.series.derive_signature``):
   review. It is NEVER silently added as a member — the owner accepts or dismisses
   it via the API.
 
-- **Odd-one-out rationale.** The matching itself is purely mechanical; the LLM is
-  used ONLY to write a one-sentence explanation of *why* a member that breaks the
-  signature (a different sender / kind / currency) is unlike the rest. That call
-  (``generate_reason``) mirrors ``series_insight.generate_description``: best-
-  effort, capped tokens, text extracted from ``type=="text"`` blocks.
+The related **odd-one-out** rationale lives in ``library.series.odd_ones_out``
+and is deterministic (built from the documents' real sender/kind/currency), not
+LLM-generated: an LLM asked to phrase it once hallucinated a sender name that
+appeared in none of the documents, so this path deliberately uses no LLM.
 """
 
 import logging
 
-from anthropic import AsyncAnthropic
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -31,66 +28,9 @@ from library.models import (
     Document,
     SuggestionState,
 )
-from library.series import SeriesSignature, _Member, load_authored_signature
+from library.series import load_authored_signature
 
 logger = logging.getLogger(__name__)
-
-# A single explanatory sentence needs very little room; this also caps spend.
-MAX_REASON_TOKENS: int = 60
-
-REASON_SYSTEM_PROMPT: str = """\
-You explain, in ONE short sentence, why a single document does not fit a
-recurring series of household documents in "Library", a self-hosted family
-document archive.
-
-You are told the series' dominant identity (its usual sender, document kind, and
-currency), the one document that breaks it, and which axis differs: a different
-sender, a different document kind, or a different currency.
-
-Write exactly ONE plain-English sentence naming why this document is unlike the
-rest of the series. Do NOT add a preamble, a heading, bullet points, or advice —
-return only the single sentence."""
-
-
-def build_reason_prompt(
-    signature: SeriesSignature, candidate: _Member, mechanical_axis: str
-) -> str:
-    """Render the odd-one-out contrast into the user prompt for ``generate_reason``."""
-    lines = [
-        "The series is predominantly: "
-        f"sender_id={signature.sender_id}, kind_id={signature.kind_id}, "
-        f"currency={signature.currency}.",
-        "The document that does not fit:",
-        f"- Title: {candidate.title or 'untitled'}",
-        f"- Sender: {candidate.sender}",
-        f"- Document kind: {candidate.kind}",
-        f"- Currency: {candidate.currency}",
-        f"It differs from the rest of the series on this axis: {mechanical_axis}.",
-    ]
-    return "\n".join(lines)
-
-
-async def generate_reason(
-    client: AsyncAnthropic,
-    model: str,
-    *,
-    signature: SeriesSignature,
-    candidate: _Member,
-    mechanical_axis: str,
-) -> tuple[str, int, int]:
-    """Call the LLM once; return ``(reason, input_tokens, output_tokens)``."""
-    response = await client.messages.create(
-        model=model,
-        max_tokens=MAX_REASON_TOKENS,
-        system=REASON_SYSTEM_PROMPT,
-        messages=[
-            {"role": "user", "content": build_reason_prompt(signature, candidate, mechanical_axis)}
-        ],
-    )
-    text = "".join(
-        block.text for block in response.content if getattr(block, "type", None) == "text"
-    ).strip()
-    return text, response.usage.input_tokens, response.usage.output_tokens
 
 
 async def _candidate_series_ids(session: AsyncSession, document: Document) -> list[int]:

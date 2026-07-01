@@ -27,12 +27,14 @@ def _member(
     sender_id: int | None = 1,
     kind_id: int | None = 2,
     currency: str | None = "EUR",
+    sender: str | None = "Sender",
+    kind: str | None = "utility-bill",
 ) -> _Member:
     """A minimal ``_Member`` for signature/odd-one-out tests (identity only)."""
     return _Member(
         document_id=document_id,
-        sender="Sender",
-        kind="utility-bill",
+        sender=sender,
+        kind=kind,
         document_date=date(2025, 1, document_id % 28 + 1),
         amount=Decimal("100.00"),
         currency=currency,
@@ -266,9 +268,60 @@ def test_odd_ones_out_classifies_axis() -> None:
         _member(5, sender_id=9, kind_id=8),  # differs on both -> sender wins (first axis)
     ]
     odd = odd_ones_out(members, signature)
-    by_id = {member.document_id: axis for member, axis in odd}
+    by_id = {member.document_id: axis for member, axis, _reason in odd}
     assert 1 not in by_id  # the matching member is not odd
     assert by_id[2] == "sender"
     assert by_id[3] == "kind"
     assert by_id[4] == "currency"
     assert by_id[5] == "sender"
+
+
+def test_odd_ones_out_reason_is_grounded_and_never_hallucinates() -> None:
+    """Regression: the reason must name ONLY real sender/kind/currency values.
+
+    An LLM previously wrote the reason and invented a sender ("De Hooge Waerder")
+    that appeared in none of the documents. The reason is now deterministic, so it
+    can only ever contain values actually present on the members.
+    """
+    # Dominant identity is Waternet (sender_id 1); the odd member is Vitens.
+    members = [
+        _member(1, sender="Waternet"),
+        _member(2, sender="Waternet"),
+        _member(3, sender="Vitens", sender_id=9),  # odd one out on sender
+    ]
+    signature = derive_signature(members)
+    assert signature is not None
+    odd = odd_ones_out(members, signature)
+    assert len(odd) == 1
+    member, axis, reason = odd[0]
+    assert member.document_id == 3
+    assert axis == "sender"
+    # Grounded: names the odd member's REAL sender and the REAL usual sender.
+    assert reason == "This document is from Vitens, unlike the rest of the series (Waternet)."
+
+    # Anti-hallucination guarantee: every capitalised word in the reason is a real
+    # value from the members (or a sentence-start word), never an invented name.
+    real_values = {"Waternet", "Vitens"}
+    sentence_starts = {"This"}
+    proper_nouns = {
+        word.strip(".,()")
+        for word in reason.split()
+        if word[:1].isupper() and word.strip(".,()") not in sentence_starts
+    }
+    assert proper_nouns <= real_values
+
+
+def test_odd_ones_out_reason_handles_missing_sender() -> None:
+    """A member with no sender must not provoke an invented name."""
+    members = [
+        _member(1, sender="Waternet"),
+        _member(2, sender="Waternet"),
+        _member(3, sender=None, sender_id=None),  # no sender set
+    ]
+    signature = derive_signature(members)
+    assert signature is not None
+    odd = odd_ones_out(members, signature)
+    assert len(odd) == 1
+    _member_row, axis, reason = odd[0]
+    assert axis == "sender"
+    assert reason == "This document has no sender set, unlike the rest of the series (Waternet)."

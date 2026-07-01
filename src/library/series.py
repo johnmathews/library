@@ -879,16 +879,52 @@ async def suggest_signature_matches(
     ]
 
 
-def odd_ones_out(members: list[_Member], signature: SeriesSignature) -> list[tuple[_Member, str]]:
-    """Members whose triple differs from ``signature``'s dominant one, each labelled.
+def _odd_one_out_reason(candidate: _Member, axis: str, representative: _Member | None) -> str:
+    """A deterministic, grounded one-sentence reason a member breaks the signature.
 
-    Pure. The label names the *first* differing axis in priority order
-    ``sender → kind → currency`` (a document can differ on several; naming the
-    highest-priority one keeps the rationale focused, since a different sender is
-    usually the most telling reason a document doesn't belong).
+    Built ONLY from values actually present on the documents — never an LLM — so
+    it can never invent a sender / kind / currency that isn't in the series. (An
+    LLM previously asked to phrase this hallucinated a sender name that appeared
+    in none of the documents.) ``representative`` is any member carrying the
+    dominant signature; its real sender/kind/currency names what "the rest of the
+    series" is. Both the candidate's and the representative's values come straight
+    from the database rows, so the sentence states only facts.
+    """
+    if axis == "sender":
+        subject = f"is from {candidate.sender}" if candidate.sender else "has no sender set"
+        usual = representative.sender if representative else None
+    elif axis == "kind":
+        subject = (
+            f"is a {candidate.kind} document" if candidate.kind else "has no document kind set"
+        )
+        usual = representative.kind if representative else None
+    else:  # currency
+        subject = f"is in {candidate.currency}" if candidate.currency else "has no currency set"
+        usual = representative.currency if representative else None
+    if usual:
+        return f"This document {subject}, unlike the rest of the series ({usual})."
+    return f"This document {subject}, unlike the rest of the series."
+
+
+def odd_ones_out(
+    members: list[_Member], signature: SeriesSignature
+) -> list[tuple[_Member, str, str]]:
+    """Members whose triple differs from ``signature``'s dominant one.
+
+    Pure. Returns ``(member, axis, reason)`` per odd member. ``axis`` is the
+    *first* differing dimension in priority order ``sender → kind → currency`` (a
+    document can differ on several; naming the highest-priority one keeps the
+    rationale focused, since a different sender is usually the most telling reason
+    a document doesn't belong). ``reason`` is a deterministic, grounded sentence
+    (:func:`_odd_one_out_reason`) built only from real document values — there is
+    no LLM in this path, so the reason can never name something not in the series.
     """
     dominant = (signature.sender_id, signature.kind_id, signature.currency)
-    result: list[tuple[_Member, str]] = []
+    # Any member carrying the dominant signature, to name "the rest of the series".
+    representative = next(
+        (m for m in members if (m.sender_id, m.kind_id, m.currency) == dominant), None
+    )
+    result: list[tuple[_Member, str, str]] = []
     for member in members:
         if (member.sender_id, member.kind_id, member.currency) == dominant:
             continue
@@ -898,7 +934,7 @@ def odd_ones_out(members: list[_Member], signature: SeriesSignature) -> list[tup
             axis = "kind"
         else:
             axis = "currency"
-        result.append((member, axis))
+        result.append((member, axis, _odd_one_out_reason(member, axis, representative)))
     return result
 
 

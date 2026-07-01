@@ -138,8 +138,10 @@ def test_dismiss_suppresses_resuggestion(api_client: TestClient, api_database_ur
 
 def test_odd_ones_out_shape(api_client: TestClient, api_database_url: str) -> None:
     tag = uuid.uuid4().hex[:8]
-    main = seed_docs(api_database_url, f"OddMain-{tag}", "utility-bill", 3)
-    stray = seed_docs(api_database_url, f"OddStray-{tag}", "utility-bill", 1)
+    main_sender = f"OddMain-{tag}"
+    stray_sender = f"OddStray-{tag}"
+    main = seed_docs(api_database_url, main_sender, "utility-bill", 3)
+    stray = seed_docs(api_database_url, stray_sender, "utility-bill", 1)
     aid = _create_series(api_client, "Odd", main + stray)
 
     body = api_client.get(f"/api/charts/authored/{aid}/odd-ones-out")
@@ -149,7 +151,11 @@ def test_odd_ones_out_shape(api_client: TestClient, api_database_url: str) -> No
     entry = members[0]
     assert entry["id"] == stray[0]
     assert entry["axis"] == "sender"
-    assert entry["reason"] is None  # no api key configured in tests
+    # Reason is deterministic and grounded — it names only real sender values
+    # (regression: an LLM previously invented a sender absent from every doc).
+    assert entry["reason"] == (
+        f"This document is from {stray_sender}, unlike the rest of the series ({main_sender})."
+    )
     assert {
         "id",
         "title",

@@ -9,7 +9,6 @@ whose dominant currency bucket is too small are skipped.
 
 from typing import Annotated
 
-from anthropic import AsyncAnthropic
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, func, select
@@ -46,7 +45,6 @@ from library.series import (
     summarize_authored_series,
     summarize_series,
 )
-from library.series_match import generate_reason
 
 router = APIRouter()
 
@@ -628,39 +626,21 @@ async def dismiss_authored_suggestion(
 async def get_authored_odd_ones_out(
     authored_id: int,
     session: Annotated[AsyncSession, Depends(get_session)],
-    settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
     """Current members whose ``(sender, kind, currency)`` differs from the dominant
-    signature, each with a mechanical ``axis`` label and an LLM ``reason``.
+    signature, each with a mechanical ``axis`` label and a grounded ``reason``.
 
-    The match is purely mechanical; the ``reason`` sentence is generated only when
-    extraction is enabled and an API key is configured (mirroring the series-
-    insight guards), otherwise ``reason`` is ``null``."""
+    The whole path is deterministic: both the match and the ``reason`` sentence
+    are built from the documents' real sender/kind/currency (no LLM), so the
+    reason can never name a sender/kind/currency that isn't in the series."""
     await _get_authored_or_404(session, authored_id)
     members = await _load_authored_members(session, authored_id)
     signature = derive_signature(members)
     if signature is None:
         return {"members": []}
-    odd = odd_ones_out(members, signature)
-
-    use_llm = settings.extraction_enabled and settings.anthropic_api_key is not None
-    client: AsyncAnthropic | None = None
-    if use_llm:
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
-    try:
-        result: list[dict[str, object]] = []
-        for member, axis in odd:
-            reason: str | None = None
-            if client is not None:
-                reason, _, _ = await generate_reason(
-                    client,
-                    settings.extraction_model,
-                    signature=signature,
-                    candidate=member,
-                    mechanical_axis=axis,
-                )
-            result.append({**_serialise_member(member), "axis": axis, "reason": reason})
-    finally:
-        if client is not None:
-            await client.close()
-    return {"members": result}
+    return {
+        "members": [
+            {**_serialise_member(member), "axis": axis, "reason": reason}
+            for member, axis, reason in odd_ones_out(members, signature)
+        ]
+    }

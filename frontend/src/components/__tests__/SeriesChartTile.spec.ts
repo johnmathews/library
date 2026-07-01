@@ -105,6 +105,30 @@ describe('SeriesChartTile', () => {
     expect(wrapper.text()).toContain('trend rising')
   })
 
+  it('lays out the header as title, description, then metadata on separate lines', () => {
+    const wrapper = mountTile(okSeries)
+    // The count/currency moved out of the heading into the metadata block.
+    expect(wrapper.find('[data-testid="series-heading"]').text()).not.toContain('documents')
+    const count = wrapper.find('[data-testid="series-meta-count"]')
+    const analysis = wrapper.find('[data-testid="series-meta-analysis"]')
+    expect(count.text()).toContain('3 documents')
+    expect(count.text()).toContain('EUR')
+    // The two metadata types are distinct elements, each on its own line.
+    expect(analysis.exists()).toBe(true)
+    expect(analysis.text()).toContain('above usual')
+    expect(analysis.text()).toContain('trend rising')
+    expect(count.element).not.toBe(analysis.element)
+    // Order in the DOM: description precedes the metadata count line.
+    const html = wrapper.html()
+    expect(html.indexOf('series-description')).toBeLessThan(html.indexOf('series-meta-count'))
+  })
+
+  it('uses a singular noun for a one-document series', () => {
+    const wrapper = mountTile({ ...okSeries, count: 1 })
+    expect(wrapper.find('[data-testid="series-meta-count"]').text()).toContain('1 document')
+    expect(wrapper.find('[data-testid="series-meta-count"]').text()).not.toContain('1 documents')
+  })
+
   it('renders the cached LLM description when present', () => {
     const wrapper = mountTile(okSeries)
     const desc = wrapper.find('[data-testid="series-description"]')

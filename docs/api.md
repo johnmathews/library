@@ -1,6 +1,6 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-07-01 (authored-series smart features: `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with LLM reason; additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Status:** active. **Last updated:** 2026-07-01 (authored-series smart features: `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -974,8 +974,11 @@ odd-one-out sentence):
   silently added as a member. The suggestion list is also computed live on read.
 - **Odd-ones-out.** Current members whose `(sender, kind, currency)` differs from
   the dominant signature, each with a mechanical `axis` (`sender` → `kind` →
-  `currency`, first difference) and an LLM-generated one-sentence `reason`
-  (`null` when extraction is disabled).
+  `currency`, first difference) and a **deterministic, grounded** one-sentence
+  `reason` built only from the documents' real sender/kind/currency values — **no
+  LLM** (`library.series.odd_ones_out`). An earlier LLM-written reason
+  hallucinated a sender name present in none of the documents; the reason can now
+  only ever name values actually in the series, so it cannot misattribute.
 
 Suggestions surface only when the signature is confident: a resolved sender/kind
 and `dominance ≥ series_autocontinue_min_dominance` (default `0.6`). A dismissed
@@ -987,7 +990,7 @@ suggestion writes a `dismissed` tombstone so it is never re-proposed.
 | GET | `/api/charts/authored/{id}/suggestions` | `{suggestions: [{id, title, sender, kind, currency, document_date, amount}], count}` — signature-matching non-members, newest first, capped at `series_suggestion_limit` (default 20). |
 | POST | `/api/charts/authored/{id}/suggestions/{document_id}/accept` | Promote to a member (idempotent); clears the suggestion row; returns the refreshed series body. |
 | POST | `/api/charts/authored/{id}/suggestions/{document_id}/dismiss` | Write a `dismissed` tombstone; returns `{count}` — remaining live matches. |
-| GET | `/api/charts/authored/{id}/odd-ones-out` | `{members: [{id, title, sender, kind, currency, document_date, amount, axis, reason}]}` — members breaking the signature. The `reason` call runs the LLM per member, so fetch lazily. |
+| GET | `/api/charts/authored/{id}/odd-ones-out` | `{members: [{id, title, sender, kind, currency, document_date, amount, axis, reason}]}` — members breaking the signature. `reason` is a deterministic, grounded sentence (no LLM), so it can never name a value absent from the series. |
 
 Additively, each **authored** entry in `GET /api/charts` and
 `GET /api/charts/{id}` carries three extra keys the dashboard reads without a

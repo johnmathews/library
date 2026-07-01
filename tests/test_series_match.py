@@ -1,9 +1,12 @@
-"""Tests for authored-series signature matching: reasons + propose-for-review."""
+"""Tests for authored-series signature matching: propose-for-review auto-continue.
+
+The odd-one-out *reason* is deterministic and lives in ``library.series`` (tested
+in ``test_series.py``); there is no LLM in this module's path.
+"""
 
 import hashlib
 import uuid
 from collections.abc import AsyncIterator
-from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
@@ -22,46 +25,9 @@ from library.models import (
     Sender,
     SuggestionState,
 )
-from library.series import SeriesSignature, _Member
-from library.series_match import generate_reason, propose_authored_matches
+from library.series_match import propose_authored_matches
 
 pytestmark = pytest.mark.integration
-
-
-# --- Fake Anthropic client (mirrors test_series_insight) --------------------
-
-
-@dataclass
-class _Block:
-    text: str
-    type: str = "text"
-
-
-@dataclass
-class _Usage:
-    input_tokens: int
-    output_tokens: int
-
-
-@dataclass
-class _Response:
-    content: list[_Block]
-    usage: _Usage
-
-
-class FakeMessages:
-    def __init__(self, text: str) -> None:
-        self._text = text
-        self.calls: list[dict[str, object]] = []
-
-    async def create(self, **kwargs: object) -> _Response:
-        self.calls.append(kwargs)
-        return _Response(content=[_Block(self._text)], usage=_Usage(120, 18))
-
-
-class FakeAnthropic:
-    def __init__(self, text: str = "This bill is from a different provider.") -> None:
-        self.messages = FakeMessages(text)
 
 
 # --- Fixtures + seeding -----------------------------------------------------
@@ -153,37 +119,6 @@ async def _member_count(session: AsyncSession, series_id: int) -> int:
         .all()
     )
     return len(rows)
-
-
-# --- generate_reason --------------------------------------------------------
-
-
-async def test_generate_reason_returns_text_and_tokens() -> None:
-    signature = SeriesSignature(
-        sender_id=1, kind_id=2, currency="EUR", member_count=4, dominant_count=3, dominance=0.75
-    )
-    candidate = _Member(
-        document_id=9,
-        sender="OtherCo",
-        kind="invoice",
-        document_date=date(2025, 5, 1),
-        amount=Decimal("200.00"),
-        currency="EUR",
-        sender_id=9,
-        kind_id=2,
-        title="Stray invoice",
-    )
-    client = FakeAnthropic("Different sender than the rest of the series.")
-    text, in_tok, out_tok = await generate_reason(
-        client,
-        "claude-haiku-4-5",
-        signature=signature,
-        candidate=candidate,
-        mechanical_axis="sender",
-    )
-    assert text == "Different sender than the rest of the series."
-    assert (in_tok, out_tok) == (120, 18)
-    assert client.messages.calls[0]["model"] == "claude-haiku-4-5"
 
 
 # --- propose_authored_matches (PROPOSE-FOR-REVIEW) --------------------------
