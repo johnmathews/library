@@ -1,6 +1,7 @@
 """Tests for hybrid (vector + FTS, RRF) retrieval in library.search."""
 
 import hashlib
+import math
 from collections.abc import AsyncIterator
 
 import pytest
@@ -23,6 +24,23 @@ def unit_vector(index: int) -> list[float]:
     """A 1024-dim unit vector with 1.0 at ``index`` (orthogonal across indices)."""
     vector = [0.0] * EMBEDDING_DIM
     vector[index] = 1.0
+    return vector
+
+
+def graded_vector(similarity: float) -> list[float]:
+    """A 1024-dim unit vector whose cosine similarity to ``unit_vector(0)`` is
+    exactly ``similarity`` — so its cosine *distance* to it is ``1 - similarity``.
+
+    Orthogonal one-hot vectors (``unit_vector(1)``, ``(2)``, ...) are all cosine-
+    distance 1.0 from ``unit_vector(0)``; using them to build "increasingly far"
+    chunks produces a tie the DB breaks arbitrarily (a flaky ordering). This
+    puts each chunk at a *strictly* increasing, deterministic distance instead:
+    the e0 component carries the similarity and the leftover magnitude goes on a
+    second, shared axis (direction is irrelevant — only distance to the e0 query
+    ranks the chunks)."""
+    vector = [0.0] * EMBEDDING_DIM
+    vector[0] = similarity
+    vector[1] = math.sqrt(max(0.0, 1.0 - similarity * similarity))
     return vector
 
 
@@ -226,18 +244,19 @@ async def test_multi_chunk_passages_for_long_doc(session: AsyncSession) -> None:
         "long",
         ocr_text="long multi-topic doc",
         chunks=[
-            ("nearest passage", unit_vector(0)),
-            ("second passage", unit_vector(1)),
-            ("third passage", unit_vector(2)),
-            ("fourth passage", unit_vector(3)),
+            ("nearest passage", unit_vector(0)),  # cosine distance 0.0
+            ("second passage", graded_vector(0.9)),  # 0.1
+            ("third passage", graded_vector(0.8)),  # 0.2
+            ("fourth passage", graded_vector(0.7)),  # 0.3
         ],
     )
     short_doc = await seed_document(
         session, "short", ocr_text="short doc", chunks=[("only passage", unit_vector(0))]
     )
 
-    # Query embedding nearest unit_vector(0); orthogonal vectors give increasing
-    # cosine distance for indices 1, 2, 3, so order is deterministic.
+    # Query embedding is unit_vector(0); the graded chunk vectors sit at strictly
+    # increasing cosine distances (0.0 < 0.1 < 0.2 < 0.3), so the nearest-3 order
+    # is deterministic — no equidistant tie for the DB to break arbitrarily.
     hits = await semantic_search(
         session, query="", query_embedding=unit_vector(0), top_k=10, chunks_per_doc=3
     )
