@@ -141,8 +141,7 @@ All filters compose (AND), including with `q`.
       "has_searchable_pdf": true, "has_thumbnail": true,
       "amount_total": "123.45", "currency": "EUR",
       "snippet": "uw <b>rekening</b> voor mei … totaal",
-      "rank": 0.31,
-      "preview_excerpt": null
+      "rank": 0.31
     }
   ],
   "total": 1, "limit": 25, "offset": 0
@@ -156,14 +155,7 @@ sorted by slug; `projects` is `[]` when the document is in no project.
 issues found), `needs_review` (one or more validation findings), or
 `verified` (user confirmed the metadata is correct). `amount_total` (JSON
 string, preserves decimal precision) and `currency` (3-letter code) are
-`null` when not set on the document. `preview_excerpt` (`string | null`) is a
-plain-text excerpt of the document body (`ocr_text`) with markdown syntax
-stripped, whitespace collapsed, and truncated to ~240 chars with an ellipsis;
-it is populated **only for `text/markdown`** documents and `null` for every
-other MIME type. There is no DB column — it is computed in `_list_item_fields`
-from the already-loaded `ocr_text` (helper `markdown_excerpt` in
-`src/library/text_preview.py`), and the dashboard uses it to render an
-email-note tile preview instead of the generic "Text" placeholder.
+`null` when not set on the document.
 
 ### 1.3.3 Search semantics
 
