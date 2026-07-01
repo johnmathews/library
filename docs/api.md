@@ -111,7 +111,7 @@ ingestion semantics are documented in [ingestion.md](ingestion.md).
 | `sender_id` | int | Sender id |
 | `recipient_id` | int | Recipient id |
 | `tag` | string, repeatable | Tag slug; repeating the parameter ANDs them (`?tag=energie&tag=wonen` requires both) |
-| `project` | string | Project slug; only documents that belong to this project |
+| `project` | string, repeatable | Project slug; repeating the parameter **ORs** them (`?project=a&project=b` returns documents in *either*) — unlike `tag`, which ANDs. A document rarely belongs to several projects, so intersection would usually return nothing |
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown` |
 | `status` | enum | `received` / `ocr` / `extract` / `embed` / `indexed` / `failed` |
 | `date_from`, `date_to` | date | Inclusive bounds on `document_date` |
@@ -190,6 +190,9 @@ Everything in the list item, plus:
 
 - `ocr_text`, `ocr_confidence`
 - `amount_total` (JSON string), `currency`, `due_date`, `expiry_date`
+- `updated_at` — timestamp of the **last edit** (the list item already carries
+  `created_at`, the *ingestion* time). It bumps on any change, including
+  tag/project-only edits, so "Last edited" reflects the true last human touch.
 - `source`, `original_filename`, `sha256`
 - `extraction` — the provenance block written by Claude extraction
   (`prompt_version`, `model`, `confidence`, token/cost accounting,
