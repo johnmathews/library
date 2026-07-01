@@ -1,0 +1,60 @@
+import { mount } from '@vue/test-utils'
+import { describe, expect, it } from 'vitest'
+
+import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
+import type { IngestionEvent } from '@/api/documents'
+
+function ev(event: string, created_at: string, detail: Record<string, unknown> = {}): IngestionEvent {
+  return { event, created_at, detail }
+}
+
+const EVENTS: IngestionEvent[] = [
+  ev('received', '2026-06-10T10:00:00Z'),
+  ev('status_changed', '2026-06-10T10:00:01Z', { from: 'received', to: 'ocr' }),
+  ev('ocr_completed', '2026-06-10T10:00:05Z'),
+  ev('status_changed', '2026-06-10T10:00:06Z', { from: 'ocr', to: 'extract' }),
+  ev('extraction_completed', '2026-06-10T10:00:10Z'),
+  ev('embedding_skipped', '2026-06-10T10:00:11Z'),
+  ev('status_changed', '2026-06-10T10:00:20Z', { from: 'embed', to: 'indexed' }),
+  ev('user_edited', '2026-06-11T09:00:00Z', { fields: ['title', 'summary'] }),
+  ev('project_changed', '2026-06-11T09:00:00Z', { projects: ['house-purchase'] }),
+]
+
+describe('DocumentHistoryTimeline', () => {
+  it('shows humanized milestones and hides per-stage noise by default', () => {
+    const w = mount(DocumentHistoryTimeline, { props: { events: EVENTS } })
+    const items = w.findAll('[data-testid="history-item"]')
+    const text = items.map((i) => i.text())
+
+    // Milestones are present and humanized.
+    expect(text.some((t) => t.includes('Ingested'))).toBe(true)
+    expect(text.some((t) => t.includes('OCR complete'))).toBe(true)
+    expect(text.some((t) => t.includes('Description & metadata added'))).toBe(true)
+    expect(text.some((t) => t.includes('Indexed for search'))).toBe(true)
+    expect(text.some((t) => t.includes('Edited') && t.includes('title, summary'))).toBe(true)
+    expect(text.some((t) => t.includes('Projects changed'))).toBe(true)
+
+    // Noise is hidden from the curated view: only the indexed transition survives,
+    // so no intermediate status_changed and no *_skipped rows.
+    const curated = w.find('ol').text()
+    expect(curated).not.toContain('Status changed')
+    expect(curated).not.toContain('Embedding skipped')
+
+    // One row per non-noise event (received, ocr, extraction, indexed, edited, projects = 6).
+    expect(items).toHaveLength(6)
+  })
+
+  it('reveals every raw event under "show all"', () => {
+    const w = mount(DocumentHistoryTimeline, { props: { events: EVENTS } })
+    const raw = w.findAll('[data-testid="history-raw-item"]')
+    // The raw log is complete — every event, including the noise, appears.
+    expect(raw).toHaveLength(EVENTS.length)
+    expect(w.find('[data-testid="history-raw-list"]').text()).toContain('status_changed')
+    expect(w.find('[data-testid="history-raw-list"]').text()).toContain('embedding_skipped')
+  })
+
+  it('renders an empty state when there are no milestones', () => {
+    const w = mount(DocumentHistoryTimeline, { props: { events: [] } })
+    expect(w.find('[data-testid="history-empty"]').exists()).toBe(true)
+  })
+})

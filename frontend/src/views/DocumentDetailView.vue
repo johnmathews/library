@@ -68,6 +68,7 @@ import { useJobsStore } from '@/stores/jobs'
 import { deriveNoteTitle } from '@/utils/noteTitle'
 import DocumentSeriesTrend from '@/components/DocumentSeriesTrend.vue'
 import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
+import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
 
 const props = withDefaults(
   defineProps<{
@@ -2007,6 +2008,8 @@ watch(
             </AppButton>
           </div>
         </div>
+
+        <DocumentHistoryTimeline :events="doc.events" />
       </div>
     </div>
   </template>
