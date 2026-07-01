@@ -115,6 +115,7 @@ async def ingest_file(
     source: DocumentSource,
     uploader_id: int | None = None,
     extra_event_detail: dict[str, object] | None = None,
+    extra_document: dict[str, object] | None = None,
     defer_processing: bool = True,
 ) -> IngestResult:
     """Validate, store, register, and enqueue processing for one file.
@@ -128,6 +129,12 @@ async def ingest_file(
     ``received``/``duplicate_upload`` event (e.g. email sender/subject/
     message-id — see ``library.email_ingest``); keys are merged into the
     standard detail dict.
+
+    ``extra_document`` seeds ``Document.extra`` (JSONB) at creation so a channel
+    can carry a hint into extraction (e.g. the email ``To:`` addresses under
+    ``email_to``, read by ``extraction.apply`` as the recipient fallback). It is
+    only applied to a newly created document; a duplicate reuses the existing
+    row's ``extra`` unchanged.
 
     ``defer_processing=False`` skips queueing the standard pipeline job; a
     caller that pre-fills pipeline outputs (the paperless importer reuses
@@ -188,6 +195,7 @@ async def ingest_file(
         source=source,
         original_filename=filename,
         uploader_id=uploader_id,
+        extra={**(extra_document or {})},
     )
     session.add(document)
     await session.flush()

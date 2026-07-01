@@ -39,6 +39,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from library.config import Settings
+from library.extraction.apply import match_user_by_email
 from library.ingest import (
     ALLOWED_MIME_TYPES,
     IngestError,
@@ -111,13 +112,31 @@ def _message_id(message: MailMessage) -> str | None:
     return raw.strip() if raw else None
 
 
+def _to_addresses(message: MailMessage) -> list[str]:
+    """The lowercased ``To:`` addresses (imap-tools already strips display names).
+
+    ``MailMessage.to`` is a tuple of bare addresses (a ``John <a@b.com>`` header
+    is parsed to ``a@b.com``); blanks are dropped. ``getattr`` guards a message
+    stub without the attribute so provenance capture never itself raises.
+    """
+    return [
+        address.strip().lower()
+        for address in (getattr(message, "to", None) or ())
+        if address and address.strip()
+    ]
+
+
 def _event_detail(message: MailMessage) -> dict[str, object]:
-    """Sender/subject/Message-ID provenance recorded against every ingest."""
-    return {
+    """Sender/subject/Message-ID (+ To:) provenance recorded against every ingest."""
+    detail: dict[str, object] = {
         "email_from": message.from_,
         "email_subject": message.subject,
         "email_message_id": _message_id(message),
     }
+    to_addresses = _to_addresses(message)
+    if to_addresses:
+        detail["email_to"] = to_addresses
+    return detail
 
 
 def _ingest_attachments(
@@ -318,24 +337,14 @@ async def resolve_sender_owner(
     """Resolve an email sender address to the owning user's id.
 
     Matches the (lowercased) sender against any user's
-    ``preferences.notifications.email_forward_addresses``; on no match, falls
-    back to ``default_owner_username`` (if configured); otherwise ``None`` (the
-    document stays unowned, as before this feature).
-
-    Iterates users in Python rather than a JSONB containment query — a
-    personal/family deployment has a handful of users, so clarity wins; switch
-    to a ``@>`` query if the user table ever grows large.
+    ``preferences.notifications.email_forward_addresses`` (via the shared
+    ``match_user_by_email`` helper); on no match, falls back to
+    ``default_owner_username`` (if configured); otherwise ``None`` (the document
+    stays unowned, as before this feature).
     """
-    normalized = (sender or "").strip().lower()
-    if normalized:
-        rows = (await session.execute(select(User.id, User.preferences))).all()
-        for user_id, preferences in rows:
-            block = (preferences or {}).get("notifications") or {}
-            addresses = block.get("email_forward_addresses") or []
-            if isinstance(addresses, list) and normalized in {
-                str(item).strip().lower() for item in addresses
-            }:
-                return user_id
+    user_id = await match_user_by_email(session, sender or "")
+    if user_id is not None:
+        return user_id
     if default_owner_username:
         return (
             await session.execute(select(User.id).where(User.username == default_owner_username))
@@ -355,6 +364,10 @@ async def _ingest_candidate(
             candidate.event_detail.get("email_from"),  # type: ignore[arg-type]
             default_owner_username=default_owner_username,
         )
+        # Carry the To: addresses onto Document.extra so extraction can use them
+        # as the recipient fallback (only-fill-when-empty; see extraction.apply).
+        email_to = candidate.event_detail.get("email_to")
+        extra_document = {"email_to": email_to} if email_to else None
         return await ingest_file(
             session,
             content=candidate.content,
@@ -363,6 +376,7 @@ async def _ingest_candidate(
             source=DocumentSource.EMAIL,
             uploader_id=owner_id,
             extra_event_detail=dict(candidate.event_detail),
+            extra_document=extra_document,
         )
 
 

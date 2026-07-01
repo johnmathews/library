@@ -150,6 +150,53 @@ async def upsert_recipient(session: AsyncSession, name: str) -> Recipient:
     return recipient
 
 
+async def match_user_by_email(session: AsyncSession, address: str) -> int | None:
+    """Resolve an email address to the owning user's id.
+
+    Matches the (lowercased, whitespace-stripped) ``address`` against any user's
+    ``preferences.notifications.email_forward_addresses``; returns that user's id
+    on the first match, else ``None``. Iterates users in Python rather than a
+    JSONB containment query — a personal/family deployment has a handful of
+    users, so clarity wins; switch to a ``@>`` query if the table ever grows.
+
+    This is the single email→user matcher reused by ``resolve_sender_owner``
+    (sender attribution) and ``resolve_recipient_from_email`` (recipient
+    fallback); it lives here so both ``email_ingest`` and extraction can import
+    it without an import cycle (extraction must not import ``email_ingest``).
+    """
+    normalized = (address or "").strip().lower()
+    if not normalized:
+        return None
+    rows = (await session.execute(select(User.id, User.preferences))).all()
+    for user_id, preferences in rows:
+        block = (preferences or {}).get("notifications") or {}
+        addresses = block.get("email_forward_addresses") or []
+        if isinstance(addresses, list) and normalized in {
+            str(item).strip().lower() for item in addresses
+        }:
+            return user_id
+    return None
+
+
+async def resolve_recipient_from_email(session: AsyncSession, addresses: list[str]) -> int | None:
+    """Resolve email ``To:`` addresses to a known user's recipient id.
+
+    For the first address that identifies a user (via ``match_user_by_email``),
+    returns that user's linked recipient id (created/adopted via
+    ``get_or_create_user_recipient``). Returns ``None`` when no address matches a
+    user. Used as the "only fill when empty" recipient fallback in
+    ``_apply_outcome`` — see there.
+    """
+    for address in addresses or []:
+        user_id = await match_user_by_email(session, address)
+        if user_id is None:
+            continue
+        user = await session.get(User, user_id)
+        if user is not None:
+            return (await get_or_create_user_recipient(session, user)).id
+    return None
+
+
 async def get_or_create_tag(session: AsyncSession, slug: str) -> Tag:
     existing = (await session.execute(select(Tag).where(Tag.slug == slug))).scalar_one_or_none()
     if existing is not None:
@@ -200,6 +247,18 @@ async def _apply_outcome(
         assert metadata.recipient_name is not None
         document.recipient_id = (await upsert_recipient(session, metadata.recipient_name)).id
         fields_set.append("recipient_id")
+
+    # Only-fill-when-empty fallback: when the LLM left recipient unset (and the
+    # user has not locked it), derive it from the email ``To:`` address if that
+    # identifies a known user. The LLM value always wins when present; a user
+    # edit always wins. Threaded onto ``extra["email_to"]`` at ingest time.
+    if document.recipient_id is None and "recipient_id" not in user_edited:
+        email_to = document.extra.get("email_to")
+        if isinstance(email_to, list) and email_to:
+            recipient_id = await resolve_recipient_from_email(session, email_to)
+            if recipient_id is not None:
+                document.recipient_id = recipient_id
+                fields_set.append("recipient_id")
 
     scalar_values: dict[str, object | None] = {
         "title": metadata.title,

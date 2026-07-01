@@ -1,6 +1,7 @@
 """Integration tests for applying extraction results (real test Postgres)."""
 
 import hashlib
+import uuid
 from collections.abc import AsyncIterator, Iterator
 from datetime import date
 from decimal import Decimal
@@ -19,7 +20,13 @@ from sqlalchemy.ext.asyncio import (
 
 from library.config import Settings, get_settings
 from library.extraction import apply as apply_module
-from library.extraction.apply import apply_extraction, todays_spend_usd, upsert_recipient
+from library.extraction.apply import (
+    apply_extraction,
+    match_user_by_email,
+    resolve_recipient_from_email,
+    todays_spend_usd,
+    upsert_recipient,
+)
 from library.extraction.extractor import (
     PROMPT_VERSION,
     CallUsage,
@@ -671,3 +678,166 @@ async def test_upsert_recipient_plain_name_unlinked(
 
         assert recipient.user_id is None
         assert recipient.name == "Acme Logistics BV"
+
+
+# --------------------------------- email To: → recipient fallback (only-fill-when-empty)
+
+
+async def _make_user_with_forward(
+    session_factory: async_sessionmaker[AsyncSession],
+    *,
+    username: str,
+    display_name: str,
+    forward_addresses: list[str],
+) -> int:
+    async with session_factory() as session:
+        user = User(
+            username=username,
+            password_hash="x",
+            display_name=display_name,
+            preferences={"notifications": {"email_forward_addresses": forward_addresses}},
+        )
+        session.add(user)
+        await session.commit()
+        return user.id
+
+
+async def test_match_user_by_email_is_case_insensitive(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    address = f"box-{uuid.uuid4().hex[:8]}@example.com"
+    user_id = await _make_user_with_forward(
+        session_factory,
+        username=f"mbe-{uuid.uuid4().hex[:8]}",
+        display_name="Match By Email",
+        forward_addresses=[address],
+    )
+    async with session_factory() as session:
+        assert await match_user_by_email(session, f"  {address.upper()} ") == user_id
+        assert await match_user_by_email(session, f"nobody-{uuid.uuid4().hex}@example.com") is None
+        assert await match_user_by_email(session, "") is None
+
+
+async def test_resolve_recipient_from_email_returns_user_recipient(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    address = f"rr-{uuid.uuid4().hex[:8]}@example.com"
+    display_name = f"Recipient User {uuid.uuid4().hex[:6]}"
+    user_id = await _make_user_with_forward(
+        session_factory,
+        username=f"rru-{uuid.uuid4().hex[:8]}",
+        display_name=display_name,
+        forward_addresses=[address],
+    )
+    async with session_factory() as session:
+        # First matching address wins; unknown ones are skipped.
+        recipient_id = await resolve_recipient_from_email(
+            session, [f"unknown-{uuid.uuid4().hex}@x.test", address.upper()]
+        )
+        await session.commit()
+        assert recipient_id is not None
+        recipient = await session.get(Recipient, recipient_id)
+        assert recipient is not None
+        assert recipient.user_id == user_id
+        assert recipient.name == display_name
+
+
+async def test_resolve_recipient_from_email_unknown_returns_none(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    async with session_factory() as session:
+        assert await resolve_recipient_from_email(session, []) is None
+        assert (
+            await resolve_recipient_from_email(session, [f"nobody-{uuid.uuid4().hex}@x.test"])
+            is None
+        )
+
+
+async def test_apply_fills_recipient_from_email_to_when_llm_empty(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """LLM leaves recipient null → fallback fills it from the email To: user."""
+    address = f"fill-{uuid.uuid4().hex[:8]}@example.com"
+    display_name = f"Fallback User {uuid.uuid4().hex[:6]}"
+    user_id = await _make_user_with_forward(
+        session_factory,
+        username=f"fbu-{uuid.uuid4().hex[:8]}",
+        display_name=display_name,
+        forward_addresses=[address],
+    )
+    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=None)))
+    document_id = await make_document(
+        session_factory, f"apply-to-fallback-{uuid.uuid4().hex[:8]}", extra={"email_to": [address]}
+    )
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient is not None
+        assert document.recipient.user_id == user_id
+        assert document.recipient.name == display_name
+        assert "recipient_id" in document.extra["extraction"]["fields_set"]
+
+
+async def test_apply_llm_recipient_wins_over_email_to(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the LLM names a recipient, the To:-derived user is NOT used."""
+    address = f"lose-{uuid.uuid4().hex[:8]}@example.com"
+    llm_recipient = f"Acme Corp {uuid.uuid4().hex[:6]}"
+    await _make_user_with_forward(
+        session_factory,
+        username=f"lwu-{uuid.uuid4().hex[:8]}",
+        display_name=f"Should Not Win {uuid.uuid4().hex[:6]}",
+        forward_addresses=[address],
+    )
+    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=llm_recipient)))
+    document_id = await make_document(
+        session_factory, f"apply-llm-wins-{uuid.uuid4().hex[:8]}", extra={"email_to": [address]}
+    )
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient is not None
+        assert document.recipient.name == llm_recipient
+        assert document.recipient.user_id is None  # the plain LLM name, not the To: user
+
+
+async def test_apply_email_to_matching_nobody_leaves_recipient_none(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A To: address matching no user leaves recipient null when the LLM is empty."""
+    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=None)))
+    document_id = await make_document(
+        session_factory,
+        f"apply-to-nobody-{uuid.uuid4().hex[:8]}",
+        extra={"email_to": [f"nobody-{uuid.uuid4().hex}@example.com"]},
+    )
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient_id is None
+        assert "recipient_id" not in document.extra["extraction"]["fields_set"]
