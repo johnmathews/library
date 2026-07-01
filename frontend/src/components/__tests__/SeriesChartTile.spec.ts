@@ -27,6 +27,7 @@ const api = vi.hoisted(() => ({
   updateSeriesMeta: vi.fn(),
   // Authored (W14) branch.
   updateAuthoredSeries: vi.fn(),
+  deleteAuthoredSeries: vi.fn(),
   addAuthoredMember: vi.fn(),
   removeAuthoredMember: vi.fn(),
   // Smart features (suggestions / odd-ones-out).
@@ -488,5 +489,99 @@ describe('SeriesChartTile title/description + single-chart link (W12)', () => {
     await wrapper.find('[data-testid="series-odd-remove"]').trigger('click')
     await flushPromises()
     expect(api.removeAuthoredMember).toHaveBeenCalledWith(5, 30)
+  })
+})
+
+describe('SeriesChartTile grouping', () => {
+  function mountGrouped(grouping: 'none' | 'week' | 'month' | 'quarter' | 'year') {
+    return mount(SeriesChartTile, {
+      props: { series: okSeries, grouping },
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    })
+  }
+
+  it('sums per-document amounts into one bar per quarter when grouped', () => {
+    mountGrouped('quarter')
+    const data = lineDataCapture.data as {
+      datasets: { data: { x: string; y: number }[]; backgroundColor: unknown }[]
+    }
+    // okSeries' three Q1-2025 documents (100 + 100 + 130) collapse to one bar.
+    expect(data.datasets[0]!.data).toEqual([{ x: '2025-01-01', y: 330 }])
+    // Uniform colour in grouped mode — no per-document red highlight.
+    expect(data.datasets[0]!.backgroundColor).toBe('#2563eb')
+  })
+
+  it('keeps one bar per document when grouping is none', () => {
+    mountGrouped('none')
+    const data = lineDataCapture.data as {
+      datasets: { data: unknown[]; backgroundColor: unknown }[]
+    }
+    expect(data.datasets[0]!.data).toHaveLength(okSeries.points!.length)
+    // Per-document colouring is an array (active bar highlighted).
+    expect(Array.isArray(data.datasets[0]!.backgroundColor)).toBe(true)
+  })
+})
+
+describe('SeriesChartTile delete (W4)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const authored: DocumentSeries = {
+    ...okSeries,
+    sender: null,
+    sender_id: null,
+    kind_id: null,
+    authored_id: 9,
+  }
+
+  function mountAuthored(series: DocumentSeries = authored) {
+    return mount(SeriesChartTile, {
+      props: { series, editable: true },
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    })
+  }
+
+  it('offers delete only for authored series', () => {
+    // Emergent series: no delete affordance (nothing to remove).
+    const emergent = mount(SeriesChartTile, {
+      props: { series: okSeries, editable: true },
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    })
+    expect(emergent.find('[data-testid="series-delete"]').exists()).toBe(false)
+
+    expect(mountAuthored().find('[data-testid="series-delete"]').exists()).toBe(true)
+  })
+
+  it('confirms, deletes, and emits "deleted"', async () => {
+    api.deleteAuthoredSeries.mockResolvedValue(undefined)
+    const wrapper = mountAuthored()
+
+    await wrapper.find('[data-testid="series-delete"]').trigger('click')
+    // A confirmation appears before anything is deleted.
+    expect(wrapper.find('[data-testid="series-delete-confirm"]').exists()).toBe(true)
+    expect(api.deleteAuthoredSeries).not.toHaveBeenCalled()
+
+    await wrapper.find('[data-testid="series-delete-confirm-button"]').trigger('click')
+    await flushPromises()
+
+    expect(api.deleteAuthoredSeries).toHaveBeenCalledWith(9)
+    expect(wrapper.emitted('deleted')).toHaveLength(1)
+  })
+
+  it('cancels without deleting', async () => {
+    const wrapper = mountAuthored()
+    await wrapper.find('[data-testid="series-delete"]').trigger('click')
+    await wrapper.find('[data-testid="series-delete-cancel"]').trigger('click')
+    expect(wrapper.find('[data-testid="series-delete-confirm"]').exists()).toBe(false)
+    expect(api.deleteAuthoredSeries).not.toHaveBeenCalled()
+  })
+
+  it('surfaces an error and does not emit when deletion fails', async () => {
+    api.deleteAuthoredSeries.mockRejectedValue(new Error('500'))
+    const wrapper = mountAuthored()
+    await wrapper.find('[data-testid="series-delete"]').trigger('click')
+    await wrapper.find('[data-testid="series-delete-confirm-button"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="series-delete-error"]').exists()).toBe(true)
+    expect(wrapper.emitted('deleted')).toBeUndefined()
   })
 })

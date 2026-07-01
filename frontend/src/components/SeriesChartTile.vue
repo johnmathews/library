@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { RouterLink } from 'vue-router'
+import { RouterLink, useRouter } from 'vue-router'
 import { Bar } from 'vue-chartjs'
 import { Chart as ChartJS, TimeScale, LinearScale, BarElement, Tooltip } from 'chart.js'
 // Date adapter for chart.js's time scale (registered as a side effect).
@@ -13,6 +13,7 @@ import {
   authoredSeriesId,
   updateSeriesMeta,
   updateAuthoredSeries,
+  deleteAuthoredSeries,
   addAuthoredMember,
   removeAuthoredMember,
   fetchAuthoredSuggestions,
@@ -24,6 +25,11 @@ import {
   type SeriesSuggestion,
   type SeriesOddOneOut,
 } from '@/api/documents'
+import {
+  groupSeriesPoints,
+  type ChartGrouping,
+  type GroupedPoint,
+} from '@/composables/useChartsGrouping'
 
 ChartJS.register(TimeScale, LinearScale, BarElement, Tooltip)
 
@@ -44,10 +50,20 @@ const props = defineProps<{
   // same window. Null/omitted leaves the axis auto-fitted to this series' data.
   axisMin?: string | null
   axisMax?: string | null
+  // Time-bucket grouping. When set to something other than "none", the
+  // per-document bars are replaced by one bar per calendar period whose height
+  // is the SUM of the documents that fall in it. Display-only; membership is
+  // unchanged.
+  grouping?: ChartGrouping
+  // Render the chart taller (the single-chart / full-screen view). The grid
+  // tiles keep the compact default.
+  size?: 'default' | 'large'
 }>()
 
-// Emitted after a successful add/remove so the parent can refetch the series.
-const emit = defineEmits<{ changed: [] }>()
+// `changed` fires after an add/remove so the parent can refetch the series;
+// `deleted` fires after the whole (authored) series is removed so the parent
+// can drop the tile / leave the single-chart page (W4).
+const emit = defineEmits<{ changed: []; deleted: [] }>()
 
 const points = computed(() => props.series.points ?? [])
 
@@ -71,12 +87,30 @@ const id = computed(() =>
 )
 const detailHref = computed(() => `/charts/${id.value}`)
 
+// Whole-tile "click to open the chart" (W3): the heading and the chart area
+// navigate to the single-chart page when this tile links to a detail view.
+// Only active where `detailLink` is set — never on the detail page itself
+// (would self-link) or on the document-trend embed.
+const router = useRouter()
+function openDetail(): void {
+  if (props.detailLink) router?.push(detailHref.value)
+}
+
 // Heading prefers a user title override (W12) over the derived label.
 const headingMain = computed<string>(() =>
   props.series.title?.trim()
     ? props.series.title
     : `${props.series.sender} · ${props.series.cadence} series`,
 )
+
+// Handle to the underlying vue-chartjs <Bar> so the parent can grab the canvas
+// for image/PDF export (W6). vue-chartjs exposes the Chart.js instance as
+// `.chart`; its `.canvas` is the rendered element.
+const barRef = ref<{ chart?: { canvas: HTMLCanvasElement } } | null>(null)
+function getChartCanvas(): HTMLCanvasElement | null {
+  return barRef.value?.chart?.canvas ?? null
+}
+defineExpose({ getChartCanvas })
 
 const busy = ref(false)
 const showAdd = ref(false)
@@ -121,6 +155,39 @@ async function onSaveMeta(): Promise<void> {
     }
     editingMeta.value = false
     emit('changed')
+  } finally {
+    busy.value = false
+  }
+}
+
+// --- Delete the whole series (authored only) -------------------------------
+//
+// Only authored (user-curated) series can be deleted — emergent series are
+// computed from the documents themselves, so there is no row to remove.
+// Deletion is a two-step inline confirm (no blocking native dialog).
+const canDelete = computed(() => canEdit.value && isAuthored.value)
+const confirmingDelete = ref(false)
+const deleteError = ref<string | null>(null)
+
+function onDeleteClick(): void {
+  deleteError.value = null
+  confirmingDelete.value = true
+}
+
+function onCancelDelete(): void {
+  confirmingDelete.value = false
+}
+
+async function onConfirmDelete(): Promise<void> {
+  if (!canDelete.value || busy.value) return
+  busy.value = true
+  deleteError.value = null
+  try {
+    await deleteAuthoredSeries(props.series.authored_id!)
+    confirmingDelete.value = false
+    emit('deleted')
+  } catch {
+    deleteError.value = 'Could not delete this chart. Try again.'
   } finally {
     busy.value = false
   }
@@ -317,7 +384,33 @@ const trendText = computed<string>(() =>
   props.series.trend ? `trend ${props.series.trend.direction}` : '',
 )
 
+// True when a real time-bucket grouping is in effect.
+const isGrouped = computed<boolean>(() => props.grouping != null && props.grouping !== 'none')
+
+// Summed buckets for grouped mode (empty otherwise). Kept separate so the
+// tooltip can report the per-bucket document count.
+const groupedBuckets = computed<GroupedPoint[]>(() =>
+  isGrouped.value
+    ? groupSeriesPoints(points.value, props.grouping as Exclude<ChartGrouping, 'none'>)
+    : [],
+)
+
 const chartData = computed(() => {
+  // Grouped: one bar per calendar period, height = SUM of the period's
+  // documents. No single "active" document maps to a bucket, so bars are
+  // coloured uniformly.
+  if (isGrouped.value) {
+    return {
+      datasets: [
+        {
+          data: groupedBuckets.value.map((b) => ({ x: b.x, y: b.y })),
+          backgroundColor: '#2563eb',
+          borderRadius: 4,
+          maxBarThickness: 32,
+        },
+      ],
+    }
+  }
   const pts = points.value
   const active = activeIdx.value
   // Bars, not a line: these are discrete recurring events (one document per
@@ -336,12 +429,37 @@ const chartData = computed(() => {
   }
 })
 
+// Coarser tick unit when grouped so period bars label cleanly. The literal
+// union matches Chart.js's TimeUnit so the options object type-checks.
+const timeUnit = computed<'week' | 'month' | 'quarter' | 'year' | undefined>(() => {
+  switch (props.grouping) {
+    case 'week':
+      return 'week'
+    case 'month':
+      return 'month'
+    case 'quarter':
+      return 'quarter'
+    case 'year':
+      return 'year'
+    default:
+      return undefined
+  }
+})
+
+// In grouped mode the tooltip reports the summed amount plus how many
+// documents were rolled into the bar.
+function groupedTooltipLabel(ctx: { dataIndex: number; parsed: { y: number | null } }): string {
+  const bucket = groupedBuckets.value[ctx.dataIndex]
+  const n = bucket?.count ?? 0
+  return `${ctx.parsed.y ?? 0} · ${n} ${n === 1 ? 'document' : 'documents'}`
+}
+
 const chartOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
   plugins: {
     legend: { display: false },
-    tooltip: { callbacks: {} },
+    tooltip: { callbacks: isGrouped.value ? { label: groupedTooltipLabel } : {} },
   },
   scales: {
     // Temporal x-axis: the gap between two events reflects the real time
@@ -349,7 +467,7 @@ const chartOptions = computed(() => ({
     // shared window is supplied (W4), clamp min/max so every tile lines up.
     x: {
       type: 'time' as const,
-      time: { tooltipFormat: 'yyyy-MM-dd' },
+      time: { tooltipFormat: 'yyyy-MM-dd', ...(timeUnit.value ? { unit: timeUnit.value } : {}) },
       grid: { display: false },
       ticks: { maxRotation: 45, minRotation: 0, autoSkip: true, font: { size: 10 } },
       ...(props.axisMin ? { min: props.axisMin } : {}),
@@ -375,7 +493,15 @@ function pointLabel(point: { title?: string | null; date: string }): string {
           class="text-sm font-semibold text-gray-800 dark:text-gray-100"
           data-testid="series-heading"
         >
-          {{ headingMain }}
+          <RouterLink
+            v-if="detailLink"
+            :to="detailHref"
+            data-testid="series-heading-link"
+            class="hover:underline"
+          >
+            {{ headingMain }}
+          </RouterLink>
+          <template v-else>{{ headingMain }}</template>
         </h3>
         <div class="flex shrink-0 items-center gap-2">
           <button
@@ -386,6 +512,15 @@ function pointLabel(point: { title?: string | null; date: string }): string {
             @click="onEditMeta"
           >
             Edit
+          </button>
+          <button
+            v-if="canDelete && !editingMeta && !confirmingDelete"
+            type="button"
+            data-testid="series-delete"
+            class="text-xs text-gray-500 hover:text-red-600 dark:text-gray-400 dark:hover:text-red-400"
+            @click="onDeleteClick"
+          >
+            Delete
           </button>
           <RouterLink
             v-if="detailLink"
@@ -398,6 +533,45 @@ function pointLabel(point: { title?: string | null; date: string }): string {
         </div>
       </div>
     </header>
+
+    <!-- Inline delete confirmation (W4). Two-step, no blocking dialog. -->
+    <div
+      v-if="confirmingDelete"
+      data-testid="series-delete-confirm"
+      class="mt-3 rounded-md border border-red-300 dark:border-red-500/30 bg-red-50 dark:bg-red-500/10 px-3 py-2"
+    >
+      <p class="text-sm text-red-800 dark:text-red-300">
+        Delete this chart? The documents in it are not affected.
+      </p>
+      <p
+        v-if="deleteError"
+        data-testid="series-delete-error"
+        role="alert"
+        class="mt-1 text-xs text-red-600 dark:text-red-400"
+      >
+        {{ deleteError }}
+      </p>
+      <div class="mt-2 flex justify-end gap-2">
+        <button
+          type="button"
+          data-testid="series-delete-cancel"
+          class="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 disabled:opacity-50"
+          :disabled="busy"
+          @click="onCancelDelete"
+        >
+          Cancel
+        </button>
+        <button
+          type="button"
+          data-testid="series-delete-confirm-button"
+          class="text-xs font-medium text-red-600 hover:text-red-700 dark:text-red-400 dark:hover:text-red-300 disabled:opacity-50"
+          :disabled="busy"
+          @click="onConfirmDelete"
+        >
+          Delete chart
+        </button>
+      </div>
+    </div>
 
     <!-- Inline title/description editor (W12). -->
     <form
@@ -467,8 +641,17 @@ function pointLabel(point: { title?: string | null; date: string }): string {
       </p>
     </div>
 
-    <div class="mt-3 h-40">
-      <Bar :data="chartData" :options="chartOptions" />
+    <div
+      class="mt-3"
+      :class="[size === 'large' ? 'h-[28rem]' : 'h-40', detailLink ? 'cursor-pointer' : '']"
+      :role="detailLink ? 'link' : undefined"
+      :tabindex="detailLink ? 0 : undefined"
+      :aria-label="detailLink ? `Open ${headingMain} chart` : undefined"
+      data-testid="series-chart-area"
+      @click="openDetail"
+      @keydown.enter="openDetail"
+    >
+      <Bar ref="barRef" :data="chartData" :options="chartOptions" />
     </div>
 
     <!-- Smart features (authored series): propose-for-review suggestions and
