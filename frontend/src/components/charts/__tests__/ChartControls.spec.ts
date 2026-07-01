@@ -45,14 +45,18 @@ describe('ChartControls', () => {
 
   it('emits set-custom when a datepicker is edited', async () => {
     const wrapper = mountControls()
-    // Fill the "from" datepicker's three fields to form a valid ISO date.
-    await wrapper.find('#chart-range-from-day').setValue('15')
-    await wrapper.find('#chart-range-from-month').setValue('3')
-    await wrapper.find('#chart-range-from-year').setValue('2025')
-    await wrapper.find('#chart-range-from-year').trigger('input')
+    // The native date input carries an ISO yyyy-mm-dd value directly.
+    await wrapper.find('[data-testid="charts-range-from"]').setValue('2025-03-15')
     const events = wrapper.emitted('set-custom')
     expect(events).toBeTruthy()
-    // The last emit carries the completed date for the "from" field.
     expect(events!.at(-1)).toEqual(['from', '2025-03-15'])
+  })
+
+  it('emits set-custom with null when a datepicker is cleared', async () => {
+    const wrapper = mountControls({ customTo: '2025-03-15' })
+    await wrapper.find('[data-testid="charts-range-to"]').setValue('')
+    const events = wrapper.emitted('set-custom')
+    expect(events).toBeTruthy()
+    expect(events!.at(-1)).toEqual(['to', null])
   })
 })

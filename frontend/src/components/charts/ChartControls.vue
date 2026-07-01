@@ -8,8 +8,12 @@
  * Preset ↔ datepicker interplay lives in the composable: `select-timeframe`
  * reflects a preset's window into the from/to fields, and `set-custom` (a
  * user edit of a datepicker) flips the selection to "custom".
+ *
+ * Layout follows the mosaic field pattern (uppercase-xs labels, `.form-input` /
+ * `.form-select`, one aligned `items-end` row) shared with the rest of the app's
+ * filter bars. From/To are native `<input type="date">` — their value is already
+ * ISO `yyyy-mm-dd`, matching `customFrom`/`customTo` exactly.
  */
-import AppDateInput from '@/components/app/AppDateInput.vue'
 import type { Timeframe, TimeframeOption } from '@/composables/useChartsTimeframe'
 import type { ChartGrouping, GroupingOption } from '@/composables/useChartsGrouping'
 
@@ -28,6 +32,9 @@ const emit = defineEmits<{
   'update:grouping': [ChartGrouping]
 }>()
 
+const LABEL_CLASS =
+  'block text-xs uppercase text-gray-600 dark:text-gray-300 font-semibold mb-1'
+
 function onSelectTimeframe(event: Event): void {
   emit('select-timeframe', (event.target as HTMLSelectElement).value as Timeframe)
 }
@@ -35,16 +42,23 @@ function onSelectTimeframe(event: Event): void {
 function onSelectGrouping(event: Event): void {
   emit('update:grouping', (event.target as HTMLSelectElement).value as ChartGrouping)
 }
+
+function onCustomDate(which: 'from' | 'to', event: Event): void {
+  // Native date inputs emit ISO yyyy-mm-dd, or "" when cleared → null.
+  const value = (event.target as HTMLInputElement).value
+  emit('set-custom', which, value || null)
+}
 </script>
 
 <template>
-  <div class="flex flex-wrap items-end gap-4" data-testid="chart-controls">
-    <label class="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
-      <span class="font-medium">Time range</span>
+  <div class="flex flex-wrap items-end gap-3" data-testid="chart-controls">
+    <div>
+      <label :class="LABEL_CLASS" for="charts-timeframe">Time range</label>
       <select
+        id="charts-timeframe"
         :value="timeframe"
         data-testid="charts-timeframe"
-        class="form-select text-sm"
+        class="form-select"
         aria-label="Shared time range across charts"
         @change="onSelectTimeframe"
       >
@@ -52,29 +66,41 @@ function onSelectGrouping(event: Event): void {
           {{ opt.label }}
         </option>
       </select>
-    </label>
+    </div>
 
-    <AppDateInput
-      id="chart-range-from"
-      legend="From"
-      data-testid="charts-range-from"
-      :model-value="customFrom"
-      @update:model-value="(v) => emit('set-custom', 'from', v)"
-    />
-    <AppDateInput
-      id="chart-range-to"
-      legend="To"
-      data-testid="charts-range-to"
-      :model-value="customTo"
-      @update:model-value="(v) => emit('set-custom', 'to', v)"
-    />
+    <div>
+      <label :class="LABEL_CLASS" for="charts-range-from">From</label>
+      <input
+        id="charts-range-from"
+        :value="customFrom ?? ''"
+        type="date"
+        data-testid="charts-range-from"
+        class="form-input"
+        aria-label="Custom range start date"
+        @input="onCustomDate('from', $event)"
+      />
+    </div>
 
-    <label class="flex flex-col gap-1 text-sm text-gray-600 dark:text-gray-300">
-      <span class="font-medium">Group by</span>
+    <div>
+      <label :class="LABEL_CLASS" for="charts-range-to">To</label>
+      <input
+        id="charts-range-to"
+        :value="customTo ?? ''"
+        type="date"
+        data-testid="charts-range-to"
+        class="form-input"
+        aria-label="Custom range end date"
+        @input="onCustomDate('to', $event)"
+      />
+    </div>
+
+    <div>
+      <label :class="LABEL_CLASS" for="charts-grouping">Group by</label>
       <select
+        id="charts-grouping"
         :value="grouping"
         data-testid="charts-grouping"
-        class="form-select text-sm"
+        class="form-select"
         aria-label="Group documents into time buckets"
         @change="onSelectGrouping"
       >
@@ -82,6 +108,6 @@ function onSelectGrouping(event: Event): void {
           {{ opt.label }}
         </option>
       </select>
-    </label>
+    </div>
   </div>
 </template>
