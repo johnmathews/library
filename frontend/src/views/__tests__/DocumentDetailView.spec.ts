@@ -462,14 +462,40 @@ describe('DocumentDetailView', () => {
     expect(patchCalls()[0]!.body).toEqual({ tags: ['energie', 'wonen'] })
   })
 
-  it('projects editor sends a comma-split full-replacement list', async () => {
+  it('projects multiselect adds an existing project from the menu', async () => {
     const w = await mountView()
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
-    await w.find('#edit-projects').setValue(' House purchase,  Taxes ,')
-    await w.find('#edit-projects').trigger('change')
+    await w.find('#edit-projects').trigger('focus')
+    // The existing project (from GET /api/projects) is offered in the menu.
+    const option = w.find('[data-testid="edit-projects-option"]')
+    expect(option.text()).toBe('House purchase')
+    await option.trigger('mousedown')
     await flushPromises()
-    expect(patchCalls()[0]!.body).toEqual({ projects: ['House purchase', 'Taxes'] })
+    expect(patchCalls()[0]!.body).toEqual({ projects: ['House purchase'] })
+  })
+
+  it('projects multiselect creates a new project inline via Enter', async () => {
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    await w.find('#edit-projects').setValue('Taxes')
+    await w.find('#edit-projects').trigger('focus')
+    // A name that matches no existing option offers a "Create" affordance.
+    expect(w.find('[data-testid="edit-projects-create"]').exists()).toBe(true)
+    await w.find('#edit-projects').trigger('keydown.enter')
+    await flushPromises()
+    expect(patchCalls()[0]!.body).toEqual({ projects: ['Taxes'] })
+  })
+
+  it('projects multiselect removes a project and PATCHes the reduced list', async () => {
+    detail = makeDetail({ projects: [{ slug: 'taxes', name: 'Taxes' }] })
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    await w.find('[data-testid="edit-projects-remove"]').trigger('click')
+    await flushPromises()
+    expect(patchCalls()[0]!.body).toEqual({ projects: [] })
   })
 
   it('has no topics editor in edit mode (topics are read-only)', async () => {

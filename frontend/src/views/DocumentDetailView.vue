@@ -26,6 +26,7 @@ import {
   AppDetails,
   AppErrorSummary,
   AppInput,
+  AppMultiSelect,
   AppSelect,
   AppTextarea,
 } from '@/components/app'
@@ -99,10 +100,11 @@ const kinds = ref<KindOption[]>([])
 const senders = ref<SenderOption[]>([])
 const recipients = ref<RecipientOption[]>([])
 
-// Existing project names feed the projects editor's datalist (free text still
-// creates new projects via the backend upsert).
+// Existing projects feed the projects multiselect (picking an existing name or
+// typing a new one, which the backend upserts on save).
 const { projects: projectOptions, ensureLoaded: ensureProjectsLoaded } = useTaxonomyOptions()
 void ensureProjectsLoaded()
+const projectOptionNames = computed(() => projectOptions.value.map((project) => project.name))
 
 onMounted(async () => {
   // Best-effort: without options the kind/recipient selects still offer the
@@ -402,6 +404,19 @@ const drafts = reactive<Record<StringDraftField, string>>({
   language: '',
   amount: '',
 })
+/** The projects draft as a list, backed by the comma-joined `drafts.projects`
+ * string so fieldDirty/buildPatch/hydrateField keep working unchanged. The
+ * multiselect edits this array; the string stays the source of truth. */
+const projectsDraftList = computed<string[]>({
+  get: () =>
+    drafts.projects
+      .split(',')
+      .map((project) => project.trim())
+      .filter(Boolean),
+  set: (values) => {
+    drafts.projects = values.join(', ')
+  },
+})
 /** Draft ISO date strings for the date fields. */
 const dateDrafts = reactive<{
   document_date: string | null
@@ -577,6 +592,9 @@ async function saveField(field: EditableField): Promise<void> {
   try {
     doc.value = await updateDocument(doc.value.id, patch)
     hydrateField(field)
+    // A projects edit may have created a new project inline; refresh the shared
+    // taxonomy cache so it's offered in the multiselect and elsewhere.
+    if (field === 'projects') void refreshTaxonomyOptions()
     savedField[field] = true
     window.setTimeout(() => {
       savedField[field] = false
@@ -1713,26 +1731,16 @@ watch(
                       @change="saveField('tags')"
                       @keyup.enter="saveField('tags')"
                     />
-                    <template v-else-if="field === 'projects'">
-                      <AppInput
-                        id="edit-projects"
-                        v-model="drafts.projects"
-                        label="Projects"
-                        hide-label
-                        hint="Separate projects with commas"
-                        list="project-options"
-                        :error-message="fieldError.projects ?? undefined"
-                        @change="saveField('projects')"
-                        @keyup.enter="saveField('projects')"
-                      />
-                      <datalist id="project-options">
-                        <option
-                          v-for="project in projectOptions"
-                          :key="project.slug"
-                          :value="project.name"
-                        />
-                      </datalist>
-                    </template>
+                    <AppMultiSelect
+                      v-else-if="field === 'projects'"
+                      id="edit-projects"
+                      v-model="projectsDraftList"
+                      label="Projects"
+                      :options="projectOptionNames"
+                      placeholder="Select or add a project…"
+                      :error-message="fieldError.projects ?? undefined"
+                      @change="saveField('projects')"
+                    />
                     <div
                       v-else-if="field === 'amount'"
                       class="flex flex-wrap gap-3"

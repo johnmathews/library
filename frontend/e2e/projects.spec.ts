@@ -65,8 +65,9 @@ test('create a project, assign a document, filter the dashboard by it', async ({
 
   // Open the detail page, enter edit mode, give it a unique title (so we can
   // identify its tile later) and assign the brand-new project. The projects
-  // editor is a comma-separated free-text input (#edit-projects) backed by a
-  // datalist; committing with Enter autosaves the field.
+  // editor is a token multiselect whose text input (#edit-projects) creates a
+  // new project when a typed name matches no existing option; Enter commits the
+  // token and autosaves the field.
   await page.goto(`/documents/${id}`)
   await expect(page.getByText('Status', { exact: true })).toBeVisible()
   await page.getByTestId('edit-toggle').click()
