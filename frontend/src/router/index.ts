@@ -61,6 +61,11 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/ChartsView.vue'),
   },
   {
+    path: '/projects',
+    name: 'projects',
+    component: () => import('../views/ProjectsListView.vue'),
+  },
+  {
     // Single, shareable chart for one series (stable {sender}-{kind}-{currency} id).
     path: '/charts/:seriesId',
     name: 'series-chart',

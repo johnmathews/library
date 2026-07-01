@@ -84,11 +84,21 @@ test('create a project, assign a document, filter the dashboard by it', async ({
   await page.reload()
   await expect(page.getByTestId('project-badge').filter({ hasText: projectName })).toBeVisible()
 
-  // From the dashboard, apply the Project filter for the new project.
+  // The project appears on the dedicated /projects index (with a doc count),
+  // and its link navigates to the project-filtered dashboard.
+  await page.goto('/projects')
+  const row = page.getByTestId(`project-row-${projectSlug}`)
+  await expect(row).toBeVisible()
+  await expect(row).toContainText('1 document')
+  await page.getByTestId(`project-link-${projectSlug}`).click()
+  await expect(page).toHaveURL(new RegExp(`[?&]project=${projectSlug}(?:&|$)`))
+
+  // From the dashboard, apply the Project filter for the new project. The pill
+  // is now a multi-select of checkboxes (projects OR-compose).
   await page.goto('/')
   await openFilters(page)
   await page.getByTestId('pill-project').getByTestId('filter-pill-button').click()
-  await page.getByTestId(`project-option-${projectSlug}`).click()
+  await page.getByTestId('pill-project').locator(`input[value="${projectSlug}"]`).check()
 
   // The URL reflects the project slug and the document's tile is present.
   await expect(page).toHaveURL(new RegExp(`[?&]project=${projectSlug}(?:&|$)`))
