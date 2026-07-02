@@ -408,18 +408,18 @@ const gridColsStyle = computed(() =>
                    thumbnail. One field per line; title as the heading, the
                    rest as label/value rows. -->
               <span
-                class="block w-full px-4 py-3 text-left font-normal not-italic text-gray-500 dark:text-gray-400"
+                class="block w-full px-4 py-3 text-left font-normal not-italic text-gray-600 dark:text-gray-300"
                 data-testid="markdown-preview"
               >
                 <span
                   v-if="item.title"
-                  class="block text-xs font-semibold text-gray-600 dark:text-gray-300 line-clamp-2"
+                  class="block text-base font-semibold text-gray-700 dark:text-gray-200 line-clamp-2"
                   >{{ item.title }}</span
                 >
                 <span
                   v-for="row in previewMetadata(item)"
                   :key="row.label"
-                  class="mt-1 block truncate text-[11px] leading-snug"
+                  class="mt-1 block truncate text-sm leading-snug"
                 >
                   <span class="text-gray-400 dark:text-gray-500">{{ row.label }}</span>
                   {{ row.value }}
