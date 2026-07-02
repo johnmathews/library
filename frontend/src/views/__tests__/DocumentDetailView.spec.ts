@@ -267,6 +267,29 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="row-title"] [data-testid="row-value"]').exists()).toBe(true)
   })
 
+  it('aligns the Amount and Currency inputs (both labels hidden, no inline hint)', async () => {
+    // Regression guard for the financial-panel misalignment: Currency used to
+    // render a visible <label> + a hint above its input, pushing it ~2 lines
+    // below Amount. Both editors must defer their label to the outer <dt> via
+    // hide-label (rendered as sr-only) and carry no header hint, so their inputs
+    // share a baseline. JSDOM has no layout, so we assert the DOM that causes the
+    // offset rather than pixel positions.
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+
+    const amountLabel = w.find('label[for="edit-amount"]')
+    const currencyLabel = w.find('label[for="edit-currency"]')
+    expect(amountLabel.exists()).toBe(true)
+    expect(currencyLabel.exists()).toBe(true)
+    // Both labels are visually hidden -> zero header height above each input.
+    expect(amountLabel.classes()).toContain('sr-only')
+    expect(currencyLabel.classes()).toContain('sr-only')
+    // No hint paragraph pushes the Currency input down.
+    expect(w.find('#edit-currency-hint').exists()).toBe(false)
+    expect(w.find('#edit-amount-hint').exists()).toBe(false)
+  })
+
   it('keeps panels multi-column in edit mode (narrow fields do not span both columns)', async () => {
     const w = await mountView()
     await w.find('[data-testid="edit-toggle"]').trigger('click')

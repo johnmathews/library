@@ -1809,7 +1809,8 @@ watch(
                         id="edit-currency"
                         v-model="currencyDraft"
                         label="Currency"
-                        hint="3-letter code, like EUR"
+                        hide-label
+                        placeholder="EUR"
                         width-class="w-24"
                         @keyup.enter="saveField('amount')"
                       />
