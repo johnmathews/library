@@ -1144,13 +1144,28 @@ watch(
            title; from `sm` up it floats to the top-right so "Ask" is the first
            action a reader sees. `min-w-0` lets the title wrap instead of
            shoving the button off-screen. -->
-      <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+      <div id="document-hero-top-row" class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <h1
           id="document-title"
           class="min-w-0 text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold break-words app-detail-title"
         >
           {{ doc.title ?? 'Untitled document' }}
         </h1>
+      </div>
+      <dl
+        v-if="heroStats.length"
+        class="mt-12 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3"
+        data-testid="hero-stats"
+      >
+        <div v-for="stat in heroStats" :key="stat.label">
+          <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            {{ stat.label }}
+          </dt>
+          <dd class="mt-0.5 text-sm font-medium text-gray-800 dark:text-gray-100 break-words">
+            {{ stat.value }}
+          </dd>
+        </div>
+
         <AppButton
           variant="primary"
           :to="{ name: 'ask', query: { q: askPrompt } }"
@@ -1175,20 +1190,6 @@ watch(
           </svg>
           Ask about this document
         </AppButton>
-      </div>
-      <dl
-        v-if="heroStats.length"
-        class="mt-4 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3"
-        data-testid="hero-stats"
-      >
-        <div v-for="stat in heroStats" :key="stat.label">
-          <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
-            {{ stat.label }}
-          </dt>
-          <dd class="mt-0.5 text-sm font-medium text-gray-800 dark:text-gray-100 break-words">
-            {{ stat.value }}
-          </dd>
-        </div>
       </dl>
       <div
         v-if="doc.tags.length"
