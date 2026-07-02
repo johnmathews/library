@@ -1253,11 +1253,12 @@ normalising a code is a series-aware whole-store rewrite, not a table CRUD.
 - **`GET /api/admin/currencies`** → `[{code, document_count}, …]`: the distinct
   currency codes on non-deleted documents, with counts, ordered by code.
 - **`POST /api/admin/currencies/normalize`** `{from_code, to_code}` → rename
-  `from_code` to `to_code` everywhere. Both codes are trimmed, upper-cased and
-  must match `^[A-Z]{3}$`. On success (**`200`**):
+  `from_code` to `to_code` everywhere. Both codes are trimmed and upper-cased
+  before comparison and must match `^[A-Z]{3}$`; the response echoes the
+  normalised (upper-case) codes. On success (**`200`**):
 
   ```json
-  {"from_code": "Eur", "to_code": "EUR", "counts": {"documents": 12, "series_insights": 2,
+  {"from_code": "USD", "to_code": "EUR", "counts": {"documents": 12, "series_insights": 2,
    "series_insights_merged": 1, "series_membership_overrides": 0, "series_meta_overrides": 1,
    "authored_series": 1, "authored_series_suggestions": 0}, "fx_rate_missing": true}
   ```
