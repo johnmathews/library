@@ -118,9 +118,10 @@ test('dashboard reflects metadata preferences', async ({ page }) => {
     await page.goto('/settings')
     await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible()
 
-    // The AppCheckboxes component renders a real <label for="…">Correspondent</label>
-    // bound to <input type="checkbox" value="sender">; getByLabel resolves that binding.
-    const correspondentCheckbox = page.getByLabel('Correspondent')
+    // The Dashboard tab uses DashboardFieldsEditor: the sender row's checkbox is
+    // `[data-testid="dashboard-field-sender"]`. (A loose getByLabel('Correspondent')
+    // would also match the row's Up/Down/drag aria-labels, so target the checkbox.)
+    const correspondentCheckbox = page.getByTestId('dashboard-field-sender')
     await correspondentCheckbox.uncheck()
     await page.getByRole('button', { name: 'Save changes' }).click()
     await expect(page.getByText('Your settings have been saved.')).toBeVisible()
@@ -132,7 +133,7 @@ test('dashboard reflects metadata preferences', async ({ page }) => {
     // `item.sender` is set (v-if="shows('sender') && item.sender"), so it
     // would be absent even with the field enabled if no documents have senders.
     await page.goto('/settings')
-    await expect(page.getByLabel('Correspondent')).not.toBeChecked()
+    await expect(page.getByTestId('dashboard-field-sender')).not.toBeChecked()
 
     // ── Phase 3: the dashboard renders no sender lines while field is off ────
     await page.goto('/')
@@ -146,7 +147,7 @@ test('dashboard reflects metadata preferences', async ({ page }) => {
     // Running this in finally ensures the restore happens even if an earlier
     // assertion throws, preventing state corruption in subsequent specs.
     await page.goto('/settings')
-    const correspondent = page.getByLabel('Correspondent')
+    const correspondent = page.getByTestId('dashboard-field-sender')
     if (!(await correspondent.isChecked())) {
       await correspondent.check()
       await page.getByRole('button', { name: 'Save changes' }).click()
