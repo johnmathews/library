@@ -16,6 +16,8 @@ const EMPTY: AppliedFilters = {
   dateFrom: '',
   dateTo: '',
   review: '',
+  sort: 'document_date',
+  dir: 'desc',
   page: 1,
 }
 

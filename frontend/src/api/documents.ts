@@ -135,6 +135,10 @@ export interface DocumentFilters {
   date_to?: string
   source?: DocumentSource
   review_status?: ReviewStatus
+  /** Non-search order field; ignored by the backend when `q` is set. */
+  sort?: 'document_date' | 'added_date'
+  /** Direction for `sort`; ignored when `q` is set. */
+  direction?: 'asc' | 'desc'
   limit?: number
   offset?: number
 }

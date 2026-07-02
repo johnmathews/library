@@ -12,6 +12,13 @@
  */
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
 
+export const SORT_FIELDS = ['document_date', 'added_date'] as const
+export const SORT_DIRECTIONS = ['asc', 'desc'] as const
+export type SortField = (typeof SORT_FIELDS)[number]
+export type SortDirection = (typeof SORT_DIRECTIONS)[number]
+export const DEFAULT_SORT: SortField = 'document_date'
+export const DEFAULT_SORT_DIRECTION: SortDirection = 'desc'
+
 export interface AppliedFilters {
   q: string
   kind: string
@@ -24,6 +31,10 @@ export interface AppliedFilters {
   dateFrom: string
   dateTo: string
   review: string
+  // Sort is not a "filter" (excluded from hasActiveFilters); it round-trips
+  // through the URL like one. Unknown values fall back to the defaults.
+  sort: SortField
+  dir: SortDirection
   page: number
 }
 
@@ -36,6 +47,16 @@ function asString(value: LocationQuery[string] | undefined): string {
 function asStringArray(value: LocationQuery[string] | undefined): string[] {
   if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string')
   return typeof value === 'string' ? [value] : []
+}
+
+/** Coerce a query value to one of `allowed`, else `fallback`. */
+function asEnum<T extends string>(
+  value: LocationQuery[string] | undefined,
+  allowed: readonly T[],
+  fallback: T,
+): T {
+  const s = asString(value)
+  return (allowed as readonly string[]).includes(s) ? (s as T) : fallback
 }
 
 /** Parse the route query into the strongly-typed applied state. */
@@ -52,6 +73,8 @@ export function parseDocumentQuery(query: LocationQuery): AppliedFilters {
     dateFrom: asString(query.date_from),
     dateTo: asString(query.date_to),
     review: asString(query.review),
+    sort: asEnum(query.sort, SORT_FIELDS, DEFAULT_SORT),
+    dir: asEnum(query.dir, SORT_DIRECTIONS, DEFAULT_SORT_DIRECTION),
     page: Math.max(1, Number.parseInt(asString(query.page), 10) || 1),
   }
 }
@@ -76,6 +99,9 @@ export function buildDocumentQuery(
   if (applied.dateFrom) query.date_from = applied.dateFrom
   if (applied.dateTo) query.date_to = applied.dateTo
   if (applied.review) query.review = applied.review
+  // Sort params are omitted at their defaults so the canonical URL stays clean.
+  if (applied.sort !== DEFAULT_SORT) query.sort = applied.sort
+  if (applied.dir !== DEFAULT_SORT_DIRECTION) query.dir = applied.dir
   if (page > 1) query.page = String(page)
   return query
 }

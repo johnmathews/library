@@ -169,6 +169,37 @@ describe('DocumentListView', () => {
     expect(localStorage.getItem('library:doc-grid-cols')).toContain('5')
   })
 
+  it('sort control round-trips field + direction through the URL and the request', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+
+    // Field select changes the URL and re-fetches with the sort param.
+    await w.find('[data-testid="sort-field-select"]').setValue('added_date')
+    await flushPromises()
+    expect(router.currentRoute.value.query.sort).toBe('added_date')
+    expect(documentUrls().at(-1)).toContain('sort=added_date')
+
+    // Direction toggle flips desc -> asc and appears in the URL.
+    await w.find('[data-testid="sort-dir-toggle"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.dir).toBe('asc')
+    expect(documentUrls().at(-1)).toContain('direction=asc')
+
+    // Back to the default field clears the sort param (canonical URL stays clean).
+    await w.find('[data-testid="sort-field-select"]').setValue('document_date')
+    await flushPromises()
+    expect(router.currentRoute.value.query.sort).toBeUndefined()
+  })
+
+  it('disables the sort control while a search query is active (rank wins)', async () => {
+    await router.push({ path: '/', query: { q: 'factuur' } })
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+
+    expect(w.find('[data-testid="sort-field-select"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-testid="sort-dir-toggle"]').attributes('disabled')).toBeDefined()
+  })
+
   it('makes the whole card clickable via a stretched title link', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()

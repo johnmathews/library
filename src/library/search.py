@@ -19,6 +19,7 @@ Search semantics (see docs/api.md §1.3.3)
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import date
+from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import Select, case, cast, func, or_, select
@@ -55,6 +56,26 @@ RRF_K: int = 60
 FTS_RANK_NORMALIZATION: int = 1
 
 
+class DocumentSort(StrEnum):
+    """Field the non-search document list is ordered by."""
+
+    DOCUMENT_DATE = "document_date"
+    ADDED_DATE = "added_date"
+
+
+class SortDirection(StrEnum):
+    """Direction for :class:`DocumentSort`."""
+
+    ASC = "asc"
+    DESC = "desc"
+
+
+# Defaults preserve the historic ordering (newest document_date first, unknown
+# dates last, then created_at, then id).
+DEFAULT_DOCUMENT_SORT: DocumentSort = DocumentSort.DOCUMENT_DATE
+DEFAULT_SORT_DIRECTION: SortDirection = SortDirection.DESC
+
+
 @dataclass(frozen=True, slots=True)
 class DocumentFilters:
     """Metadata filters that AND-compose (with each other and with a query)."""
@@ -75,6 +96,10 @@ class DocumentFilters:
     date_from: date | None = None
     date_to: date | None = None
     review_status: ReviewStatus | None = None
+    # Ordering for the non-search branch. Ignored when a query ``q`` is present,
+    # where relevance rank always wins.
+    sort: DocumentSort = DEFAULT_DOCUMENT_SORT
+    direction: SortDirection = DEFAULT_SORT_DIRECTION
 
 
 @dataclass(frozen=True, slots=True)
@@ -131,12 +156,33 @@ def filter_conditions(filters: DocumentFilters) -> list[Any]:
     return conditions
 
 
+def _order_by(filters: DocumentFilters) -> list[Any]:
+    """ORDER BY terms for the non-search branch, honouring sort + direction.
+
+    ``document_date`` keeps NULLS LAST in both directions (unknown dates never
+    lead). ``id`` is the final tiebreaker, following the chosen direction so the
+    total order is deterministic. ``created_at`` is non-nullable, so it needs no
+    NULLS handling.
+    """
+    descending = filters.direction is SortDirection.DESC
+
+    def dir_of(column: Any) -> Any:
+        return column.desc() if descending else column.asc()
+
+    id_term = dir_of(Document.id)
+    if filters.sort is DocumentSort.ADDED_DATE:
+        return [dir_of(Document.created_at), id_term]
+    return [dir_of(Document.document_date).nulls_last(), dir_of(Document.created_at), id_term]
+
+
 def build_document_query(q: str | None, filters: DocumentFilters) -> DocumentQuery:
     """The list/search statement pair for a query string and filters.
 
-    With ``q`` (non-empty), rows are ``(Document, rank, snippet)`` ordered
-    by rank; without it, plain ``Document`` rows ordered by document_date
-    (newest first, unknown dates last), then created_at.
+    With ``q`` (non-empty), rows are ``(Document, rank, snippet)`` ordered by
+    rank (``filters.sort``/``direction`` are ignored — relevance wins). Without
+    it, plain ``Document`` rows ordered by ``filters.sort``/``direction``,
+    defaulting to document_date (newest first, unknown dates last), then
+    created_at.
     """
     conditions = filter_conditions(filters)
 
@@ -166,15 +212,7 @@ def build_document_query(q: str | None, filters: DocumentFilters) -> DocumentQue
         )
         has_rank = True
     else:
-        statement = (
-            select(Document)
-            .where(*conditions)
-            .order_by(
-                Document.document_date.desc().nulls_last(),
-                Document.created_at.desc(),
-                Document.id.desc(),
-            )
-        )
+        statement = select(Document).where(*conditions).order_by(*_order_by(filters))
         has_rank = False
 
     count = select(func.count()).select_from(Document).where(*conditions)
