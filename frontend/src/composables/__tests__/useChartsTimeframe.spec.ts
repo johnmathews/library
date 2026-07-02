@@ -44,6 +44,10 @@ describe('timeframeBounds', () => {
 describe('useChartsTimeframe', () => {
   beforeEach(() => localStorage.clear())
 
+  it('defaults to the last 12 months', () => {
+    expect(useChartsTimeframe().timeframe.value).toBe('12m')
+  })
+
   it('reflects a chosen preset into the custom datepicker fields', () => {
     const { selectTimeframe, customFrom, customTo, timeframe } = useChartsTimeframe()
     selectTimeframe('12m')

@@ -520,6 +520,29 @@ describe('SeriesChartTile grouping', () => {
     // Per-document colouring is an array (active bar highlighted).
     expect(Array.isArray(data.datasets[0]!.backgroundColor)).toBe(true)
   })
+
+  it('tooltip reports the bar total and a per-document breakdown when grouped', () => {
+    mountGrouped('quarter')
+    const options = lineDataCapture.options as {
+      plugins: {
+        tooltip: {
+          callbacks: {
+            label: (ctx: { dataIndex: number; parsed: { y: number } }) => string
+            afterBody: (items: { dataIndex: number }[]) => string[]
+          }
+        }
+      }
+    }
+    const { label, afterBody } = options.plugins.tooltip.callbacks
+    // okSeries' three Q1-2025 docs (100 + 100 + 130 = 330) roll into one bar.
+    expect(label({ dataIndex: 0, parsed: { y: 330 } })).toContain('Total')
+    expect(label({ dataIndex: 0, parsed: { y: 330 } })).toContain('3 documents')
+    const rows = afterBody([{ dataIndex: 0 }])
+    // One row per contributing document, each showing its own amount.
+    expect(rows).toHaveLength(3)
+    expect(rows.some((r) => r.includes('100'))).toBe(true)
+    expect(rows.some((r) => r.includes('130'))).toBe(true)
+  })
 })
 
 describe('SeriesChartTile delete (W4)', () => {

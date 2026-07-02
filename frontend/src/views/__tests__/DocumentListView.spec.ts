@@ -78,10 +78,14 @@ describe('DocumentListView', () => {
   let wrapper: VueWrapper | undefined
   /** What GET /api/documents responds with; tests override per case. */
   let listResponse: () => Response
+  /** What the "needs review" count probe (review_status=needs_review&limit=1)
+   *  responds with; defaults to zero so the button is hidden unless a test opts in. */
+  let reviewCountResponse: () => Response
 
   beforeEach(async () => {
     resetTaxonomyOptionsForTests()
     listResponse = () => jsonResponse(listBody([]))
+    reviewCountResponse = () => jsonResponse(listBody([], 0))
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
@@ -96,7 +100,13 @@ describe('DocumentListView', () => {
         const body = init?.body ? JSON.parse(String(init.body)) : {}
         return Promise.resolve(jsonResponse({ dashboard_fields: body.dashboard_fields ?? [] }))
       }
-      if (url.startsWith('/api/documents')) return Promise.resolve(listResponse())
+      if (url.startsWith('/api/documents')) {
+        // The needs-review count probe is a distinct total-only query.
+        if (/review_status=needs_review/.test(url) && /[?&]limit=1(&|$)/.test(url)) {
+          return Promise.resolve(reviewCountResponse())
+        }
+        return Promise.resolve(listResponse())
+      }
       return Promise.resolve(jsonResponse({ detail: `unexpected ${url}` }, 500))
     })
     pinia = createPinia()
@@ -132,6 +142,9 @@ describe('DocumentListView', () => {
     return fetchMock.mock.calls
       .map((call) => String(call[0]))
       .filter((url) => url.startsWith('/api/documents'))
+      // Exclude the needs-review count probe (limit=1) so list-fetch assertions
+      // (order, count) aren't perturbed by it.
+      .filter((url) => !(/review_status=needs_review/.test(url) && /[?&]limit=1(&|$)/.test(url)))
   }
 
   it('renders tiles in the dashboard grid with title link, tags, sender and date', async () => {
@@ -251,6 +264,62 @@ describe('DocumentListView', () => {
       dashboard_fields: ['kind', 'sender'],
     })
     expect(useAuthStore().dashboardFields).toEqual(['kind', 'sender'])
+  })
+
+  it('places the Fields button in the sort/tiles controls row', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    // The controls row aligns its items at the bottom (items-end); the Fields
+    // button now lives there alongside the sort field + tiles-per-row selects.
+    const controls = w
+      .findAll('.items-end')
+      .find((el) => el.find('[data-testid="grid-cols-select"]').exists())
+    expect(controls).toBeTruthy()
+    expect(controls!.find('[data-testid="dashboard-fields-button"]').exists()).toBe(true)
+    expect(controls!.find('[data-testid="sort-field-select"]').exists()).toBe(true)
+  })
+
+  it('shows a red "N documents need review" button with the count when some need review', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    reviewCountResponse = () => jsonResponse(listBody([], 4))
+    const w = await mountView()
+
+    const button = w.find('[data-testid="needs-review-filter"]')
+    expect(button.exists()).toBe(true)
+    expect(button.text()).toContain('4 documents need review')
+    // Pale-red attention styling (not the old pill).
+    expect(button.classes()).toContain('bg-red-50')
+    expect(button.classes()).toContain('border-red-300')
+    expect(button.classes()).not.toContain('rounded-full')
+  })
+
+  it('singularises the review count for exactly one document', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    reviewCountResponse = () => jsonResponse(listBody([], 1))
+    const w = await mountView()
+    expect(w.find('[data-testid="needs-review-filter"]').text()).toContain('1 document needs review')
+  })
+
+  it('hides the review button entirely when nothing needs review', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    reviewCountResponse = () => jsonResponse(listBody([], 0))
+    const w = await mountView()
+    expect(w.find('[data-testid="needs-review-filter"]').exists()).toBe(false)
+  })
+
+  it('toggles the needs_review filter through the URL when clicked', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    reviewCountResponse = () => jsonResponse(listBody([], 2))
+    const w = await mountView()
+
+    await w.find('[data-testid="needs-review-filter"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.review).toBe('needs_review')
+
+    // Clicking again clears it.
+    await w.find('[data-testid="needs-review-filter"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.review).toBeUndefined()
   })
 
   it('makes the whole card clickable via a stretched title link', async () => {

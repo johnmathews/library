@@ -388,10 +388,14 @@ const trendText = computed<string>(() =>
 const isGrouped = computed<boolean>(() => props.grouping != null && props.grouping !== 'none')
 
 // Summed buckets for grouped mode (empty otherwise). Kept separate so the
-// tooltip can report the per-bucket document count.
+// tooltip can report the per-bucket document count and per-document breakdown.
+// Each point carries its label so the tooltip can name the contributing docs.
 const groupedBuckets = computed<GroupedPoint[]>(() =>
   isGrouped.value
-    ? groupSeriesPoints(points.value, props.grouping as Exclude<ChartGrouping, 'none'>)
+    ? groupSeriesPoints(
+        points.value.map((p) => ({ date: p.date, amount: p.amount, label: pointLabel(p) })),
+        props.grouping as Exclude<ChartGrouping, 'none'>,
+      )
     : [],
 )
 
@@ -446,12 +450,33 @@ const timeUnit = computed<'week' | 'month' | 'quarter' | 'year' | undefined>(() 
   }
 })
 
-// In grouped mode the tooltip reports the summed amount plus how many
-// documents were rolled into the bar.
+// Format an amount for the tooltip, appending the series currency when known.
+function formatTooltipAmount(amount: number): string {
+  const num = amount.toLocaleString(undefined, { maximumFractionDigits: 2 })
+  return props.series.currency ? `${num} ${props.series.currency}` : num
+}
+
+// Grouped tooltip, first line: the bar's total + how many documents fed it.
 function groupedTooltipLabel(ctx: { dataIndex: number; parsed: { y: number | null } }): string {
   const bucket = groupedBuckets.value[ctx.dataIndex]
   const n = bucket?.count ?? 0
-  return `${ctx.parsed.y ?? 0} · ${n} ${n === 1 ? 'document' : 'documents'}`
+  return `Total ${formatTooltipAmount(ctx.parsed.y ?? 0)} · ${n} ${n === 1 ? 'document' : 'documents'}`
+}
+
+// Grouped tooltip, following lines: each contributing document's amount on its
+// own row (label: amount). Capped so a busy bucket doesn't produce a giant
+// tooltip — the remainder is summarised as "+N more".
+const TOOLTIP_ITEM_CAP = 12
+function groupedTooltipAfterBody(items: { dataIndex: number }[]): string[] {
+  const bucket = groupedBuckets.value[items[0]?.dataIndex ?? -1]
+  if (!bucket) return []
+  const rows = bucket.items
+    .slice(0, TOOLTIP_ITEM_CAP)
+    .map((it) => `${it.label}: ${formatTooltipAmount(it.amount)}`)
+  if (bucket.items.length > TOOLTIP_ITEM_CAP) {
+    rows.push(`+${bucket.items.length - TOOLTIP_ITEM_CAP} more`)
+  }
+  return rows
 }
 
 const chartOptions = computed(() => ({
@@ -459,7 +484,11 @@ const chartOptions = computed(() => ({
   maintainAspectRatio: false,
   plugins: {
     legend: { display: false },
-    tooltip: { callbacks: isGrouped.value ? { label: groupedTooltipLabel } : {} },
+    tooltip: {
+      callbacks: isGrouped.value
+        ? { label: groupedTooltipLabel, afterBody: groupedTooltipAfterBody }
+        : {},
+    },
   },
   scales: {
     // Temporal x-axis: the gap between two events reflects the real time

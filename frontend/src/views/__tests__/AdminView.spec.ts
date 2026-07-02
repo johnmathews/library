@@ -21,6 +21,8 @@ vi.mock('@/api/admin', () => ({
   deleteKind: vi.fn(),
   listCurrencies: vi.fn(),
   normalizeCurrency: vi.fn(),
+  listFxRates: vi.fn(),
+  seedFxRate: vi.fn(),
 }))
 
 vi.mock('@/api/taxonomy', () => ({
@@ -45,9 +47,11 @@ import {
   getCoverage,
   getSystemInfo,
   listCurrencies,
+  listFxRates,
   listRecipients,
   listUsers,
   normalizeCurrency,
+  seedFxRate,
   renameKind,
   renameRecipient,
   renameSender,
@@ -173,6 +177,12 @@ const currencyList = [
   { code: 'USD', document_count: 2 },
 ]
 
+const fxList = [
+  { code: 'EUR', document_count: 9, is_base: false, has_rate: false, rate_to_base: null, as_of: null },
+  { code: 'GBP', document_count: 4, is_base: false, has_rate: true, rate_to_base: '1.27000000', as_of: '2026-07-01' },
+  { code: 'USD', document_count: 2, is_base: true, has_rate: true, rate_to_base: '1', as_of: null },
+]
+
 function seedDefaults(): void {
   vi.mocked(getSystemInfo).mockResolvedValue(systemInfo)
   vi.mocked(getArchitecture).mockResolvedValue(architecture)
@@ -182,6 +192,7 @@ function seedDefaults(): void {
   vi.mocked(listSenders).mockResolvedValue(structuredClone(senderList))
   vi.mocked(listKinds).mockResolvedValue(structuredClone(kindList))
   vi.mocked(listCurrencies).mockResolvedValue(structuredClone(currencyList))
+  vi.mocked(listFxRates).mockResolvedValue(structuredClone(fxList))
 }
 
 function mountView() {
@@ -844,5 +855,74 @@ describe('AdminView', () => {
     expect(conflict.text()).toContain('series_meta_overrides')
     // A refused rename must not have reloaded the list (still just the open call).
     expect(listCurrencies).toHaveBeenCalledTimes(1)
+  })
+
+  // --- Metadata tab: FX rates -----------------------------------------------
+
+  it('lists FX-rate status per currency on opening the Metadata tab', async () => {
+    const wrapper = await openMetadataTab()
+    expect(listFxRates).toHaveBeenCalledTimes(1)
+    // USD is the base; GBP has a rate; EUR has none.
+    expect(wrapper.find('[data-testid="fx-status-USD"]').text()).toContain('Base')
+    expect(wrapper.find('[data-testid="fx-status-GBP"]').text()).toContain('1.27')
+    expect(wrapper.find('[data-testid="fx-status-EUR"]').text()).toContain('No rate')
+    // Only the missing code offers a manual-entry toggle.
+    expect(wrapper.find('[data-testid="fx-manual-toggle-EUR"]').exists()).toBe(true)
+  })
+
+  it('fetches a live rate for a code that lacks one and reloads the list', async () => {
+    vi.mocked(seedFxRate).mockResolvedValue({
+      currency: 'EUR',
+      as_of: '2026-07-03',
+      rate_to_base: '1.09000000',
+    })
+    const wrapper = await openMetadataTab()
+
+    await wrapper.find('[data-testid="fx-fetch-EUR"]').trigger('click')
+    await flushPromises()
+
+    expect(seedFxRate).toHaveBeenCalledWith({ currency: 'EUR', source: 'live' })
+    // Reloaded: once on open, once after seeding.
+    expect(listFxRates).toHaveBeenCalledTimes(2)
+  })
+
+  it('falls back to manual entry when the live fetch fails', async () => {
+    vi.mocked(seedFxRate).mockRejectedValueOnce(
+      new ApiError(502, 'the live FX provider does not list EUR'),
+    )
+    const wrapper = await openMetadataTab()
+
+    await wrapper.find('[data-testid="fx-fetch-EUR"]').trigger('click')
+    await flushPromises()
+
+    // The error is shown and the manual form is revealed.
+    expect(wrapper.find('[data-testid="fx-row-error-EUR"]').text()).toContain('does not list EUR')
+    expect(wrapper.find('[data-testid="fx-manual-input-EUR"]').exists()).toBe(true)
+
+    // Entering a manual rate seeds it.
+    vi.mocked(seedFxRate).mockResolvedValueOnce({
+      currency: 'EUR',
+      as_of: '2026-07-03',
+      rate_to_base: '1.10000000',
+    })
+    await wrapper.find('[data-testid="fx-manual-input-EUR"]').setValue('1.10')
+    await wrapper.find('[data-testid="fx-manual-form-EUR"]').trigger('submit')
+    await flushPromises()
+
+    expect(seedFxRate).toHaveBeenLastCalledWith({
+      currency: 'EUR',
+      source: 'manual',
+      rateToBase: '1.10',
+    })
+  })
+
+  it('rejects a non-positive manual rate without calling the API', async () => {
+    const wrapper = await openMetadataTab()
+    await wrapper.find('[data-testid="fx-manual-toggle-EUR"]').trigger('click')
+    await wrapper.find('[data-testid="fx-manual-input-EUR"]').setValue('0')
+    await wrapper.find('[data-testid="fx-manual-form-EUR"]').trigger('submit')
+    await flushPromises()
+    expect(seedFxRate).not.toHaveBeenCalled()
+    expect(wrapper.find('[data-testid="fx-row-error-EUR"]').text()).toContain('positive')
   })
 })

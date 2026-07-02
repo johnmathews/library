@@ -65,6 +65,8 @@ All under `require_admin`:
 | `PATCH` / `DELETE /api/admin/kinds/{slug}` | kinds (slug-keyed): rename the display name only (no merge), or reassign-then-delete by slug (§1.2.3) |
 | `GET /api/admin/currencies` | distinct currency codes in use, with document counts (§1.2.5) |
 | `POST /api/admin/currencies/normalize` | rename a currency code across the whole store, series-aware (§1.2.5) |
+| `GET /api/admin/fx-rates` | FX-rate seeding status per in-use currency (§1.2.6) |
+| `POST /api/admin/fx-rates` | seed an FX rate (live fetch or manual entry) so conversion resolves (§1.2.6) |
 
 The system config view only exposes a curated, secret-free subset of settings —
 never API keys, passwords, or internal URLs. All reference-entity mutations
@@ -182,6 +184,25 @@ Codes are validated as `^[A-Z]{3}$` (upper-cased first); a no-op rename (same
 code) is a `400`. The admin UI shows a confirm step before running, and surfaces
 the per-table result, the FX warning, or the conflict list. See
 docs/api.md §1.18.6 for the exact response shapes.
+
+### 1.2.6 FX rates (seeding conversion)
+
+Cross-currency series convert through a stored USD rate (`fx_rates`, base = USD;
+`rate_to_base` is the value of one unit in USD). A **single** row per currency is
+enough — `library.fx` falls back to the nearest-date rate for any document. The
+Currencies card's **FX rates** subsection (`GET /api/admin/fx-rates`) lists every
+in-use code with its status: **base** (USD, always 1.0, never seeded), a seeded
+**rate + as-of date** (with a *Refresh*), or **No rate** with two ways to seed
+one (`POST /api/admin/fx-rates`, upsert on `(currency, as_of)`, today by default):
+
+- **Fetch rate** (`source: "live"`) — pulls the current rate from a keyless
+  provider (`open.er-api.com`, config `fx_api_url`/`fx_api_timeout_s`), inverting
+  its USD→X rate to USD-per-unit.
+- **Enter manually** (`source: "manual"`) — type the USD-per-unit rate. This is
+  also the automatic fallback: if the live fetch fails or the provider doesn't
+  list the code (a `502`), the manual form opens with the error.
+
+USD is refused (it is the implicit base). See docs/api.md §1.18.7 for shapes.
 
 ## 1.3 The admin views (frontend)
 

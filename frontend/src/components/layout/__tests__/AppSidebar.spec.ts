@@ -11,9 +11,11 @@ const router = createRouter({
     { path: '/', name: 'documents', component: { template: '<div/>' } },
     { path: '/upload', name: 'upload', component: { template: '<div/>' } },
     { path: '/notes/new', name: 'note-new', component: { template: '<div/>' } },
+    { path: '/ask', name: 'ask', component: { template: '<div/>' } },
     { path: '/settings', name: 'settings', component: { template: '<div/>' } },
     { path: '/jobs', name: 'jobs', component: { template: '<div/>' } },
     { path: '/charts', name: 'charts', component: { template: '<div/>' } },
+    { path: '/projects', name: 'projects', component: { template: '<div/>' } },
     { path: '/admin', name: 'admin', component: { template: '<div/>' } },
   ],
 })
@@ -90,6 +92,30 @@ describe('AppSidebar', () => {
     expect(chartsLink.exists()).toBe(true)
     expect(chartsLink.attributes('href')).toBe('/charts')
     expect(chartsLink.text()).toContain('Charts')
+  })
+
+  it('orders the nav: Charts after New note, Projects before Settings', async () => {
+    seedAuth(true)
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    const order = wrapper
+      .findAll('#sidebar-nav a[data-testid]')
+      .map((a) => a.attributes('data-testid'))
+    expect(order).toEqual([
+      'sidebar-documents-link',
+      'sidebar-upload-link',
+      'sidebar-notes-link',
+      'sidebar-charts-link',
+      'sidebar-ask-link',
+      'sidebar-jobs-link',
+      'sidebar-projects-link',
+      'sidebar-settings-link',
+      'sidebar-admin-link',
+    ])
   })
 
   it('renders the desktop expand/collapse toggle', async () => {

@@ -77,6 +77,11 @@ class Settings(BaseSettings):
     ask_max_tool_turns: int = 4
     ask_max_answer_tokens: int = 1024
     ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.
+    # Foreign-exchange rate seeding (see docs/admin.md, "FX rates"). The admin
+    # "Fetch rate" affordance calls this keyless provider for the live USD-per-unit
+    # rate; open.er-api.com returns USD->X rates, inverted to rate_to_base(X).
+    fx_api_url: str = "https://open.er-api.com/v6/latest"
+    fx_api_timeout_s: float = 10.0
     # Document series + comparative queries (see docs/ask.md, "Document series").
     series_min_documents: int = 3  # min members before stats are reported
     series_typical_pct: float = 0.10  # half-width of the "typical" band vs median
