@@ -404,15 +404,24 @@ change can identify documents extracted with an older prompt.
 On success:
 
 - **Sender** is upserted by case-insensitive name match (create if new).
-- **Recipient** is upserted by case-insensitive name match (create if new),
-  identically to sender; skipped when a user has already edited `recipient_id`.
-  When the LLM returns **no** recipient, a fallback fires: `resolve_recipient_from_email`
-  (`extraction/apply.py`) matches the email `To:` addresses stashed on
-  `extra["email_to"]` against users' `email_forward_addresses`
+- **Recipient** is matched to an **existing** recipient only — never created.
+  `match_existing_recipient` (`extraction/apply.py`) resolves the LLM's name
+  first against known users (by username / display name → that user's linked
+  recipient), then against existing recipients by case-insensitive name. If the
+  extracted name matches nothing it is **dropped** (recipient left unset) rather
+  than inserting a new recipient row, so the LLM can't invent junk recipients
+  (e.g. a family surname). Skipped when a user has already edited `recipient_id`.
+  When the LLM yields **no** valid existing recipient, a fallback fires:
+  `resolve_recipient_from_email` (`extraction/apply.py`) matches the email `To:`
+  addresses stashed on `extra["email_to"]` against users' `email_forward_addresses`
   (case-insensitive, via `match_user_by_email`) and, on a hit, sets the
-  recipient to that user's linked recipient. This is **fill-only** — an
-  LLM-extracted recipient always wins, and a user's manual edit still wins over
-  both (the whole recipient step is skipped once `recipient_id` is user-edited).
+  recipient to that user's linked recipient. This is **fill-only** — a valid
+  LLM-matched recipient wins, and a user's manual edit still wins over both (the
+  whole recipient step is skipped once `recipient_id` is user-edited). Creating a
+  brand-new recipient is reserved for the **manual** edit path: `upsert_recipient`
+  (still create-if-missing) is used only by `apply_document_update`
+  (`PATCH /api/documents/{id}`), so a user can add a new recipient by hand while
+  inference stays constrained.
 - **Kind** is resolved by slug to the seeded `kinds` row.
 - **Tags** are get-or-created by slug and merged into the document's
   tag set (never removed).
@@ -950,14 +959,17 @@ Details and decisions:
 - **Recipient auto-fill from `To:`.** The message's `To:` address(es) are
   captured onto `document.extra["email_to"]` (`_to_addresses` / `_event_detail`
   in `email_ingest.py`, seeded into `Document.extra` via `ingest_file`'s
-  `extra_document` parameter). During extraction, when the LLM does **not**
-  determine a recipient, the pipeline resolves that `To:` address against every
+  `extra_document` parameter). During extraction, when the LLM yields **no**
+  valid existing recipient (its name matched no known user or recipient, so it
+  was dropped), the pipeline resolves that `To:` address against every
   user's configured `email_forward_addresses` (case-insensitive) and, on a
   match, sets the recipient to that user's linked recipient — see the
   recipient fallback under "Applying results" in the Extraction section above.
-  It is **fill-only** (an LLM-extracted recipient or a user's manual edit always
-  wins) and reuses the same `email_forward_addresses` as sender→owner
-  attribution — no new configuration.
+  Net effect for emails: the recipient comes from the LLM only when it names a
+  real known recipient, otherwise from the email `To:`. It is **fill-only** (a
+  valid LLM-matched recipient or a user's manual edit always wins) and reuses the
+  same `email_forward_addresses` as sender→owner attribution — no new
+  configuration.
 - **Allowlist.** `LIBRARY_EMAIL_ALLOWED_SENDERS` is comma-separated and
   case-insensitive; empty (default) accepts mail from anyone, so set it
   whenever the address is guessable. Rejected mail stays in the inbox
