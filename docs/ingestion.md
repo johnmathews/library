@@ -411,17 +411,26 @@ On success:
   extracted name matches nothing it is **dropped** (recipient left unset) rather
   than inserting a new recipient row, so the LLM can't invent junk recipients
   (e.g. a family surname). Skipped when a user has already edited `recipient_id`.
-  When the LLM yields **no** valid existing recipient, a fallback fires:
-  `resolve_recipient_from_email` (`extraction/apply.py`) matches the email `To:`
-  addresses stashed on `extra["email_to"]` against users' `email_forward_addresses`
-  (case-insensitive, via `match_user_by_email`) and, on a hit, sets the
-  recipient to that user's linked recipient. This is **fill-only** — a valid
-  LLM-matched recipient wins, and a user's manual edit still wins over both (the
-  whole recipient step is skipped once `recipient_id` is user-edited). Creating a
-  brand-new recipient is reserved for the **manual** edit path: `upsert_recipient`
-  (still create-if-missing) is used only by `apply_document_update`
-  (`PATCH /api/documents/{id}`), so a user can add a new recipient by hand while
-  inference stays constrained.
+  When the LLM yields **no** valid existing recipient, two fallbacks fire in
+  order (both **fill-only**, both skipped once `recipient_id` is user-edited):
+  1. **Email `To:`** — `resolve_recipient_from_email` (`extraction/apply.py`)
+     matches the `To:` addresses stashed on `extra["email_to"]` against users'
+     `email_forward_addresses` (case-insensitive, via `match_user_by_email`) and,
+     on a hit, sets the recipient to that user's linked recipient.
+  2. **Owner (uploader)** — if recipient is *still* unset and the document has an
+     `uploader_id`, it is attributed to that owner's linked recipient
+     (`get_or_create_user_recipient`). `uploader_id` is resolved at ingest from
+     the forwarder's `From:` address (`resolve_sender_owner`), so a personal
+     document you forward to the library is attributed to **you** even when the
+     addressee name on the page matched no known user and the `To:` header is just
+     the library dropbox. This is the final tier: a valid LLM-matched recipient
+     wins, then the `To:` user, then the owner; a user's manual edit still wins
+     over all of them.
+
+  Creating a brand-new recipient is reserved for the **manual** edit path:
+  `upsert_recipient` (still create-if-missing) is used only by
+  `apply_document_update` (`PATCH /api/documents/{id}`), so a user can add a new
+  recipient by hand while inference stays constrained.
 - **Kind** is resolved by slug to the seeded `kinds` row.
 - **Tags** are get-or-created by slug and merged into the document's
   tag set (never removed).
@@ -965,11 +974,14 @@ Details and decisions:
   user's configured `email_forward_addresses` (case-insensitive) and, on a
   match, sets the recipient to that user's linked recipient — see the
   recipient fallback under "Applying results" in the Extraction section above.
-  Net effect for emails: the recipient comes from the LLM only when it names a
-  real known recipient, otherwise from the email `To:`. It is **fill-only** (a
-  valid LLM-matched recipient or a user's manual edit always wins) and reuses the
-  same `email_forward_addresses` as sender→owner attribution — no new
-  configuration.
+  When a message is **forwarded** rather than sent straight to the library, the
+  `To:` header is the library dropbox — not you — so this `To:` match cannot
+  fire; the **owner (uploader) fallback** then attributes the document to
+  whoever forwarded it (resolved from `From:` at ingest). Net effect for emails:
+  the recipient comes from the LLM when it names a real known recipient, else the
+  email `To:` user, else the forwarding owner. It is **fill-only** (a valid
+  LLM-matched recipient or a user's manual edit always wins) and reuses the same
+  `email_forward_addresses` as sender→owner attribution — no new configuration.
 - **Allowlist.** `LIBRARY_EMAIL_ALLOWED_SENDERS` is comma-separated and
   case-insensitive; empty (default) accepts mail from anyone, so set it
   whenever the address is guessable. Rejected mail stays in the inbox

@@ -891,7 +891,11 @@ async def test_apply_email_to_matching_nobody_leaves_recipient_none(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A To: address matching no user leaves recipient null when the LLM is empty."""
+    """A To: address matching no user leaves recipient null when the LLM is empty.
+
+    With no ``uploader_id`` on the document, the owner fallback cannot fire
+    either, so recipient stays unset.
+    """
     patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=None)))
     document_id = await make_document(
         session_factory,
@@ -909,6 +913,91 @@ async def test_apply_email_to_matching_nobody_leaves_recipient_none(
         assert document is not None
         assert document.recipient_id is None
         assert "recipient_id" not in document.extra["extraction"]["fields_set"]
+
+
+# ------------------------------ owner (uploader) → recipient fallback (final tier)
+
+
+async def test_apply_falls_back_to_uploader_when_nothing_else_resolves(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A forwarded doc whose addressee matches nobody is attributed to its owner.
+
+    The LLM names a recipient that matches no existing recipient/user (so
+    inference drops it) and there is no matching To: address, but the document
+    has an ``uploader_id`` (resolved from the forwarder at ingest). The final
+    fallback attributes the document to that owner's recipient.
+    """
+    async with session_factory() as session:
+        owner = User(username=f"owner-{uuid.uuid4().hex[:8]}", password_hash="x", display_name="")
+        session.add(owner)
+        await session.commit()
+        owner_id = owner.id
+        owner_username = owner.username
+
+    # An unmatched full name — inference drops it (never invents a row).
+    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name="John Mathews")))
+    document_id = await make_document(
+        session_factory,
+        f"apply-owner-fallback-{uuid.uuid4().hex[:8]}",
+        uploader_id=owner_id,
+    )
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient is not None
+        assert document.recipient.user_id == owner_id
+        # Recipient is named after the owner (display_name empty → username).
+        assert document.recipient.name == owner_username
+        assert "recipient_id" in document.extra["extraction"]["fields_set"]
+
+
+async def test_apply_email_to_wins_over_uploader_fallback(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The To:-identified user takes precedence over the owner fallback."""
+    address = f"to-wins-{uuid.uuid4().hex[:8]}@example.com"
+    to_user_id = await _make_user_with_forward(
+        session_factory,
+        username=f"tou-{uuid.uuid4().hex[:8]}",
+        display_name=f"To User {uuid.uuid4().hex[:6]}",
+        forward_addresses=[address],
+    )
+    async with session_factory() as session:
+        owner = User(username=f"owner-{uuid.uuid4().hex[:8]}", password_hash="x", display_name="")
+        session.add(owner)
+        await session.commit()
+        owner_id = owner.id
+
+    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=None)))
+    document_id = await make_document(
+        session_factory,
+        f"apply-to-over-owner-{uuid.uuid4().hex[:8]}",
+        uploader_id=owner_id,
+        extra={"email_to": [address]},
+    )
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient is not None
+        assert document.recipient.user_id == to_user_id  # To: user, not the owner
+        assert document.recipient.user_id != owner_id
 
 
 # ------------------------- inference must not invent recipients (extract-only path)

@@ -286,6 +286,23 @@ async def _apply_outcome(
                 document.recipient_id = recipient_id
                 fields_set.append("recipient_id")
 
+    # Final fallback: a still-unattributed document belongs to whoever added it.
+    # ``uploader_id`` is resolved at ingest from the forwarder's From: address
+    # (``resolve_sender_owner``), so for personal mail you forward to the library
+    # the owner *is* the recipient — even when the addressee name on the document
+    # matched no known user and the To: header is just the library dropbox. This
+    # only fires when both stronger signals (the LLM name and the To: user) came
+    # up empty; a manual edit still wins.
+    if (
+        document.recipient_id is None
+        and "recipient_id" not in user_edited
+        and document.uploader_id is not None
+    ):
+        owner = await session.get(User, document.uploader_id)
+        if owner is not None:
+            document.recipient_id = (await get_or_create_user_recipient(session, owner)).id
+            fields_set.append("recipient_id")
+
     scalar_values: dict[str, object | None] = {
         "title": metadata.title,
         "summary": metadata.summary,
