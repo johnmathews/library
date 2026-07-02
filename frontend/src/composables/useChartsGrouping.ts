@@ -14,7 +14,10 @@ import { parseISO, startOfWeek, startOfMonth, startOfQuarter, startOfYear } from
  */
 export type ChartGrouping = 'none' | 'week' | 'month' | 'quarter' | 'year'
 
-export const CHARTS_GROUPING_STORAGE_KEY = 'library:charts-grouping'
+// `-v2` bumps the persisted key so the new "by month" default reaches everyone
+// once (older machines stored `none` under the bare key); a later manual choice
+// persists under this key as usual.
+export const CHARTS_GROUPING_STORAGE_KEY = 'library:charts-grouping-v2'
 
 export interface GroupingOption {
   value: ChartGrouping
@@ -29,18 +32,28 @@ export const GROUPING_OPTIONS: GroupingOption[] = [
   { value: 'year', label: 'By year' },
 ]
 
+/** One contributing document within a bucket, for the tooltip breakdown. */
+export interface BucketItem {
+  amount: number
+  label: string
+}
+
 /** A summed bucket: `x` is the ISO period start, `y` the total, `count` the
- *  number of documents that fell in it. */
+ *  number of documents that fell in it, `items` the per-document breakdown
+ *  (amount + label) that fed the sum, in input order. */
 export interface GroupedPoint {
   x: string
   y: number
   count: number
+  items: BucketItem[]
 }
 
-/** The minimal shape `groupSeriesPoints` needs from a series point. */
+/** The minimal shape `groupSeriesPoints` needs from a series point. `label` is
+ *  optional; it falls back to the date in the per-document breakdown. */
 export interface DatedAmount {
   date: string
   amount: string | number
+  label?: string
 }
 
 function bucketStart(date: Date, grouping: Exclude<ChartGrouping, 'none'>): Date {
@@ -80,13 +93,16 @@ export function groupSeriesPoints(
   for (const p of points) {
     const start = bucketStart(parseISO(p.date), grouping)
     const key = isoDate(start)
-    const amount = Number(p.amount)
+    const raw = Number(p.amount)
+    const amount = Number.isFinite(raw) ? raw : 0
+    const item: BucketItem = { amount, label: p.label ?? p.date }
     const entry = buckets.get(key)
     if (entry) {
-      entry.y += Number.isFinite(amount) ? amount : 0
+      entry.y += amount
       entry.count += 1
+      entry.items.push(item)
     } else {
-      buckets.set(key, { x: key, y: Number.isFinite(amount) ? amount : 0, count: 1 })
+      buckets.set(key, { x: key, y: amount, count: 1, items: [item] })
     }
   }
   return [...buckets.values()].sort((a, b) => a.x.localeCompare(b.x))
@@ -98,6 +114,6 @@ export interface ChartsGrouping {
 }
 
 export function useChartsGrouping(): ChartsGrouping {
-  const grouping = useStorage<ChartGrouping>(CHARTS_GROUPING_STORAGE_KEY, 'none')
+  const grouping = useStorage<ChartGrouping>(CHARTS_GROUPING_STORAGE_KEY, 'month')
   return { grouping, options: GROUPING_OPTIONS }
 }

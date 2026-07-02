@@ -11,7 +11,7 @@
  *   - System: version/build, deployment topology, runtime config, DB stats.
  * Tab selection is local state (no sub-routes).
  */
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { AppBadge, AppButton, AppInput, AppSelect } from '@/components/app'
@@ -29,12 +29,14 @@ import {
   getCoverage,
   getSystemInfo,
   listCurrencies,
+  listFxRates,
   listRecipients,
   listUsers,
   normalizeCurrency,
   renameKind,
   renameRecipient,
   renameSender,
+  seedFxRate,
   updateUser,
   type AdminUser,
   type ArchitectureDoc,
@@ -43,6 +45,7 @@ import {
   type CurrencyConflictItem,
   type CurrencyInUse,
   type CurrencyNormalizeResult,
+  type FxRateStatus,
   type RecipientOption,
   type SystemInfo,
 } from '@/api/admin'
@@ -896,6 +899,7 @@ async function confirmNormalize(): Promise<void> {
     normalizeFrom.value = ''
     normalizeTo.value = ''
     await loadCurrencies()
+    await loadFxRates()
   } catch (error) {
     normalizeConfirming.value = false
     if (error instanceof ApiError && error.status === 409 && error.body) {
@@ -910,6 +914,78 @@ async function confirmNormalize(): Promise<void> {
   }
 }
 
+// --- Metadata: FX rates -----------------------------------------------------
+// Conversion needs one fx_rates row per currency; this subsection seeds them.
+// A "Fetch rate" button pulls the live USD-per-unit rate; if the provider is
+// down or lacks the code, a manual-entry fallback lets the admin type a rate.
+const fxRates = ref<FxRateStatus[]>([])
+const fxLoading = ref(false)
+const fxLoaded = ref(false)
+const fxError = ref<string | null>(null)
+// The code currently being seeded (disables its row's buttons).
+const fxBusyCode = ref<string | null>(null)
+// Per-code UI state: manual-entry form open, its typed rate, and any error.
+const fxManualOpen = reactive<Record<string, boolean>>({})
+const fxManualRate = reactive<Record<string, string>>({})
+const fxRowError = reactive<Record<string, string>>({})
+
+async function loadFxRates(): Promise<void> {
+  fxLoading.value = true
+  fxError.value = null
+  try {
+    fxRates.value = await listFxRates()
+    fxLoaded.value = true
+  } catch {
+    fxError.value = 'Could not load FX rates. Try refreshing the page.'
+  } finally {
+    fxLoading.value = false
+  }
+}
+
+async function fetchFxLive(code: string): Promise<void> {
+  fxBusyCode.value = code
+  fxRowError[code] = ''
+  try {
+    await seedFxRate({ currency: code, source: 'live' })
+    await loadFxRates()
+  } catch (error) {
+    fxRowError[code] =
+      error instanceof ApiError
+        ? `${error.detail} — you can enter a rate manually.`
+        : 'Could not fetch a rate. Enter one manually.'
+    fxManualOpen[code] = true
+  } finally {
+    fxBusyCode.value = null
+  }
+}
+
+function toggleFxManual(code: string): void {
+  fxManualOpen[code] = !fxManualOpen[code]
+  fxRowError[code] = ''
+}
+
+async function seedFxManual(code: string): Promise<void> {
+  // A number-typed input can yield a number or string; normalise to a string.
+  const rate = String(fxManualRate[code] ?? '').trim()
+  if (!rate || !(Number(rate) > 0)) {
+    fxRowError[code] = 'Enter a positive rate (USD per one unit).'
+    return
+  }
+  fxBusyCode.value = code
+  fxRowError[code] = ''
+  try {
+    await seedFxRate({ currency: code, source: 'manual', rateToBase: rate })
+    fxManualOpen[code] = false
+    fxManualRate[code] = ''
+    await loadFxRates()
+  } catch (error) {
+    fxRowError[code] =
+      error instanceof ApiError ? error.detail : 'Could not save the rate. Try again.'
+  } finally {
+    fxBusyCode.value = null
+  }
+}
+
 // Lazily load the metadata lists the first time the Metadata tab is opened.
 watch(tab, (current) => {
   if (current !== 'metadata') return
@@ -917,6 +993,7 @@ watch(tab, (current) => {
   if (!sendersLoaded.value && !sendersLoading.value) void loadSenders()
   if (!kindsLoaded.value && !kindsLoading.value) void loadKinds()
   if (!currenciesLoaded.value && !currenciesLoading.value) void loadCurrencies()
+  if (!fxLoaded.value && !fxLoading.value) void loadFxRates()
 })
 
 onMounted(() => {
@@ -2113,7 +2190,7 @@ const tabClass = (active: boolean): string =>
                 class="mt-1 text-amber-700 dark:text-amber-400"
               >
                 No FX rate exists for {{ normalizeResult.to_code }} — FX conversion for it is
-                unavailable until a rate is seeded.
+                unavailable until a rate is seeded. Seed one in the FX rates section below.
               </p>
             </div>
 
@@ -2157,6 +2234,143 @@ const tabClass = (active: boolean): string =>
             <p v-else class="text-sm text-gray-500 dark:text-gray-400">
               No currencies are set on any document yet.
             </p>
+
+            <!-- FX rates subsection: seed a rate so conversion resolves -->
+            <div class="mt-6 border-t border-gray-100 dark:border-gray-700/60 pt-4">
+              <h3 class="text-base font-semibold text-gray-800 dark:text-gray-100 mb-1">
+                FX rates
+              </h3>
+              <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">
+                Cross-currency series convert via a stored USD rate. Fetch a live rate per code, or
+                enter one manually (the value of one unit in USD). USD is the base (1.0).
+              </p>
+
+              <p
+                v-if="fxLoading"
+                data-testid="fx-loading"
+                class="text-sm text-gray-500 dark:text-gray-400"
+              >
+                Loading…
+              </p>
+              <p
+                v-else-if="fxError"
+                data-testid="fx-error"
+                class="text-sm text-red-600 dark:text-red-400"
+              >
+                {{ fxError }}
+              </p>
+
+              <ul
+                v-else-if="fxRates.length"
+                class="divide-y divide-gray-100 dark:divide-gray-700/60"
+              >
+                <li
+                  v-for="fx in fxRates"
+                  :key="fx.code"
+                  :data-testid="`fx-row-${fx.code}`"
+                  class="py-2 text-sm"
+                >
+                  <div class="flex flex-wrap items-center justify-between gap-2">
+                    <span class="font-medium text-gray-800 dark:text-gray-100">
+                      {{ fx.code }}
+                      <span class="ml-1 text-xs font-normal text-gray-400">
+                        · {{ fx.document_count }} doc(s)
+                      </span>
+                    </span>
+
+                    <!-- Status + actions -->
+                    <span
+                      v-if="fx.is_base"
+                      :data-testid="`fx-status-${fx.code}`"
+                      class="text-xs text-gray-500 dark:text-gray-400"
+                    >
+                      Base currency (1.0)
+                    </span>
+                    <span
+                      v-else-if="fx.has_rate"
+                      :data-testid="`fx-status-${fx.code}`"
+                      class="flex flex-wrap items-center gap-2 text-xs"
+                    >
+                      <AppBadge colour="green">Rate {{ fx.rate_to_base }}</AppBadge>
+                      <span class="text-gray-400">as of {{ fx.as_of }}</span>
+                      <button
+                        type="button"
+                        :data-testid="`fx-fetch-${fx.code}`"
+                        class="text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 disabled:opacity-50"
+                        :disabled="fxBusyCode === fx.code"
+                        @click="fetchFxLive(fx.code)"
+                      >
+                        {{ fxBusyCode === fx.code ? 'Fetching…' : 'Refresh' }}
+                      </button>
+                    </span>
+                    <span
+                      v-else
+                      :data-testid="`fx-status-${fx.code}`"
+                      class="flex flex-wrap items-center gap-2 text-xs"
+                    >
+                      <AppBadge colour="yellow">No rate</AppBadge>
+                      <button
+                        type="button"
+                        :data-testid="`fx-fetch-${fx.code}`"
+                        class="font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 disabled:opacity-50"
+                        :disabled="fxBusyCode === fx.code"
+                        @click="fetchFxLive(fx.code)"
+                      >
+                        {{ fxBusyCode === fx.code ? 'Fetching…' : 'Fetch rate' }}
+                      </button>
+                      <button
+                        type="button"
+                        :data-testid="`fx-manual-toggle-${fx.code}`"
+                        class="text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                        @click="toggleFxManual(fx.code)"
+                      >
+                        Enter manually
+                      </button>
+                    </span>
+                  </div>
+
+                  <!-- Manual-entry fallback form -->
+                  <form
+                    v-if="fxManualOpen[fx.code]"
+                    :data-testid="`fx-manual-form-${fx.code}`"
+                    class="mt-2 flex flex-wrap items-center gap-2"
+                    @submit.prevent="seedFxManual(fx.code)"
+                  >
+                    <label :for="`fx-manual-input-${fx.code}`" class="sr-only">
+                      {{ fx.code }} rate to USD
+                    </label>
+                    <input
+                      :id="`fx-manual-input-${fx.code}`"
+                      v-model="fxManualRate[fx.code]"
+                      type="text"
+                      inputmode="decimal"
+                      autocomplete="off"
+                      placeholder="USD per 1 unit"
+                      class="form-input w-40 text-sm"
+                      :data-testid="`fx-manual-input-${fx.code}`"
+                    />
+                    <AppButton
+                      type="submit"
+                      :data-testid="`fx-seed-submit-${fx.code}`"
+                      :disabled="fxBusyCode === fx.code"
+                    >
+                      {{ fxBusyCode === fx.code ? 'Saving…' : 'Save rate' }}
+                    </AppButton>
+                  </form>
+
+                  <p
+                    v-if="fxRowError[fx.code]"
+                    :data-testid="`fx-row-error-${fx.code}`"
+                    class="mt-1 text-xs text-red-600 dark:text-red-400"
+                  >
+                    {{ fxRowError[fx.code] }}
+                  </p>
+                </li>
+              </ul>
+              <p v-else class="text-sm text-gray-500 dark:text-gray-400">
+                No currencies are set on any document yet.
+              </p>
+            </div>
           </template>
         </div>
       </div>

@@ -372,3 +372,52 @@ export function normalizeCurrency(
     body: { from_code: fromCode, to_code: toCode },
   })
 }
+
+// --- FX rates --------------------------------------------------------------
+// Conversion needs one fx_rates row per currency; these back the admin
+// "seed a rate" affordance. `rate_to_base` is the value of one unit in USD.
+
+/** One in-use currency and whether it has a seeded FX rate (GET /fx-rates). */
+export interface FxRateStatus {
+  code: string
+  document_count: number
+  /** USD, the implicit base: always convertible (rate 1.0), never seeded. */
+  is_base: boolean
+  has_rate: boolean
+  /** Latest seeded rate (USD per one unit), when `has_rate`. */
+  rate_to_base: string | null
+  as_of: string | null
+}
+
+/** The row seeded by `seedFxRate`. */
+export interface FxRateSeedResult {
+  currency: string
+  as_of: string
+  rate_to_base: string
+}
+
+/** GET /api/admin/fx-rates — per in-use currency, its FX-rate status. */
+export function listFxRates(signal?: AbortSignal): Promise<FxRateStatus[]> {
+  return apiFetch<FxRateStatus[]>('/api/admin/fx-rates', { signal })
+}
+
+/**
+ * POST /api/admin/fx-rates — seed a rate for `currency`. `source: 'live'`
+ * fetches the current rate from the provider; `source: 'manual'` uses
+ * `rateToBase` (USD per one unit). Rejects with 422 (bad code / USD / manual
+ * with no rate) or 502 (live provider failed or lacks the currency).
+ */
+export function seedFxRate(params: {
+  currency: string
+  source: 'live' | 'manual'
+  rateToBase?: string
+}): Promise<FxRateSeedResult> {
+  return apiFetch<FxRateSeedResult>('/api/admin/fx-rates', {
+    method: 'POST',
+    body: {
+      currency: params.currency,
+      source: params.source,
+      ...(params.rateToBase !== undefined ? { rate_to_base: params.rateToBase } : {}),
+    },
+  })
+}

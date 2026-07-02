@@ -8,9 +8,10 @@ See docs/admin.md.
 """
 
 import json
-from datetime import datetime
+from datetime import date, datetime
+from decimal import Decimal
 from pathlib import Path
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
@@ -26,6 +27,8 @@ from library.config import Settings, get_settings
 from library.currencies import list_currencies_in_use, normalize_currency
 from library.db import get_session
 from library.extraction.apply import get_or_create_user_recipient
+from library.fx_admin import list_fx_status, seed_fx_rate, seed_fx_rate_live
+from library.fx_api import FxApiError
 from library.models import Document, DocumentStatus, User
 from library.schemas import KindOut, RecipientOut, SenderOut
 from library.taxonomy import (
@@ -1088,4 +1091,123 @@ async def normalize_currency_route(
         to_code=result.to_code,
         counts=result.counts,
         fx_rate_missing=result.fx_rate_missing,
+    )
+
+
+# ------------------------------------------------------------------- FX rates
+
+
+class FxRateStatus(BaseModel):
+    """One in-use currency and whether it has a seeded FX rate.
+
+    ``is_base`` is USD (rate 1.0, always convertible, never seeded). ``rate_to_base``
+    / ``as_of`` carry the latest seeded row when ``has_rate`` is true.
+    """
+
+    code: str
+    document_count: int
+    is_base: bool
+    has_rate: bool
+    rate_to_base: Decimal | None = None
+    as_of: date | None = None
+
+
+class FxRateSeedIn(BaseModel):
+    """Body of POST /api/admin/fx-rates.
+
+    ``source="live"`` fetches the current USD-per-unit rate from the provider;
+    ``source="manual"`` requires ``rate_to_base`` (USD per one unit). ``as_of``
+    defaults to today.
+    """
+
+    currency: Annotated[str, StringConstraints(max_length=8)]
+    source: Literal["live", "manual"] = "live"
+    rate_to_base: Decimal | None = Field(default=None, gt=0)
+    as_of: date | None = None
+
+
+class FxRateSeedOut(BaseModel):
+    """The seeded FX row."""
+
+    currency: str
+    as_of: date
+    rate_to_base: Decimal
+
+
+@router.get(
+    "/fx-rates",
+    response_model=list[FxRateStatus],
+    summary="Report the FX-rate seeding status of every in-use currency",
+)
+async def list_fx_rates_route(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> list[FxRateStatus]:
+    """Per in-use currency: document count and whether an FX rate is seeded."""
+    rows = await list_fx_status(session)
+    return [
+        FxRateStatus(
+            code=row.code,
+            document_count=row.document_count,
+            is_base=row.is_base,
+            has_rate=row.has_rate,
+            rate_to_base=row.rate_to_base,
+            as_of=row.as_of,
+        )
+        for row in rows
+    ]
+
+
+@router.post(
+    "/fx-rates",
+    response_model=FxRateSeedOut,
+    summary="Seed an FX rate for a currency (live fetch or manual entry)",
+    responses={
+        422: {"description": "Not a 3-letter code, USD (the base), or manual with no rate"},
+        502: {"description": "The live FX provider failed or does not list the currency"},
+    },
+)
+async def seed_fx_rate_route(
+    payload: FxRateSeedIn,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    settings: Annotated[Settings, Depends(get_settings)],
+) -> FxRateSeedOut:
+    """Seed (upsert) one ``fx_rates`` row so conversion for ``currency`` resolves.
+
+    Live source fetches the USD-per-unit rate; manual source uses ``rate_to_base``.
+    USD is refused (the implicit base). See docs/admin.md and the fx modules.
+    """
+    if payload.source == "manual":
+        if payload.rate_to_base is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="rate_to_base is required when source is manual",
+            )
+        result = await seed_fx_rate(session, payload.currency, payload.rate_to_base, payload.as_of)
+    else:
+        try:
+            result = await seed_fx_rate_live(session, payload.currency, settings=settings)
+        except FxApiError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"live FX lookup failed: {exc}",
+            ) from exc
+
+    if result.status == "invalid_code":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="currency must be a 3-letter currency code",
+        )
+    if result.status == "is_base":
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+            detail="USD is the base currency (rate 1.0) and needs no seeded rate",
+        )
+    if result.status == "unsupported":
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"the live FX provider does not list {result.currency}; enter a rate manually",
+        )
+    assert result.as_of is not None and result.rate_to_base is not None
+    return FxRateSeedOut(
+        currency=result.currency, as_of=result.as_of, rate_to_base=result.rate_to_base
     )

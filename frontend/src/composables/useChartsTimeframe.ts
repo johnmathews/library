@@ -16,7 +16,10 @@ import { useStorage } from '@vueuse/core'
  */
 export type Timeframe = 'all' | 'ytd' | 'lastq' | '12m' | '3y' | 'custom'
 
-export const CHARTS_TIMEFRAME_STORAGE_KEY = 'library:charts-timeframe'
+// `-v2` bumps the persisted key so the new "last 12 months" default reaches
+// everyone once (older machines stored `all` under the bare key); a later manual
+// choice persists under this key as usual.
+export const CHARTS_TIMEFRAME_STORAGE_KEY = 'library:charts-timeframe-v2'
 export const CHARTS_CUSTOM_FROM_STORAGE_KEY = 'library:charts-custom-from'
 export const CHARTS_CUSTOM_TO_STORAGE_KEY = 'library:charts-custom-to'
 
@@ -80,7 +83,7 @@ export interface ChartsTimeframe {
 }
 
 export function useChartsTimeframe(): ChartsTimeframe {
-  const timeframe = useStorage<Timeframe>(CHARTS_TIMEFRAME_STORAGE_KEY, 'all')
+  const timeframe = useStorage<Timeframe>(CHARTS_TIMEFRAME_STORAGE_KEY, '12m')
   const customFrom = useStorage<string | null>(CHARTS_CUSTOM_FROM_STORAGE_KEY, null)
   const customTo = useStorage<string | null>(CHARTS_CUSTOM_TO_STORAGE_KEY, null)
 

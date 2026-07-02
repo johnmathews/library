@@ -91,6 +91,28 @@ const items = ref<DocumentListItem[]>([])
 const total = ref(0)
 const hasMore = computed(() => items.value.length < total.value)
 
+// Global count of documents needing review, independent of the current filter,
+// for the "Needs review" affordance. Refreshed on each list load (a cheap
+// total-only query); the button hides entirely when the count is zero.
+const reviewCount = ref(0)
+async function refreshReviewCount(): Promise<void> {
+  try {
+    const response = await listDocuments({ review_status: 'needs_review', limit: 1, offset: 0 })
+    reviewCount.value = response.total
+  } catch {
+    // Non-critical: keep the last known count if the count query fails.
+  }
+}
+
+const isReviewFilterActive = computed(() => applied.value.review === 'needs_review')
+// Show the button when something needs review, or when the filter is active (so
+// the user can always toggle it back off), otherwise hide it.
+const showReviewButton = computed(() => reviewCount.value > 0 || isReviewFilterActive.value)
+const reviewButtonLabel = computed(() => {
+  const n = reviewCount.value
+  return `${n} ${n === 1 ? 'document needs' : 'documents need'} review`
+})
+
 let abortController: AbortController | null = null
 let generation = 0
 
@@ -165,6 +187,7 @@ watch(
       items.value = response.items
       total.value = response.total
       loading.value = false
+      void refreshReviewCount()
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === 'AbortError') return
       if (gen !== generation) return
@@ -321,22 +344,27 @@ function toggleSortDirection(): void {
 
   <DocumentFilterBar :applied="applied" @apply="applyFilterQuery" @clear="clearFilters" />
 
-  <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-    <button
-      type="button"
-      :class="[
-        'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-medium transition-colors',
-        applied.review === 'needs_review'
-          ? 'bg-yellow-100 text-yellow-700 dark:bg-yellow-400/30 dark:text-yellow-400 ring-1 ring-yellow-400/50'
-          : 'bg-gray-100 text-gray-600 hover:bg-yellow-50 hover:text-yellow-700 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-yellow-400/20 dark:hover:text-yellow-400',
-      ]"
-      data-testid="needs-review-filter"
-      @click="applyFilterQuery(applied.review === 'needs_review' ? {} : { review: 'needs_review' })"
-    >
-      Needs review
-    </button>
-    <DashboardFieldsMenu />
-  </div>
+  <button
+    v-if="showReviewButton"
+    type="button"
+    :class="[
+      'flex w-full sm:w-auto items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors mb-4',
+      isReviewFilterActive
+        ? 'border-red-500 bg-red-100 text-red-800 ring-1 ring-red-400 dark:border-red-500/60 dark:bg-red-500/20 dark:text-red-200'
+        : 'border-red-300 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20',
+    ]"
+    :aria-pressed="isReviewFilterActive"
+    data-testid="needs-review-filter"
+    @click="applyFilterQuery(isReviewFilterActive ? {} : { review: 'needs_review' })"
+  >
+    <svg class="h-4 w-4 shrink-0 fill-current" viewBox="0 0 16 16" aria-hidden="true">
+      <path
+        d="M8 1a1 1 0 0 1 .87.5l6 10.5A1 1 0 0 1 14 13.5H2a1 1 0 0 1-.87-1.5l6-10.5A1 1 0 0 1 8 1Zm0 4a1 1 0 0 0-1 1v2a1 1 0 1 0 2 0V6a1 1 0 0 0-1-1Zm0 6a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"
+      />
+    </svg>
+    <span class="flex-1 text-left">{{ reviewButtonLabel }}</span>
+    <span v-if="isReviewFilterActive" class="text-xs font-normal opacity-80">Showing · clear</span>
+  </button>
 
   <div
     v-if="loadError"
@@ -396,6 +424,7 @@ function toggleSortDirection(): void {
             </option>
           </select>
         </label>
+        <DashboardFieldsMenu />
       </div>
     </div>
 

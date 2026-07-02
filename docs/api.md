@@ -1278,3 +1278,26 @@ normalising a code is a series-aware whole-store rewrite, not a table CRUD.
   `to_code` are the same; **`409`** the rename would collide with user-authored
   series overrides — nothing is mutated, body
   `{"detail": "…", "conflicts": [{"table": "series_meta_overrides", "sender_id": 3, "kind_id": 5}, …]}`.
+
+### 1.18.7 FX rates — `GET /api/admin/fx-rates`, `POST /api/admin/fx-rates`
+
+Cross-currency series conversion needs one `fx_rates` row per currency (base =
+USD, so `rate_to_base` is the value of one unit in USD; a single row suffices —
+`library.fx` falls back to the nearest-date rate). These endpoints report and
+seed those rows; the normalise flow above only *flags* a missing rate.
+
+- **`GET /api/admin/fx-rates`** → `[{code, document_count, is_base, has_rate, rate_to_base, as_of}, …]`:
+  one entry per in-use currency. `is_base` is USD (always convertible at 1.0,
+  never seeded); `has_rate` says whether a row exists, with the latest
+  `rate_to_base`/`as_of` when it does (else both `null`).
+- **`POST /api/admin/fx-rates`** `{currency, source, rate_to_base?, as_of?}` →
+  seed (upsert on `(currency, as_of)`, `as_of` defaults to today). `source`:
+  - `"live"` — fetch the current USD-per-unit rate from the provider
+    (`open.er-api.com`, keyless; `rate_to_base(X) = 1 / (USD→X)`), then seed.
+  - `"manual"` — seed the supplied `rate_to_base` (a positive decimal string,
+    USD per one unit). Required for this source.
+
+  Success (**`200`**): `{"currency": "EUR", "as_of": "2026-07-03", "rate_to_base": "1.09000000"}`.
+  Errors: **`422`** the code is not `^[A-Z]{3}$`, is USD (the base), or a
+  `"manual"` request omits `rate_to_base`; **`502`** the live provider failed or
+  does not list the currency (the admin UI then offers manual entry).

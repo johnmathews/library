@@ -82,16 +82,16 @@ describe('ChartsView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    // Default "all" → open axis (null bounds).
+    // Default "last 12 months" → a bounded axis on every tile.
     let stub = wrapper.findComponent(TileStub)
-    expect(stub.props('axisMin')).toBeNull()
-    expect(stub.props('axisMax')).toBeNull()
-
-    // Choosing a bounded window clamps the axis on every tile.
-    await wrapper.find('[data-testid="charts-timeframe"]').setValue('12m')
-    stub = wrapper.findComponent(TileStub)
     expect(stub.props('axisMin')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
     expect(stub.props('axisMax')).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+
+    // Choosing "all time" opens the axis (null bounds) on every tile.
+    await wrapper.find('[data-testid="charts-timeframe"]').setValue('all')
+    stub = wrapper.findComponent(TileStub)
+    expect(stub.props('axisMin')).toBeNull()
+    expect(stub.props('axisMax')).toBeNull()
   })
 
   it('drops a tile from the grid when it emits "deleted"', async () => {
@@ -128,10 +128,11 @@ describe('ChartsView', () => {
     } as never)
     const wrapper = mountView()
     await flushPromises()
-    expect(wrapper.findComponent(TileStub).props('grouping')).toBe('none')
-
-    await wrapper.find('[data-testid="charts-grouping"]').setValue('month')
+    // Default grouping is "month".
     expect(wrapper.findComponent(TileStub).props('grouping')).toBe('month')
+
+    await wrapper.find('[data-testid="charts-grouping"]').setValue('quarter')
+    expect(wrapper.findComponent(TileStub).props('grouping')).toBe('quarter')
   })
 
   it('shows an error state when the fetch fails', async () => {
