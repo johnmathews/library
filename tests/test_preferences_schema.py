@@ -20,6 +20,13 @@ def test_non_list_coerces_to_empty() -> None:
     assert prefs.dashboard_fields == []
 
 
+def test_order_is_preserved_not_canonicalised() -> None:
+    # Order is meaningful (drives the card render order), so a list given out of
+    # catalog order round-trips as-is rather than being re-sorted.
+    prefs = DashboardPreferences(dashboard_fields=["tags", "kind", "date"])
+    assert prefs.dashboard_fields == [DashboardField.TAGS, DashboardField.KIND, DashboardField.DATE]
+
+
 def test_resolve_absent_key_returns_default() -> None:
     assert resolve_dashboard_preferences({}).dashboard_fields == DEFAULT_DASHBOARD_FIELDS
     assert resolve_dashboard_preferences(None).dashboard_fields == DEFAULT_DASHBOARD_FIELDS

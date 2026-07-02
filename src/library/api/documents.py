@@ -49,7 +49,14 @@ from library.schemas import (
     SenderOut,
     TagOut,
 )
-from library.search import DocumentFilters, build_document_query
+from library.search import (
+    DEFAULT_DOCUMENT_SORT,
+    DEFAULT_SORT_DIRECTION,
+    DocumentFilters,
+    DocumentSort,
+    SortDirection,
+    build_document_query,
+)
 from library.series import serialise_summary, summarize_series
 from library.storage import derived_path, path_for
 from library.thumbnails import THUMBNAIL_NAME
@@ -201,13 +208,22 @@ async def list_documents(
         date | None, Query(description="Inclusive upper bound on document_date.")
     ] = None,
     source: Annotated[DocumentSource | None, Query()] = None,
+    sort: Annotated[
+        DocumentSort,
+        Query(description="Order field for the non-search list. Ignored when `q` is set."),
+    ] = DEFAULT_DOCUMENT_SORT,
+    direction: Annotated[
+        SortDirection,
+        Query(description="Order direction for `sort`. Ignored when `q` is set."),
+    ] = DEFAULT_SORT_DIRECTION,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0)] = 0,
 ) -> DocumentListResponse:
     """Paginated document list; all filters AND-compose, including with `q`.
 
-    Without `q`, results are ordered by document_date (newest first, unknown
-    dates last), then created_at. With `q`, by search rank.
+    Without `q`, results are ordered by `sort`/`direction` (default document_date
+    newest first, unknown dates last, then created_at). With `q`, by search rank
+    (`sort`/`direction` are ignored).
     """
     query = build_document_query(
         q,
@@ -223,6 +239,8 @@ async def list_documents(
             date_from=date_from,
             date_to=date_to,
             source=source,
+            sort=sort,
+            direction=direction,
         ),
     )
 

@@ -84,13 +84,18 @@ describe('DocumentListView', () => {
     listResponse = () => jsonResponse(listBody([]))
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
-    fetchMock.mockImplementation((input: unknown) => {
+    fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
       const url = String(input)
       if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
       if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
       if (url === '/api/recipients') return Promise.resolve(jsonResponse(RECIPIENTS))
       if (url === '/api/tags') return Promise.resolve(jsonResponse(TAGS))
       if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
+      if (url.startsWith('/api/settings')) {
+        // Echo the persisted field list back (server-cleaned shape).
+        const body = init?.body ? JSON.parse(String(init.body)) : {}
+        return Promise.resolve(jsonResponse({ dashboard_fields: body.dashboard_fields ?? [] }))
+      }
       if (url.startsWith('/api/documents')) return Promise.resolve(listResponse())
       return Promise.resolve(jsonResponse({ detail: `unexpected ${url}` }, 500))
     })
@@ -167,6 +172,85 @@ describe('DocumentListView', () => {
     await flushPromises()
     expect(w.find('#dashboard-grid').attributes('style')).toContain('--doc-grid-cols: 5')
     expect(localStorage.getItem('library:doc-grid-cols')).toContain('5')
+  })
+
+  it('sort control round-trips field + direction through the URL and the request', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+
+    // Field select changes the URL and re-fetches with the sort param.
+    await w.find('[data-testid="sort-field-select"]').setValue('added_date')
+    await flushPromises()
+    expect(router.currentRoute.value.query.sort).toBe('added_date')
+    expect(documentUrls().at(-1)).toContain('sort=added_date')
+
+    // Direction toggle flips desc -> asc and appears in the URL.
+    await w.find('[data-testid="sort-dir-toggle"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query.dir).toBe('asc')
+    expect(documentUrls().at(-1)).toContain('direction=asc')
+
+    // Back to the default field clears the sort param (canonical URL stays clean).
+    await w.find('[data-testid="sort-field-select"]').setValue('document_date')
+    await flushPromises()
+    expect(router.currentRoute.value.query.sort).toBeUndefined()
+  })
+
+  it('disables the sort control while a search query is active (rank wins)', async () => {
+    await router.push({ path: '/', query: { q: 'factuur' } })
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+
+    expect(w.find('[data-testid="sort-field-select"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-testid="sort-dir-toggle"]').attributes('disabled')).toBeDefined()
+  })
+
+  it('renders card meta fields in the stored order', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    seedPrefs(['date', 'kind'])
+    const w = await mountView()
+    const html = w.find('.app-doc-card__meta').html()
+    // date span before kind badge.
+    expect(html.indexOf('app-doc-card__date')).toBeLessThan(html.indexOf('Invoice'))
+
+    w.unmount()
+    seedPrefs(['kind', 'date'])
+    const w2 = await mountView()
+    const html2 = w2.find('.app-doc-card__meta').html()
+    expect(html2.indexOf('Invoice')).toBeLessThan(html2.indexOf('app-doc-card__date'))
+  })
+
+  it('keeps the ungated "Needs review" badge pinned first, outside the ordered fields', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem({ review_status: 'needs_review' })]))
+    // Even with no fields enabled, the review badge still renders.
+    seedPrefs([])
+    const w = await mountView()
+    const meta = w.find('.app-doc-card__meta')
+    expect(meta.find('[data-testid="review-badge"]').exists()).toBe(true)
+  })
+
+  it('Fields menu opens a popover and persists a toggle via PUT /api/settings', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    seedPrefs(['kind'])
+    const w = await mountView()
+
+    expect(w.find('[data-testid="dashboard-fields-panel"]').exists()).toBe(false)
+    await w.find('[data-testid="dashboard-fields-button"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="dashboard-fields-panel"]').exists()).toBe(true)
+
+    // Enable "sender" (currently off) — persists and updates the store.
+    await w.find('[data-testid="dashboard-field-sender"]').setValue(true)
+    await flushPromises()
+
+    const settingsPut = fetchMock.mock.calls.find(
+      (call) => String(call[0]) === '/api/settings' && (call[1] as RequestInit)?.method === 'PUT',
+    )
+    expect(settingsPut).toBeTruthy()
+    expect(JSON.parse(String((settingsPut![1] as RequestInit).body))).toEqual({
+      dashboard_fields: ['kind', 'sender'],
+    })
+    expect(useAuthStore().dashboardFields).toEqual(['kind', 'sender'])
   })
 
   it('makes the whole card clickable via a stretched title link', async () => {

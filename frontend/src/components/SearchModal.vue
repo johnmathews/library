@@ -126,6 +126,8 @@ function onSubmit(): void {
     dateFrom: draft.dateFrom ?? '',
     dateTo: draft.dateTo ?? '',
     review: current.review, // preserved — modal doesn't manage it
+    sort: current.sort, // preserved — modal doesn't manage it
+    dir: current.dir, // preserved — modal doesn't manage it
     page: 1, // a new search resets paging
   }
 

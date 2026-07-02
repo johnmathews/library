@@ -237,11 +237,12 @@ DEFAULT_DASHBOARD_FIELDS: Final[list[DashboardField]] = [
 
 
 class DashboardPreferences(BaseModel):
-    """Which metadata fields appear on the dashboard tiles (membership only).
+    """Which metadata fields appear on the dashboard tiles, and in what order.
 
-    The list is a set of fields to show, not an ordering: the tile render
-    order is fixed in the frontend (DocumentListView), independent of the
-    order stored here.
+    The list is order-significant: it drives BOTH which fields show AND the
+    order they render in on each card (the frontend DocumentListView renders
+    its card meta row by iterating this list). Fields omitted from the list
+    are hidden.
     """
 
     dashboard_fields: list[DashboardField]
@@ -251,9 +252,10 @@ class DashboardPreferences(BaseModel):
     def _clean(cls, value: object) -> list[DashboardField]:
         """Keep only known field keys, de-duplicated, order preserved.
 
-        Tolerant on purpose: unknown/garbage values are dropped (never a
-        422 or 500), so a hand-edited row or a renamed field can't break
-        the dashboard.
+        Order is preserved because it is meaningful (see the class docstring):
+        the stored sequence is the render order on the card. Tolerant on
+        purpose: unknown/garbage values are dropped (never a 422 or 500), so a
+        hand-edited row or a renamed field can't break the dashboard.
         """
         if not isinstance(value, list):
             return []

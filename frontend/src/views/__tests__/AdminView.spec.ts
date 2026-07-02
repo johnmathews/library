@@ -11,8 +11,22 @@ vi.mock('@/api/admin', () => ({
   updateUser: vi.fn(),
   deleteUser: vi.fn(),
   listRecipients: vi.fn(),
+  createRecipient: vi.fn(),
   renameRecipient: vi.fn(),
   deleteRecipient: vi.fn(),
+  createSender: vi.fn(),
+  renameSender: vi.fn(),
+  deleteSender: vi.fn(),
+  renameKind: vi.fn(),
+  deleteKind: vi.fn(),
+  listCurrencies: vi.fn(),
+  normalizeCurrency: vi.fn(),
+}))
+
+vi.mock('@/api/taxonomy', () => ({
+  listSenders: vi.fn(),
+  listKinds: vi.fn(),
+  createKind: vi.fn(),
 }))
 
 vi.mock('@/composables/taxonomyOptions', () => ({
@@ -20,17 +34,26 @@ vi.mock('@/composables/taxonomyOptions', () => ({
 }))
 
 import {
+  createRecipient,
+  createSender,
   createUser,
+  deleteKind,
   deleteRecipient,
+  deleteSender,
   deleteUser,
   getArchitecture,
   getCoverage,
   getSystemInfo,
+  listCurrencies,
   listRecipients,
   listUsers,
+  normalizeCurrency,
+  renameKind,
   renameRecipient,
+  renameSender,
   updateUser,
 } from '@/api/admin'
+import { createKind, listKinds, listSenders } from '@/api/taxonomy'
 import { refreshTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { ApiError } from '@/api/client'
 import AdminView from '../AdminView.vue'
@@ -133,12 +156,32 @@ const recipientList = [
   { id: 12, name: 'Carol', document_count: 1 },
 ]
 
+const senderList = [
+  { id: 20, name: 'Acme', document_count: 0 },
+  { id: 21, name: 'Globex', document_count: 4 },
+  { id: 22, name: 'Initech', document_count: 2 },
+]
+
+const kindList = [
+  { slug: 'invoice', name: 'Invoice', document_count: 0 },
+  { slug: 'receipt', name: 'Receipt', document_count: 5 },
+  { slug: 'letter', name: 'Letter', document_count: 2 },
+]
+
+const currencyList = [
+  { code: 'EUR', document_count: 9 },
+  { code: 'USD', document_count: 2 },
+]
+
 function seedDefaults(): void {
   vi.mocked(getSystemInfo).mockResolvedValue(systemInfo)
   vi.mocked(getArchitecture).mockResolvedValue(architecture)
   vi.mocked(getCoverage).mockResolvedValue(coverageAvailable)
   vi.mocked(listUsers).mockResolvedValue(structuredClone(userList))
   vi.mocked(listRecipients).mockResolvedValue(structuredClone(recipientList))
+  vi.mocked(listSenders).mockResolvedValue(structuredClone(senderList))
+  vi.mocked(listKinds).mockResolvedValue(structuredClone(kindList))
+  vi.mocked(listCurrencies).mockResolvedValue(structuredClone(currencyList))
 }
 
 function mountView() {
@@ -525,5 +568,281 @@ describe('AdminView', () => {
     await flushPromises()
 
     expect(deleteRecipient).toHaveBeenCalledWith(11, null)
+  })
+
+  it('creates a recipient and refreshes the list and taxonomy cache', async () => {
+    vi.mocked(createRecipient).mockResolvedValue({ id: 13, name: 'Dave' })
+    const wrapper = await openMetadataTab()
+
+    await wrapper.find('[data-testid="recipient-create-input"]').setValue('Dave')
+    await wrapper.find('[data-testid="recipient-create-button"]').trigger('click')
+    await flushPromises()
+
+    expect(createRecipient).toHaveBeenCalledWith('Dave')
+    // listRecipients: once on tab open, once after the successful create.
+    expect(listRecipients).toHaveBeenCalledTimes(2)
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  // --- Metadata tab: senders ------------------------------------------------
+
+  it('loads senders on first opening the Metadata tab, with document counts', async () => {
+    const wrapper = await openMetadataTab()
+
+    expect(listSenders).toHaveBeenCalledTimes(1)
+    const row = wrapper.find('[data-testid="sender-row-21"]')
+    expect(row.text()).toContain('Globex')
+    expect(row.text()).toContain('4 docs')
+  })
+
+  it('renames a sender and refreshes the list and taxonomy cache', async () => {
+    vi.mocked(renameSender).mockResolvedValue({ id: 20, name: 'Acme Corp' })
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="sender-row-20"]')
+    await row.find('[data-testid="sender-rename"]').trigger('click')
+    await wrapper.find('#sender-rename-input-20').setValue('Acme Corp')
+    await wrapper.find('[data-testid="sender-rename-save"]').trigger('click')
+    await flushPromises()
+
+    expect(renameSender).toHaveBeenCalledWith(20, 'Acme Corp', false)
+    expect(listSenders).toHaveBeenCalledTimes(2)
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('shows a merge prompt on a sender 409 collision and merges on confirm', async () => {
+    vi.mocked(renameSender)
+      .mockRejectedValueOnce(
+        new ApiError(409, 'name in use', {
+          detail: 'name in use',
+          target_id: 21,
+          target_name: 'Globex',
+          target_document_count: 4,
+        }),
+      )
+      .mockResolvedValueOnce({ id: 21, name: 'Globex' })
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="sender-row-20"]')
+    await row.find('[data-testid="sender-rename"]').trigger('click')
+    await wrapper.find('#sender-rename-input-20').setValue('Globex')
+    await wrapper.find('[data-testid="sender-rename-save"]').trigger('click')
+    await flushPromises()
+
+    const warning = wrapper.find('[data-testid="sender-merge-warning"]')
+    expect(warning.exists()).toBe(true)
+    expect(warning.text()).toContain('Globex')
+    expect(warning.text()).toContain('4 documents')
+
+    await wrapper.find('[data-testid="sender-merge-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(renameSender).toHaveBeenNthCalledWith(1, 20, 'Globex', false)
+    expect(renameSender).toHaveBeenNthCalledWith(2, 20, 'Globex', true)
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('deletes a zero-document sender after an inline confirm', async () => {
+    vi.mocked(deleteSender).mockResolvedValue()
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="sender-row-20"]')
+    await row.find('[data-testid="sender-delete"]').trigger('click')
+    expect(wrapper.find('[data-testid="sender-reassign-select"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="sender-delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteSender).toHaveBeenCalledWith(20)
+    expect(listSenders).toHaveBeenCalledTimes(2)
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('deletes an in-use sender by reassigning its documents', async () => {
+    vi.mocked(deleteSender).mockResolvedValue()
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="sender-row-21"]')
+    await row.find('[data-testid="sender-delete"]').trigger('click')
+    const select = wrapper.find('[data-testid="sender-reassign-select"]')
+    expect(select.exists()).toBe(true)
+    await wrapper.find('#sender-reassign-21').setValue('22')
+    await wrapper.find('[data-testid="sender-delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteSender).toHaveBeenCalledWith(21, 22)
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('creates a sender and refreshes the list', async () => {
+    vi.mocked(createSender).mockResolvedValue({ id: 23, name: 'Umbrella' })
+    const wrapper = await openMetadataTab()
+
+    await wrapper.find('[data-testid="sender-create-input"]').setValue('Umbrella')
+    await wrapper.find('[data-testid="sender-create-button"]').trigger('click')
+    await flushPromises()
+
+    expect(createSender).toHaveBeenCalledWith('Umbrella')
+    expect(listSenders).toHaveBeenCalledTimes(2)
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  // --- Metadata tab: kinds --------------------------------------------------
+
+  it('loads kinds on first opening the Metadata tab, with document counts', async () => {
+    const wrapper = await openMetadataTab()
+
+    expect(listKinds).toHaveBeenCalledTimes(1)
+    const row = wrapper.find('[data-testid="kind-row-receipt"]')
+    expect(row.text()).toContain('Receipt')
+    expect(row.text()).toContain('5 docs')
+  })
+
+  it('renames a kind (name-only) and refreshes the list and taxonomy cache', async () => {
+    vi.mocked(renameKind).mockResolvedValue({ slug: 'invoice', name: 'Tax invoice' })
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="kind-row-invoice"]')
+    await row.find('[data-testid="kind-rename"]').trigger('click')
+    await wrapper.find('#kind-rename-input-invoice').setValue('Tax invoice')
+    await wrapper.find('[data-testid="kind-rename-save"]').trigger('click')
+    await flushPromises()
+
+    expect(renameKind).toHaveBeenCalledWith('invoice', 'Tax invoice')
+    expect(listKinds).toHaveBeenCalledTimes(2)
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('surfaces a kind rename 409 as a row error (no merge prompt)', async () => {
+    vi.mocked(renameKind).mockRejectedValue(
+      new ApiError(409, 'a kind named Receipt already exists', {
+        detail: 'a kind named Receipt already exists',
+        target_slug: 'receipt',
+        target_name: 'Receipt',
+      }),
+    )
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="kind-row-invoice"]')
+    await row.find('[data-testid="kind-rename"]').trigger('click')
+    await wrapper.find('#kind-rename-input-invoice').setValue('Receipt')
+    await wrapper.find('[data-testid="kind-rename-save"]').trigger('click')
+    await flushPromises()
+
+    // No merge UI for kinds — the collision is a hard row error.
+    expect(wrapper.find('[data-testid="kind-merge-warning"]').exists()).toBe(false)
+    const err = wrapper.find('[data-testid="kind-error-invoice"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('already exists')
+  })
+
+  it('deletes an in-use kind by reassigning its documents by slug', async () => {
+    vi.mocked(deleteKind).mockResolvedValue()
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="kind-row-receipt"]')
+    await row.find('[data-testid="kind-delete"]').trigger('click')
+    const select = wrapper.find('[data-testid="kind-reassign-select"]')
+    expect(select.exists()).toBe(true)
+    await wrapper.find('#kind-reassign-receipt').setValue('letter')
+    await wrapper.find('[data-testid="kind-delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteKind).toHaveBeenCalledWith('receipt', 'letter')
+    expect(refreshTaxonomyOptions).toHaveBeenCalledTimes(1)
+  })
+
+  it('deletes a zero-document kind after an inline confirm', async () => {
+    vi.mocked(deleteKind).mockResolvedValue()
+    const wrapper = await openMetadataTab()
+
+    const row = wrapper.find('[data-testid="kind-row-invoice"]')
+    await row.find('[data-testid="kind-delete"]').trigger('click')
+    expect(wrapper.find('[data-testid="kind-reassign-select"]').exists()).toBe(false)
+    await wrapper.find('[data-testid="kind-delete-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(deleteKind).toHaveBeenCalledWith('invoice')
+    expect(listKinds).toHaveBeenCalledTimes(2)
+  })
+
+  it('creates a kind and surfaces a 409 near-duplicate error', async () => {
+    vi.mocked(createKind).mockRejectedValue(
+      new ApiError(409, 'similar to an existing kind', {
+        detail: 'similar to an existing kind',
+        existing_slug: 'receipt',
+        existing_name: 'Receipt',
+      }),
+    )
+    const wrapper = await openMetadataTab()
+
+    await wrapper.find('[data-testid="kind-create-input"]').setValue('Reciept')
+    await wrapper.find('[data-testid="kind-create-button"]').trigger('click')
+    await flushPromises()
+
+    expect(createKind).toHaveBeenCalledWith('Reciept')
+    const err = wrapper.find('[data-testid="kind-create-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('similar to an existing kind')
+  })
+
+  // --- Metadata tab: currencies ---------------------------------------------
+
+  it('lists currencies in use on opening the Metadata tab, with counts', async () => {
+    const wrapper = await openMetadataTab()
+    expect(listCurrencies).toHaveBeenCalledTimes(1)
+    const row = wrapper.find('[data-testid="currency-row-EUR"]')
+    expect(row.text()).toContain('EUR')
+    expect(row.text()).toContain('9')
+  })
+
+  it('normalises a currency after a confirm step and surfaces the FX warning', async () => {
+    vi.mocked(normalizeCurrency).mockResolvedValue({
+      from_code: 'EUR',
+      to_code: 'GBP',
+      counts: { documents: 9 },
+      fx_rate_missing: true,
+    })
+    const wrapper = await openMetadataTab()
+
+    await wrapper.find('#currency-normalize-from').setValue('EUR')
+    await wrapper.find('[data-testid="currency-normalize-to"]').setValue('gbp')
+    await wrapper.find('[data-testid="currency-normalize-button"]').trigger('click')
+    await flushPromises()
+
+    // A confirm step appears first; the request is not sent yet.
+    expect(wrapper.find('[data-testid="currency-normalize-confirm-box"]').exists()).toBe(true)
+    expect(normalizeCurrency).not.toHaveBeenCalled()
+
+    await wrapper.find('[data-testid="currency-normalize-confirm"]').trigger('click')
+    await flushPromises()
+
+    expect(normalizeCurrency).toHaveBeenCalledWith('EUR', 'gbp')
+    expect(wrapper.find('[data-testid="currency-normalize-result"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="currency-fx-warning"]').exists()).toBe(true)
+    // The list reloads: once on open, once after the rename.
+    expect(listCurrencies).toHaveBeenCalledTimes(2)
+  })
+
+  it('refuses on an override collision and lists the conflicts (nothing reloaded)', async () => {
+    vi.mocked(normalizeCurrency).mockRejectedValue(
+      new ApiError(409, 'would collide with overrides', {
+        detail: 'would collide with overrides',
+        conflicts: [{ table: 'series_meta_overrides', sender_id: 3, kind_id: 5 }],
+      }),
+    )
+    const wrapper = await openMetadataTab()
+
+    await wrapper.find('#currency-normalize-from').setValue('EUR')
+    await wrapper.find('[data-testid="currency-normalize-to"]').setValue('USD')
+    await wrapper.find('[data-testid="currency-normalize-button"]').trigger('click')
+    await flushPromises()
+    await wrapper.find('[data-testid="currency-normalize-confirm"]').trigger('click')
+    await flushPromises()
+
+    const conflict = wrapper.find('[data-testid="currency-conflict"]')
+    expect(conflict.exists()).toBe(true)
+    expect(conflict.text()).toContain('series_meta_overrides')
+    // A refused rename must not have reloaded the list (still just the open call).
+    expect(listCurrencies).toHaveBeenCalledTimes(1)
   })
 })

@@ -17,6 +17,7 @@ import { useIntersectionObserver, useStorage } from '@vueuse/core'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { AppBadge, AppBanner } from '@/components/app'
 import DocumentFilterBar from '@/components/DocumentFilterBar.vue'
+import DashboardFieldsMenu from '@/components/DashboardFieldsMenu.vue'
 import {
   DOCUMENT_LANGUAGES,
   listDocuments,
@@ -29,8 +30,15 @@ import { renderSnippet } from '@/utils/snippet'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import { useJobsStore } from '@/stores/jobs'
-import type { DashboardField } from '@/api/settings'
-import { parseDocumentQuery, hasActiveFilters } from '@/utils/documentQuery'
+import {
+  parseDocumentQuery,
+  hasActiveFilters,
+  buildDocumentQuery,
+  DEFAULT_SORT,
+  DEFAULT_SORT_DIRECTION,
+  type SortField,
+  type SortDirection,
+} from '@/utils/documentQuery'
 
 const PAGE_SIZE = 25
 const MAX_TAGS = 4
@@ -40,10 +48,6 @@ const router = useRouter()
 
 const auth = useAuthStore()
 const jobsStore = useJobsStore()
-
-function shows(field: DashboardField): boolean {
-  return auth.dashboardFields.includes(field)
-}
 
 // Full-width mode fills the tile and crops the lower part of the page;
 // whole-page mode letterboxes the entire first page. Box height is unchanged.
@@ -110,6 +114,8 @@ function buildFilters(
     review_status: (state.review || undefined) as DocumentListItem['review_status'] | undefined,
     date_from: state.dateFrom || undefined,
     date_to: state.dateTo || undefined,
+    sort: state.sort !== DEFAULT_SORT ? state.sort : undefined,
+    direction: state.dir !== DEFAULT_SORT_DIRECTION ? state.dir : undefined,
     limit,
     offset,
   }
@@ -281,6 +287,29 @@ const gridCols = useStorage<string>('library:doc-grid-cols', 'auto')
 const gridColsStyle = computed(() =>
   gridCols.value === 'auto' ? {} : { '--doc-grid-cols': gridCols.value },
 )
+
+// --- Sort control ----------------------------------------------------------
+// Sort round-trips through the URL like the filters, but is not a "filter"
+// (excluded from hasActiveFilters). It has no effect while a search query is
+// present — the backend orders by relevance rank — so the control is disabled
+// then. Changing sort preserves the other filters and resets to page 1.
+const SORT_OPTIONS: { value: SortField; label: string }[] = [
+  { value: 'document_date', label: 'Document date' },
+  { value: 'added_date', label: 'Added date' },
+]
+const sortDisabled = computed(() => Boolean(applied.value.q))
+
+function setSort(sort: SortField, dir: SortDirection): void {
+  applyFilterQuery(buildDocumentQuery({ ...applied.value, sort, dir }, 1))
+}
+
+function onSortFieldChange(event: Event): void {
+  setSort((event.target as HTMLSelectElement).value as SortField, applied.value.dir)
+}
+
+function toggleSortDirection(): void {
+  setSort(applied.value.sort, applied.value.dir === 'asc' ? 'desc' : 'asc')
+}
 </script>
 
 <template>
@@ -292,7 +321,7 @@ const gridColsStyle = computed(() =>
 
   <DocumentFilterBar :applied="applied" @apply="applyFilterQuery" @clear="clearFilters" />
 
-  <div class="flex flex-wrap gap-2 mb-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
     <button
       type="button"
       :class="[
@@ -306,6 +335,7 @@ const gridColsStyle = computed(() =>
     >
       Needs review
     </button>
+    <DashboardFieldsMenu />
   </div>
 
   <div
@@ -321,19 +351,52 @@ const gridColsStyle = computed(() =>
       <p class="text-sm text-gray-500 dark:text-gray-400" data-testid="result-count">
         {{ total }} {{ total === 1 ? 'document' : 'documents' }}
       </p>
-      <label class="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-        <span class="hidden sm:inline">Tiles per row</span>
-        <select
-          v-model="gridCols"
-          data-testid="grid-cols-select"
-          aria-label="Tiles per row"
-          class="form-select py-1 text-sm"
+      <div class="flex items-end gap-3">
+        <div
+          class="flex flex-col gap-1"
+          :title="sortDisabled ? 'Sorted by relevance while searching' : undefined"
         >
-          <option v-for="opt in GRID_COLS_OPTIONS" :key="opt" :value="opt">
-            {{ opt === 'auto' ? 'Auto' : opt }}
-          </option>
-        </select>
-      </label>
+          <span class="text-xs font-medium uppercase tracking-wide text-gray-400">Sort</span>
+          <div class="flex items-center gap-1.5">
+            <select
+              :value="applied.sort"
+              :disabled="sortDisabled"
+              data-testid="sort-field-select"
+              aria-label="Sort field"
+              class="form-select py-1 text-sm disabled:opacity-50"
+              @change="onSortFieldChange"
+            >
+              <option v-for="opt in SORT_OPTIONS" :key="opt.value" :value="opt.value">
+                {{ opt.label }}
+              </option>
+            </select>
+            <button
+              type="button"
+              :disabled="sortDisabled"
+              data-testid="sort-dir-toggle"
+              :aria-label="applied.dir === 'asc' ? 'Ascending, click for descending' : 'Descending, click for ascending'"
+              :aria-pressed="applied.dir === 'asc'"
+              class="inline-flex items-center rounded-md border border-gray-300 dark:border-gray-600 px-2 py-1 text-sm text-violet-600 dark:text-violet-400 hover:bg-violet-50 dark:hover:bg-violet-400/10 disabled:opacity-50 disabled:hover:bg-transparent"
+              @click="toggleSortDirection"
+            >
+              {{ applied.dir === 'asc' ? '↑' : '↓' }}
+            </button>
+          </div>
+        </div>
+        <label class="flex flex-col gap-1 text-sm text-gray-500 dark:text-gray-400">
+          <span class="hidden sm:inline text-xs font-medium uppercase tracking-wide text-gray-400">Tiles per row</span>
+          <select
+            v-model="gridCols"
+            data-testid="grid-cols-select"
+            aria-label="Tiles per row"
+            class="form-select py-1 text-sm"
+          >
+            <option v-for="opt in GRID_COLS_OPTIONS" :key="opt" :value="opt">
+              {{ opt === 'auto' ? 'Auto' : opt }}
+            </option>
+          </select>
+        </label>
+      </div>
     </div>
 
     <div
@@ -451,50 +514,58 @@ const gridColsStyle = computed(() =>
               {{ item.title ?? 'Untitled document' }}
             </RouterLink>
           </h2>
+          <!-- Card metadata rendered in the user's chosen field order (stored per
+               user in dashboard_fields). The "Needs review" badge is pinned first
+               and is NOT part of the toggleable/orderable field set. -->
           <p class="flex flex-wrap items-center gap-2 app-doc-card__meta">
-            <AppBadge v-if="shows('kind') && item.kind" colour="blue">{{ item.kind.name }}</AppBadge>
-            <AppBadge v-if="shows('language') && item.language !== 'unknown'" colour="grey">
-              {{ languageName(item.language) }}
-            </AppBadge>
-            <template v-if="shows('status')">
-              <AppBadge v-if="item.status === 'failed'" colour="red">Failed</AppBadge>
-              <AppBadge v-else-if="item.status !== 'indexed'" colour="yellow">Processing</AppBadge>
-            </template>
             <AppBadge v-if="item.review_status === 'needs_review'" colour="yellow" data-testid="review-badge">Needs review</AppBadge>
-            <AppBadge v-if="shows('file_type')" colour="grey">{{ fileTypeLabel(item) }}</AppBadge>
-            <span
-              v-if="shows('sender') && item.sender"
-              class="app-doc-card__sender text-sm text-gray-500 dark:text-gray-400"
-            >
-              {{ item.sender.name }}
-            </span>
-            <span
-              v-if="shows('date') && item.document_date"
-              class="app-doc-card__date text-sm text-gray-500 dark:text-gray-400"
-            >
-              {{ formatDate(item.document_date) }}
-            </span>
-            <span
-              v-if="shows('amount') && amountLabels.get(item.id)"
-              class="app-doc-card__amount text-sm text-gray-500 dark:text-gray-400"
-            >
-              {{ amountLabels.get(item.id) }}
-            </span>
-          </p>
-          <p
-            v-if="shows('tags') && item.tags.length"
-            class="flex flex-wrap items-center gap-2 mt-2 app-doc-card__tags"
-            data-testid="doc-tags"
-          >
-            <AppBadge v-for="tag in item.tags.slice(0, MAX_TAGS)" :key="tag.slug" colour="grey">
-              {{ tag.name }}
-            </AppBadge>
-            <span
-              v-if="item.tags.length > MAX_TAGS"
-              class="app-doc-card__tags-more text-sm text-gray-500 dark:text-gray-400"
-            >
-              +{{ item.tags.length - MAX_TAGS }}
-            </span>
+            <template v-for="field in auth.dashboardFields" :key="field">
+              <AppBadge v-if="field === 'kind' && item.kind" colour="blue">{{ item.kind.name }}</AppBadge>
+              <AppBadge
+                v-else-if="field === 'language' && item.language !== 'unknown'"
+                colour="grey"
+              >
+                {{ languageName(item.language) }}
+              </AppBadge>
+              <template v-else-if="field === 'status'">
+                <AppBadge v-if="item.status === 'failed'" colour="red">Failed</AppBadge>
+                <AppBadge v-else-if="item.status !== 'indexed'" colour="yellow">Processing</AppBadge>
+              </template>
+              <AppBadge v-else-if="field === 'file_type'" colour="grey">{{ fileTypeLabel(item) }}</AppBadge>
+              <span
+                v-else-if="field === 'sender' && item.sender"
+                class="app-doc-card__sender text-sm text-gray-500 dark:text-gray-400"
+              >
+                {{ item.sender.name }}
+              </span>
+              <span
+                v-else-if="field === 'date' && item.document_date"
+                class="app-doc-card__date text-sm text-gray-500 dark:text-gray-400"
+              >
+                {{ formatDate(item.document_date) }}
+              </span>
+              <span
+                v-else-if="field === 'amount' && amountLabels.get(item.id)"
+                class="app-doc-card__amount text-sm text-gray-500 dark:text-gray-400"
+              >
+                {{ amountLabels.get(item.id) }}
+              </span>
+              <span
+                v-else-if="field === 'tags' && item.tags.length"
+                class="inline-flex flex-wrap items-center gap-2 app-doc-card__tags"
+                data-testid="doc-tags"
+              >
+                <AppBadge v-for="tag in item.tags.slice(0, MAX_TAGS)" :key="tag.slug" colour="grey">
+                  {{ tag.name }}
+                </AppBadge>
+                <span
+                  v-if="item.tags.length > MAX_TAGS"
+                  class="app-doc-card__tags-more text-sm text-gray-500 dark:text-gray-400"
+                >
+                  +{{ item.tags.length - MAX_TAGS }}
+                </span>
+              </span>
+            </template>
           </p>
           <p
             v-if="item.summary && !(applied.q && item.snippet)"

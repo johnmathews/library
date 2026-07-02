@@ -561,3 +561,246 @@ def test_recipient_mgmt_rejects_non_admin(api_client: TestClient) -> None:
 def test_recipient_mgmt_rejects_anonymous(anon_client: TestClient) -> None:
     assert anon_client.patch("/api/admin/recipients/1", json={"name": "x"}).status_code == 401
     assert anon_client.delete("/api/admin/recipients/1").status_code == 401
+
+
+# ------------------------------------------------ recipient create (W4)
+
+
+def test_create_recipient_new_then_dedupes(admin_client: TestClient, api_database_url: str) -> None:
+    resp = admin_client.post("/api/admin/recipients", json={"name": "W4 New Recipient"})
+    assert resp.status_code == 201, resp.text
+    rid = resp.json()["id"]
+    assert resp.json()["name"] == "W4 New Recipient"
+    assert _recipients(admin_client)["W4 New Recipient"]["id"] == rid
+
+    # Case-insensitive match returns the existing row with 200 (no duplicate).
+    again = admin_client.post("/api/admin/recipients", json={"name": "w4 new recipient"})
+    assert again.status_code == 200, again.text
+    assert again.json()["id"] == rid
+
+
+def test_create_recipient_empty_422(admin_client: TestClient) -> None:
+    assert admin_client.post("/api/admin/recipients", json={"name": "   "}).status_code == 422
+
+
+# ------------------------------------------------------- sender management (W4)
+
+
+def _senders(client: TestClient) -> dict[str, dict[str, object]]:
+    """Map sender name -> {id, name, document_count} from GET /api/senders."""
+    response = client.get("/api/senders")
+    assert response.status_code == 200, response.text
+    return {item["name"]: item for item in response.json()}
+
+
+def test_create_sender_new_then_dedupes(admin_client: TestClient) -> None:
+    resp = admin_client.post("/api/admin/senders", json={"name": "W4 Sender Co"})
+    assert resp.status_code == 201, resp.text
+    sid = resp.json()["id"]
+    again = admin_client.post("/api/admin/senders", json={"name": "w4 sender co"})
+    assert again.status_code == 200, again.text
+    assert again.json()["id"] == sid
+
+
+def test_create_sender_empty_422(admin_client: TestClient) -> None:
+    assert admin_client.post("/api/admin/senders", json={"name": ""}).status_code == 422
+
+
+def test_rename_sender_no_collision(admin_client: TestClient, api_database_url: str) -> None:
+    seed_document(api_database_url, "w4-s-rename", sender_name="W4 S Old")
+    sid = _senders(admin_client)["W4 S Old"]["id"]
+    resp = admin_client.patch(f"/api/admin/senders/{sid}", json={"name": "W4 S New"})
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {"id": sid, "name": "W4 S New"}
+    senders = _senders(admin_client)
+    assert "W4 S Old" not in senders
+    assert senders["W4 S New"]["id"] == sid
+
+
+def test_rename_sender_collision_then_merge(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    seed_document(api_database_url, "w4-s-src", sender_name="W4 S Src")
+    seed_document(api_database_url, "w4-s-tgt-1", sender_name="W4 S Tgt")
+    seed_document(api_database_url, "w4-s-tgt-2", sender_name="W4 S Tgt")
+    senders = _senders(admin_client)
+    src = senders["W4 S Src"]["id"]
+    tgt = senders["W4 S Tgt"]["id"]
+
+    conflict = admin_client.patch(f"/api/admin/senders/{src}", json={"name": "w4 s tgt"})
+    assert conflict.status_code == 409, conflict.text
+    body = conflict.json()
+    assert body["target_id"] == tgt
+    assert body["target_name"] == "W4 S Tgt"
+    assert body["target_document_count"] == 2
+    assert "W4 S Src" in _senders(admin_client)  # untouched
+
+    merged = admin_client.patch(
+        f"/api/admin/senders/{src}", json={"name": "W4 S Tgt", "merge": True}
+    )
+    assert merged.status_code == 200, merged.text
+    assert merged.json() == {"id": tgt, "name": "W4 S Tgt"}
+    senders2 = _senders(admin_client)
+    assert "W4 S Src" not in senders2
+    assert senders2["W4 S Tgt"]["document_count"] == 3
+
+
+def test_delete_sender_zero_docs(admin_client: TestClient, api_database_url: str) -> None:
+    doc_id = seed_document(api_database_url, "w4-s-del-zero", sender_name="W4 S Del Zero")
+    assert admin_client.delete(f"/api/documents/{doc_id}").status_code == 204
+    sid = _senders(admin_client)["W4 S Del Zero"]["id"]
+    assert admin_client.delete(f"/api/admin/senders/{sid}").status_code == 204
+    assert "W4 S Del Zero" not in _senders(admin_client)
+
+
+def test_delete_sender_in_use_without_target_409(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    seed_document(api_database_url, "w4-s-inuse-1", sender_name="W4 S InUse")
+    seed_document(api_database_url, "w4-s-inuse-2", sender_name="W4 S InUse")
+    sid = _senders(admin_client)["W4 S InUse"]["id"]
+    resp = admin_client.delete(f"/api/admin/senders/{sid}")
+    assert resp.status_code == 409, resp.text
+    assert resp.json()["document_count"] == 2
+    assert "W4 S InUse" in _senders(admin_client)
+
+
+def test_delete_sender_in_use_with_target_reassigns(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    src_doc = seed_document(api_database_url, "w4-s-move-src", sender_name="W4 S Move Src")
+    seed_document(api_database_url, "w4-s-move-tgt", sender_name="W4 S Move Tgt")
+    senders = _senders(admin_client)
+    src = senders["W4 S Move Src"]["id"]
+    tgt = senders["W4 S Move Tgt"]["id"]
+    resp = admin_client.delete(f"/api/admin/senders/{src}?reassign_to={tgt}")
+    assert resp.status_code == 204, resp.text
+    senders2 = _senders(admin_client)
+    assert "W4 S Move Src" not in senders2
+    assert senders2["W4 S Move Tgt"]["document_count"] == 2
+    assert admin_client.get(f"/api/documents/{src_doc}").json()["sender"]["id"] == tgt
+
+
+def test_delete_sender_in_use_with_null_target_nulls(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    doc_id = seed_document(api_database_url, "w4-s-null", sender_name="W4 S Null")
+    sid = _senders(admin_client)["W4 S Null"]["id"]
+    resp = admin_client.delete(f"/api/admin/senders/{sid}?reassign_to=")
+    assert resp.status_code == 204, resp.text
+    assert "W4 S Null" not in _senders(admin_client)
+    assert admin_client.get(f"/api/documents/{doc_id}").json()["sender"] is None
+
+
+def test_sender_mgmt_errors(admin_client: TestClient, api_database_url: str) -> None:
+    seed_document(api_database_url, "w4-s-self", sender_name="W4 S Self")
+    sid = _senders(admin_client)["W4 S Self"]["id"]
+    assert admin_client.delete(f"/api/admin/senders/{sid}?reassign_to={sid}").status_code == 400
+    assert admin_client.patch(f"/api/admin/senders/{sid}", json={"name": "  "}).status_code == 400
+    assert admin_client.patch("/api/admin/senders/99999999", json={"name": "X"}).status_code == 404
+    assert admin_client.delete("/api/admin/senders/99999999").status_code == 404
+
+
+def test_sender_mgmt_rejects_non_admin_and_anon(
+    api_client: TestClient, anon_client: TestClient
+) -> None:
+    assert api_client.post("/api/admin/senders", json={"name": "x"}).status_code == 403
+    assert api_client.patch("/api/admin/senders/1", json={"name": "x"}).status_code == 403
+    assert api_client.delete("/api/admin/senders/1").status_code == 403
+    assert anon_client.post("/api/admin/senders", json={"name": "x"}).status_code == 401
+
+
+# --------------------------------------------------------- kind management (W4)
+
+
+def _kinds(client: TestClient) -> dict[str, dict[str, object]]:
+    """Map kind slug -> {slug, name, document_count} from GET /api/kinds."""
+    response = client.get("/api/kinds")
+    assert response.status_code == 200, response.text
+    return {item["slug"]: item for item in response.json()}
+
+
+def _make_kind(client: TestClient, name: str) -> str:
+    """Create a kind via POST /api/kinds and return its slug."""
+    resp = client.post("/api/kinds", json={"name": name})
+    assert resp.status_code in (200, 201), resp.text
+    return resp.json()["slug"]
+
+
+def test_rename_kind_name_only_slug_immutable(admin_client: TestClient) -> None:
+    slug = _make_kind(admin_client, "W4 Kind Alpha")
+    resp = admin_client.patch(f"/api/admin/kinds/{slug}", json={"name": "W4 Kind Renamed"})
+    assert resp.status_code == 200, resp.text
+    # Slug is unchanged; only the display name updated. Names are standardised to
+    # sentence case (matching create_kind and the seeded convention).
+    assert resp.json() == {"slug": slug, "name": "W4 kind renamed"}
+    assert _kinds(admin_client)[slug]["name"] == "W4 kind renamed"
+
+
+def test_rename_kind_name_collision_409(admin_client: TestClient) -> None:
+    slug_a = _make_kind(admin_client, "W4 Kind Bravo")
+    _make_kind(admin_client, "W4 Kind Charlie")
+    # Renaming Bravo to Charlie's name collides (no kind-merge). Names are
+    # standardised, so the stored/target name is sentence-cased.
+    resp = admin_client.patch(f"/api/admin/kinds/{slug_a}", json={"name": "W4 Kind Charlie"})
+    assert resp.status_code == 409, resp.text
+    body = resp.json()
+    assert body["target_name"] == "W4 kind charlie"
+    assert isinstance(body["target_slug"], str)
+
+
+def test_rename_kind_errors(admin_client: TestClient) -> None:
+    slug = _make_kind(admin_client, "W4 Kind Delta")
+    assert admin_client.patch(f"/api/admin/kinds/{slug}", json={"name": " "}).status_code == 400
+    assert (
+        admin_client.patch("/api/admin/kinds/no-such-kind", json={"name": "X"}).status_code == 404
+    )
+
+
+def test_delete_kind_zero_docs(admin_client: TestClient) -> None:
+    slug = _make_kind(admin_client, "W4 Kind Echo")
+    assert admin_client.delete(f"/api/admin/kinds/{slug}").status_code == 204
+    assert slug not in _kinds(admin_client)
+
+
+def test_delete_kind_in_use_flows(admin_client: TestClient, api_database_url: str) -> None:
+    src_slug = _make_kind(admin_client, "W4 Kind Foxtrot")
+    tgt_slug = _make_kind(admin_client, "W4 Kind Golf")
+    doc_id = seed_document(api_database_url, "w4-k-move", kind_slug=src_slug)
+
+    # In use without a target -> 409.
+    conflict = admin_client.delete(f"/api/admin/kinds/{src_slug}")
+    assert conflict.status_code == 409, conflict.text
+    assert conflict.json()["document_count"] == 1
+
+    # Reassign to another kind by slug -> 204, doc moves.
+    resp = admin_client.delete(f"/api/admin/kinds/{src_slug}?reassign_to={tgt_slug}")
+    assert resp.status_code == 204, resp.text
+    assert src_slug not in _kinds(admin_client)
+    assert admin_client.get(f"/api/documents/{doc_id}").json()["kind"]["slug"] == tgt_slug
+
+
+def test_delete_kind_null_target_and_self_and_unknown(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    slug = _make_kind(admin_client, "W4 Kind Hotel")
+    doc_id = seed_document(api_database_url, "w4-k-null", kind_slug=slug)
+    # self-reassign -> 400
+    assert admin_client.delete(f"/api/admin/kinds/{slug}?reassign_to={slug}").status_code == 400
+    # unknown reassignment target -> 404
+    assert (
+        admin_client.delete(f"/api/admin/kinds/{slug}?reassign_to=no-such-kind").status_code == 404
+    )
+    # explicit null -> nulls the doc's kind, then deletes
+    resp = admin_client.delete(f"/api/admin/kinds/{slug}?reassign_to=")
+    assert resp.status_code == 204, resp.text
+    assert admin_client.get(f"/api/documents/{doc_id}").json()["kind"] is None
+    assert admin_client.delete("/api/admin/kinds/no-such-kind").status_code == 404
+
+
+def test_kind_mgmt_rejects_non_admin_and_anon(
+    api_client: TestClient, anon_client: TestClient
+) -> None:
+    assert api_client.patch("/api/admin/kinds/invoice", json={"name": "x"}).status_code == 403
+    assert api_client.delete("/api/admin/kinds/invoice").status_code == 403
+    assert anon_client.delete("/api/admin/kinds/invoice").status_code == 401

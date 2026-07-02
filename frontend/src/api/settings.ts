@@ -2,11 +2,12 @@
 import { apiFetch } from './client'
 
 /**
- * The selectable dashboard tile fields. This array is the single frontend
- * source of truth for the Settings page's checkbox list — the field keys,
- * their display labels, and the checkbox order. It does NOT define the
- * dashboard tile render order: that order is fixed in DocumentListView's
- * template, independent of this list.
+ * The catalog of dashboard tile fields: the field keys and their display
+ * labels. This is the frontend source of truth for the Fields picker and the
+ * Settings checkbox list. The *stored* per-user list (`dashboard_fields`)
+ * determines BOTH which fields show AND the order they render in on the card
+ * (DocumentListView drives its meta row from that ordered list). The order of
+ * this catalog is only the default catalog order used to seed the picker.
  */
 export const DASHBOARD_FIELDS = [
   { value: 'kind', text: 'Document type' },
@@ -20,6 +21,20 @@ export const DASHBOARD_FIELDS = [
 ] as const
 
 export type DashboardField = (typeof DASHBOARD_FIELDS)[number]['value']
+
+/**
+ * The default enabled dashboard fields, in render order. Mirrors the backend's
+ * DEFAULT_DASHBOARD_FIELDS (schemas.py) — amount and file_type are off by
+ * default. Used by the "Reset to defaults" action.
+ */
+export const DEFAULT_DASHBOARD_FIELDS: DashboardField[] = [
+  'kind',
+  'sender',
+  'tags',
+  'date',
+  'language',
+  'status',
+]
 
 /**
  * The page-canvas tones a user can pick (Settings → Appearance). The `swatch`

@@ -117,10 +117,16 @@ ingestion semantics are documented in [ingestion.md](ingestion.md).
 | `date_from`, `date_to` | date | Inclusive bounds on `document_date` |
 | `review_status` | enum | `verified` / `needs_review` / `unreviewed` — filter by extraction-quality review state |
 | `source` | enum | `upload` / `consume` / `email` / `api` / `mcp` / `import` / `note` |
+| `sort` | enum | `document_date` (default) / `added_date`. Field the non-search list is ordered by. **Ignored when `q` is set** — search always orders by relevance rank |
+| `direction` | enum | `desc` (default) / `asc`. Direction for `sort`. Ignored when `q` is set |
 | `limit` | int | Page size, default 25, max 100 |
 | `offset` | int | Rows to skip, default 0 |
 
-All filters compose (AND), including with `q`.
+All filters compose (AND), including with `q`. Ordering: without `q`, results
+are sorted by `sort`/`direction` (default `document_date desc`, with unknown
+dates always last, then `created_at`, then `id`); `added_date` sorts by the
+row's `created_at`. With `q` present, relevance rank always wins and
+`sort`/`direction` are ignored.
 
 ### 1.3.2 Response
 
@@ -1194,3 +1200,81 @@ All reassignments move **every** document, soft-deleted included. Responses:
   is flat (top-level fields, returned via `JSONResponse`):
   `{"detail": "…", "document_count": 4}`.
 - **`422`** → `reassign_to` was neither an integer, empty, nor `null`.
+
+### 1.18.3 `POST /api/admin/recipients` — create
+
+Body `{name}` (trimmed, ≤255). Creates a recipient, deduping
+case-insensitively. **`201`** → `{id, name}` for a new recipient; **`200`** →
+the existing `{id, name}` when the name already exists (no duplicate is made);
+**`422`** → blank name.
+
+### 1.18.4 Senders — `POST` / `PATCH` / `DELETE /api/admin/senders`
+
+Senders mirror recipients exactly (same id-keyed rename/merge and
+reassign-then-delete contract; `Document.sender_id` is nullable `ON DELETE SET
+NULL`, so documents are never deleted — only their pointer nulled):
+
+- **`POST /api/admin/senders`** `{name}` → create/dedupe (`201` new, `200`
+  existing, `422` blank), returns `{id, name}`.
+- **`PATCH /api/admin/senders/{id}`** `{name, merge?}` → rename in place (`200`),
+  or on a case-insensitive collision with another sender return `409`
+  `{detail, target_id, target_name, target_document_count}`; re-send with
+  `merge: true` to fold this sender into the target. `400` blank, `404` unknown.
+- **`DELETE /api/admin/senders/{id}?reassign_to=…`** → three-state `reassign_to`
+  exactly as recipients (omitted/`<id>`/empty). `204` deleted, `400`
+  self-reassign, `404` unknown sender or target, `409` `{detail, document_count}`
+  in-use without a target, `422` non-integer `reassign_to`.
+
+### 1.18.5 Kinds — `PATCH` / `DELETE /api/admin/kinds/{slug}`
+
+Kinds are keyed by their **stable, unique `slug`**. (Create already exists at the
+public `POST /api/kinds`, §1.8.4.1.)
+
+- **`PATCH /api/admin/kinds/{slug}`** `{name}` → rename the **display name only**;
+  the slug never changes (anything keyed on it keeps working). The name is
+  standardised to sentence case (matching `create_kind`). There is **no merge**:
+  a case-insensitive name collision with another kind is refused with `409`
+  `{detail, target_slug, target_name}`. `400` blank name, `404` unknown slug.
+- **`DELETE /api/admin/kinds/{slug}?reassign_to=…`** → reassign-then-delete, but
+  the target is a **kind slug** (not an id): omitted → `204` if unused / `409`
+  `{detail, document_count}` if in use; `=<slug>` → move documents onto that kind,
+  then delete; `=` (empty/`null`) → null the kind on its documents, then delete.
+  `400` self-reassign, `404` unknown kind or target.
+
+All reference mutations above (senders/kinds/recipients, create/rename/delete)
+serialise on a shared transaction-scoped **advisory lock**, so concurrent admin
+edits (e.g. two merges into the same target) can't interleave.
+
+### 1.18.6 Currencies — `GET /api/admin/currencies`, `POST /api/admin/currencies/normalize`
+
+Currency is free-text (no reference table) but is part of **series identity**, so
+normalising a code is a series-aware whole-store rewrite, not a table CRUD.
+
+- **`GET /api/admin/currencies`** → `[{code, document_count}, …]`: the distinct
+  currency codes on non-deleted documents, with counts, ordered by code.
+- **`POST /api/admin/currencies/normalize`** `{from_code, to_code}` → rename
+  `from_code` to `to_code` everywhere. Both codes are trimmed and upper-cased
+  before comparison and must match `^[A-Z]{3}$`; the response echoes the
+  normalised (upper-case) codes. On success (**`200`**):
+
+  ```json
+  {"from_code": "USD", "to_code": "EUR", "counts": {"documents": 12, "series_insights": 2,
+   "series_insights_merged": 1, "series_membership_overrides": 0, "series_meta_overrides": 1,
+   "authored_series": 1, "authored_series_suggestions": 0}, "fx_rate_missing": true}
+  ```
+
+  What it touches (all in one transaction, under a dedicated advisory lock):
+  `documents`, `authored_series`, `authored_series_suggestions` are plain
+  updates; `series_insights` is a recomputable cache, so a `from_code` row that
+  would collide with an existing `to_code` bucket is **dropped** (survivor kept,
+  counted as `series_insights_merged`) and the rest updated; the two **override**
+  tables (`series_membership_overrides`, `series_meta_overrides`) hold
+  user-authored data, so if the rename would collide there the whole operation is
+  **refused** (see `409`) and nothing changes. `fx_rates` is **never** mutated;
+  `fx_rate_missing` is `true` when `to_code` has no rate row (FX conversion for it
+  is unavailable until one is seeded).
+
+  Errors: **`422`** a code is not `^[A-Z]{3}$`; **`400`** `from_code` and
+  `to_code` are the same; **`409`** the rename would collide with user-authored
+  series overrides — nothing is mutated, body
+  `{"detail": "…", "conflicts": [{"table": "series_meta_overrides", "sender_id": 3, "kind_id": 5}, …]}`.

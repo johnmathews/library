@@ -18,23 +18,41 @@ import { AppBadge, AppButton, AppInput, AppSelect } from '@/components/app'
 import type { SelectItem } from '@/components/app'
 import { ApiError } from '@/api/client'
 import {
+  createRecipient,
+  createSender,
   createUser,
   deleteRecipient,
+  deleteSender,
+  deleteKind,
   deleteUser,
   getArchitecture,
   getCoverage,
   getSystemInfo,
+  listCurrencies,
   listRecipients,
   listUsers,
+  normalizeCurrency,
+  renameKind,
   renameRecipient,
+  renameSender,
   updateUser,
   type AdminUser,
   type ArchitectureDoc,
   type CoverageInfo,
   type CoverageSide,
+  type CurrencyConflictItem,
+  type CurrencyInUse,
+  type CurrencyNormalizeResult,
   type RecipientOption,
   type SystemInfo,
 } from '@/api/admin'
+import {
+  createKind,
+  listKinds,
+  listSenders,
+  type KindOption,
+  type SenderOption,
+} from '@/api/taxonomy'
 import { refreshTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { useAuthStore } from '@/stores/auth'
 
@@ -479,11 +497,426 @@ async function confirmDelete(row: RecipientOption): Promise<void> {
   }
 }
 
-// Lazily load the recipients the first time the Metadata tab is opened.
-watch(tab, (current) => {
-  if (current === 'metadata' && !recipientsLoaded.value && !recipientsLoading.value) {
-    void loadRecipients()
+// Create-recipient control (above the list).
+const recipientCreateValue = ref('')
+const recipientCreating = ref(false)
+const recipientCreateError = ref<string | null>(null)
+
+/** Create a recipient (200 for an existing case-insensitive match, 201 for new
+ * — both are success). Reload the panel and refresh the shared taxonomy cache. */
+async function onCreateRecipient(): Promise<void> {
+  const name = recipientCreateValue.value.trim()
+  if (!name || recipientCreating.value) return
+  recipientCreating.value = true
+  recipientCreateError.value = null
+  try {
+    await createRecipient(name)
+    recipientCreateValue.value = ''
+    await afterRecipientMutation()
+  } catch (error) {
+    recipientCreateError.value =
+      error instanceof ApiError ? error.detail : 'Could not create the recipient. Try again.'
+  } finally {
+    recipientCreating.value = false
   }
+}
+
+// --- Metadata: senders ------------------------------------------------------
+// Same id-keyed rename/merge + delete-with-reassign contract as recipients.
+
+const senders = ref<SenderOption[]>([])
+const sendersLoading = ref(false)
+const sendersLoaded = ref(false)
+const sendersError = ref<string | null>(null)
+const senderPendingIds = ref<Set<number>>(new Set())
+const senderRowError = ref<Record<number, string>>({})
+const senderRenameId = ref<number | null>(null)
+const senderRenameValue = ref('')
+const senderMergeTarget = ref<{
+  target_id: number
+  target_name: string
+  target_document_count: number
+} | null>(null)
+const senderDeleteId = ref<number | null>(null)
+const senderReassignValue = ref('')
+
+function setSenderPending(id: number, pending: boolean): void {
+  const next = new Set(senderPendingIds.value)
+  if (pending) next.add(id)
+  else next.delete(id)
+  senderPendingIds.value = next
+}
+
+function setSenderError(id: number, message: string | null): void {
+  const next = { ...senderRowError.value }
+  if (message) next[id] = message
+  else delete next[id]
+  senderRowError.value = next
+}
+
+/** Reassign options for a row: every other sender, plus "None (clear)". */
+function senderReassignItems(row: SenderOption): SelectItem[] {
+  const others = senders.value
+    .filter((s) => s.id !== row.id)
+    .map((s) => ({ value: String(s.id), text: `${s.name} (${s.document_count})` }))
+  return [{ value: '', text: 'None (clear sender)' }, ...others]
+}
+
+async function loadSenders(): Promise<void> {
+  sendersLoading.value = true
+  sendersError.value = null
+  try {
+    senders.value = await listSenders()
+    sendersLoaded.value = true
+  } catch {
+    sendersError.value = 'Could not load senders. Try refreshing the page.'
+  } finally {
+    sendersLoading.value = false
+  }
+}
+
+async function afterSenderMutation(): Promise<void> {
+  await loadSenders()
+  void refreshTaxonomyOptions()
+}
+
+function startSenderRename(row: SenderOption): void {
+  cancelSenderDelete()
+  senderRenameId.value = row.id
+  senderRenameValue.value = row.name
+  senderMergeTarget.value = null
+  setSenderError(row.id, null)
+}
+
+function cancelSenderRename(): void {
+  senderRenameId.value = null
+  senderRenameValue.value = ''
+  senderMergeTarget.value = null
+}
+
+/** Save a rename. On a 409 collision (without `merge`), reveal the merge prompt
+ * instead of erroring; the merge-confirm button re-calls with `merge: true`. */
+async function saveSenderRename(row: SenderOption, merge = false): Promise<void> {
+  const name = senderRenameValue.value.trim()
+  if (!name) {
+    setSenderError(row.id, 'Enter a name.')
+    return
+  }
+  setSenderPending(row.id, true)
+  setSenderError(row.id, null)
+  try {
+    await renameSender(row.id, name, merge)
+    cancelSenderRename()
+    await afterSenderMutation()
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 409 && error.body && !merge) {
+      senderMergeTarget.value = {
+        target_id: Number(error.body.target_id),
+        target_name: String(error.body.target_name),
+        target_document_count: Number(error.body.target_document_count),
+      }
+    } else {
+      setSenderError(
+        row.id,
+        error instanceof ApiError ? error.detail : 'Could not rename the sender. Try again.',
+      )
+    }
+  } finally {
+    setSenderPending(row.id, false)
+  }
+}
+
+function startSenderDelete(row: SenderOption): void {
+  cancelSenderRename()
+  senderDeleteId.value = row.id
+  senderReassignValue.value = ''
+  setSenderError(row.id, null)
+}
+
+function cancelSenderDelete(): void {
+  senderDeleteId.value = null
+  senderReassignValue.value = ''
+}
+
+/** Confirm a delete. In-use senders reassign (to the chosen id, or null to
+ * clear); zero-document senders delete outright. */
+async function confirmSenderDelete(row: SenderOption): Promise<void> {
+  setSenderPending(row.id, true)
+  setSenderError(row.id, null)
+  try {
+    if (row.document_count > 0) {
+      const chosen = senderReassignValue.value === '' ? null : Number(senderReassignValue.value)
+      await deleteSender(row.id, chosen)
+    } else {
+      await deleteSender(row.id)
+    }
+    cancelSenderDelete()
+    await afterSenderMutation()
+  } catch (error) {
+    setSenderError(
+      row.id,
+      error instanceof ApiError ? error.detail : 'Could not delete the sender. Try again.',
+    )
+  } finally {
+    setSenderPending(row.id, false)
+  }
+}
+
+// Create-sender control (above the list).
+const senderCreateValue = ref('')
+const senderCreating = ref(false)
+const senderCreateError = ref<string | null>(null)
+
+async function onCreateSender(): Promise<void> {
+  const name = senderCreateValue.value.trim()
+  if (!name || senderCreating.value) return
+  senderCreating.value = true
+  senderCreateError.value = null
+  try {
+    await createSender(name)
+    senderCreateValue.value = ''
+    await afterSenderMutation()
+  } catch (error) {
+    senderCreateError.value =
+      error instanceof ApiError ? error.detail : 'Could not create the sender. Try again.'
+  } finally {
+    senderCreating.value = false
+  }
+}
+
+// --- Metadata: kinds --------------------------------------------------------
+// Kinds are slug-keyed: rename edits the display name only (no merge — a name
+// collision is a hard 409), and delete reassigns to another kind by slug.
+
+const kinds = ref<KindOption[]>([])
+const kindsLoading = ref(false)
+const kindsLoaded = ref(false)
+const kindsError = ref<string | null>(null)
+const kindPendingSlugs = ref<Set<string>>(new Set())
+const kindRowError = ref<Record<string, string>>({})
+const kindRenameSlug = ref<string | null>(null)
+const kindRenameValue = ref('')
+const kindDeleteSlug = ref<string | null>(null)
+const kindReassignValue = ref('')
+
+function setKindPending(slug: string, pending: boolean): void {
+  const next = new Set(kindPendingSlugs.value)
+  if (pending) next.add(slug)
+  else next.delete(slug)
+  kindPendingSlugs.value = next
+}
+
+function setKindError(slug: string, message: string | null): void {
+  const next = { ...kindRowError.value }
+  if (message) next[slug] = message
+  else delete next[slug]
+  kindRowError.value = next
+}
+
+/** Reassign options for a row: every other kind (by slug), plus "None (clear)". */
+function kindReassignItems(row: KindOption): SelectItem[] {
+  const others = kinds.value
+    .filter((k) => k.slug !== row.slug)
+    .map((k) => ({ value: k.slug, text: `${k.name} (${k.document_count})` }))
+  return [{ value: '', text: 'None (clear kind)' }, ...others]
+}
+
+async function loadKinds(): Promise<void> {
+  kindsLoading.value = true
+  kindsError.value = null
+  try {
+    kinds.value = await listKinds()
+    kindsLoaded.value = true
+  } catch {
+    kindsError.value = 'Could not load kinds. Try refreshing the page.'
+  } finally {
+    kindsLoading.value = false
+  }
+}
+
+async function afterKindMutation(): Promise<void> {
+  await loadKinds()
+  void refreshTaxonomyOptions()
+}
+
+function startKindRename(row: KindOption): void {
+  cancelKindDelete()
+  kindRenameSlug.value = row.slug
+  kindRenameValue.value = row.name
+  setKindError(row.slug, null)
+}
+
+function cancelKindRename(): void {
+  kindRenameSlug.value = null
+  kindRenameValue.value = ''
+}
+
+/** Save a name-only rename. A 409 name collision surfaces as a row error —
+ * there is no kind merge. */
+async function saveKindRename(row: KindOption): Promise<void> {
+  const name = kindRenameValue.value.trim()
+  if (!name) {
+    setKindError(row.slug, 'Enter a name.')
+    return
+  }
+  setKindPending(row.slug, true)
+  setKindError(row.slug, null)
+  try {
+    await renameKind(row.slug, name)
+    cancelKindRename()
+    await afterKindMutation()
+  } catch (error) {
+    setKindError(
+      row.slug,
+      error instanceof ApiError ? error.detail : 'Could not rename the kind. Try again.',
+    )
+  } finally {
+    setKindPending(row.slug, false)
+  }
+}
+
+function startKindDelete(row: KindOption): void {
+  cancelKindRename()
+  kindDeleteSlug.value = row.slug
+  kindReassignValue.value = ''
+  setKindError(row.slug, null)
+}
+
+function cancelKindDelete(): void {
+  kindDeleteSlug.value = null
+  kindReassignValue.value = ''
+}
+
+/** Confirm a delete. In-use kinds reassign by slug (or null to clear);
+ * zero-document kinds delete outright. */
+async function confirmKindDelete(row: KindOption): Promise<void> {
+  setKindPending(row.slug, true)
+  setKindError(row.slug, null)
+  try {
+    if (row.document_count > 0) {
+      const chosen = kindReassignValue.value === '' ? null : kindReassignValue.value
+      await deleteKind(row.slug, chosen)
+    } else {
+      await deleteKind(row.slug)
+    }
+    cancelKindDelete()
+    await afterKindMutation()
+  } catch (error) {
+    setKindError(
+      row.slug,
+      error instanceof ApiError ? error.detail : 'Could not delete the kind. Try again.',
+    )
+  } finally {
+    setKindPending(row.slug, false)
+  }
+}
+
+// Create-kind control (above the list). `createKind` 409s on a near-duplicate;
+// surface the conflict detail.
+const kindCreateValue = ref('')
+const kindCreating = ref(false)
+const kindCreateError = ref<string | null>(null)
+
+async function onCreateKind(): Promise<void> {
+  const name = kindCreateValue.value.trim()
+  if (!name || kindCreating.value) return
+  kindCreating.value = true
+  kindCreateError.value = null
+  try {
+    await createKind(name)
+    kindCreateValue.value = ''
+    await afterKindMutation()
+  } catch (error) {
+    kindCreateError.value =
+      error instanceof ApiError ? error.detail : 'Could not create the kind. Try again.'
+  } finally {
+    kindCreating.value = false
+  }
+}
+
+// --- Metadata: currencies ---------------------------------------------------
+// Currency is free-text (no reference table) but part of series identity, so
+// "normalise" is a whole-store rewrite, not a per-row edit (see docs/api.md
+// §1.18.6). There is a confirm step because the series-insight cache merge drops
+// rows (they regenerate) and the rename spans every document.
+const currencies = ref<CurrencyInUse[]>([])
+const currenciesLoading = ref(false)
+const currenciesLoaded = ref(false)
+const currenciesError = ref<string | null>(null)
+
+const normalizeFrom = ref('')
+const normalizeTo = ref('')
+const normalizeConfirming = ref(false)
+const normalizePending = ref(false)
+const normalizeError = ref<string | null>(null)
+const normalizeConflicts = ref<CurrencyConflictItem[]>([])
+const normalizeResult = ref<CurrencyNormalizeResult | null>(null)
+
+const currencyItems = computed<SelectItem[]>(() => [
+  { value: '', text: 'Select a code…' },
+  ...currencies.value.map((c) => ({ value: c.code, text: `${c.code} (${c.document_count})` })),
+])
+
+async function loadCurrencies(): Promise<void> {
+  currenciesLoading.value = true
+  currenciesError.value = null
+  try {
+    currencies.value = await listCurrencies()
+    currenciesLoaded.value = true
+  } catch {
+    currenciesError.value = 'Could not load currencies. Try refreshing the page.'
+  } finally {
+    currenciesLoading.value = false
+  }
+}
+
+function startNormalize(): void {
+  normalizeError.value = null
+  normalizeConflicts.value = []
+  normalizeResult.value = null
+  if (!normalizeFrom.value || !normalizeTo.value.trim()) {
+    normalizeError.value = 'Choose a source code and enter a 3-letter target code.'
+    return
+  }
+  normalizeConfirming.value = true
+}
+
+function cancelNormalize(): void {
+  normalizeConfirming.value = false
+}
+
+async function confirmNormalize(): Promise<void> {
+  normalizePending.value = true
+  normalizeError.value = null
+  normalizeConflicts.value = []
+  try {
+    const result = await normalizeCurrency(normalizeFrom.value, normalizeTo.value.trim())
+    normalizeResult.value = result
+    normalizeConfirming.value = false
+    normalizeFrom.value = ''
+    normalizeTo.value = ''
+    await loadCurrencies()
+  } catch (error) {
+    normalizeConfirming.value = false
+    if (error instanceof ApiError && error.status === 409 && error.body) {
+      normalizeConflicts.value = (error.body.conflicts as CurrencyConflictItem[]) ?? []
+      normalizeError.value = error.detail
+    } else {
+      normalizeError.value =
+        error instanceof ApiError ? error.detail : 'Could not normalise the currency. Try again.'
+    }
+  } finally {
+    normalizePending.value = false
+  }
+}
+
+// Lazily load the metadata lists the first time the Metadata tab is opened.
+watch(tab, (current) => {
+  if (current !== 'metadata') return
+  if (!recipientsLoaded.value && !recipientsLoading.value) void loadRecipients()
+  if (!sendersLoaded.value && !sendersLoading.value) void loadSenders()
+  if (!kindsLoaded.value && !kindsLoading.value) void loadKinds()
+  if (!currenciesLoaded.value && !currenciesLoading.value) void loadCurrencies()
 })
 
 onMounted(() => {
@@ -978,28 +1411,268 @@ const tabClass = (active: boolean): string =>
       </div>
     </section>
 
-    <!-- Metadata tab (recipients management) -->
+    <!-- Metadata tab (senders / recipients / kinds management) -->
     <section v-show="tab === 'metadata'" role="tabpanel" data-testid="admin-tab-metadata">
-      <p
-        v-if="recipientsLoading"
-        data-testid="recipients-loading"
-        class="text-gray-600 dark:text-gray-300"
-      >
-        Loading recipients…
-      </p>
-      <div
-        v-else-if="recipientsError"
-        data-testid="recipients-error"
-        role="alert"
-        class="bg-white dark:bg-gray-800 border-l-4 border-red-500 rounded-lg px-4 py-3 shadow-xs text-gray-700 dark:text-gray-200"
-      >
-        {{ recipientsError }}
-      </div>
-      <div v-else class="space-y-6">
+      <div class="space-y-6">
+        <!-- Senders -->
+        <div :class="cardClass">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Senders</h2>
+
+          <!-- Create sender -->
+          <div class="mb-4">
+            <label
+              for="sender-create-input"
+              class="block text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
+            >
+              Add sender
+            </label>
+            <div class="flex items-end gap-2">
+              <input
+                id="sender-create-input"
+                v-model="senderCreateValue"
+                type="text"
+                autocomplete="off"
+                class="form-input flex-1"
+                data-testid="sender-create-input"
+                @keyup.enter="onCreateSender()"
+              />
+              <AppButton
+                type="button"
+                data-testid="sender-create-button"
+                :disabled="senderCreating"
+                @click="onCreateSender()"
+              >
+                {{ senderCreating ? 'Adding…' : 'Add' }}
+              </AppButton>
+            </div>
+            <p
+              v-if="senderCreateError"
+              data-testid="sender-create-error"
+              class="mt-1 text-xs text-red-600 dark:text-red-400"
+            >
+              {{ senderCreateError }}
+            </p>
+          </div>
+
+          <p v-if="sendersLoading" data-testid="senders-loading" class="text-sm text-gray-500 dark:text-gray-400">
+            Loading senders…
+          </p>
+          <div
+            v-else-if="sendersError"
+            data-testid="senders-error"
+            role="alert"
+            class="border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-red-700 dark:text-red-300"
+          >
+            {{ sendersError }}
+          </div>
+          <p
+            v-else-if="senders.length === 0"
+            data-testid="senders-empty"
+            class="text-sm text-gray-500 dark:text-gray-400"
+          >
+            No senders yet.
+          </p>
+          <ul
+            v-else
+            class="divide-y divide-gray-100 dark:divide-gray-700/60"
+            data-testid="sender-list"
+          >
+            <li
+              v-for="s in senders"
+              :key="s.id"
+              :data-testid="`sender-row-${s.id}`"
+              class="py-3"
+            >
+              <!-- Display row -->
+              <div v-if="senderRenameId !== s.id" class="flex items-center justify-between gap-3">
+                <span class="min-w-0 truncate font-medium text-gray-800 dark:text-gray-100">
+                  {{ s.name }}
+                </span>
+                <div class="flex shrink-0 items-center gap-2">
+                  <AppBadge colour="grey">{{ s.document_count }} docs</AppBadge>
+                  <button
+                    type="button"
+                    data-testid="sender-rename"
+                    :disabled="senderPendingIds.has(s.id)"
+                    class="rounded-md border border-gray-200 dark:border-gray-700/60 px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
+                    @click="startSenderRename(s)"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="sender-delete"
+                    :disabled="senderPendingIds.has(s.id)"
+                    class="rounded-md border border-red-200 dark:border-red-500/40 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50 cursor-pointer"
+                    @click="startSenderDelete(s)"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              <!-- Rename editor -->
+              <div v-else class="space-y-2">
+                <div class="flex items-end gap-2">
+                  <div class="flex-1">
+                    <AppInput
+                      :id="`sender-rename-input-${s.id}`"
+                      v-model="senderRenameValue"
+                      label="Sender name"
+                      autocomplete="off"
+                      data-testid="sender-rename-input"
+                      @keyup.enter="saveSenderRename(s)"
+                    />
+                  </div>
+                  <AppButton
+                    type="button"
+                    data-testid="sender-rename-save"
+                    :disabled="senderPendingIds.has(s.id)"
+                    @click="saveSenderRename(s)"
+                  >
+                    Save
+                  </AppButton>
+                  <AppButton
+                    type="button"
+                    variant="secondary"
+                    data-testid="sender-rename-cancel"
+                    @click="cancelSenderRename()"
+                  >
+                    Cancel
+                  </AppButton>
+                </div>
+
+                <!-- Merge prompt (shown when the rename collides, 409) -->
+                <div
+                  v-if="senderMergeTarget"
+                  data-testid="sender-merge-warning"
+                  role="alert"
+                  class="border-l-4 border-yellow-500 bg-yellow-50 dark:bg-yellow-500/10 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+                >
+                  <p>
+                    '{{ s.name }}' will be merged into '{{ senderMergeTarget.target_name }}'
+                    ({{ senderMergeTarget.target_document_count }} documents) and removed.
+                  </p>
+                  <AppButton
+                    type="button"
+                    class="mt-2"
+                    data-testid="sender-merge-confirm"
+                    :disabled="senderPendingIds.has(s.id)"
+                    @click="saveSenderRename(s, true)"
+                  >
+                    Merge and remove
+                  </AppButton>
+                </div>
+              </div>
+
+              <!-- Delete confirm / reassign -->
+              <div
+                v-if="senderDeleteId === s.id"
+                data-testid="sender-delete-confirm-box"
+                class="mt-2 border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+              >
+                <template v-if="s.document_count > 0">
+                  <p class="mb-2">
+                    '{{ s.name }}' still has {{ s.document_count }} documents. Choose where to move
+                    them (or clear the sender) before deleting.
+                  </p>
+                  <AppSelect
+                    :id="`sender-reassign-${s.id}`"
+                    v-model="senderReassignValue"
+                    label="Reassign documents to"
+                    :items="senderReassignItems(s)"
+                    data-testid="sender-reassign-select"
+                  />
+                </template>
+                <p v-else class="mb-2">Delete '{{ s.name }}'? This cannot be undone.</p>
+                <div class="mt-2 flex gap-2">
+                  <AppButton
+                    type="button"
+                    data-testid="sender-delete-confirm"
+                    :disabled="senderPendingIds.has(s.id)"
+                    @click="confirmSenderDelete(s)"
+                  >
+                    Delete
+                  </AppButton>
+                  <AppButton
+                    type="button"
+                    variant="secondary"
+                    data-testid="sender-delete-cancel"
+                    @click="cancelSenderDelete()"
+                  >
+                    Cancel
+                  </AppButton>
+                </div>
+              </div>
+
+              <p
+                v-if="senderRowError[s.id]"
+                :data-testid="`sender-error-${s.id}`"
+                class="mt-1 text-xs text-red-600 dark:text-red-400"
+              >
+                {{ senderRowError[s.id] }}
+              </p>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Recipients -->
         <div :class="cardClass">
           <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Recipients</h2>
+
+          <!-- Create recipient -->
+          <div class="mb-4">
+            <label
+              for="recipient-create-input"
+              class="block text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
+            >
+              Add recipient
+            </label>
+            <div class="flex items-end gap-2">
+              <input
+                id="recipient-create-input"
+                v-model="recipientCreateValue"
+                type="text"
+                autocomplete="off"
+                class="form-input flex-1"
+                data-testid="recipient-create-input"
+                @keyup.enter="onCreateRecipient()"
+              />
+              <AppButton
+                type="button"
+                data-testid="recipient-create-button"
+                :disabled="recipientCreating"
+                @click="onCreateRecipient()"
+              >
+                {{ recipientCreating ? 'Adding…' : 'Add' }}
+              </AppButton>
+            </div>
+            <p
+              v-if="recipientCreateError"
+              data-testid="recipient-create-error"
+              class="mt-1 text-xs text-red-600 dark:text-red-400"
+            >
+              {{ recipientCreateError }}
+            </p>
+          </div>
+
           <p
-            v-if="recipients.length === 0"
+            v-if="recipientsLoading"
+            data-testid="recipients-loading"
+            class="text-sm text-gray-500 dark:text-gray-400"
+          >
+            Loading recipients…
+          </p>
+          <div
+            v-else-if="recipientsError"
+            data-testid="recipients-error"
+            role="alert"
+            class="border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-red-700 dark:text-red-300"
+          >
+            {{ recipientsError }}
+          </div>
+          <p
+            v-else-if="recipients.length === 0"
             data-testid="recipients-empty"
             class="text-sm text-gray-500 dark:text-gray-400"
           >
@@ -1147,6 +1820,344 @@ const tabClass = (active: boolean): string =>
               </p>
             </li>
           </ul>
+        </div>
+
+        <!-- Kinds -->
+        <div :class="cardClass">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-4">Kinds</h2>
+
+          <!-- Create kind -->
+          <div class="mb-4">
+            <label
+              for="kind-create-input"
+              class="block text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
+            >
+              Add kind
+            </label>
+            <div class="flex items-end gap-2">
+              <input
+                id="kind-create-input"
+                v-model="kindCreateValue"
+                type="text"
+                autocomplete="off"
+                class="form-input flex-1"
+                data-testid="kind-create-input"
+                @keyup.enter="onCreateKind()"
+              />
+              <AppButton
+                type="button"
+                data-testid="kind-create-button"
+                :disabled="kindCreating"
+                @click="onCreateKind()"
+              >
+                {{ kindCreating ? 'Adding…' : 'Add' }}
+              </AppButton>
+            </div>
+            <p
+              v-if="kindCreateError"
+              data-testid="kind-create-error"
+              class="mt-1 text-xs text-red-600 dark:text-red-400"
+            >
+              {{ kindCreateError }}
+            </p>
+          </div>
+
+          <p v-if="kindsLoading" data-testid="kinds-loading" class="text-sm text-gray-500 dark:text-gray-400">
+            Loading kinds…
+          </p>
+          <div
+            v-else-if="kindsError"
+            data-testid="kinds-error"
+            role="alert"
+            class="border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-red-700 dark:text-red-300"
+          >
+            {{ kindsError }}
+          </div>
+          <p
+            v-else-if="kinds.length === 0"
+            data-testid="kinds-empty"
+            class="text-sm text-gray-500 dark:text-gray-400"
+          >
+            No kinds yet.
+          </p>
+          <ul
+            v-else
+            class="divide-y divide-gray-100 dark:divide-gray-700/60"
+            data-testid="kind-list"
+          >
+            <li
+              v-for="k in kinds"
+              :key="k.slug"
+              :data-testid="`kind-row-${k.slug}`"
+              class="py-3"
+            >
+              <!-- Display row -->
+              <div v-if="kindRenameSlug !== k.slug" class="flex items-center justify-between gap-3">
+                <span class="min-w-0 truncate font-medium text-gray-800 dark:text-gray-100">
+                  {{ k.name }}
+                </span>
+                <div class="flex shrink-0 items-center gap-2">
+                  <AppBadge colour="grey">{{ k.document_count }} docs</AppBadge>
+                  <button
+                    type="button"
+                    data-testid="kind-rename"
+                    :disabled="kindPendingSlugs.has(k.slug)"
+                    class="rounded-md border border-gray-200 dark:border-gray-700/60 px-2.5 py-1 text-xs font-medium text-gray-700 dark:text-gray-200 hover:bg-gray-50 dark:hover:bg-gray-700 disabled:opacity-50 cursor-pointer"
+                    @click="startKindRename(k)"
+                  >
+                    Rename
+                  </button>
+                  <button
+                    type="button"
+                    data-testid="kind-delete"
+                    :disabled="kindPendingSlugs.has(k.slug)"
+                    class="rounded-md border border-red-200 dark:border-red-500/40 px-2.5 py-1 text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-500/10 disabled:opacity-50 cursor-pointer"
+                    @click="startKindDelete(k)"
+                  >
+                    Delete
+                  </button>
+                </div>
+              </div>
+
+              <!-- Rename editor (name-only; no merge) -->
+              <div v-else class="space-y-2">
+                <div class="flex items-end gap-2">
+                  <div class="flex-1">
+                    <AppInput
+                      :id="`kind-rename-input-${k.slug}`"
+                      v-model="kindRenameValue"
+                      label="Kind name"
+                      autocomplete="off"
+                      data-testid="kind-rename-input"
+                      @keyup.enter="saveKindRename(k)"
+                    />
+                  </div>
+                  <AppButton
+                    type="button"
+                    data-testid="kind-rename-save"
+                    :disabled="kindPendingSlugs.has(k.slug)"
+                    @click="saveKindRename(k)"
+                  >
+                    Save
+                  </AppButton>
+                  <AppButton
+                    type="button"
+                    variant="secondary"
+                    data-testid="kind-rename-cancel"
+                    @click="cancelKindRename()"
+                  >
+                    Cancel
+                  </AppButton>
+                </div>
+              </div>
+
+              <!-- Delete confirm / reassign (by slug) -->
+              <div
+                v-if="kindDeleteSlug === k.slug"
+                data-testid="kind-delete-confirm-box"
+                class="mt-2 border-l-4 border-red-500 bg-red-50 dark:bg-red-500/10 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+              >
+                <template v-if="k.document_count > 0">
+                  <p class="mb-2">
+                    '{{ k.name }}' still has {{ k.document_count }} documents. Choose where to move
+                    them (or clear the kind) before deleting.
+                  </p>
+                  <AppSelect
+                    :id="`kind-reassign-${k.slug}`"
+                    v-model="kindReassignValue"
+                    label="Reassign documents to"
+                    :items="kindReassignItems(k)"
+                    data-testid="kind-reassign-select"
+                  />
+                </template>
+                <p v-else class="mb-2">Delete '{{ k.name }}'? This cannot be undone.</p>
+                <div class="mt-2 flex gap-2">
+                  <AppButton
+                    type="button"
+                    data-testid="kind-delete-confirm"
+                    :disabled="kindPendingSlugs.has(k.slug)"
+                    @click="confirmKindDelete(k)"
+                  >
+                    Delete
+                  </AppButton>
+                  <AppButton
+                    type="button"
+                    variant="secondary"
+                    data-testid="kind-delete-cancel"
+                    @click="cancelKindDelete()"
+                  >
+                    Cancel
+                  </AppButton>
+                </div>
+              </div>
+
+              <p
+                v-if="kindRowError[k.slug]"
+                :data-testid="`kind-error-${k.slug}`"
+                class="mt-1 text-xs text-red-600 dark:text-red-400"
+              >
+                {{ kindRowError[k.slug] }}
+              </p>
+            </li>
+          </ul>
+        </div>
+
+        <!-- Currencies -->
+        <div :class="cardClass">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-1">Currencies</h2>
+          <p class="mb-4 text-sm text-gray-500 dark:text-gray-400">
+            Currency codes aren't a reference table, but they're part of series
+            identity. Normalising rewrites a code across every document and series
+            — merging duplicate cached insights (they regenerate) and refusing if
+            it would collide with your series overrides.
+          </p>
+
+          <p
+            v-if="currenciesLoading"
+            data-testid="currencies-loading"
+            class="text-sm text-gray-500 dark:text-gray-400"
+          >
+            Loading…
+          </p>
+          <p
+            v-else-if="currenciesError"
+            data-testid="currencies-error"
+            class="text-sm text-red-600 dark:text-red-400"
+          >
+            {{ currenciesError }}
+          </p>
+
+          <template v-else>
+            <!-- Normalise form -->
+            <div class="mb-4 flex flex-wrap items-end gap-2">
+              <AppSelect
+                id="currency-normalize-from"
+                v-model="normalizeFrom"
+                label="From"
+                :items="currencyItems"
+                data-testid="currency-normalize-from"
+              />
+              <div>
+                <label
+                  for="currency-normalize-to"
+                  class="block text-xs font-semibold uppercase tracking-wide text-gray-400 dark:text-gray-500 mb-1"
+                >
+                  To
+                </label>
+                <input
+                  id="currency-normalize-to"
+                  v-model="normalizeTo"
+                  type="text"
+                  maxlength="3"
+                  autocomplete="off"
+                  placeholder="EUR"
+                  class="form-input w-24 uppercase"
+                  data-testid="currency-normalize-to"
+                />
+              </div>
+              <AppButton
+                type="button"
+                data-testid="currency-normalize-button"
+                :disabled="normalizePending"
+                @click="startNormalize()"
+              >
+                Normalise
+              </AppButton>
+            </div>
+
+            <!-- Confirm step -->
+            <div
+              v-if="normalizeConfirming"
+              data-testid="currency-normalize-confirm-box"
+              class="mb-4 border-l-4 border-amber-500 bg-amber-50 dark:bg-amber-500/10 rounded-lg px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+            >
+              <p class="mb-2">
+                Rename <strong>{{ normalizeFrom }}</strong> to
+                <strong>{{ normalizeTo.toUpperCase() }}</strong> across all documents and series?
+                Duplicate cached insights are merged; this isn't a per-document undo.
+              </p>
+              <div class="flex gap-2">
+                <AppButton
+                  type="button"
+                  data-testid="currency-normalize-confirm"
+                  :disabled="normalizePending"
+                  @click="confirmNormalize()"
+                >
+                  {{ normalizePending ? 'Normalising…' : 'Confirm' }}
+                </AppButton>
+                <AppButton
+                  type="button"
+                  variant="secondary"
+                  data-testid="currency-normalize-cancel"
+                  @click="cancelNormalize()"
+                >
+                  Cancel
+                </AppButton>
+              </div>
+            </div>
+
+            <!-- Result summary -->
+            <div
+              v-if="normalizeResult"
+              data-testid="currency-normalize-result"
+              class="mb-4 rounded-lg border border-green-200 bg-green-50 dark:border-green-500/30 dark:bg-green-500/10 px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+            >
+              <p>
+                Renamed <strong>{{ normalizeResult.from_code }}</strong> →
+                <strong>{{ normalizeResult.to_code }}</strong> ·
+                {{ normalizeResult.counts.documents ?? 0 }} document(s).
+              </p>
+              <p
+                v-if="normalizeResult.fx_rate_missing"
+                data-testid="currency-fx-warning"
+                class="mt-1 text-amber-700 dark:text-amber-400"
+              >
+                No FX rate exists for {{ normalizeResult.to_code }} — FX conversion for it is
+                unavailable until a rate is seeded.
+              </p>
+            </div>
+
+            <!-- Override-collision refusal -->
+            <div
+              v-if="normalizeConflicts.length"
+              data-testid="currency-conflict"
+              class="mb-4 rounded-lg border border-red-200 bg-red-50 dark:border-red-500/30 dark:bg-red-500/10 px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
+            >
+              <p class="mb-1">
+                Refused: this would collide with {{ normalizeConflicts.length }} series
+                override(s). Resolve them first (nothing was changed).
+              </p>
+              <ul class="list-disc pl-5">
+                <li v-for="(c, i) in normalizeConflicts" :key="i">
+                  {{ c.table }} · sender {{ c.sender_id ?? '—' }} · kind {{ c.kind_id ?? '—' }}
+                </li>
+              </ul>
+            </div>
+
+            <p
+              v-else-if="normalizeError"
+              data-testid="currency-normalize-error"
+              class="mb-4 text-sm text-red-600 dark:text-red-400"
+            >
+              {{ normalizeError }}
+            </p>
+
+            <!-- Codes in use -->
+            <ul v-if="currencies.length" class="divide-y divide-gray-100 dark:divide-gray-700/60">
+              <li
+                v-for="c in currencies"
+                :key="c.code"
+                :data-testid="`currency-row-${c.code}`"
+                class="flex items-center justify-between py-2 text-sm"
+              >
+                <span class="font-medium text-gray-800 dark:text-gray-100">{{ c.code }}</span>
+                <AppBadge colour="grey">{{ c.document_count }}</AppBadge>
+              </li>
+            </ul>
+            <p v-else class="text-sm text-gray-500 dark:text-gray-400">
+              No currencies are set on any document yet.
+            </p>
+          </template>
         </div>
       </div>
     </section>

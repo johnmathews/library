@@ -188,6 +188,61 @@ def test_list_pagination_and_default_ordering(
     assert response.status_code == 422
 
 
+def test_sort_control_orders_by_field_and_direction(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    # Seeded in ascending document_date order so insertion order (created_at/id)
+    # runs opposite to document_date, letting us tell the two sort fields apart.
+    older = seed_document(
+        api_database_url, "w2-sort-1", tag_slugs=["w2-sort"], document_date=date(2026, 1, 1)
+    )
+    newer = seed_document(
+        api_database_url, "w2-sort-2", tag_slugs=["w2-sort"], document_date=date(2026, 3, 1)
+    )
+    dateless = seed_document(api_database_url, "w2-sort-3", tag_slugs=["w2-sort"])
+
+    def ids(**params: Any) -> list[int]:
+        return [item["id"] for item in list_docs(api_client, tag="w2-sort", **params)["items"]]
+
+    # document_date desc (the default): newest first, unknown date last.
+    assert ids() == [newer, older, dateless]
+    assert ids(sort="document_date", direction="desc") == [newer, older, dateless]
+    # document_date asc: oldest first, unknown date STILL last (NULLS LAST both ways).
+    assert ids(sort="document_date", direction="asc") == [older, newer, dateless]
+    # added_date (created_at) desc: most recently added first (reverse insertion).
+    assert ids(sort="added_date", direction="desc") == [dateless, newer, older]
+    # added_date asc: earliest added first.
+    assert ids(sort="added_date", direction="asc") == [older, newer, dateless]
+
+
+def test_sort_is_ignored_during_search_rank_wins(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    heavy = seed_document(
+        api_database_url,
+        "w2-sort-q-heavy",
+        tag_slugs=["w2-sortq"],
+        ocr_text="factuur factuur factuur",
+    )
+    light = seed_document(
+        api_database_url, "w2-sort-q-light", tag_slugs=["w2-sortq"], ocr_text="factuur eenmalig"
+    )
+
+    def ids(**params: Any) -> list[int]:
+        body = list_docs(api_client, tag="w2-sortq", q="factuur", **params)
+        return [item["id"] for item in body["items"]]
+
+    # Relevance rank orders heavier-match first regardless of the sort params.
+    assert ids() == [heavy, light]
+    assert ids(sort="added_date", direction="asc") == [heavy, light]
+    assert ids(sort="added_date", direction="desc") == [heavy, light]
+
+
+def test_sort_rejects_unknown_values(api_client: TestClient) -> None:
+    assert api_client.get("/api/documents", params={"sort": "bogus"}).status_code == 422
+    assert api_client.get("/api/documents", params={"direction": "sideways"}).status_code == 422
+
+
 def test_filters_compose(api_client: TestClient, api_database_url: str) -> None:
     invoice = seed_document(
         api_database_url,
