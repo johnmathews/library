@@ -1140,18 +1140,13 @@ watch(
       id="document-hero"
       class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5 sm:p-6 mb-6"
     >
-      <!-- Title + primary call-to-action. On mobile the button stacks under the
-           title; from `sm` up it floats to the top-right so "Ask" is the first
-           action a reader sees. `min-w-0` lets the title wrap instead of
-           shoving the button off-screen. -->
-      <div id="document-hero-top-row" class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <h1
-          id="document-title"
-          class="min-w-0 text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold break-words app-detail-title"
-        >
-          {{ doc.title ?? 'Untitled document' }}
-        </h1>
-      </div>
+      <!-- Title. `break-words` lets a long title wrap rather than overflow. -->
+      <h1
+        id="document-title"
+        class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold break-words app-detail-title"
+      >
+        {{ doc.title ?? 'Untitled document' }}
+      </h1>
       <dl
         v-if="heroStats.length"
         class="mt-12 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3"
@@ -1165,12 +1160,31 @@ watch(
             {{ stat.value }}
           </dd>
         </div>
+      </dl>
+      <!-- Bottom row: tag pills on the left, the primary "Ask" action pinned
+           bottom-right and baseline-aligned with the pills (sm:items-end). On a
+           narrow screen the row stacks (flex-col) so the button drops neatly
+           below the pills, left-aligned to match them. `sm:ml-auto` keeps the
+           button hard-right even when a document has no tags. -->
+      <div
+        id="document-hero-bottom-row"
+        class="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end"
+      >
+        <div
+          v-if="doc.tags.length"
+          class="flex flex-wrap gap-2"
+          data-testid="hero-tags"
+        >
+          <AppBadge v-for="tag in doc.tags" :key="tag.slug" :colour="tagColour(tag.name)">
+            {{ tag.name }}
+          </AppBadge>
+        </div>
 
         <AppButton
           variant="primary"
           :to="{ name: 'ask', query: { q: askPrompt } }"
           target="_blank"
-          class="shrink-0 gap-1.5 self-start"
+          class="shrink-0 gap-1.5 self-start sm:self-end sm:ml-auto"
           data-testid="ask-about-document"
         >
           <svg
@@ -1190,15 +1204,6 @@ watch(
           </svg>
           Ask about this document
         </AppButton>
-      </dl>
-      <div
-        v-if="doc.tags.length"
-        class="mt-5 flex flex-wrap gap-2"
-        data-testid="hero-tags"
-      >
-        <AppBadge v-for="tag in doc.tags" :key="tag.slug" :colour="tagColour(tag.name)">
-          {{ tag.name }}
-        </AppBadge>
       </div>
     </div>
 
