@@ -14,7 +14,6 @@ import { AppButton, AppBanner, AppCheckboxes, AppErrorSummary, AppInput, AppText
 import { ApiError } from '@/api/client'
 import {
   BACKGROUND_TONES,
-  DASHBOARD_FIELDS,
   DEFAULT_BACKGROUND_TONE,
   DEFAULT_TILE_PREVIEW,
   NOTIFICATION_EVENTS,
@@ -26,6 +25,7 @@ import {
   type DashboardField,
   type TilePreview,
 } from '@/api/settings'
+import DashboardFieldsEditor from '@/components/DashboardFieldsEditor.vue'
 import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
@@ -35,10 +35,8 @@ const tab = ref<Tab>('dashboard')
 
 // --- Dashboard fields --------------------------------------------------------
 
-const items = DASHBOARD_FIELDS.map((field) => ({ value: field.value, text: field.text }))
-
-// Seed the checkbox model from the store's current preferences.
-const selected = ref<string[]>([...auth.dashboardFields])
+// Seed the editor model (ordered, enabled fields) from the store's preferences.
+const selected = ref<DashboardField[]>([...auth.dashboardFields])
 
 const saved = ref(false)
 const errorMessage = ref<string | null>(null)
@@ -251,16 +249,13 @@ const tabClass = (active: boolean): string =>
 
       <div id="settings-card-dashboard-fields" :class="cardClass" class="max-w-2xl">
         <form @submit.prevent="onSubmit">
-          <AppCheckboxes
-            id="dashboard-fields"
-            legend="Dashboard tile fields"
-            legend-size="l"
-            hint="Select all that apply. The document title and thumbnail are always shown."
-            :items="items"
-            :error-message="errorMessage ?? undefined"
-            v-model="selected"
-            small
-          />
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Dashboard tile fields</h2>
+          <p class="mb-4 mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Choose which fields show on document cards and the order they appear
+            in. Drag the handle or use the arrows to reorder. The document title
+            and thumbnail are always shown.
+          </p>
+          <DashboardFieldsEditor v-model="selected" />
           <div class="mt-6">
             <AppButton type="submit" :disabled="saving">Save changes</AppButton>
           </div>

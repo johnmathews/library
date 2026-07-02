@@ -17,6 +17,7 @@ import { useIntersectionObserver, useStorage } from '@vueuse/core'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { AppBadge, AppBanner } from '@/components/app'
 import DocumentFilterBar from '@/components/DocumentFilterBar.vue'
+import DashboardFieldsMenu from '@/components/DashboardFieldsMenu.vue'
 import {
   DOCUMENT_LANGUAGES,
   listDocuments,
@@ -29,7 +30,6 @@ import { renderSnippet } from '@/utils/snippet'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import { useJobsStore } from '@/stores/jobs'
-import type { DashboardField } from '@/api/settings'
 import {
   parseDocumentQuery,
   hasActiveFilters,
@@ -48,10 +48,6 @@ const router = useRouter()
 
 const auth = useAuthStore()
 const jobsStore = useJobsStore()
-
-function shows(field: DashboardField): boolean {
-  return auth.dashboardFields.includes(field)
-}
 
 // Full-width mode fills the tile and crops the lower part of the page;
 // whole-page mode letterboxes the entire first page. Box height is unchanged.
@@ -325,7 +321,7 @@ function toggleSortDirection(): void {
 
   <DocumentFilterBar :applied="applied" @apply="applyFilterQuery" @clear="clearFilters" />
 
-  <div class="flex flex-wrap gap-2 mb-4">
+  <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
     <button
       type="button"
       :class="[
@@ -339,6 +335,7 @@ function toggleSortDirection(): void {
     >
       Needs review
     </button>
+    <DashboardFieldsMenu />
   </div>
 
   <div
@@ -517,50 +514,58 @@ function toggleSortDirection(): void {
               {{ item.title ?? 'Untitled document' }}
             </RouterLink>
           </h2>
+          <!-- Card metadata rendered in the user's chosen field order (stored per
+               user in dashboard_fields). The "Needs review" badge is pinned first
+               and is NOT part of the toggleable/orderable field set. -->
           <p class="flex flex-wrap items-center gap-2 app-doc-card__meta">
-            <AppBadge v-if="shows('kind') && item.kind" colour="blue">{{ item.kind.name }}</AppBadge>
-            <AppBadge v-if="shows('language') && item.language !== 'unknown'" colour="grey">
-              {{ languageName(item.language) }}
-            </AppBadge>
-            <template v-if="shows('status')">
-              <AppBadge v-if="item.status === 'failed'" colour="red">Failed</AppBadge>
-              <AppBadge v-else-if="item.status !== 'indexed'" colour="yellow">Processing</AppBadge>
-            </template>
             <AppBadge v-if="item.review_status === 'needs_review'" colour="yellow" data-testid="review-badge">Needs review</AppBadge>
-            <AppBadge v-if="shows('file_type')" colour="grey">{{ fileTypeLabel(item) }}</AppBadge>
-            <span
-              v-if="shows('sender') && item.sender"
-              class="app-doc-card__sender text-sm text-gray-500 dark:text-gray-400"
-            >
-              {{ item.sender.name }}
-            </span>
-            <span
-              v-if="shows('date') && item.document_date"
-              class="app-doc-card__date text-sm text-gray-500 dark:text-gray-400"
-            >
-              {{ formatDate(item.document_date) }}
-            </span>
-            <span
-              v-if="shows('amount') && amountLabels.get(item.id)"
-              class="app-doc-card__amount text-sm text-gray-500 dark:text-gray-400"
-            >
-              {{ amountLabels.get(item.id) }}
-            </span>
-          </p>
-          <p
-            v-if="shows('tags') && item.tags.length"
-            class="flex flex-wrap items-center gap-2 mt-2 app-doc-card__tags"
-            data-testid="doc-tags"
-          >
-            <AppBadge v-for="tag in item.tags.slice(0, MAX_TAGS)" :key="tag.slug" colour="grey">
-              {{ tag.name }}
-            </AppBadge>
-            <span
-              v-if="item.tags.length > MAX_TAGS"
-              class="app-doc-card__tags-more text-sm text-gray-500 dark:text-gray-400"
-            >
-              +{{ item.tags.length - MAX_TAGS }}
-            </span>
+            <template v-for="field in auth.dashboardFields" :key="field">
+              <AppBadge v-if="field === 'kind' && item.kind" colour="blue">{{ item.kind.name }}</AppBadge>
+              <AppBadge
+                v-else-if="field === 'language' && item.language !== 'unknown'"
+                colour="grey"
+              >
+                {{ languageName(item.language) }}
+              </AppBadge>
+              <template v-else-if="field === 'status'">
+                <AppBadge v-if="item.status === 'failed'" colour="red">Failed</AppBadge>
+                <AppBadge v-else-if="item.status !== 'indexed'" colour="yellow">Processing</AppBadge>
+              </template>
+              <AppBadge v-else-if="field === 'file_type'" colour="grey">{{ fileTypeLabel(item) }}</AppBadge>
+              <span
+                v-else-if="field === 'sender' && item.sender"
+                class="app-doc-card__sender text-sm text-gray-500 dark:text-gray-400"
+              >
+                {{ item.sender.name }}
+              </span>
+              <span
+                v-else-if="field === 'date' && item.document_date"
+                class="app-doc-card__date text-sm text-gray-500 dark:text-gray-400"
+              >
+                {{ formatDate(item.document_date) }}
+              </span>
+              <span
+                v-else-if="field === 'amount' && amountLabels.get(item.id)"
+                class="app-doc-card__amount text-sm text-gray-500 dark:text-gray-400"
+              >
+                {{ amountLabels.get(item.id) }}
+              </span>
+              <span
+                v-else-if="field === 'tags' && item.tags.length"
+                class="inline-flex flex-wrap items-center gap-2 app-doc-card__tags"
+                data-testid="doc-tags"
+              >
+                <AppBadge v-for="tag in item.tags.slice(0, MAX_TAGS)" :key="tag.slug" colour="grey">
+                  {{ tag.name }}
+                </AppBadge>
+                <span
+                  v-if="item.tags.length > MAX_TAGS"
+                  class="app-doc-card__tags-more text-sm text-gray-500 dark:text-gray-400"
+                >
+                  +{{ item.tags.length - MAX_TAGS }}
+                </span>
+              </span>
+            </template>
           </p>
           <p
             v-if="item.summary && !(applied.q && item.snippet)"
