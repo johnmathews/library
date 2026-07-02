@@ -22,6 +22,7 @@ from library.config import Settings, get_settings
 from library.extraction import apply as apply_module
 from library.extraction.apply import (
     apply_extraction,
+    match_existing_recipient,
     match_user_by_email,
     resolve_recipient_from_email,
     todays_spend_usd,
@@ -187,6 +188,17 @@ async def test_dutch_invoice_outcome_populates_metadata(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    async with session_factory() as session:
+        # Extraction only assigns a recipient that already exists (it never
+        # invents one), so "John" must be present for it to be matched. The
+        # test DB is shared, so seed idempotently.
+        existing_john = (
+            await session.execute(select(Recipient).where(Recipient.name == "John"))
+        ).scalar_one_or_none()
+        if existing_john is None:
+            session.add(Recipient(name="John"))
+            await session.commit()
+
     patch_extract(monkeypatch, make_outcome(make_metadata()))
     document_id = await make_document(session_factory, "apply-happy")
 
@@ -680,6 +692,57 @@ async def test_upsert_recipient_plain_name_unlinked(
         assert recipient.name == "Acme Logistics BV"
 
 
+# -------------------------------- match_existing_recipient (inference: never invents)
+
+
+async def test_match_existing_recipient_matches_user_by_name(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A name equal to a user's username/display name resolves to their recipient."""
+    async with session_factory() as session:
+        user = User(username=f"mer-{uuid.uuid4().hex[:8]}", password_hash="x", display_name="Carol")
+        session.add(user)
+        await session.flush()
+
+        matched = await match_existing_recipient(session, "carol")  # case-insensitive
+        await session.commit()
+
+        assert matched is not None
+        assert matched.user_id == user.id
+        assert matched.name == "Carol"
+
+
+async def test_match_existing_recipient_matches_plain_recipient_case_insensitively(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """A name matching an existing plain (user-less) recipient resolves to it."""
+    name = f"Existing Recipient {uuid.uuid4().hex[:6]}"
+    async with session_factory() as session:
+        session.add(Recipient(name=name))
+        await session.commit()
+
+    async with session_factory() as session:
+        matched = await match_existing_recipient(session, name.upper())
+        assert matched is not None
+        assert matched.name == name
+        assert matched.user_id is None
+
+
+async def test_match_existing_recipient_unknown_returns_none_and_creates_nothing(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """An unknown name returns None and never inserts a new recipient row."""
+    unknown = f"Nobody {uuid.uuid4().hex[:8]}"
+    async with session_factory() as session:
+        before = (await session.execute(select(func.count()).select_from(Recipient))).scalar_one()
+        matched = await match_existing_recipient(session, unknown)
+        await session.commit()
+        after = (await session.execute(select(func.count()).select_from(Recipient))).scalar_one()
+
+    assert matched is None
+    assert after == before
+
+
 # --------------------------------- email To: → recipient fallback (only-fill-when-empty)
 
 
@@ -791,7 +854,7 @@ async def test_apply_llm_recipient_wins_over_email_to(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When the LLM names a recipient, the To:-derived user is NOT used."""
+    """When the LLM names an *existing* recipient, the To:-derived user is NOT used."""
     address = f"lose-{uuid.uuid4().hex[:8]}@example.com"
     llm_recipient = f"Acme Corp {uuid.uuid4().hex[:6]}"
     await _make_user_with_forward(
@@ -800,6 +863,11 @@ async def test_apply_llm_recipient_wins_over_email_to(
         display_name=f"Should Not Win {uuid.uuid4().hex[:6]}",
         forward_addresses=[address],
     )
+    async with session_factory() as session:
+        # The LLM name only wins over the To: fallback when it already exists;
+        # inference never creates a recipient from an unmatched extracted name.
+        session.add(Recipient(name=llm_recipient))
+        await session.commit()
     patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=llm_recipient)))
     document_id = await make_document(
         session_factory, f"apply-llm-wins-{uuid.uuid4().hex[:8]}", extra={"email_to": [address]}
@@ -841,3 +909,111 @@ async def test_apply_email_to_matching_nobody_leaves_recipient_none(
         assert document is not None
         assert document.recipient_id is None
         assert "recipient_id" not in document.extra["extraction"]["fields_set"]
+
+
+# ------------------------- inference must not invent recipients (extract-only path)
+
+
+async def test_apply_llm_recipient_matching_existing_is_assigned(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An extracted name that matches an existing recipient is assigned to it."""
+    name = f"Known Recipient {uuid.uuid4().hex[:6]}"
+    async with session_factory() as session:
+        session.add(Recipient(name=name))
+        await session.commit()
+
+    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=name.lower())))
+    document_id = await make_document(session_factory, f"apply-known-{uuid.uuid4().hex[:8]}")
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        count = (
+            await session.execute(
+                select(func.count()).select_from(Recipient).where(Recipient.name == name)
+            )
+        ).scalar_one()
+        assert count == 1  # matched the existing row, no duplicate created
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient is not None and document.recipient.name == name
+        assert "recipient_id" in document.extra["extraction"]["fields_set"]
+
+
+async def test_apply_llm_recipient_not_in_table_stays_unset_and_creates_nothing(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An extracted name matching no recipient leaves recipient unset and invents nothing."""
+    invented = f"Mathews {uuid.uuid4().hex[:8]}"
+    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=invented)))
+    document_id = await make_document(session_factory, f"apply-invented-{uuid.uuid4().hex[:8]}")
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Recipient)
+                .where(func.lower(Recipient.name) == invented.lower())
+            )
+        ).scalar_one()
+        assert count == 0  # no junk recipient row created
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient_id is None
+        assert "recipient_id" not in document.extra["extraction"]["fields_set"]
+
+
+async def test_apply_invented_llm_recipient_falls_back_to_email_to_user(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An unmatched LLM name is skipped; the To: fallback then fills the user recipient."""
+    address = f"fb-{uuid.uuid4().hex[:8]}@example.com"
+    display_name = f"Fallback Wins {uuid.uuid4().hex[:6]}"
+    user_id = await _make_user_with_forward(
+        session_factory,
+        username=f"fbw-{uuid.uuid4().hex[:8]}",
+        display_name=display_name,
+        forward_addresses=[address],
+    )
+    invented = f"Mathews {uuid.uuid4().hex[:8]}"
+    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=invented)))
+    document_id = await make_document(
+        session_factory, f"apply-invented-fb-{uuid.uuid4().hex[:8]}", extra={"email_to": [address]}
+    )
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        # The invented name created no recipient row.
+        count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Recipient)
+                .where(func.lower(Recipient.name) == invented.lower())
+            )
+        ).scalar_one()
+        assert count == 0
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient is not None
+        assert document.recipient.user_id == user_id
+        assert document.recipient.name == display_name
+        assert "recipient_id" in document.extra["extraction"]["fields_set"]

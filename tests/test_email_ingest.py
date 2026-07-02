@@ -72,6 +72,7 @@ def make_pdf(marker: str | None = None) -> bytes:
 def make_raw_mail(
     *,
     from_addr: str = "john@example.com",
+    to_addr: str = "library@example.test",
     subject: str = "Invoice",
     message_id: str | None = None,
     attachments: list[tuple[str, bytes, str, str]] | None = None,
@@ -79,7 +80,7 @@ def make_raw_mail(
     """Raw RFC822 bytes for a (possibly multipart) mail with attachments."""
     message = EmailMessage()
     message["From"] = from_addr
-    message["To"] = "library@example.test"
+    message["To"] = to_addr
     message["Subject"] = subject
     message["Message-ID"] = message_id or f"<{uuid.uuid4().hex}@example.com>"
     message.set_content("see attached")
@@ -668,6 +669,41 @@ async def test_body_email_stores_matching_to_address_in_document_extra(
     await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
 
     documents = await documents_named(session_factory, f"{subject}.txt")
+    assert len(documents) == 1
+    assert documents[0].extra["email_to"] == [to_address.lower()]
+    # And the same provenance is recorded on the received event.
+    events = await events_for(session_factory, documents[0].id, "received")
+    assert events[0].detail["email_to"] == [to_address.lower()]
+
+
+async def test_attachment_email_stores_matching_to_address_in_document_extra(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # An attachment mail (not just a body-only mail) whose To: matches a user's
+    # forward address stores that address (lowercased) under
+    # document.extra["email_to"], so the extraction recipient fallback works for
+    # attachments exactly as it does for email bodies.
+    tag = uuid.uuid4().hex[:8]
+    to_address = f"family-{tag}@example.test"
+    await _make_user(
+        session_factory,
+        username=f"attrecip-{tag}",
+        forward_addresses=[to_address],
+    )
+    name = f"attach-to-{tag}.pdf"
+    raw = make_raw_mail(
+        to_addr=f"Family Inbox <{to_address.upper()}>",
+        subject=f"attach to-match {tag}",
+        attachments=[(name, make_pdf(tag), "application", "pdf")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="22")])
+
+    await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    documents = await documents_named(session_factory, name)
     assert len(documents) == 1
     assert documents[0].extra["email_to"] == [to_address.lower()]
     # And the same provenance is recorded on the received event.

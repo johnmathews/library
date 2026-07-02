@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -1104,6 +1104,45 @@ def test_patch_recipient_upserts_and_returns(api_client: TestClient, api_databas
     assert isinstance(body["recipient"]["id"], int)
     # Storage-level marker recorded so re-extraction won't overwrite it.
     assert "recipient_id" in body["user_edited_fields"]
+
+    # Clearing it with null removes the recipient.
+    cleared = api_client.patch(f"/api/documents/{document_id}", json={"recipient": None})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["recipient"] is None
+
+
+def test_patch_recipient_creates_brand_new_recipient(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The MANUAL edit path still CREATES a recipient for a brand-new name.
+
+    Unlike the extraction/inference path (which never invents a recipient), a
+    user deliberately assigning an unknown recipient via PATCH must create it.
+    """
+    import uuid
+
+    brand_new = f"Brand New Recipient {uuid.uuid4().hex[:8]}"
+
+    async def count_named() -> int:
+        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                result = await conn.execute(
+                    select(func.count()).select_from(Recipient).where(Recipient.name == brand_new)
+                )
+                return result.scalar_one()
+        finally:
+            await engine.dispose()
+
+    assert asyncio.run(count_named()) == 0  # does not exist yet
+
+    document_id = seed_document(api_database_url, "w2-recipient-create-new")
+    response = api_client.patch(f"/api/documents/{document_id}", json={"recipient": brand_new})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["recipient"]["name"] == brand_new
+    assert isinstance(body["recipient"]["id"], int)
+    assert asyncio.run(count_named()) == 1  # created by the manual edit
 
     # Clearing it with null removes the recipient.
     cleared = api_client.patch(f"/api/documents/{document_id}", json={"recipient": None})

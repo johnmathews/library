@@ -124,6 +124,29 @@ async def _match_user(session: AsyncSession, name: str) -> User | None:
     )
 
 
+async def match_existing_recipient(session: AsyncSession, name: str) -> Recipient | None:
+    """Resolve a name to an **existing** :class:`Recipient`, without inventing one.
+
+    A name matching a user's **username or display name** (case-insensitive)
+    resolves to that user's linked recipient (created/adopted as needed — a user
+    is a real, known person, not an invented recipient). Any other name resolves
+    to a plain recipient by case-insensitive name match. Returns ``None`` when
+    nothing matches; unlike :func:`upsert_recipient` it never creates a new plain
+    recipient. Used by the extraction/inference path so the LLM cannot conjure a
+    junk recipient row for a name that isn't already known.
+    """
+    cleaned = name.strip()
+    user = await _match_user(session, cleaned)
+    if user is not None:
+        return await get_or_create_user_recipient(session, user)
+
+    return (
+        await session.execute(
+            select(Recipient).where(func.lower(Recipient.name) == cleaned.lower())
+        )
+    ).scalar_one_or_none()
+
+
 async def upsert_recipient(session: AsyncSession, name: str) -> Recipient:
     """Resolve an extracted recipient name to a :class:`Recipient` row.
 
@@ -131,20 +154,16 @@ async def upsert_recipient(session: AsyncSession, name: str) -> Recipient:
     resolves to that user's linked recipient (created/adopted as needed), so a
     document addressed to either name maps to one recipient. Any other name
     upserts a plain recipient by case-insensitive name match, creating if new.
-    """
-    cleaned = name.strip()
-    user = await _match_user(session, cleaned)
-    if user is not None:
-        return await get_or_create_user_recipient(session, user)
 
-    existing = (
-        await session.execute(
-            select(Recipient).where(func.lower(Recipient.name) == cleaned.lower())
-        )
-    ).scalar_one_or_none()
+    This *creates* a recipient when none matches; it backs the **manual** edit
+    path (``documents_service.apply_document_update``) where a user deliberately
+    assigns a new recipient. The extraction/inference path uses
+    :func:`match_existing_recipient` instead, which never invents a row.
+    """
+    existing = await match_existing_recipient(session, name)
     if existing is not None:
         return existing
-    recipient = Recipient(name=cleaned)
+    recipient = Recipient(name=name.strip())
     session.add(recipient)
     await session.flush()
     return recipient
@@ -245,8 +264,15 @@ async def _apply_outcome(
 
     if settable("recipient_id", metadata.recipient_name):
         assert metadata.recipient_name is not None
-        document.recipient_id = (await upsert_recipient(session, metadata.recipient_name)).id
-        fields_set.append("recipient_id")
+        # Inference must never INVENT a recipient: only assign when the extracted
+        # name matches an existing recipient (or a known user). An unmatched name
+        # is dropped — recipient stays unset so the To: fallback below can fire
+        # and no junk recipient row is created. Manual edits still use
+        # upsert_recipient (which creates); this constrains inference only.
+        matched = await match_existing_recipient(session, metadata.recipient_name)
+        if matched is not None:
+            document.recipient_id = matched.id
+            fields_set.append("recipient_id")
 
     # Only-fill-when-empty fallback: when the LLM left recipient unset (and the
     # user has not locked it), derive it from the email ``To:`` address if that
