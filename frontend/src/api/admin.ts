@@ -222,3 +222,96 @@ export function deleteRecipient(id: number, reassignTo?: number | null): Promise
   }
   return apiFetch<void>(`/api/admin/recipients/${id}`, { method: 'DELETE', query })
 }
+
+/** POST /api/admin/recipients — create a recipient (dedupes case-insensitively). */
+export function createRecipient(name: string): Promise<RecipientRef> {
+  return apiFetch<RecipientRef>('/api/admin/recipients', { method: 'POST', body: { name } })
+}
+
+// --- Senders ----------------------------------------------------------------
+// Same id-keyed rename/merge + delete-with-reassign contract as recipients.
+
+/** The renamed sender (or the merge target, when a merge was performed). */
+export interface SenderRef {
+  id: number
+  name: string
+}
+
+/** 409 body from `renameSender` on a name collision (see `RecipientRenameConflict`). */
+export interface SenderRenameConflict {
+  detail: string
+  target_id: number
+  target_name: string
+  target_document_count: number
+}
+
+/** 409 body from `deleteSender` when the sender still owns documents. */
+export interface SenderDeleteConflict {
+  detail: string
+  document_count: number
+}
+
+/** POST /api/admin/senders — create a sender (dedupes case-insensitively). */
+export function createSender(name: string): Promise<SenderRef> {
+  return apiFetch<SenderRef>('/api/admin/senders', { method: 'POST', body: { name } })
+}
+
+/** PATCH /api/admin/senders/{id} — rename, or (with `merge`) fold into the target. */
+export function renameSender(id: number, name: string, merge = false): Promise<SenderRef> {
+  return apiFetch<SenderRef>(`/api/admin/senders/${id}`, {
+    method: 'PATCH',
+    body: merge ? { name, merge: true } : { name },
+  })
+}
+
+/** DELETE /api/admin/senders/{id}; `reassignTo` three-state as `deleteRecipient`. */
+export function deleteSender(id: number, reassignTo?: number | null): Promise<void> {
+  const query: Record<string, string | number | undefined> = {}
+  if (reassignTo !== undefined) {
+    query.reassign_to = reassignTo === null ? '' : reassignTo
+  }
+  return apiFetch<void>(`/api/admin/senders/${id}`, { method: 'DELETE', query })
+}
+
+// --- Kinds ------------------------------------------------------------------
+// Kinds are slug-keyed: rename edits the display name only (slug is immutable),
+// and delete reassigns to another kind by slug. There is no kind-merge — a name
+// collision on rename is a hard 409.
+
+/** The renamed kind. */
+export interface KindRef {
+  slug: string
+  name: string
+}
+
+/** 409 body from `renameKind` when the new name collides with another kind. */
+export interface KindRenameConflict {
+  detail: string
+  target_slug: string
+  target_name: string
+}
+
+/** 409 body from `deleteKind` when the kind still owns documents. */
+export interface KindDeleteConflict {
+  detail: string
+  document_count: number
+}
+
+/** PATCH /api/admin/kinds/{slug} — rename the display name (slug is immutable). */
+export function renameKind(slug: string, name: string): Promise<KindRef> {
+  return apiFetch<KindRef>(`/api/admin/kinds/${slug}`, { method: 'PATCH', body: { name } })
+}
+
+/**
+ * DELETE /api/admin/kinds/{slug}. `reassignTo` three-state:
+ *   - omitted → 409 guard when the kind still has documents.
+ *   - `null` → `reassign_to=` (null the kind on its documents).
+ *   - a slug → move the documents to that kind before deleting.
+ */
+export function deleteKind(slug: string, reassignTo?: string | null): Promise<void> {
+  const query: Record<string, string | undefined> = {}
+  if (reassignTo !== undefined) {
+    query.reassign_to = reassignTo === null ? '' : reassignTo
+  }
+  return apiFetch<void>(`/api/admin/kinds/${slug}`, { method: 'DELETE', query })
+}

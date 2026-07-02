@@ -16,6 +16,21 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.models import Document, Kind, Recipient, Sender, Tag, document_tags
 
+
+@dataclass(frozen=True)
+class CreateEntityResult[Entity: (Sender, Recipient)]:
+    """Outcome of a reference-entity create.
+
+    - ``created`` — a new row (``entity`` is it).
+    - ``exists`` — a case-insensitive name match already existed (``entity`` is
+      the existing row); no duplicate is made.
+    - ``empty_name`` — the name was blank after trimming.
+    """
+
+    status: Literal["created", "exists", "empty_name"]
+    entity: Entity | None = None
+
+
 _NON_ALNUM = re.compile(r"[^a-z0-9]+")
 
 
@@ -364,6 +379,249 @@ async def reassign_and_delete_recipient(
         update(Document).where(Document.recipient_id == recipient_id).values(recipient_id=target_id)
     )
     await session.delete(recipient)
+    await session.commit()
+    return DeleteResult(status="deleted")
+
+
+async def create_recipient(session: AsyncSession, name: str) -> "CreateEntityResult[Recipient]":
+    """Create a recipient from a name, deduping case-insensitively.
+
+    Trims and collapses whitespace; an existing case-insensitive name match is
+    returned (``exists``) rather than creating a duplicate (the ``name`` column
+    is unique). Owns its transaction, mirroring the other reference CRUD.
+    """
+    cleaned = " ".join(name.split())
+    if not cleaned:
+        return CreateEntityResult(status="empty_name")
+    existing = (
+        await session.execute(
+            select(Recipient).where(func.lower(Recipient.name) == cleaned.lower())
+        )
+    ).scalar_one_or_none()
+    if existing is not None:
+        return CreateEntityResult(status="exists", entity=existing)
+    recipient = Recipient(name=cleaned)
+    session.add(recipient)
+    await session.commit()
+    await session.refresh(recipient)
+    return CreateEntityResult(status="created", entity=recipient)
+
+
+# ------------------------------------------------------------- sender management
+#
+# Admin-only mutations behind POST/PATCH/DELETE /api/admin/senders, mirroring the
+# recipient CRUD above (Sender has the same shape: unique name, Document.sender_id
+# nullable ON DELETE SET NULL). Each service owns its transaction.
+
+
+async def _sender_document_count(session: AsyncSession, sender_id: int) -> int:
+    """Non-deleted documents from a sender (matches list_senders counts)."""
+    return (
+        await session.execute(
+            select(func.count())
+            .select_from(Document)
+            .where(Document.sender_id == sender_id, Document.deleted_at.is_(None))
+        )
+    ).scalar_one()
+
+
+async def create_sender(session: AsyncSession, name: str) -> "CreateEntityResult[Sender]":
+    """Create a sender from a name, deduping case-insensitively (see create_recipient)."""
+    cleaned = " ".join(name.split())
+    if not cleaned:
+        return CreateEntityResult(status="empty_name")
+    existing = (
+        await session.execute(select(Sender).where(func.lower(Sender.name) == cleaned.lower()))
+    ).scalar_one_or_none()
+    if existing is not None:
+        return CreateEntityResult(status="exists", entity=existing)
+    sender = Sender(name=cleaned)
+    session.add(sender)
+    await session.commit()
+    await session.refresh(sender)
+    return CreateEntityResult(status="created", entity=sender)
+
+
+@dataclass(frozen=True)
+class SenderRenameResult:
+    """Outcome of :func:`rename_sender` (mirrors :class:`RenameResult`)."""
+
+    status: Literal["renamed", "merged", "collision", "not_found", "empty_name"]
+    sender: Sender | None = None
+    document_count: int = 0
+
+
+async def rename_sender(
+    session: AsyncSession, sender_id: int, new_name: str, merge: bool
+) -> SenderRenameResult:
+    """Rename a sender, merging into an existing name on collision when asked.
+
+    Mirrors :func:`rename_recipient`: a case-insensitive name match against
+    another sender is a collision, reported with ``merge=False`` or (with
+    ``merge=True``) resolved by reassigning this sender's documents onto the
+    target and deleting this sender.
+    """
+    cleaned = new_name.strip()
+    if not cleaned:
+        return SenderRenameResult(status="empty_name")
+    sender = await session.get(Sender, sender_id)
+    if sender is None:
+        return SenderRenameResult(status="not_found")
+
+    target = (
+        await session.execute(
+            select(Sender).where(
+                func.lower(Sender.name) == cleaned.lower(),
+                Sender.id != sender_id,
+            )
+        )
+    ).scalar_one_or_none()
+
+    if target is not None:
+        if not merge:
+            count = await _sender_document_count(session, target.id)
+            return SenderRenameResult(status="collision", sender=target, document_count=count)
+        await session.execute(
+            update(Document).where(Document.sender_id == sender_id).values(sender_id=target.id)
+        )
+        await session.delete(sender)
+        await session.commit()
+        return SenderRenameResult(status="merged", sender=target)
+
+    sender.name = cleaned
+    await session.commit()
+    return SenderRenameResult(status="renamed", sender=sender)
+
+
+async def reassign_and_delete_sender(
+    session: AsyncSession, sender_id: int, reassign_to: int | None | _Unset = UNSET
+) -> DeleteResult:
+    """Delete a sender, first moving its documents to ``reassign_to`` (or NULL).
+
+    Three-state ``reassign_to`` exactly as :func:`reassign_and_delete_recipient`.
+    """
+    sender = await session.get(Sender, sender_id)
+    if sender is None:
+        return DeleteResult(status="not_found")
+
+    provided = not isinstance(reassign_to, _Unset)
+    target_id: int | None = reassign_to if isinstance(reassign_to, int) else None
+    if target_id is not None:
+        if target_id == sender_id:
+            return DeleteResult(status="self_reassign")
+        if await session.get(Sender, target_id) is None:
+            return DeleteResult(status="target_not_found")
+
+    count = await _sender_document_count(session, sender_id)
+    if count > 0 and not provided:
+        return DeleteResult(status="in_use", document_count=count)
+
+    await session.execute(
+        update(Document).where(Document.sender_id == sender_id).values(sender_id=target_id)
+    )
+    await session.delete(sender)
+    await session.commit()
+    return DeleteResult(status="deleted")
+
+
+# --------------------------------------------------------------- kind management
+#
+# Admin-only mutations behind PATCH/DELETE /api/admin/kinds/{slug}. Kinds are
+# identified by their stable, unique ``slug``: rename edits the display ``name``
+# only (the slug never changes, so anything keyed on it keeps working), and there
+# is no name-merge — a name collision with another kind is refused. Delete
+# reassigns Document.kind_id (target named by slug) exactly like the others.
+
+
+async def _kind_document_count(session: AsyncSession, kind_id: int) -> int:
+    """Non-deleted documents of a kind (matches list_kinds counts)."""
+    return (
+        await session.execute(
+            select(func.count())
+            .select_from(Document)
+            .where(Document.kind_id == kind_id, Document.deleted_at.is_(None))
+        )
+    ).scalar_one()
+
+
+@dataclass(frozen=True)
+class KindRenameResult:
+    """Outcome of :func:`rename_kind`.
+
+    - ``renamed`` — display name updated in place (``kind`` is the row); slug
+      is never touched.
+    - ``collision`` — another kind already uses that name (``kind`` is the
+      conflicting kind); refused because duplicate display names are confusing
+      and there is no kind-merge.
+    - ``not_found`` — no kind with the slug.
+    - ``empty_name`` — the new name was blank after trimming.
+    """
+
+    status: Literal["renamed", "collision", "not_found", "empty_name"]
+    kind: Kind | None = None
+
+
+async def rename_kind(session: AsyncSession, slug: str, new_name: str) -> KindRenameResult:
+    """Rename a kind's display name (slug immutable); refuse a name collision.
+
+    The slug is a stable machine identifier, so only ``name`` changes. A
+    case-insensitive name match against another kind is refused (``collision``)
+    rather than merged — kinds have no merge semantics.
+    """
+    cleaned = standardize_kind_name(new_name) if new_name.strip() else ""
+    if not cleaned:
+        return KindRenameResult(status="empty_name")
+    kind = (await session.execute(select(Kind).where(Kind.slug == slug))).scalar_one_or_none()
+    if kind is None:
+        return KindRenameResult(status="not_found")
+
+    target = (
+        await session.execute(
+            select(Kind).where(func.lower(Kind.name) == cleaned.lower(), Kind.slug != slug)
+        )
+    ).scalar_one_or_none()
+    if target is not None:
+        return KindRenameResult(status="collision", kind=target)
+
+    kind.name = cleaned
+    await session.commit()
+    return KindRenameResult(status="renamed", kind=kind)
+
+
+async def reassign_and_delete_kind(
+    session: AsyncSession, slug: str, reassign_to: str | None | _Unset = UNSET
+) -> DeleteResult:
+    """Delete a kind, first moving its documents to the ``reassign_to`` kind (or NULL).
+
+    Kinds are named by slug throughout their API, so ``reassign_to`` is a target
+    *slug* (three-state: a slug to move onto, explicit ``None`` to null, or
+    :data:`UNSET`). Behaviour otherwise matches
+    :func:`reassign_and_delete_recipient`.
+    """
+    kind = (await session.execute(select(Kind).where(Kind.slug == slug))).scalar_one_or_none()
+    if kind is None:
+        return DeleteResult(status="not_found")
+
+    provided = not isinstance(reassign_to, _Unset)
+    target_id: int | None = None
+    if isinstance(reassign_to, str):
+        if reassign_to == slug:
+            return DeleteResult(status="self_reassign")
+        target = (
+            await session.execute(select(Kind).where(Kind.slug == reassign_to))
+        ).scalar_one_or_none()
+        if target is None:
+            return DeleteResult(status="target_not_found")
+        target_id = target.id
+
+    count = await _kind_document_count(session, kind.id)
+    if count > 0 and not provided:
+        return DeleteResult(status="in_use", document_count=count)
+
+    await session.execute(
+        update(Document).where(Document.kind_id == kind.id).values(kind_id=target_id)
+    )
+    await session.delete(kind)
     await session.commit()
     return DeleteResult(status="deleted")
 
