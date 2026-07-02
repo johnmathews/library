@@ -296,6 +296,45 @@ in sync automatically.
   to `AppliedFilters`; the `DOCUMENT_STATUSES` options array lives in
   `src/api/documents.ts`.
 
+### Dashboard sort control (`DocumentListView.vue`)
+
+A mosaic sort control sits in the results-count row: a field `<select>`
+(`[data-testid="sort-field-select"]` — Document date / Added date) plus a violet
+asc/desc toggle (`[data-testid="sort-dir-toggle"]`). It round-trips through the
+URL like the filters — `sort`/`dir` are added to `AppliedFilters`,
+`parseDocumentQuery`/`buildDocumentQuery` (omitted at their defaults:
+`document_date`/`desc`), and unknown values fall back to the defaults. Sort is
+deliberately **excluded from `hasActiveFilters`** (it is not a filter). While a
+search query is active the control is disabled, because the backend orders by
+relevance rank when `q` is present.
+
+### Dashboard card-fields picker (`DashboardFieldsMenu.vue` / `DashboardFieldsEditor.vue`)
+
+A **Fields** button (`[data-testid="dashboard-fields-button"]`) on the dashboard
+opens a popover to toggle and reorder the metadata fields shown on document
+cards. The stored `dashboard_fields` list is **order-significant**:
+`DocumentListView` renders its card meta row by iterating that ordered list (the
+ungated "Needs review" badge stays pinned first, outside the field set). The
+reusable `DashboardFieldsEditor` provides a checkbox per field, drag reorder
+(SortableJS via the `sortablejs` dependency), accessible Up/Down move buttons +
+aria, and "Reset to defaults". Changes persist immediately through the existing
+`PUT /api/settings` → `auth.applyPreferences` path — no new endpoint. The
+Settings → Dashboard tab reuses the same `DashboardFieldsEditor`.
+
+### Admin → Metadata tab (`AdminView.vue`)
+
+The Metadata tab manages the reference taxonomy with full CRUD, grouped into
+**Senders**, **Recipients**, **Kinds**, and **Currencies** cards (lazy-loaded on
+first open). Senders and recipients share the id-keyed create / rename-or-merge /
+delete-with-reassign UI (`sender-*`, `recipient-*` testids); kinds are slug-keyed
+with a name-only rename (a name collision is a row error — no merge) and
+reassign-by-slug delete (`kind-*` testids). The **Currencies** card lists codes
+in use with counts and offers a series-aware **normalise** form (from-select +
+to-input) behind a confirm step, surfacing the per-table result, an FX-missing
+warning (`currency-fx-warning`), or a refusal listing override conflicts
+(`currency-conflict`). All mutations go through `src/api/admin.ts` and refresh
+the shared taxonomy cache.
+
 ## 1.6 Dark mode
 
 Dark mode is class-based (`.dark` on `<html>`, driven by `ThemeToggle` /

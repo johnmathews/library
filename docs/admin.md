@@ -58,11 +58,19 @@ All under `require_admin`:
 | `POST /api/admin/users` | create a user (optionally admin); also links a recipient (§1.2.4) |
 | `PATCH /api/admin/users/{id}` | promote/demote and activate/deactivate |
 | `DELETE /api/admin/users/{id}` | delete a user (guarded: not yourself, not the last admin) (§1.2.4) |
+| `POST /api/admin/recipients` | create a recipient (dedupes case-insensitively) (§1.2.3) |
 | `PATCH /api/admin/recipients/{id}` | rename a recipient, or merge it into another (§1.2.3) |
 | `DELETE /api/admin/recipients/{id}` | delete a recipient, reassigning its documents first (§1.2.3) |
+| `POST` / `PATCH` / `DELETE /api/admin/senders[/{id}]` | senders: create / rename-or-merge / reassign-then-delete — identical contract to recipients (§1.2.3) |
+| `PATCH` / `DELETE /api/admin/kinds/{slug}` | kinds (slug-keyed): rename the display name only (no merge), or reassign-then-delete by slug (§1.2.3) |
+| `GET /api/admin/currencies` | distinct currency codes in use, with document counts (§1.2.5) |
+| `POST /api/admin/currencies/normalize` | rename a currency code across the whole store, series-aware (§1.2.5) |
 
 The system config view only exposes a curated, secret-free subset of settings —
-never API keys, passwords, or internal URLs.
+never API keys, passwords, or internal URLs. All reference-entity mutations
+(senders/kinds/recipients) and currency normalisation serialise on transaction-scoped
+advisory locks (kinds/senders/recipients share one; currency uses its own) so
+concurrent admin edits can't interleave.
 
 **Last-admin protection:** `PATCH` refuses (409) any change that would leave
 zero active admins, so an admin cannot lock everyone out. Deactivating a user
@@ -105,6 +113,17 @@ These mutations move the FK directly; they bypass per-document
 documents must move regardless). After any mutation the frontend refreshes the
 shared taxonomy cache so other views' recipient dropdowns/filters update.
 
+**Senders and kinds** get the same treatment from the same Metadata tab.
+**Senders** (`POST/PATCH/DELETE /api/admin/senders`) are id-keyed and behave
+exactly like recipients (create/dedupe, rename-or-merge, reassign-then-delete;
+`Document.sender_id` is `ON DELETE SET NULL`). **Kinds**
+(`PATCH/DELETE /api/admin/kinds/{slug}`) are keyed by their stable, unique
+`slug`: rename edits the **display name only** (the slug never changes, and a
+name collision with another kind is refused — there is no kind merge), and
+delete reassigns documents to another kind **by slug**. Create for kinds stays on
+the public `POST /api/kinds`. Deleting any reference row never deletes documents
+— it only nulls their pointer.
+
 ### 1.2.4 Users ↔ recipients (auto-link, dual-name matching, delete)
 
 Each user is paired with a **recipient** (the "who a document is addressed to"
@@ -136,6 +155,33 @@ for a user under either of their names.
   FK just unlinks it (`user_id` → NULL), so documents addressed to that person
   stay addressed. Deletion of the user row itself is irreversible (sessions and
   API tokens cascade away with it).
+
+### 1.2.5 Currency normalisation (series-aware)
+
+Currency is a free-text `CHAR(3)` code, not a reference table — but it is part
+of **series identity** (a series is one `(sender, kind, currency)` group), so it
+can't just be CRUDed. The Metadata tab's **Currencies** card lists the distinct
+codes in use (`GET /api/admin/currencies`) and offers a **normalise** action
+(`POST /api/admin/currencies/normalize`, `{from_code, to_code}`) that renames a
+code everywhere at once, in one transaction under a dedicated advisory lock:
+
+- **Plain rewrite** — `documents`, `authored_series`, and
+  `authored_series_suggestions` (`signature_currency`).
+- **Cache merge** — `series_insights` is a recomputable cache; a `from_code` row
+  that would collide with an existing `to_code` bucket is dropped (the survivor
+  is kept and regenerates on next indexing), the rest are moved.
+- **Refuse on user data** — `series_membership_overrides` and
+  `series_meta_overrides` hold user-authored pins/titles. If the rename would
+  collide there, the whole operation is **refused** (`409`, listing the
+  conflicts) and nothing changes — no user data is ever dropped.
+- **`fx_rates` untouched** — FX rate rows are never merged across codes; if the
+  target has no rate row the result flags `fx_rate_missing` so the admin knows FX
+  conversion for it is unavailable until a rate is seeded.
+
+Codes are validated as `^[A-Z]{3}$` (upper-cased first); a no-op rename (same
+code) is a `400`. The admin UI shows a confirm step before running, and surfaces
+the per-table result, the FX warning, or the conflict list. See
+docs/api.md §1.18.6 for the exact response shapes.
 
 ## 1.3 The admin views (frontend)
 
