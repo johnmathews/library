@@ -59,7 +59,19 @@ they stub `fetch` with a single-use `Response`, and the mount read consumed the
 body before the test's own interaction could read it. Fixed by routing
 `/api/kinds` to its own fresh response in the spec's fetch stub.
 
-## 5. Verification
+## 5. Deploy health-check bug (found post-deploy)
+
+Verifying the live deploy surfaced a latent bug: `scripts/deploy.sh`'s health
+gate ran `curl -fsS http://localhost:8000/healthz` on the host, but `:8000` is
+**paperless-ngx** (the library app publishes on `:8010`). Paperless answers with
+a 302 to `/accounts/login/`, which `curl -fsS` (no `-L`) treats as success — so
+the gate passed unconditionally and never actually checked the library app.
+Fixed to probe inside the container (`docker compose exec -T library-webserver
+python -c "…urlopen('http://localhost:8000/healthz')"`), mirroring the image's
+own HEALTHCHECK (python, since curl isn't in the image). Verified against the
+live host: exit 0 when healthy, exit 1 when the app is unreachable.
+
+## 6. Verification
 
 Backend 867 passed + ruff clean; frontend 669 unit passed + type-check + lint
 clean. New tests: schema resolver tolerance, the `PUT /api/settings/kind-colors`
