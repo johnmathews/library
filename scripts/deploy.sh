@@ -93,7 +93,15 @@ deploy() {
   fi
 
   bold "Health check:"
-  if remote "curl -fsS http://localhost:8000/healthz >/dev/null"; then
+  # Probe /healthz INSIDE the webserver container. The host's :8000 is
+  # paperless-ngx (the library app publishes on :8010), and a bare
+  # `curl localhost:8000` there gets paperless' 302 to /accounts/login/ —
+  # which `curl -fsS` treats as success, so it never actually checked the
+  # library app. Exec-in-container hits the app directly on its own port, and
+  # uses python (guaranteed present — it's what the image's HEALTHCHECK uses;
+  # curl may not be installed) so a non-2xx raises and fails the gate.
+  if remote "docker compose exec -T $WEB_SVC \
+      python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""; then
     echo "  /healthz OK"
   else
     err "/healthz did not return OK — check 'docker compose logs $WEB_SVC'."
