@@ -255,6 +255,32 @@ input[type='search']::-webkit-search-results-decoration {
   box-shadow: 0 12px 28px -8px rgb(0 0 0 / 0.6);
 }
 
+/*
+ * Per-kind border accent (Settings → Appearance → Document type colours). Only
+ * tiles whose kind has a colour get .app-doc-card--accented + a --card-accent
+ * hex; neutral tiles fall through to the gray/violet rules above unchanged. The
+ * compound selector (two classes) outranks Tailwind's single .border-gray-200,
+ * so no !important is needed. A single stored hex is adapted per surface with
+ * color-mix — darkened on light, lightened for the near-black dark surface — so
+ * it stays legible in both modes, and the hover state shifts it further to keep
+ * the "border reacts on hover" feel.
+ */
+.app-doc-card.app-doc-card--accented {
+  border-color: var(--card-accent);
+}
+
+.app-doc-card.app-doc-card--accented:hover {
+  border-color: color-mix(in srgb, var(--card-accent), #000 16%);
+}
+
+.dark .app-doc-card.app-doc-card--accented {
+  border-color: color-mix(in srgb, var(--card-accent), #fff 12%);
+}
+
+.dark .app-doc-card.app-doc-card--accented:hover {
+  border-color: color-mix(in srgb, var(--card-accent), #fff 28%);
+}
+
 @media (prefers-reduced-motion: reduce) {
   .app-doc-card {
     transition:

@@ -27,6 +27,7 @@ import {
   type DocumentListItem,
 } from '@/api/documents'
 import { renderSnippet } from '@/utils/snippet'
+import { resolveKindColor } from '@/utils/kindColor'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import { useJobsStore } from '@/stores/jobs'
@@ -301,6 +302,26 @@ const amountLabels = computed<Map<number, string | null>>(() => {
   return labels
 })
 
+// Per-tile border accent by document kind (user override → default palette →
+// null). Precomputed once per item; a null means "no accent", so the tile keeps
+// its neutral default border and violet hover. Applied as the --card-accent CSS
+// var; utility-patterns.css turns that into the light/dark/hover border colour.
+const tileAccents = computed<Map<number, string | null>>(() => {
+  const overrides = auth.kindColors
+  const accents = new Map<number, string | null>()
+  for (const item of items.value) accents.set(item.id, resolveKindColor(item.kind?.slug, overrides))
+  return accents
+})
+
+function tileAccentClass(id: number): string {
+  return tileAccents.value.get(id) ? 'app-doc-card--accented' : ''
+}
+
+function tileAccentStyle(id: number): { '--card-accent': string } | undefined {
+  const accent = tileAccents.value.get(id)
+  return accent ? { '--card-accent': accent } : undefined
+}
+
 // Tiles-per-row preference. 'auto' keeps the responsive breakpoints (the W16
 // contract default); a number pins the desktop column count. Per-machine, since
 // it's a display-size choice (docs/frontend-view-principles.md §4): persisted in
@@ -460,6 +481,9 @@ function toggleSortDirection(): void {
         :key="item.id"
         :id="`doc-card-${item.id}`"
         class="relative bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 overflow-hidden app-doc-card"
+        :class="tileAccentClass(item.id)"
+        :style="tileAccentStyle(item.id)"
+        :data-kind="item.kind?.slug"
         data-testid="doc-card"
       >
         <div class="app-doc-card__thumbnail relative aspect-[4/3] bg-gray-100 dark:bg-gray-900/40 border-b border-gray-200 dark:border-gray-700/60 w-full flex items-center justify-center">

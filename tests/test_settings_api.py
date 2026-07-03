@@ -141,6 +141,61 @@ def test_appearance_requires_auth(anon_client: TestClient) -> None:
     assert resp.status_code == 401
 
 
+def test_get_settings_includes_default_kind_colors(api_client: TestClient) -> None:
+    # Unset by default: everyone sees the frontend's built-in palette.
+    assert api_client.get("/api/settings").json()["kind_colors"] == {}
+
+
+def test_put_kind_colors_round_trips_and_normalises(api_client: TestClient) -> None:
+    put = api_client.put(
+        "/api/settings/kind-colors",
+        json={"kind_colors": {"invoice": "#56B1F3", "receipt": "#34bd68"}},
+    )
+    assert put.status_code == 200, put.text
+    # Hex is lower-cased on the way in.
+    assert put.json()["kind_colors"] == {"invoice": "#56b1f3", "receipt": "#34bd68"}
+    assert api_client.get("/api/settings").json()["kind_colors"] == {
+        "invoice": "#56b1f3",
+        "receipt": "#34bd68",
+    }
+    assert api_client.get("/api/auth/me").json()["preferences"]["kind_colors"] == {
+        "invoice": "#56b1f3",
+        "receipt": "#34bd68",
+    }
+
+
+def test_put_kind_colors_drops_malformed_entries(api_client: TestClient) -> None:
+    put = api_client.put(
+        "/api/settings/kind-colors",
+        json={"kind_colors": {"invoice": "#56b1f3", "bad": "blue", "short": "#fff"}},
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["kind_colors"] == {"invoice": "#56b1f3"}
+
+
+def test_put_kind_colors_empty_map_resets_all(api_client: TestClient) -> None:
+    api_client.put("/api/settings/kind-colors", json={"kind_colors": {"invoice": "#56b1f3"}})
+    put = api_client.put("/api/settings/kind-colors", json={"kind_colors": {}})
+    assert put.status_code == 200, put.text
+    assert put.json()["kind_colors"] == {}
+    assert api_client.get("/api/settings").json()["kind_colors"] == {}
+
+
+def test_put_kind_colors_preserves_other_preferences(api_client: TestClient) -> None:
+    api_client.put("/api/settings/appearance", json={"background_tone": "mist"})
+    api_client.put("/api/settings/kind-colors", json={"kind_colors": {"invoice": "#56b1f3"}})
+    body = api_client.get("/api/settings").json()
+    assert body["background_tone"] == "mist"
+    assert body["kind_colors"] == {"invoice": "#56b1f3"}
+
+
+def test_put_kind_colors_requires_auth(anon_client: TestClient) -> None:
+    resp = anon_client.put(
+        "/api/settings/kind-colors", json={"kind_colors": {"invoice": "#56b1f3"}}
+    )
+    assert resp.status_code == 401
+
+
 def test_put_settings_round_trips(api_client: TestClient) -> None:
     put = api_client.put("/api/settings", json={"dashboard_fields": ["amount", "tags"]})
     assert put.status_code == 200, put.text

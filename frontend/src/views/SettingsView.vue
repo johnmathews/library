@@ -9,22 +9,27 @@
  *     forwards documents from (explicit save; PUT /api/settings/notifications).
  * All preferences live per-user on the server and in the auth store.
  */
-import { ref } from 'vue'
+import { computed, onMounted, ref } from 'vue'
 import { AppButton, AppBanner, AppCheckboxes, AppErrorSummary, AppInput, AppTextarea, PageHeader } from '@/components/app'
 import { ApiError } from '@/api/client'
 import {
   BACKGROUND_TONES,
   DEFAULT_BACKGROUND_TONE,
   DEFAULT_TILE_PREVIEW,
+  NEUTRAL_KIND_COLOR,
   NOTIFICATION_EVENTS,
+  SUGGESTED_COLORS,
   TILE_PREVIEWS,
   updateAppearance,
+  updateKindColors,
   updateNotifications,
   updateSettings,
   type BackgroundTone,
   type DashboardField,
   type TilePreview,
 } from '@/api/settings'
+import { listKinds, type KindOption } from '@/api/taxonomy'
+import { isHexColor, resolveKindColor } from '@/utils/kindColor'
 import DashboardFieldsEditor from '@/components/DashboardFieldsEditor.vue'
 import { useAuthStore } from '@/stores/auth'
 
@@ -104,6 +109,82 @@ async function selectTilePreview(mode: TilePreview): Promise<void> {
     if (auth.user) auth.applyPreferences({ ...auth.user.preferences, tile_preview: previous })
     toneError.value = 'Sorry, your appearance preference could not be saved. Try again.'
   }
+}
+
+// --- Appearance (per-kind tile border colours) ------------------------------
+
+// All kinds, listed for the colour editor; ordered most-used first so the ones
+// the user actually has sit at the top. Loaded once on mount.
+const kinds = ref<KindOption[]>([])
+const sortedKinds = computed<KindOption[]>(() =>
+  [...kinds.value].sort(
+    (a, b) => b.document_count - a.document_count || a.name.localeCompare(b.name),
+  ),
+)
+
+onMounted(async () => {
+  try {
+    const loaded = await listKinds()
+    if (Array.isArray(loaded)) kinds.value = loaded
+  } catch {
+    // Non-fatal: the colour editor simply shows no rows if kinds can't load.
+  }
+})
+
+// Local, editable copy of the user's overrides; the source of truth for the
+// pickers. Seeded from the store and reconciled with the server after each save.
+const kindColorOverrides = ref<Record<string, string>>({ ...auth.kindColors })
+const kindColorError = ref<string | null>(null)
+
+const hasCustomColors = computed(() => Object.keys(kindColorOverrides.value).length > 0)
+function isCustomised(slug: string): boolean {
+  return slug in kindColorOverrides.value
+}
+
+// The colour shown in a kind's picker: its resolved colour (override → default)
+// or a neutral grey stand-in for kinds with no colour (the native <input
+// type="color"> always needs a concrete hex).
+function pickerValue(slug: string): string {
+  return resolveKindColor(slug, kindColorOverrides.value) ?? NEUTRAL_KIND_COLOR
+}
+
+/** Replace the whole override map, saving optimistically with rollback. */
+async function persistKindColors(next: Record<string, string>): Promise<void> {
+  const previous = { ...kindColorOverrides.value }
+  kindColorOverrides.value = next
+  kindColorError.value = null
+  // Optimistic: repaint the dashboard tiles immediately via the store.
+  if (auth.user) auth.applyPreferences({ ...auth.user.preferences, kind_colors: next })
+  try {
+    const result = await updateKindColors(next)
+    auth.applyPreferences(result)
+    kindColorOverrides.value = { ...(result.kind_colors ?? {}) }
+  } catch {
+    kindColorOverrides.value = previous
+    if (auth.user) auth.applyPreferences({ ...auth.user.preferences, kind_colors: previous })
+    kindColorError.value = 'Sorry, your document type colours could not be saved. Try again.'
+  }
+}
+
+function setKindColor(slug: string, hex: string): void {
+  if (!isHexColor(hex)) return
+  void persistKindColors({ ...kindColorOverrides.value, [slug]: hex.toLowerCase() })
+}
+
+/** Native colour input commit (`change`, not `input`, so it fires once). */
+function onPickKindColor(slug: string, event: Event): void {
+  setKindColor(slug, (event.target as HTMLInputElement).value)
+}
+
+function resetKindColor(slug: string): void {
+  if (!isCustomised(slug)) return
+  const next = { ...kindColorOverrides.value }
+  delete next[slug]
+  void persistKindColors(next)
+}
+
+function resetAllKindColors(): void {
+  if (hasCustomColors.value) void persistKindColors({})
 }
 
 // --- Notifications (Pushover + email forwarding) ----------------------------
@@ -335,6 +416,87 @@ const tabClass = (active: boolean): string =>
             >
               <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ mode.text }}</span>
               <span class="text-xs text-gray-500 dark:text-gray-400">{{ mode.hint }}</span>
+            </button>
+          </div>
+        </fieldset>
+      </div>
+
+      <div id="settings-card-kind-colors" :class="cardClass" class="mt-6">
+        <fieldset>
+          <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+            Document type colours
+          </legend>
+          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Give each document type a coloured border on the dashboard so you can
+            spot it at a glance. Pick any colour or tap a suggestion; “Default”
+            restores a type's built-in colour. Saves to your account automatically.
+          </p>
+
+          <AppErrorSummary
+            v-if="kindColorError"
+            :errors="[{ text: kindColorError }]"
+            class="mt-4"
+            data-testid="kind-colors-error"
+          />
+
+          <ul class="mt-5 space-y-2">
+            <li
+              v-for="kind in sortedKinds"
+              :key="kind.slug"
+              class="flex flex-wrap items-center gap-x-4 gap-y-2 py-1"
+              :data-testid="`kind-color-row-${kind.slug}`"
+            >
+              <label class="flex items-center gap-2 min-w-[11rem] cursor-pointer">
+                <input
+                  type="color"
+                  :value="pickerValue(kind.slug)"
+                  :aria-label="`Border colour for ${kind.name}`"
+                  :data-testid="`kind-color-input-${kind.slug}`"
+                  class="h-8 w-8 shrink-0 cursor-pointer rounded-md border border-gray-200 dark:border-gray-700/60 bg-transparent"
+                  @change="onPickKindColor(kind.slug, $event)"
+                />
+                <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ kind.name }}</span>
+                <span class="text-xs text-gray-400 dark:text-gray-500">{{ kind.document_count }}</span>
+              </label>
+
+              <div
+                class="flex items-center gap-1.5"
+                role="group"
+                :aria-label="`Suggested colours for ${kind.name}`"
+              >
+                <button
+                  v-for="swatch in SUGGESTED_COLORS"
+                  :key="swatch.hex"
+                  type="button"
+                  :title="swatch.name"
+                  :aria-label="`${swatch.name} for ${kind.name}`"
+                  class="h-5 w-5 rounded-full border border-black/10 dark:border-white/20 transition hover:scale-110 cursor-pointer"
+                  :style="{ backgroundColor: swatch.hex }"
+                  @click="setKindColor(kind.slug, swatch.hex)"
+                ></button>
+              </div>
+
+              <button
+                type="button"
+                class="ml-auto text-xs font-medium text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 disabled:opacity-40 disabled:cursor-default cursor-pointer"
+                :disabled="!isCustomised(kind.slug)"
+                :data-testid="`kind-color-reset-${kind.slug}`"
+                @click="resetKindColor(kind.slug)"
+              >
+                Default
+              </button>
+            </li>
+          </ul>
+
+          <div class="mt-5">
+            <button
+              type="button"
+              class="text-sm font-medium text-violet-600 hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-default cursor-pointer"
+              :disabled="!hasCustomColors"
+              data-testid="kind-colors-reset-all"
+              @click="resetAllKindColors"
+            >
+              Reset all to defaults
             </button>
           </div>
         </fieldset>

@@ -86,7 +86,7 @@ Beyond the in-app toasts (which are session-bound and only visible while the web
 app is open), each user can opt into **Pushover** push notifications that reach
 their phone/desktop even when Library isn't open. This is a second sink on the
 same document events, configured per-user in **Settings → Notifications**
-(`PUT /api/settings/notifications`, see [api.md](api.md) §1.10.4).
+(`PUT /api/settings/notifications`, see [api.md](api.md) §1.10.5).
 
 ### 1.5.1 Credentials
 

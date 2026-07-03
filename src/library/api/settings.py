@@ -12,6 +12,7 @@ from library.models import User
 from library.schemas import (
     AppearancePreferences,
     DashboardPreferences,
+    KindColorsPreferences,
     NotificationSettingsIn,
     UserPreferences,
     resolve_preferences,
@@ -60,6 +61,26 @@ async def put_appearance(
         **(user.preferences or {}),
         "background_tone": payload.background_tone.value,
         "tile_preview": payload.tile_preview.value,
+    }
+    await db.commit()
+    return resolve_preferences(user.preferences)
+
+
+@router.put(
+    "/settings/kind-colors",
+    response_model=UserPreferences,
+    summary="Update your per-kind tile border colours",
+)
+async def put_kind_colors(
+    payload: KindColorsPreferences,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(current_user)],
+) -> UserPreferences:
+    """Replace the per-kind colour overrides. Malformed entries are dropped; an
+    empty map resets every kind to its built-in default."""
+    user.preferences = {
+        **(user.preferences or {}),
+        "kind_colors": payload.kind_colors,
     }
     await db.commit()
     return resolve_preferences(user.preferences)
