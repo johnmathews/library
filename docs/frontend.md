@@ -105,9 +105,12 @@ vocabulary that the `App*` components and views compose:
   Tailwind border utility on the tile would silently defeat the accent
   `border-color` (this is exactly the bug that made the accent invisible when it
   first shipped). Keeping the neutral, hover, and accent borders all in the one
-  `components` layer lets normal specificity decide. A real computed-border check
-  lives in `e2e/tile-border-colour.spec.ts` (jsdom can't resolve layered
-  cascade, so the unit test only asserts the class hook). `.app-doc-card__*`
+  `components` layer lets normal specificity decide. Coloured tiles use a **2px**
+  border (neutral tiles stay 1px) so the kind colour reads on high-DPI phones;
+  `box-sizing:border-box` keeps the grid aligned. A real computed border
+  colour+width check lives in `e2e/tile-border-colour.spec.ts` (jsdom can't
+  resolve layered cascade, so the unit test only asserts the class hook).
+  `.app-doc-card__*`
   hooks (`__title`, `__thumbnail`,
   `__meta`, …) are an acceptance contract used by `DocumentListView` and its
   tests. The `__thumbnail` box keeps a fixed

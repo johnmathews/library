@@ -278,6 +278,13 @@ input[type='search']::-webkit-search-results-decoration {
  * it further to keep the "border reacts on hover" feel.
  */
 .app-doc-card.app-doc-card--accented {
+  /*
+   * Coloured tiles get a thicker (2px) border so the kind colour reads clearly,
+   * especially on high-DPI phone screens where 1px looks hairline; neutral tiles
+   * keep the 1px hairline. box-sizing:border-box (Tailwind preflight) means the
+   * extra width is drawn inside the tile, so the grid stays aligned.
+   */
+  border-width: 2px;
   border-color: var(--card-accent);
 }
 

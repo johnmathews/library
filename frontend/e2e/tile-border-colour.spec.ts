@@ -90,8 +90,13 @@ test('per-kind accent: tile paints the override border colour (cascade layer fix
   await expect(tile).toBeVisible()
   await expect(tile).toHaveClass(/app-doc-card--accented/)
 
-  // The real, resolved border colour must be the override — not the neutral grey
-  // (rgb(229, 231, 235)) that a utility-layer win would leave.
-  const borderColor = await tile.evaluate((el) => getComputedStyle(el).borderTopColor)
-  expect(borderColor).toBe(OVERRIDE_RGB)
+  // The real, resolved border must be the override colour — not the neutral grey
+  // (rgb(229, 231, 235)) that a utility-layer win would leave — and 2px thick so
+  // the colour reads on a phone (neutral tiles stay 1px).
+  const border = await tile.evaluate((el) => {
+    const s = getComputedStyle(el)
+    return { color: s.borderTopColor, width: s.borderTopWidth }
+  })
+  expect(border.color).toBe(OVERRIDE_RGB)
+  expect(border.width).toBe('2px')
 })
