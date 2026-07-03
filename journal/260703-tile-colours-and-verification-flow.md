@@ -101,8 +101,11 @@ Backend 871 passed (ruff clean whole-repo, coverage 85%). Frontend 689 unit
 passed (+20: `validationReason`, `reviewQueue`, detail-view queue mode, list-row
 reason, detail why-panel), type-check + eslint clean, production build OK. Two new
 e2e specs (`tile-border-colour`, `review-queue`) run in CI; the review-queue spec
-also exercises §2.1 by manufacturing a `needs_review` doc via a future-date edit —
-something the e2e stack previously couldn't do without Claude extraction.
+manufactures a `needs_review` doc via an `amount_currency_coupling` edit (currency
+with no amount) — something the e2e stack previously couldn't do without Claude
+extraction. (It first used a future `document_date`, but that sorted the fixtures
+to the top of the dashboard and broke other specs' "newest upload = first tile"
+assumption; a dateless trigger avoids the pollution.)
 
 ## 5. Follow-ups (not done)
 
