@@ -106,5 +106,7 @@ something the e2e stack previously couldn't do without Claude extraction.
 
 ## 5. Follow-ups (not done)
 
-- `reviewQueue.start()` caps at 200 `needs_review` docs (silently). Fine for now;
-  paginate the queue if anyone accumulates more.
+- `reviewQueue.start()` caps at 100 `needs_review` docs — the list API's max
+  `limit` (a larger value 422s; passing 200 was the bug that broke the queue
+  entry point in CI e2e, invisible to the unit test whose mocked fetch ignored
+  `limit`). Re-entering the queue reloads the next batch. Paginate if needed.

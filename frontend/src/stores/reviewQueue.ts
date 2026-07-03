@@ -30,8 +30,11 @@ export const useReviewQueueStore = defineStore('reviewQueue', () => {
   const hasNext = computed(() => index.value < ids.value.length - 1)
 
   /** Load the current needs-review set and point the cursor at the first one.
-   *  Returns the first document's id, or null if nothing needs review. */
-  async function start(limit = 200): Promise<number | null> {
+   *  Returns the first document's id, or null if nothing needs review.
+   *  `limit` is capped at the list API's maximum (100) — a larger value is a
+   *  422, which is what silently broke the queue entry point in e2e; re-entering
+   *  the queue after clearing the first batch reloads the next. */
+  async function start(limit = 100): Promise<number | null> {
     const response = await listDocuments({ review_status: 'needs_review', limit, offset: 0 })
     ids.value = response.items.map((item) => item.id)
     index.value = 0

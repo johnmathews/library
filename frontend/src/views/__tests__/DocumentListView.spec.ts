@@ -267,6 +267,31 @@ describe('DocumentListView', () => {
     expect(meta.find('[data-testid="review-badge"]').exists()).toBe(true)
   })
 
+  it('start-review-queue loads the queue and navigates to the first flagged doc', async () => {
+    // Count probe says work exists (button shows); the queue-load query returns
+    // the flagged docs so start() has an id to open.
+    reviewCountResponse = () => jsonResponse(listBody([], 2))
+    const flagged = [
+      makeItem({ id: 41, review_status: 'needs_review' }),
+      makeItem({ id: 42, review_status: 'needs_review' }),
+    ]
+    listResponse = () => jsonResponse(listBody(flagged, 2))
+    seedPrefs([])
+    const w = await mountView()
+    const push = vi.spyOn(router, 'push')
+
+    const startBtn = w.find('[data-testid="start-review-queue"]')
+    expect(startBtn.exists()).toBe(true)
+    await startBtn.trigger('click')
+    await flushPromises()
+
+    expect(push).toHaveBeenCalledWith({
+      name: 'document-detail',
+      params: { id: 41 },
+      query: { queue: '1' },
+    })
+  })
+
   it('shows a short plain-language reason next to the review badge', async () => {
     listResponse = () =>
       jsonResponse(

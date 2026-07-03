@@ -23,7 +23,7 @@ describe('useReviewQueueStore', () => {
 
     const first = await q.start()
 
-    expect(listDocuments).toHaveBeenCalledWith({ review_status: 'needs_review', limit: 200, offset: 0 })
+    expect(listDocuments).toHaveBeenCalledWith({ review_status: 'needs_review', limit: 100, offset: 0 })
     expect(first).toBe(5)
     expect(q.currentId).toBe(5)
     expect(q.total).toBe(3)
