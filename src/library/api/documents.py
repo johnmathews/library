@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
-from library.documents_service import apply_document_update
+from library.documents_service import apply_document_update, revalidate_after_edit
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
 from library.jobs import extract_document
 from library.models import (
@@ -48,6 +48,7 @@ from library.schemas import (
     RecipientOut,
     SenderOut,
     TagOut,
+    ValidationFindingSummary,
 )
 from library.search import (
     DEFAULT_DOCUMENT_SORT,
@@ -356,6 +357,10 @@ async def update_document(
     edited = await apply_document_update(session, document, payload, edited_by="user")
     if not edited:
         return _detail(document)
+    # A corrected field can resolve (or introduce) a validation finding, so
+    # re-run the deterministic rules and update review_status before committing —
+    # this is what clears a fixed "implausible date" warning on save.
+    await revalidate_after_edit(session, document, get_settings())
     await session.commit()
     # updated_at has a SQL onupdate (func.now()); SQLAlchemy expires it after the
     # UPDATE since it can't know the server-computed value — refresh it eagerly
@@ -558,9 +563,28 @@ def _list_item_fields(document: Document) -> dict[str, Any]:
         "has_searchable_pdf": document.searchable_pdf,
         "has_thumbnail": (derived_path(document.sha256) / THUMBNAIL_NAME).is_file(),
         "review_status": document.review_status,
+        "review_findings": _review_findings(document),
         "amount_total": document.amount_total,
         "currency": document.currency,
     }
+
+
+def _review_findings(document: Document) -> list[ValidationFindingSummary]:
+    """Compact validation findings for list rows — only when the document still
+    needs review, so clean rows stay lean."""
+    if document.review_status != ReviewStatus.NEEDS_REVIEW:
+        return []
+    validation = document.extra.get("validation") if isinstance(document.extra, dict) else None
+    findings = validation.get("findings", []) if isinstance(validation, dict) else []
+    return [
+        ValidationFindingSummary(
+            rule=finding.get("rule", ""),
+            field=finding.get("field"),
+            message=finding.get("message", ""),
+        )
+        for finding in findings
+        if isinstance(finding, dict)
+    ]
 
 
 def _detail(document: Document) -> DocumentDetail:

@@ -98,7 +98,17 @@ vocabulary that the `App*` components and views compose:
   `--card-accent` hex (per-user, from Settings → Appearance → Document type
   colours); the accent overrides the base border in both modes (adapted per
   surface with `color-mix`) and shifts on hover, while neutral kinds keep the
-  gray/violet default. `.app-doc-card__*` hooks (`__title`, `__thumbnail`,
+  gray/violet default. **Cascade-layer note:** `.app-doc-card` **owns its
+  border** (`border: 1px solid …` in the rule, *not* a `border-gray-200` utility
+  on the markup). `utility-patterns.css` is imported into Tailwind's `components`
+  layer, which loses to the `utilities` layer regardless of specificity — so a
+  Tailwind border utility on the tile would silently defeat the accent
+  `border-color` (this is exactly the bug that made the accent invisible when it
+  first shipped). Keeping the neutral, hover, and accent borders all in the one
+  `components` layer lets normal specificity decide. A real computed-border check
+  lives in `e2e/tile-border-colour.spec.ts` (jsdom can't resolve layered
+  cascade, so the unit test only asserts the class hook). `.app-doc-card__*`
+  hooks (`__title`, `__thumbnail`,
   `__meta`, …) are an acceptance contract used by `DocumentListView` and its
   tests. The `__thumbnail` box keeps a fixed
   `aspect-[4/3]`; how the (tall, A4) first-page image fits it is a per-user
@@ -324,6 +334,37 @@ total-only probe (`listDocuments({ review_status: 'needs_review', limit: 1 })`,
 refreshed on each list load) independent of the current filter. When the count is
 zero and the filter is off the button is **hidden**; when documents need review it
 carries a **pale-red bg + darker-red border** (active state deepens the red).
+Beside it, a violet **"Review these one by one →"** button
+(`[data-testid="start-review-queue"]`, shown when the count > 0) enters the
+step-through review queue (below).
+
+On each flagged tile, a short **plain-language reason** (`[data-testid="review-reason"]`)
+sits next to the "Needs review" badge — e.g. *"Unlikely date"* — sourced from the
+new `review_findings` on the list row and humanised by `summarizeReviewReasons`
+(`utils/validationReason.ts`, the single source of finding wording shared with
+the detail why-panel and the queue).
+
+### Step-through review queue (`stores/reviewQueue.ts` + queue mode on `DocumentDetailView`)
+
+The **"Review these one by one"** button loads every `needs_review` id into the
+`reviewQueue` Pinia store (ordered ids + a cursor) and opens the first document
+with `?queue=1`. In **queue mode** `DocumentDetailView` shows a violet queue bar
+(`[data-testid="review-queue-bar"]`) with the position ("Reviewing *X* of *N*")
+and controls: **← Prev**, **Verify & next** (accepts as-is via the verify
+endpoint), **Next →**, and **Exit**. Editing is the page's normal per-field
+autosave — which now revalidates server-side (api.md §1.5) — so fixing a field
+drops the document off `needs_review`; **Next** then removes the resolved
+document from the queue and advances, while an unfixed document is kept for a
+later pass. When the queue empties the view returns to the dashboard. No new
+route or editor: queue mode is a query flag reusing the whole existing detail
+page. Covered by `stores/__tests__/reviewQueue.spec.ts`, queue-mode cases in
+`DocumentDetailView.spec.ts`, and `e2e/review-queue.spec.ts`.
+
+The detail page also leads with a prominent **"Why this needs review"** panel
+(`[data-testid="validation-findings"]`, shown while `review_status` is
+`needs_review`) that lists **every** finding in plain language — including
+field-mapped ones like an implausible date, which previously showed only as a
+small per-field ⚠ badge. The per-field ⚠ badges remain as a secondary signal.
 
 ### Dashboard card-fields picker (`DashboardFieldsMenu.vue` / `DashboardFieldsEditor.vue`)
 
@@ -384,7 +425,7 @@ the toggle. The user's choice is persisted by `useDark` (localStorage).
   scans `dist/` and fails if any file name or text content reintroduces
   `govuk-`, GDS Transport, or crown/crest references (guarding against a partial
   reskin regression).
-- `npm run test:e2e` — Playwright against the real stack. Five projects: desktop Chromium, mobile WebKit (375 px, iPhone 14), tablet WebKit (iPad gen 11), **desktop Firefox**, and **desktop WebKit** (Safari). The chromium/mobile/tablet projects run the full suite; the two desktop-engine projects are **scoped (via `testMatch`) to `e2e/pdf-preview.spec.ts` only** — they exist to prove the self-rendered PDF preview behaves identically across all three engines, without forcing the rest of the suite onto Firefox. That spec proves canvases paint and scrolling reveals page 2 on each engine. Recent flows have their own specs in `frontend/e2e/`: **`markdown-reader`** (upload a `.md` → the reader renders), **`projects`** (create → assign via the token multiselect → see it on the `/projects` index → filter the dashboard by it), **`notes`** (author a note → edit in place → restore a version), **`topics-readonly`** (topics show as read-only badges with no editor), and **`admin-views`** (a normal user sees no Admin link and is redirected from `/admin`; an admin reaches `/admin` and the four tabs render). The admin spec needs a second admin login (`E2E_ADMIN_USERNAME`/`E2E_ADMIN_PASSWORD`; CI creates an `e2e-admin --admin` user). All self-skip without `E2E_BASE_URL` and run in CI's e2e job. (CI installs all three engines — `chromium firefox webkit` — in `.github/workflows/ci.yml`.)
+- `npm run test:e2e` — Playwright against the real stack. Five projects: desktop Chromium, mobile WebKit (375 px, iPhone 14), tablet WebKit (iPad gen 11), **desktop Firefox**, and **desktop WebKit** (Safari). The chromium/mobile/tablet projects run the full suite; the two desktop-engine projects are **scoped (via `testMatch`) to `e2e/pdf-preview.spec.ts` only** — they exist to prove the self-rendered PDF preview behaves identically across all three engines, without forcing the rest of the suite onto Firefox. That spec proves canvases paint and scrolling reveals page 2 on each engine. Recent flows have their own specs in `frontend/e2e/`: **`markdown-reader`** (upload a `.md` → the reader renders), **`projects`** (create → assign via the token multiselect → see it on the `/projects` index → filter the dashboard by it), **`notes`** (author a note → edit in place → restore a version), **`topics-readonly`** (topics show as read-only badges with no editor), **`admin-views`** (a normal user sees no Admin link and is redirected from `/admin`; an admin reaches `/admin` and the four tabs render), **`tile-border-colour`** (sets a per-kind override and asserts the tile's *computed* border colour — the cascade-layer regression guard), and **`review-queue`** (a future-date edit flags a doc `needs_review`, then the queue is entered, advanced, and exited). The admin spec needs a second admin login (`E2E_ADMIN_USERNAME`/`E2E_ADMIN_PASSWORD`; CI creates an `e2e-admin --admin` user). All self-skip without `E2E_BASE_URL` and run in CI's e2e job. (CI installs all three engines — `chromium firefox webkit` — in `.github/workflows/ci.yml`.)
 
 ## 1.8 What did not change
 

@@ -1,6 +1,6 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-07-01 (authored-series smart features: `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Status:** active. **Last updated:** 2026-07-03 (verification flow: `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2). Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -160,9 +160,13 @@ only present (non-null) when `q` is given. Tags and `projects` are each
 sorted by slug; `projects` is `[]` when the document is in no project.
 `review_status` reflects extraction-quality validation: `unreviewed` (no
 issues found), `needs_review` (one or more validation findings), or
-`verified` (user confirmed the metadata is correct). `amount_total` (JSON
-string, preserves decimal precision) and `currency` (3-letter code) are
-`null` when not set on the document.
+`verified` (user confirmed the metadata is correct). `review_findings` is a
+compact list of `{rule, field, message}` explaining *why* a row needs review —
+populated only when `review_status` is `needs_review`, `[]` otherwise (the full
+provenance blob stays on the detail endpoint's `validation`, §1.4). It lets the
+dashboard and review queue show a short reason without a second request.
+`amount_total` (JSON string, preserves decimal precision) and `currency`
+(3-letter code) are `null` when not set on the document.
 
 ### 1.3.3 Search semantics
 
@@ -244,6 +248,18 @@ service (`src/library/documents_service.py`) with `edited_by="user"`; the same
 service backs the Ask agent's `update_document_metadata` write tool
 (`edited_by="ask"` — see [ask.md §1.8](ask.md)), so both surfaces apply edits,
 record provenance, and lock fields against re-extraction identically.
+
+**Revalidation on save.** After applying an edit, both this route **and** the
+Ask agent's write tool re-run the deterministic validation rules
+(`documents_service.revalidate_after_edit`) and rewrite `extra["validation"]` +
+`review_status` in the same transaction, so a correction *clears its own warning
+immediately*: fix an implausible
+`document_date` and save, and the `date_plausibility` finding is gone from the
+returned detail and the document drops off `needs_review`. Findings you can't fix
+by editing (e.g. `ocr_confidence_gate`) remain until the document is explicitly
+verified (§1.8.3). Status policy: any remaining finding → `needs_review`; no
+findings → the document stays `verified` if a human already verified it (an edit
+never silently un-verifies), otherwise `unreviewed`.
 
 > **`topics` is read-only.** The auto-extracted `topics` list is **not** in this
 > body (it was removed from `DocumentUpdate` and the detail editor). It still
@@ -366,7 +382,9 @@ deleted documents. Auth + CSRF apply.
 
 Use this after reviewing a document's metadata in the detail view and
 confirming it is correct. The `review_status` can return to `needs_review`
-if extraction is re-run and new findings are produced.
+if extraction is re-run and new findings are produced, or if a later **edit**
+introduces a finding (a save that produces no findings keeps `verified` — see
+the revalidation-on-save note in §1.5).
 
 ## 1.8.4 Taxonomy — `GET /api/kinds`, `/api/senders`, `/api/recipients`, `/api/tags`
 

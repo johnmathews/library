@@ -44,6 +44,20 @@ export interface IngestionEvent {
   created_at: string
 }
 
+/**
+ * Compact validation finding carried on list rows (and the base of the fuller
+ * detail `ValidationFinding`). Explains *why* a document needs review.
+ */
+export interface ValidationFindingSummary {
+  rule: string
+  /**
+   * Storage field name (e.g. `document_date`, `amount_total`), or null for
+   * document-level rules (`ocr_confidence_gate`, `empty_extraction`, …).
+   */
+  field: string | null
+  message: string
+}
+
 /** One row of GET /api/documents. */
 export interface DocumentListItem {
   id: number
@@ -66,6 +80,11 @@ export interface DocumentListItem {
   currency: string | null
   review_status: ReviewStatus
   /**
+   * Compact reasons a document needs review (populated only when
+   * review_status is `needs_review`; `[]` otherwise). See {@link resolveReviewReason}.
+   */
+  review_findings: ValidationFindingSummary[]
+  /**
    * Only non-null with `?q=`. ts_headline fragments with <b>/</b> markers
    * over raw (NOT HTML-escaped) OCR text — render via `renderSnippet`,
    * never as-is.
@@ -82,17 +101,9 @@ export interface DocumentListResponse {
   offset: number
 }
 
-/** One finding from the extraction validation step. */
-export interface ValidationFinding {
-  rule: string
-  /**
-   * Storage field name, e.g. `amount_total`, `currency`, `kind_id`, `sender_id`.
-   * Null for document-level rules (e.g. `ocr_confidence_gate`, `empty_extraction`,
-   * `self_reported_low`) that are not tied to a single field.
-   */
-  field: string | null
+/** One finding from the extraction validation step (detail: adds severity). */
+export interface ValidationFinding extends ValidationFindingSummary {
   severity: 'warn' | 'error'
-  message: string
 }
 
 /** Structured output from the validation step attached to a document. */

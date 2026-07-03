@@ -949,6 +949,129 @@ def test_detail_exposes_validation(api_client: TestClient, api_database_url: str
     assert body["validation"] == validation_blob
 
 
+def test_list_exposes_review_findings_for_flagged_rows(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """needs_review rows carry compact review_findings; clean rows carry []."""
+    flagged_id = seed_document(
+        api_database_url,
+        "w1-list-findings-flagged",
+        tag_slugs=["w1-list-findings"],
+        review_status=ReviewStatus.NEEDS_REVIEW,
+        extra={
+            "validation": {
+                "findings": [
+                    {
+                        "rule": "date_plausibility",
+                        "field": "document_date",
+                        "severity": "warn",
+                        "message": "document_date is in the future",
+                    }
+                ]
+            }
+        },
+    )
+    seed_document(
+        api_database_url,
+        "w1-list-findings-clean",
+        tag_slugs=["w1-list-findings"],
+        review_status=ReviewStatus.UNREVIEWED,
+    )
+
+    body = list_docs(api_client, tag="w1-list-findings")
+    by_id = {item["id"]: item for item in body["items"]}
+    assert by_id[flagged_id]["review_findings"] == [
+        {
+            "rule": "date_plausibility",
+            "field": "document_date",
+            "message": "document_date is in the future",
+        }
+    ]
+    clean = next(item for item in body["items"] if item["id"] != flagged_id)
+    assert clean["review_findings"] == []
+
+
+# --- Save-time revalidation (W1) ---------------------------------------------
+
+
+def test_update_recomputes_validation_and_clears_resolved_finding(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Correcting a flagged field re-runs validation in the same PATCH: the
+    resolved finding disappears and review_status drops off needs_review."""
+    document_id = seed_document(
+        api_database_url,
+        "reval-clear",
+        kind_slug="invoice",
+        title="Invoice",
+        document_date=date(2041, 3, 12),  # future -> date_plausibility fires
+        review_status=ReviewStatus.NEEDS_REVIEW,
+        extra={
+            "validation": {
+                "prompt_version": "seed",
+                "findings": [
+                    {
+                        "rule": "date_plausibility",
+                        "field": "document_date",
+                        "severity": "warn",
+                        "message": "document_date is in the future",
+                    }
+                ],
+                "validated_at": "2026-07-01T00:00:00+00:00",
+            }
+        },
+    )
+
+    response = api_client.patch(
+        f"/api/documents/{document_id}", json={"document_date": "2024-03-12"}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["document_date"] == "2024-03-12"
+    assert body["review_status"] != "needs_review"
+    rules = [finding["rule"] for finding in (body["validation"]["findings"] or [])]
+    assert "date_plausibility" not in rules
+
+
+def test_update_keeps_unfixable_finding(api_client: TestClient, api_database_url: str) -> None:
+    """An edit that does not address a low-OCR finding leaves it — and the
+    needs_review flag — in place after revalidation."""
+    document_id = seed_document(
+        api_database_url,
+        "reval-keep",
+        kind_slug="invoice",
+        title="Invoice",
+        ocr_confidence=10.0,  # below the 50.0 floor -> ocr_confidence_gate fires
+        review_status=ReviewStatus.NEEDS_REVIEW,
+    )
+
+    response = api_client.patch(
+        f"/api/documents/{document_id}", json={"title": "Invoice (checked)"}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["review_status"] == "needs_review"
+    rules = [finding["rule"] for finding in body["validation"]["findings"]]
+    assert "ocr_confidence_gate" in rules
+
+
+def test_update_preserves_verified_status(api_client: TestClient, api_database_url: str) -> None:
+    """Editing a user-verified document that has no findings must not demote it
+    back to unreviewed."""
+    document_id = seed_document(
+        api_database_url,
+        "reval-verified",
+        kind_slug="invoice",
+        title="Invoice",
+        document_date=date(2024, 1, 1),
+        review_status=ReviewStatus.VERIFIED,
+    )
+
+    response = api_client.patch(f"/api/documents/{document_id}", json={"title": "Invoice (edited)"})
+    assert response.status_code == 200, response.text
+    assert response.json()["review_status"] == "verified"
+
+
 # --- Projects (W6) -----------------------------------------------------------
 
 

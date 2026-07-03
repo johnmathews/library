@@ -16,7 +16,7 @@
 import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { useRoute } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import {
   AppBackLink,
   AppBadge,
@@ -66,7 +66,9 @@ import { refreshTaxonomyOptions, useTaxonomyOptions } from '@/composables/taxono
 import { useMarkdownEditorMode } from '@/composables/useMarkdownEditorMode'
 import { ApiError } from '@/api/client'
 import { useJobsStore } from '@/stores/jobs'
+import { useReviewQueueStore } from '@/stores/reviewQueue'
 import { deriveNoteTitle } from '@/utils/noteTitle'
+import { resolveReviewReasons, type ReviewReason } from '@/utils/validationReason'
 import DocumentSeriesTrend from '@/components/DocumentSeriesTrend.vue'
 import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
@@ -82,6 +84,8 @@ const props = withDefaults(
 )
 
 const route = useRoute()
+const router = useRouter()
+const reviewQueue = useReviewQueueStore()
 
 // --- Document loading --------------------------------------------------------
 
@@ -843,16 +847,17 @@ const findingsByField = computed<Record<string, ValidationFinding[]>>(() => {
 })
 
 /**
- * Document-level findings: those whose `field` is null, or whose `field` is
- * not mapped to a rendered summary row (e.g. ocr_confidence_gate,
- * empty_extraction, self_reported_low). Shown in a top-level warning banner.
+ * Every reason this document needs review, in plain language — the source for
+ * the prominent top-of-page "Why this needs review" panel. Unlike the old
+ * document-level-only banner, this includes field-mapped findings (e.g. an
+ * implausible `document_date`) so the reason is never hidden behind a small
+ * per-field ⚠ badge. Shown only while the document actually needs review.
  */
-const documentLevelFindings = computed<ValidationFinding[]>(() => {
+const reviewReasons = computed<ReviewReason[]>(() => {
+  if (doc.value?.review_status !== 'needs_review') return []
   const findings = doc.value?.validation?.findings
   if (!findings?.length) return []
-  return findings.filter(
-    (f) => f.field === null || !(f.field in STORAGE_TO_UI_FIELD),
-  )
+  return resolveReviewReasons(findings)
 })
 
 // --- Mark verified ------------------------------------------------------------
@@ -874,6 +879,54 @@ async function markVerified(): Promise<void> {
   } finally {
     verifying.value = false
   }
+}
+
+// --- Review queue (step-through mode) -----------------------------------------
+//
+// Entered from the dashboard's "Review these one by one" button, which loads the
+// needs-review set into the reviewQueue store and opens the first doc with
+// `?queue=1`. Editing is the page's normal per-field autosave (revalidated
+// server-side), so a fixed document simply drops off `needs_review`; the queue
+// controls then advance to the next id, exiting to the dashboard when done.
+
+const inQueue = computed(() => route.query.queue === '1' && reviewQueue.isActive)
+
+/** Navigate to the next queued document, or exit to the dashboard when the
+ *  queue is empty. */
+function goToQueueTarget(targetId: number | null): void {
+  if (targetId === null) {
+    reviewQueue.reset()
+    void router.push('/')
+    return
+  }
+  void router.push({ name: 'document-detail', params: { id: targetId }, query: { queue: '1' } })
+}
+
+/** "Next": advance past the current document. If its findings were resolved
+ *  (autosave dropped it off needs_review) it leaves the queue; otherwise it
+ *  stays for a later pass and we just step the cursor. */
+function queueNext(): void {
+  const resolved = doc.value?.review_status !== 'needs_review'
+  goToQueueTarget(resolved ? reviewQueue.resolveCurrent() : reviewQueue.next())
+}
+
+/** "Verify & next": accept the document as-is, then advance. */
+async function verifyAndNext(): Promise<void> {
+  await markVerified()
+  if (doc.value?.review_status === 'verified') {
+    goToQueueTarget(reviewQueue.resolveCurrent())
+  }
+}
+
+/** "Prev": step back to the previous queued document. */
+function queuePrev(): void {
+  if (reviewQueue.hasPrev) goToQueueTarget(reviewQueue.prev())
+}
+
+/** Leave the queue without finishing it. */
+function exitQueue(): void {
+  reviewQueue.reset()
+  void router.push('/')
 }
 
 // --- Preview and OCR text -----------------------------------------------------
@@ -1120,18 +1173,59 @@ watch(
   <AppBackLink to="/" text="Back to documents" class="mb-4" />
 
   <template v-if="doc">
+    <div
+      v-if="inQueue"
+      class="mb-6 flex flex-col gap-3 rounded-lg border border-violet-300 bg-violet-50 p-3 sm:flex-row sm:items-center dark:border-violet-500/40 dark:bg-violet-500/10"
+      data-testid="review-queue-bar"
+    >
+      <p class="text-sm font-medium text-violet-800 dark:text-violet-200" data-testid="review-queue-position">
+        Reviewing {{ reviewQueue.position }} of {{ reviewQueue.total }}
+      </p>
+      <div class="flex flex-1 flex-wrap items-center gap-2 sm:justify-end">
+        <AppButton
+          type="button"
+          variant="secondary"
+          :disabled="!reviewQueue.hasPrev"
+          data-testid="queue-prev"
+          @click="queuePrev"
+        >
+          ← Prev
+        </AppButton>
+        <AppButton
+          v-if="doc.review_status !== 'verified'"
+          type="button"
+          variant="secondary"
+          :disabled="verifying"
+          data-testid="queue-verify-next"
+          @click="verifyAndNext"
+        >
+          Verify &amp; next
+        </AppButton>
+        <AppButton type="button" data-testid="queue-next" @click="queueNext"> Next → </AppButton>
+        <button
+          type="button"
+          class="text-sm text-violet-700 hover:underline dark:text-violet-300"
+          data-testid="queue-exit"
+          @click="exitQueue"
+        >
+          Exit
+        </button>
+      </div>
+    </div>
     <AppBanner v-if="notice" :variant="notice.variant" data-testid="detail-banner" class="mb-6">
       {{ notice.text }}
     </AppBanner>
     <AppErrorSummary v-if="errorItems.length" :errors="errorItems" data-testid="error-summary" />
     <AppBanner
-      v-if="documentLevelFindings.length"
+      v-if="reviewReasons.length"
       data-testid="validation-findings"
       class="mb-6"
     >
-      <ul class="list-disc list-inside space-y-1">
-        <li v-for="finding in documentLevelFindings" :key="finding.rule">
-          {{ finding.message }}
+      <p class="font-semibold">Why this needs review</p>
+      <ul class="mt-1 list-disc list-inside space-y-1">
+        <li v-for="reason in reviewReasons" :key="`${reason.rule}:${reason.field ?? 'doc'}`">
+          <span class="font-medium">{{ reason.title }}</span
+          ><template v-if="reason.detail"> — {{ reason.detail }}</template>
         </li>
       </ul>
     </AppBanner>

@@ -23,7 +23,12 @@ from library.extraction.extractor import (
     ExtractionSkipped,
     extract,
 )
-from library.extraction.validation import derive_review_status, findings_to_payload, validate
+from library.extraction.validation import (
+    Finding,
+    derive_review_status,
+    findings_to_payload,
+    validate,
+)
 from library.models import (
     Document,
     DocumentLanguage,
@@ -353,13 +358,16 @@ async def _apply_outcome(
     return fields_set
 
 
-async def _apply_validation(session: AsyncSession, document: Document, settings: Settings) -> None:
-    """Run deterministic validation and set review_status + extra["validation"].
+async def revalidate_document(
+    session: AsyncSession, document: Document, settings: Settings
+) -> list[Finding]:
+    """Run deterministic validation and persist ``extra["validation"]``; return
+    the findings. Does NOT touch ``review_status`` — the caller applies its own
+    status policy (extraction auto-flags via ``derive_review_status``; the edit
+    path preserves a user's ``verified`` status — see
+    ``documents_service.revalidate_after_edit``).
 
-    Best-effort: the caller (``apply_extraction``) wraps this in a try/except so
-    any failure here never propagates and never fails the document.  There is no
-    need to skip user-locked fields — validation reads whatever the document's
-    current values are, regardless of their provenance.
+    Reads whatever the document's current values are, regardless of provenance.
     """
     kind_slug: str | None = None
     if document.kind_id is not None:
@@ -372,7 +380,6 @@ async def _apply_validation(session: AsyncSession, document: Document, settings:
         ocr_floor=settings.extraction_validation_ocr_floor,
         today=datetime.now(UTC).date(),
     )
-    document.review_status = derive_review_status(findings)
     document.extra = {
         **document.extra,
         "validation": {
@@ -381,6 +388,17 @@ async def _apply_validation(session: AsyncSession, document: Document, settings:
             "validated_at": datetime.now(UTC).isoformat(),
         },
     }
+    return findings
+
+
+async def _apply_validation(session: AsyncSession, document: Document, settings: Settings) -> None:
+    """Run validation and set review_status + extra["validation"] (extraction path).
+
+    Best-effort: the caller (``apply_extraction``) wraps this in a try/except so
+    any failure here never propagates and never fails the document.
+    """
+    findings = await revalidate_document(session, document, settings)
+    document.review_status = derive_review_status(findings)
 
 
 async def apply_extraction(session: AsyncSession, document: Document, settings: Settings) -> None:

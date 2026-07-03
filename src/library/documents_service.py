@@ -20,8 +20,14 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.extraction.apply import get_or_create_tag, upsert_recipient, upsert_sender
-from library.models import Document, IngestionEvent, Kind
+from library.config import Settings
+from library.extraction.apply import (
+    get_or_create_tag,
+    revalidate_document,
+    upsert_recipient,
+    upsert_sender,
+)
+from library.models import Document, IngestionEvent, Kind, ReviewStatus
 from library.projects import get_or_create_project
 from library.schemas import DocumentUpdate
 
@@ -216,3 +222,26 @@ async def apply_document_update(
             )
         )
     return edited
+
+
+async def revalidate_after_edit(
+    session: AsyncSession, document: Document, settings: Settings
+) -> None:
+    """Recompute validation after a user/agent edit and update ``review_status``.
+
+    A metadata edit can resolve a finding (e.g. a corrected ``document_date``),
+    so we re-run the deterministic rules and rewrite ``extra["validation"]``.
+    Status policy, distinct from the extraction path:
+
+    - any finding still firing  -> ``needs_review``
+    - no findings, was verified  -> keep ``verified`` (never demote a human's
+      explicit verification on an unrelated edit)
+    - no findings, otherwise     -> ``unreviewed``
+
+    Mutates ``document`` in place; does NOT commit — the caller owns the txn.
+    """
+    findings = await revalidate_document(session, document, settings)
+    if findings:
+        document.review_status = ReviewStatus.NEEDS_REVIEW
+    elif document.review_status != ReviewStatus.VERIFIED:
+        document.review_status = ReviewStatus.UNREVIEWED

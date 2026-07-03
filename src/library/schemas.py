@@ -60,6 +60,17 @@ class ProjectRef(BaseModel):
     name: str
 
 
+class ValidationFindingSummary(BaseModel):
+    """A single validation concern, in the compact shape list rows carry so the
+    dashboard and review queue can show *why* a document needs review without
+    the full ``validation`` blob (detail-only). Mirrors
+    ``extraction.validation.Finding``."""
+
+    rule: str
+    field: str | None
+    message: str
+
+
 class IngestionEventOut(BaseModel):
     """One entry of a document's append-only audit trail."""
 
@@ -89,6 +100,14 @@ class DocumentListItem(BaseModel):
     has_searchable_pdf: bool
     has_thumbnail: bool
     review_status: ReviewStatus
+    review_findings: list[ValidationFindingSummary] = Field(
+        default_factory=list,
+        description=(
+            "Compact validation findings when review_status is needs_review "
+            "(rule/field/message); empty otherwise. Full provenance is on the "
+            "detail endpoint's `validation`."
+        ),
+    )
     amount_total: Decimal | None = None
     currency: str | None = None
     snippet: str | None = Field(

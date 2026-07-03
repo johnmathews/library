@@ -6,6 +6,7 @@ import DocumentDetailView from '../DocumentDetailView.vue'
 import type { DocumentDetail, DocumentMarkdownResponse } from '@/api/documents'
 import { listNoteVersions, restoreNoteVersion, updateNote } from '@/api/notes'
 import { useJobsStore } from '@/stores/jobs'
+import { useReviewQueueStore } from '@/stores/reviewQueue'
 
 // pdfjs-dist can't run its worker/canvas in jsdom — mock the whole module
 // so that DocumentPdfPreview (now imported by DocumentDetailView) can be loaded.
@@ -67,6 +68,7 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     extraction: null,
     validation: null,
     review_status: 'unreviewed',
+    review_findings: [],
     user_edited_fields: [],
     events: [],
     ...overrides,
@@ -133,6 +135,9 @@ describe('DocumentDetailView', () => {
       }
       if (url === '/api/documents/12' && method === 'PATCH') {
         return Promise.resolve(patchResponse())
+      }
+      if (url === '/api/documents/12/verify' && method === 'POST') {
+        return Promise.resolve(jsonResponse({ ...detail, review_status: 'verified' }))
       }
       if (url === '/api/documents/12/markdown' && method === 'GET') {
         return Promise.resolve(markdownResponse())
@@ -900,6 +905,132 @@ describe('DocumentDetailView', () => {
     expect(w.findAll('[data-testid="validation-badge"]')).toHaveLength(0)
     // The action-notice banner (detail-banner) must not be affected.
     expect(w.find('[data-testid="detail-banner"]').exists()).toBe(false)
+  })
+
+  it('surfaces a field-mapped finding (implausible date) in the top panel too', async () => {
+    detail = makeDetail({
+      review_status: 'needs_review',
+      validation: {
+        findings: [
+          {
+            rule: 'date_plausibility',
+            field: 'document_date',
+            severity: 'warn',
+            message: 'document_date is in the future',
+          },
+        ],
+      },
+    })
+    const w = await mountView()
+    const banner = w.find('[data-testid="validation-findings"]')
+    expect(banner.exists()).toBe(true)
+    // Plain-language title + the underlying reason, both in the top panel — no
+    // longer hidden behind only a per-field ⚠ badge.
+    expect(banner.text()).toContain('Unlikely date')
+    expect(banner.text()).toContain('document_date is in the future')
+    // The per-field badge still appears beside the date row (secondary signal).
+    expect(w.findAll('[data-testid="validation-badge"]').length).toBeGreaterThan(0)
+  })
+
+  it('hides the why-panel once the document is no longer needs_review', async () => {
+    detail = makeDetail({
+      review_status: 'verified',
+      validation: {
+        findings: [
+          { rule: 'date_plausibility', field: 'document_date', severity: 'warn', message: 'x' },
+        ],
+      },
+    })
+    const w = await mountView()
+    expect(w.find('[data-testid="validation-findings"]').exists()).toBe(false)
+  })
+
+  // --- Review queue (queue mode) ---------------------------------------------
+
+  function seedQueue(ids: number[], index = 0): ReturnType<typeof useReviewQueueStore> {
+    const q = useReviewQueueStore()
+    q.ids = ids
+    q.index = index
+    return q
+  }
+
+  it('shows the queue bar with position and controls in queue mode', async () => {
+    seedQueue([12, 13])
+    detail = makeDetail({ review_status: 'needs_review' })
+    const w = await mountView('/documents/12?queue=1')
+
+    expect(w.find('[data-testid="review-queue-bar"]').exists()).toBe(true)
+    expect(w.find('[data-testid="review-queue-position"]').text()).toContain('1 of 2')
+    // First document: Prev disabled; Verify & Next available (not yet verified).
+    expect(w.find('[data-testid="queue-prev"]').attributes('disabled')).toBeDefined()
+    expect(w.find('[data-testid="queue-verify-next"]').exists()).toBe(true)
+    expect(w.find('[data-testid="queue-next"]').exists()).toBe(true)
+  })
+
+  it('is not in queue mode without ?queue=1', async () => {
+    seedQueue([12, 13])
+    detail = makeDetail({ review_status: 'needs_review' })
+    const w = await mountView('/documents/12')
+    expect(w.find('[data-testid="review-queue-bar"]').exists()).toBe(false)
+  })
+
+  it('Next advances the cursor and navigates to the next queued document', async () => {
+    const q = seedQueue([12, 13])
+    detail = makeDetail({ review_status: 'needs_review' }) // still flagged -> keep in queue
+    const w = await mountView('/documents/12?queue=1')
+    const push = vi.spyOn(router, 'push').mockResolvedValue()
+
+    await w.find('[data-testid="queue-next"]').trigger('click')
+
+    expect(q.index).toBe(1) // stepped, not dropped (still needs_review)
+    expect(q.total).toBe(2)
+    expect(push).toHaveBeenCalledWith({
+      name: 'document-detail',
+      params: { id: 13 },
+      query: { queue: '1' },
+    })
+  })
+
+  it('Verify & next marks verified, drops the doc from the queue, and advances', async () => {
+    const q = seedQueue([12, 13])
+    detail = makeDetail({ review_status: 'needs_review' })
+    const w = await mountView('/documents/12?queue=1')
+    const push = vi.spyOn(router, 'push').mockResolvedValue()
+
+    await w.find('[data-testid="queue-verify-next"]').trigger('click')
+    await flushPromises()
+
+    expect(q.total).toBe(1) // #12 verified -> removed
+    expect(q.ids).toEqual([13])
+    expect(push).toHaveBeenCalledWith({
+      name: 'document-detail',
+      params: { id: 13 },
+      query: { queue: '1' },
+    })
+  })
+
+  it('Exit clears the queue and returns to the dashboard', async () => {
+    const q = seedQueue([12, 13])
+    detail = makeDetail({ review_status: 'needs_review' })
+    const w = await mountView('/documents/12?queue=1')
+    const push = vi.spyOn(router, 'push').mockResolvedValue()
+
+    await w.find('[data-testid="queue-exit"]').trigger('click')
+
+    expect(q.isActive).toBe(false)
+    expect(push).toHaveBeenCalledWith('/')
+  })
+
+  it('finishing the last queued document exits to the dashboard', async () => {
+    const q = seedQueue([12]) // only one left
+    detail = makeDetail({ review_status: 'verified' }) // already resolved -> Next drops it
+    const w = await mountView('/documents/12?queue=1')
+    const push = vi.spyOn(router, 'push').mockResolvedValue()
+
+    await w.find('[data-testid="queue-next"]').trigger('click')
+
+    expect(q.isActive).toBe(false)
+    expect(push).toHaveBeenCalledWith('/')
   })
 
   it('passes the page query param as initialPage to DocumentPdfPreview', async () => {

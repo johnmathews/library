@@ -40,6 +40,7 @@ function makeItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
     snippet: null,
     rank: null,
     review_status: 'unreviewed',
+    review_findings: [],
     ...overrides,
   }
 }
@@ -264,6 +265,25 @@ describe('DocumentListView', () => {
     const w = await mountView()
     const meta = w.find('.app-doc-card__meta')
     expect(meta.find('[data-testid="review-badge"]').exists()).toBe(true)
+  })
+
+  it('shows a short plain-language reason next to the review badge', async () => {
+    listResponse = () =>
+      jsonResponse(
+        listBody([
+          makeItem({
+            review_status: 'needs_review',
+            review_findings: [
+              { rule: 'date_plausibility', field: 'document_date', message: 'future date' },
+            ],
+          }),
+        ]),
+      )
+    seedPrefs([])
+    const w = await mountView()
+    const reason = w.find('[data-testid="review-reason"]')
+    expect(reason.exists()).toBe(true)
+    expect(reason.text()).toBe('Unlikely date')
   })
 
   it('Fields menu opens a popover and persists a toggle via PUT /api/settings', async () => {

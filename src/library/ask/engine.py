@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
-from library.documents_service import apply_document_update
+from library.documents_service import apply_document_update, revalidate_after_edit
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
 from library.models import Document
@@ -381,6 +381,7 @@ def _preview_current(document: Document, field: str) -> Any:
 
 async def _run_update_document(
     session: AsyncSession,
+    settings: Settings,
     args: dict[str, Any],
     editable_ids: set[int],
     previewed_ids: set[int],
@@ -451,6 +452,9 @@ async def _run_update_document(
         edited = await apply_document_update(session, document, update, edited_by="ask")
     except HTTPException as exc:
         return {"error": str(exc.detail)}
+    # Recompute validation so an agent-applied fix clears its warning (and a bad
+    # edit gets flagged) — same behaviour as the PATCH route (documents.py).
+    await revalidate_after_edit(session, document, settings)
     await session.commit()
     return {"status": "updated", "document_id": document_id, "updated_fields": edited}
 
@@ -478,7 +482,7 @@ async def _dispatch_tool(
         editable_ids.update(cited)
         return result
     if name == "update_document_metadata":
-        return await _run_update_document(session, args, editable_ids, previewed_ids)
+        return await _run_update_document(session, settings, args, editable_ids, previewed_ids)
     return {"error": f"unknown tool {name}"}
 
 

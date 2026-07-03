@@ -8,6 +8,7 @@ dispatch driven by a stubbed Anthropic client).
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from datetime import date
 from typing import Any, cast
 
 import pytest
@@ -19,7 +20,7 @@ from library.ask import engine as ask_engine
 from library.ask.engine import _run_update_document, run_ask
 from library.config import get_settings
 from library.documents_service import apply_document_update
-from library.models import Document, IngestionEvent
+from library.models import Document, IngestionEvent, ReviewStatus
 from library.schemas import DocumentUpdate
 from tests.test_api_ask import _FakeAnthropic, _Response, _TextBlock, _ToolUseBlock, _Usage
 from tests.test_documents_api import _seed_document
@@ -103,6 +104,7 @@ async def test_update_tool_preview_does_not_write(api_database_url: str) -> None
         previewed: set[int] = set()
         result = await _run_update_document(
             session,
+            get_settings(),
             {"document_id": document_id, "title": "Proposed title", "confirmed": False},
             {document_id},
             previewed,
@@ -128,6 +130,7 @@ async def test_update_tool_commit_writes_with_ask_provenance(api_database_url: s
         document = await _load(session, document_id)
         result = await _run_update_document(
             session,
+            get_settings(),
             {"document_id": document_id, "title": "Confirmed title", "confirmed": True},
             {document_id},
             {document_id},  # previewed earlier in the thread
@@ -146,6 +149,50 @@ async def test_update_tool_commit_writes_with_ask_provenance(api_database_url: s
 
 
 @pytest.mark.asyncio
+async def test_update_tool_revalidates_and_clears_finding(api_database_url: str) -> None:
+    """An Ask-confirmed edit recomputes validation just like the PATCH route, so
+    fixing a flagged field clears its warning and review_status."""
+    document_id = await _seed_document(
+        api_database_url,
+        "askw-reval",
+        kind_slug="invoice",
+        title="Invoice",
+        document_date=date(2041, 3, 12),  # future -> date_plausibility fires
+        review_status=ReviewStatus.NEEDS_REVIEW,
+        extra={
+            "validation": {
+                "findings": [
+                    {
+                        "rule": "date_plausibility",
+                        "field": "document_date",
+                        "severity": "warn",
+                        "message": "document_date is in the future",
+                    }
+                ]
+            }
+        },
+    )
+
+    async with _open_session(api_database_url) as session:
+        await _load(session, document_id)
+        result = await _run_update_document(
+            session,
+            get_settings(),
+            {"document_id": document_id, "document_date": "2024-03-12", "confirmed": True},
+            {document_id},
+            {document_id},
+        )
+
+    assert result["status"] == "updated"
+
+    async with _open_session(api_database_url) as session:
+        document = await _load(session, document_id)
+        assert document.review_status != ReviewStatus.NEEDS_REVIEW
+        rules = [f["rule"] for f in document.extra["validation"]["findings"]]
+        assert "date_plausibility" not in rules
+
+
+@pytest.mark.asyncio
 async def test_update_tool_guardrail_rejects_unsurfaced_document(
     api_database_url: str,
 ) -> None:
@@ -156,6 +203,7 @@ async def test_update_tool_guardrail_rejects_unsurfaced_document(
         # editable_ids does NOT contain document_id -> refuse, even with confirmed.
         result = await _run_update_document(
             session,
+            get_settings(),
             {"document_id": document_id, "title": "Hacked", "confirmed": True},
             {document_id + 9999},
             {document_id},
@@ -181,6 +229,7 @@ async def test_update_tool_confirm_without_preview_is_refused(api_database_url: 
         # Surfaced (editable) but NOT previewed.
         result = await _run_update_document(
             session,
+            get_settings(),
             {"document_id": document_id, "title": "Sneaky", "confirmed": True},
             {document_id},
             set(),

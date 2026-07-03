@@ -228,6 +228,15 @@ input[type='search']::-webkit-search-results-decoration {
  * views/__tests__/DocumentListView.spec.ts and docs/frontend.md §1.2.
  */
 .app-doc-card {
+  /*
+   * The card owns its border here (not a Tailwind `border-gray-200` utility on
+   * the markup). Tailwind utilities live in the `utilities` cascade layer, which
+   * outranks this `components` layer regardless of selector specificity — so a
+   * utility border would always defeat the `--accented` colour below. Keeping the
+   * neutral border, hover, and accent rules all in this one layer lets normal
+   * specificity decide, and the accent finally shows.
+   */
+  border: 1px solid var(--color-gray-200);
   border-radius: 1rem;
   box-shadow:
     0 1px 2px 0 rgb(16 24 40 / 0.06),
@@ -247,6 +256,7 @@ input[type='search']::-webkit-search-results-decoration {
 }
 
 .dark .app-doc-card {
+  border-color: color-mix(in srgb, var(--color-gray-700) 60%, transparent);
   box-shadow: 0 1px 2px 0 rgb(0 0 0 / 0.4);
 }
 
@@ -259,11 +269,13 @@ input[type='search']::-webkit-search-results-decoration {
  * Per-kind border accent (Settings → Appearance → Document type colours). Only
  * tiles whose kind has a colour get .app-doc-card--accented + a --card-accent
  * hex; neutral tiles fall through to the gray/violet rules above unchanged. The
- * compound selector (two classes) outranks Tailwind's single .border-gray-200,
- * so no !important is needed. A single stored hex is adapted per surface with
- * color-mix — darkened on light, lightened for the near-black dark surface — so
- * it stays legible in both modes, and the hover state shifts it further to keep
- * the "border reacts on hover" feel.
+ * compound selector (two classes, 0-2-0) outranks the plain .app-doc-card
+ * border (0-1-0) within this same `components` layer, so no !important is
+ * needed — and, crucially, no Tailwind border utility sits on the markup to
+ * defeat it from the higher `utilities` layer. A single stored hex is adapted
+ * per surface with color-mix — darkened on light, lightened for the near-black
+ * dark surface — so it stays legible in both modes, and the hover state shifts
+ * it further to keep the "border reacts on hover" feel.
  */
 .app-doc-card.app-doc-card--accented {
   border-color: var(--card-accent);

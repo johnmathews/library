@@ -28,8 +28,10 @@ import {
 } from '@/api/documents'
 import { renderSnippet } from '@/utils/snippet'
 import { resolveKindColor } from '@/utils/kindColor'
+import { summarizeReviewReasons } from '@/utils/validationReason'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
+import { useReviewQueueStore } from '@/stores/reviewQueue'
 import { useJobsStore } from '@/stores/jobs'
 import {
   parseDocumentQuery,
@@ -102,6 +104,23 @@ async function refreshReviewCount(): Promise<void> {
     reviewCount.value = response.total
   } catch {
     // Non-critical: keep the last known count if the count query fails.
+  }
+}
+
+const reviewQueue = useReviewQueueStore()
+const startingQueue = ref(false)
+/** Enter the step-through review queue: load the needs-review set and open the
+ *  first document in queue mode (`?queue=1`). No-op if nothing needs review. */
+async function startReviewQueue(): Promise<void> {
+  if (startingQueue.value) return
+  startingQueue.value = true
+  try {
+    const firstId = await reviewQueue.start()
+    if (firstId !== null) {
+      void router.push({ name: 'document-detail', params: { id: firstId }, query: { queue: '1' } })
+    }
+  } finally {
+    startingQueue.value = false
   }
 }
 
@@ -365,27 +384,38 @@ function toggleSortDirection(): void {
 
   <DocumentFilterBar :applied="applied" @apply="applyFilterQuery" @clear="clearFilters" />
 
-  <button
-    v-if="showReviewButton"
-    type="button"
-    :class="[
-      'flex w-full sm:w-auto items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors mb-4',
-      isReviewFilterActive
-        ? 'border-red-500 bg-red-100 text-red-800 ring-1 ring-red-400 dark:border-red-500/60 dark:bg-red-500/20 dark:text-red-200'
-        : 'border-red-300 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20',
-    ]"
-    :aria-pressed="isReviewFilterActive"
-    data-testid="needs-review-filter"
-    @click="applyFilterQuery(isReviewFilterActive ? {} : { review: 'needs_review' })"
-  >
-    <svg class="h-4 w-4 shrink-0 fill-current" viewBox="0 0 16 16" aria-hidden="true">
-      <path
-        d="M8 1a1 1 0 0 1 .87.5l6 10.5A1 1 0 0 1 14 13.5H2a1 1 0 0 1-.87-1.5l6-10.5A1 1 0 0 1 8 1Zm0 4a1 1 0 0 0-1 1v2a1 1 0 1 0 2 0V6a1 1 0 0 0-1-1Zm0 6a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"
-      />
-    </svg>
-    <span class="flex-1 text-left">{{ reviewButtonLabel }}</span>
-    <span v-if="isReviewFilterActive" class="text-xs font-normal opacity-80">Showing · clear</span>
-  </button>
+  <div v-if="showReviewButton" class="flex flex-col sm:flex-row sm:items-center gap-2 mb-4">
+    <button
+      type="button"
+      :class="[
+        'flex w-full sm:w-auto items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors',
+        isReviewFilterActive
+          ? 'border-red-500 bg-red-100 text-red-800 ring-1 ring-red-400 dark:border-red-500/60 dark:bg-red-500/20 dark:text-red-200'
+          : 'border-red-300 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-500/40 dark:bg-red-500/10 dark:text-red-300 dark:hover:bg-red-500/20',
+      ]"
+      :aria-pressed="isReviewFilterActive"
+      data-testid="needs-review-filter"
+      @click="applyFilterQuery(isReviewFilterActive ? {} : { review: 'needs_review' })"
+    >
+      <svg class="h-4 w-4 shrink-0 fill-current" viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M8 1a1 1 0 0 1 .87.5l6 10.5A1 1 0 0 1 14 13.5H2a1 1 0 0 1-.87-1.5l6-10.5A1 1 0 0 1 8 1Zm0 4a1 1 0 0 0-1 1v2a1 1 0 1 0 2 0V6a1 1 0 0 0-1-1Zm0 6a1 1 0 1 0 0 2 1 1 0 0 0 0-2Z"
+        />
+      </svg>
+      <span class="flex-1 text-left">{{ reviewButtonLabel }}</span>
+      <span v-if="isReviewFilterActive" class="text-xs font-normal opacity-80">Showing · clear</span>
+    </button>
+    <button
+      v-if="reviewCount > 0"
+      type="button"
+      class="flex w-full sm:w-auto items-center justify-center gap-1.5 rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-100 disabled:opacity-60 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/20"
+      :disabled="startingQueue"
+      data-testid="start-review-queue"
+      @click="startReviewQueue"
+    >
+      {{ startingQueue ? 'Starting…' : 'Review these one by one →' }}
+    </button>
+  </div>
 
   <div
     v-if="loadError"
@@ -480,7 +510,7 @@ function toggleSortDirection(): void {
         v-for="item in items"
         :key="item.id"
         :id="`doc-card-${item.id}`"
-        class="relative bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 overflow-hidden app-doc-card"
+        class="relative bg-white dark:bg-gray-800 overflow-hidden app-doc-card"
         :class="tileAccentClass(item.id)"
         :style="tileAccentStyle(item.id)"
         :data-kind="item.kind?.slug"
@@ -571,7 +601,14 @@ function toggleSortDirection(): void {
                user in dashboard_fields). The "Needs review" badge is pinned first
                and is NOT part of the toggleable/orderable field set. -->
           <p class="flex flex-wrap items-center gap-2 app-doc-card__meta">
-            <AppBadge v-if="item.review_status === 'needs_review'" colour="yellow" data-testid="review-badge">Needs review</AppBadge>
+            <template v-if="item.review_status === 'needs_review'">
+              <AppBadge colour="yellow" data-testid="review-badge">Needs review</AppBadge>
+              <span
+                v-if="item.review_findings.length"
+                class="text-xs text-amber-700 dark:text-amber-400"
+                data-testid="review-reason"
+              >{{ summarizeReviewReasons(item.review_findings) }}</span>
+            </template>
             <template v-for="field in auth.dashboardFields" :key="field">
               <AppBadge v-if="field === 'kind' && item.kind" colour="blue">{{ item.kind.name }}</AppBadge>
               <AppBadge
