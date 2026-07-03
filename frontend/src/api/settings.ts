@@ -72,6 +72,45 @@ export type TilePreview = (typeof TILE_PREVIEWS)[number]['value']
 export const DEFAULT_TILE_PREVIEW: TilePreview = 'full_width'
 
 /**
+ * The built-in default tile-border colour for each document kind, by slug. Only
+ * the kinds that meaningfully occur are coloured; every other kind (incl.
+ * `other`) has no entry and renders with the tile's neutral default border.
+ *
+ * These hues are the reference source of truth for the "Default"/reset action
+ * and were validated colourblind-safe (worst adjacent ΔE ≈ 24–38, well above
+ * the ≥12 target). The backend stores only per-user *overrides*; these defaults
+ * live frontend-side so the palette can be retuned without a data migration.
+ */
+export const DEFAULT_KIND_COLORS: Record<string, string> = {
+  invoice: '#56b1f3', // sky
+  receipt: '#34bd68', // green
+  letter: '#755ff8', // violet
+  warranty: '#dfad2b', // amber
+  contract: '#fa4949', // red
+}
+
+/**
+ * One-click colour presets shown beside the picker in Settings. A spread of
+ * distinct, legible hues; the user can still pick any colour via the native
+ * picker. Not required to be mutually colourblind-safe — they are conveniences,
+ * not an auto-assigned series.
+ */
+export const SUGGESTED_COLORS = [
+  { name: 'Blue', hex: '#56b1f3' },
+  { name: 'Green', hex: '#34bd68' },
+  { name: 'Violet', hex: '#755ff8' },
+  { name: 'Amber', hex: '#dfad2b' },
+  { name: 'Red', hex: '#fa4949' },
+  { name: 'Orange', hex: '#eb6834' },
+  { name: 'Teal', hex: '#14b8a6' },
+  { name: 'Pink', hex: '#e87ba4' },
+  { name: 'Slate', hex: '#6b7280' },
+] as const
+
+/** The grey shown in the picker for a kind with no colour (a "no accent" stand-in). */
+export const NEUTRAL_KIND_COLOR = '#cbd0d8'
+
+/**
  * The notification events a user can subscribe to (Settings → Notifications).
  * This ordered list is the single frontend source of truth for the checkbox
  * list — the event keys and their labels. The keys mirror the backend's
@@ -119,6 +158,9 @@ export interface UserPreferences {
   // key still type-check; consumers fall back to the defaults.
   background_tone?: BackgroundTone
   tile_preview?: TilePreview
+  // Sparse per-kind border-colour overrides (slug → '#rrggbb'). Absent kinds
+  // fall back to DEFAULT_KIND_COLORS; an empty map means "all defaults".
+  kind_colors?: Record<string, string>
   notifications?: NotificationPreferences
 }
 
@@ -140,6 +182,20 @@ export function updateAppearance(
   return apiFetch<UserPreferences>('/api/settings/appearance', {
     method: 'PUT',
     body: { background_tone: tone, tile_preview: tilePreview },
+  })
+}
+
+/**
+ * PUT /api/settings/kind-colors — replace the per-kind border-colour overrides.
+ * Send the full override map; `{}` resets every kind to its built-in default.
+ * Malformed entries are dropped server-side; the cleaned map is returned.
+ */
+export function updateKindColors(
+  kindColors: Record<string, string>,
+): Promise<UserPreferences> {
+  return apiFetch<UserPreferences>('/api/settings/kind-colors', {
+    method: 'PUT',
+    body: { kind_colors: kindColors },
   })
 }
 

@@ -147,6 +147,30 @@ describe('DocumentListView', () => {
       .filter((url) => !(/review_status=needs_review/.test(url) && /[?&]limit=1(&|$)/.test(url)))
   }
 
+  it('accents a tile with its kind default colour (invoice → sky)', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()])) // makeItem() is an invoice
+    const w = await mountView()
+    const tile = w.find('[data-testid="doc-card"]')
+    expect(tile.classes()).toContain('app-doc-card--accented')
+    expect(tile.attributes('style') ?? '').toContain('--card-accent: #56b1f3')
+  })
+
+  it('leaves a neutral kind (other) with no border accent', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem({ kind: { slug: 'other', name: 'Other' } })]))
+    const w = await mountView()
+    const tile = w.find('[data-testid="doc-card"]')
+    expect(tile.classes()).not.toContain('app-doc-card--accented')
+    expect(tile.attributes('style') ?? '').not.toContain('--card-accent')
+  })
+
+  it("applies a user's per-kind override over the default palette", async () => {
+    useAuthStore().user!.preferences.kind_colors = { invoice: '#112233' }
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    const tile = w.find('[data-testid="doc-card"]')
+    expect(tile.attributes('style') ?? '').toContain('--card-accent: #112233')
+  })
+
   it('renders tiles in the dashboard grid with title link, tags, sender and date', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()

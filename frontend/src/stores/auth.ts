@@ -59,6 +59,12 @@ export const useAuthStore = defineStore('auth', () => {
     () => user.value?.preferences?.notifications ?? { ...DEFAULT_NOTIFICATION_PREFERENCES },
   )
 
+  // Per-kind tile-border colour overrides (slug → '#rrggbb'). Empty when unset
+  // or the user is absent; resolveKindColor falls back to the default palette.
+  const kindColors = computed<Record<string, string>>(
+    () => user.value?.preferences?.kind_colors ?? {},
+  )
+
   function applyPreferences(preferences: UserPreferences): void {
     if (user.value) user.value.preferences = preferences
   }
@@ -110,6 +116,7 @@ export const useAuthStore = defineStore('auth', () => {
     backgroundTone,
     tilePreview,
     notificationSettings,
+    kindColors,
     applyPreferences,
     ensureLoaded,
     login,

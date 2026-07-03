@@ -5,6 +5,7 @@ from library.schemas import (
     BackgroundTone,
     DashboardField,
     DashboardPreferences,
+    KindColorsPreferences,
     resolve_dashboard_preferences,
     resolve_preferences,
 )
@@ -63,3 +64,36 @@ def test_resolve_preferences_reads_stored_tone() -> None:
 
 def test_resolve_preferences_defaults_garbage_tone() -> None:
     assert resolve_preferences({"background_tone": 7}).background_tone == DEFAULT_BACKGROUND_TONE
+
+
+def test_kind_colors_keeps_valid_hex_lowercased() -> None:
+    prefs = KindColorsPreferences(kind_colors={"invoice": "#56B1F3", "receipt": "#34bd68"})
+    assert prefs.kind_colors == {"invoice": "#56b1f3", "receipt": "#34bd68"}
+
+
+def test_kind_colors_drops_invalid_entries() -> None:
+    prefs = KindColorsPreferences(
+        kind_colors={
+            "invoice": "#56b1f3",  # kept
+            "bad": "blue",  # not hex
+            "short": "#fff",  # 3-digit form not accepted
+            "": "#123456",  # empty slug
+            "num": 123,  # non-str value
+        }  # type: ignore[dict-item]
+    )
+    assert prefs.kind_colors == {"invoice": "#56b1f3"}
+
+
+def test_kind_colors_non_dict_coerces_empty() -> None:
+    prefs = KindColorsPreferences(kind_colors="nope")  # type: ignore[arg-type]
+    assert prefs.kind_colors == {}
+
+
+def test_resolve_preferences_defaults_kind_colors_empty() -> None:
+    assert resolve_preferences({}).kind_colors == {}
+    assert resolve_preferences(None).kind_colors == {}
+
+
+def test_resolve_preferences_cleans_stored_kind_colors() -> None:
+    resolved = resolve_preferences({"kind_colors": {"invoice": "#AABBCC", "x": "nope"}})
+    assert resolved.kind_colors == {"invoice": "#aabbcc"}

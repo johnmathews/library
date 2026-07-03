@@ -76,6 +76,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/settings` | Your display preferences (dashboard fields + page-canvas tone + tile preview) |
 | PUT    | `/api/settings` | Update your dashboard fields |
 | PUT    | `/api/settings/appearance` | Update your page-canvas tone and tile preview |
+| PUT    | `/api/settings/kind-colors` | Update your per-kind tile border colours |
 | PUT    | `/api/settings/notifications` | Update your Pushover notifications + email forwarding addresses |
 | GET    | `/api/admin/system` | System & infra context: version, config, deployment, DB stats (admin only) |
 | GET    | `/api/admin/architecture` | Architecture docs as markdown (admin only) |
@@ -531,15 +532,16 @@ curl -H "Authorization: Bearer library_3q2…" \
 Bearer requests are CSRF-exempt (the header cannot be set cross-site).
 Revoked or unknown tokens, and tokens of disabled users, get `401`.
 
-## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`, `PUT /api/settings/notifications`
+## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`, `PUT /api/settings/kind-colors`, `PUT /api/settings/notifications`
 
 Per-user preferences: which metadata fields appear on the dashboard tiles, the
 page-canvas tone behind them, how each tile previews the document's first page,
-and Pushover notification settings (incl. email forwarding addresses). Auth and
-CSRF rules are identical to the rest of `/api` (§1.9). All preferences live in
-one JSONB `preferences` blob on the user row; writes are split per concern
-(fields vs appearance vs notifications) so each Settings tab saves
-independently, and every write preserves the sibling keys.
+the per-kind tile border colours, and Pushover notification settings (incl.
+email forwarding addresses). Auth and CSRF rules are identical to the rest of
+`/api` (§1.9). All preferences live in one JSONB `preferences` blob on the user
+row; writes are split per concern (fields vs appearance vs kind-colours vs
+notifications) so each Settings tab saves independently, and every write
+preserves the sibling keys.
 
 ### 1.10.1 `GET /api/settings`
 
@@ -548,7 +550,7 @@ user has never saved preferences, the **default set** is returned (no
 `404` or empty body).
 
 ```json
-{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"], "background_tone": "neutral", "tile_preview": "full_width", "notifications": {"enabled": false, "pushover_app_token_set": false, "pushover_user_key_set": false, "pushover_device": null, "events": [], "email_forward_addresses": []}}
+{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"], "background_tone": "neutral", "tile_preview": "full_width", "kind_colors": {}, "notifications": {"enabled": false, "pushover_app_token_set": false, "pushover_user_key_set": false, "pushover_device": null, "events": [], "email_forward_addresses": []}}
 ```
 
 ### 1.10.2 `PUT /api/settings`
@@ -609,7 +611,26 @@ tile preview to `full_width` — `200` with the default, never `422` — matchin
 `full_width`), so a client sending only `background_tone` still succeeds. On
 read, absent keys resolve to their defaults.
 
-### 1.10.4 `PUT /api/settings/notifications`
+### 1.10.4 `PUT /api/settings/kind-colors`
+
+Body: `{"kind_colors": {"<slug>": "#rrggbb", ...}}`. Replaces the per-kind tile
+**border colours** and returns the full resolved preference set (same shape as
+GET). Auth + CSRF apply. The map is a **sparse set of overrides**: a kind absent
+from the map falls back to the frontend's built-in default palette, and an empty
+map (`{}`) resets every kind to its default.
+
+**Hex, not a token.** Unlike `background_tone`, the value is a literal `#rrggbb`
+hex, because the Settings colour picker offers an arbitrary colour rather than a
+fixed palette. The *defaults* still live frontend-side (`api/settings.ts`
+`DEFAULT_KIND_COLORS`), so the built-in palette can be retuned without a data
+migration; only user overrides are persisted here.
+
+**Tolerant validation.** Entries whose value isn't a 6-digit `#rrggbb` hex (or
+whose key is empty) are silently dropped — `200` with the cleaned map, never
+`422` — and the map is capped at 64 entries. Hex is normalised to lower-case.
+On read, an absent `kind_colors` key resolves to `{}`.
+
+### 1.10.5 `PUT /api/settings/notifications`
 
 Per-user Pushover push notifications and the email addresses you forward
 documents from. Auth + CSRF apply. Returns the full resolved preference set

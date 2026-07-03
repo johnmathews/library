@@ -4,6 +4,7 @@ See docs/api.md for the full surface description. ``Decimal`` fields
 (``amount_total``) serialize to JSON strings to preserve precision.
 """
 
+import re
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
@@ -362,6 +363,57 @@ class AppearancePreferences(BaseModel):
         return DEFAULT_TILE_PREVIEW
 
 
+# Per-kind tile border colours are stored as raw ``#rrggbb`` hex — unlike the
+# named ``background_tone`` token — because the Settings colour picker offers an
+# arbitrary colour, not a fixed palette. The *defaults* still live frontend-side
+# (assets + api/settings.ts), so only user overrides are persisted here.
+_HEX_COLOUR = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+# Cap the stored map so a hand-edited blob can never carry an unbounded palette;
+# there are only ~15 seeded kinds, so this is generous headroom.
+MAX_KIND_COLOURS: Final[int] = 64
+
+
+def _clean_kind_colors(raw: object) -> dict[str, str]:
+    """Keep only ``{slug: '#rrggbb'}`` pairs, hex lower-cased; drop the rest.
+
+    Tolerant like :meth:`DashboardPreferences._clean`: a non-dict, an unknown
+    value type, or a malformed/short hex is dropped rather than raising, so a
+    hand-edited preferences blob never 500s the dashboard.
+    """
+    if not isinstance(raw, dict):
+        return {}
+    cleaned: dict[str, str] = {}
+    for slug, value in raw.items():
+        if len(cleaned) >= MAX_KIND_COLOURS:
+            break
+        if isinstance(slug, str) and slug and isinstance(value, str) and _HEX_COLOUR.match(value):
+            cleaned[slug] = value.lower()
+    return cleaned
+
+
+def _resolve_kind_colors(blob: dict[str, Any]) -> dict[str, str]:
+    """The stored per-kind colour overrides, cleaned; empty when unset."""
+    return _clean_kind_colors(blob.get("kind_colors"))
+
+
+class KindColorsPreferences(BaseModel):
+    """Body of PUT /api/settings/kind-colors — per-kind tile border colours.
+
+    A sparse map of kind slug → ``#rrggbb``. Only overrides are stored; a kind
+    absent from the map falls back to the frontend's built-in default palette,
+    and an empty map resets every kind to its default. Malformed entries are
+    dropped (never a 422), matching the other tolerant preference resolvers.
+    """
+
+    kind_colors: dict[str, str] = {}
+
+    @field_validator("kind_colors", mode="before")
+    @classmethod
+    def _clean(cls, value: object) -> dict[str, str]:
+        return _clean_kind_colors(value)
+
+
 class NotificationEvent(StrEnum):
     """A document event a user can choose to be pushed about (via Pushover)."""
 
@@ -543,6 +595,7 @@ class UserPreferences(BaseModel):
     dashboard_fields: list[DashboardField]
     background_tone: BackgroundTone
     tile_preview: TilePreview
+    kind_colors: dict[str, str]
     notifications: NotificationSettingsOut
 
 
@@ -557,6 +610,7 @@ def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
         dashboard_fields=resolve_dashboard_preferences(blob).dashboard_fields,
         background_tone=_resolve_background_tone(blob),
         tile_preview=_resolve_tile_preview(blob),
+        kind_colors=_resolve_kind_colors(blob),
         notifications=resolve_notification_settings(blob),
     )
 
