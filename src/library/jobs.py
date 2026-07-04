@@ -368,8 +368,8 @@ async def advance_pipeline(
                         exc_info=True,
                     )
         except Exception as exc:
-            await session.rollback()
             failed_in = document.status
+            await session.rollback()
             document.status = DocumentStatus.FAILED
             session.add(
                 IngestionEvent(

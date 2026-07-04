@@ -219,6 +219,14 @@ describe('AdminView', () => {
     vi.restoreAllMocks()
   })
 
+  it('does not cap the view root width (shell owns width)', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const root = wrapper.find('#admin-page')
+    expect(root.exists()).toBe(true)
+    expect(root.classes().some((cls) => cls.startsWith('max-w-'))).toBe(false)
+  })
+
   it('orders the tabs Users · Metadata · Architecture · Coverage · System with Users selected by default', async () => {
     const wrapper = mountView()
     await flushPromises()

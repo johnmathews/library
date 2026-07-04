@@ -17,6 +17,7 @@ import {
 import { refreshTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { useAuthStore } from '@/stores/auth'
 import { ApiError } from '@/api/client'
+import { PageHeader } from '@/components/app'
 
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.isAdmin)
@@ -158,24 +159,25 @@ async function confirmDelete(slug: string): Promise<void> {
 
 <template>
   <div id="projects-view">
-    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
-      <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold">Projects</h1>
-      <button
-        v-if="isAdmin && !showCreate"
-        type="button"
-        data-testid="project-new-button"
-        class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm"
-        @click="openCreate"
-      >
-        + New project
-      </button>
-    </div>
+    <PageHeader title="Projects">
+      <template #actions>
+        <button
+          v-if="isAdmin && !showCreate"
+          type="button"
+          data-testid="project-new-button"
+          class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm"
+          @click="openCreate"
+        >
+          + New project
+        </button>
+      </template>
+    </PageHeader>
 
     <!-- Create form (admins only). -->
     <form
       v-if="showCreate"
       data-testid="project-create-form"
-      class="mb-6 bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5 space-y-3"
+      class="mb-6 card p-5 space-y-3"
       @submit.prevent="submitCreate"
     >
       <div>
@@ -263,7 +265,7 @@ async function confirmDelete(slug: string): Promise<void> {
       <li
         v-for="project in projects"
         :key="project.slug"
-        class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-4"
+        class="card p-4"
         :data-testid="`project-row-${project.slug}`"
       >
         <!-- Inline edit form. -->

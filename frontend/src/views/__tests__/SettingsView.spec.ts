@@ -67,6 +67,18 @@ describe('SettingsView', () => {
     expect(rootClasses.some((cls) => cls.startsWith('max-w-'))).toBe(false)
   })
 
+  it('does not cap the settings cards width (shell owns width)', () => {
+    const auth = useAuthStore()
+    auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
+    stubFetch({ dashboard_fields: ['kind'] })
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+    for (const id of ['#settings-card-dashboard-fields', '#settings-card-notifications']) {
+      const card = wrapper.find(id)
+      expect(card.exists()).toBe(true)
+      expect(card.classes().some((cls) => cls.startsWith('max-w-'))).toBe(false)
+    }
+  })
+
   it('switches between tabs', async () => {
     const auth = useAuthStore()
     auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }

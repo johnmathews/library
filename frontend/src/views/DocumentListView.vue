@@ -15,7 +15,7 @@
 import { computed, reactive, ref, watch } from 'vue'
 import { useIntersectionObserver, useStorage } from '@vueuse/core'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
-import { AppBadge, AppBanner } from '@/components/app'
+import { AppBadge, AppBanner, PageHeader } from '@/components/app'
 import DocumentFilterBar from '@/components/DocumentFilterBar.vue'
 import DashboardFieldsMenu from '@/components/DashboardFieldsMenu.vue'
 import {
@@ -380,7 +380,7 @@ function toggleSortDirection(): void {
     {{ flashMessage }}
   </AppBanner>
 
-  <h1 id="dashboard-title" class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">Documents</h1>
+  <PageHeader title="Documents" title-id="dashboard-title" />
 
   <DocumentFilterBar :applied="applied" @apply="applyFilterQuery" @clear="clearFilters" />
 
@@ -419,7 +419,7 @@ function toggleSortDirection(): void {
 
   <div
     v-if="loadError"
-    class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-4 text-gray-600 dark:text-gray-300"
+    class="card p-4 text-gray-600 dark:text-gray-300"
     data-testid="load-error"
   >
     {{ loadError }}
@@ -481,7 +481,7 @@ function toggleSortDirection(): void {
 
     <div
       v-if="!items.length && !isFiltered"
-      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-8 text-center text-gray-500 dark:text-gray-400"
+      class="card p-8 text-center text-gray-500 dark:text-gray-400"
       data-testid="empty-library"
     >
       There are no documents in your library yet.
@@ -491,7 +491,7 @@ function toggleSortDirection(): void {
     </div>
     <div
       v-else-if="!items.length"
-      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-8 text-center text-gray-500 dark:text-gray-400"
+      class="card p-8 text-center text-gray-500 dark:text-gray-400"
       data-testid="empty-results"
     >
       No documents match your search. Try different words, check the filters, or

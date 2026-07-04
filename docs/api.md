@@ -33,6 +33,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | POST   | `/api/documents` | Upload a file for ingestion |
 | GET    | `/api/documents` | List / search documents |
 | GET    | `/api/documents/{id}` | Full document detail |
+| GET    | `/api/documents/{id}/markdown` | Per-page markdown rendering of a document |
 | PATCH  | `/api/documents/{id}` | Edit metadata |
 | DELETE | `/api/documents/{id}` | Soft-delete |
 | POST   | `/api/documents/{id}/extract` | Queue metadata re-extraction |
@@ -84,8 +85,18 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/admin/users` | List all users (admin only) |
 | POST   | `/api/admin/users` | Create a user (admin only) |
 | PATCH  | `/api/admin/users/{id}` | Promote/demote, activate/deactivate a user (admin only) |
+| POST   | `/api/admin/recipients` | Create a recipient (dedupes case-insensitively) (admin only) |
 | PATCH  | `/api/admin/recipients/{id}` | Rename or merge a recipient (admin only) |
 | DELETE | `/api/admin/recipients/{id}` | Delete a recipient, reassigning its documents (admin only) |
+| POST   | `/api/admin/senders` | Create a sender (dedupes case-insensitively) (admin only) |
+| PATCH  | `/api/admin/senders/{id}` | Rename or merge a sender (admin only) |
+| DELETE | `/api/admin/senders/{id}` | Delete a sender, reassigning its documents (admin only) |
+| PATCH  | `/api/admin/kinds/{slug}` | Rename a kind's display name; slug is immutable (admin only) |
+| DELETE | `/api/admin/kinds/{slug}` | Delete a kind, reassigning its documents (admin only) |
+| GET    | `/api/admin/currencies` | Distinct currency codes with counts (admin only) |
+| POST   | `/api/admin/currencies/normalize` | Rename a currency code store-wide (series-aware) (admin only) |
+| GET    | `/api/admin/fx-rates` | FX rates per in-use currency (base = USD) (admin only) |
+| POST   | `/api/admin/fx-rates` | Seed an FX rate (live fetch or manual) (admin only) |
 
 Soft-deleted documents return **404** from every per-document endpoint and
 never appear in lists. Other error shapes: `404` unknown document, `422`
@@ -218,6 +229,20 @@ Everything in the list item, plus:
 - `user_edited_fields` — fields locked by user edits (see 1.5)
 - `events` — the full ingestion audit trail, oldest first:
   `[{event, detail, created_at}, …]`
+
+### 1.4.1 Per-page markdown — `GET /api/documents/{id}/markdown`
+
+The document's per-page markdown rendering, assembled from the stored
+`document_pages` rows and ordered by page number:
+
+```json
+{"page_count": 2, "pages": [{"page_number": 1, "markdown": "# Invoice…"},
+                            {"page_number": 2, "markdown": "…"}]}
+```
+
+`page_count` is the length of `pages`. A document with no stored pages
+returns `{"page_count": 0, "pages": []}` (still `200`). Unknown or
+soft-deleted documents return `404`.
 
 ## 1.5 Edit metadata — `PATCH /api/documents/{id}`
 

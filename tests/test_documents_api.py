@@ -729,6 +729,19 @@ def test_download_original_inline_disposition(
     )
 
 
+def test_download_original_missing_blob_404(api_client: TestClient, api_database_url: str) -> None:
+    """A document row can exist while its original blob was never stored (or was
+    pruned). The endpoint must 404 with a clear message, not 500 on a missing file."""
+    document_id = seed_document(
+        api_database_url, "w-original-missing", original_filename="lost.pdf"
+    )
+    # Deliberately no store() — the blob for this sha256 does not exist on disk.
+
+    response = api_client.get(f"/api/documents/{document_id}/original")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "original file missing from storage"
+
+
 def test_download_searchable_pdf_inline_disposition(
     api_client: TestClient, api_database_url: str
 ) -> None:
@@ -776,6 +789,20 @@ def test_thumbnail_endpoint_serves_webp_and_marks_presence(
     by_id = {item["id"]: item for item in list_docs(api_client, tag="w7-thumb")["items"]}
     assert by_id[with_thumb]["has_thumbnail"] is True
     assert by_id[without_thumb]["has_thumbnail"] is False
+
+
+def test_thumbnail_missing_file_on_live_document_404(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A live (non-deleted) document whose thumbnail hasn't been rendered yet must
+    404 at the missing-file check with a clear message, not 500. (The soft-deleted
+    404 path exits earlier in _get_document_or_404, so it never reaches this branch.)"""
+    document_id = seed_document(api_database_url, "w-thumbnail-missing")
+    # No thumbnail file written for this sha256's derived dir.
+
+    response = api_client.get(f"/api/documents/{document_id}/thumbnail")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "no thumbnail for this document"
 
 
 # --- Corrections flywheel ----------------------------------------------------

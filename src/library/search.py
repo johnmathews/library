@@ -117,6 +117,12 @@ class DocumentQuery:
     has_rank: bool
 
 
+def _ilike_escape(value: str) -> str:
+    """Escape LIKE wildcards so a user substring matches literally under
+    ``ilike(..., escape="\\")``."""
+    return value.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
+
+
 def filter_conditions(filters: DocumentFilters) -> list[Any]:
     """WHERE conditions for the filters; always excludes soft-deleted rows."""
     conditions: list[Any] = [Document.deleted_at.is_(None)]
@@ -127,14 +133,10 @@ def filter_conditions(filters: DocumentFilters) -> list[Any]:
     if filters.recipient_id is not None:
         conditions.append(Document.recipient_id == filters.recipient_id)
     if filters.sender_contains is not None:
-        escaped = (
-            filters.sender_contains.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
-        )
+        escaped = _ilike_escape(filters.sender_contains)
         conditions.append(Document.sender.has(Sender.name.ilike(f"%{escaped}%", escape="\\")))
     if filters.recipient_contains is not None:
-        escaped = (
-            filters.recipient_contains.replace("\\", "\\\\").replace("%", r"\%").replace("_", r"\_")
-        )
+        escaped = _ilike_escape(filters.recipient_contains)
         conditions.append(Document.recipient.has(Recipient.name.ilike(f"%{escaped}%", escape="\\")))
     for slug in filters.tag_slugs:
         conditions.append(Document.tags.any(Tag.slug == slug))

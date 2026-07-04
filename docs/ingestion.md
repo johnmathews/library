@@ -355,7 +355,7 @@ the SDK converts the model to a JSON schema (with
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown`. |
 | `tags` | `list[str]` | Normalised to lowercase slugs, deduplicated, capped at 8 client-side (array length constraints are also unsupported in the schema). |
 | `topics` | `list[str]` | Human-readable topic phrases (kept as prose, **not** slugified) for general-reference material — what the document covers. Stripped, case-insensitively deduplicated, capped at 12. Empty (`[]`) for transactional paperwork. Persisted to the `documents.topics` JSONB column (migration 0010). |
-| `confidence` | enum | `high` / `medium` / `low` — `low` triggers escalation. |
+| `confidence` | enum | `high` / `low` — `low` triggers escalation (the gate is binary). |
 | `reasoning_note` | `str \| None` | One-line note when something needed judgement. |
 
 Numeric min/max, string-length, and array-length constraints are not

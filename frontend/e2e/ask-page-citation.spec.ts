@@ -1,6 +1,11 @@
 /**
  * Task 13 e2e — Ask → page citation → PDF deep-link.
  *
+ * NOTE: this is a deliberate UI/deep-link test, NOT an Ask-engine test — it
+ * intercepts POST /api/ask with a fixed citation (the e2e stack has no Anthropic
+ * key). The real ask engine (tool loop, used_tools, citation assembly) is
+ * exercised against a stubbed SDK in tests/test_api_ask.py.
+ *
  * Flow:
  *   1. Sign in and seed a real document (text file, for a stable id).
  *   2. Intercept GET /api/documents/{id} so the detail view believes the

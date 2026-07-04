@@ -81,7 +81,7 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
   <section
     id="document-history"
     data-testid="document-history"
-    class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
+    class="card p-5"
   >
     <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">History</h2>
 

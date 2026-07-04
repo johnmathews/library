@@ -14,7 +14,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { AppBadge, AppButton, AppInput, AppSelect } from '@/components/app'
+import { AppBadge, AppButton, AppInput, AppSelect, PageHeader } from '@/components/app'
 import type { SelectItem } from '@/components/app'
 import { ApiError } from '@/api/client'
 import {
@@ -1003,8 +1003,7 @@ onMounted(() => {
   void loadUsers()
 })
 
-const cardClass =
-  'bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-6'
+const cardClass = 'card p-6'
 const tabClass = (active: boolean): string =>
   [
     'px-4 py-2 -mb-px text-sm font-medium border-b-2 transition cursor-pointer',
@@ -1015,8 +1014,8 @@ const tabClass = (active: boolean): string =>
 </script>
 
 <template>
-  <div id="admin-page" class="max-w-4xl">
-    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-4">Admin</h1>
+  <div id="admin-page">
+    <PageHeader title="Admin" />
 
     <div
       role="tablist"

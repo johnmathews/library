@@ -84,3 +84,61 @@ test('an admin reaches /admin and the four tabs render', async ({ page }) => {
   // getByText(...).first() would match that hidden copy and fail.
   await expect(usersPanel.getByText(ADMIN_USERNAME).first()).toBeVisible()
 })
+
+/**
+ * Admin-write round-trip through the real API (W6): create a sender, rename it,
+ * and prove the rename lands in the Metadata tab. This is the only e2e that
+ * mutates admin taxonomy state end-to-end. Everything is keyed to a per-run
+ * UNIQUE marker so the shared backend and parallel browser projects never
+ * collide, and no document_date is written (senders carry no date), so the
+ * dashboard-sort invariant the other specs rely on is untouched.
+ */
+test('an admin creates and renames a sender through the API and the UI reflects it', async ({
+  page,
+}, testInfo) => {
+  await signIn(page, ADMIN_USERNAME, ADMIN_PASSWORD)
+
+  // Admin write endpoints are CSRF-protected like the document routes: read the
+  // double-submit cookie set at sign-in and echo it in the header (mirrors
+  // review-queue.spec.ts's seed pattern).
+  const csrf = (await page.context().cookies()).find((c) => c.name === 'library_csrftoken')
+  expect(csrf, 'library_csrftoken cookie must exist after sign-in').toBeDefined()
+  const headers = { 'X-CSRF-Token': csrf!.value }
+
+  // Unique per project + run so concurrent projects and reruns never collide on
+  // the case-insensitive dedupe.
+  const marker = `${testInfo.project.name}-${Date.now()}`
+  const originalName = `W6 Sender ${marker}`
+  const renamedName = `W6 Renamed ${marker}`
+
+  // 1. Seed a brand-new sender — a fresh name is a 201 create (a dedupe hit
+  //    would be 200), returning the {id, name} contract.
+  const create = await page.request.post('/api/admin/senders', {
+    headers,
+    data: { name: originalName },
+  })
+  expect(create.status(), await create.text()).toBe(201)
+  const created = (await create.json()) as { id: number; name: string }
+  expect(created.name).toBe(originalName)
+  const id = created.id
+
+  // 2. Rename it through the real API. A plain rename (no collision) is a 200
+  //    echoing the same id with the new name.
+  const rename = await page.request.patch(`/api/admin/senders/${id}`, {
+    headers,
+    data: { name: renamedName },
+  })
+  expect(rename.status(), await rename.text()).toBe(200)
+  expect(await rename.json()).toMatchObject({ id, name: renamedName })
+
+  // 3. The Metadata tab reflects the rename. Senders load lazily when the tab is
+  //    first entered, so navigate fresh and open it; the row is keyed by id
+  //    (`sender-row-{id}`) and shows the new name.
+  await page.goto('/admin')
+  await page.getByTestId('admin-tab-metadata-btn').click()
+  await expect(page.getByTestId('admin-tab-metadata')).toBeVisible()
+  const row = page.getByTestId(`sender-row-${id}`)
+  await expect(row).toBeVisible()
+  await expect(row).toContainText(renamedName)
+  await expect(row).not.toContainText(originalName)
+})

@@ -19,6 +19,7 @@ import {
 import SeriesChartTile from '@/components/SeriesChartTile.vue'
 import CurrencySelect from '@/components/CurrencySelect.vue'
 import ChartControls from '@/components/charts/ChartControls.vue'
+import { PageHeader } from '@/components/app'
 import { useChartsTimeframe } from '@/composables/useChartsTimeframe'
 import { useChartsGrouping } from '@/composables/useChartsGrouping'
 
@@ -155,18 +156,19 @@ onMounted(load)
 
 <template>
   <div id="charts-view">
-    <div class="flex flex-wrap items-center justify-between gap-3 mb-6">
-      <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold">Charts</h1>
-      <button
-        v-if="!showCreate"
-        type="button"
-        data-testid="charts-create-button"
-        class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm"
-        @click="openCreate"
-      >
-        + Create a new series
-      </button>
-    </div>
+    <PageHeader title="Charts">
+      <template #actions>
+        <button
+          v-if="!showCreate"
+          type="button"
+          data-testid="charts-create-button"
+          class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm"
+          @click="openCreate"
+        >
+          + Create a new series
+        </button>
+      </template>
+    </PageHeader>
 
     <!-- Shared time-range + grouping applied to every tile (W5). -->
     <ChartControls
@@ -186,7 +188,7 @@ onMounted(load)
     <form
       v-if="showCreate"
       data-testid="charts-create-form"
-      class="mb-6 bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5 space-y-3"
+      class="mb-6 card p-5 space-y-3"
       @submit.prevent="submitCreate"
     >
       <h2 class="text-sm font-semibold text-gray-800 dark:text-gray-100">Create a new series</h2>

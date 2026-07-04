@@ -260,8 +260,7 @@ async function onNotificationsSubmit(): Promise<void> {
   }
 }
 
-const cardClass =
-  'bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-6'
+const cardClass = 'card p-6'
 const tabClass = (active: boolean): string =>
   [
     'px-4 py-2 -mb-px text-sm font-medium border-b-2 transition cursor-pointer',
@@ -328,7 +327,7 @@ const tabClass = (active: boolean): string =>
         </AppBanner>
       </div>
 
-      <div id="settings-card-dashboard-fields" :class="cardClass" class="max-w-2xl">
+      <div id="settings-card-dashboard-fields" :class="cardClass">
         <form @submit.prevent="onSubmit">
           <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Dashboard tile fields</h2>
           <p class="mb-4 mt-1 text-sm text-gray-500 dark:text-gray-400">
@@ -522,7 +521,7 @@ const tabClass = (active: boolean): string =>
         </AppBanner>
       </div>
 
-      <div id="settings-card-notifications" :class="cardClass" class="max-w-2xl">
+      <div id="settings-card-notifications" :class="cardClass">
         <form @submit.prevent="onNotificationsSubmit">
           <label class="flex items-center gap-2 py-1">
             <input

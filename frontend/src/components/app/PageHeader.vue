@@ -16,8 +16,10 @@ withDefaults(
   defineProps<{
     title: string
     description?: string
+    /** Optional id applied to the <h1>, for views that expose the title by id. */
+    titleId?: string
   }>(),
-  { description: undefined },
+  { description: undefined, titleId: undefined },
 )
 </script>
 
@@ -27,7 +29,7 @@ withDefaults(
     class="w-full flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-6"
   >
     <div class="min-w-0">
-      <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold">
+      <h1 :id="titleId" class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold">
         {{ title }}
       </h1>
       <p v-if="description" class="text-gray-500 dark:text-gray-400 mt-1">

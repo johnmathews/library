@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -501,10 +502,8 @@ def _collect_document_ids(value: Any, ids: set[int]) -> None:
             _collect_document_ids(item, ids)
 
 
-def _ids_from_history(history: list[dict[str, Any]]) -> set[int]:
-    """Document ids surfaced by tool results in replayed prior turns, so the
-    write tool may edit documents cited earlier in the thread."""
-    ids: set[int] = set()
+def _tool_result_payloads(history: list[dict[str, Any]]) -> Iterator[Any]:
+    """Yield each decoded ``tool_result`` payload from replayed prior turns."""
     for message in history:
         content = message.get("content")
         if not isinstance(content, list):
@@ -516,10 +515,17 @@ def _ids_from_history(history: list[dict[str, Any]]) -> set[int]:
             if not isinstance(raw, str):
                 continue
             try:
-                payload = json.loads(raw)
+                yield json.loads(raw)
             except (ValueError, TypeError):
                 continue
-            _collect_document_ids(payload, ids)
+
+
+def _ids_from_history(history: list[dict[str, Any]]) -> set[int]:
+    """Document ids surfaced by tool results in replayed prior turns, so the
+    write tool may edit documents cited earlier in the thread."""
+    ids: set[int] = set()
+    for payload in _tool_result_payloads(history):
+        _collect_document_ids(payload, ids)
     return ids
 
 
@@ -529,26 +535,13 @@ def _previewed_ids_from_history(history: list[dict[str, Any]]) -> set[int]:
     first, making propose-then-confirm a code invariant rather than a prompt
     contract the model could skip."""
     ids: set[int] = set()
-    for message in history:
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "tool_result":
-                continue
-            raw = block.get("content")
-            if not isinstance(raw, str):
-                continue
-            try:
-                payload = json.loads(raw)
-            except (ValueError, TypeError):
-                continue
-            if (
-                isinstance(payload, dict)
-                and payload.get("status") == "preview"
-                and isinstance(payload.get("document_id"), int)
-            ):
-                ids.add(payload["document_id"])
+    for payload in _tool_result_payloads(history):
+        if (
+            isinstance(payload, dict)
+            and payload.get("status") == "preview"
+            and isinstance(payload.get("document_id"), int)
+        ):
+            ids.add(payload["document_id"])
     return ids
 
 

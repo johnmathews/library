@@ -214,7 +214,7 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
     <form
       id="upload-form"
       novalidate
-      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5 mb-6"
+      class="card p-5 mb-6"
       @submit.prevent="onSubmit"
     >
       <AppFileUpload
@@ -237,7 +237,7 @@ function phaseLabel(phase: Phase): { text: string; colour: 'green' | 'yellow' | 
       <li
         v-for="entry in entries"
         :key="entry.key"
-        class="flex items-center gap-3 bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 px-4 py-3"
+        class="flex items-center gap-3 card px-4 py-3"
       >
         <span class="flex-1 min-w-0 truncate text-sm text-gray-800 dark:text-gray-100">{{
           entry.name
