@@ -84,8 +84,12 @@ Defined in `assets/main.css` (`@theme` tokens) and
 - **Accent:** violet (`--color-violet-500` family). Status colours: green / red /
   yellow / sky scales.
 - **Type:** Inter; headings `text-2xl md:text-3xl font-bold` for page titles.
-- **Badges/pills:** `AppBadge`, `FilterPill`. **Empty/loading/error states:**
-  reuse existing view patterns (e.g. `DocumentListView`).
+- **Badges/pills:** `AppBadge`, `FilterPill`. **Dropdowns/menus/popovers:**
+  `AppPopover` (controlled `v-model:open`, Escape/outside-click close, focus
+  return, `--z-popover` token) — don't hand-roll open-state + outside-click; a
+  true modal uses the native `<dialog>` (`SearchModal`) instead.
+  **Empty/loading/error states:** reuse existing view patterns (e.g.
+  `DocumentListView`).
 - **Field rows / filter bars:** the `.filter-label` recipe + `.form-*` controls
   in a `flex flex-wrap items-end gap-3` row; prefer native `<input type="date">` /
   `<select>` over hand-rolled widgets. See §5 and the reference implementation

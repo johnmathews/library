@@ -231,6 +231,7 @@ components use `defineModel()`.
 | `AppBadge` | GovTag | Mosaic pill badge; maps GovTag's `colour` set onto Mosaic `{bg,text}` pairs. |
 | `AppPanel` | GovPanel | Violet confirmation panel (title + body slots). |
 | `AppDetails` | GovDetails | Native `<details>` disclosure with a violet summary. |
+| `AppPopover` | — (new) | Behavioural primitive for the app's dropdown overlays: controlled `v-model:open`, Escape-closes-with-focus-return, outside-mousedown close, one `--z-popover` stacking token. `#trigger` slot (scoped `{ open, toggle, triggerRef }`) + panel default slot; `align` (`left`/`right`/`auto`/`none`) + caller-owned `panelClass`/`panelAttrs`. Anchored **in-flow** (no Teleport), so class-based alignment and the header dropdown's responsive positioning are preserved. Backs `FilterPill`, `DashboardFieldsMenu`, the `JobsView` columns menu, and both `AppHeader` dropdowns; `SearchModal` stays a native `<dialog>` (a modal, not a popover). |
 | `AppBackLink` | GovBackLink | Chevron back link; `<RouterLink>`/`<a>`. |
 | `AppBanner` | GovNotificationBanner | `role="alert"` left-border banner; `variant="success"` → green, else info/sky; focuses on mount. |
 | `AppErrorSummary` | GovErrorSummary | Red summary card listing `errors: ErrorSummaryItem[]`; **focuses itself on mount** and each link moves focus to its field (a11y preserved). |
@@ -314,9 +315,10 @@ in sync automatically.
   the pill row and expands it inline on tap; the search input and chips stay
   visible at every width.
 - **`FilterPill` primitive** (`src/components/app/FilterPill.vue`, exported
-  from `@/components/app`): a reusable controlled popover — rounded button +
-  slotted dropdown panel, `v-model:open`, closes on Escape or outside
-  mousedown.
+  from `@/components/app`): a rounded pill button + slotted dropdown panel,
+  `v-model:open`. It builds on **`AppPopover`** (§1.4) for the shared overlay
+  behaviour — closes on Escape (focus returns to the pill) or outside mousedown,
+  viewport-aware alignment — and adds the pill's active/value-label styling.
 - **`status` filter** and **multi-tag** (`tags: string[]`) are new additions
   to `AppliedFilters`; the `DOCUMENT_STATUSES` options array lives in
   `src/api/documents.ts`.
@@ -370,6 +372,22 @@ route or editor: queue mode is a query flag reusing the whole existing detail
 page. Covered by `stores/__tests__/reviewQueue.spec.ts`, queue-mode cases in
 `DocumentDetailView.spec.ts`, and `e2e/review-queue.spec.ts`.
 
+### DocumentDetailView component structure
+
+The view keeps the hero, the two-column grid, the preview column + markdown
+reader, the actions card, and the history timeline; the two editors are their
+own components: **`DocumentMetadataEditor.vue`** (the edit-mode metadata editor)
+and **`NoteEditorPanel.vue`** (the in-place note editor + version history).
+Because every save **replaces** the parent-owned `doc` wholesale (and the hero /
+preview read `doc`), both editors are wired **`v-model:doc`** — the child emits
+the fresh document up so the parent's other regions re-render (a one-way prop
+would freeze them on the pre-save snapshot). `NoteEditorPanel` additionally emits
+**`reload-markdown`** because the note body lives in the parent's reader
+(`markdownData`), not on `doc`. Shared `marked`+DOMPurify/format helpers live in
+`src/utils/documentFormat.ts`. `hydrateDrafts` runs only on the edit-toggle
+(never a `watch(doc)`), so a background refresh mid-edit can't clobber in-progress
+drafts.
+
 The detail page also leads with a prominent **"Why this needs review"** panel
 (`[data-testid="validation-findings"]`, shown while `review_status` is
 `needs_review`) that lists **every** finding in plain language — including
@@ -408,6 +426,19 @@ an **Enter manually** fallback form (`fx-manual-toggle-{code}` →
 `fx-manual-input-{code}` + `fx-seed-submit-{code}`), which also opens
 automatically when a live fetch fails. All mutations go through
 `src/api/admin.ts` and refresh the shared taxonomy cache.
+
+**Component structure.** `AdminView.vue` is a thin shell (PageHeader + tablist +
+one `v-show` section per tab); each tab is its own component under
+`src/views/admin/` (`AdminSystemPanel`, `AdminArchitecturePanel`,
+`AdminCoveragePanel`, `AdminUsersPanel`, `AdminMetadataPanel`). The eager tabs
+self-load on mount; `AdminMetadataPanel` takes an `:active` prop and loads lazily
+on first open. The Senders/Recipients/Kinds cards are three instances of one
+generic **`TaxonomyCrudPanel.vue`** driven by a `TaxonomyDescriptor`
+(`src/views/admin/taxonomyCrud.ts`): the descriptor captures every point the
+three entities diverge — `keyOf` (id vs slug), `hasMerge` (kinds have none),
+`parseReassign`, and the API callables — so the shared panel stays
+behaviour-identical to the original three inline blocks. Currencies + FX stay
+inline in `AdminMetadataPanel` (a different per-row-state idiom, not taxonomy).
 
 ## 1.6 Dark mode
 
