@@ -12,7 +12,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useStorage } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
-import { AppBadge, AppInput, AppSelect, PageHeader } from '@/components/app'
+import { AppBadge, AppInput, AppPopover, AppSelect, PageHeader } from '@/components/app'
 import {
   getDocument,
   listDocuments,
@@ -345,8 +345,6 @@ const columnVisibility = useStorage<Record<string, boolean>>(
   { mergeDefaults: true },
 )
 const showColumnMenu = ref(false)
-/** The Columns menu wrapper, for the outside-click close handler. */
-const columnMenu = ref<HTMLElement | null>(null)
 
 function isVisible(key: string): boolean {
   return columnVisibility.value[key] ?? true
@@ -389,18 +387,6 @@ function cellValue(key: string, job: JobInfo): string {
   }
 }
 
-// Close the column menu on an outside click (uses the wrapper ref, not a
-// document-wide query, so it stays correct regardless of DOM structure).
-function onDocumentClick(e: MouseEvent): void {
-  if (!showColumnMenu.value) return
-  const container = columnMenu.value
-  if (container && !container.contains(e.target as Node)) showColumnMenu.value = false
-}
-
-onMounted(() => {
-  document.addEventListener('click', onDocumentClick)
-})
-onUnmounted(() => document.removeEventListener('click', onDocumentClick))
 </script>
 
 <template>
@@ -418,43 +404,48 @@ onUnmounted(() => document.removeEventListener('click', onDocumentClick))
         </label>
 
         <!-- Column-visibility menu (governs the table) -->
-        <div ref="columnMenu" class="relative">
-          <button
-            type="button"
-            data-testid="jobs-columns-button"
-            class="flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
-            @click="showColumnMenu = !showColumnMenu"
-          >
-            <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M9 4h6m-6 4h6m-6 4h6m-6 4h6M4 4v16m16-16v16"
-              />
-            </svg>
-            Columns
-          </button>
-          <div
-            v-if="showColumnMenu"
-            data-testid="jobs-columns-menu"
-            class="absolute right-0 mt-1 w-52 rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 shadow-lg z-40 py-1"
-          >
-            <label
-              v-for="col in COLUMNS"
-              :key="col.key"
-              class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+        <AppPopover
+          :open="showColumnMenu"
+          align="right"
+          :panel-attrs="{ 'data-testid': 'jobs-columns-menu' }"
+          panel-class="absolute mt-1 w-52 py-1"
+          @update:open="showColumnMenu = $event"
+        >
+          <template #trigger="{ open, toggle, triggerRef }">
+            <button
+              :ref="triggerRef"
+              type="button"
+              data-testid="jobs-columns-button"
+              class="flex items-center gap-1.5 rounded-lg border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-3 py-1.5 text-sm font-medium text-gray-600 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+              :aria-expanded="open"
+              @click="toggle"
             >
-              <input
-                type="checkbox"
-                :checked="isVisible(col.key)"
-                :data-testid="`jobs-col-toggle-${col.key}`"
-                class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
-                @change="toggleColumn(col.key)"
-              />
-              {{ col.label }}
-            </label>
-          </div>
-        </div>
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" stroke-width="2" viewBox="0 0 24 24">
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M9 4h6m-6 4h6m-6 4h6m-6 4h6M4 4v16m16-16v16"
+                />
+              </svg>
+              Columns
+            </button>
+          </template>
+
+          <label
+            v-for="col in COLUMNS"
+            :key="col.key"
+            class="flex items-center gap-2 px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer"
+          >
+            <input
+              type="checkbox"
+              :checked="isVisible(col.key)"
+              :data-testid="`jobs-col-toggle-${col.key}`"
+              class="rounded border-gray-300 dark:border-gray-600 text-violet-500 focus:ring-violet-500"
+              @change="toggleColumn(col.key)"
+            />
+            {{ col.label }}
+          </label>
+        </AppPopover>
       </template>
     </PageHeader>
 

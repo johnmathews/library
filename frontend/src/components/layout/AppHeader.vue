@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import ThemeToggle from './ThemeToggle.vue'
+import { AppPopover } from '@/components/app'
 import { useAuthStore } from '@/stores/auth'
 import { useJobsStore } from '@/stores/jobs'
 
@@ -82,99 +83,95 @@ async function handleSignOut() {
             id="header-jobs-indicator"
             class="relative inline-flex"
           >
-            <button
-              id="header-jobs-button"
-              data-testid="header-jobs-button"
-              class="relative w-8 h-8 flex items-center justify-center bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700/50 rounded-full"
-              aria-haspopup="true"
-              :aria-expanded="jobsMenuOpen"
-              :aria-label="`${jobsStore.activeCount} background job(s) running`"
-              @click.stop="jobsMenuOpen = !jobsMenuOpen"
+            <!--
+              The jobs button sits mid-cluster (search/theme/user-menu are to
+              its right), so a button-anchored `right-0` dropdown runs off the
+              LEFT edge on a phone. Below `sm` we pin the panel to the viewport's
+              right edge with a width cap so it always stays on screen; at `sm`+
+              the button has room, so restore the under-button anchor. AppPopover
+              provides Escape/focus-return/outside-close + the z-token.
+            -->
+            <AppPopover
+              :open="jobsMenuOpen"
+              align="none"
+              :panel-attrs="{ id: 'header-jobs-dropdown' }"
+              panel-class="origin-top-right fixed top-16 right-2 w-72 max-w-[calc(100vw-1rem)] sm:absolute sm:top-full sm:right-0 sm:mt-1 sm:w-auto sm:min-w-64 sm:max-w-none py-1.5 overflow-hidden"
+              @update:open="jobsMenuOpen = $event"
             >
-              <span class="sr-only">Background jobs running</span>
-              <svg
-                class="w-5 h-5 animate-spin text-violet-500"
-                viewBox="0 0 24 24"
-                fill="none"
-                xmlns="http://www.w3.org/2000/svg"
-                aria-hidden="true"
-              >
-                <circle
-                  class="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="9"
-                  stroke="currentColor"
-                  stroke-width="3"
-                />
-                <path
-                  class="opacity-90"
-                  fill="currentColor"
-                  d="M12 3a9 9 0 0 1 9 9h-3a6 6 0 0 0-6-6V3Z"
-                />
-              </svg>
-              <span
-                data-testid="header-jobs-count"
-                aria-live="polite"
-                class="absolute -top-1 -right-1 min-w-4 h-4 px-1 flex items-center justify-center text-[10px] font-semibold text-white bg-violet-500 rounded-full"
-                >{{ jobsStore.activeCount }}</span
-              >
-            </button>
-            <Transition
-              enter-active-class="transition ease-out duration-200"
-              enter-from-class="opacity-0 -translate-y-1"
-              enter-to-class="opacity-100 translate-y-0"
-              leave-active-class="transition ease-out duration-200"
-              leave-from-class="opacity-100 translate-y-0"
-              leave-to-class="opacity-0 -translate-y-1"
-            >
-              <!--
-                The jobs button sits mid-cluster (search/theme/user-menu are
-                to its right), so a button-anchored `right-0` dropdown runs off
-                the LEFT edge on a phone. Below `sm` we pin it to the viewport's
-                right edge with a width cap so it always stays on screen; at
-                `sm`+ the button has room, so restore the under-button anchor.
-              -->
-              <div
-                v-show="jobsMenuOpen"
-                id="header-jobs-dropdown"
-                class="origin-top-right z-50 fixed top-16 right-2 w-72 max-w-[calc(100vw-1rem)] sm:absolute sm:top-full sm:right-0 sm:mt-1 sm:w-auto sm:min-w-64 sm:max-w-none bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 py-1.5 rounded-lg shadow-lg overflow-hidden"
-                @focusin="jobsMenuOpen = true"
-                @focusout="jobsMenuOpen = false"
-              >
-                <div
-                  class="pt-0.5 pb-2 px-3 mb-1 border-b border-gray-200 dark:border-gray-700/60 text-xs font-semibold uppercase text-gray-400 dark:text-gray-500"
+              <template #trigger="{ open, toggle, triggerRef }">
+                <button
+                  :ref="triggerRef"
+                  id="header-jobs-button"
+                  data-testid="header-jobs-button"
+                  class="relative w-8 h-8 flex items-center justify-center bg-white dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700/50 rounded-full"
+                  aria-haspopup="true"
+                  :aria-expanded="open"
+                  :aria-label="`${jobsStore.activeCount} background job(s) running`"
+                  @click.stop="toggle"
                 >
-                  Processing
-                </div>
-                <ul class="max-h-64 overflow-y-auto">
-                  <li v-for="doc in jobsStore.activeList" :key="doc.id" data-testid="header-jobs-item">
-                    <RouterLink
-                      class="flex items-center justify-between gap-3 text-sm py-1 px-3 hover:bg-gray-50 dark:hover:bg-gray-700/30"
-                      :to="`/documents/${doc.id}`"
-                      @click="jobsMenuOpen = false"
-                    >
-                      <span class="truncate text-gray-700 dark:text-gray-200">{{
-                        doc.title || `Document #${doc.id}`
-                      }}</span>
-                      <span class="shrink-0 text-xs text-gray-400 dark:text-gray-500">{{
-                        stageLabel(doc.status)
-                      }}</span>
-                    </RouterLink>
-                  </li>
-                </ul>
-                <div class="border-t border-gray-200 dark:border-gray-700/60 mt-1 pt-1">
+                  <span class="sr-only">Background jobs running</span>
+                  <svg
+                    class="w-5 h-5 animate-spin text-violet-500"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    xmlns="http://www.w3.org/2000/svg"
+                    aria-hidden="true"
+                  >
+                    <circle
+                      class="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="9"
+                      stroke="currentColor"
+                      stroke-width="3"
+                    />
+                    <path
+                      class="opacity-90"
+                      fill="currentColor"
+                      d="M12 3a9 9 0 0 1 9 9h-3a6 6 0 0 0-6-6V3Z"
+                    />
+                  </svg>
+                  <span
+                    data-testid="header-jobs-count"
+                    aria-live="polite"
+                    class="absolute -top-1 -right-1 min-w-4 h-4 px-1 flex items-center justify-center text-[10px] font-semibold text-white bg-violet-500 rounded-full"
+                    >{{ jobsStore.activeCount }}</span
+                  >
+                </button>
+              </template>
+
+              <div
+                class="pt-0.5 pb-2 px-3 mb-1 border-b border-gray-200 dark:border-gray-700/60 text-xs font-semibold uppercase text-gray-400 dark:text-gray-500"
+              >
+                Processing
+              </div>
+              <ul class="max-h-64 overflow-y-auto">
+                <li v-for="doc in jobsStore.activeList" :key="doc.id" data-testid="header-jobs-item">
                   <RouterLink
-                    data-testid="header-jobs-viewall"
-                    class="font-medium text-sm text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 flex items-center py-1 px-3"
-                    to="/jobs"
+                    class="flex items-center justify-between gap-3 text-sm py-1 px-3 hover:bg-gray-50 dark:hover:bg-gray-700/30"
+                    :to="`/documents/${doc.id}`"
                     @click="jobsMenuOpen = false"
                   >
-                    View all jobs
+                    <span class="truncate text-gray-700 dark:text-gray-200">{{
+                      doc.title || `Document #${doc.id}`
+                    }}</span>
+                    <span class="shrink-0 text-xs text-gray-400 dark:text-gray-500">{{
+                      stageLabel(doc.status)
+                    }}</span>
                   </RouterLink>
-                </div>
+                </li>
+              </ul>
+              <div class="border-t border-gray-200 dark:border-gray-700/60 mt-1 pt-1">
+                <RouterLink
+                  data-testid="header-jobs-viewall"
+                  class="font-medium text-sm text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 flex items-center py-1 px-3"
+                  to="/jobs"
+                  @click="jobsMenuOpen = false"
+                >
+                  View all jobs
+                </RouterLink>
               </div>
-            </Transition>
+            </AppPopover>
           </div>
 
           <!-- Search trigger -->
@@ -205,72 +202,67 @@ async function handleSignOut() {
 
           <!-- User menu -->
           <div id="header-user-menu" class="relative inline-flex">
-            <button
-              id="header-user-menu-button"
-              class="inline-flex items-center justify-center group"
-              aria-haspopup="true"
-              :aria-expanded="userMenuOpen"
-              @click.stop="userMenuOpen = !userMenuOpen"
+            <AppPopover
+              :open="userMenuOpen"
+              align="right"
+              :panel-attrs="{ id: 'header-user-menu-dropdown' }"
+              panel-class="origin-top-right absolute top-full min-w-44 mt-1 py-1.5 overflow-hidden"
+              @update:open="userMenuOpen = $event"
             >
-              <div class="flex items-center truncate">
-                <span
-                  class="truncate ml-2 text-sm font-medium text-gray-600 dark:text-gray-100 group-hover:text-gray-800 dark:group-hover:text-white"
-                  >{{ displayName }}</span
+              <template #trigger="{ open, toggle, triggerRef }">
+                <button
+                  :ref="triggerRef"
+                  id="header-user-menu-button"
+                  class="inline-flex items-center justify-center group"
+                  aria-haspopup="true"
+                  :aria-expanded="open"
+                  @click.stop="toggle"
                 >
-                <svg
-                  class="w-3 h-3 shrink-0 ml-1 fill-current text-gray-600 dark:text-gray-300"
-                  viewBox="0 0 12 12"
-                >
-                  <path d="M5.9 11.4L.5 6l1.4-1.4 4 4 4-4L11.3 6z" />
-                </svg>
-              </div>
-            </button>
-            <Transition
-              enter-active-class="transition ease-out duration-200"
-              enter-from-class="opacity-0 -translate-y-1"
-              enter-to-class="opacity-100 translate-y-0"
-              leave-active-class="transition ease-out duration-200"
-              leave-from-class="opacity-100 translate-y-0"
-              leave-to-class="opacity-0 -translate-y-1"
-            >
+                  <div class="flex items-center truncate">
+                    <span
+                      class="truncate ml-2 text-sm font-medium text-gray-600 dark:text-gray-100 group-hover:text-gray-800 dark:group-hover:text-white"
+                      >{{ displayName }}</span
+                    >
+                    <svg
+                      class="w-3 h-3 shrink-0 ml-1 fill-current text-gray-600 dark:text-gray-300"
+                      viewBox="0 0 12 12"
+                    >
+                      <path d="M5.9 11.4L.5 6l1.4-1.4 4 4 4-4L11.3 6z" />
+                    </svg>
+                  </div>
+                </button>
+              </template>
+
               <div
-                v-show="userMenuOpen"
-                id="header-user-menu-dropdown"
-                class="origin-top-right z-10 absolute top-full min-w-44 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700/60 py-1.5 rounded-lg shadow-lg overflow-hidden mt-1 right-0"
-                @focusin="userMenuOpen = true"
-                @focusout="userMenuOpen = false"
+                class="pt-0.5 pb-2 px-3 mb-1 border-b border-gray-200 dark:border-gray-700/60"
               >
-                <div
-                  class="pt-0.5 pb-2 px-3 mb-1 border-b border-gray-200 dark:border-gray-700/60"
-                >
-                  <div class="font-medium text-gray-800 dark:text-gray-100">
-                    {{ displayName }}
-                  </div>
-                  <div class="text-xs text-gray-600 dark:text-gray-300 italic">
-                    {{ authStore.user?.username }}
-                  </div>
+                <div class="font-medium text-gray-800 dark:text-gray-100">
+                  {{ displayName }}
                 </div>
-                <ul>
-                  <li>
-                    <RouterLink
-                      class="font-medium text-sm text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 flex items-center py-1 px-3"
-                      to="/settings"
-                      @click="userMenuOpen = false"
-                    >
-                      Settings
-                    </RouterLink>
-                  </li>
-                  <li>
-                    <button
-                      class="font-medium text-sm text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 flex items-center py-1 px-3 w-full text-left"
-                      @click="handleSignOut"
-                    >
-                      Sign Out
-                    </button>
-                  </li>
-                </ul>
+                <div class="text-xs text-gray-600 dark:text-gray-300 italic">
+                  {{ authStore.user?.username }}
+                </div>
               </div>
-            </Transition>
+              <ul>
+                <li>
+                  <RouterLink
+                    class="font-medium text-sm text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 flex items-center py-1 px-3"
+                    to="/settings"
+                    @click="userMenuOpen = false"
+                  >
+                    Settings
+                  </RouterLink>
+                </li>
+                <li>
+                  <button
+                    class="font-medium text-sm text-violet-500 hover:text-violet-600 dark:hover:text-violet-400 flex items-center py-1 px-3 w-full text-left"
+                    @click="handleSignOut"
+                  >
+                    Sign Out
+                  </button>
+                </li>
+              </ul>
+            </AppPopover>
           </div>
         </div>
       </div>
