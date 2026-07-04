@@ -1,6 +1,6 @@
 # Roadmap & deferred work
 
-**Status:** active. **Last updated:** 2026-06-28. **Supersedes:** none.
+**Status:** active. **Last updated:** 2026-07-04. **Supersedes:** none.
 
 Living list of agreed-but-not-yet-built work and explicitly-deferred ideas, so
 they don't get lost between sessions. Most recent context lives in
@@ -12,9 +12,10 @@ Nothing is currently queued.
 
 The **admin role + admin views** shipped in the 2026-06-28 cycle: a boolean
 `users.is_admin` role with a `require_admin` guard, global project mutations
-gated to admins, the `/api/admin/*` API (system/architecture/coverage/users),
-the `/admin` views page, and a CI coverage-summary pipeline baked into the
-image. See [admin.md](admin.md).
+gated to admins, the `/api/admin/*` API, the `/admin` views page, and a CI
+coverage-summary pipeline baked into the image. The admin API started as
+system/architecture/coverage/users and has since grown **reference-entity CRUD**
+(see §1.4 and [admin.md](admin.md), [api.md §1.18](api.md)).
 
 The previously-planned items all shipped in the 2026-06-28 notes + topics
 refinement cycle:
@@ -68,3 +69,32 @@ refinement cycle:
 
 `topics` earned its place by becoming search content rather than a parallel
 editable taxonomy.
+
+## 1.4 Shipped since 2026-06-28
+
+Recorded here so they read as **done**, not queued:
+
+- **`/charts` view (series/charts).** An aggregate charts dashboard: a responsive
+  grid of per-`(sender, kind)` series bar-chart tiles with cached LLM
+  descriptions, a shared control bar (time range + custom datepickers +
+  group-by), authored/manual series creation, editable "documents in series"
+  lists, single-chart pages (`/charts/{id}`), and PDF/JPEG/PNG export + copy-link.
+  See [frontend.md §1.7](frontend.md), [ask.md §1.7](ask.md), and
+  [api.md §1.14](api.md).
+- **FX-rate seeding + admin reference-entity CRUD.** The admin API now covers
+  reference entities: senders, kinds, recipients (create / rename-or-merge /
+  reassign-then-delete), series-aware currency normalization, and **FX-rate
+  seeding** (`/api/admin/fx-rates`, base = USD, date-aware) so cross-currency
+  series can convert. All reference FKs are `ON DELETE SET NULL`; every mutation
+  is guarded by a shared advisory lock. See [admin.md](admin.md) and
+  [api.md §1.18](api.md).
+- **Per-user per-kind tile border colours.** Each user can colour dashboard tiles
+  by document kind (a per-user preference); the border is owned by the tile's
+  component-layer rule so it paints reliably under Tailwind v4 cascade layers.
+  See [frontend.md](frontend.md).
+- **Document verification flow.** `PATCH /api/documents/{id}` (and the Ask write
+  tool) now recompute validation on edit, so correcting a flagged field clears
+  its finding while genuine warnings persist; a "Why this needs review" panel
+  lists every finding in plain language, dashboard rows show a short reason, and a
+  step-through review queue (`?queue=1`) walks the `needs_review` set. See
+  [frontend.md](frontend.md).

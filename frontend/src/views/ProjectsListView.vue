@@ -17,7 +17,13 @@ import {
 import { refreshTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { useAuthStore } from '@/stores/auth'
 import { ApiError } from '@/api/client'
-import { PageHeader } from '@/components/app'
+import {
+  AppButton,
+  AppErrorSummary,
+  AppInput,
+  PageHeader,
+  type ErrorSummaryItem,
+} from '@/components/app'
 
 const auth = useAuthStore()
 const isAdmin = computed(() => auth.isAdmin)
@@ -54,6 +60,11 @@ const newName = ref('')
 const newDescription = ref('')
 const createError = ref<string | null>(null)
 const creating = ref(false)
+
+// Stable-identity list for AppErrorSummary (see ChartsView for the rationale).
+const createErrorItems = computed<ErrorSummaryItem[]>(() =>
+  createError.value ? [{ text: createError.value }] : [],
+)
 
 function openCreate(): void {
   showCreate.value = true
@@ -161,15 +172,15 @@ async function confirmDelete(slug: string): Promise<void> {
   <div id="projects-view">
     <PageHeader title="Projects">
       <template #actions>
-        <button
+        <AppButton
           v-if="isAdmin && !showCreate"
+          variant="primary"
           type="button"
           data-testid="project-new-button"
-          class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm"
           @click="openCreate"
         >
           + New project
-        </button>
+        </AppButton>
       </template>
     </PageHeader>
 
@@ -180,55 +191,43 @@ async function confirmDelete(slug: string): Promise<void> {
       class="mb-6 card p-5 space-y-3"
       @submit.prevent="submitCreate"
     >
-      <div>
-        <label class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300" for="project-create-name">
-          Name
-        </label>
-        <input
-          id="project-create-name"
-          v-model="newName"
-          data-testid="project-create-name"
-          class="form-input w-full"
-          type="text"
-          autocomplete="off"
-        />
-      </div>
-      <div>
-        <label
-          class="block text-sm font-medium mb-1 text-gray-700 dark:text-gray-300"
-          for="project-create-description"
-        >
-          Description <span class="text-gray-400">(optional)</span>
-        </label>
-        <input
-          id="project-create-description"
-          v-model="newDescription"
-          data-testid="project-create-description"
-          class="form-input w-full"
-          type="text"
-          autocomplete="off"
-        />
-      </div>
-      <p v-if="createError" data-testid="project-create-error" class="text-sm text-red-600 dark:text-red-400">
-        {{ createError }}
-      </p>
+      <AppInput
+        id="project-create-name"
+        v-model="newName"
+        testid="project-create-name"
+        label="Name"
+        autocomplete="off"
+      />
+      <AppInput
+        id="project-create-description"
+        v-model="newDescription"
+        testid="project-create-description"
+        label="Description (optional)"
+        autocomplete="off"
+      />
+      <AppErrorSummary
+        v-if="createError"
+        data-testid="project-create-error"
+        :errors="createErrorItems"
+      />
       <div class="flex gap-3">
-        <button
+        <AppButton
+          variant="primary"
           type="submit"
           data-testid="project-create-submit"
-          class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm"
           :disabled="!newName.trim() || creating"
         >
           {{ creating ? 'Creating…' : 'Create project' }}
-        </button>
-        <button
+        </AppButton>
+        <AppButton
+          variant="secondary"
+          size="sm"
           type="button"
           data-testid="project-create-cancel"
-          class="btn-sm border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
           @click="showCreate = false"
         >
           Cancel
-        </button>
+        </AppButton>
       </div>
     </form>
 
@@ -270,37 +269,41 @@ async function confirmDelete(slug: string): Promise<void> {
       >
         <!-- Inline edit form. -->
         <div v-if="editingSlug === project.slug" class="space-y-2">
-          <input
+          <AppInput
+            :id="`project-edit-name-${project.slug}`"
             v-model="editName"
-            :data-testid="`project-edit-name-${project.slug}`"
-            class="form-input w-full"
-            type="text"
+            :testid="`project-edit-name-${project.slug}`"
+            label="Name"
+            hide-label
           />
-          <input
+          <AppInput
+            :id="`project-edit-description-${project.slug}`"
             v-model="editDescription"
-            :data-testid="`project-edit-description-${project.slug}`"
-            class="form-input w-full"
-            type="text"
+            :testid="`project-edit-description-${project.slug}`"
+            label="Description"
+            hide-label
             placeholder="Description (optional)"
           />
           <div class="flex gap-2">
-            <button
+            <AppButton
+              variant="primary"
+              size="sm"
               type="button"
               :data-testid="`project-edit-save-${project.slug}`"
-              class="btn-sm bg-violet-600 hover:bg-violet-700 text-white"
               :disabled="!editName.trim() || busySlug === project.slug"
               @click="saveEdit(project.slug)"
             >
               Save
-            </button>
-            <button
+            </AppButton>
+            <AppButton
+              variant="secondary"
+              size="sm"
               type="button"
               :data-testid="`project-edit-cancel-${project.slug}`"
-              class="btn-sm border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
               @click="cancelEdit"
             >
               Cancel
-            </button>
+            </AppButton>
           </div>
         </div>
 
@@ -339,42 +342,50 @@ async function confirmDelete(slug: string): Promise<void> {
           </div>
 
           <div v-if="isAdmin" class="flex flex-wrap items-center gap-2 shrink-0">
-            <button
+            <AppButton
+              variant="secondary"
+              size="sm"
               type="button"
               :data-testid="`project-edit-${project.slug}`"
-              class="btn-sm border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
               @click="startEdit(project)"
             >
               Edit
-            </button>
-            <button
+            </AppButton>
+            <AppButton
+              variant="secondary"
+              size="sm"
               type="button"
               :data-testid="`project-archive-${project.slug}`"
-              class="btn-sm border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
               :disabled="busySlug === project.slug"
               @click="toggleArchive(project)"
             >
               {{ project.archived ? 'Unarchive' : 'Archive' }}
-            </button>
+            </AppButton>
             <template v-if="confirmingSlug === project.slug">
-              <button
+              <AppButton
+                variant="warning"
+                size="sm"
                 type="button"
                 :data-testid="`project-delete-confirm-${project.slug}`"
-                class="btn-sm bg-red-600 hover:bg-red-700 text-white"
                 :disabled="busySlug === project.slug"
                 @click="confirmDelete(project.slug)"
               >
                 Confirm delete
-              </button>
-              <button
+              </AppButton>
+              <AppButton
+                variant="secondary"
+                size="sm"
                 type="button"
                 :data-testid="`project-delete-cancel-${project.slug}`"
-                class="btn-sm border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
                 @click="cancelDelete"
               >
                 Cancel
-              </button>
+              </AppButton>
             </template>
+            <!-- Two-step delete arming affordance: an outline-red button that is
+                 deliberately quieter than the solid-red "Confirm delete" it
+                 reveals. AppButton has no outline-destructive variant, so this
+                 stays hand-rolled to preserve the escalation. -->
             <button
               v-else
               type="button"

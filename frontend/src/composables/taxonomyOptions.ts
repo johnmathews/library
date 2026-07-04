@@ -2,13 +2,19 @@
  * Shared, lazily-fetched taxonomy options (kinds / senders / tags / projects).
  *
  * The search modal and the list view's filter summary both need the
- * taxonomy lists; this module fetches each endpoint once per page load
+ * taxonomy lists; this store fetches each endpoint once per page load
  * (on first `ensureLoaded()` call) and caches the results app-wide.
  * Best-effort: a failed endpoint leaves its list empty and callers
  * degrade gracefully (the selects just offer "All …", the filter
  * summary falls back to raw slugs/ids).
+ *
+ * Backed by a Pinia store so the cache is a single app-wide singleton with the
+ * rest of the app's shared state. The `useTaxonomyOptions()` /
+ * `refreshTaxonomyOptions()` helpers below are thin wrappers over the store so
+ * call sites keep their existing shape.
  */
 
+import { defineStore, storeToRefs } from 'pinia'
 import { ref, type Ref } from 'vue'
 import {
   listKinds,
@@ -22,24 +28,17 @@ import {
 } from '@/api/taxonomy'
 import { listProjects, type ProjectOption } from '@/api/projects'
 
-const kinds = ref<KindOption[]>([])
-const senders = ref<SenderOption[]>([])
-const recipients = ref<RecipientOption[]>([])
-const tags = ref<TagOption[]>([])
-const projects = ref<ProjectOption[]>([])
-let loadPromise: Promise<void> | null = null
+export const useTaxonomyOptionsStore = defineStore('taxonomyOptions', () => {
+  const kinds = ref<KindOption[]>([])
+  const senders = ref<SenderOption[]>([])
+  const recipients = ref<RecipientOption[]>([])
+  const tags = ref<TagOption[]>([])
+  const projects = ref<ProjectOption[]>([])
+  // Private (not returned): the in-flight/completed fetch, so `ensureLoaded`
+  // fetches each endpoint at most once until `refresh()` invalidates it.
+  let loadPromise: Promise<void> | null = null
 
-export interface TaxonomyOptions {
-  kinds: Ref<KindOption[]>
-  senders: Ref<SenderOption[]>
-  recipients: Ref<RecipientOption[]>
-  tags: Ref<TagOption[]>
-  projects: Ref<ProjectOption[]>
   /** Fetch the lists on first call; later calls reuse the cache. */
-  ensureLoaded: () => Promise<void>
-}
-
-export function useTaxonomyOptions(): TaxonomyOptions {
   function ensureLoaded(): Promise<void> {
     loadPromise ??= Promise.allSettled([
       listKinds(),
@@ -57,27 +56,42 @@ export function useTaxonomyOptions(): TaxonomyOptions {
     return loadPromise
   }
 
-  return { kinds, senders, recipients, tags, projects, ensureLoaded }
+  /** Invalidate the cache and re-fetch the taxonomy lists now. */
+  function refresh(): Promise<void> {
+    loadPromise = null
+    return ensureLoaded()
+  }
+
+  return { kinds, senders, recipients, tags, projects, ensureLoaded, refresh }
+})
+
+export interface TaxonomyOptions {
+  kinds: Ref<KindOption[]>
+  senders: Ref<SenderOption[]>
+  recipients: Ref<RecipientOption[]>
+  tags: Ref<TagOption[]>
+  projects: Ref<ProjectOption[]>
+  /** Fetch the lists on first call; later calls reuse the cache. */
+  ensureLoaded: () => Promise<void>
+}
+
+/**
+ * Thin wrapper over the taxonomy-options store: exposes the shared lists as refs
+ * (so `kinds.value` etc. keep working at call sites) plus `ensureLoaded()`.
+ */
+export function useTaxonomyOptions(): TaxonomyOptions {
+  const store = useTaxonomyOptionsStore()
+  const { kinds, senders, recipients, tags, projects } = storeToRefs(store)
+  return { kinds, senders, recipients, tags, projects, ensureLoaded: store.ensureLoaded }
 }
 
 /**
  * Invalidate the cache and re-fetch the taxonomy lists now, updating the shared
- * module-level refs in place. Call after creating a taxonomy entry inline (e.g.
- * a new recipient on the detail page) so every consumer of the shared cache —
- * the list view's filter bar, the search modal — picks it up without a reload.
+ * store in place. Call after creating a taxonomy entry inline (e.g. a new
+ * recipient on the detail page) so every consumer of the shared cache — the list
+ * view's filter bar, the search modal — picks it up without a reload.
  * Best-effort: a failed endpoint leaves its list unchanged.
  */
 export function refreshTaxonomyOptions(): Promise<void> {
-  loadPromise = null
-  return useTaxonomyOptions().ensureLoaded()
-}
-
-/** Test-only: drop the module-level cache between specs. */
-export function resetTaxonomyOptionsForTests(): void {
-  kinds.value = []
-  senders.value = []
-  recipients.value = []
-  tags.value = []
-  projects.value = []
-  loadPromise = null
+  return useTaxonomyOptionsStore().refresh()
 }

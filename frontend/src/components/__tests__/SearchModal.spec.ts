@@ -1,8 +1,8 @@
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
+import { createPinia, setActivePinia } from 'pinia'
 import SearchModal from '../SearchModal.vue'
-import { resetTaxonomyOptionsForTests } from '@/composables/taxonomyOptions'
 
 /**
  * jsdom (29.x at the time of writing) implements HTMLDialogElement's `open`
@@ -48,7 +48,8 @@ describe('SearchModal', () => {
   let wrapper: VueWrapper | undefined
 
   beforeEach(async () => {
-    resetTaxonomyOptionsForTests()
+    // Fresh Pinia per test → a fresh taxonomy-options store (empty cache).
+    setActivePinia(createPinia())
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: unknown) => {

@@ -3,7 +3,7 @@
 # overrides the command for the worker.
 
 # --- Frontend stage: build the Vue SPA ---
-FROM node:22-slim AS frontend
+FROM node:22-slim@sha256:813a7480f28fdadac1f7f5c824bcdad435b5bc1322a5968bbbdef8d058f9dff4 AS frontend
 
 WORKDIR /frontend
 
@@ -15,7 +15,7 @@ COPY frontend/ ./
 RUN npm run build
 
 # --- Build stage: install dependencies and the project with uv ---
-FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim AS builder
+FROM ghcr.io/astral-sh/uv:python3.13-bookworm-slim@sha256:531f855bda2c73cd6ef67d56b733b357cea384185b3022bd09f05e002cd144ca AS builder
 
 ENV UV_COMPILE_BYTECODE=1 \
     UV_LINK_MODE=copy \
@@ -37,7 +37,10 @@ RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
 # --- Runtime stage: slim image, non-root user ---
-FROM python:3.13-slim
+# Pinned to -bookworm (matching the builder stage) so the compiled C-extension
+# venv copied from the builder runs against the same Debian/glibc. An unqualified
+# python:3.13-slim floats to newer Debian and risks an ABI mismatch.
+FROM python:3.13-slim-bookworm@sha256:fcbd8dfc2605ba7c2eca646846c5e892b2931e41f6227985154a596f26ab8ed7
 
 # OCR system dependencies (per OCRmyPDF docs): tesseract + nld/eng tessdata,
 # ghostscript (PDF/A output), unpaper (--clean), pngquant (--optimize >= 2).

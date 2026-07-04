@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import { listThreads, deleteThread, type ThreadSummary } from '@/api/ask'
+import { AppButton } from '@/components/app'
 
 // `newDisabled` greys out "New conversation" when the view is already an empty
 // new conversation (no thread, no turns): starting a new one is redundant there,
@@ -70,15 +71,12 @@ defineExpose({ refresh })
     data-testid="conversation-sidebar"
   >
     <div class="flex flex-col gap-2 p-3 border-b border-gray-200 dark:border-gray-700/60">
-      <button
-        data-testid="new-conversation"
+      <AppButton
+        variant="primary"
+        size="sm"
         type="button"
-        class="btn-sm w-full"
-        :class="
-          newDisabled
-            ? 'bg-gray-200 dark:bg-gray-700 text-gray-400 dark:text-gray-500 cursor-not-allowed'
-            : 'bg-violet-600 hover:bg-violet-700 text-white'
-        "
+        data-testid="new-conversation"
+        class="w-full"
         :disabled="newDisabled"
         @click="!newDisabled && emit('new')"
       >
@@ -86,7 +84,7 @@ defineExpose({ refresh })
           <path d="M15 7H9V1c0-.6-.4-1-1-1S7 .4 7 1v6H1c-.6 0-1 .4-1 1s.4 1 1 1h6v6c0 .6.4 1 1 1s1-.4 1-1V9h6c.6 0 1-.4 1-1s-.4-1-1-1z" />
         </svg>
         New conversation
-      </button>
+      </AppButton>
 
       <input
         v-model="query"

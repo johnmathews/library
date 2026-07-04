@@ -12,6 +12,9 @@ const props = withDefaults(
     autocomplete?: string
     /** Visually hide the label (kept for screen readers); see AppInput. */
     hideLabel?: boolean
+    /** `data-testid` for the inner `<textarea>` itself (not the wrapper); see
+        AppInput. Lets tests/Playwright target the editable element directly. */
+    testid?: string
   }>(),
   { rows: 5 },
 )
@@ -45,6 +48,7 @@ const describedBy = computed(() => {
       :name="props.name ?? props.id"
       :rows="props.rows"
       :autocomplete="props.autocomplete"
+      :data-testid="props.testid"
       :aria-describedby="describedBy"
       :aria-invalid="props.errorMessage ? 'true' : undefined"
     ></textarea>

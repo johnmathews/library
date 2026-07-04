@@ -19,7 +19,15 @@ import {
 import SeriesChartTile from '@/components/SeriesChartTile.vue'
 import CurrencySelect from '@/components/CurrencySelect.vue'
 import ChartControls from '@/components/charts/ChartControls.vue'
-import { PageHeader } from '@/components/app'
+import {
+  AppBanner,
+  AppButton,
+  AppErrorSummary,
+  AppInput,
+  AppTextarea,
+  PageHeader,
+  type ErrorSummaryItem,
+} from '@/components/app'
 import { useChartsTimeframe } from '@/composables/useChartsTimeframe'
 import { useChartsGrouping } from '@/composables/useChartsGrouping'
 
@@ -73,6 +81,13 @@ const createResults = ref<DocumentListItem[]>([])
 const selectedDocs = ref<{ id: number; label: string; currency: string | null }[]>([])
 const creating = ref(false)
 const createError = ref<string | null>(null)
+
+// Stable-identity list for AppErrorSummary: only re-derived when the message
+// changes, so editing other form fields while the error shows doesn't re-fire
+// the summary's focus-on-change behaviour.
+const createErrorItems = computed<ErrorSummaryItem[]>(() =>
+  createError.value ? [{ text: createError.value }] : [],
+)
 
 // Mechanical currency-consistency check: warn when the chosen chart currency
 // disagrees with the currencies of the selected documents. Documents with no
@@ -158,15 +173,15 @@ onMounted(load)
   <div id="charts-view">
     <PageHeader title="Charts">
       <template #actions>
-        <button
+        <AppButton
           v-if="!showCreate"
+          variant="primary"
           type="button"
           data-testid="charts-create-button"
-          class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm"
           @click="openCreate"
         >
           + Create a new series
-        </button>
+        </AppButton>
       </template>
     </PageHeader>
 
@@ -192,31 +207,36 @@ onMounted(load)
       @submit.prevent="submitCreate"
     >
       <h2 class="text-sm font-semibold text-gray-800 dark:text-gray-100">Create a new series</h2>
-      <div class="grid grid-cols-1 sm:grid-cols-[1fr_10rem] gap-3">
-        <input
+      <div class="grid grid-cols-1 sm:grid-cols-[1fr_10rem] gap-3 items-end">
+        <AppInput
+          id="charts-create-name"
           v-model="newName"
-          type="text"
-          data-testid="charts-create-name"
+          testid="charts-create-name"
+          label="Series name"
+          hide-label
           placeholder="Series name"
-          class="form-input w-full text-sm"
         />
         <CurrencySelect v-model="newCurrency" data-testid="charts-create-currency" />
       </div>
 
-      <textarea
+      <AppTextarea
+        id="charts-create-description"
         v-model="newDescription"
-        data-testid="charts-create-description"
-        rows="2"
+        testid="charts-create-description"
+        label="Subtitle or context"
+        hide-label
+        :rows="2"
         placeholder="Subtitle or context (optional) — e.g. what this series tracks and why"
-        class="form-textarea w-full text-sm"
-      ></textarea>
+      />
 
-      <input
+      <AppInput
+        id="charts-create-search"
         v-model="createQuery"
+        testid="charts-create-search"
+        label="Search documents to add"
+        hide-label
         type="search"
-        data-testid="charts-create-search"
         placeholder="Search documents to add…"
-        class="form-input w-full text-sm"
         @input="onCreateSearch"
       />
       <ul
@@ -279,9 +299,11 @@ onMounted(load)
         </span>
       </p>
 
-      <p v-if="createError" data-testid="charts-create-error" role="alert" class="text-sm text-red-600 dark:text-red-400">
-        {{ createError }}
-      </p>
+      <AppErrorSummary
+        v-if="createError"
+        data-testid="charts-create-error"
+        :errors="createErrorItems"
+      />
 
       <div class="flex justify-end gap-2">
         <button
@@ -293,14 +315,14 @@ onMounted(load)
         >
           Cancel
         </button>
-        <button
+        <AppButton
+          variant="primary"
           type="submit"
           data-testid="charts-create-submit"
-          class="btn bg-violet-600 hover:bg-violet-700 text-white text-sm disabled:opacity-50"
           :disabled="creating"
         >
           Create series
-        </button>
+        </AppButton>
       </div>
     </form>
 
@@ -308,14 +330,9 @@ onMounted(load)
       Loading charts…
     </p>
 
-    <div
-      v-else-if="error"
-      data-testid="charts-error"
-      role="alert"
-      class="bg-white dark:bg-gray-800 border-l-4 border-red-500 rounded-lg px-4 py-3 shadow-xs text-gray-700 dark:text-gray-200"
-    >
+    <AppBanner v-else-if="error" variant="error" data-testid="charts-error">
       {{ error }}
-    </div>
+    </AppBanner>
 
     <p
       v-else-if="series.length === 0"

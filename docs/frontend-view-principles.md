@@ -153,7 +153,28 @@ all enforced by lint/format/coverage gates. You get "right the first time" by
 Because tests assert on `data-testid` (not classes), a bar can be fully restyled
 without breaking contracts — so consistency is cheap to maintain.
 
-## 6. When you add a new view
+## 6. Which error surface to use
+
+Errors are the other place inconsistency creeps in — the app has four ways to
+show one, and using the wrong one (or hand-rolling a fifth) is what made error
+states feel arbitrary view-to-view. Pick by *where the error belongs*, don't
+hand-roll a red `border-l-4` box:
+
+- **Form-submit validation** (a `POST`/`PUT` the user just triggered) →
+  `AppErrorSummary`. It focuses itself on mount and links to the offending
+  field, so keyboard/screen-reader users land on the problem.
+- **A page/section failed to load, or a section-level status** →
+  `AppBanner` (`variant="error"`). One banner at the top of the section, e.g. a
+  charts grid or an admin panel that couldn't fetch.
+- **Background/async outcome** (something that finished while the user was
+  elsewhere — an upload, a job) → the `notifications` toast store.
+- **A single field is invalid** → the `errorMessage` prop already baked into the
+  `App*` inputs — not a separate element.
+
+Row-scoped inline errors inside a dense CRUD table (e.g. the admin taxonomy
+panels) are the one deliberate exception — they stay next to their row.
+
+## 7. When you add a new view
 
 1. Start from `DocumentDetailView.vue` as the structural template (header,
    no root cap, responsive grid).

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 import DocumentFilterBar from '../DocumentFilterBar.vue'
-import { resetTaxonomyOptionsForTests } from '@/composables/taxonomyOptions'
 import type { AppliedFilters } from '@/utils/documentQuery'
 
 const EMPTY: AppliedFilters = {
@@ -51,7 +51,8 @@ describe('DocumentFilterBar', () => {
   const fetchMock = vi.fn()
 
   beforeEach(() => {
-    resetTaxonomyOptionsForTests()
+    // Fresh Pinia per test → a fresh taxonomy-options store (empty cache).
+    setActivePinia(createPinia())
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: unknown) => {

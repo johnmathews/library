@@ -1,10 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises } from '@vue/test-utils'
-import {
-  refreshTaxonomyOptions,
-  resetTaxonomyOptionsForTests,
-  useTaxonomyOptions,
-} from '@/composables/taxonomyOptions'
+import { createPinia, setActivePinia } from 'pinia'
+import { refreshTaxonomyOptions, useTaxonomyOptions } from '@/composables/taxonomyOptions'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -24,7 +21,9 @@ describe('taxonomyOptions cache', () => {
   let recipients = RECIPIENTS_BEFORE
 
   beforeEach(() => {
-    resetTaxonomyOptionsForTests()
+    // Fresh Pinia per test → a fresh taxonomy-options store (empty lists, no
+    // in-flight fetch), replacing the old resetTaxonomyOptionsForTests() reset.
+    setActivePinia(createPinia())
     recipients = RECIPIENTS_BEFORE
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()

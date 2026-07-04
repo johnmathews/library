@@ -13,6 +13,7 @@ import ChartControls from '@/components/charts/ChartControls.vue'
 import { useChartsTimeframe } from '@/composables/useChartsTimeframe'
 import { useChartsGrouping } from '@/composables/useChartsGrouping'
 import { downloadImage, downloadPdf, copyShareUrl, type ImageFormat } from '@/utils/chartExport'
+import { AppBanner, AppButton } from '@/components/app'
 
 const route = useRoute()
 const router = useRouter()
@@ -106,14 +107,9 @@ watch(() => route.params.seriesId, load)
       Loading chart…
     </p>
 
-    <div
-      v-else-if="error"
-      data-testid="series-chart-error"
-      role="alert"
-      class="bg-white dark:bg-gray-800 border-l-4 border-red-500 rounded-lg px-4 py-3 shadow-xs text-gray-700 dark:text-gray-200"
-    >
+    <AppBanner v-else-if="error" variant="error" data-testid="series-chart-error">
       {{ error }}
-    </div>
+    </AppBanner>
 
     <div v-else-if="chart">
       <!-- Toolbar: shared controls on the left, export/share on the right (W6). -->
@@ -132,38 +128,42 @@ watch(() => route.params.seriesId, load)
 
         <!-- Export & share the chart (W6). -->
         <div class="flex flex-wrap items-center gap-2" data-testid="chart-export">
-          <button
+          <AppButton
+            variant="secondary"
+            size="sm"
             type="button"
             data-testid="chart-export-pdf"
-            class="btn-sm border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50"
             @click="exportPdf"
           >
             Download PDF
-          </button>
-          <button
+          </AppButton>
+          <AppButton
+            variant="secondary"
+            size="sm"
             type="button"
             data-testid="chart-export-jpeg"
-            class="btn-sm border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50"
             @click="exportImage('jpeg')"
           >
             JPEG
-          </button>
-          <button
+          </AppButton>
+          <AppButton
+            variant="secondary"
+            size="sm"
             type="button"
             data-testid="chart-export-png"
-            class="btn-sm border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50"
             @click="exportImage('png')"
           >
             PNG
-          </button>
-          <button
+          </AppButton>
+          <AppButton
+            variant="secondary"
+            size="sm"
             type="button"
             data-testid="chart-share"
-            class="btn-sm border border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700/50"
             @click="share"
           >
             {{ copied ? 'Link copied' : 'Copy link' }}
-          </button>
+          </AppButton>
         </div>
       </div>
 
