@@ -114,11 +114,22 @@ eye compares them directly. Use one pattern for all of them.
 
 - **The row:** `flex flex-wrap items-end gap-3` — controls bottom-aligned so
   labels and inputs line up; wraps cleanly on narrow screens.
-- **The label (identical on every control):**
-  `block text-xs uppercase text-gray-600 dark:text-gray-300 font-semibold mb-1`.
-  Mixing label styles within one bar (one control `text-sm font-medium`, the next
-  a `<legend>`) is the single thing that made the pre-2026-07-01 `/charts` bar look
-  "weird" even though each control worked in isolation.
+- **The label (identical on every control):** the `.filter-label` class
+  (`block text-xs uppercase text-gray-600 dark:text-gray-300 font-semibold mb-1`,
+  defined once in `utility-patterns.css`). Apply the class; don't re-spec the
+  recipe per bar. Mixing label styles within one bar (one control
+  `text-sm font-medium`, the next a `<legend>`) is the single thing that made the
+  pre-2026-07-01 `/charts` bar look "weird" even though each control worked in
+  isolation.
+  - **Two scoped label recipes — don't cross them.** This uppercase-xs
+    `.filter-label` is the recipe for **filter/control bars only**. Stacked
+    **forms** use the *different* label baked into the `App*` input components
+    (`text-sm font-medium text-gray-700`, §3) — do not hand-roll or override it.
+    A filter bar is therefore built from raw `.form-input`/`.form-select` +
+    `.filter-label` (as `ChartControls` does), **not** from `App*` form
+    components, because those carry the stacked-form label. The two recipes are
+    intentional: uppercase-xs reads as a compact control legend; sentence-case
+    reads better down a long form.
 - **The controls:** `.form-input` / `.form-select` already carry border, bg,
   `rounded-lg`, `text-base sm:text-sm`, and dark mode — add the class, don't
   re-spec padding/border per control.

@@ -25,9 +25,9 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
   full provenance, and user edits always winning.
 - **Search:** Postgres FTS with both Dutch and English stemming,
   websearch syntax, filters, ranked snippets.
-- **Web app:** Vue 3 SPA on GOV.UK design patterns (without the
-  licence-restricted GDS assets), installable on iOS/Android, responsive
-  to 320px.
+- **Web app:** Vue 3 SPA styled with the Mosaic design language (Cruip) —
+  Tailwind 4, the Inter typeface, a violet accent, and dark mode —
+  installable on iOS/Android, responsive to 320px.
 - **Live jobs & notifications:** a Jobs view of current and historical
   background work, a navbar running-jobs indicator, and toasts when a
   document finishes — pushed live over Server-Sent Events (no polling).
@@ -43,8 +43,8 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
 
 - **Backend:** Python 3.13, FastAPI, SQLAlchemy 2 (async), PostgreSQL 17,
   Procrastinate (Postgres-native job queue) — managed with [uv](https://docs.astral.sh/uv/)
-- **Frontend:** Vue 3 + TypeScript, Vite, vue-router, Pinia — design based
-  on the [GOV.UK Design System](https://design-system.service.gov.uk/)
+- **Frontend:** Vue 3 + TypeScript, Vite, vue-router, Pinia — Mosaic design
+  language (Tailwind 4 + Inter), see [`docs/frontend.md`](docs/frontend.md)
 - **Deployment:** Docker Compose (api + worker + db; the api image also
   serves the built frontend); images published to
   `ghcr.io/johnmathews/library`

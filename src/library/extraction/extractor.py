@@ -16,6 +16,7 @@ from typing import Any
 from anthropic import AsyncAnthropic
 
 from library.config import Settings
+from library.extraction.pricing import MODEL_PRICING_USD_PER_MTOK
 from library.extraction.schema import KIND_SLUGS, ExtractedMetadata
 from library.models import Document
 from library.storage import derived_dir, path_for
@@ -25,13 +26,6 @@ logger = logging.getLogger(__name__)
 # Bump whenever the system prompt or schema changes meaningfully; stored per
 # run so old-prompt documents can be found and re-extracted later.
 PROMPT_VERSION: str = "2026-06-29.1"
-
-# USD per million tokens (input, output), June 2026 list prices.
-MODEL_PRICING_USD_PER_MTOK: dict[str, tuple[float, float]] = {
-    "claude-haiku-4-5": (1.0, 5.0),
-    "claude-sonnet-4-6": (3.0, 15.0),
-    "claude-opus-4-8": (5.0, 25.0),
-}
 
 # Short OCR text (<= this many characters) is sent whole: metadata lives on
 # the first pages, and this caps per-document spend for transactional docs.
@@ -170,10 +164,17 @@ class ExtractionOutcome:
 
 
 def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> float:
-    """Estimated USD cost of one call from the static pricing table."""
+    """Estimated USD cost of one call from the static pricing table.
+
+    Raises :class:`KeyError` for a model with no pricing row — silently
+    returning 0 would zero the recorded cost *and* the daily-spend budget
+    gate. Configured ``*_model`` knobs are validated against the table at
+    startup (see :class:`library.config.Settings`), so this only fires for a
+    model passed programmatically that was never priced.
+    """
     if model not in MODEL_PRICING_USD_PER_MTOK:
-        logger.warning("no pricing for model %s; recording cost 0", model)
-    input_price, output_price = MODEL_PRICING_USD_PER_MTOK.get(model, (0.0, 0.0))
+        raise KeyError(f"no pricing row for model {model!r}; add it to MODEL_PRICING_USD_PER_MTOK")
+    input_price, output_price = MODEL_PRICING_USD_PER_MTOK[model]
     return input_tokens / 1_000_000 * input_price + output_tokens / 1_000_000 * output_price
 
 

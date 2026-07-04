@@ -32,9 +32,6 @@ const emit = defineEmits<{
   'update:grouping': [ChartGrouping]
 }>()
 
-const LABEL_CLASS =
-  'block text-xs uppercase text-gray-600 dark:text-gray-300 font-semibold mb-1'
-
 function onSelectTimeframe(event: Event): void {
   emit('select-timeframe', (event.target as HTMLSelectElement).value as Timeframe)
 }
@@ -53,7 +50,7 @@ function onCustomDate(which: 'from' | 'to', event: Event): void {
 <template>
   <div class="flex flex-wrap items-end gap-3" data-testid="chart-controls">
     <div>
-      <label :class="LABEL_CLASS" for="charts-timeframe">Time range</label>
+      <label class="filter-label" for="charts-timeframe">Time range</label>
       <select
         id="charts-timeframe"
         :value="timeframe"
@@ -69,7 +66,7 @@ function onCustomDate(which: 'from' | 'to', event: Event): void {
     </div>
 
     <div>
-      <label :class="LABEL_CLASS" for="charts-range-from">From</label>
+      <label class="filter-label" for="charts-range-from">From</label>
       <input
         id="charts-range-from"
         :value="customFrom ?? ''"
@@ -82,7 +79,7 @@ function onCustomDate(which: 'from' | 'to', event: Event): void {
     </div>
 
     <div>
-      <label :class="LABEL_CLASS" for="charts-range-to">To</label>
+      <label class="filter-label" for="charts-range-to">To</label>
       <input
         id="charts-range-to"
         :value="customTo ?? ''"
@@ -95,7 +92,7 @@ function onCustomDate(which: 'from' | 'to', event: Event): void {
     </div>
 
     <div>
-      <label :class="LABEL_CLASS" for="charts-grouping">Group by</label>
+      <label class="filter-label" for="charts-grouping">Group by</label>
       <select
         id="charts-grouping"
         :value="grouping"

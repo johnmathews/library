@@ -642,6 +642,11 @@ Before each extraction, one query sums today's `cost_usd` across
 (default 5.0) extraction is skipped with `reason: "budget"` until the
 next UTC day.
 
+Every configured `*_model` knob (extraction, escalation, judge, markdown,
+ask) must have a row in `MODEL_PRICING_USD_PER_MTOK`
+(`library.extraction.pricing`); a `Settings` with an unpriced model fails
+at startup rather than silently recording cost 0 and defeating the budget gate.
+
 ## Markdown layer (`library.markdown`)
 
 The `markdown` pipeline stage renders each document page as clean

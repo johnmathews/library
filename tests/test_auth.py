@@ -6,17 +6,22 @@ Uses the shared API test database; usernames are randomized per test
 
 import asyncio
 import hashlib
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 
 import pytest
 from fastapi import FastAPI
 from fastapi.routing import APIRoute
 from fastapi.testclient import TestClient
-from sqlalchemy import text
-from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy import select, text
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from library.auth import service
 from library.auth.deps import CSRF_COOKIE, CSRF_HEADER, SESSION_COOKIE
+from library.models import ApiToken, User
+from library.models import Session as SessionModel
 from tests.conftest import AuthUser, create_user, fetch_all, login
 
 pytestmark = pytest.mark.integration
@@ -400,3 +405,177 @@ def test_every_api_route_requires_auth(api_app: FastAPI, anon_client: TestClient
             )
             checked += 1
     assert checked >= 14  # documents (8) + jobs + logout + me + tokens(3) + settings(2)
+
+
+# --------------------------------------- service-layer session/token lifecycle
+#
+# These call ``library.auth.service`` directly against the API test database.
+# The HTTP tests above exercise the same paths, but TestClient runs the app in
+# a worker thread that coverage does not trace, so the security-relevant branches
+# (expired-session reject, token accept/revoke, revoke-all) need direct coverage.
+
+
+@asynccontextmanager
+async def _service_session(database_url: str) -> AsyncIterator[AsyncSession]:
+    """An AsyncSession bound to the test database for calling service functions."""
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            yield session
+    finally:
+        await engine.dispose()
+
+
+async def _load_user(db: AsyncSession, user_id: int) -> User:
+    return (await db.execute(select(User).where(User.id == user_id))).scalar_one()
+
+
+async def test_authenticate_user_accepts_correct_and_rejects_wrong(
+    api_database_url: str, auth_user: AuthUser
+) -> None:
+    async with _service_session(api_database_url) as db:
+        ok = await service.authenticate_user(db, auth_user.username, auth_user.password)
+        assert ok is not None and ok.id == auth_user.id
+        assert await service.authenticate_user(db, auth_user.username, "wrong") is None
+        assert await service.authenticate_user(db, "no-such-user", "wrong") is None
+
+
+async def test_validate_session_accepts_then_rejects_when_expired(
+    api_database_url: str, auth_user: AuthUser
+) -> None:
+    async with _service_session(api_database_url) as db:
+        user = await _load_user(db, auth_user.id)
+        raw = await service.create_session(db, user)
+
+        accepted = await service.validate_session(db, raw)
+        assert accepted is not None and accepted.id == auth_user.id
+
+        record = (
+            await db.execute(
+                select(SessionModel).where(SessionModel.token_hash == service.sha256_hex(raw))
+            )
+        ).scalar_one()
+        record.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        await db.commit()
+
+        assert await service.validate_session(db, raw) is None
+        assert await service.validate_session(db, "not-a-real-session") is None
+
+
+async def test_validate_session_refreshes_stale_sliding_expiry(
+    api_database_url: str, auth_user: AuthUser
+) -> None:
+    async with _service_session(api_database_url) as db:
+        user = await _load_user(db, auth_user.id)
+        raw = await service.create_session(db, user)
+
+        # Age the session past the touch throttle so validation rewrites it.
+        record = (
+            await db.execute(
+                select(SessionModel).where(SessionModel.token_hash == service.sha256_hex(raw))
+            )
+        ).scalar_one()
+        record.last_seen_at = datetime.now(UTC) - timedelta(minutes=10)
+        record.expires_at = datetime.now(UTC) + timedelta(days=1)
+        await db.commit()
+
+        assert (await service.validate_session(db, raw)) is not None
+        refreshed = (
+            await db.execute(
+                select(SessionModel).where(SessionModel.token_hash == service.sha256_hex(raw))
+            )
+        ).scalar_one()
+        now = datetime.now(UTC)
+        assert refreshed.expires_at > now + timedelta(days=29)  # pushed back to ~30 days
+        assert refreshed.last_seen_at > now - timedelta(minutes=1)
+
+
+async def test_revoke_session_deletes_row(api_database_url: str, auth_user: AuthUser) -> None:
+    async with _service_session(api_database_url) as db:
+        user = await _load_user(db, auth_user.id)
+        raw = await service.create_session(db, user)
+
+        await service.revoke_session(db, raw)
+
+        assert await service.validate_session(db, raw) is None
+        remaining = (
+            (
+                await db.execute(
+                    select(SessionModel).where(SessionModel.token_hash == service.sha256_hex(raw))
+                )
+            )
+            .scalars()
+            .all()
+        )
+        assert remaining == []
+
+
+async def test_validate_api_token_accepts_then_rejects_revoked(
+    api_database_url: str, auth_user: AuthUser
+) -> None:
+    async with _service_session(api_database_url) as db:
+        user = await _load_user(db, auth_user.id)
+        raw, token = await service.create_api_token(db, user, "unit-token")
+
+        accepted = await service.validate_api_token(db, raw)
+        assert accepted is not None and accepted.id == auth_user.id
+
+        assert await service.revoke_api_token(db, user, token.id) is True
+
+        assert await service.validate_api_token(db, raw) is None
+        assert await service.validate_api_token(db, "library_garbage") is None
+
+        stamped = (
+            await db.execute(select(ApiToken.revoked_at).where(ApiToken.id == token.id))
+        ).scalar_one()
+        assert stamped is not None
+
+
+async def test_revoke_api_token_unknown_id_returns_false(
+    api_database_url: str, auth_user: AuthUser
+) -> None:
+    async with _service_session(api_database_url) as db:
+        user = await _load_user(db, auth_user.id)
+        assert await service.revoke_api_token(db, user, 10_000_000) is False
+
+
+async def test_revoke_all_credentials_deletes_sessions_and_revokes_live_tokens(
+    api_database_url: str, auth_user: AuthUser
+) -> None:
+    async with _service_session(api_database_url) as db:
+        user = await _load_user(db, auth_user.id)
+        raw_a = await service.create_session(db, user)
+        raw_b = await service.create_session(db, user)
+        _, live = await service.create_api_token(db, user, "live-token")
+        _, already = await service.create_api_token(db, user, "already-revoked")
+
+        # Pre-revoke one token so we can assert revoke_all leaves its stamp alone.
+        await service.revoke_api_token(db, user, already.id)
+        already_ts = (
+            await db.execute(select(ApiToken.revoked_at).where(ApiToken.id == already.id))
+        ).scalar_one()
+        assert already_ts is not None
+
+        await service.revoke_all_credentials(db, user.id)
+
+        # Both sessions are gone and no longer authenticate.
+        remaining = (
+            (await db.execute(select(SessionModel).where(SessionModel.user_id == user.id)))
+            .scalars()
+            .all()
+        )
+        assert remaining == []
+        assert await service.validate_session(db, raw_a) is None
+        assert await service.validate_session(db, raw_b) is None
+
+        # The live token now carries a revoked_at stamp.
+        live_ts = (
+            await db.execute(select(ApiToken.revoked_at).where(ApiToken.id == live.id))
+        ).scalar_one()
+        assert live_ts is not None
+
+        # The already-revoked token keeps its original stamp (is-None filter skipped it).
+        unchanged = (
+            await db.execute(select(ApiToken.revoked_at).where(ApiToken.id == already.id))
+        ).scalar_one()
+        assert unchanged == already_ts

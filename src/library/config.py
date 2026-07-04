@@ -4,8 +4,21 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import SecretStr, field_validator
+from pydantic import SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
+
+from library.extraction.pricing import MODEL_PRICING_USD_PER_MTOK
+
+# The ``*_model`` knobs whose value must have a row in
+# ``MODEL_PRICING_USD_PER_MTOK`` — an unpriced model would silently record a
+# cost of 0 and defeat the daily-spend budget gate, so we fail fast at startup.
+_PRICED_MODEL_FIELDS: tuple[str, ...] = (
+    "extraction_model",
+    "extraction_escalation_model",
+    "extraction_judge_model",
+    "markdown_model",
+    "ask_model",
+)
 
 
 class Settings(BaseSettings):
@@ -124,6 +137,24 @@ class Settings(BaseSettings):
         if isinstance(value, list):
             return [str(item).strip().lower() for item in value if str(item).strip()]
         return value
+
+    @model_validator(mode="after")
+    def _require_pricing_for_configured_models(self) -> "Settings":
+        """Fail fast when a configured ``*_model`` knob has no pricing row.
+
+        Every model we call must appear in ``MODEL_PRICING_USD_PER_MTOK`` so
+        its per-call cost is recorded and counts against the daily-spend budget
+        gate. An unpriced model would silently cost 0 and never trip the gate,
+        so we reject the configuration at startup instead.
+        """
+        for field in _PRICED_MODEL_FIELDS:
+            value = getattr(self, field)
+            if value not in MODEL_PRICING_USD_PER_MTOK:
+                raise ValueError(
+                    f"{field}={value!r} has no pricing row in MODEL_PRICING_USD_PER_MTOK; "
+                    f"add it to library.extraction.pricing or set a priced model"
+                )
+        return self
 
 
 @lru_cache
