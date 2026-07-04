@@ -13,6 +13,11 @@
 @theme {
   --shadow-sm: 0 1px 1px 0 rgb(0 0 0 / 0.05), 0 1px 2px 0 rgb(0 0 0 / 0.02);
 
+  /* Stacking layer for popovers/dropdowns (AppPopover). Sits above the sticky
+     app header (z-30) so panels are never clipped behind it. One token so the
+     overlays don't re-diverge (they previously ranged z-10..z-50). */
+  --z-popover: 50;
+
   --color-gray-50: #f9fafb;
   --color-gray-100: #f3f4f6;
   --color-gray-200: #e5e7eb;
@@ -117,6 +122,11 @@
   --text-6xl--letter-spacing: -0.02em;
 
   --breakpoint-xs: 480px;
+}
+
+/* Popover stacking layer (see --z-popover). Used by AppPopover's panel. */
+@utility z-popover {
+  z-index: var(--z-popover);
 }
 
 /*
