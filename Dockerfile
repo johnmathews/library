@@ -40,7 +40,7 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # Pinned to -bookworm (matching the builder stage) so the compiled C-extension
 # venv copied from the builder runs against the same Debian/glibc. An unqualified
 # python:3.13-slim floats to newer Debian and risks an ABI mismatch.
-FROM python:3.13-slim-bookworm@sha256:fcbd8dfc2605ba7c2eca646846c5e892b2931e41f6227985154a596f26ab8ed7
+FROM python:3.14-slim-bookworm@sha256:4ff4b92a68355dbdb52584ab3391dff8d371a61d4e063468bfd0130e3189c6d9
 
 # OCR system dependencies (per OCRmyPDF docs): tesseract + nld/eng tessdata,
 # ghostscript (PDF/A output), unpaper (--clean), pngquant (--optimize >= 2).
