@@ -3,7 +3,7 @@
 # overrides the command for the worker.
 
 # --- Frontend stage: build the Vue SPA ---
-FROM node:22-slim@sha256:813a7480f28fdadac1f7f5c824bcdad435b5bc1322a5968bbbdef8d058f9dff4 AS frontend
+FROM node:26-slim@sha256:a1d9d671994fc2d26e297ac56b4b1522a8bc7fa71c43b14cd1b1fe6c5116f7dc AS frontend
 
 WORKDIR /frontend
 
