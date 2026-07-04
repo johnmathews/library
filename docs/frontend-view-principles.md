@@ -72,8 +72,10 @@ column* (grid), not to clamp the whole page narrower.
 Defined in `assets/main.css` (`@theme` tokens) and
 `assets/utility-patterns.css` (component classes):
 
-- **Card / panel:** `bg-white dark:bg-gray-800 shadow-xs rounded-xl border
-  border-gray-200 dark:border-gray-700/60 p-5`.
+- **Card / panel:** the `.card` class (surface + `shadow-xs` + `rounded-xl` +
+  hairline border, defined once in `utility-patterns.css`); it carries **no
+  padding**, so add your own `p-5` (`class="card p-5"`). Apply the class; don't
+  re-spec the surface recipe per view.
 - **Buttons:** `AppButton` (`.btn` / `.btn-sm` / `.btn-lg` / `.btn-xs`), violet
   primary, gray secondary, red destructive.
 - **Forms:** `AppInput` / `AppTextarea` / `AppSelect` / `AppCheckboxes` /
@@ -84,8 +86,8 @@ Defined in `assets/main.css` (`@theme` tokens) and
 - **Type:** Inter; headings `text-2xl md:text-3xl font-bold` for page titles.
 - **Badges/pills:** `AppBadge`, `FilterPill`. **Empty/loading/error states:**
   reuse existing view patterns (e.g. `DocumentListView`).
-- **Field rows / filter bars:** one label recipe + `.form-*` controls in a
-  `flex flex-wrap items-end gap-3` row; prefer native `<input type="date">` /
+- **Field rows / filter bars:** the `.filter-label` recipe + `.form-*` controls
+  in a `flex flex-wrap items-end gap-3` row; prefer native `<input type="date">` /
   `<select>` over hand-rolled widgets. See §5 and the reference implementation
   `components/charts/ChartControls.vue`.
 

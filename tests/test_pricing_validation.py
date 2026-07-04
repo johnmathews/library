@@ -46,3 +46,18 @@ def test_estimate_cost_usd_priced_model() -> None:
     # claude-haiku-4-5 = (1.0, 5.0) USD per Mtok.
     cost = estimate_cost_usd("claude-haiku-4-5", 1_000_000, 1_000_000)
     assert cost == pytest.approx(6.0)
+
+
+def test_every_model_field_is_validated() -> None:
+    """Every Settings ``*_model`` field must be in ``_PRICED_MODEL_FIELDS``.
+
+    ``_PRICED_MODEL_FIELDS`` is hand-maintained, so a future ``*_model`` field
+    added to Settings but forgotten here would silently escape startup pricing
+    validation and only surface as a runtime KeyError mid-pipeline. This guard
+    fails loudly at test time instead.
+    """
+    model_fields = {name for name in Settings.model_fields if name.endswith("_model")}
+    missing = model_fields - set(_PRICED_MODEL_FIELDS)
+    assert not missing, (
+        f"{sorted(missing)} not in _PRICED_MODEL_FIELDS — will escape pricing validation"
+    )
