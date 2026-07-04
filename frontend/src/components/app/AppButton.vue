@@ -5,6 +5,8 @@ import { RouterLink, type RouteLocationRaw } from 'vue-router'
 const props = withDefaults(
   defineProps<{
     variant?: 'primary' | 'secondary' | 'warning' | 'inverse'
+    /** Base sizing class: default `.btn`, `sm` → `.btn-sm`, `lg` → `.btn-lg`. */
+    size?: 'sm' | 'lg'
     type?: 'submit' | 'button' | 'reset'
     to?: RouteLocationRaw
     href?: string
@@ -28,8 +30,12 @@ const variantClasses: Record<NonNullable<typeof props.variant>, string> = {
   inverse: 'bg-white text-violet-600 hover:bg-gray-100',
 }
 
+const sizeClass = computed(() =>
+  props.size === 'sm' ? 'btn-sm' : props.size === 'lg' ? 'btn-lg' : 'btn',
+)
+
 const classes = computed(() => [
-  'btn',
+  sizeClass.value,
   variantClasses[props.variant],
   { 'pointer-events-none opacity-60': props.disabled },
 ])

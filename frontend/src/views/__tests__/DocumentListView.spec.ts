@@ -5,7 +5,6 @@ import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import DocumentListView from '../DocumentListView.vue'
 import type { DocumentListItem } from '@/api/documents'
 import type { DashboardField } from '@/api/settings'
-import { resetTaxonomyOptionsForTests } from '@/composables/taxonomyOptions'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import { useJobsStore } from '@/stores/jobs'
@@ -84,7 +83,8 @@ describe('DocumentListView', () => {
   let reviewCountResponse: () => Response
 
   beforeEach(async () => {
-    resetTaxonomyOptionsForTests()
+    // The taxonomy-options cache lives in Pinia now; the fresh `createPinia()`
+    // below gives each test an empty cache (no explicit reset needed).
     listResponse = () => jsonResponse(listBody([]))
     reviewCountResponse = () => jsonResponse(listBody([], 0))
     vi.stubGlobal('fetch', fetchMock)

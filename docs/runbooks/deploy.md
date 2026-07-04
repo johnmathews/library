@@ -24,6 +24,10 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
    ```bash
    gh run list --branch main --limit 1
    ```
+   The script now **enforces this automatically** (the *promote gate*, §1.3): it
+   verifies `:latest` resolves to the same digest as `:<HEAD-sha>` and aborts
+   if `promote` hasn't caught up yet, so the footgun above is caught before any
+   image is pulled.
 2. **Key-based SSH to the host works** (`ssh paperless true` returns instantly,
    no password). The script aborts early if it can't connect non-interactively.
 3. **No schema-incompatible change shipped without a backup plan.** The new
@@ -33,7 +37,13 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
 
 ## 1.3 What `scripts/deploy.sh` does
 
-On the host, in `/srv/apps`, it runs:
+First, locally, it runs the **promote gate**: it inspects the registry (via
+`docker buildx imagetools`, no pull) and confirms `:latest` resolves to the
+same digest as `ghcr.io/johnmathews/library:<HEAD-sha>`. If `promote` hasn't
+retagged this commit yet — or `docker`/git isn't available to check — it aborts
+*before* touching the host, so it can't silently redeploy the previous image.
+
+Then, on the host, in `/srv/apps`, it runs:
 
 ```bash
 docker compose up -d --pull always library-migrate library-webserver library-worker
@@ -58,11 +68,17 @@ script uses the production names.
 ```bash
 scripts/deploy.sh --status   # show the running stack + Alembic head, no deploy
 scripts/deploy.sh --logs     # tail recent webserver + worker logs
+scripts/deploy.sh --force    # deploy WITHOUT the promote gate (emergencies)
 scripts/deploy.sh --help     # usage
 ```
 
+`--force` (or `SKIP_PROMOTE_CHECK=1`) bypasses the promote gate — use it only
+when you've verified `:latest` is current yourself (e.g. `docker`/git isn't
+available locally to run the check). You then own not redeploying the old image.
+
 Overrides (env): `LIBRARY_DEPLOY_HOST` (default `paperless`),
-`LIBRARY_DEPLOY_DIR` (default `/srv/apps`).
+`LIBRARY_DEPLOY_DIR` (default `/srv/apps`), `SKIP_PROMOTE_CHECK` (`1` = bypass
+the promote gate, like `--force`).
 
 ## 1.5 Verify after deploy
 

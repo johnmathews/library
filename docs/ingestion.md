@@ -355,7 +355,7 @@ the SDK converts the model to a JSON schema (with
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown`. |
 | `tags` | `list[str]` | Normalised to lowercase slugs, deduplicated, capped at 8 client-side (array length constraints are also unsupported in the schema). |
 | `topics` | `list[str]` | Human-readable topic phrases (kept as prose, **not** slugified) for general-reference material — what the document covers. Stripped, case-insensitively deduplicated, capped at 12. Empty (`[]`) for transactional paperwork. Persisted to the `documents.topics` JSONB column (migration 0010). |
-| `confidence` | enum | `high` / `medium` / `low` — `low` triggers escalation. |
+| `confidence` | enum | `high` / `low` — `low` triggers escalation (the gate is binary). |
 | `reasoning_note` | `str \| None` | One-line note when something needed judgement. |
 
 Numeric min/max, string-length, and array-length constraints are not
@@ -641,6 +641,11 @@ Before each extraction, one query sums today's `cost_usd` across
 `ingestion_events`; at or over `LIBRARY_EXTRACTION_DAILY_BUDGET_USD`
 (default 5.0) extraction is skipped with `reason: "budget"` until the
 next UTC day.
+
+Every configured `*_model` knob (extraction, escalation, judge, markdown,
+ask) must have a row in `MODEL_PRICING_USD_PER_MTOK`
+(`library.extraction.pricing`); a `Settings` with an unpriced model fails
+at startup rather than silently recording cost 0 and defeating the budget gate.
 
 ## Markdown layer (`library.markdown`)
 

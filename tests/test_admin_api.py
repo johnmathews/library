@@ -5,12 +5,17 @@ Uses the shared API test database; assertions target seeded markers and
 shapes rather than exact table contents.
 """
 
+import asyncio
 import json
+from collections.abc import Awaitable, Callable
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+from sqlalchemy.pool import NullPool
 
+from library import taxonomy
 from tests.conftest import AuthUser, create_user
 from tests.test_documents_api import seed_document
 
@@ -804,3 +809,204 @@ def test_kind_mgmt_rejects_non_admin_and_anon(
     assert api_client.patch("/api/admin/kinds/invoice", json={"name": "x"}).status_code == 403
     assert api_client.delete("/api/admin/kinds/invoice").status_code == 403
     assert anon_client.delete("/api/admin/kinds/invoice").status_code == 401
+
+
+# ------------------------------------- taxonomy service-layer branches (W1)
+#
+# The admin routes above exercise these mutations end-to-end, but the FastAPI
+# handlers run inside TestClient's own event-loop thread, which the coverage
+# tracer does not follow — so the merge-execution and reassign-and-delete
+# branches of ``library.taxonomy`` show as uncovered even though the HTTP tests
+# pass. These cases call the async services directly in the main thread (the
+# same ``asyncio.run`` pattern conftest uses for seeding) so the bulk-reassign
+# code is genuinely exercised, and assert the observable outcome the way the
+# HTTP tests do: the seeded document's FK, read back through the API, actually
+# moved (or was nulled) and the source entity is gone.
+
+
+def _run_service[T](api_database_url: str, op: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """Run a taxonomy service against the API test DB in the main thread.
+
+    A short-lived NullPool engine (mirroring the app's per-request session and
+    conftest's own seeding helpers) so the service commits against the same
+    database the ``admin_client`` reads from.
+    """
+
+    async def _body() -> T:
+        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                return await op(session)
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_body())
+
+
+def test_sender_merge_reassigns_docs_and_deletes_source(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    """rename_sender with merge=True re-points the source's docs then deletes it."""
+    src_doc = seed_document(
+        api_database_url, "w1-svc-s-merge-src", sender_name="W1 Svc S Merge Src"
+    )
+    seed_document(api_database_url, "w1-svc-s-merge-tgt", sender_name="W1 Svc S Merge Tgt")
+    senders = _senders(admin_client)
+    src = senders["W1 Svc S Merge Src"]["id"]
+    tgt = senders["W1 Svc S Merge Tgt"]["id"]
+
+    result = _run_service(
+        api_database_url,
+        lambda s: taxonomy.rename_sender(s, src, "W1 Svc S Merge Tgt", merge=True),
+    )
+    assert result.status == "merged"
+    assert result.sender is not None and result.sender.id == tgt
+
+    assert "W1 Svc S Merge Src" not in _senders(admin_client)
+    # The source's document now belongs to the surviving target sender.
+    assert admin_client.get(f"/api/documents/{src_doc}").json()["sender"]["id"] == tgt
+
+
+def test_service_reassign_and_delete_sender_to_target(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    src_doc = seed_document(api_database_url, "w1-svc-s-move-src", sender_name="W1 Svc S Move Src")
+    seed_document(api_database_url, "w1-svc-s-move-tgt", sender_name="W1 Svc S Move Tgt")
+    senders = _senders(admin_client)
+    src = senders["W1 Svc S Move Src"]["id"]
+    tgt = senders["W1 Svc S Move Tgt"]["id"]
+
+    result = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_sender(s, src, tgt)
+    )
+    assert result.status == "deleted"
+    assert "W1 Svc S Move Src" not in _senders(admin_client)
+    assert admin_client.get(f"/api/documents/{src_doc}").json()["sender"]["id"] == tgt
+
+
+def test_service_reassign_and_delete_sender_null_clears(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    doc = seed_document(api_database_url, "w1-svc-s-null", sender_name="W1 Svc S Null")
+    sid = _senders(admin_client)["W1 Svc S Null"]["id"]
+
+    result = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_sender(s, sid, None)
+    )
+    assert result.status == "deleted"
+    assert "W1 Svc S Null" not in _senders(admin_client)
+    assert admin_client.get(f"/api/documents/{doc}").json()["sender"] is None
+
+
+def test_service_reassign_and_delete_sender_error_branches(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    seed_document(api_database_url, "w1-svc-s-err", sender_name="W1 Svc S Err")
+    sid = _senders(admin_client)["W1 Svc S Err"]["id"]
+
+    # Self-reassign and an unknown target are both refused before any mutation.
+    self_res = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_sender(s, sid, sid)
+    )
+    assert self_res.status == "self_reassign"
+    missing_res = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_sender(s, sid, 99999999)
+    )
+    assert missing_res.status == "target_not_found"
+    assert "W1 Svc S Err" in _senders(admin_client)  # survives both refusals
+
+
+def test_service_reassign_and_delete_kind_to_target(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    src_slug = _make_kind(admin_client, "W1 Svc Kind Src")
+    tgt_slug = _make_kind(admin_client, "W1 Svc Kind Tgt")
+    doc = seed_document(api_database_url, "w1-svc-k-move", kind_slug=src_slug)
+
+    result = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_kind(s, src_slug, tgt_slug)
+    )
+    assert result.status == "deleted"
+    assert src_slug not in _kinds(admin_client)
+    assert admin_client.get(f"/api/documents/{doc}").json()["kind"]["slug"] == tgt_slug
+
+
+def test_service_reassign_and_delete_kind_null_clears(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    slug = _make_kind(admin_client, "W1 Svc Kind Null")
+    doc = seed_document(api_database_url, "w1-svc-k-null", kind_slug=slug)
+
+    result = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_kind(s, slug, None)
+    )
+    assert result.status == "deleted"
+    assert slug not in _kinds(admin_client)
+    assert admin_client.get(f"/api/documents/{doc}").json()["kind"] is None
+
+
+def test_service_reassign_and_delete_kind_error_branches(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    slug = _make_kind(admin_client, "W1 Svc Kind Err")
+    seed_document(api_database_url, "w1-svc-k-err", kind_slug=slug)
+
+    self_res = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_kind(s, slug, slug)
+    )
+    assert self_res.status == "self_reassign"
+    missing_res = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_kind(s, slug, "no-such-kind-xyz")
+    )
+    assert missing_res.status == "target_not_found"
+    assert slug in _kinds(admin_client)
+
+
+def test_service_reassign_and_delete_recipient_to_target(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    src_doc = seed_document(
+        api_database_url, "w1-svc-r-move-src", recipient_name="W1 Svc R Move Src"
+    )
+    seed_document(api_database_url, "w1-svc-r-move-tgt", recipient_name="W1 Svc R Move Tgt")
+    recs = _recipients(admin_client)
+    src = recs["W1 Svc R Move Src"]["id"]
+    tgt = recs["W1 Svc R Move Tgt"]["id"]
+
+    result = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_recipient(s, src, tgt)
+    )
+    assert result.status == "deleted"
+    assert "W1 Svc R Move Src" not in _recipients(admin_client)
+    assert admin_client.get(f"/api/documents/{src_doc}").json()["recipient"]["id"] == tgt
+
+
+def test_service_reassign_and_delete_recipient_null_clears(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    doc = seed_document(api_database_url, "w1-svc-r-null", recipient_name="W1 Svc R Null")
+    rid = _recipients(admin_client)["W1 Svc R Null"]["id"]
+
+    result = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_recipient(s, rid, None)
+    )
+    assert result.status == "deleted"
+    assert "W1 Svc R Null" not in _recipients(admin_client)
+    assert admin_client.get(f"/api/documents/{doc}").json()["recipient"] is None
+
+
+def test_service_reassign_and_delete_recipient_error_branches(
+    admin_client: TestClient, api_database_url: str
+) -> None:
+    seed_document(api_database_url, "w1-svc-r-err", recipient_name="W1 Svc R Err")
+    rid = _recipients(admin_client)["W1 Svc R Err"]["id"]
+
+    self_res = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_recipient(s, rid, rid)
+    )
+    assert self_res.status == "self_reassign"
+    missing_res = _run_service(
+        api_database_url, lambda s: taxonomy.reassign_and_delete_recipient(s, rid, 99999999)
+    )
+    assert missing_res.status == "target_not_found"
+    assert "W1 Svc R Err" in _recipients(admin_client)

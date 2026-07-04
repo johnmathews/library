@@ -1,0 +1,21 @@
+# Keep pinned base-image digests and GitHub Actions current via reviewable PRs.
+# The Dockerfile and docker-compose.yml pin every base image by @sha256; without
+# a bumper those digests silently rot. Docker ecosystem PRs refresh them; the
+# github-actions ecosystem keeps the CI action pins current too.
+version: 2
+updates:
+  - package-ecosystem: "docker"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(docker)"
+
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    commit-message:
+      prefix: "chore(ci)"

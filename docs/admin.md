@@ -1,4 +1,4 @@
-# 1. Admin role & admin views
+# Admin role & admin views
 
 The library is a multi-user "named family accounts over one shared library"
 (see [architecture.md](architecture.md) §1.5). On top of that, a single boolean

@@ -71,7 +71,7 @@ async function confirmDelete(): Promise<void> {
 </script>
 
 <template>
-  <div id="delete-page" class="max-w-xl mx-auto">
+  <div id="delete-page">
     <div class="mb-4">
       <AppBackLink :to="detailPath" text="Back to the document" />
     </div>
@@ -79,7 +79,7 @@ async function confirmDelete(): Promise<void> {
     <template v-if="doc">
       <div
         id="delete-confirm-card"
-        class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-red-200 dark:border-red-500/30 p-6"
+        class="max-w-xl mx-auto bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-red-200 dark:border-red-500/30 p-6"
       >
         <AppErrorSummary v-if="deleteError" :errors="[{ text: deleteError }]" />
 
@@ -116,7 +116,7 @@ async function confirmDelete(): Promise<void> {
 
     <template v-else-if="notFound">
       <div
-        class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-6"
+        class="card p-6"
       >
         <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-2">
           Document not found
@@ -128,7 +128,7 @@ async function confirmDelete(): Promise<void> {
     </template>
     <div
       v-else-if="loadError"
-      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-6 text-gray-500 dark:text-gray-400"
+      class="card p-6 text-gray-500 dark:text-gray-400"
     >
       Sorry, the document could not be loaded. Try again later.
     </div>

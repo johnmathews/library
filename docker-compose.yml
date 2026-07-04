@@ -18,7 +18,7 @@ services:
     # the original alpine cluster's C collation, so reusing an existing pgdata
     # volume under this image is safe (no glibc collation-version mismatch).
     # Only applied on a FRESH volume; an existing cluster keeps its collation.
-    image: pgvector/pgvector:pg17
+    image: pgvector/pgvector:pg17@sha256:dd467f03ca5c5581222490e5217e48a262864ccb659be559f8491bbafdc97da0
     restart: unless-stopped
     mem_limit: 1g
     environment:
@@ -38,7 +38,7 @@ services:
   # search. CPU inference; downloads the model (~2 GB) into embedder_cache on
   # first start. Memory-capped — budget for it on the host (docs/deployment.md).
   embedder:
-    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7
+    image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7@sha256:22eac176ead3eb7008c672123b05331347e1a86661a7f27f3f6550dbe31ff96c
     command: ["--model-id", "BAAI/bge-m3", "--auto-truncate"]
     restart: unless-stopped
     mem_limit: 3g

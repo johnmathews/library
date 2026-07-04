@@ -72,8 +72,10 @@ column* (grid), not to clamp the whole page narrower.
 Defined in `assets/main.css` (`@theme` tokens) and
 `assets/utility-patterns.css` (component classes):
 
-- **Card / panel:** `bg-white dark:bg-gray-800 shadow-xs rounded-xl border
-  border-gray-200 dark:border-gray-700/60 p-5`.
+- **Card / panel:** the `.card` class (surface + `shadow-xs` + `rounded-xl` +
+  hairline border, defined once in `utility-patterns.css`); it carries **no
+  padding**, so add your own `p-5` (`class="card p-5"`). Apply the class; don't
+  re-spec the surface recipe per view.
 - **Buttons:** `AppButton` (`.btn` / `.btn-sm` / `.btn-lg` / `.btn-xs`), violet
   primary, gray secondary, red destructive.
 - **Forms:** `AppInput` / `AppTextarea` / `AppSelect` / `AppCheckboxes` /
@@ -84,8 +86,8 @@ Defined in `assets/main.css` (`@theme` tokens) and
 - **Type:** Inter; headings `text-2xl md:text-3xl font-bold` for page titles.
 - **Badges/pills:** `AppBadge`, `FilterPill`. **Empty/loading/error states:**
   reuse existing view patterns (e.g. `DocumentListView`).
-- **Field rows / filter bars:** one label recipe + `.form-*` controls in a
-  `flex flex-wrap items-end gap-3` row; prefer native `<input type="date">` /
+- **Field rows / filter bars:** the `.filter-label` recipe + `.form-*` controls
+  in a `flex flex-wrap items-end gap-3` row; prefer native `<input type="date">` /
   `<select>` over hand-rolled widgets. See §5 and the reference implementation
   `components/charts/ChartControls.vue`.
 
@@ -114,11 +116,22 @@ eye compares them directly. Use one pattern for all of them.
 
 - **The row:** `flex flex-wrap items-end gap-3` — controls bottom-aligned so
   labels and inputs line up; wraps cleanly on narrow screens.
-- **The label (identical on every control):**
-  `block text-xs uppercase text-gray-600 dark:text-gray-300 font-semibold mb-1`.
-  Mixing label styles within one bar (one control `text-sm font-medium`, the next
-  a `<legend>`) is the single thing that made the pre-2026-07-01 `/charts` bar look
-  "weird" even though each control worked in isolation.
+- **The label (identical on every control):** the `.filter-label` class
+  (`block text-xs uppercase text-gray-600 dark:text-gray-300 font-semibold mb-1`,
+  defined once in `utility-patterns.css`). Apply the class; don't re-spec the
+  recipe per bar. Mixing label styles within one bar (one control
+  `text-sm font-medium`, the next a `<legend>`) is the single thing that made the
+  pre-2026-07-01 `/charts` bar look "weird" even though each control worked in
+  isolation.
+  - **Two scoped label recipes — don't cross them.** This uppercase-xs
+    `.filter-label` is the recipe for **filter/control bars only**. Stacked
+    **forms** use the *different* label baked into the `App*` input components
+    (`text-sm font-medium text-gray-700`, §3) — do not hand-roll or override it.
+    A filter bar is therefore built from raw `.form-input`/`.form-select` +
+    `.filter-label` (as `ChartControls` does), **not** from `App*` form
+    components, because those carry the stacked-form label. The two recipes are
+    intentional: uppercase-xs reads as a compact control legend; sentence-case
+    reads better down a long form.
 - **The controls:** `.form-input` / `.form-select` already carry border, bg,
   `rounded-lg`, `text-base sm:text-sm`, and dark mode — add the class, don't
   re-spec padding/border per control.
@@ -142,7 +155,28 @@ all enforced by lint/format/coverage gates. You get "right the first time" by
 Because tests assert on `data-testid` (not classes), a bar can be fully restyled
 without breaking contracts — so consistency is cheap to maintain.
 
-## 6. When you add a new view
+## 6. Which error surface to use
+
+Errors are the other place inconsistency creeps in — the app has four ways to
+show one, and using the wrong one (or hand-rolling a fifth) is what made error
+states feel arbitrary view-to-view. Pick by *where the error belongs*, don't
+hand-roll a red `border-l-4` box:
+
+- **Form-submit validation** (a `POST`/`PUT` the user just triggered) →
+  `AppErrorSummary`. It focuses itself on mount and links to the offending
+  field, so keyboard/screen-reader users land on the problem.
+- **A page/section failed to load, or a section-level status** →
+  `AppBanner` (`variant="error"`). One banner at the top of the section, e.g. a
+  charts grid or an admin panel that couldn't fetch.
+- **Background/async outcome** (something that finished while the user was
+  elsewhere — an upload, a job) → the `notifications` toast store.
+- **A single field is invalid** → the `errorMessage` prop already baked into the
+  `App*` inputs — not a separate element.
+
+Row-scoped inline errors inside a dense CRUD table (e.g. the admin taxonomy
+panels) are the one deliberate exception — they stay next to their row.
+
+## 7. When you add a new view
 
 1. Start from `DocumentDetailView.vue` as the structural template (header,
    no root cap, responsive grid).

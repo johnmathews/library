@@ -94,6 +94,13 @@ describe('DocumentDeleteView', () => {
     return wrapper
   }
 
+  it('does not cap the view root width (shell owns width)', async () => {
+    const w = await mountView()
+    const root = w.find('#delete-page')
+    expect(root.exists()).toBe(true)
+    expect(root.classes().some((cls) => cls.startsWith('max-w-'))).toBe(false)
+  })
+
   it('shows a warning naming the document, with confirm and cancel', async () => {
     const w = await mountView()
     expect(w.find('h1').text()).toContain('Are you sure')

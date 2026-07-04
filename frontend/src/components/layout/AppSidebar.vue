@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, watch } from 'vue'
+import { onMounted, onUnmounted, ref, watch } from 'vue'
+import { useStorage } from '@vueuse/core'
 import { useRoute } from 'vue-router'
 import { useAuthStore } from '@/stores/auth'
 
@@ -33,18 +34,20 @@ const route = useRoute()
 // `sidebar-expanded` key predates it, so read it once as a fallback to
 // preserve an existing preference on first load after this change.
 const SIDEBAR_EXPANDED_KEY = 'library:sidebar-expanded'
-const storedSidebarExpanded =
-  localStorage.getItem(SIDEBAR_EXPANDED_KEY) ?? localStorage.getItem('sidebar-expanded')
 
 function defaultSidebarExpanded(): boolean {
   if (typeof window === 'undefined' || !window.matchMedia) return false
   return window.matchMedia('(min-width: 1024px)').matches
 }
 
-const sidebarExpanded = ref<boolean>(
-  storedSidebarExpanded === null
-    ? defaultSidebarExpanded()
-    : storedSidebarExpanded === 'true',
+// The initial value only matters when the primary key is unset: honour a legacy
+// `sidebar-expanded` preference if present, otherwise fall back to the viewport
+// heuristic. `useStorage` reads the primary key directly when it exists (so a
+// stored choice always wins) and, being missing, writes this computed default.
+const legacySidebarExpanded = localStorage.getItem('sidebar-expanded')
+const sidebarExpanded = useStorage<boolean>(
+  SIDEBAR_EXPANDED_KEY,
+  legacySidebarExpanded === null ? defaultSidebarExpanded() : legacySidebarExpanded === 'true',
 )
 
 // close on click outside
@@ -79,10 +82,11 @@ onUnmounted(() => {
   document.removeEventListener('keydown', keyHandler)
 })
 
+// `useStorage` persists the value itself; this watch only mirrors it onto the
+// <body> class that drives the CSS-only expanded/collapsed layout.
 watch(
   sidebarExpanded,
   () => {
-    localStorage.setItem(SIDEBAR_EXPANDED_KEY, String(sidebarExpanded.value))
     const body = document.querySelector('body')
     if (!body) return
     if (sidebarExpanded.value) {

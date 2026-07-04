@@ -105,7 +105,7 @@ async function onSubmit(): Promise<void> {
     <form
       id="new-note-form"
       novalidate
-      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5 mb-6"
+      class="card p-5 mb-6"
       @submit.prevent="onSubmit"
     >
       <div class="space-y-4">

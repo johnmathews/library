@@ -8,6 +8,67 @@ All notable changes to Library are documented here. The format follows
 
 ### Added
 
+**Charts view (`/charts`)** — a new aggregate **charts dashboard** in the web
+app: a responsive grid of bar-chart tiles, one per eligible recurring
+`(sender, kind)` series, each showing the trend, its cached LLM description, and
+an editable "documents in this series" list. A shared control bar drives every
+tile (time range, custom datepickers, and a group-by that buckets and sums
+amounts per calendar period). Supports **authored/manual series** creation,
+single-chart pages (`/charts/{id}`) with **PDF / JPEG / PNG export** and
+copy-link, and smart panels (signature-matching suggestions + deterministic,
+grounded odd-ones-out). Reachable from the sidebar **Charts** link. See
+[docs/frontend.md](docs/frontend.md) §1.7, [docs/ask.md](docs/ask.md) §1.7, and
+[docs/api.md](docs/api.md) §1.14.
+
+**Dashboard sort control + per-user card-fields picker** — the document list
+gains a **sort control** (`document_date` | `added_date` × `asc` | `desc`,
+round-tripped through the URL; relevance still wins while a query is present, so
+the control is disabled then), and a per-user **Fields** popover that toggles
+**and reorders** which metadata fields each card shows (order-significant,
+persisted via `PUT /api/settings`). See [docs/api.md](docs/api.md) §1.3.1 and
+[docs/frontend.md](docs/frontend.md).
+
+**Admin reference-entity CRUD** — the admin API (`/api/admin/*`) now manages the
+shared reference taxonomy, not just system/architecture/coverage/users:
+**senders** (create / rename-or-merge / reassign-then-delete), **kinds**
+(name-only rename with slug immutable, reassign-by-slug delete), **recipients**
+(create / rename-or-merge / reassign-then-delete), and **series-aware currency
+normalization** (a rename rewrites documents, authored series, and the
+`series_insights` cache, and **refuses** up front if it would collide with a
+user-authored override — no user data is dropped). All reference FKs are
+`ON DELETE SET NULL`, and every mutation is guarded by a shared advisory lock.
+Surfaced in `AdminView`'s **Metadata** tab. See [docs/admin.md](docs/admin.md)
+and [docs/api.md](docs/api.md) §1.18.
+
+**FX-rate seeding** — cross-currency series conversion needs one `fx_rates` row
+per in-use currency (base = USD, date-aware). Admins can now seed a rate (live
+fetch or manual) via `GET`/`POST /api/admin/fx-rates` and a Currencies-card
+affordance, so a newly-normalised currency code no longer leaves FX conversion
+silently missing. See [docs/api.md](docs/api.md) §1.18.7.
+
+**Per-user per-kind tile border colours** — each user can colour dashboard tiles
+by document kind (a per-user preference). The tile owns its border in the CSS
+`components` layer so the accent paints reliably under Tailwind v4 cascade
+layers, with an e2e guard asserting the computed border colour. See
+[docs/frontend.md](docs/frontend.md).
+
+**Recipient auto-fill + forwarded-mail owner attribution** — email ingestion now
+auto-fills a document's **recipient** from the email `To:` header (matched
+against existing recipients only — extraction never invents one), and when a
+forwarded message's recipient can't be resolved the document is attributed to the
+forwarding **owner** rather than left blank. See
+[docs/ingestion.md](docs/ingestion.md).
+
+**Email-body ingestion when there's no attachment** — an inbound email with no
+attachment is no longer dropped: its body is ingested as the document. See
+[docs/ingestion.md](docs/ingestion.md).
+
+**Ask metadata write tool (propose-then-confirm)** — the Ask agent can now
+**update a document's metadata**, proposing the change and applying it only after
+the user confirms. The write shares the edit path's validation recompute, so an
+agent-applied fix clears its finding (and a bad edit re-flags) identically to the
+`PATCH` route. See [docs/ask.md](docs/ask.md) and [docs/api.md](docs/api.md).
+
 **Admin role + admin views** — users now have a boolean **admin** role
 (`users.is_admin`, migration 0014). Admins reach a new **Admin** page (`/admin`)
 with four tabs backed by `/api/admin/*`: **System** (app version + git sha,
@@ -19,6 +80,18 @@ from the host with `library user set-admin <name>` (or `library user add --admin
 The role is exposed on `GET /api/auth/me`. See [docs/admin.md](docs/admin.md).
 
 ### Changed
+
+**Document verification flow reworked** — edits now recompute validation.
+`PATCH /api/documents/{id}` (and the Ask write tool, which shares the edit path)
+re-run the deterministic rules on save, so correcting a flagged field **clears**
+its finding while genuine warnings persist (previously a stale finding lingered
+until the next pipeline run); a user-**verified** document stays verified across
+clean edits. The detail page gains a prominent **"Why this needs review"** panel
+listing every finding in plain language, dashboard rows show a short reason next
+to the "Needs review" badge (via a new compact `review_findings` on the list
+API), and a **step-through review queue** (`?queue=1`) walks the `needs_review`
+set one document at a time, dropping each doc as it's fixed. See
+[docs/frontend.md](docs/frontend.md).
 
 **Project mutations are now admin-only** — projects are a global, shared taxonomy,
 so `POST`/`PATCH`/`DELETE /api/projects` now require the admin role (`403`

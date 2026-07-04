@@ -514,7 +514,7 @@ function pointLabel(point: { title?: string | null; date: string }): string {
 <template>
   <section
     data-testid="series-trend"
-    class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
+    class="card p-5"
   >
     <header>
       <div class="flex items-start justify-between gap-2">

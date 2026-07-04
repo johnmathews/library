@@ -41,6 +41,25 @@ describe('AppButton', () => {
     expect(a.attributes('target')).toBe('_self')
     expect(a.attributes('rel')).toBeUndefined()
   })
+  it('renders the base .btn class by default (no size prop)', () => {
+    const wrapper = mount(AppButton, { slots: { default: 'X' } })
+    const cls = wrapper.get('button').classes()
+    expect(cls).toContain('btn')
+    expect(cls).not.toContain('btn-sm')
+    expect(cls).not.toContain('btn-lg')
+  })
+  it('swaps the base class for .btn-sm when size="sm"', () => {
+    const wrapper = mount(AppButton, { props: { size: 'sm' }, slots: { default: 'X' } })
+    const cls = wrapper.get('button').classes()
+    expect(cls).toContain('btn-sm')
+    expect(cls).not.toContain('btn')
+  })
+  it('swaps the base class for .btn-lg when size="lg"', () => {
+    const wrapper = mount(AppButton, { props: { size: 'lg' }, slots: { default: 'X' } })
+    const cls = wrapper.get('button').classes()
+    expect(cls).toContain('btn-lg')
+    expect(cls).not.toContain('btn')
+  })
   it('maps the secondary variant to grey border styling', () => {
     const wrapper = mount(AppButton, { props: { variant: 'secondary' }, slots: { default: 'X' } })
     expect(wrapper.get('button').classes().join(' ')).toContain('border-gray-200')

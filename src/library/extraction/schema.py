@@ -97,7 +97,7 @@ class ExtractedMetadata(BaseModel):
     language: Literal["nld", "eng", "mixed", "unknown"]
     tags: list[str]
     topics: list[str] = []
-    confidence: Literal["high", "medium", "low"]
+    confidence: Literal["high", "low"]
     reasoning_note: str | None
 
     @field_validator("sender_name", "recipient_name", "reasoning_note", mode="after")

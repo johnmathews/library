@@ -10,6 +10,7 @@
  * tasks" is on.
  */
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
+import { useStorage } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import { AppBadge, AppInput, AppSelect, PageHeader } from '@/components/app'
 import {
@@ -334,7 +335,15 @@ const DEFAULT_VISIBILITY: Record<string, boolean> = Object.fromEntries(
   COLUMNS.map((c) => [c.key, c.defaultVisible]),
 )
 
-const columnVisibility = ref<Record<string, boolean>>({ ...DEFAULT_VISIBILITY })
+// Persisted per-machine. `mergeDefaults` merges the stored map over the current
+// defaults so a newly-added column keeps its default visibility instead of
+// vanishing for users with an older saved preference.
+const columnVisibility = useStorage<Record<string, boolean>>(
+  COLUMNS_STORAGE_KEY,
+  { ...DEFAULT_VISIBILITY },
+  undefined,
+  { mergeDefaults: true },
+)
 const showColumnMenu = ref(false)
 /** The Columns menu wrapper, for the outside-click close handler. */
 const columnMenu = ref<HTMLElement | null>(null)
@@ -352,27 +361,11 @@ const cardMetaColumns = computed(() =>
   visibleColumns.value.filter((c) => c.key !== 'document' && c.key !== 'status'),
 )
 
-function loadColumnPrefs(): void {
-  try {
-    const raw = localStorage.getItem(COLUMNS_STORAGE_KEY)
-    if (!raw) return
-    const parsed = JSON.parse(raw) as Record<string, boolean>
-    // Merge over defaults so newly-added columns keep their default visibility.
-    columnVisibility.value = { ...DEFAULT_VISIBILITY, ...parsed }
-  } catch {
-    // Corrupt/unavailable storage — fall back to defaults.
-  }
-}
-
 function toggleColumn(key: string): void {
+  // useStorage persists the mutation automatically.
   columnVisibility.value = {
     ...columnVisibility.value,
     [key]: !isVisible(key),
-  }
-  try {
-    localStorage.setItem(COLUMNS_STORAGE_KEY, JSON.stringify(columnVisibility.value))
-  } catch {
-    // Storage unavailable (private mode/quota) — keep the in-memory choice.
   }
 }
 
@@ -405,7 +398,6 @@ function onDocumentClick(e: MouseEvent): void {
 }
 
 onMounted(() => {
-  loadColumnPrefs()
   document.addEventListener('click', onDocumentClick)
 })
 onUnmounted(() => document.removeEventListener('click', onDocumentClick))

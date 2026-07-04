@@ -14,7 +14,7 @@
 import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { AppBadge, AppButton, AppInput, AppSelect } from '@/components/app'
+import { AppBadge, AppBanner, AppButton, AppInput, AppSelect, PageHeader } from '@/components/app'
 import type { SelectItem } from '@/components/app'
 import { ApiError } from '@/api/client'
 import {
@@ -1003,8 +1003,7 @@ onMounted(() => {
   void loadUsers()
 })
 
-const cardClass =
-  'bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-6'
+const cardClass = 'card p-6'
 const tabClass = (active: boolean): string =>
   [
     'px-4 py-2 -mb-px text-sm font-medium border-b-2 transition cursor-pointer',
@@ -1015,8 +1014,8 @@ const tabClass = (active: boolean): string =>
 </script>
 
 <template>
-  <div id="admin-page" class="max-w-4xl">
-    <h1 class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold mb-4">Admin</h1>
+  <div id="admin-page">
+    <PageHeader title="Admin" />
 
     <div
       role="tablist"
@@ -1042,14 +1041,9 @@ const tabClass = (active: boolean): string =>
       <p v-if="systemLoading" data-testid="system-loading" class="text-gray-600 dark:text-gray-300">
         Loading system information…
       </p>
-      <div
-        v-else-if="systemError"
-        data-testid="system-error"
-        role="alert"
-        class="bg-white dark:bg-gray-800 border-l-4 border-red-500 rounded-lg px-4 py-3 shadow-xs text-gray-700 dark:text-gray-200"
-      >
+      <AppBanner v-else-if="systemError" variant="error" data-testid="system-error">
         {{ systemError }}
-      </div>
+      </AppBanner>
       <div v-else-if="system" class="space-y-6">
         <!-- Build + deployment -->
         <div :class="cardClass">
@@ -1161,14 +1155,9 @@ const tabClass = (active: boolean): string =>
       <p v-if="archLoading" data-testid="arch-loading" class="text-gray-600 dark:text-gray-300">
         Loading architecture docs…
       </p>
-      <div
-        v-else-if="archError"
-        data-testid="arch-error"
-        role="alert"
-        class="bg-white dark:bg-gray-800 border-l-4 border-red-500 rounded-lg px-4 py-3 shadow-xs text-gray-700 dark:text-gray-200"
-      >
+      <AppBanner v-else-if="archError" variant="error" data-testid="arch-error">
         {{ archError }}
-      </div>
+      </AppBanner>
       <p
         v-else-if="archDocs.length === 0"
         data-testid="arch-empty"
@@ -1214,14 +1203,9 @@ const tabClass = (active: boolean): string =>
       <p v-if="coverageLoading" data-testid="coverage-loading" class="text-gray-600 dark:text-gray-300">
         Loading coverage data…
       </p>
-      <div
-        v-else-if="coverageError"
-        data-testid="coverage-error"
-        role="alert"
-        class="bg-white dark:bg-gray-800 border-l-4 border-red-500 rounded-lg px-4 py-3 shadow-xs text-gray-700 dark:text-gray-200"
-      >
+      <AppBanner v-else-if="coverageError" variant="error" data-testid="coverage-error">
         {{ coverageError }}
-      </div>
+      </AppBanner>
       <div
         v-else-if="coverage && !coverage.available"
         data-testid="coverage-unavailable"
@@ -1332,14 +1316,9 @@ const tabClass = (active: boolean): string =>
       <p v-if="usersLoading" data-testid="users-loading" class="text-gray-600 dark:text-gray-300">
         Loading users…
       </p>
-      <div
-        v-else-if="usersError"
-        data-testid="users-error"
-        role="alert"
-        class="bg-white dark:bg-gray-800 border-l-4 border-red-500 rounded-lg px-4 py-3 shadow-xs text-gray-700 dark:text-gray-200"
-      >
+      <AppBanner v-else-if="usersError" variant="error" data-testid="users-error">
         {{ usersError }}
-      </div>
+      </AppBanner>
       <div v-else class="space-y-6">
         <div class="overflow-x-auto bg-white dark:bg-gray-800 rounded-lg shadow-xs">
           <table class="w-full text-sm">

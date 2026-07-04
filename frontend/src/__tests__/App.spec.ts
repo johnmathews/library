@@ -3,7 +3,6 @@ import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
 import App from '@/App.vue'
-import { resetTaxonomyOptionsForTests } from '@/composables/taxonomyOptions'
 import { useAuthStore } from '@/stores/auth'
 
 // jsdom 29 ships no showModal()/close() on HTMLDialogElement — stub the
@@ -53,7 +52,8 @@ describe('App Mosaic shell', () => {
   let wrapper: VueWrapper | undefined
 
   beforeEach(async () => {
-    resetTaxonomyOptionsForTests()
+    // The taxonomy-options cache lives in Pinia now; the fresh `createPinia()`
+    // below gives each test an empty cache (no explicit reset needed).
     localStorage.clear()
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()

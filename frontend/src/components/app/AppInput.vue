@@ -22,6 +22,10 @@ const props = defineProps<{
   /** Render an eye-icon button that toggles the value between hidden
       (password) and visible (text). Overrides `type`. */
   revealable?: boolean
+  /** `data-testid` for the inner `<input>` itself (not the wrapper), so tests
+      and Playwright `.fill()`/`.setValue()` can target the editable element. A
+      bare `data-testid` attribute would fall through to the wrapper `<div>`. */
+  testid?: string
 }>()
 
 const model = defineModel<string>({ default: '' })
@@ -67,6 +71,7 @@ const describedBy = computed(() => {
         :inputmode="props.inputmode"
         :spellcheck="props.spellcheck"
         :list="props.list"
+        :data-testid="props.testid"
         :aria-describedby="describedBy"
         :aria-invalid="props.errorMessage ? 'true' : undefined"
       />

@@ -1232,7 +1232,7 @@ watch(
 
     <div
       id="document-hero"
-      class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5 sm:p-6 mb-6"
+      class="card p-5 sm:p-6 mb-6"
     >
       <!-- Title. `break-words` lets a long title wrap rather than overflow. -->
       <h1
@@ -1308,7 +1308,7 @@ watch(
       <div id="document-preview-column" class="min-w-0 space-y-4 lg:order-2">
         <div
           id="document-preview-card"
-          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 overflow-hidden"
+          class="card overflow-hidden"
         >
           <!-- Preview header: keeps the document window itself clean (the native
                PDF toolbar is hidden) while giving an unambiguous way to open the
@@ -1405,7 +1405,7 @@ watch(
              behind a Show/Hide toggle to keep the metadata reachable. -->
         <div
           id="document-markdown-card"
-          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
+          class="card p-5"
         >
           <div class="flex items-center justify-between gap-3 mb-3">
             <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Document text</h2>
@@ -1472,7 +1472,7 @@ watch(
         <div
           v-if="isNote"
           id="document-note-card"
-          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
+          class="card p-5"
         >
           <div class="mb-4 flex items-center justify-between gap-3">
             <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Note</h2>
@@ -1624,7 +1624,7 @@ watch(
 
         <div
           id="document-details-card"
-          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
+          class="card p-5"
         >
           <div class="mb-4 flex items-center justify-between gap-3">
             <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Details</h2>
@@ -2102,7 +2102,7 @@ watch(
 
         <div
           id="document-actions-card"
-          class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-5"
+          class="card p-5"
         >
           <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">Actions</h2>
           <p class="text-sm mb-2">
@@ -2174,7 +2174,7 @@ watch(
   </template>
   <div
     v-else-if="loadError"
-    class="bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60 p-4 text-gray-600 dark:text-gray-300"
+    class="card p-4 text-gray-600 dark:text-gray-300"
   >
     Sorry, the document could not be loaded. Try again later.
   </div>

@@ -86,6 +86,13 @@ input[type='search']::-webkit-search-results-decoration {
   @apply pr-10;
 }
 
+/* Filter-bar label recipe (see docs/frontend-view-principles.md §5). Scoped to
+   filter/control bars — NOT stacked forms, whose labels come baked into the
+   App* input components. One definition so every bar shares the same recipe. */
+.filter-label {
+  @apply block text-xs uppercase text-gray-600 dark:text-gray-300 font-semibold mb-1;
+}
+
 .form-checkbox,
 .form-radio {
   @apply text-violet-500 checked:bg-violet-500 checked:border-transparent border border-gray-300 dark:border-gray-700/60 dark:checked:border-transparent focus-visible:not-checked:ring-2 focus-visible:not-checked:ring-violet-500/50;
@@ -129,6 +136,14 @@ input[type='search']::-webkit-search-results-decoration {
 
 .form-switch input[type='checkbox']:disabled + label > span:first-child {
   @apply bg-gray-400 dark:bg-gray-600;
+}
+
+/* Cards */
+/* Chrome only — the shared white/dark panel surface (background, subtle shadow,
+ * rounded corners, hairline border). Deliberately carries NO padding: callers keep
+ * their own p-4/p-5/p-6 so spacing stays per-view. */
+.card {
+  @apply bg-white dark:bg-gray-800 shadow-xs rounded-xl border border-gray-200 dark:border-gray-700/60;
 }
 
 /* Chrome, Safari and Opera */

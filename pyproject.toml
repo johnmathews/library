@@ -83,12 +83,29 @@ markers = [
     "integration: tests that need Docker (ephemeral Postgres via testcontainers)",
     "slow_ocr: real OCR engine runs (tesseract/ocrmypdf binaries, RapidOCR model download)",
 ]
+filterwarnings = [
+    # Starlette's TestClient warns that driving it via httpx is deprecated. The
+    # httpx2 runtime migration is deliberately deferred; silence the test-only
+    # noise until we take that on. Matched by message only (the backticked text)
+    # rather than by StarletteDeprecationWarning: naming the category would force
+    # pytest to import starlette.testclient at config time, and that import emits
+    # the very warning before the filter is active.
+    "ignore:Using .httpx. with .starlette.testclient. is deprecated",
+]
 
 [tool.coverage.run]
 source = ["src/library"]
+# NOTE: FastAPI's TestClient runs the app via an anyio blocking portal, and
+# coverage does not trace those handler lines — so async endpoint bodies read as
+# "missing" even though the integration tests exercise them (api/admin.py and
+# api/documents.py are the clearest cases). The behavioural coverage is higher
+# than the report shows. Critical branches are covered by direct in-event-loop
+# service tests instead (see tests/test_admin_api.py, test_charts_write_paths.py,
+# test_auth.py). Fixing the measurement itself is a separate follow-up.
 
 [tool.coverage.report]
 # Coverage gate: `coverage report` exits non-zero below this, failing CI.
-# Backend currently sits at ~95%, so 85% leaves headroom without being slack.
+# Backend measures ~87%; the taxonomy/auth test additions restored headroom
+# over the 85% gate without it being slack.
 fail_under = 85
 show_missing = true

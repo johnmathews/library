@@ -79,6 +79,13 @@ vocabulary that the `App*` components and views compose:
 - **Form controls:** `.form-input`, `.form-textarea`, `.form-select`,
   `.form-checkbox`, `.form-radio`, `.form-multiselect`, `.form-switch` — the
   base + dark-mode styling for every field control.
+- **`.filter-label`** — the shared filter/control-bar label recipe (uppercase-xs,
+  gray, `mb-1`); one definition so every filter bar matches. Scoped to
+  filter/control bars, **not** stacked forms (whose labels are baked into the
+  `App*` inputs). See [frontend-view-principles.md](frontend-view-principles.md) §5.
+- **`.card`** — the shared white/dark panel surface (background, `shadow-xs`,
+  `rounded-xl`, hairline border). Carries **no padding** by design — callers add
+  their own `p-4`/`p-5`/`p-6` so spacing stays per-view.
 - **Typography helpers** (`.h1`–`.h4`), `.no-scrollbar` (hides the scrollbar
   entirely — used for app chrome), and `.thin-scrollbar` (keeps a subtle, thin
   scrollbar so an internal scroll region reads as scrollable — used by the Ask
@@ -214,7 +221,7 @@ components use `defineModel()`.
 
 | Component | Replaces | What it does |
 |-----------|----------|--------------|
-| `AppButton` | GovButton | `.btn` + `variant` (`primary` violet / `secondary` / `warning` red / `inverse`); renders `<RouterLink>` for `to`, `<a role=button>` for `href`, else `<button>`. `preventDoubleClick` retained. |
+| `AppButton` | GovButton | `.btn` + `variant` (`primary` violet / `secondary` / `warning` red / `inverse`); optional `size` (`sm` → `.btn-sm`, `lg` → `.btn-lg`, default `.btn`); renders `<RouterLink>` for `to`, `<a role=button>` for `href`, else `<button>`. `preventDoubleClick` retained. |
 | `AppInput` | GovInput | `.form-input` with label/hint/error wiring + `aria-describedby`/`aria-invalid`; optional `list` for a `<datalist>`. |
 | `AppTextarea` | GovTextarea | `.form-textarea` with the same label/hint/error wiring. |
 | `AppSelect` | GovSelect | `.form-select`, options from `items: SelectItem[]` (`{value,text}`). |
