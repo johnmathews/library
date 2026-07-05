@@ -24,6 +24,7 @@ from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, inge
 from library.jobs import extract_document
 from library.models import (
     Document,
+    DocumentComment,
     DocumentLanguage,
     DocumentPage,
     DocumentSource,
@@ -34,6 +35,7 @@ from library.models import (
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
 from library.schemas import (
+    CommentOut,
     DocumentDetail,
     DocumentListItem,
     DocumentListResponse,
@@ -272,7 +274,7 @@ async def get_document(
 ) -> DocumentDetail:
     """Full metadata, OCR text, extraction provenance, and the audit trail."""
     document = await _get_document_or_404(session, document_id)
-    return _detail(document)
+    return await _detail(session, document)
 
 
 @router.get(
@@ -356,7 +358,7 @@ async def update_document(
     document = await _get_document_or_404(session, document_id)
     edited = await apply_document_update(session, document, payload, edited_by="user")
     if not edited:
-        return _detail(document)
+        return await _detail(session, document)
     # A corrected field can resolve (or introduce) a validation finding, so
     # re-run the deterministic rules and update review_status before committing —
     # this is what clears a fixed "implausible date" warning on save.
@@ -364,11 +366,11 @@ async def update_document(
     await session.commit()
     # updated_at has a SQL onupdate (func.now()); SQLAlchemy expires it after the
     # UPDATE since it can't know the server-computed value — refresh it eagerly
-    # here so _detail() doesn't trigger a lazy load in this sync context.
+    # here so _detail() doesn't trigger a lazy load of an already-expired attribute.
     await session.refresh(
         document, ["kind", "sender", "recipient", "tags", "projects", "events", "updated_at"]
     )
-    return _detail(document)
+    return await _detail(session, document)
 
 
 @router.delete(
@@ -431,7 +433,7 @@ async def verify_document(
     session.add(IngestionEvent(document_id=document.id, event="review_verified", detail={}))
     await session.commit()
     await session.refresh(document)
-    return _detail(document)
+    return await _detail(session, document)
 
 
 @router.get(
@@ -587,8 +589,25 @@ def _review_findings(document: Document) -> list[ValidationFindingSummary]:
     ]
 
 
-def _detail(document: Document) -> DocumentDetail:
-    """Build the detail response; exposes extraction provenance, not raw extra."""
+async def _detail(session: AsyncSession, document: Document) -> DocumentDetail:
+    """Build the detail response; exposes extraction provenance, not raw extra.
+
+    Comments are queried explicitly (``Document.comments`` is ``lazy="raise"``,
+    since a normal document load never wants them) rather than eager-loaded on
+    every read of ``Document`` — this is the one place the detail payload needs
+    them.
+    """
+    comments = (
+        (
+            await session.execute(
+                select(DocumentComment)
+                .where(DocumentComment.document_id == document.id)
+                .order_by(DocumentComment.created_at.desc())
+            )
+        )
+        .scalars()
+        .all()
+    )
     return DocumentDetail(
         **_list_item_fields(document),
         ocr_text=document.ocr_text,
@@ -606,4 +625,5 @@ def _detail(document: Document) -> DocumentDetail:
             IngestionEventOut(event=event.event, detail=event.detail, created_at=event.created_at)
             for event in sorted(document.events, key=lambda event: event.id)
         ],
+        comments=[CommentOut.model_validate(comment) for comment in comments],
     )

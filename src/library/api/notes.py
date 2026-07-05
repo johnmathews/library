@@ -224,7 +224,7 @@ async def create_note(
     await session.commit()
     await process_document.defer_async(document_id=document.id)
     await session.refresh(document, _DETAIL_REFRESH_ATTRS)
-    return _detail(document)
+    return await _detail(session, document)
 
 
 @router.patch(
@@ -248,7 +248,7 @@ async def update_note(
     # A no-op PATCH must not pollute the version history with a phantom snapshot.
     if not provided:
         await session.refresh(document, _DETAIL_REFRESH_ATTRS)
-        return _detail(document)
+        return await _detail(session, document)
 
     await _snapshot_current(session, document)
 
@@ -270,7 +270,7 @@ async def update_note(
     if body_changed:
         await _reprocess_note(document.id)
     await session.refresh(document, _DETAIL_REFRESH_ATTRS)
-    return _detail(document)
+    return await _detail(session, document)
 
 
 @router.get(
@@ -351,4 +351,4 @@ async def restore_note_version(
     await session.commit()
     await _reprocess_note(document.id)
     await session.refresh(document, _DETAIL_REFRESH_ATTRS)
-    return _detail(document)
+    return await _detail(session, document)

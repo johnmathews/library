@@ -15,6 +15,7 @@ from library.api import (
     ask,
     auth,
     charts,
+    comments,
     documents,
     events,
     jobs,
@@ -67,6 +68,13 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "description": (
             "Author Markdown notes inside Library, edit them in place, and "
             "browse or restore their version history."
+        ),
+    },
+    {
+        "name": "comments",
+        "description": (
+            "Free-text, dated comments attached to an existing document; each "
+            "edit re-queues embedding so /ask can find the document through it."
         ),
     },
     {
@@ -195,6 +203,7 @@ def create_app() -> FastAPI:
     )
     api_router.include_router(documents.router)
     api_router.include_router(notes.router)
+    api_router.include_router(comments.router)
     api_router.include_router(charts.router)
     api_router.include_router(series.router)
     api_router.include_router(taxonomy.router)

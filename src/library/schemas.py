@@ -11,7 +11,7 @@ from decimal import Decimal
 from enum import StrEnum
 from typing import Annotated, Any, Final
 
-from pydantic import BaseModel, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
 from library.models import DocumentLanguage, DocumentSource, DocumentStatus, ReviewStatus
 
@@ -77,6 +77,24 @@ class IngestionEventOut(BaseModel):
     event: str
     detail: dict[str, Any]
     created_at: datetime
+
+
+class CommentIn(BaseModel):
+    """Body of POST/PATCH /api/documents/{id}/comments/*."""
+
+    body: str = Field(min_length=1)
+
+
+class CommentOut(BaseModel):
+    """One comment on a document — via the comments API or the document detail."""
+
+    id: int
+    document_id: int
+    author_id: int | None
+    body: str
+    created_at: datetime
+
+    model_config = ConfigDict(from_attributes=True)
 
 
 class DocumentListItem(BaseModel):
@@ -155,6 +173,7 @@ class DocumentDetail(DocumentListItem):
         default=None, description="Latest validation run: findings + provenance."
     )
     events: list[IngestionEventOut] = Field(description="Audit trail, oldest first.")
+    comments: list[CommentOut] = Field(description="User comments, newest first.")
 
 
 CurrencyCode = Annotated[
