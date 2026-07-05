@@ -387,9 +387,21 @@ describe('AskView', () => {
     expect(askQuestionMock).toHaveBeenCalledTimes(1) // plain Enter sends
 
     await ta.trigger('keydown', { key: 'Enter', shiftKey: true })
+    await flushPromises()
+    expect(askQuestionMock).toHaveBeenCalledTimes(1) // shift+enter does not send
+
+    // Ctrl+J inserts a newline at the caret and restores the caret just after
+    // it (on nextTick), rather than sending — a regression in the splice/caret
+    // math, or a dropped nextTick, would otherwise pass silently here.
+    const textarea = ta.element as HTMLTextAreaElement
+    await ta.setValue('hello')
+    textarea.selectionStart = textarea.selectionEnd = 2
     await ta.trigger('keydown', { key: 'j', ctrlKey: true })
     await flushPromises()
-    expect(askQuestionMock).toHaveBeenCalledTimes(1) // neither sends
+    expect(askQuestionMock).toHaveBeenCalledTimes(1) // ctrl+j does not send
+    expect(textarea.value).toBe('he\nllo')
+    expect(textarea.selectionStart).toBe(3)
+    expect(textarea.selectionEnd).toBe(3)
 
     await ta.trigger('keydown', { key: 'Enter', isComposing: true })
     await flushPromises()
