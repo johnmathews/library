@@ -126,6 +126,18 @@ onMounted(() => {
             {{ formatUsd(system.stats.extraction_cost_usd_total) }}
           </dd>
         </div>
+        <div>
+          <dt class="text-gray-500 dark:text-gray-400" title="Extraction/markdown last skipped by the daily LLM budget — run `library backfill` to fill them">
+            Budget-skipped
+          </dt>
+          <dd
+            class="text-2xl font-bold"
+            :class="system.stats.documents_budget_skipped > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-gray-800 dark:text-gray-100'"
+            data-testid="stat-budget-skipped"
+          >
+            {{ system.stats.documents_budget_skipped }}
+          </dd>
+        </div>
       </dl>
 
       <h3 class="text-sm font-semibold text-gray-700 dark:text-gray-200 mt-5 mb-2">

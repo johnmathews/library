@@ -77,6 +77,7 @@ const systemInfo = {
     jobs_total: 5,
     jobs_active: 1,
     extraction_cost_usd_total: 1.5,
+    documents_budget_skipped: 2,
   },
 }
 

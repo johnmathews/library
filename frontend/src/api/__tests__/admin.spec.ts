@@ -59,6 +59,7 @@ describe('admin API', () => {
         jobs_total: 5,
         jobs_active: 0,
         extraction_cost_usd_total: 1.5,
+        documents_budget_skipped: 0,
       },
     }
     respondWith(payload)

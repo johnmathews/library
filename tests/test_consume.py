@@ -424,13 +424,17 @@ class _StubJobApp:
     def __init__(self, work_for_s: float) -> None:
         self._work_for_s = work_for_s
         self.worker_ran = False
+        self.concurrency: int | None = None
 
     @asynccontextmanager
     async def open_async(self) -> AsyncIterator["_StubJobApp"]:
         yield self
 
-    async def run_worker_async(self) -> None:
+    async def run_worker_async(
+        self, concurrency: int = 1, stalled_worker_timeout: float = 30.0
+    ) -> None:
         self.worker_ran = True
+        self.concurrency = concurrency
         await asyncio.sleep(self._work_for_s)
 
 
@@ -448,9 +452,10 @@ async def test_worker_runs_watcher_alongside_and_shuts_down_cleanly(
     name = f"worker-{uuid.uuid4().hex[:8]}.pdf"
     (consume_root / name).write_bytes(make_pdf())
 
-    settings = Settings(consume_dir=consume_root)
+    settings = Settings(consume_dir=consume_root, worker_concurrency=2)
     await asyncio.wait_for(worker.run_worker_with_consume(settings), timeout=15)
 
     assert stub.worker_ran
+    assert stub.concurrency == 2  # worker_concurrency is threaded through
     assert len(await documents_named(session_factory, name)) == 1
     assert any(path.name == name for path in archived_files(consume_root))

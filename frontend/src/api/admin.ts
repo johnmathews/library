@@ -25,6 +25,7 @@ export interface DbStats {
   jobs_total: number
   jobs_active: number
   extraction_cost_usd_total: number
+  documents_budget_skipped: number
 }
 
 /** One deployed service in the stack (name + its role). */

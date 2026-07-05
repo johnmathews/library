@@ -40,7 +40,10 @@ async def run_worker_with_consume(settings: Settings) -> None:
         watcher_task = asyncio.create_task(watcher.run(stop_event))
         watcher_task.add_done_callback(_log_watcher_exit)
         try:
-            await job_app.run_worker_async()
+            await job_app.run_worker_async(
+                concurrency=settings.worker_concurrency,
+                stalled_worker_timeout=settings.stalled_worker_prune_seconds,
+            )
         finally:
             stop_event.set()
             # A watcher crash was already logged by the done callback.
@@ -57,7 +60,10 @@ def main() -> None:
     settings = get_settings()
     if settings.consume_dir is None:
         with job_app.open():
-            job_app.run_worker()
+            job_app.run_worker(
+                concurrency=settings.worker_concurrency,
+                stalled_worker_timeout=settings.stalled_worker_prune_seconds,
+            )
         return
     asyncio.run(run_worker_with_consume(settings))
 

@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import (
 
 from library import jobs
 from library.config import get_settings
-from library.jobs import advance_pipeline, job_app, process_document
+from library.jobs import advance_pipeline, job_app, process_document, sweep_stalled_jobs
 from library.models import Document, DocumentSource, DocumentStatus, IngestionEvent
 from library.ocr import router as ocr_router
 from library.ocr.base import OcrResult
@@ -296,6 +296,88 @@ async def test_process_document_task_registered_and_deferrable() -> None:
         job = next(iter(connector.jobs.values()))
         assert job["task_name"] == "library.jobs.process_document"
         assert job["args"] == {"document_id": 42}
+
+
+def test_sweep_cron_built_from_minutes() -> None:
+    assert jobs.sweep_cron(5) == "*/5 * * * *"
+    # Clamped to the 1-59 minute-step range like the email poller.
+    assert jobs.sweep_cron(0) == "*/1 * * * *"
+    assert jobs.sweep_cron(90) == "*/59 * * * *"
+
+
+def test_sweep_stalled_jobs_registered_with_default_cron() -> None:
+    assert sweep_stalled_jobs.name == "library.jobs.sweep_stalled_jobs"
+    periodic = job_app.periodic_registry.periodic_tasks[("library.jobs.sweep_stalled_jobs", "")]
+    assert periodic.cron == "*/5 * * * *"
+
+
+async def test_sweep_reenqueues_stalled_process_document_jobs(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Every stalled ``process_document`` job is retried, filtered by heartbeat."""
+    get_settings.cache_clear()
+    sentinels = [object(), object(), object()]
+    captured: dict[str, object] = {}
+    retried: list[object] = []
+
+    async def fake_get_stalled(**kwargs: object) -> list[object]:
+        captured.update(kwargs)
+        return sentinels
+
+    async def fake_retry(job: object, **kwargs: object) -> None:
+        retried.append(job)
+
+    monkeypatch.setattr(job_app.job_manager, "get_stalled_jobs", fake_get_stalled)
+    monkeypatch.setattr(job_app.job_manager, "retry_job", fake_retry)
+
+    await sweep_stalled_jobs(timestamp=0)
+
+    assert retried == sentinels
+    assert captured["task_name"] == "library.jobs.process_document"
+    assert captured["seconds_since_heartbeat"] == 60.0
+
+
+async def test_sweep_is_noop_when_disabled(monkeypatch: pytest.MonkeyPatch) -> None:
+    """``stalled_job_sweep_minutes=0`` skips the query entirely (no work, no spend)."""
+    monkeypatch.setenv("LIBRARY_STALLED_JOB_SWEEP_MINUTES", "0")
+    get_settings.cache_clear()
+    called = False
+
+    async def fake_get_stalled(**kwargs: object) -> list[object]:
+        nonlocal called
+        called = True
+        return []
+
+    monkeypatch.setattr(job_app.job_manager, "get_stalled_jobs", fake_get_stalled)
+    try:
+        await sweep_stalled_jobs(timestamp=0)
+    finally:
+        get_settings.cache_clear()
+
+    assert called is False
+
+
+async def test_pipeline_resumes_from_midpipeline_status(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+) -> None:
+    """A document stranded mid-pipeline by a crash resumes to ``indexed``.
+
+    This is the property the stalled-job sweeper relies on: re-running
+    ``advance_pipeline`` on a non-terminal document drives it to completion.
+    """
+    document_id = await make_document(session_factory, "pipeline-resume")
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        document.status = DocumentStatus.OCR  # simulate a hard kill mid-pipeline
+        await session.commit()
+
+    await advance_pipeline(session_factory, document_id)
+
+    status, _ = await get_status_and_events(session_factory, document_id)
+    assert status == DocumentStatus.INDEXED
 
 
 async def test_thumbnail_defer_failure_does_not_fail_document(

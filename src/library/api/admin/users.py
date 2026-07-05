@@ -15,6 +15,7 @@ from library.api.admin._base import _ADMIN_MUTATION_LOCK_KEY, router
 from library.auth.deps import current_user
 from library.auth.passwords import hash_password
 from library.auth.service import revoke_all_credentials
+from library.budget_backfill import budget_skipped_count
 from library.config import Settings, get_settings
 from library.db import get_session
 from library.extraction.apply import get_or_create_user_recipient
@@ -64,6 +65,10 @@ class DbStats(BaseModel):
     jobs_total: int
     jobs_active: int = Field(description="Jobs in 'todo' or 'doing'.")
     extraction_cost_usd_total: float = Field(description="Summed Claude extraction spend.")
+    documents_budget_skipped: int = Field(
+        description="Documents whose extraction/markdown was last skipped by the daily "
+        "LLM budget — run `library backfill` (or enable budget_backfill) to fill them."
+    )
 
 
 class SystemInfo(BaseModel):
@@ -226,6 +231,8 @@ async def _db_stats(session: AsyncSession) -> DbStats:
         for member in DocumentStatus
         if member.value in by_status
     }
+    documents_budget_skipped = await budget_skipped_count(session)
+
     return DbStats(
         documents_total=documents_total,
         documents_deleted=documents_deleted,
@@ -235,6 +242,7 @@ async def _db_stats(session: AsyncSession) -> DbStats:
         jobs_total=jobs_total,
         jobs_active=jobs_active,
         extraction_cost_usd_total=round(float(extraction_cost), 4),
+        documents_budget_skipped=documents_budget_skipped,
     )
 
 

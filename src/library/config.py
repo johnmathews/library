@@ -124,6 +124,33 @@ class Settings(BaseSettings):
     # Username that owns email-ingested documents whose sender matches no user's
     # forwarding addresses. Unset = such documents stay unowned (and notify no one).
     email_default_owner: str | None = None
+    # Background worker (see docs/ingestion.md, "Job queue").
+    # Concurrency: how many jobs the Procrastinate worker runs at once. Default 1
+    # (serial) — raising it multiplies peak worker RAM (parallel OCR subprocesses
+    # + embedder batches), so tune only with host headroom to spare.
+    worker_concurrency: int = 1
+    # Crash recovery: a hard-killed worker strands its in-flight process_document
+    # job in `doing`. sweep_stalled_jobs re-enqueues such jobs every
+    # ``stalled_job_sweep_minutes`` (0 disables) once their worker's heartbeat is
+    # older than ``stalled_job_heartbeat_seconds`` (kept well above Procrastinate's
+    # ~10 s heartbeat so a live worker mid-stage is never swept).
+    stalled_job_sweep_minutes: int = 5
+    stalled_job_heartbeat_seconds: float = 60.0
+    # How long a dead worker's row survives before Procrastinate prunes it at the
+    # next worker startup (``stalled_worker_timeout``). CRITICAL for recovery:
+    # get_stalled_jobs finds a stranded job only while its (stale-heartbeat)
+    # worker row still exists — once pruned, the orphaned ``doing`` job becomes
+    # invisible and never resumes. So this must stay well above the worker's
+    # crash→restart gap AND the sweep interval; the default 24 h covers any
+    # realistic redeploy/reboot. The only cost of a high value is a few stale
+    # rows lingering in procrastinate_workers (cosmetic).
+    stalled_worker_prune_seconds: float = 86400.0
+    # Daily auto-backfill of budget-skipped documents (see docs/ingestion.md,
+    # "Extraction"/"Markdown layer"). When enabled, a daily task re-enqueues
+    # extraction/markdown for documents that were skipped because the per-day
+    # LLM budget was exhausted — the budget resets daily, so the next tick fills
+    # them. Default off: it spends money, so opt in deliberately.
+    budget_backfill_enabled: bool = False
     # paperless-ngx importer (see docs/migration.md).
     paperless_url: str | None = None
     paperless_token: SecretStr | None = None

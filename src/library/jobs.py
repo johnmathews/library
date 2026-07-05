@@ -509,14 +509,98 @@ async def evaluate_series_autocontinue(document_id: int) -> None:
         await propose_authored_matches(session, get_settings(), document_id)
 
 
-def email_poll_cron(minutes: int) -> str:
-    """Cron expression for the email poller: every ``minutes`` minutes.
+def _every_n_minutes_cron(minutes: int) -> str:
+    """A cron expression firing every ``minutes`` minutes.
 
     Cron steps live in the minute field (0-59), so the value is clamped
-    to 1-59; longer intervals are not worth a second schedule shape for
-    a mailbox poll.
+    to 1-59; a disabled feature (``minutes <= 0``) still ticks every minute
+    and no-ops in its task body rather than warranting a second schedule shape.
     """
     return f"*/{min(max(minutes, 1), 59)} * * * *"
+
+
+def email_poll_cron(minutes: int) -> str:
+    """Cron expression for the email poller: every ``minutes`` minutes."""
+    return _every_n_minutes_cron(minutes)
+
+
+def sweep_cron(minutes: int) -> str:
+    """Cron expression for the stalled-job sweeper: every ``minutes`` minutes."""
+    return _every_n_minutes_cron(minutes)
+
+
+@job_app.periodic(cron=sweep_cron(get_settings().stalled_job_sweep_minutes))
+@job_app.task(name="library.jobs.sweep_stalled_jobs")
+async def sweep_stalled_jobs(timestamp: int) -> None:
+    """Periodic task: re-enqueue ``process_document`` jobs stranded by a crash.
+
+    A hard-killed worker (OOM/SIGKILL/host crash/redeploy mid-stage) never runs
+    ``advance_pipeline``'s failure handler, so its in-flight job stays in
+    ``doing`` and the document is stuck in a non-terminal status with no
+    re-queue. This finds such jobs by a stale worker heartbeat
+    (``stalled_job_heartbeat_seconds``, kept well above Procrastinate's ~10 s
+    heartbeat so a live worker mid-OCR is never swept) and retries each; the
+    pipeline then resumes idempotently from the stranded status. Instant no-op
+    when ``stalled_job_sweep_minutes`` is 0 (the schedule still ticks).
+
+    Depends on ``stalled_worker_prune_seconds``: ``get_stalled_jobs`` can only
+    see a stranded job while its dead worker's row still exists. Procrastinate
+    prunes worker rows at the next worker startup, so that prune timeout is set
+    high (24 h) in ``library.worker`` — otherwise a redeploy could delete the
+    crashed worker's row before this sweep ever runs, hiding the job forever.
+    """
+    settings = get_settings()
+    if settings.stalled_job_sweep_minutes <= 0:
+        return
+    manager = job_app.job_manager
+    stalled = await manager.get_stalled_jobs(
+        task_name="library.jobs.process_document",
+        seconds_since_heartbeat=settings.stalled_job_heartbeat_seconds,
+    )
+    recovered = 0
+    for job in stalled:
+        await manager.retry_job(job)
+        recovered += 1
+    if recovered:
+        logger.warning(
+            "sweep_stalled_jobs (scheduled for %s): re-enqueued %s stalled process_document job(s)",
+            timestamp,
+            recovered,
+        )
+
+
+@job_app.periodic(cron="17 3 * * *")
+@job_app.task(name="library.jobs.backfill_budget_skipped")
+async def backfill_budget_skipped(timestamp: int) -> None:
+    """Daily task: re-enqueue documents whose LLM metadata was skipped by budget.
+
+    A burst can exhaust the per-day extraction/markdown budget, leaving documents
+    ``indexed`` but without LLM metadata (an ``extraction_skipped`` /
+    ``markdown_skipped`` event with ``reason: budget``). The budget resets daily,
+    so this runs in the small hours and re-enqueues those documents — reusing the
+    same ``extract_document`` + ``markdown_document`` path as the backfill CLI, so
+    it honours ``extra["user_edited_fields"]`` and re-checks the budget itself.
+    Opt-in: instant no-op unless ``budget_backfill_enabled`` is set (it spends).
+    """
+    settings = get_settings()
+    if not settings.budget_backfill_enabled:
+        return
+    # Imported lazily: budget_backfill only needs models, but keeping the import
+    # local mirrors poll_email_inbox and avoids widening this module's import at
+    # start-up for an opt-in feature.
+    from library.budget_backfill import budget_skipped_document_ids
+
+    async with get_sessionmaker()() as session:
+        document_ids = await budget_skipped_document_ids(session)
+    for document_id in document_ids:
+        await extract_document.defer_async(document_id=document_id)
+        await markdown_document.defer_async(document_id=document_id)
+    if document_ids:
+        logger.info(
+            "backfill_budget_skipped (scheduled for %s): re-enqueued %s budget-skipped document(s)",
+            timestamp,
+            len(document_ids),
+        )
 
 
 @job_app.periodic(cron=email_poll_cron(get_settings().email_poll_minutes))
