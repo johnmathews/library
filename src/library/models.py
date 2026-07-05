@@ -393,6 +393,12 @@ class Document(Base):
         passive_deletes=True,
         lazy="raise",
     )
+    comments: Mapped[list["DocumentComment"]] = relationship(
+        back_populates="document",
+        cascade="all, delete-orphan",
+        order_by="DocumentComment.created_at",
+        lazy="raise",
+    )
     pages: Mapped[list["DocumentPage"]] = relationship(
         back_populates="document",
         cascade="all, delete-orphan",
@@ -429,6 +435,12 @@ class DocumentChunk(Base):
     text: Mapped[str] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    comment_id: Mapped[int | None] = mapped_column(
+        BigInteger,
+        ForeignKey("document_comments.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
 
     document: Mapped[Document] = relationship(back_populates="chunks")
 
@@ -503,6 +515,34 @@ class NoteVersion(Base):
     title: Mapped[str | None] = mapped_column(Text)
     body: Mapped[str] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class DocumentComment(Base):
+    """User-authored, dated free-text attached to an existing document.
+
+    Distinct from a note (a source='note' Document): a comment annotates
+    another document and is embedded as an extra chunk so /ask can find the
+    document through it. `created_at` is the recorded date shown in the UI.
+    """
+
+    __tablename__ = "document_comments"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("documents.id", ondelete="CASCADE"), index=True, nullable=False
+    )
+    author_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    body: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+    document: Mapped["Document"] = relationship(back_populates="comments")
 
 
 class AskThread(Base):
