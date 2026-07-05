@@ -45,6 +45,7 @@ import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
 import NoteEditorPanel from '@/components/NoteEditorPanel.vue'
 import DocumentMetadataEditor from '@/components/DocumentMetadataEditor.vue'
+import DocumentComments from '@/components/DocumentComments.vue'
 import { useDocumentLayout, HERO_FIELD_LABELS } from '@/composables/useDocumentLayout'
 
 const props = withDefaults(
@@ -413,6 +414,23 @@ const noteBody = computed(() =>
   (markdownData.value?.pages ?? []).map((page) => page.markdown).join('\n\n'),
 )
 
+// --- Comments ------------------------------------------------------------------
+//
+// Unlike the note/metadata editors, comment mutations don't return the full
+// DocumentDetail (createComment/updateComment/deleteComment return just the
+// comment or void), so there's no v-model:doc round-trip to piggyback on —
+// the card instead emits `changed` and this re-fetches the document.
+
+async function reloadDocument(): Promise<void> {
+  if (!doc.value) return
+  try {
+    doc.value = await getDocument(doc.value.id)
+  } catch {
+    // Transient — the stale comments list is still correct apart from the one
+    // in-flight change; the next reload or SSE-triggered refresh recovers it.
+  }
+}
+
 // --- Section-card reorder (W6) ------------------------------------------------
 //
 // The two-column grid renders its cards from the persisted `cardOrder`. Each
@@ -424,7 +442,7 @@ const noteBody = computed(() =>
 // it visually so a seriesless doc reads exactly as before).
 
 const PREVIEW_CARD_IDS = ['preview', 'markdown', 'series-chart']
-const METADATA_CARD_IDS = ['notes', 'metadata', 'actions', 'history']
+const METADATA_CARD_IDS = ['notes', 'metadata', 'comments', 'actions', 'history']
 
 /** Whether a card id has content to render for the current document. */
 function cardPresent(id: string): boolean {
@@ -985,6 +1003,13 @@ watch(
         />
 
         <DocumentMetadataEditor v-else-if="cardId === 'metadata'" v-model:doc="doc" />
+
+        <DocumentComments
+          v-else-if="cardId === 'comments'"
+          :document-id="doc.id"
+          :comments="doc.comments"
+          @changed="reloadDocument"
+        />
 
         <div
           v-else-if="cardId === 'actions'"

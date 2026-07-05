@@ -1473,6 +1473,7 @@ describe('DocumentDetailView', () => {
         'notes',
         'history',
         'metadata',
+        'comments',
         'actions',
       ])
       const w = await mountView()
@@ -1481,8 +1482,13 @@ describe('DocumentDetailView', () => {
         .findAll('[data-testid^="section-card-"]')
         .map((el) => el.attributes('data-testid') ?? '')
       // notes is absent (not a note doc), so the metadata column is history,
-      // metadata, actions in that saved order.
-      expect(ids).toEqual(['section-card-history', 'section-card-metadata', 'section-card-actions'])
+      // metadata, comments, actions in that saved order.
+      expect(ids).toEqual([
+        'section-card-history',
+        'section-card-metadata',
+        'section-card-comments',
+        'section-card-actions',
+      ])
     })
 
     it('reset layout restores the default hero order and card order', async () => {
