@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import { RouterLink, useRouter } from 'vue-router'
 import { Bar } from 'vue-chartjs'
 import { Chart as ChartJS, TimeScale, LinearScale, BarElement, Tooltip } from 'chart.js'
@@ -393,7 +393,12 @@ const isGrouped = computed<boolean>(() => props.grouping != null && props.groupi
 const groupedBuckets = computed<GroupedPoint[]>(() =>
   isGrouped.value
     ? groupSeriesPoints(
-        points.value.map((p) => ({ date: p.date, amount: p.amount, label: pointLabel(p) })),
+        points.value.map((p) => ({
+          date: p.date,
+          amount: p.amount,
+          label: pointLabel(p),
+          document_id: p.document_id,
+        })),
         props.grouping as Exclude<ChartGrouping, 'none'>,
       )
     : [],
@@ -479,16 +484,119 @@ function groupedTooltipAfterBody(items: { dataIndex: number }[]): string[] {
   return rows
 }
 
+// --- Ungrouped: click a bar to open its document -----------------------------
+//
+// In ungrouped mode each bar is one document, so a bar click navigates to that
+// document. Chart.js hands us the active element(s); its `.index` is the
+// dataIndex, which maps 1:1 to points.value. We stop propagation so a bar click
+// on a whole-tile "open chart" tile (detailLink) opens the DOCUMENT, not the
+// chart page. Grouped mode has no per-document bar, so this is ungrouped-only.
+interface ActiveBarElement {
+  index: number
+}
+interface ChartEvent {
+  native?: Event | null
+}
+function onBarClick(event: ChartEvent, elements: ActiveBarElement[]): void {
+  if (!elements.length) return
+  const documentId = points.value[elements[0]!.index]?.document_id
+  if (documentId == null) return
+  // Prevent the whole-tile openDetail handler (bubbling) from also firing.
+  event.native?.stopPropagation?.()
+  router?.push(`/documents/${documentId}`)
+}
+
+// Pointer cursor while over a clickable bar (ungrouped only).
+function onBarHover(event: ChartEvent, elements: ActiveBarElement[]): void {
+  const target = event.native?.target as HTMLElement | undefined
+  if (target?.style) target.style.cursor = elements.length ? 'pointer' : 'default'
+}
+
+// --- Grouped: sticky HTML tooltip with clickable document rows ----------------
+//
+// A canvas tooltip can't hold clickable links, so in grouped mode we disable
+// Chart.js's built-in tooltip and render our own absolutely-positioned HTML
+// element (driven by Chart.js's `external` tooltip handler). It lists each
+// source document in the bucket as a link and stays open while the pointer is
+// over it — long enough to click a row.
+interface TooltipModel {
+  opacity: number
+  caretX: number
+  caretY: number
+  dataPoints?: { dataIndex: number }[]
+}
+const tooltipVisible = ref(false)
+const tooltipIndex = ref(-1)
+const tooltipPos = ref<{ x: number; y: number }>({ x: 0, y: 0 })
+let hideTimer: ReturnType<typeof setTimeout> | null = null
+
+function cancelHideTooltip(): void {
+  if (hideTimer !== null) {
+    clearTimeout(hideTimer)
+    hideTimer = null
+  }
+}
+// Delay the hide so the pointer can travel from the bar onto the tooltip; a
+// mouseenter on the tooltip cancels it (see the template).
+function scheduleHideTooltip(): void {
+  cancelHideTooltip()
+  hideTimer = setTimeout(() => {
+    tooltipVisible.value = false
+    hideTimer = null
+  }, 200)
+}
+function hideTooltipNow(): void {
+  cancelHideTooltip()
+  tooltipVisible.value = false
+}
+
+function externalTooltipHandler(context: { chart: unknown; tooltip: TooltipModel }): void {
+  const model = context.tooltip
+  if (!model || model.opacity === 0) {
+    scheduleHideTooltip()
+    return
+  }
+  const dataIndex = model.dataPoints?.[0]?.dataIndex
+  if (dataIndex == null || !groupedBuckets.value[dataIndex]) return
+  cancelHideTooltip()
+  tooltipIndex.value = dataIndex
+  tooltipPos.value = { x: model.caretX, y: model.caretY }
+  tooltipVisible.value = true
+}
+
+// The bucket currently under the tooltip, plus its formatted header line.
+const tooltipBucket = computed<GroupedPoint | null>(() =>
+  tooltipVisible.value ? (groupedBuckets.value[tooltipIndex.value] ?? null) : null,
+)
+const tooltipHeader = computed<string>(() => {
+  const bucket = tooltipBucket.value
+  if (!bucket) return ''
+  const n = bucket.count
+  return `Total ${formatTooltipAmount(bucket.y)} · ${n} ${n === 1 ? 'document' : 'documents'}`
+})
+
+// Never leak the grouped overlay into ungrouped mode.
+watch(isGrouped, (grouped) => {
+  if (!grouped) hideTooltipNow()
+})
+onBeforeUnmount(cancelHideTooltip)
+
 const chartOptions = computed(() => ({
   responsive: true,
   maintainAspectRatio: false,
+  // Per-bar click/hover only makes sense ungrouped (one bar = one document).
+  ...(isGrouped.value ? {} : { onClick: onBarClick, onHover: onBarHover }),
   plugins: {
     legend: { display: false },
-    tooltip: {
-      callbacks: isGrouped.value
-        ? { label: groupedTooltipLabel, afterBody: groupedTooltipAfterBody }
-        : {},
-    },
+    tooltip: isGrouped.value
+      ? {
+          // Suppress the canvas tooltip; the HTML overlay replaces it so rows
+          // can be links. Callbacks stay so the model still carries the data.
+          enabled: false,
+          external: externalTooltipHandler,
+          callbacks: { label: groupedTooltipLabel, afterBody: groupedTooltipAfterBody },
+        }
+      : { callbacks: {} },
   },
   scales: {
     // Temporal x-axis: the gap between two events reflects the real time
@@ -671,7 +779,7 @@ function pointLabel(point: { title?: string | null; date: string }): string {
     </div>
 
     <div
-      class="mt-3"
+      class="relative mt-3"
       :class="[size === 'large' ? 'h-[28rem]' : 'h-40', detailLink ? 'cursor-pointer' : '']"
       :role="detailLink ? 'link' : undefined"
       :tabindex="detailLink ? 0 : undefined"
@@ -681,6 +789,50 @@ function pointLabel(point: { title?: string | null; date: string }): string {
       @keydown.enter="openDetail"
     >
       <Bar ref="barRef" :data="chartData" :options="chartOptions" />
+
+      <!-- Grouped mode: sticky HTML tooltip (a canvas tooltip can't hold links).
+           Lists the bucket's source documents as links; stays open while the
+           pointer is over it. `@click.stop` keeps a row click from bubbling to
+           the whole-tile openDetail handler. -->
+      <div
+        v-if="isGrouped && tooltipVisible && tooltipBucket"
+        data-testid="chart-tooltip"
+        class="pointer-events-auto absolute z-10 max-w-[16rem] -translate-x-1/2 rounded-md border border-gray-200 bg-white p-2 text-xs shadow-lg dark:border-gray-700 dark:bg-gray-800"
+        :style="{ left: `${tooltipPos.x}px`, top: `${tooltipPos.y}px` }"
+        @mouseenter="cancelHideTooltip"
+        @mouseleave="hideTooltipNow"
+        @click.stop
+      >
+        <p
+          data-testid="chart-tooltip-header"
+          class="mb-1 font-semibold text-gray-800 dark:text-gray-100"
+        >
+          {{ tooltipHeader }}
+        </p>
+        <ul class="space-y-0.5">
+          <li
+            v-for="(item, i) in tooltipBucket.items"
+            :key="item.document_id ?? i"
+            class="flex items-baseline justify-between gap-2"
+          >
+            <RouterLink
+              v-if="item.document_id != null"
+              :to="`/documents/${item.document_id}`"
+              data-testid="chart-tooltip-doc-link"
+              class="min-w-0 truncate text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:underline"
+              :title="item.label"
+            >
+              {{ item.label }}
+            </RouterLink>
+            <span v-else class="min-w-0 truncate text-gray-700 dark:text-gray-300">{{
+              item.label
+            }}</span>
+            <span class="shrink-0 tabular-nums text-gray-500 dark:text-gray-400">{{
+              formatTooltipAmount(item.amount)
+            }}</span>
+          </li>
+        </ul>
+      </div>
     </div>
 
     <!-- Smart features (authored series): propose-for-review suggestions and

@@ -35,6 +35,18 @@ describe('groupSeriesPoints', () => {
     ])
   })
 
+  it('carries document_id onto each bucket item so tooltips can link (W2)', () => {
+    const withIds = [
+      { date: '2025-01-05', amount: '100.00', label: 'Rent Jan 5', document_id: 11 },
+      { date: '2025-01-20', amount: '50.00', label: 'Rent Jan 20', document_id: 12 },
+    ]
+    const [bucket] = groupSeriesPoints(withIds, 'month')
+    expect(bucket!.items).toEqual([
+      { amount: 100, label: 'Rent Jan 5', document_id: 11 },
+      { amount: 50, label: 'Rent Jan 20', document_id: 12 },
+    ])
+  })
+
   it('sums amounts per quarter', () => {
     const out = groupSeriesPoints(points, 'quarter')
     expect(out.map(({ x, y, count }) => ({ x, y, count }))).toEqual([

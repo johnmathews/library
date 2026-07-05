@@ -32,10 +32,14 @@ export const GROUPING_OPTIONS: GroupingOption[] = [
   { value: 'year', label: 'By year' },
 ]
 
-/** One contributing document within a bucket, for the tooltip breakdown. */
+/** One contributing document within a bucket, for the tooltip breakdown.
+ *  `document_id` is carried so the grouped tooltip can link each row to its
+ *  source document (`/documents/{document_id}`); it is optional because callers
+ *  that only need amount/label (e.g. non-linking previews) may omit it. */
 export interface BucketItem {
   amount: number
   label: string
+  document_id?: number
 }
 
 /** A summed bucket: `x` is the ISO period start, `y` the total, `count` the
@@ -49,11 +53,14 @@ export interface GroupedPoint {
 }
 
 /** The minimal shape `groupSeriesPoints` needs from a series point. `label` is
- *  optional; it falls back to the date in the per-document breakdown. */
+ *  optional; it falls back to the date in the per-document breakdown.
+ *  `document_id` is optional and, when present, is threaded onto each
+ *  BucketItem so grouped tooltips can link back to the source document. */
 export interface DatedAmount {
   date: string
   amount: string | number
   label?: string
+  document_id?: number
 }
 
 function bucketStart(date: Date, grouping: Exclude<ChartGrouping, 'none'>): Date {
@@ -95,7 +102,7 @@ export function groupSeriesPoints(
     const key = isoDate(start)
     const raw = Number(p.amount)
     const amount = Number.isFinite(raw) ? raw : 0
-    const item: BucketItem = { amount, label: p.label ?? p.date }
+    const item: BucketItem = { amount, label: p.label ?? p.date, document_id: p.document_id }
     const entry = buckets.get(key)
     if (entry) {
       entry.y += amount

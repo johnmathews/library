@@ -82,10 +82,26 @@ export interface ChartsTimeframe {
   setCustom: (which: 'from' | 'to', value: string | null) => void
 }
 
-export function useChartsTimeframe(): ChartsTimeframe {
-  const timeframe = useStorage<Timeframe>(CHARTS_TIMEFRAME_STORAGE_KEY, '12m')
-  const customFrom = useStorage<string | null>(CHARTS_CUSTOM_FROM_STORAGE_KEY, null)
-  const customTo = useStorage<string | null>(CHARTS_CUSTOM_TO_STORAGE_KEY, null)
+/**
+ * Optional persistence-key overrides. Additive and fully backward-compatible:
+ * omitting a key (or the whole object) keeps the shared `/charts` keys, so an
+ * independent surface — e.g. the document-detail chart — can carry its own
+ * time-range without fighting the global dashboard controls. Defaults ('12m',
+ * open custom range) are unchanged regardless of the key used.
+ */
+export interface ChartsTimeframeStorageKeys {
+  timeframe?: string
+  customFrom?: string
+  customTo?: string
+}
+
+export function useChartsTimeframe(keys: ChartsTimeframeStorageKeys = {}): ChartsTimeframe {
+  const timeframe = useStorage<Timeframe>(keys.timeframe ?? CHARTS_TIMEFRAME_STORAGE_KEY, '12m')
+  const customFrom = useStorage<string | null>(
+    keys.customFrom ?? CHARTS_CUSTOM_FROM_STORAGE_KEY,
+    null,
+  )
+  const customTo = useStorage<string | null>(keys.customTo ?? CHARTS_CUSTOM_TO_STORAGE_KEY, null)
 
   const bounds = computed<TimeframeBounds>(() =>
     timeframe.value === 'custom'
