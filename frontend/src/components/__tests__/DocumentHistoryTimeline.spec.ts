@@ -53,6 +53,45 @@ describe('DocumentHistoryTimeline', () => {
     expect(w.find('[data-testid="history-raw-list"]').text()).toContain('embedding_skipped')
   })
 
+  it('orders milestones and the raw log newest-first, even from out-of-order input', () => {
+    // Deliberately shuffled input; the component must sort it, not trust order.
+    const shuffled: IngestionEvent[] = [
+      EVENTS[4]!, // extraction_completed 10:00:10
+      EVENTS[0]!, // received           10:00:00
+      EVENTS[7]!, // user_edited        2026-06-11T09:00:00
+      EVENTS[2]!, // ocr_completed      10:00:05
+      EVENTS[6]!, // status_changed→indexed 10:00:20
+    ]
+    const w = mount(DocumentHistoryTimeline, { props: { events: shuffled } })
+
+    const milestoneText = w.findAll('[data-testid="history-item"]').map((i) => i.text())
+    // Newest (user_edited on the 11th) is first; oldest (received) is last.
+    expect(milestoneText[0]).toContain('Edited')
+    expect(milestoneText[milestoneText.length - 1]).toContain('Ingested')
+
+    // Raw log is likewise newest-first.
+    const rawEventNames = w
+      .findAll('[data-testid="history-raw-item"]')
+      .map((i) => i.text())
+    // First raw row is the newest event (user_edited), last is the oldest (received).
+    expect(rawEventNames[0]).toContain('user_edited')
+    expect(rawEventNames[rawEventNames.length - 1]).toContain('received')
+  })
+
+  it('keeps events with equal timestamps in stable (incoming) order', () => {
+    // user_edited and project_changed share 2026-06-11T09:00:00Z. Stable sort
+    // must preserve their incoming order (user_edited before project_changed)
+    // at the top of the newest-first list.
+    const w = mount(DocumentHistoryTimeline, { props: { events: EVENTS } })
+    const milestoneText = w.findAll('[data-testid="history-item"]').map((i) => i.text())
+    const editedIdx = milestoneText.findIndex((t) => t.includes('Edited'))
+    const projectsIdx = milestoneText.findIndex((t) => t.includes('Projects changed'))
+    expect(editedIdx).toBeGreaterThanOrEqual(0)
+    expect(editedIdx).toBeLessThan(projectsIdx)
+    // Both are the newest events, so they sit at the very top.
+    expect(editedIdx).toBe(0)
+  })
+
   it('renders an empty state when there are no milestones', () => {
     const w = mount(DocumentHistoryTimeline, { props: { events: [] } })
     expect(w.find('[data-testid="history-empty"]').exists()).toBe(true)

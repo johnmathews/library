@@ -7,12 +7,19 @@ import type { DocumentDetail, DocumentMarkdownResponse } from '@/api/documents'
 import { listNoteVersions, restoreNoteVersion, updateNote } from '@/api/notes'
 import { useJobsStore } from '@/stores/jobs'
 import { useReviewQueueStore } from '@/stores/reviewQueue'
+import { useDocumentLayout } from '@/composables/useDocumentLayout'
 
 // pdfjs-dist can't run its worker/canvas in jsdom — mock the whole module
 // so that DocumentPdfPreview (now imported by DocumentDetailView) can be loaded.
 vi.mock('pdfjs-dist', () => ({
   GlobalWorkerOptions: { workerSrc: '' },
   getDocument: vi.fn(() => ({ promise: new Promise(() => {}), destroy: () => Promise.resolve() })),
+}))
+
+// sortablejs manipulates real DOM nodes on drag; in unit tests we exercise the
+// reactive rendering + wiring (not the drag physics), so stub it out.
+vi.mock('sortablejs', () => ({
+  default: { create: vi.fn(() => ({ destroy: vi.fn() })) },
 }))
 
 // The notes API is exercised only by the note-specific controls; mock it so
@@ -104,6 +111,11 @@ describe('DocumentDetailView', () => {
   let markdownResponse: () => Response
 
   beforeEach(async () => {
+    // useDocumentLayout is a module singleton — reset its persisted state and
+    // leave edit mode so hero/card customisation tests don't leak into others.
+    const layout = useDocumentLayout()
+    layout.resetLayout()
+    layout.setEditMode(false)
     detail = makeDetail()
     patchResponse = () => jsonResponse(detail)
     createKindResponse = (init?: RequestInit) => {
@@ -1346,6 +1358,165 @@ describe('DocumentDetailView', () => {
 
       expect(restoreNoteVersionMock).toHaveBeenCalledWith(12, 1)
       expect(w.find('h1').text()).toBe('Restored note')
+    })
+  })
+
+  // --- Layout customisation: hero fields (W5) + section cards (W6) ------------
+
+  describe('layout customisation (Edit layout)', () => {
+    /** Ordered hero-field testids currently in the hero (read or edit mode). */
+    function heroFieldOrder(w: VueWrapper): string[] {
+      return w
+        .find('#document-hero')
+        .findAll('[data-testid^="hero-field-"]')
+        .map((el) => el.attributes('data-testid') ?? '')
+        .filter((id) => !id.startsWith('hero-field-toggle-'))
+    }
+
+    it('renders the recipient field in the hero when present (added in W5)', async () => {
+      detail = makeDetail({ recipient: { id: 5, name: 'John' } })
+      const w = await mountView()
+      const field = w.find('#document-hero [data-testid="hero-field-recipient"]')
+      expect(field.exists()).toBe(true)
+      expect(field.text()).toContain('John')
+    })
+
+    it('omits a hero field hidden in the saved layout (read mode)', async () => {
+      useDocumentLayout().setHeroFieldVisible('sender', false)
+      const w = await mountView()
+      expect(w.find('#document-hero [data-testid="hero-field-sender"]').exists()).toBe(false)
+      // Other visible fields still render.
+      expect(w.find('#document-hero [data-testid="hero-field-kind"]').exists()).toBe(true)
+    })
+
+    it('drops a visible-but-empty field from the read-mode hero', async () => {
+      // due_date is hidden by default; make it visible but leave it null.
+      useDocumentLayout().setHeroFieldVisible('due_date', true)
+      detail = makeDetail({ due_date: null })
+      const w = await mountView()
+      expect(w.find('#document-hero [data-testid="hero-field-due_date"]').exists()).toBe(false)
+    })
+
+    it('renders hero fields in the saved order', async () => {
+      useDocumentLayout().setHeroFieldOrder(['sender', 'kind'])
+      const w = await mountView()
+      const order = heroFieldOrder(w)
+      expect(order.indexOf('hero-field-sender')).toBeLessThan(order.indexOf('hero-field-kind'))
+    })
+
+    it('shows no edit-only controls when edit mode is off', async () => {
+      const w = await mountView()
+      expect(w.find('[data-testid="hero-fields-editor"]').exists()).toBe(false)
+      expect(w.findAll('[data-testid^="hero-field-toggle-"]')).toHaveLength(0)
+      expect(w.findAll('[data-testid^="card-drag-handle-"]')).toHaveLength(0)
+      expect(w.find('[data-testid="reset-layout"]').exists()).toBe(false)
+      expect(w.find('[data-testid="edit-layout-toggle"]').text()).toBe('Edit layout')
+    })
+
+    it('reveals hero field toggles and card drag handles when edit mode is on', async () => {
+      const w = await mountView()
+      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await flushPromises()
+
+      // Every known field is listed for toggling — including ones hidden by
+      // default (language) and ones with no value (due_date).
+      expect(w.find('[data-testid="hero-field-toggle-kind"]').exists()).toBe(true)
+      expect(w.find('[data-testid="hero-field-toggle-recipient"]').exists()).toBe(true)
+      expect(w.find('[data-testid="hero-field-toggle-language"]').exists()).toBe(true)
+      // Section cards expose a drag handle in both columns.
+      expect(w.find('[data-testid="card-drag-handle-preview"]').exists()).toBe(true)
+      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(true)
+      // Reset appears only in edit mode, and the toggle now reads "Done".
+      expect(w.find('[data-testid="reset-layout"]').exists()).toBe(true)
+      expect(w.find('[data-testid="edit-layout-toggle"]').text()).toBe('Done')
+    })
+
+    it('hiding a field via its toggle persists and removes it from the read-mode hero', async () => {
+      const w = await mountView()
+      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await flushPromises()
+
+      await w.find('[data-testid="hero-field-toggle-kind"]').setValue(false)
+      await w.find('[data-testid="edit-layout-toggle"]').trigger('click') // back to read
+      await flushPromises()
+
+      expect(w.find('#document-hero [data-testid="hero-field-kind"]').exists()).toBe(false)
+      expect(
+        useDocumentLayout().heroFields.value.find((f) => f.key === 'kind')?.visible,
+      ).toBe(false)
+    })
+
+    it('renders section cards in the saved order within a column', async () => {
+      useDocumentLayout().setCardOrder([
+        'markdown',
+        'preview',
+        'series-chart',
+        'notes',
+        'metadata',
+        'actions',
+        'history',
+      ])
+      const w = await mountView()
+      const ids = w
+        .find('#document-preview-column')
+        .findAll('[data-testid^="section-card-"]')
+        .map((el) => el.attributes('data-testid') ?? '')
+      expect(ids.indexOf('section-card-markdown')).toBeLessThan(ids.indexOf('section-card-preview'))
+    })
+
+    it('reorders the metadata column independently of the preview column', async () => {
+      useDocumentLayout().setCardOrder([
+        'preview',
+        'markdown',
+        'series-chart',
+        'notes',
+        'history',
+        'metadata',
+        'actions',
+      ])
+      const w = await mountView()
+      const ids = w
+        .find('#document-metadata-column')
+        .findAll('[data-testid^="section-card-"]')
+        .map((el) => el.attributes('data-testid') ?? '')
+      // notes is absent (not a note doc), so the metadata column is history,
+      // metadata, actions in that saved order.
+      expect(ids).toEqual(['section-card-history', 'section-card-metadata', 'section-card-actions'])
+    })
+
+    it('reset layout restores the default hero order and card order', async () => {
+      const layout = useDocumentLayout()
+      layout.setHeroFieldOrder(['amount', 'kind'])
+      layout.setCardOrder([
+        'history',
+        'actions',
+        'metadata',
+        'notes',
+        'series-chart',
+        'markdown',
+        'preview',
+      ])
+      const w = await mountView()
+      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await flushPromises()
+      await w.find('[data-testid="reset-layout"]').trigger('click')
+      await flushPromises()
+
+      expect(layout.heroFields.value[0]!.key).toBe('kind')
+      expect(layout.cardOrder.value[0]).toBe('preview')
+    })
+
+    it('resets edit mode when the view unmounts so it never persists across navigation', async () => {
+      const layout = useDocumentLayout()
+      const w = await mountView()
+      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await flushPromises()
+      expect(layout.editMode.value).toBe(true)
+
+      // Leaving the view (SPA navigation) must clear the singleton flag, otherwise
+      // returning would show edit affordances with no Sortable instances attached.
+      w.unmount()
+      expect(layout.editMode.value).toBe(false)
     })
   })
 })

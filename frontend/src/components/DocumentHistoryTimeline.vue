@@ -69,9 +69,11 @@ function formatDateTime(iso: string): string {
   return Number.isNaN(parsed.getTime()) ? iso : dateTimeFormat.format(parsed)
 }
 
-/** Oldest-first; the API returns them ordered but we sort defensively. */
+/** Newest-first; the API returns them ordered but we sort defensively.
+ * Array.prototype.sort is stable, so events sharing a timestamp keep their
+ * incoming relative order. Feeds both the milestone timeline and "Show all". */
 const ordered = computed(() =>
-  [...props.events].sort((a, b) => a.created_at.localeCompare(b.created_at)),
+  [...props.events].sort((a, b) => b.created_at.localeCompare(a.created_at)),
 )
 
 const milestones = computed(() => ordered.value.filter((event) => !isNoise(event)))

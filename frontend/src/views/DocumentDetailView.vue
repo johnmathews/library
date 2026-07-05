@@ -13,7 +13,8 @@
  * PDF preview uses DocumentPdfPreview (pdf.js canvas renderer) for
  * consistent cross-browser rendering on every viewport.
  */
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import Sortable from 'sortablejs'
 import { useRoute, useRouter } from 'vue-router'
 import {
   AppBackLink,
@@ -44,6 +45,7 @@ import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
 import NoteEditorPanel from '@/components/NoteEditorPanel.vue'
 import DocumentMetadataEditor from '@/components/DocumentMetadataEditor.vue'
+import { useDocumentLayout, HERO_FIELD_LABELS } from '@/composables/useDocumentLayout'
 
 const props = withDefaults(
   defineProps<{
@@ -71,29 +73,61 @@ onBeforeUnmount(() => {
 })
 
 // --- Hero header (title + key stats + tags) -----------------------------------
+//
+// The hero is customisable (W5): a single page-wide "Edit layout" mode (shared
+// with the section-card reorder, W6) lets the user show/hide and drag-reorder
+// the labelled stat fields. Order + visibility persist per-machine via
+// `useDocumentLayout`; the mode itself is ephemeral (resets on reload). Values
+// remain read-only here — editing metadata stays in the Details card below.
 
-/** The at-a-glance facts shown as a labelled stat row in the hero header.
- * These mirror (read-only) the most important editable rows below. Only stats
- * that actually have a value are emitted — a value-less stat is dropped rather
- * than shown as a dead em-dash, so a general doc reads cleanly. */
-const heroStats = computed<{ label: string; value: string }[]>(() => {
+const {
+  heroFields,
+  cardOrder,
+  editMode: layoutEditMode,
+  toggleEditMode: toggleLayoutEditMode,
+  setEditMode: setLayoutEditMode,
+  setHeroFieldVisible,
+  moveHeroField,
+  setCardOrder,
+  resetLayout,
+} = useDocumentLayout()
+
+/** Display string for every known hero field, resolved from the current doc.
+ * An empty string means "no value" — such a field is dropped from the read-mode
+ * hero (preserving today's "only show when present" behaviour) but is still
+ * listed (with an em-dash placeholder) inside edit mode so it can be toggled. */
+const heroFieldValues = computed<Record<string, string>>(() => {
   const d = doc.value
-  if (!d) return []
-  const stats: { label: string; value: string }[] = []
-  if (d.kind?.name) stats.push({ label: 'Kind', value: d.kind.name })
-  if (d.sender?.name) stats.push({ label: 'Sender', value: d.sender.name })
-  const documentDate = formatDate(d.document_date)
-  if (documentDate) stats.push({ label: 'Document date', value: documentDate })
-  // Ingestion date (created_at) and last edited (updated_at) are always present
-  // and read-only — the three dates read as a distinct trio in the hero.
-  stats.push({ label: 'Ingested', value: formatDateTime(d.created_at) })
-  stats.push({ label: 'Last edited', value: formatDateTime(d.updated_at) })
-  if (d.amount_total !== null) {
-    const amount = [d.amount_total, d.currency].filter(Boolean).join(' ')
-    if (amount) stats.push({ label: 'Amount', value: amount })
-  }
-  return stats
+  const values: Record<string, string> = {}
+  if (!d) return values
+  values.kind = d.kind?.name ?? ''
+  values.sender = d.sender?.name ?? ''
+  values.recipient = d.recipient?.name ?? ''
+  values.document_date = formatDate(d.document_date) ?? ''
+  values.created_at = formatDateTime(d.created_at)
+  values.updated_at = formatDateTime(d.updated_at)
+  values.amount =
+    d.amount_total !== null ? [d.amount_total, d.currency].filter(Boolean).join(' ') : ''
+  values.language = d.language ?? ''
+  values.due_date = formatDate(d.due_date) ?? ''
+  values.expiry_date = formatDate(d.expiry_date) ?? ''
+  return values
 })
+
+/** Resolved display value for a hero field key ('' when absent). */
+function heroValue(key: string): string {
+  return heroFieldValues.value[key] ?? ''
+}
+
+/** Human label for a hero field key. */
+function heroLabel(key: string): string {
+  return HERO_FIELD_LABELS[key] ?? key
+}
+
+/** Read-mode hero fields: visible AND with a value, in the saved order. */
+const readHeroFields = computed(() =>
+  heroFields.value.filter((f) => f.visible && heroValue(f.key) !== ''),
+)
 
 /** Pre-filled text for the "Ask about this document" button. It just names the
  * current document so the existing Ask RAG retrieval surfaces it — there is no
@@ -379,6 +413,127 @@ const noteBody = computed(() =>
   (markdownData.value?.pages ?? []).map((page) => page.markdown).join('\n\n'),
 )
 
+// --- Section-card reorder (W6) ------------------------------------------------
+//
+// The two-column grid renders its cards from the persisted `cardOrder`. Each
+// column reorders WITHIN itself only (cross-column moves are out of scope for
+// v1 — the responsive lg:grid-cols-2 / lg:order-* split makes them fiddly). A
+// column filters the flat `cardOrder` to its own member ids, skipping cards not
+// currently present (notes exist only for note docs; the series chart hides
+// itself when there is no qualifying series — the wrapper's `empty:hidden` drops
+// it visually so a seriesless doc reads exactly as before).
+
+const PREVIEW_CARD_IDS = ['preview', 'markdown', 'series-chart']
+const METADATA_CARD_IDS = ['notes', 'metadata', 'actions', 'history']
+
+/** Whether a card id has content to render for the current document. */
+function cardPresent(id: string): boolean {
+  if (id === 'notes') return isNote.value
+  return true
+}
+
+const previewCards = computed(() =>
+  cardOrder.value.filter((id) => PREVIEW_CARD_IDS.includes(id) && cardPresent(id)),
+)
+const metadataCards = computed(() =>
+  cardOrder.value.filter((id) => METADATA_CARD_IDS.includes(id) && cardPresent(id)),
+)
+
+/**
+ * Apply a drag reorder within one column. `present` is the column's current
+ * ordered ids; the move is spliced there, then written back into the flat
+ * `cardOrder` in place (only the positions occupied by this column's present
+ * ids change, so the other column and any absent ids keep their slots and the
+ * result stays a valid permutation).
+ */
+function reorderCards(present: string[], oldIndex: number, newIndex: number): void {
+  if (oldIndex === newIndex || oldIndex < 0 || newIndex < 0) return
+  const reordered = present.slice()
+  const [moved] = reordered.splice(oldIndex, 1)
+  if (moved === undefined) return
+  reordered.splice(newIndex, 0, moved)
+  const presentSet = new Set(present)
+  let i = 0
+  const next = cardOrder.value.map((id) => (presentSet.has(id) ? reordered[i++]! : id))
+  setCardOrder(next)
+}
+
+// --- Drag wiring: sortablejs, live only while editing the layout --------------
+//
+// Sortable instances attach when edit mode turns on and are destroyed when it
+// turns off (or on unmount). Each `onEnd` translates the DOM move into a call to
+// the composable's reorder helper — the reactive array is the source of truth,
+// and Vue re-renders from it (we never treat the DOM move as authoritative).
+
+const heroEditListEl = ref<HTMLElement | null>(null)
+const previewColumnEl = ref<HTMLElement | null>(null)
+const metadataColumnEl = ref<HTMLElement | null>(null)
+let sortables: Sortable[] = []
+
+function destroySortables(): void {
+  for (const instance of sortables) instance.destroy()
+  sortables = []
+}
+
+function buildSortables(): void {
+  destroySortables()
+  if (heroEditListEl.value) {
+    sortables.push(
+      Sortable.create(heroEditListEl.value, {
+        handle: '[data-hero-drag-handle]',
+        animation: 150,
+        onEnd: (evt: Sortable.SortableEvent) => {
+          if (evt.oldIndex == null || evt.newIndex == null) return
+          moveHeroField(evt.oldIndex, evt.newIndex)
+        },
+      }),
+    )
+  }
+  if (previewColumnEl.value) {
+    sortables.push(
+      Sortable.create(previewColumnEl.value, {
+        handle: '[data-card-drag-handle]',
+        animation: 150,
+        onEnd: (evt: Sortable.SortableEvent) => {
+          if (evt.oldIndex == null || evt.newIndex == null) return
+          reorderCards(previewCards.value, evt.oldIndex, evt.newIndex)
+        },
+      }),
+    )
+  }
+  if (metadataColumnEl.value) {
+    sortables.push(
+      Sortable.create(metadataColumnEl.value, {
+        handle: '[data-card-drag-handle]',
+        animation: 150,
+        onEnd: (evt: Sortable.SortableEvent) => {
+          if (evt.oldIndex == null || evt.newIndex == null) return
+          reorderCards(metadataCards.value, evt.oldIndex, evt.newIndex)
+        },
+      }),
+    )
+  }
+}
+
+watch(layoutEditMode, async (on) => {
+  if (on) {
+    await nextTick()
+    buildSortables()
+  } else {
+    destroySortables()
+  }
+})
+
+// Reset the (module-singleton) edit-mode flag on unmount so it never persists
+// across SPA navigation. Without this, leaving the view in edit mode and
+// returning would render the edit affordances with `editMode` still true but no
+// Sortable instances attached (the watcher above only fires on a *change*), so
+// dragging would be silently dead until the user toggled Done→Edit again.
+onBeforeUnmount(() => {
+  destroySortables()
+  setLayoutEditMode(false)
+})
+
 // --- Load on navigation (registered last: the handler runs immediately and
 // --- touches the edit/notice state declared above) ----------------------------
 
@@ -478,27 +633,95 @@ watch(
       id="document-hero"
       class="card p-5 sm:p-6 mb-6"
     >
-      <!-- Title. `break-words` lets a long title wrap rather than overflow. -->
-      <h1
-        id="document-title"
-        class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold break-words app-detail-title"
-      >
-        {{ doc.title ?? 'Untitled document' }}
-      </h1>
+      <!-- Title row. `break-words` lets a long title wrap rather than overflow;
+           the layout controls sit top-right, stacking under the title on narrow
+           screens (flex keeps them reachable when the grid stacks below lg). -->
+      <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <h1
+          id="document-title"
+          class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold break-words app-detail-title"
+        >
+          {{ doc.title ?? 'Untitled document' }}
+        </h1>
+        <div class="flex shrink-0 items-center gap-2">
+          <button
+            v-if="layoutEditMode"
+            type="button"
+            class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
+            data-testid="reset-layout"
+            @click="resetLayout"
+          >
+            Reset layout
+          </button>
+          <button
+            type="button"
+            class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
+            data-testid="edit-layout-toggle"
+            :aria-pressed="layoutEditMode"
+            @click="toggleLayoutEditMode"
+          >
+            {{ layoutEditMode ? 'Done' : 'Edit layout' }}
+          </button>
+        </div>
+      </div>
+
+      <!-- Read mode: labelled stat row — only visible fields that have a value,
+           in the saved order (unchanged from before apart from customisation). -->
       <dl
-        v-if="heroStats.length"
+        v-if="!layoutEditMode && readHeroFields.length"
         class="mt-12 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3"
         data-testid="hero-stats"
       >
-        <div v-for="stat in heroStats" :key="stat.label">
+        <div v-for="field in readHeroFields" :key="field.key" :data-testid="`hero-field-${field.key}`">
           <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
-            {{ stat.label }}
+            {{ heroLabel(field.key) }}
           </dt>
           <dd class="mt-0.5 text-sm font-medium text-gray-800 dark:text-gray-100 break-words">
-            {{ stat.value }}
+            {{ heroValue(field.key) }}
           </dd>
         </div>
       </dl>
+
+      <!-- Edit mode: every known field as a reorderable row with a show/hide
+           toggle + drag handle. Empty fields show a muted em-dash so they can
+           still be toggled/reordered. -->
+      <div v-else-if="layoutEditMode" class="mt-6" data-testid="hero-fields-editor">
+        <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
+          Show, hide and drag to reorder the fields shown here. Cards below reorder within their column.
+        </p>
+        <ul ref="heroEditListEl" role="list" class="flex flex-col gap-1">
+          <li
+            v-for="field in heroFields"
+            :key="field.key"
+            class="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700/40"
+            :data-testid="`hero-field-${field.key}`"
+          >
+            <button
+              type="button"
+              data-hero-drag-handle
+              class="cursor-grab text-gray-400 hover:text-violet-500 active:cursor-grabbing"
+              :aria-label="`Drag to reorder ${heroLabel(field.key)}`"
+              tabindex="-1"
+            >
+              ⠿
+            </button>
+            <input
+              type="checkbox"
+              class="form-checkbox text-violet-600"
+              :checked="field.visible"
+              :aria-label="`Show ${heroLabel(field.key)} in the hero`"
+              :data-testid="`hero-field-toggle-${field.key}`"
+              @change="setHeroFieldVisible(field.key, ($event.target as HTMLInputElement).checked)"
+            />
+            <span class="w-32 shrink-0 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+              {{ heroLabel(field.key) }}
+            </span>
+            <span class="min-w-0 truncate text-sm text-gray-800 dark:text-gray-100">
+              {{ heroValue(field.key) || '—' }}
+            </span>
+          </li>
+        </ul>
+      </div>
       <!-- Bottom row: tag pills on the left, the primary "Ask" action pinned
            bottom-right and baseline-aligned with the pills (sm:items-end). On a
            narrow screen the row stacks (flex-col) so the button drops neatly
@@ -549,8 +772,28 @@ watch(
       <!-- Preview: right column on desktop (lg:order-2), first on mobile.
            min-w-0 lets this grid column shrink below its content's intrinsic
            width so long tokens wrap instead of widening the page (iOS zoom). -->
-      <div id="document-preview-column" class="min-w-0 space-y-4 lg:order-2">
+      <div id="document-preview-column" ref="previewColumnEl" class="min-w-0 space-y-4 lg:order-2">
+        <!-- Each card is a reorderable wrapper (drag handle shown in edit mode).
+             `empty:hidden` drops a card that rendered nothing (e.g. the series
+             chart with no qualifying series) so a seriesless doc reads as before. -->
         <div
+          v-for="cardId in previewCards"
+          :key="cardId"
+          :data-testid="`section-card-${cardId}`"
+          class="relative empty:hidden"
+        >
+          <button
+            v-if="layoutEditMode"
+            type="button"
+            data-card-drag-handle
+            :data-testid="`card-drag-handle-${cardId}`"
+            class="absolute right-2 top-2 z-10 cursor-grab rounded bg-white/90 px-2 py-1 text-gray-400 shadow-sm hover:text-violet-500 active:cursor-grabbing dark:bg-gray-800/90"
+            aria-label="Drag to reorder this section"
+          >
+            ⠿
+          </button>
+        <div
+          v-if="cardId === 'preview'"
           id="document-preview-card"
           class="card overflow-hidden"
         >
@@ -648,6 +891,7 @@ watch(
              screens it stacks above the metadata, so it collapses by default
              behind a Show/Hide toggle to keep the metadata reachable. -->
         <div
+          v-else-if="cardId === 'markdown'"
           id="document-markdown-card"
           class="card p-5"
         >
@@ -704,25 +948,46 @@ watch(
           </div>
         </div>
 
-        <DocumentSeriesTrend v-if="doc" :document-id="doc.id" />
+        <DocumentSeriesTrend
+          v-else-if="cardId === 'series-chart'"
+          :document-id="doc.id"
+        />
+        </div>
       </div>
 
       <!-- Metadata: left column on desktop (lg:order-1). min-w-0 (as above)
            lets long metadata values wrap rather than widen the page. -->
-      <div id="document-metadata-column" class="min-w-0 space-y-6 lg:order-1">
+      <div id="document-metadata-column" ref="metadataColumnEl" class="min-w-0 space-y-6 lg:order-1">
+        <div
+          v-for="cardId in metadataCards"
+          :key="cardId"
+          :data-testid="`section-card-${cardId}`"
+          class="relative empty:hidden"
+        >
+          <button
+            v-if="layoutEditMode"
+            type="button"
+            data-card-drag-handle
+            :data-testid="`card-drag-handle-${cardId}`"
+            class="absolute right-2 top-2 z-10 cursor-grab rounded bg-white/90 px-2 py-1 text-gray-400 shadow-sm hover:text-violet-500 active:cursor-grabbing dark:bg-gray-800/90"
+            aria-label="Drag to reorder this section"
+          >
+            ⠿
+          </button>
         <!-- Note-only controls: in-place note editing + version history. Shown
              only for notes (source === 'note'); the generic metadata editor
              below stays available for notes too. -->
         <NoteEditorPanel
-          v-if="isNote"
+          v-if="cardId === 'notes'"
           v-model:doc="doc"
           :note-body="noteBody"
           @reload-markdown="loadMarkdown(doc.id)"
         />
 
-        <DocumentMetadataEditor v-model:doc="doc" />
+        <DocumentMetadataEditor v-else-if="cardId === 'metadata'" v-model:doc="doc" />
 
         <div
+          v-else-if="cardId === 'actions'"
           id="document-actions-card"
           class="card p-5"
         >
@@ -783,7 +1048,11 @@ watch(
           </div>
         </div>
 
-        <DocumentHistoryTimeline :events="doc.events" />
+        <DocumentHistoryTimeline
+          v-else-if="cardId === 'history'"
+          :events="doc.events"
+        />
+        </div>
       </div>
     </div>
   </template>
