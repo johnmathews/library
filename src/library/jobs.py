@@ -27,6 +27,7 @@ from library.markdown.apply import apply_markdown
 from library.models import (
     Document,
     DocumentChunk,
+    DocumentComment,
     DocumentPage,
     DocumentStatus,
     IngestionEvent,
@@ -233,11 +234,29 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
         ):
             chunk_records.append((piece, None))
 
-    if not chunk_records:
+    comments = (
+        (
+            await session.execute(
+                select(DocumentComment)
+                .where(DocumentComment.document_id == document.id)
+                .order_by(DocumentComment.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    # One chunk per comment (never sub-chunked), framed to carry the date so
+    # the text itself explains when it was written.
+    comment_records: list[tuple[str, int]] = [
+        (f"User comment ({comment.created_at.date().isoformat()}): {comment.body}", comment.id)
+        for comment in comments
+    ]
+
+    if not chunk_records and not comment_records:
         await _record_embed_event(session, document, "embedding_skipped", {"reason": "no_text"})
         return
 
-    texts = [text for text, _ in chunk_records]
+    texts = [text for text, _ in chunk_records] + [text for text, _ in comment_records]
     try:
         vectors = await embed_texts(texts, settings=settings)
     except EmbeddingError as exc:
@@ -246,9 +265,12 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
         )
         return
 
+    content_vectors = vectors[: len(chunk_records)]
+    comment_vectors = vectors[len(chunk_records) :]
+
     await session.execute(delete(DocumentChunk).where(DocumentChunk.document_id == document.id))
     for index, ((text, page_number), vector) in enumerate(
-        zip(chunk_records, vectors, strict=True), start=1
+        zip(chunk_records, content_vectors, strict=True), start=1
     ):
         session.add(
             DocumentChunk(
@@ -257,6 +279,20 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
                 page_number=page_number,
                 text=text,
                 embedding=vector,
+                comment_id=None,
+            )
+        )
+    for offset, ((text, comment_id), vector) in enumerate(
+        zip(comment_records, comment_vectors, strict=True), start=1
+    ):
+        session.add(
+            DocumentChunk(
+                document_id=document.id,
+                chunk_index=len(chunk_records) + offset,
+                page_number=None,
+                text=text,
+                embedding=vector,
+                comment_id=comment_id,
             )
         )
     await _record_embed_event(
@@ -266,7 +302,11 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
         {"chunks": len(texts), "model": settings.embedding_model_name, "page_aware": bool(pages)},
     )
     logger.info(
-        "embedded document %s into %s chunks (page_aware=%s)", document.id, len(texts), bool(pages)
+        "embedded document %s into %s chunks (page_aware=%s, comments=%s)",
+        document.id,
+        len(texts),
+        bool(pages),
+        len(comment_records),
     )
 
 
