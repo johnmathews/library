@@ -274,13 +274,13 @@ jobs:
       # tolerated so the build never fails for want of coverage (the script then
       # records a null pct for that side).
       - name: Download backend coverage JSON
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           name: backend-coverage-json
           path: coverage-artifacts/backend
       - name: Download frontend coverage report
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         continue-on-error: true
         with:
           name: frontend-coverage-html
