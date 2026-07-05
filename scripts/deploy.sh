@@ -64,8 +64,28 @@ require_ssh() {
 
 # Digest that a tag currently resolves to on the registry, or "" if the tag
 # does not exist. Uses buildx imagetools (no pull) so it's cheap.
+#
+# We parse the `Digest:` line of the default output rather than
+# `--format '{{.Manifest.Digest}}'`: for a MULTI-ARCH image the top-level is an
+# OCI *index* (``.Index``, not ``.Manifest``), and buildx (v0.29) silently
+# renders the full human output for `{{.Manifest.Digest}}` instead of the
+# digest — so two tags pointing at the SAME index compared unequal and the gate
+# always false-failed. The first `Digest:` line is the index digest, which is
+# exactly what a tag resolves to, so identical tags compare equal.
 image_digest() {
-  docker buildx imagetools inspect "$1" --format '{{.Manifest.Digest}}' 2>/dev/null || true
+  # Retry a few times: ghcr occasionally throttles rapid imagetools calls and
+  # returns nothing, which would make the promote gate false-fail on a transient
+  # blip. A genuinely-absent tag returns empty after all attempts (caller treats
+  # empty as "not on the registry").
+  local out
+  for _ in 1 2 3; do
+    out="$(docker buildx imagetools inspect "$1" 2>/dev/null | awk '/^Digest:/ {print $2; exit}')"
+    if [[ -n "$out" ]]; then
+      printf '%s' "$out"
+      return 0
+    fi
+    sleep 2
+  done
 }
 
 # Guard the documented footgun: `docker compose up --pull always` fetches
@@ -153,11 +173,25 @@ deploy() {
   # library app. Exec-in-container hits the app directly on its own port, and
   # uses python (guaranteed present — it's what the image's HEALTHCHECK uses;
   # curl may not be installed) so a non-2xx raises and fails the gate.
-  if remote "docker compose exec -T $WEB_SVC \
-      python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\""; then
+  #
+  # Retry: `compose up` returns as soon as the container is (re)created, but
+  # uvicorn needs a few seconds to bind and accept connections — a single probe
+  # races the recreate and false-fails an otherwise-healthy deploy. Poll for up
+  # to ~60s (well past the observed ~15-20s boot) before giving up.
+  local health_ok=0
+  for _ in $(seq 1 20); do
+    if remote "docker compose exec -T $WEB_SVC \
+        python -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz')\"" \
+        >/dev/null 2>&1; then
+      health_ok=1
+      break
+    fi
+    sleep 3
+  done
+  if [[ "$health_ok" == "1" ]]; then
     echo "  /healthz OK"
   else
-    err "/healthz did not return OK — check 'docker compose logs $WEB_SVC'."
+    err "/healthz did not return OK after ~60s — check 'docker compose logs $WEB_SVC'."
     exit 1
   fi
 
