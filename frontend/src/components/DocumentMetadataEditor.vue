@@ -41,6 +41,7 @@ import {
   type RecipientOption,
 } from '@/api/taxonomy'
 import { refreshTaxonomyOptions, useTaxonomyOptions } from '@/composables/taxonomyOptions'
+import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 import { ApiError } from '@/api/client'
 import { formatDate, tagColour, formatDateTime } from '@/utils/documentFormat'
 
@@ -284,7 +285,13 @@ function sourceLabel(source: string): string {
 // the field wrapper — via the same per-field PATCH the backend already expects.
 // There is no global Save/Cancel; "Done" just leaves edit mode.
 
-const editMode = ref(false)
+// Lifted into `useMetadataEditMode` (a module singleton, mirroring
+// `useDocumentLayout`'s `editMode`) so the detail view's floating island can
+// also read and flip this same flag — its Edit/Done button must open these
+// very editors, not an independent second mode. Ephemeral: the detail view
+// resets it to false on unmount.
+const { editMode, toggle: toggleSharedEditMode, setEditMode: setSharedEditMode } =
+  useMetadataEditMode()
 
 /** The fields whose draft is a plain string (text inputs + selects). */
 type StringDraftField =
@@ -368,14 +375,14 @@ function hydrateField(field: EditableField, d: DocumentDetail): void {
 }
 
 function toggleEditMode(): void {
-  editMode.value = !editMode.value
+  toggleSharedEditMode()
   if (editMode.value) hydrateDrafts()
   else resetEditState()
 }
 
 /** Leave edit mode and clear the transient per-field error / "Saved" state. */
 function resetEditState(): void {
-  editMode.value = false
+  setSharedEditMode(false)
   recipientAdding.value = false
   recipientNewName.value = ''
   kindAdding.value = false

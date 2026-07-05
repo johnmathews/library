@@ -8,6 +8,7 @@ import { listNoteVersions, restoreNoteVersion, updateNote } from '@/api/notes'
 import { useJobsStore } from '@/stores/jobs'
 import { useReviewQueueStore } from '@/stores/reviewQueue'
 import { useDocumentLayout } from '@/composables/useDocumentLayout'
+import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 
 // pdfjs-dist can't run its worker/canvas in jsdom — mock the whole module
 // so that DocumentPdfPreview (now imported by DocumentDetailView) can be loaded.
@@ -96,6 +97,54 @@ const PROJECTS = [{ slug: 'house-purchase', name: 'House purchase', document_cou
 
 const Stub = { template: '<div />' }
 
+/** Minimal IntersectionObserver stand-in: jsdom has none. Captures the
+ * callback and observed element per instance so a test can synthesize an
+ * intersection change via `trigger(isIntersecting)`. */
+class FakeIntersectionObserver implements IntersectionObserver {
+  static instances: FakeIntersectionObserver[] = []
+  readonly root: Element | Document | null = null
+  readonly rootMargin = ''
+  readonly scrollMargin = ''
+  readonly thresholds: ReadonlyArray<number> = []
+  private callback: IntersectionObserverCallback
+  private observed: Element[] = []
+
+  constructor(callback: IntersectionObserverCallback) {
+    this.callback = callback
+    FakeIntersectionObserver.instances.push(this)
+  }
+
+  observe(target: Element): void {
+    this.observed.push(target)
+  }
+
+  unobserve(target: Element): void {
+    this.observed = this.observed.filter((el) => el !== target)
+  }
+
+  disconnect(): void {
+    this.observed = []
+  }
+
+  takeRecords(): IntersectionObserverEntry[] {
+    return []
+  }
+
+  /** Synthesize the observer reporting a new intersection state for the
+   * (single) observed hero element. */
+  trigger(isIntersecting: boolean): void {
+    const entry = { isIntersecting, target: this.observed[0] } as IntersectionObserverEntry
+    this.callback([entry], this)
+  }
+}
+
+/** The most recently constructed fake observer — the view creates exactly one. */
+function lastIntersectionObserver(): FakeIntersectionObserver {
+  const instance = FakeIntersectionObserver.instances.at(-1)
+  if (!instance) throw new Error('no IntersectionObserver was constructed')
+  return instance
+}
+
 describe('DocumentDetailView', () => {
   const fetchMock = vi.fn()
   let router: Router
@@ -117,6 +166,9 @@ describe('DocumentDetailView', () => {
     const layout = useDocumentLayout()
     layout.resetLayout()
     layout.setEditMode(false)
+    // useMetadataEditMode is a module singleton too — reset it so a metadata
+    // edit-mode toggle in one test never leaks into the next.
+    useMetadataEditMode().setEditMode(false)
     detail = makeDetail()
     patchResponse = () => jsonResponse(detail)
     createKindResponse = (init?: RequestInit) => {
@@ -126,6 +178,8 @@ describe('DocumentDetailView', () => {
     }
     markdownResponse = () =>
       jsonResponse({ page_count: 1, pages: [{ page_number: 1, markdown: '# Invoice\n\nTotal: €123.45' }] } satisfies DocumentMarkdownResponse)
+    FakeIntersectionObserver.instances = []
+    vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
     updateNoteMock.mockReset()
@@ -175,6 +229,9 @@ describe('DocumentDetailView', () => {
     wrapper?.unmount()
     wrapper = undefined
     vi.unstubAllGlobals()
+    // Restore any vi.spyOn (e.g. window.open) so a later test's fresh spy
+    // starts with empty call history instead of accumulating across tests.
+    vi.restoreAllMocks()
   })
 
   async function mountView(
@@ -1240,15 +1297,19 @@ describe('DocumentDetailView', () => {
     expect(link.attributes('href')).toBe('/jobs?document_id=12')
   })
 
-  it('links "Ask about this document" to /ask in a new tab, seeding the title (W1)', async () => {
+  it('opens "Ask about this document" to /ask in a new tab, seeding the title (W1)', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
     const w = await mountView()
-    const link = w.find('[data-testid="ask-about-document"]')
-    expect(link.exists()).toBe(true)
-    expect(link.attributes('target')).toBe('_blank')
-    // Guard against tab-napping regressing on the RouterLink (new-tab) branch.
-    expect(link.attributes('rel')).toBe('noopener')
-    const href = link.attributes('href')!
-    const q = new URL(href, 'http://localhost').searchParams.get('q') ?? ''
+    const button = w.find('[data-testid="ask-about-document"]')
+    expect(button.exists()).toBe(true)
+    await button.trigger('click')
+
+    expect(openSpy).toHaveBeenCalledTimes(1)
+    const [url, target, features] = openSpy.mock.calls[0]!
+    expect(target).toBe('_blank')
+    // Guard against tab-napping regressing.
+    expect(features).toContain('noopener')
+    const q = new URL(String(url), 'http://localhost').searchParams.get('q') ?? ''
     expect(q).toContain('Energierekening mei 2026')
   })
 
@@ -1261,10 +1322,12 @@ describe('DocumentDetailView', () => {
   })
 
   it('omits the parenthetical entirely when kind/sender/date are all missing (W1)', async () => {
+    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
     detail = makeDetail({ kind: null, sender: null, document_date: null })
     const w = await mountView()
-    const href = w.find('[data-testid="ask-about-document"]').attributes('href')!
-    const q = new URL(href, 'http://localhost').searchParams.get('q') ?? ''
+    await w.find('[data-testid="ask-about-document"]').trigger('click')
+    const url = String(openSpy.mock.calls[0]![0])
+    const q = new URL(url, 'http://localhost').searchParams.get('q') ?? ''
     // No empty parenthetical and no dangling open-paren at all.
     expect(q).not.toContain('()')
     expect(q).not.toContain('(')
@@ -1569,6 +1632,72 @@ describe('DocumentDetailView', () => {
       // returning would show edit affordances with no Sortable instances attached.
       w.unmount()
       expect(layout.editMode.value).toBe(false)
+    })
+  })
+
+  // --- Floating island (Ask + lifted metadata Edit/Done) ----------------------
+
+  describe('floating island', () => {
+    it('is absent while the hero still intersects the viewport', async () => {
+      const w = await mountView()
+      expect(w.find('[data-testid="detail-island"]').exists()).toBe(false)
+    })
+
+    it('appears once the IntersectionObserver reports the hero as not intersecting, and hides again when it returns', async () => {
+      const w = await mountView()
+      lastIntersectionObserver().trigger(false)
+      await flushPromises()
+      expect(w.find('[data-testid="detail-island"]').exists()).toBe(true)
+
+      lastIntersectionObserver().trigger(true)
+      await flushPromises()
+      expect(w.find('[data-testid="detail-island"]').exists()).toBe(false)
+    })
+
+    it('disconnects the observer on unmount', async () => {
+      const w = await mountView()
+      const observer = lastIntersectionObserver()
+      const disconnectSpy = vi.spyOn(observer, 'disconnect')
+      w.unmount()
+      expect(disconnectSpy).toHaveBeenCalled()
+    })
+
+    it('island-edit-toggle flips the shared metadata edit mode, and the Details card reflects it', async () => {
+      const w = await mountView()
+      lastIntersectionObserver().trigger(false)
+      await flushPromises()
+
+      expect(w.find('[data-testid="island-edit-toggle"]').text()).toContain('Edit')
+      expect(w.find('#edit-title').exists()).toBe(false)
+
+      await w.find('[data-testid="island-edit-toggle"]').trigger('click')
+      await flushPromises()
+
+      expect(useMetadataEditMode().editMode.value).toBe(true)
+      // The Details card's own toggle and inline editors reflect the same flag.
+      expect(w.find('#edit-title').exists()).toBe(true)
+      expect(w.find('[data-testid="edit-toggle"]').text()).toBe('Done')
+      expect(w.find('[data-testid="island-edit-toggle"]').text()).toContain('Done')
+
+      // Toggling back off from the island closes the card's editors too.
+      await w.find('[data-testid="island-edit-toggle"]').trigger('click')
+      await flushPromises()
+      expect(w.find('#edit-title').exists()).toBe(false)
+    })
+
+    it('island-ask calls the shared ask-about-document navigation', async () => {
+      const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+      const w = await mountView()
+      lastIntersectionObserver().trigger(false)
+      await flushPromises()
+
+      await w.find('[data-testid="island-ask"]').trigger('click')
+
+      expect(openSpy).toHaveBeenCalledTimes(1)
+      const [url, target] = openSpy.mock.calls[0]!
+      expect(target).toBe('_blank')
+      const q = new URL(String(url), 'http://localhost').searchParams.get('q') ?? ''
+      expect(q).toContain('Energierekening mei 2026')
     })
   })
 })

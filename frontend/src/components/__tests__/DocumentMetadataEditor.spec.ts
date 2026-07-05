@@ -27,6 +27,7 @@ vi.mock('@/composables/taxonomyOptions', () => ({
 import { ref } from 'vue'
 import { updateDocument, type DocumentDetail } from '@/api/documents'
 import { listKinds, listRecipients, listSenders } from '@/api/taxonomy'
+import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 import DocumentMetadataEditor from '../DocumentMetadataEditor.vue'
 
 const KINDS = [
@@ -91,6 +92,9 @@ function mountEditor(doc: DocumentDetail = makeDetail()) {
 
 describe('DocumentMetadataEditor', () => {
   beforeEach(() => {
+    // editMode is a module singleton (useMetadataEditMode) — reset it so a
+    // toggle in one test never leaks "already editing" into the next.
+    useMetadataEditMode().setEditMode(false)
     vi.clearAllMocks()
     vi.mocked(updateDocument).mockReset()
     vi.mocked(listKinds).mockResolvedValue(structuredClone(KINDS))
