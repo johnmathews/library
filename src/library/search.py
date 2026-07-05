@@ -50,6 +50,12 @@ HEADLINE_OPTIONS: str = (
 # long tail so the top few results from each retriever dominate.
 RRF_K: int = 60
 
+# Over-fetch factor for the HNSW-accelerated vector candidate prefetch
+# (``_vector_candidates``): fetch ``pool * FANOUT`` nearest chunks so enough
+# *distinct* documents survive the one-chunk-per-document collapse even when
+# several near chunks share a document (~6 chunks/doc typical).
+VECTOR_CANDIDATE_FANOUT: int = 5
+
 # ts_rank normalization bitmask (Postgres). 1 = divide rank by 1 + log(document
 # length): damps long docs accumulating raw match count so score reflects match
 # density, keeping short on-topic invoices competitive. 0 restores prior behavior.
@@ -250,26 +256,77 @@ async def _vector_candidates(
     conditions: list[Any],
     query_embedding: Sequence[float],
     pool: int,
+    *,
+    has_user_filters: bool,
 ) -> tuple[list[int], dict[int, tuple[int, str, int | None]]]:
     """The ``pool`` nearest *documents* (by their closest chunk), with that chunk.
 
-    ``DISTINCT ON (document_id)`` collapses to one row per document — the
-    nearest chunk — *before* the limit, so ``pool`` counts documents, not
-    chunks (a single many-chunk document can't crowd out the candidate set).
+    Query shape matters for the HNSW index. A single
+    ``SELECT DISTINCT ON (document_id) … ORDER BY document_id, distance`` forces
+    Postgres to sort by ``document_id`` first — which the distance-ordered ANN
+    index (``ix_document_chunks_embedding``) cannot satisfy — so it degrades to a
+    sequential scan over every chunk (O(N)). Instead we split the work:
+
+    1. **Prefetch** the ``pool * VECTOR_CANDIDATE_FANOUT`` globally-nearest chunks
+       with ``ORDER BY embedding <=> query LIMIT k`` — the exact shape the HNSW
+       index accelerates (O(log N) per neighbour).
+    2. **Collapse** that small prefetched set to one row per document (its nearest
+       chunk) with ``DISTINCT ON`` — cheap, because it runs over ``k`` rows, not
+       the whole table — and take the ``pool`` nearest documents.
+
+    The fanout over-fetches so enough *distinct* documents survive the collapse
+    even when several near chunks share a document. This is an ANN approximation
+    of "every document's nearest chunk": a document excluded here has its nearest
+    chunk beyond the k-th nearest chunk overall, so it would not have reached the
+    top ``pool`` documents anyway.
+
+    **Where the filter is applied depends on whether the caller supplied
+    metadata filters** — because a join to ``documents`` defeats the ANN index
+    scan (verified via ``EXPLAIN``):
+
+    - *Unfiltered* (``conditions`` is only the always-on soft-delete exclusion):
+      the prefetch runs over ``document_chunks`` alone, so the HNSW index is
+      used; the soft-delete exclusion is then applied in the collapse, over the
+      ``k`` prefetched rows. (Soft-deleted documents' chunks are never removed,
+      so they must still be filtered — just after the index scan, not before it.
+      A negligible under-fetch is possible if some of the ``k`` nearest chunks
+      belong to deleted documents; deletions are rare and the fanout absorbs it.)
+    - *Filtered* (the caller set kind/sender/date/... filters): the predicates
+      are applied **before** the limit (joining ``documents``), so a restrictive
+      filter can't under-fetch. This forgoes the index scan, but the filter
+      itself narrows the rows the sort touches.
     """
     distance = DocumentChunk.embedding.cosine_distance(query_embedding).label("distance")
-    nearest_per_document = (
-        select(
-            DocumentChunk.document_id.label("document_id"),
-            DocumentChunk.chunk_index.label("chunk_index"),
-            DocumentChunk.page_number.label("page_number"),
-            DocumentChunk.text.label("text"),
-            distance,
+    prefetch_query = select(
+        DocumentChunk.document_id.label("document_id"),
+        DocumentChunk.chunk_index.label("chunk_index"),
+        DocumentChunk.page_number.label("page_number"),
+        DocumentChunk.text.label("text"),
+        distance,
+    )
+    if has_user_filters:
+        prefetch_query = prefetch_query.join(
+            Document, Document.id == DocumentChunk.document_id
+        ).where(*conditions)
+    prefetch = (
+        prefetch_query.order_by(distance.asc()).limit(pool * VECTOR_CANDIDATE_FANOUT).subquery()
+    )
+    collapse_query = select(
+        prefetch.c.document_id,
+        prefetch.c.chunk_index,
+        prefetch.c.page_number,
+        prefetch.c.text,
+        prefetch.c.distance,
+    )
+    if not has_user_filters:
+        # The index-accelerated prefetch didn't join, so apply the always-on
+        # soft-delete exclusion here, over the small prefetched set.
+        collapse_query = collapse_query.join(Document, Document.id == prefetch.c.document_id).where(
+            *conditions
         )
-        .join(Document, Document.id == DocumentChunk.document_id)
-        .where(*conditions)
-        .order_by(DocumentChunk.document_id, distance.asc())
-        .distinct(DocumentChunk.document_id)
+    nearest_per_document = (
+        collapse_query.order_by(prefetch.c.document_id, prefetch.c.distance.asc())
+        .distinct(prefetch.c.document_id)
         .subquery()
     )
     statement = (
@@ -379,9 +436,15 @@ async def semantic_search(
     """
     filters = filters or DocumentFilters()
     conditions = filter_conditions(filters)
+    # filter_conditions always begins with exactly the soft-delete base condition
+    # and appends one or more per user-set filter, so len > 1 ⟺ the caller set
+    # metadata filters. This gates the HNSW-index fast path in _vector_candidates.
+    has_user_filters = len(conditions) > 1
     pool = candidate_pool if candidate_pool is not None else max(top_k * 5, 50)
 
-    vector_order, best_chunk = await _vector_candidates(session, conditions, query_embedding, pool)
+    vector_order, best_chunk = await _vector_candidates(
+        session, conditions, query_embedding, pool, has_user_filters=has_user_filters
+    )
     fts_order = await _fts_candidates(session, conditions, query, pool) if query.strip() else []
 
     scores: dict[int, float] = {}

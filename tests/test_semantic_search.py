@@ -3,6 +3,7 @@
 import hashlib
 import math
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import delete, select
@@ -120,6 +121,59 @@ async def test_hit_carries_nearest_chunk_text(session: AsyncSession) -> None:
     hit = next(hit for hit in hits if hit.document.id == document_id)
     assert hit.chunk_text == "the near one"
     assert hit.chunk_index == 1
+
+
+async def test_collapse_one_row_per_document_nearest_first(session: AsyncSession) -> None:
+    """The HNSW-prefetch collapse returns each document once, by its nearest chunk.
+
+    Doc A carries three chunks at graded distances; it must appear exactly once
+    (carrying its *nearest* chunk) and must not crowd B/C out of the candidate
+    set — the fanout over-fetch + one-row-per-document collapse guarantee this.
+    Uses ``graded_vector`` for strictly-increasing, deterministic distances.
+    """
+    a = await seed_document(
+        session,
+        "a",
+        ocr_text="a",
+        chunks=[
+            ("a-near", graded_vector(0.9)),
+            ("a-mid", graded_vector(0.4)),
+            ("a-far", graded_vector(0.2)),
+        ],
+    )
+    b = await seed_document(session, "b", ocr_text="b", chunks=[("b", graded_vector(0.5))])
+    c = await seed_document(session, "c", ocr_text="c", chunks=[("c", graded_vector(0.1))])
+
+    hits = await semantic_search(session, query="", query_embedding=unit_vector(0), top_k=10)
+
+    ids = [hit.document.id for hit in hits]
+    assert ids == [a, b, c]  # ordered by each document's nearest chunk
+    assert len(ids) == len(set(ids))  # A's three chunks collapse to one row
+    a_hit = next(hit for hit in hits if hit.document.id == a)
+    assert a_hit.chunk_text == "a-near"  # carries A's nearest chunk, not a farther one
+
+
+async def test_unfiltered_search_excludes_soft_deleted_documents(session: AsyncSession) -> None:
+    """The index-accelerated unfiltered path still excludes soft-deletes (W3 review fix).
+
+    Regression guard: the HNSW fast path moved the soft-delete exclusion from
+    *before* the ANN limit to the post-prefetch collapse. A soft-deleted document
+    — here the *nearest* one — must not leak into unfiltered results.
+    """
+    live = await seed_document(session, "live", ocr_text="a", chunks=[("live", graded_vector(0.9))])
+    dead = await seed_document(
+        session, "dead", ocr_text="b", chunks=[("dead", graded_vector(0.95))]
+    )
+    doc = await session.get(Document, dead)
+    assert doc is not None
+    doc.deleted_at = datetime.now(UTC)  # soft-delete the nearer document
+    await session.commit()
+
+    hits = await semantic_search(session, query="", query_embedding=unit_vector(0), top_k=10)
+
+    ids = [hit.document.id for hit in hits]
+    assert live in ids
+    assert dead not in ids
 
 
 async def test_filters_restrict_results(session: AsyncSession) -> None:
