@@ -853,6 +853,51 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="extraction-details"]').text()).toContain('claude-haiku-4-5')
   })
 
+  it('does not refetch the document from a comment change while a re-extraction poll is in flight', async () => {
+    // A comment mutation while re-extraction is polling would race the poll's
+    // own getDocument call and could overwrite fresh data with stale — the
+    // comments card's `changed` handler (reloadDocument) must defer to the
+    // in-flight poll, exactly like the SSE watcher does.
+    const originalImpl = fetchMock.getMockImplementation()!
+    fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
+      const url = String(input)
+      const method = init?.method ?? 'GET'
+      if (url === '/api/documents/12/comments' && method === 'POST') {
+        return Promise.resolve(
+          jsonResponse({ id: 99, body: 'hi', created_at: '2026-06-10T13:00:00Z' }, 201),
+        )
+      }
+      return originalImpl(input, init)
+    })
+
+    // A very long poll interval keeps `extracting` true for the rest of the
+    // test without needing fake timers.
+    const w = await mountView('/documents/12', { pollIntervalMs: 100_000, extractTimeoutMs: 500_000 })
+
+    await w.find('[data-testid="rerun-extraction"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="detail-banner"]').text()).toContain('Extraction queued')
+
+    const getDocumentCalls = () =>
+      fetchMock.mock.calls.filter(
+        (call) => String(call[0]) === '/api/documents/12' && (call[1] as RequestInit | undefined)?.method === undefined,
+      ).length
+    const callsBefore = getDocumentCalls()
+
+    await w.find('[data-testid="comment-add-body"]').setValue('hi')
+    await w.find('[data-testid="comment-add-submit"]').trigger('click')
+    await flushPromises()
+
+    // The comment mutation happened...
+    expect(
+      fetchMock.mock.calls.some(
+        (call) => String(call[0]) === '/api/documents/12/comments' && (call[1] as RequestInit)?.method === 'POST',
+      ),
+    ).toBe(true)
+    // ...but the guarded reloadDocument did not issue another GET while extracting.
+    expect(getDocumentCalls()).toBe(callsBefore)
+  })
+
   it('shows downloads and the delete link routing to the confirmation page', async () => {
     const w = await mountView()
     // Download links keep the attachment default — no disposition param.

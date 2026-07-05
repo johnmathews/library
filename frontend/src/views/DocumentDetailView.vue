@@ -422,9 +422,11 @@ const noteBody = computed(() =>
 // the card instead emits `changed` and this re-fetches the document.
 
 async function reloadDocument(): Promise<void> {
-  if (!doc.value) return
+  if (!doc.value || extracting.value) return
+  const id = doc.value.id
   try {
-    doc.value = await getDocument(doc.value.id)
+    const fresh = await getDocument(id)
+    if (!unmounted) doc.value = fresh
   } catch {
     // Transient — the stale comments list is still correct apart from the one
     // in-flight change; the next reload or SSE-triggered refresh recovers it.
