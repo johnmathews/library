@@ -396,6 +396,7 @@ class Document(Base):
     comments: Mapped[list["DocumentComment"]] = relationship(
         back_populates="document",
         cascade="all, delete-orphan",
+        passive_deletes=True,
         order_by="DocumentComment.created_at",
         lazy="raise",
     )

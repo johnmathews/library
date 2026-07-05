@@ -42,7 +42,16 @@ async def test_comment_attaches_and_cascades(session: AsyncSession) -> None:
     await session.delete(document)
     await session.commit()
 
-    assert await session.get(DocumentComment, comment.id) is None
+    remaining = (
+        (
+            await session.execute(
+                select(DocumentComment).where(DocumentComment.document_id == document.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert remaining == []
 
 
 async def test_comment_round_trip_via_relationship(session: AsyncSession) -> None:
