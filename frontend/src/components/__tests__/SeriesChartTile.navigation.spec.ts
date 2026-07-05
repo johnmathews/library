@@ -217,24 +217,59 @@ describe('SeriesChartTile — clickable sticky tooltip, GROUPED (W2)', () => {
     ])
   })
 
-  it('stays open while the pointer is over it, then closes on leave', async () => {
+  it('keeps the container non-interactive so it cannot steal hover (anti-flicker)', async () => {
     const wrapper = mount(SeriesChartTile, {
       props: { series: multiSeries, grouping: 'month' },
     })
     showTooltip(wrapper)
     await nextTick()
-    const tip = wrapper.find('[data-testid="chart-tooltip"]')
 
-    // Pointer leaves the bar: Chart.js reports opacity 0 (schedules a hide).
-    const opts = capture.options as CapturedOptions
-    opts.plugins.tooltip.external!({ chart: {}, tooltip: { opacity: 0, caretX: 0, caretY: 0 } })
-    // Pointer moves onto the tooltip -> cancels the pending hide.
-    await tip.trigger('mouseenter')
-    await flushPromises()
+    // The overlaying container must NOT capture pointer events — that is exactly
+    // what let it sit under the cursor, steal the bar's hover, and drive the
+    // ~200ms show/hide oscillation. Only the links list opts back in so the
+    // documents stay clickable.
+    expect(wrapper.find('[data-testid="chart-tooltip"]').classes()).toContain('pointer-events-none')
+    expect(wrapper.find('[data-testid="chart-tooltip-links"]').classes()).toContain(
+      'pointer-events-auto',
+    )
+
+    // While the pointer stays on the bar, repeated opacity>0 reports keep it
+    // steadily visible (no toggling to hidden between reports).
+    showTooltip(wrapper)
+    showTooltip(wrapper)
+    await nextTick()
     expect(wrapper.find('[data-testid="chart-tooltip"]').exists()).toBe(true)
+  })
 
-    // Leaving the tooltip closes it immediately.
-    await tip.trigger('mouseleave')
-    expect(wrapper.find('[data-testid="chart-tooltip"]').exists()).toBe(false)
+  it('stays open while the pointer is over the links, then closes after the leave delay', async () => {
+    vi.useFakeTimers()
+    try {
+      const wrapper = mount(SeriesChartTile, {
+        props: { series: multiSeries, grouping: 'month' },
+      })
+      showTooltip(wrapper)
+      await nextTick()
+      const links = wrapper.find('[data-testid="chart-tooltip-links"]')
+
+      // Pointer leaves the bar: Chart.js reports opacity 0 (schedules a hide).
+      const opts = capture.options as CapturedOptions
+      opts.plugins.tooltip.external!({ chart: {}, tooltip: { opacity: 0, caretX: 0, caretY: 0 } })
+      // Pointer moves onto the links -> cancels the pending hide; it survives
+      // well past the hide delay.
+      await links.trigger('mouseenter')
+      vi.advanceTimersByTime(500)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="chart-tooltip"]').exists()).toBe(true)
+
+      // Leaving the links schedules a hide; it stays briefly (so the pointer can
+      // travel back to a bar) and closes once the delay elapses.
+      await links.trigger('mouseleave')
+      expect(wrapper.find('[data-testid="chart-tooltip"]').exists()).toBe(true)
+      vi.advanceTimersByTime(300)
+      await flushPromises()
+      expect(wrapper.find('[data-testid="chart-tooltip"]').exists()).toBe(false)
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

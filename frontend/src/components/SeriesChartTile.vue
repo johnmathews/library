@@ -791,16 +791,24 @@ function pointLabel(point: { title?: string | null; date: string }): string {
       <Bar ref="barRef" :data="chartData" :options="chartOptions" />
 
       <!-- Grouped mode: sticky HTML tooltip (a canvas tooltip can't hold links).
-           Lists the bucket's source documents as links; stays open while the
-           pointer is over it. `@click.stop` keeps a row click from bubbling to
-           the whole-tile openDetail handler. -->
+           Lists the bucket's source documents as links.
+
+           The CONTAINER is `pointer-events-none` on purpose: if it could receive
+           the pointer it would sit under the cursor over the hovered bar, steal
+           the hover from the chart canvas, and make Chart.js report the bar as
+           un-hovered — which schedules a hide, which re-shows on the next move,
+           i.e. the ~200ms show/hide flicker. Being pass-through, the cursor
+           stays on the bar, Chart.js keeps reporting it hovered, and the tooltip
+           holds steady. Only the links list (below) re-enables pointer events so
+           the documents stay clickable; it cancels the pending hide while
+           hovered. `@click.stop` (still fires for clicks bubbling up from the
+           links) keeps a row click from also triggering the whole-tile
+           openDetail navigation. -->
       <div
         v-if="isGrouped && tooltipVisible && tooltipBucket"
         data-testid="chart-tooltip"
-        class="pointer-events-auto absolute z-10 max-w-[16rem] -translate-x-1/2 rounded-md border border-gray-200 bg-white p-2 text-xs shadow-lg dark:border-gray-700 dark:bg-gray-800"
+        class="pointer-events-none absolute z-10 max-w-[16rem] -translate-x-1/2 rounded-md border border-gray-200 bg-white p-2 text-xs shadow-lg dark:border-gray-700 dark:bg-gray-800"
         :style="{ left: `${tooltipPos.x}px`, top: `${tooltipPos.y}px` }"
-        @mouseenter="cancelHideTooltip"
-        @mouseleave="hideTooltipNow"
         @click.stop
       >
         <p
@@ -809,7 +817,13 @@ function pointLabel(point: { title?: string | null; date: string }): string {
         >
           {{ tooltipHeader }}
         </p>
-        <ul class="space-y-0.5">
+        <ul
+          class="pointer-events-auto space-y-0.5"
+          data-testid="chart-tooltip-links"
+          @mouseenter="cancelHideTooltip"
+          @mousemove="cancelHideTooltip"
+          @mouseleave="scheduleHideTooltip"
+        >
           <li
             v-for="(item, i) in tooltipBucket.items"
             :key="item.document_id ?? i"
