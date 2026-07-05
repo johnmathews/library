@@ -76,6 +76,7 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     review_findings: [],
     user_edited_fields: [],
     events: [],
+    comments: [],
     ...overrides,
   }
 }

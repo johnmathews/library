@@ -111,6 +111,15 @@ export interface ValidationResult {
   findings: ValidationFinding[]
 }
 
+/** One comment on a document (backend `CommentOut`). */
+export interface DocumentComment {
+  id: number
+  document_id: number
+  author_id: number | null
+  body: string
+  created_at: string
+}
+
 /** Body of GET /api/documents/{id}. */
 export interface DocumentDetail extends DocumentListItem {
   /** Human-readable topic phrases extracted for general/reference docs. */
@@ -128,6 +137,7 @@ export interface DocumentDetail extends DocumentListItem {
   validation: ValidationResult | null
   user_edited_fields: string[]
   events: IngestionEvent[]
+  comments: DocumentComment[]
 }
 
 /** Query parameters of GET /api/documents — all filters AND-compose. */
@@ -283,6 +293,38 @@ export function requestExtraction(id: number): Promise<ExtractionQueued> {
 /** POST /api/documents/{id}/verify — mark document as verified; returns updated detail. */
 export function verifyDocument(id: number): Promise<DocumentDetail> {
   return apiFetch<DocumentDetail>(`/api/documents/${id}/verify`, { method: 'POST' })
+}
+
+/** GET /api/documents/{id}/comments — a document's comments. */
+export function listComments(documentId: number, signal?: AbortSignal): Promise<DocumentComment[]> {
+  return apiFetch<DocumentComment[]>(`/api/documents/${documentId}/comments`, { signal })
+}
+
+/** POST /api/documents/{id}/comments — add a comment (201); returns the created comment. */
+export function createComment(documentId: number, body: string): Promise<DocumentComment> {
+  return apiFetch<DocumentComment>(`/api/documents/${documentId}/comments`, {
+    method: 'POST',
+    body: { body },
+  })
+}
+
+/** PATCH /api/documents/{id}/comments/{cid} — edit a comment's body; returns the updated comment. */
+export function updateComment(
+  documentId: number,
+  commentId: number,
+  body: string,
+): Promise<DocumentComment> {
+  return apiFetch<DocumentComment>(`/api/documents/${documentId}/comments/${commentId}`, {
+    method: 'PATCH',
+    body: { body },
+  })
+}
+
+/** DELETE /api/documents/{id}/comments/{cid} — remove a comment (204). */
+export function deleteComment(documentId: number, commentId: number): Promise<void> {
+  return apiFetch<void>(`/api/documents/${documentId}/comments/${commentId}`, {
+    method: 'DELETE',
+  })
 }
 
 /** Options for {@link listJobs}. All optional; an empty call is the default view. */

@@ -77,6 +77,7 @@ export const DEFAULT_CARD_ORDER: readonly string[] = [
   'series-chart',
   'notes',
   'metadata',
+  'comments',
   'actions',
   'history',
 ]

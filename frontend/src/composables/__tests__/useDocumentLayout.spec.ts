@@ -80,6 +80,11 @@ describe('reconcileCardOrder', () => {
     const stored = ['markdown', 'preview', 'legacy_card']
     expect(reconcileCardOrder(stored, defaults)).toEqual(['markdown', 'preview', 'history'])
   })
+
+  it('appends the comments card to an older stored order', () => {
+    const merged = reconcileCardOrder(['preview', 'metadata'], DEFAULT_CARD_ORDER)
+    expect(merged).toContain('comments')
+  })
 })
 
 describe('useDocumentLayout', () => {
@@ -120,6 +125,7 @@ describe('useDocumentLayout', () => {
       'series-chart',
       'notes',
       'metadata',
+      'comments',
       'actions',
       'history',
     ])
