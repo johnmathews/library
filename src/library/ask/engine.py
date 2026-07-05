@@ -1,9 +1,11 @@
 """Agentic /ask: Claude orchestrates retrieval tools to answer with citations.
 
-Claude is given three tools — ``semantic_search`` (hybrid content retrieval),
-``query_documents`` (structured aggregation over metadata), and
-``compare_to_series`` (statistical summary of a recurring-document series) —
-and decides which to call for a question. It must answer only from tool results and cite the
+Claude is given read tools — ``semantic_search`` (hybrid content retrieval),
+``query_documents`` (structured aggregation over metadata),
+``compare_to_series`` (statistical summary of a recurring-document series),
+and ``get_document`` (full text + comments for one located document) — plus a
+confirmation-gated write tool, ``update_document_metadata``, and decides which
+to call for a question. It must answer only from tool results and cite the
 document ids it used. The loop is bounded (``ask_max_tool_turns``); the
 embedding and answer cost is summed for the audit log.
 """
@@ -29,7 +31,7 @@ from library.config import Settings
 from library.documents_service import apply_document_update, revalidate_after_edit
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
-from library.models import Document
+from library.models import Document, DocumentComment, DocumentPage
 from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, semantic_search
 from library.series import serialise_summary, summarize_series
@@ -52,6 +54,12 @@ Use the tools to find evidence, then answer:
   who/how-many/how-much/which-over-time questions.
 - compare_to_series: compare a recurring bill to its usual values / last year /
   trend (e.g. "is this electricity bill higher than usual?").
+- get_document: read one document in full (structured fields, the user's
+  comments, and its text) once you have located it via another tool. A
+  document's comments are the user's own notes about it and are authoritative
+  personal context — trust them over inference from the document alone (e.g.
+  a comment saying "this is my current house" settles which address is
+  current).
 - update_document_metadata: update a document's metadata (title, summary,
   sender, recipient, kind, tags, projects, dates, amount, currency, language).
   You may only edit a document that a tool surfaced earlier in THIS
@@ -217,6 +225,19 @@ TOOLS: list[dict[str, Any]] = [
                 "currency": {"type": "string", "description": "3-letter ISO currency code."},
                 "language": {"type": "string", "description": "e.g. nld or eng."},
             },
+            "required": ["document_id"],
+        },
+    },
+    {
+        "name": "get_document",
+        "description": (
+            "Read one document in full by its id: structured fields, the user's "
+            "comments (authoritative personal context), and its text. Use after "
+            "locating a document via semantic_search to answer a specific detail."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {"document_id": {"type": "integer"}},
             "required": ["document_id"],
         },
     },
@@ -460,6 +481,75 @@ async def _run_update_document(
     return {"status": "updated", "document_id": document_id, "updated_fields": edited}
 
 
+async def _run_get_document(
+    session: AsyncSession, settings: Settings, args: dict[str, Any]
+) -> dict[str, Any]:
+    """Read one document in full: structured fields, comments (queried
+    explicitly — ``Document.comments``/``Document.pages`` are ``lazy="raise"``),
+    and its text (joined markdown pages, falling back to ``ocr_text``),
+    truncated to ``settings.ask_get_document_max_chars``."""
+    raw_id = args.get("document_id")
+    try:
+        document_id = int(raw_id)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return {"error": "document_id is required and must be an integer"}
+
+    document = await session.get(Document, document_id)
+    if document is None or document.deleted_at is not None:
+        return {"error": f"document {document_id} not found"}
+
+    comment_rows = (
+        (
+            await session.execute(
+                select(DocumentComment)
+                .where(DocumentComment.document_id == document_id)
+                .order_by(DocumentComment.created_at)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    page_rows = (
+        (
+            await session.execute(
+                select(DocumentPage)
+                .where(DocumentPage.document_id == document_id)
+                .order_by(DocumentPage.page_number)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    full_text = (
+        "\n\n".join(page.markdown for page in page_rows) if page_rows else (document.ocr_text or "")
+    )
+    max_chars = settings.ask_get_document_max_chars
+    text_truncated = len(full_text) > max_chars
+    text = full_text[:max_chars] if text_truncated else full_text
+
+    return {
+        "document_id": document_id,
+        "title": document.title,
+        "sender": document.sender.name if document.sender else None,
+        "recipient": document.recipient.name if document.recipient else None,
+        "kind": document.kind.slug if document.kind else None,
+        "document_date": document.document_date.isoformat() if document.document_date else None,
+        "due_date": document.due_date.isoformat() if document.due_date else None,
+        "expiry_date": document.expiry_date.isoformat() if document.expiry_date else None,
+        "amount_total": float(document.amount_total) if document.amount_total is not None else None,
+        "currency": document.currency,
+        "language": document.language.value if document.language else None,
+        "summary": document.summary,
+        "topics": document.topics,
+        "comments": [
+            {"body": comment.body, "date": comment.created_at.isoformat()}
+            for comment in comment_rows
+        ],
+        "text": text,
+        "text_truncated": text_truncated,
+    }
+
+
 async def _dispatch_tool(
     session: AsyncSession,
     settings: Settings,
@@ -484,6 +574,12 @@ async def _dispatch_tool(
         return result
     if name == "update_document_metadata":
         return await _run_update_document(session, settings, args, editable_ids, previewed_ids)
+    if name == "get_document":
+        result = await _run_get_document(session, settings, args)
+        if "document_id" in result:
+            cited.add(result["document_id"])
+            editable_ids.add(result["document_id"])
+        return result
     return {"error": f"unknown tool {name}"}
 
 

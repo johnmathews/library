@@ -90,6 +90,7 @@ class Settings(BaseSettings):
     ask_max_tool_turns: int = 4
     ask_max_answer_tokens: int = 1024
     ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.
+    ask_get_document_max_chars: int = 8000  # cap on get_document's returned text
     # Foreign-exchange rate seeding (see docs/admin.md, "FX rates"). The admin
     # "Fetch rate" affordance calls this keyless provider for the live USD-per-unit
     # rate; open.er-api.com returns USD->X rates, inverted to rate_to_base(X).
