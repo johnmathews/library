@@ -261,9 +261,32 @@ function stopAnswering(): void {
   inFlight?.abort()
 }
 
-/** Cmd/Ctrl+Enter sends from the textarea, matching the Claude-app composer. */
+/**
+ * Enter sends; Shift+Enter and Ctrl+J insert a newline; Cmd/Ctrl+Enter still
+ * sends. Enter while an IME composition is in progress (e.g. finishing a
+ * candidate) never sends.
+ */
 function onComposerKeydown(event: KeyboardEvent): void {
-  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+  // IME composition: Enter commits the candidate, never sends.
+  if (event.isComposing || event.keyCode === 229) return
+
+  // Ctrl+J inserts a newline at the caret (not a default insertion key).
+  if (event.key === 'j' && event.ctrlKey && !event.metaKey) {
+    event.preventDefault()
+    const el = event.target as HTMLTextAreaElement
+    const start = el.selectionStart ?? question.value.length
+    const end = el.selectionEnd ?? start
+    question.value = question.value.slice(0, start) + '\n' + question.value.slice(end)
+    void nextTick(() => {
+      el.selectionStart = el.selectionEnd = start + 1
+    })
+    return
+  }
+
+  if (event.key === 'Enter') {
+    // Shift+Enter: let the browser insert a newline.
+    if (event.shiftKey) return
+    // Plain Enter, or Cmd/Ctrl+Enter: send.
     event.preventDefault()
     void onSubmit()
   }
@@ -552,7 +575,7 @@ defineExpose({ resetConversation })
             id="ask-question"
             v-model="question"
             :label="turns.length ? 'Follow-up question' : 'Your question'"
-            hint="For example: which invoices are due this month? (⌘/Ctrl + Enter to send)"
+            hint="Enter to send · Shift+Enter for new line"
             :rows="3"
             data-testid="ask-question"
             @keydown="onComposerKeydown"

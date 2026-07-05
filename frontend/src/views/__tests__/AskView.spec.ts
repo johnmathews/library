@@ -376,6 +376,31 @@ describe('AskView', () => {
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
   })
 
+  it('sends on plain Enter, not on Shift+Enter / Ctrl+J / while composing', async () => {
+    askQuestionMock.mockResolvedValue(sampleResponse({ thread_id: 1 }))
+    const w = mountView()
+    const ta = w.find('#ask-question')
+    await ta.setValue('hello')
+
+    await ta.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(askQuestionMock).toHaveBeenCalledTimes(1) // plain Enter sends
+
+    await ta.trigger('keydown', { key: 'Enter', shiftKey: true })
+    await ta.trigger('keydown', { key: 'j', ctrlKey: true })
+    await flushPromises()
+    expect(askQuestionMock).toHaveBeenCalledTimes(1) // neither sends
+
+    await ta.trigger('keydown', { key: 'Enter', isComposing: true })
+    await flushPromises()
+    expect(askQuestionMock).toHaveBeenCalledTimes(1) // IME compose does not send
+
+    await ta.setValue('hello again')
+    await ta.trigger('keydown', { key: 'Enter', metaKey: true })
+    await flushPromises()
+    expect(askQuestionMock).toHaveBeenCalledTimes(2) // cmd/ctrl+enter still sends
+  })
+
   it('uses the shared PageHeader and imposes no max-width cap (W10)', () => {
     const w = mountView()
     expect(w.find('[data-testid="page-header"]').exists()).toBe(true)
