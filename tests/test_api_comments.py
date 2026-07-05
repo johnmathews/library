@@ -91,6 +91,23 @@ def test_comment_body_min_length(api_client: TestClient, api_database_url: str) 
     assert response.status_code == 422
 
 
+def test_comment_body_whitespace_only_rejected(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    doc_id = seed_document(api_database_url, "u3-comment-blank")
+    response = api_client.post(f"/api/documents/{doc_id}/comments", json={"body": "   "})
+    assert response.status_code == 422
+
+
+def test_comment_body_stripped(api_client: TestClient, api_database_url: str) -> None:
+    doc_id = seed_document(api_database_url, "u3-comment-strip")
+    response = api_client.post(
+        f"/api/documents/{doc_id}/comments", json={"body": "  padded body  "}
+    )
+    assert response.status_code == 201, response.text
+    assert response.json()["body"] == "padded body"
+
+
 def test_comment_404_on_unknown_or_deleted_document(
     api_client: TestClient, api_database_url: str
 ) -> None:

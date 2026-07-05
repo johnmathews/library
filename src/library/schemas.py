@@ -84,6 +84,14 @@ class CommentIn(BaseModel):
 
     body: str = Field(min_length=1)
 
+    @field_validator("body")
+    @classmethod
+    def _non_blank(cls, v: str) -> str:
+        v = v.strip()
+        if not v:
+            raise ValueError("body must not be blank")
+        return v
+
 
 class CommentOut(BaseModel):
     """One comment on a document — via the comments API or the document detail."""
