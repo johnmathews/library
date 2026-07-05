@@ -2,8 +2,8 @@
 #
 # Configuration comes from a `.env` file next to this file (copy
 # `.env.example`); every value has a working default, so `docker compose up`
-# works without one. Memory limits are sized for a modest Proxmox LXC
-# (~4 GB) — tune them to your container.
+# works without one. Memory limits assume a Proxmox LXC with ~8 GB (the
+# embedder alone needs 6 GB for bge-m3) — tune them to your container.
 #
 # Named volumes:
 #   pgdata        Postgres data directory (all metadata, users, job queue)
@@ -39,9 +39,11 @@ services:
   # first start. Memory-capped — budget for it on the host (docs/deployment.md).
   embedder:
     image: ghcr.io/huggingface/text-embeddings-inference:cpu-1.7@sha256:22eac176ead3eb7008c672123b05331347e1a86661a7f27f3f6550dbe31ff96c
-    command: ["--model-id", "BAAI/bge-m3", "--auto-truncate"]
+    # bge-m3 needs ~6 GB headroom; a large batch OOM-kills it below that. Cap the
+    # batch so peak memory is bounded (matches the proxmox-setup prod template).
+    command: ["--model-id", "BAAI/bge-m3", "--auto-truncate", "--max-batch-tokens", "2048"]
     restart: unless-stopped
-    mem_limit: 3g
+    mem_limit: 6g
     volumes:
       - embedder_cache:/data
 

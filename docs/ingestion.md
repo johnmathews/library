@@ -158,7 +158,10 @@ Decisions:
   `defer()`; the worker opens it itself.
 - **Worker:** `python -m library.worker` runs the Procrastinate worker
   programmatically (this is the `worker` service command in
-  docker-compose).
+  docker-compose). It processes `LIBRARY_WORKER_CONCURRENCY` documents at
+  once (default 1 — serial). Raising it drains bursts faster but multiplies
+  peak worker RAM (parallel OCR subprocesses + embedder batches), so only
+  raise it with host headroom to spare.
 
 ### `process_document(document_id)` — pipeline
 
@@ -177,8 +180,25 @@ Decisions:
   untouched.
 - Any exception marks the document `failed`, records a `failed` event
   with `{"error": …, "status": <status it failed in>}`, and re-raises so
-  Procrastinate also marks the job failed. No automatic retries are
-  configured yet.
+  Procrastinate also marks the job failed. A *clean* exception is therefore
+  terminal and visible; there is no per-task retry policy (one would not help —
+  a retried job hits the now-`failed`/terminal document and no-ops).
+- **Crash recovery (stalled-job sweeper).** A *hard* kill (OOM, `SIGKILL`, host
+  crash, or a redeploy that `SIGKILL`s the worker mid-stage) never runs the
+  `except` block, so the document is left in a committed non-terminal status
+  (`ocr`/`extract`/`markdown`/`embed`) and its Procrastinate job stays in
+  `doing` with no re-queue — silently stranded. A periodic task
+  `library.jobs.sweep_stalled_jobs` closes this: every
+  `LIBRARY_STALLED_JOB_SWEEP_MINUTES` (default 5; `0` disables) it asks
+  Procrastinate for `process_document` jobs whose worker heartbeat is older than
+  `LIBRARY_STALLED_JOB_HEARTBEAT_SECONDS` (default 60 — safely above the ~10 s
+  heartbeat period, so a live worker mid-OCR is never swept) and re-enqueues
+  each via `retry_job`. Recovery is safe because the pipeline resumes
+  idempotently from the stranded status. `get_stalled_jobs` can only see a
+  stranded job while its dead worker's row still exists, and Procrastinate
+  prunes those rows at worker startup — so the prune timeout is raised to 24 h
+  via `LIBRARY_STALLED_WORKER_PRUNE_SECONDS`, otherwise a redeploy could delete
+  the crashed worker's row before the sweep runs and hide the job permanently.
 
 ### `generate_thumbnail(document_id)` — first-page thumbnail (W7)
 
@@ -641,6 +661,17 @@ Before each extraction, one query sums today's `cost_usd` across
 `ingestion_events`; at or over `LIBRARY_EXTRACTION_DAILY_BUDGET_USD`
 (default 5.0) extraction is skipped with `reason: "budget"` until the
 next UTC day.
+
+**Budget-skip visibility & recovery.** A burst that exhausts the daily budget
+leaves documents `indexed` but without LLM metadata. These are surfaced so they
+are not lost silently: the admin **System** view reports
+`stats.documents_budget_skipped` — the count of documents whose *latest*
+extraction or markdown outcome was a budget skip (a later success clears it),
+computed by `library.budget_backfill`. Recover them by running `library
+backfill` (see "Backfill" above), or set `LIBRARY_BUDGET_BACKFILL_ENABLED=true`
+to let the daily `backfill_budget_skipped` task (03:17 UTC, after the budget
+resets) re-enqueue them automatically. The auto-backfill is **off by default**
+because it spends money.
 
 Every configured `*_model` knob (extraction, escalation, judge, markdown,
 ask) must have a row in `MODEL_PRICING_USD_PER_MTOK`
@@ -1166,6 +1197,11 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_MARKDOWN_MAX_PAGES` | `20` | Max pages rendered/sent per document |
 | `LIBRARY_MARKDOWN_PAGE_BATCH` | `10` | Pages per vision call (batched with page-number offset) |
 | `LIBRARY_MARKDOWN_IMAGE_LONG_SIDE_PX` | `1600` | Long-side cap for rendered page images sent to the model |
+| `LIBRARY_WORKER_CONCURRENCY` | `1` | Documents the worker processes at once; raise only with RAM headroom |
+| `LIBRARY_STALLED_JOB_SWEEP_MINUTES` | `5` | Cadence of the crash-recovery sweep; `0` disables it |
+| `LIBRARY_STALLED_JOB_HEARTBEAT_SECONDS` | `60.0` | Worker-heartbeat age before an in-flight job is deemed stalled and re-enqueued |
+| `LIBRARY_STALLED_WORKER_PRUNE_SECONDS` | `86400.0` | How long a dead worker's row survives before startup-prune; kept high so the sweep can still see stranded jobs after a redeploy |
+| `LIBRARY_BUDGET_BACKFILL_ENABLED` | `false` | Daily 03:17 UTC re-enqueue of budget-skipped documents (spends; off by default) |
 | `LIBRARY_CONSUME_DIR` | unset | Consume folder to watch; unset disables the watcher |
 | `LIBRARY_CONSUME_FORCE_POLLING` | `false` | Poll instead of inotify — required for NFS/SMB-mounted consume dirs |
 | `LIBRARY_CONSUME_POLL_INTERVAL_S` | `2.0` | Poll cadence when force-polling |

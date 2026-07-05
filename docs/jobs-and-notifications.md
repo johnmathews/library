@@ -62,6 +62,18 @@ natural-language description for that `(sender, kind)` series and upserts it int
 `series_insights` (see [ask.md §1.7](ask.md)). It is idempotent and skips quietly
 for series too small to summarise; it does not toast.
 
+### 1.2.2 Crash recovery (stalled-job sweeper)
+
+A hard-killed worker (OOM/`SIGKILL`/redeploy mid-stage) leaves its in-flight
+`process_document` job in `doing` with the document stranded in a non-terminal
+status — no exception fires, so nothing re-queues it. The periodic
+`library.jobs.sweep_stalled_jobs` task recovers these: it re-enqueues
+`process_document` jobs whose worker heartbeat has gone stale (see
+[ingestion.md](ingestion.md), "process_document — pipeline"). The pipeline
+resumes idempotently, so a recovered document simply continues from where it
+died and eventually reaches `indexed`. This is why the Jobs view needs no manual
+requeue button for the common crash case.
+
 ## 1.3 Scope & non-goals
 
 1. Toasts fire for document processing only — manual re-extract/embed/markdown,

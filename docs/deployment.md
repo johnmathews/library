@@ -35,10 +35,11 @@ One image serves api and worker; the frontend is compiled into it (see
 1.3). Three named volumes hold all state: `pgdata` (Postgres),
 `library_data` (`/data`: content-addressed originals + derived artifacts),
 and `embedder_cache` (the downloaded bge-m3 model). Memory limits in the
-compose file (api 512m, worker 2g for OCR peaks, db 1g, embedder 3g for
-bge-m3) now total ~6.5 GB: **size the LXC at 6–8 GB RAM** (the embedder is
-the new cost). If you don't need semantic Ask you can omit the `embedder`
-service and set `LIBRARY_EMBEDDING_ENABLED=false` to stay at ~4 GB.
+compose file (api 512m, worker 2g for OCR peaks, db 1g, embedder 6g for
+bge-m3 — a large batch OOM-kills it below that) total ~9.5 GB: **size the
+LXC at 8 GB RAM or more** (the embedder is the dominant cost). If you don't
+need semantic Ask you can omit the `embedder` service and set
+`LIBRARY_EMBEDDING_ENABLED=false` to stay at ~4 GB.
 
 ## 1.2 Fresh-machine walkthrough (Proxmox LXC)
 
@@ -177,6 +178,11 @@ proxy — the cookie flag is about what the *browser* sees.
 
 ## 1.6 Backups
 
+This section is the general guidance for a repo-based deploy. The **live
+`paperless` instance uses a different, already-automated topology** (file store
+on TrueNAS NFS with ZFS snapshots + replication; local `pgdata` captured by the
+daily PBS LXC backup) — see §1.7.2 point 3.
+
 Two named volumes hold everything; back up both.
 
 **Database — logical dump (restores anywhere):**
@@ -297,20 +303,35 @@ see 1.7.2 for that instance's exact shape):
 
 ### 1.7.2 The live `paperless` LXC instance
 
-The production instance does **not** use this repo's `docker-compose.yml` —
-it runs a custom compose that co-hosts paperless-ngx. Concrete details:
+The production instance does **not** use this repo's `docker-compose.yml`
+(that file is a dev / CI-smoke reference). The live compose at
+`/srv/apps/docker-compose.yml` on the `paperless` LXC is **templated from the
+`home-server/proxmox-setup` Ansible repo — that repo is the deploy source of
+truth for the container wiring, mounts, and memory limits.** This repo owns the
+image; proxmox-setup owns how it is run. Concrete details:
 
 1. **Access:** `ssh paperless` (root). Compose at `/srv/apps/docker-compose.yml`
    (back it up before editing — `cp` to a `.bak-<ts>`); env in `/srv/apps/.env`.
+   Edit the compose in the proxmox-setup repo and re-apply, rather than editing
+   the host copy by hand, so the source of truth stays authoritative.
 2. **Services:** `library-db` (pgvector, bind mount `/srv/apps/library/pgdata`),
-   `library-embedder` (cache bind mount `/srv/apps/library/embedder-cache`),
-   `library-migrate` (one-shot), `library-webserver` (`:8010`→8000),
-   `library-worker`. Images are `ghcr.io/johnmathews/library:latest`.
-3. **`.env` is regenerated externally** (Portainer) — durable env overrides go
+   `library-embedder` (`mem_limit: 6g`, cache bind mount
+   `/srv/apps/library/embedder-cache`), `library-migrate` (one-shot),
+   `library-webserver` (`:8010`→8000), `library-worker`. Images are
+   `ghcr.io/johnmathews/library:latest`.
+3. **Storage & backups (see §1.6).** Library's file store (`/data`) and consume
+   folder are bind-mounted from the **TrueNAS `document-store` NFS dataset**
+   (`/mnt/nfs/document-store` → `data/`→`/data`, `consume/`→`/consume`), so the
+   corpus is not on the 16 GB LXC rootfs. The database (`pgdata`) stays **local**
+   at `/srv/apps/library/pgdata` on the LXC disk. Backup coverage follows from
+   this split: the **daily PBS backup of the LXC** captures `pgdata` (local),
+   while the file store is covered by **TrueNAS ZFS snapshots + replication** of
+   `tank`. No separate `pg_dump` cron is required for disaster recovery.
+4. **`.env` is regenerated externally** (Portainer) — durable env overrides go
    in the service's `environment:` block in the compose file, **not** in `.env`.
    So the Anthropic key for Ask must be set on `library-webserver`'s
    `environment:`, not `.env`.
-4. **Deploy command** (routine code changes): `cd /srv/apps && docker compose
+5. **Deploy command** (routine code changes): `cd /srv/apps && docker compose
    up -d --pull always library-migrate library-webserver library-worker`
    (never `stop` the db; always include `library-migrate`). This is automated by
    **`scripts/deploy.sh`** (run `make deploy` from the repo root), which also
