@@ -1628,6 +1628,45 @@ describe('DocumentDetailView', () => {
       w.unmount()
       expect(layout.editMode.value).toBe(false)
     })
+
+    it('resets metadata edit mode when in-view queue navigation changes route.params.id without unmounting', async () => {
+      // Prev/Next in the review queue changes route.params.id while the same
+      // DocumentDetailView instance stays mounted (App.vue's RouterView is
+      // unkeyed). If the module-singleton editMode flag survived that
+      // navigation, the metadata editor's non-immediate hydration watcher
+      // would never re-fire for the new document, leaving blank edit inputs.
+      const detailB = makeDetail({ id: 13, title: 'Doc B' })
+      fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
+        const url = String(input)
+        const method = init?.method ?? 'GET'
+        if (url === '/api/kinds' && method === 'POST') return Promise.resolve(createKindResponse(init))
+        if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
+        if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
+        if (url === '/api/recipients') return Promise.resolve(jsonResponse(RECIPIENTS))
+        if (url === '/api/tags') return Promise.resolve(jsonResponse([]))
+        if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
+        if (url === '/api/documents/12' && method === 'GET') return Promise.resolve(jsonResponse(detail))
+        if (url === '/api/documents/13' && method === 'GET') return Promise.resolve(jsonResponse(detailB))
+        if (url === '/api/documents/12/markdown' && method === 'GET') return Promise.resolve(markdownResponse())
+        if (url === '/api/documents/13/markdown' && method === 'GET') return Promise.resolve(markdownResponse())
+        return Promise.resolve(jsonResponse({ detail: `unexpected ${method} ${url}` }, 500))
+      })
+
+      const w = await mountView('/documents/12')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
+      await flushPromises()
+      expect(useMetadataEditMode().editMode.value).toBe(true)
+      expect(w.find('#edit-title').exists()).toBe(true)
+
+      // Simulate queue Prev/Next: the route changes but the view is not
+      // remounted (same as an unkeyed <RouterView>).
+      await router.push('/documents/13')
+      await flushPromises()
+
+      expect(useMetadataEditMode().editMode.value).toBe(false)
+      expect(w.find('#edit-title').exists()).toBe(false)
+      expect(rowValue(w, 'title')).toBe('Doc B')
+    })
   })
 
   // --- Floating island (Ask + lifted metadata Edit/Done) ----------------------

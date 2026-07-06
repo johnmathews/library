@@ -630,6 +630,14 @@ watch(
     markdownData.value = null
     markdownLoading.value = false
     markdownError.value = false
+    // The edit-mode flags are module singletons (shared with the floating
+    // island), and this view is reused across in-queue Prev/Next navigation
+    // (the RouterView in App.vue is unkeyed, so no unmount happens). Reset
+    // both here too, or a still-true editMode survives into the new document
+    // while the editor's non-immediate hydration watcher never re-fires,
+    // leaving blank edit inputs that can PATCH an empty value on Enter.
+    setLayoutEditMode(false)
+    setMetadataEditMode(false)
     const numericId = Number(id)
     if (!Number.isInteger(numericId) || numericId < 1) {
       notFound.value = true
