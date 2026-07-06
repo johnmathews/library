@@ -81,9 +81,23 @@ const keyHandler = (event: KeyboardEvent) => {
 onMounted(() => {
   document.addEventListener('click', clickHandler)
   document.addEventListener('keydown', keyHandler)
-  // A failed load just means no custom dashboards render — never surface it here.
-  if (auth.isAuthenticated) void savedViews.load().catch(() => {})
 })
+
+// Load pinned dashboards as soon as the user is known. The sidebar is a
+// persistent shell (App.vue mounts DefaultLayout around <RouterView>), so it
+// mounts BEFORE the router's async auth guard resolves — a mount-time
+// isAuthenticated check would miss the just-authenticated user and, since the
+// layout never remounts, never render dashboards after a hard load. Watching
+// isAuthenticated fires immediately when already signed in and again the moment
+// the guard populates the user. A failed load just means no custom dashboards
+// render — never surface it here.
+watch(
+  () => auth.isAuthenticated,
+  (authed) => {
+    if (authed) void savedViews.load().catch(() => {})
+  },
+  { immediate: true },
+)
 
 onUnmounted(() => {
   document.removeEventListener('click', clickHandler)

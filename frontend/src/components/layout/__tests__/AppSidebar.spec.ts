@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, flushPromises } from '@vue/test-utils'
+import { listSavedViews } from '@/api/savedViews'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 import AppSidebar from '../AppSidebar.vue'
@@ -199,6 +200,25 @@ describe('AppSidebar', () => {
     expect(pinned.attributes('href')).toBe('/?kind=invoice')
     // Unpinned views never appear as dashboards.
     expect(wrapper.find('[data-testid="sidebar-dashboard-8"]').exists()).toBe(false)
+  })
+
+  it('loads dashboards when auth resolves after mount (persistent shell mounts before the guard)', async () => {
+    // The sidebar lives in a persistent DefaultLayout that mounts before the
+    // router's async auth guard populates the user, so a mount-time check would
+    // miss the just-authenticated user. Reproduce that ordering: unauthenticated
+    // at mount, then the guard resolves the user.
+    vi.mocked(listSavedViews).mockClear()
+    const auth = useAuthStore()
+    auth.user = null
+    router.push('/')
+    await router.isReady()
+    mount(AppSidebar, { props: { sidebarOpen: false }, global: { plugins: [router] } })
+    expect(listSavedViews).not.toHaveBeenCalled()
+
+    // Guard resolves -> the watcher must now load the saved views.
+    seedAuth(false)
+    await flushPromises()
+    expect(listSavedViews).toHaveBeenCalledTimes(1)
   })
 
   it('hides the Dashboards section entirely when no views are pinned', async () => {

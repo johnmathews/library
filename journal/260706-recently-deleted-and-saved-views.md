@@ -106,8 +106,26 @@ security, or data-safety issues — it positively verified purge safety
 route ordering, the restore refresh (no MissingGreenlet), and migration
 symmetry. One hardening applied from its observations: `deleted_retention_days`
 now has a `ge=0` bound (a negative value would future-date the purge cutoff and
-delete every soft-deleted document), with a test. Two other cosmetic
-observations (sidebar active-state on `/`, load-on-mount) were left as-is.
+delete every soft-deleted document), with a test.
+
+## 6.1 CI-caught bug: sidebar dashboards never loaded after a hard load
+
+The first `main` CI run failed the two new e2e specs (deploy was gated —
+`promote` skipped, nothing shipped). Two fixes:
+
+1. **Real bug.** `AppSidebar` lives in a persistent `DefaultLayout` (App.vue
+   wraps `<RouterView>`), so it mounts *before* the router's async auth guard
+   resolves the user. The mount-time `if (auth.isAuthenticated)` snapshot saw
+   `false`, skipped `savedViews.load()`, and — the layout never remounting —
+   never retried, so pinned dashboards never appeared after a hard page load.
+   Fixed by loading reactively: `watch(() => auth.isAuthenticated, …,
+   { immediate: true })`. This is the exact concern the code review raised;
+   e2e confirmed it. Added a regression unit test (mount unauthenticated →
+   auth resolves → load fires).
+2. **Spec bug.** The recently-deleted e2e asserted `getByTestId('deleted-title')`,
+   but that string is the `<h1>` `id` (via `PageHeader title-id`), not a
+   `data-testid` — switched to `getByRole('heading', { name: 'Recently
+   Deleted' })`.
 
 ## 7. Files of note
 
