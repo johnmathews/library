@@ -3,13 +3,15 @@ import { nextTick } from 'vue'
 import {
   useDocumentLayout,
   reconcileHeroFields,
-  reconcileCardOrder,
+  reconcileCardColumns,
+  migrateCardOrderToColumns,
   DEFAULT_HERO_FIELDS,
-  DEFAULT_CARD_ORDER,
+  DEFAULT_CARD_COLUMNS,
   HERO_FIELD_LABELS,
   HERO_FIELDS_STORAGE_KEY,
-  CARD_ORDER_STORAGE_KEY,
+  CARD_COLUMNS_STORAGE_KEY,
   type HeroField,
+  type CardColumns,
 } from '../useDocumentLayout'
 
 describe('reconcileHeroFields', () => {
@@ -63,27 +65,31 @@ describe('reconcileHeroFields', () => {
   })
 })
 
-describe('reconcileCardOrder', () => {
+describe('reconcileCardColumns', () => {
   it('returns the defaults when nothing is stored', () => {
-    expect(reconcileCardOrder(null, DEFAULT_CARD_ORDER)).toEqual(DEFAULT_CARD_ORDER)
-    expect(reconcileCardOrder([], DEFAULT_CARD_ORDER)).toEqual(DEFAULT_CARD_ORDER)
+    expect(reconcileCardColumns(null, DEFAULT_CARD_COLUMNS)).toEqual(DEFAULT_CARD_COLUMNS)
+    expect(reconcileCardColumns({}, DEFAULT_CARD_COLUMNS)).toEqual(DEFAULT_CARD_COLUMNS)
   })
 
-  it('preserves the saved order of still-valid cards', () => {
-    const defaults = ['preview', 'markdown', 'notes']
-    const stored = ['notes', 'preview', 'markdown']
-    expect(reconcileCardOrder(stored, defaults)).toEqual(['notes', 'preview', 'markdown'])
+  it('appends missing known cards, drops unknown, de-dupes', () => {
+    const stored = { left: ['metadata', 'metadata', 'ghost'], right: ['preview'] } // dup + unknown, missing several
+    const merged = reconcileCardColumns(stored, DEFAULT_CARD_COLUMNS)
+    const all = [...merged.left, ...merged.right]
+    expect(all).not.toContain('ghost') // unknown dropped
+    expect(all.filter((c) => c === 'metadata')).toHaveLength(1) // de-duped
+    expect(new Set(all)).toEqual(
+      new Set([...DEFAULT_CARD_COLUMNS.left, ...DEFAULT_CARD_COLUMNS.right]),
+    ) // every known card present once
+    expect(merged.left[0]).toBe('metadata') // preserved stored order for survivors
   })
+})
 
-  it('appends a newly-added card and drops an unknown stored card', () => {
-    const defaults = ['preview', 'markdown', 'history']
-    const stored = ['markdown', 'preview', 'legacy_card']
-    expect(reconcileCardOrder(stored, defaults)).toEqual(['markdown', 'preview', 'history'])
-  })
-
-  it('appends the comments card to an older stored order', () => {
-    const merged = reconcileCardOrder(['preview', 'metadata'], DEFAULT_CARD_ORDER)
-    expect(merged).toContain('comments')
+describe('migrateCardOrderToColumns', () => {
+  it('migrates an old flat card order into the two default columns preserving order', () => {
+    const flat = ['history', 'markdown', 'metadata', 'preview'] // mixed columns, custom order
+    const cols = migrateCardOrderToColumns(flat)
+    expect(cols.left).toEqual(['history', 'metadata']) // metadata-column ids, in flat order
+    expect(cols.right).toEqual(['markdown', 'preview']) // preview-column ids, in flat order
   })
 })
 
@@ -117,18 +123,9 @@ describe('useDocumentLayout', () => {
     expect(hidden).toEqual(['language', 'due_date', 'expiry_date'])
   })
 
-  it('exposes the default card order', () => {
-    const { cardOrder } = useDocumentLayout()
-    expect(cardOrder.value).toEqual([
-      'preview',
-      'markdown',
-      'series-chart',
-      'notes',
-      'metadata',
-      'comments',
-      'actions',
-      'history',
-    ])
+  it('exposes the default card columns', () => {
+    const { cardColumns } = useDocumentLayout()
+    expect(cardColumns.value).toEqual(DEFAULT_CARD_COLUMNS)
   })
 
   it('provides a human label for every hero field key', () => {
@@ -181,41 +178,47 @@ describe('useDocumentLayout', () => {
     expect(heroFields.value.map((f) => f.key)).toEqual(reversed)
   })
 
-  it('reorders cards and persists the order', async () => {
-    const { setCardOrder, moveCard, cardOrder } = useDocumentLayout()
-    const firstId = cardOrder.value[0]!
-    moveCard(0, 1)
-    expect(cardOrder.value[1]).toBe(firstId)
+  it('moveCard moves a card across columns to the target index', () => {
+    const layout = useDocumentLayout()
+    layout.resetLayout()
+    layout.moveCard('comments', 'right', 1)
+    expect(layout.cardColumns.value.left).not.toContain('comments')
+    expect(layout.cardColumns.value.right[1]).toBe('comments')
+  })
 
-    const reversed = [...cardOrder.value].reverse()
-    setCardOrder(reversed)
-    expect(cardOrder.value).toEqual(reversed)
+  it('setColumn replaces a column and persists it', async () => {
+    const { setColumn, cardColumns } = useDocumentLayout()
+    const reversedLeft = [...cardColumns.value.left].reverse()
+    setColumn('left', reversedLeft)
+    expect(cardColumns.value.left).toEqual(reversedLeft)
     await nextTick()
-    expect(localStorage.getItem(CARD_ORDER_STORAGE_KEY)).toContain('preview')
+    expect(localStorage.getItem(CARD_COLUMNS_STORAGE_KEY)).toContain('metadata')
   })
 
   it('round-trips persisted hero/card state and reconciles a fresh read', async () => {
-    const { setHeroFieldVisible, setCardOrder } = useDocumentLayout()
+    const { setHeroFieldVisible, setColumn } = useDocumentLayout()
     setHeroFieldVisible('kind', false)
-    setCardOrder([...DEFAULT_CARD_ORDER].reverse())
+    setColumn('left', [...DEFAULT_CARD_COLUMNS.left].reverse())
     await nextTick()
 
     // Simulate a fresh page load: reconcile what is now in localStorage.
     const storedHero = JSON.parse(localStorage.getItem(HERO_FIELDS_STORAGE_KEY)!) as HeroField[]
-    const storedCards = JSON.parse(localStorage.getItem(CARD_ORDER_STORAGE_KEY)!) as string[]
+    const storedColumns = JSON.parse(
+      localStorage.getItem(CARD_COLUMNS_STORAGE_KEY)!,
+    ) as CardColumns
     const hero = reconcileHeroFields(storedHero, DEFAULT_HERO_FIELDS)
-    const cards = reconcileCardOrder(storedCards, DEFAULT_CARD_ORDER)
+    const columns = reconcileCardColumns(storedColumns, DEFAULT_CARD_COLUMNS)
     expect(hero.find((f) => f.key === 'kind')?.visible).toBe(false)
-    expect(cards[0]).toBe('history')
+    expect(columns.left[0]).toBe('history')
   })
 
   it('resetLayout restores the defaults', () => {
-    const { setHeroFieldVisible, setCardOrder, resetLayout, heroFields, cardOrder } =
+    const { setHeroFieldVisible, setColumn, resetLayout, heroFields, cardColumns } =
       useDocumentLayout()
     setHeroFieldVisible('kind', false)
-    setCardOrder([...DEFAULT_CARD_ORDER].reverse())
+    setColumn('left', [...DEFAULT_CARD_COLUMNS.left].reverse())
     resetLayout()
     expect(heroFields.value).toEqual(DEFAULT_HERO_FIELDS)
-    expect(cardOrder.value).toEqual(DEFAULT_CARD_ORDER)
+    expect(cardColumns.value).toEqual(DEFAULT_CARD_COLUMNS)
   })
 })
