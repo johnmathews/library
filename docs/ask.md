@@ -1,6 +1,6 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-07-02 (metadata write tool — propose-then-confirm; recipient in answer context; citations collapsed by default; empty-state distinguishes no-conversations from none-selected).
+**Status:** active. **Last updated:** 2026-07-06 (`get_document` read tool — full text + comments for a located document, comments authoritative over inference, §1.2/§1.9; document comments — a new dated-annotation concept, embedded as their own searchable chunks, §1.9; composer Enter-to-send, §1.6). Earlier (2026-07-02): metadata write tool — propose-then-confirm; recipient in answer context; citations collapsed by default; empty-state distinguishes no-conversations from none-selected.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -31,14 +31,16 @@ right tool per question:
 ## 1.2 How it works
 
 ```
-question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybrid retrieval ─┐
-                                    │                      (FTS + vector RRF) │
-                                    ├─▶ query_documents ─▶ structured query ──┤
-                                    │                     (sender/kind/date)  │
-                                    └─▶ compare_to_series ─▶ series stats ───┤
-                                                            (distribution/    │
-                                                             trend/YoY)       │
-            answer + citations ◀───── Claude (answers from tool results) ◀────┘
+question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hybrid retrieval ─┐
+                                    │                       (FTS + vector RRF) │
+                                    ├─▶ query_documents ───▶ structured query ─┤
+                                    │                       (sender/kind/date) │
+                                    ├─▶ compare_to_series ─▶ series stats ─────┤
+                                    │                       (distribution/     │
+                                    │                        trend/YoY)        │
+                                    └─▶ get_document ──────▶ full text +      │
+                                                            comments (one doc) │
+            answer + citations ◀───── Claude (answers from tool results) ◀─────┘
 ```
 
 1. **Embedding (indexing).** After OCR + extraction + markdown generation,
@@ -87,8 +89,20 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ─▶ hybri
    (count/mean/median/stdev/min/max), a reference-vs-usual verdict, a trend
    direction, and a year-over-year comparison. All members contribute their ids
    to the citation set.
-5. **Answer** (`ask.engine`). Claude (`ask_model`, default
-   `claude-opus-4-8`) is given the three retrieval tools — plus a fourth
+5. **Full-document read** (`get_document`). Once another tool has located a
+   document, this reads it in full: structured fields, its **comments** (see
+   §1.9), and its text (joined per-page markdown, falling back to `ocr_text`),
+   truncated to `LIBRARY_ASK_GET_DOCUMENT_MAX_CHARS` (default 8000 chars, with
+   a `text_truncated` flag on the result). A document's comments are the user's
+   own dated notes about it and are **authoritative personal context** — the
+   system prompt tells the model to trust them over inference from the
+   document text alone (e.g. a comment saying "this is my current house"
+   settles which address is current). Comments are also independently
+   discoverable via `semantic_search`, since each is embedded as its own chunk
+   (§1.9) — `get_document` is for reading a *located* document in full, not
+   for finding one.
+6. **Answer** (`ask.engine`). Claude (`ask_model`, default
+   `claude-opus-4-8`) is given the four read tools above — plus a fifth,
    **`update_document_metadata` write tool** (§1.8) — and a bounded number of turns
    (`ask_max_tool_turns`). It is instructed to answer **only** from tool results,
    to say plainly when the archive doesn't contain the answer, and to cite the
@@ -124,6 +138,7 @@ All settings use the `LIBRARY_` env prefix (see `.env.example` /
 | `LIBRARY_ASK_MODEL` | `claude-opus-4-8` | Answer model. |
 | `LIBRARY_ASK_MAX_TOOL_TURNS` | `4` | Tool-use loop bound per turn. |
 | `LIBRARY_ASK_MAX_ANSWER_TOKENS` | `1024` | Max answer length. |
+| `LIBRARY_ASK_GET_DOCUMENT_MAX_CHARS` | `8000` | Cap on the text `get_document` returns for one document; longer text is truncated with `text_truncated: true`. |
 | `LIBRARY_ASK_HISTORY_TURNS` | `3` | Prior turns re-fed into the loop for follow-ups; `0` disables history (each turn answered cold, still recorded). |
 | `LIBRARY_SERIES_MIN_DOCUMENTS` | `3` | Minimum members before series stats are reported; below this `status:"insufficient"` is returned. |
 | `LIBRARY_SERIES_TYPICAL_PCT` | `0.10` | Half-width of the "typical" verdict band as a fraction of the median (OR'd with ±1 stdev). |
@@ -237,7 +252,10 @@ composer clears, while the answer slot shows a **thinking indicator** until the
 answer lands. The primary action becomes a live **Stop** button that cancels the
 in-flight request (it is never a greyed-out, inert control); a user-initiated
 stop or an API error removes the optimistic turn and restores the question to the
-composer for editing/resend. **Cmd/Ctrl+Enter** sends from the textarea. The
+composer for editing/resend. In the composer, plain **Enter sends**;
+**Shift+Enter** and **Ctrl+J** insert a newline instead; **Cmd/Ctrl+Enter**
+still sends; Enter is ignored while an IME composition is in progress (see
+[frontend.md §1.5](frontend.md)). The
 selected conversation in the sidebar is marked with a full-perimeter ring, and
 **Delete** is a two-step inline confirm (Delete → Confirm/Cancel) so a single
 misclick cannot destroy a thread.
@@ -346,8 +364,9 @@ see [api.md §1.13–1.14](api.md) for the wire contracts.
 
 ## 1.8 Editing document metadata (the write tool)
 
-Ask is an agentic tool-use loop, and beyond the three read-only retrieval tools
-it carries one **write tool, `update_document_metadata`** (`ask.engine`), so a
+Ask is an agentic tool-use loop, and beyond the four read-only retrieval tools
+(`semantic_search`, `query_documents`, `compare_to_series`, `get_document`) it
+carries one **write tool, `update_document_metadata`** (`ask.engine`), so a
 conversation can *correct* a document's metadata, not just read it. Writes are
 tightly guarded in code — the prompt asks for good behaviour, but the guardrails
 below are enforced regardless of what the model does.
@@ -391,7 +410,38 @@ the `user_edited` event tagged with `edited_by`, and returns the changed field
 list without committing — the caller owns the commit. The two entry points
 differ only in `edited_by` (`"user"` vs `"ask"`).
 
-## 1.9 Limitations (this release)
+## 1.9 Document comments
+
+A **comment** (`library.models.DocumentComment`, table `document_comments`) is
+user-authored, dated free text **attached to an existing document** — distinct
+from a **note**, which is its own `source='note'` Document. Comments exist so
+you can annotate a document ("this is my current house", "paid this by bank
+transfer, not the card on file") without editing its extracted metadata, and
+have Ask treat that annotation as ground truth.
+
+- **Storage.** `id`, `document_id`, `author_id`, `body`, `created_at`,
+  `updated_at`; `created_at` is the recorded date shown in the UI and in
+  `get_document`'s output. Cascades on document delete.
+- **API.** `GET`/`POST /api/documents/{id}/comments`,
+  `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — see
+  [api.md §1.19](api.md) for the wire contract. Every create/edit/delete writes
+  an `IngestionEvent` (`comment_added`/`comment_edited`/`comment_deleted`) and
+  defers a re-embed of the parent document.
+- **Indexing.** `library.jobs.embed_document` queries a document's comments
+  alongside its page/OCR text and embeds **one extra chunk per comment**,
+  framed as `User comment (YYYY-MM-DD): <body>` so the text itself carries the
+  date. Each such chunk carries the new nullable `document_chunks.comment_id`
+  back-reference (`NULL` for chunks derived from the document's own text), so a
+  comment surfaces through the ordinary `semantic_search` hybrid retrieval
+  exactly like any other passage — a document can now be *found* through what
+  someone said about it, not just its own text.
+- **Reading in full.** `get_document` (§1.2) returns a document's comments
+  verbatim (body + date) alongside its structured fields and text, and the
+  system prompt instructs the model to treat them as authoritative — see §1.2.
+- **UI.** A **Comments** card on the document detail page — see
+  [frontend.md §1.5](frontend.md).
+
+## 1.10 Limitations (this release)
 
 1. **Page citations are conditional on the markdown layer.** Documents that
    have a `document_pages` row (generated by the `markdown` pipeline stage or

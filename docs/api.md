@@ -1,6 +1,6 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-07-03 (verification flow: `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2). Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Status:** active. **Last updated:** 2026-07-06 (document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -42,6 +42,10 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/documents/{id}/searchable.pdf` | Download the OCR searchable PDF |
 | GET    | `/api/documents/{id}/thumbnail` | First-page WebP thumbnail |
 | GET    | `/api/documents/{id}/series` | Recurring-series stats + comparison for this document |
+| GET    | `/api/documents/{id}/comments` | List a document's comments, newest first |
+| POST   | `/api/documents/{id}/comments` | Add a comment to a document |
+| PATCH  | `/api/documents/{id}/comments/{cid}` | Edit a comment's body |
+| DELETE | `/api/documents/{id}/comments/{cid}` | Delete a comment |
 | POST   | `/api/notes` | Author a new in-app markdown note |
 | PATCH  | `/api/notes/{id}` | Edit a note's title/body in place (snapshots a version) |
 | GET    | `/api/notes/{id}/versions` | A note's version history (newest first) |
@@ -229,6 +233,11 @@ Everything in the list item, plus:
 - `user_edited_fields` — fields locked by user edits (see 1.5)
 - `events` — the full ingestion audit trail, oldest first:
   `[{event, detail, created_at}, …]`
+- `comments` — the document's comments, **newest first**:
+  `[{id, document_id, author_id, body, created_at}, …]` (the same `CommentOut`
+  shape as §1.19). A comment is a distinct concept from a note (§1.17): it is
+  user-authored dated text attached to *this* document, not a document of its
+  own, and it is separately indexed for `/ask` (§1.19).
 
 ### 1.4.1 Per-page markdown — `GET /api/documents/{id}/markdown`
 
@@ -773,9 +782,9 @@ unsupported `media_type`.
 - `citations` — documents the answer relied on (`document_id`, `title`,
   `page_number`); link these to `GET /api/documents/{id}`.
 - `used_tools` — which tools the engine invoked: the retrieval tools
-  (`semantic_search`, `query_documents`, `compare_to_series`) and the
-  metadata write tool (`update_document_metadata`) when the turn previewed or
-  saved a metadata edit (see [ask.md §1.8](ask.md)).
+  (`semantic_search`, `query_documents`, `compare_to_series`, `get_document`)
+  and the metadata write tool (`update_document_metadata`) when the turn
+  previewed or saved a metadata edit (see [ask.md §1.8](ask.md)).
 - `cost_usd` — estimated answer cost for this turn (recorded in `ask_turns`,
   not gated; thread total = sum of its turns).
 - `thread_id` — the conversation thread this turn belongs to (new or existing).
@@ -1365,3 +1374,40 @@ seed those rows; the normalise flow above only *flags* a missing rate.
   Errors: **`422`** the code is not `^[A-Z]{3}$`, is USD (the base), or a
   `"manual"` request omits `rate_to_base`; **`502`** the live provider failed or
   does not list the currency (the admin UI then offers manual entry).
+
+## 1.19 Comments — `/api/documents/{id}/comments`
+
+A **comment** is user-authored, dated free text attached to an *existing*
+document (`library.models.DocumentComment`, table `document_comments`) — a
+distinct concept from a **note** (§1.17), which is its own `source="note"`
+Document. A comment cannot exist without a parent document, is never itself
+searchable as a document, and is meant for annotating/correcting context
+("this is my current house") rather than authoring new content. Auth + CSRF
+apply exactly as elsewhere (§1.9).
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/documents/{id}/comments` | The document's comments, **newest first**: `[{id, document_id, author_id, body, created_at}, …]`. `404` for unknown/deleted documents. |
+| POST | `/api/documents/{id}/comments` | Body `{"body": "…"}`. `201` with the created comment. Blank/whitespace-only `body` is rejected `422`. Writes a `comment_added` ingestion event and defers a re-embed of the document. |
+| PATCH | `/api/documents/{id}/comments/{cid}` | Body `{"body": "…"}`, full replacement (there is no partial-field edit — a comment has one field). `200` with the updated comment. Blank body `422`; unknown or foreign (belonging to a different document) comment `404`. Writes a `comment_edited` event and defers a re-embed. |
+| DELETE | `/api/documents/{id}/comments/{cid}` | `204` on success; unknown or foreign comment `404`. Writes a `comment_deleted` event and defers a re-embed (the comment's chunk is dropped from search on the next embed run). |
+
+**Response shape (`CommentOut`):**
+
+```json
+{"id": 7, "document_id": 42, "author_id": 3, "body": "This is our current house.", "created_at": "2026-07-06T09:15:00Z"}
+```
+
+The same shape is embedded in the document detail response as `comments`
+(§1.4) — there is no separate "get one comment" endpoint; read a document's
+comments via either `GET /api/documents/{id}` or this list route.
+
+**Indexed for `/ask`.** Every create/edit/delete defers `embed_document`
+(`library.jobs`), which re-embeds the document's page/OCR text **and** one
+extra chunk per comment, framed `User comment (YYYY-MM-DD): <body>`. Each
+comment chunk carries the nullable `document_chunks.comment_id`
+back-reference (`NULL` for chunks derived from the document's own text,
+migration `0022`), so a comment surfaces through `semantic_search` like any
+other passage, and the Ask agent's `get_document` tool returns a document's
+comments verbatim as authoritative personal context — see
+[ask.md §1.9](ask.md).
