@@ -164,15 +164,16 @@ const askPrompt = computed<string>(() => {
 })
 
 /**
- * Open the Ask view in a new tab, pre-filled with `askPrompt`. Extracted so
- * both the hero button and the floating island (which appears once the hero
- * has scrolled off screen, see below) trigger the exact same navigation
- * rather than each duplicating the resolve-and-open logic.
+ * Where the "Ask about this document" action points: the Ask view,
+ * pre-filled with `askPrompt`. Shared so both the hero button and the
+ * floating island (which appears once the hero has scrolled off screen, see
+ * below) render as anchors pointing at the exact same URL rather than each
+ * duplicating the resolve logic. Both render a real `<a href target
+ * rel="noopener">` (via `AppButton`), so native new-tab affordances —
+ * middle-click, cmd/ctrl-click, right-click "open in new tab" — keep
+ * working, unlike a `window.open` call from a click handler.
  */
-function askAboutDocument(): void {
-  const { href } = router.resolve({ name: 'ask', query: { q: askPrompt.value } })
-  window.open(href, '_blank', 'noopener')
-}
+const askHref = computed(() => router.resolve({ name: 'ask', query: { q: askPrompt.value } }).href)
 
 // --- Floating island (Ask + metadata Edit/Done) -------------------------------
 //
@@ -823,11 +824,11 @@ watch(
         </div>
 
         <AppButton
-          type="button"
+          :href="askHref"
+          target="_blank"
           variant="primary"
           class="shrink-0 gap-1.5 self-start sm:self-end sm:ml-auto"
           data-testid="ask-about-document"
-          @click="askAboutDocument"
         >
           <svg
             xmlns="http://www.w3.org/2000/svg"
@@ -1181,11 +1182,12 @@ watch(
         </svg>
         {{ metadataEditMode ? 'Done' : 'Edit' }}
       </button>
-      <button
-        type="button"
-        class="btn-sm rounded-full bg-violet-500 hover:bg-violet-600 text-white gap-1.5"
+      <AppButton
+        :href="askHref"
+        target="_blank"
+        size="sm"
+        class="rounded-full gap-1.5"
         data-testid="island-ask"
-        @click="askAboutDocument"
       >
         <svg
           xmlns="http://www.w3.org/2000/svg"
@@ -1203,7 +1205,7 @@ watch(
           />
         </svg>
         Ask
-      </button>
+      </AppButton>
     </div>
   </template>
 

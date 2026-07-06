@@ -229,8 +229,8 @@ describe('DocumentDetailView', () => {
     wrapper?.unmount()
     wrapper = undefined
     vi.unstubAllGlobals()
-    // Restore any vi.spyOn (e.g. window.open) so a later test's fresh spy
-    // starts with empty call history instead of accumulating across tests.
+    // Restore any vi.spyOn (e.g. the disconnect spy below) so a later test's
+    // fresh spy starts with empty call history instead of accumulating.
     vi.restoreAllMocks()
   })
 
@@ -1297,20 +1297,17 @@ describe('DocumentDetailView', () => {
     expect(link.attributes('href')).toBe('/jobs?document_id=12')
   })
 
-  it('opens "Ask about this document" to /ask in a new tab, seeding the title (W1)', async () => {
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+  it('links "Ask about this document" to /ask in a new tab, seeding the title (W1)', async () => {
     const w = await mountView()
     const button = w.find('[data-testid="ask-about-document"]')
     expect(button.exists()).toBe(true)
-    await button.trigger('click')
-
-    expect(openSpy).toHaveBeenCalledTimes(1)
-    const [url, target, features] = openSpy.mock.calls[0]!
-    expect(target).toBe('_blank')
+    expect(button.attributes('target')).toBe('_blank')
     // Guard against tab-napping regressing.
-    expect(features).toContain('noopener')
-    const q = new URL(String(url), 'http://localhost').searchParams.get('q') ?? ''
-    expect(q).toContain('Energierekening mei 2026')
+    expect(button.attributes('rel')).toContain('noopener')
+    const href = button.attributes('href') ?? ''
+    const url = new URL(href, 'http://localhost')
+    expect(url.pathname).toBe('/ask')
+    expect(url.searchParams.get('q') ?? '').toContain('Energierekening mei 2026')
   })
 
   it('places the "Ask about this document" button in the hero, not the Actions panel', async () => {
@@ -1322,12 +1319,10 @@ describe('DocumentDetailView', () => {
   })
 
   it('omits the parenthetical entirely when kind/sender/date are all missing (W1)', async () => {
-    const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
     detail = makeDetail({ kind: null, sender: null, document_date: null })
     const w = await mountView()
-    await w.find('[data-testid="ask-about-document"]').trigger('click')
-    const url = String(openSpy.mock.calls[0]![0])
-    const q = new URL(url, 'http://localhost').searchParams.get('q') ?? ''
+    const href = w.find('[data-testid="ask-about-document"]').attributes('href') ?? ''
+    const q = new URL(href, 'http://localhost').searchParams.get('q') ?? ''
     // No empty parenthetical and no dangling open-paren at all.
     expect(q).not.toContain('()')
     expect(q).not.toContain('(')
@@ -1685,19 +1680,20 @@ describe('DocumentDetailView', () => {
       expect(w.find('#edit-title').exists()).toBe(false)
     })
 
-    it('island-ask calls the shared ask-about-document navigation', async () => {
-      const openSpy = vi.spyOn(window, 'open').mockReturnValue(null)
+    it('island-ask links to the same shared /ask href as the hero button', async () => {
       const w = await mountView()
       lastIntersectionObserver().trigger(false)
       await flushPromises()
 
-      await w.find('[data-testid="island-ask"]').trigger('click')
-
-      expect(openSpy).toHaveBeenCalledTimes(1)
-      const [url, target] = openSpy.mock.calls[0]!
-      expect(target).toBe('_blank')
-      const q = new URL(String(url), 'http://localhost').searchParams.get('q') ?? ''
-      expect(q).toContain('Energierekening mei 2026')
+      const islandAsk = w.find('[data-testid="island-ask"]')
+      const heroAsk = w.find('[data-testid="ask-about-document"]')
+      expect(islandAsk.attributes('target')).toBe('_blank')
+      expect(islandAsk.attributes('rel')).toContain('noopener')
+      // Both anchors share the same computed href — one code path, two renders.
+      expect(islandAsk.attributes('href')).toBe(heroAsk.attributes('href'))
+      const url = new URL(islandAsk.attributes('href') ?? '', 'http://localhost')
+      expect(url.pathname).toBe('/ask')
+      expect(url.searchParams.get('q') ?? '').toContain('Energierekening mei 2026')
     })
   })
 })

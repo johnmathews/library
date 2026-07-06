@@ -8,11 +8,13 @@
  * Extracted from DocumentDetailView. The parent owns `doc` as the single source
  * of truth and binds `v-model:doc`; every save PATCHes one field and this editor
  * emits the server's fresh DocumentDetail back up so the hero/preview never
- * freeze on a pre-save snapshot. Drafts are re-hydrated ONLY when the Edit toggle
- * opens — never on a prop change — so an external SSE refresh mid-edit never
- * clobbers in-progress drafts.
+ * freeze on a pre-save snapshot. Drafts are re-hydrated ONLY when the shared
+ * edit-mode flag flips on (via a `watch`, so this fires no matter which button —
+ * this card's own toggle or the detail view's floating island — flipped it) —
+ * never on a prop change — so an external SSE refresh mid-edit never clobbers
+ * in-progress drafts.
  */
-import { computed, onMounted, reactive, ref } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import {
   AppBadge,
   AppDateInput,
@@ -290,8 +292,13 @@ function sourceLabel(source: string): string {
 // also read and flip this same flag — its Edit/Done button must open these
 // very editors, not an independent second mode. Ephemeral: the detail view
 // resets it to false on unmount.
-const { editMode, toggle: toggleSharedEditMode, setEditMode: setSharedEditMode } =
-  useMetadataEditMode()
+//
+// Hydration/reset is driven by a `watch` below (not by whichever function
+// flips the flag): the flag can flip from this card's own toggle OR from the
+// island, and both entry paths must hydrate fresh drafts before the editors
+// render — otherwise the path that doesn't call `toggleEditMode` directly
+// would open the editors with stale/empty drafts and risk autosaving them.
+const { editMode, toggle: toggleSharedEditMode } = useMetadataEditMode()
 
 /** The fields whose draft is a plain string (text inputs + selects). */
 type StringDraftField =
@@ -376,13 +383,10 @@ function hydrateField(field: EditableField, d: DocumentDetail): void {
 
 function toggleEditMode(): void {
   toggleSharedEditMode()
-  if (editMode.value) hydrateDrafts()
-  else resetEditState()
 }
 
 /** Leave edit mode and clear the transient per-field error / "Saved" state. */
 function resetEditState(): void {
-  setSharedEditMode(false)
   recipientAdding.value = false
   recipientNewName.value = ''
   kindAdding.value = false
@@ -390,6 +394,17 @@ function resetEditState(): void {
   for (const key of Object.keys(fieldError)) fieldError[key] = null
   for (const key of Object.keys(savedField)) savedField[key] = false
 }
+
+// Hydrate on entry / reset on exit whenever the SHARED flag changes — fired
+// for both this card's own toggle and the detail view's floating island,
+// since both flip the same singleton. Moving this out of `toggleEditMode`
+// (which only the card's own button called) is what makes the island's
+// toggle hydrate fresh drafts too, instead of opening the editors with
+// whatever stale/empty drafts happened to be left over.
+watch(editMode, (on) => {
+  if (on) hydrateDrafts()
+  else resetEditState()
+})
 
 /** Whether a field's draft differs from the stored value — guards autosave so a
  * plain focus-through (no real edit) never fires a needless PATCH. */

@@ -162,6 +162,25 @@ describe('DocumentMetadataEditor', () => {
     expect((wrapper.find('#edit-title').element as HTMLInputElement).value).toBe('Half-typed edit')
   })
 
+  it('hydrates drafts when the shared edit mode is flipped by an external caller (e.g. the island), not just this card\'s own toggle', async () => {
+    // Regression test: the shared `useMetadataEditMode` flag can be flipped by
+    // DocumentDetailView's floating island as well as this card's own
+    // `edit-toggle` button. Flip it directly here (bypassing the card's own
+    // button entirely) to simulate the island's path.
+    const { wrapper, doc } = mountEditor()
+    await flushPromises()
+
+    useMetadataEditMode().editMode.value = true
+    await flushPromises()
+
+    expect((wrapper.find('#edit-title').element as HTMLInputElement).value).toBe(doc.title)
+    expect((wrapper.find('#edit-sender').element as HTMLInputElement).value).toBe(
+      doc.sender?.name ?? '',
+    )
+    // Entering edit mode alone (no field committed) must never autosave.
+    expect(updateDocument).not.toHaveBeenCalled()
+  })
+
   it('renders the sender datalist adjacent to the sender input', async () => {
     const { wrapper } = mountEditor()
     await flushPromises()
