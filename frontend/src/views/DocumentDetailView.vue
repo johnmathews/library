@@ -804,7 +804,7 @@ watch(
            still be toggled/reordered. -->
       <div v-else-if="layoutEditMode" class="mt-6" data-testid="hero-fields-editor">
         <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
-          Show, hide and drag to reorder the fields shown here. Cards below reorder within their column.
+          Show, hide and drag to reorder the fields shown here. Cards below can be dragged to reorder them or move them between columns.
         </p>
         <ul ref="heroEditListEl" role="list" class="flex flex-col gap-1">
           <li
