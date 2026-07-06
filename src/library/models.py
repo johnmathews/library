@@ -181,6 +181,36 @@ class ApiToken(Base):
     user: Mapped[User] = relationship(back_populates="api_tokens")
 
 
+class SavedView(Base):
+    """A named, per-user snapshot of the document-list filter/search state.
+
+    ``filter_state`` stores the frontend's canonical URL query (the
+    ``buildDocumentQuery`` output) verbatim, so applying a view is just pushing
+    that query at the homepage. ``pinned`` surfaces the view as a custom
+    dashboard in the sidebar; ``sort_order`` orders a user's views (and their
+    pinned subset). Scoped to one user — cascade-deleted with the account.
+    """
+
+    __tablename__ = "saved_views"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    name: Mapped[str] = mapped_column(String(255))
+    filter_state: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb"), default=dict
+    )
+    pinned: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    # Composite index serves both the FK lookup (user_id prefix) and the
+    # per-user ordered listing.
+    __table_args__ = (Index("ix_saved_views_user_id_sort_order", "user_id", "sort_order"),)
+
+
 class Kind(Base):
     """Document kind (invoice, receipt, ...); rows are seeded by migration."""
 
@@ -363,7 +393,7 @@ class Document(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
-    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    deleted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
 
     search_vector_nl: Mapped[str | None] = mapped_column(
         TSVECTOR,

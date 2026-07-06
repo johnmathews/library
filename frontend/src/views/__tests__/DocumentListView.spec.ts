@@ -8,6 +8,7 @@ import type { DashboardField } from '@/api/settings'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import { useJobsStore } from '@/stores/jobs'
+import { useSavedViewsStore } from '@/stores/savedViews'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -100,6 +101,26 @@ describe('DocumentListView', () => {
         // Echo the persisted field list back (server-cleaned shape).
         const body = init?.body ? JSON.parse(String(init.body)) : {}
         return Promise.resolve(jsonResponse({ dashboard_fields: body.dashboard_fields ?? [] }))
+      }
+      if (url === '/api/saved-views') {
+        if (init?.method === 'POST') {
+          const body = init.body ? JSON.parse(String(init.body)) : {}
+          return Promise.resolve(
+            jsonResponse(
+              {
+                id: 1,
+                name: body.name,
+                filter_state: body.filter_state ?? {},
+                pinned: body.pinned ?? false,
+                sort_order: 0,
+                created_at: '2026-07-01T00:00:00Z',
+                updated_at: '2026-07-01T00:00:00Z',
+              },
+              201,
+            ),
+          )
+        }
+        return Promise.resolve(jsonResponse([]))
       }
       if (url.startsWith('/api/documents')) {
         // The needs-review count probe is a distinct total-only query.
@@ -333,6 +354,59 @@ describe('DocumentListView', () => {
       dashboard_fields: ['kind', 'sender'],
     })
     expect(useAuthStore().dashboardFields).toEqual(['kind', 'sender'])
+  })
+
+  it('saves the current filter/search state as a named view via the Save-view control', async () => {
+    await router.push('/?kind=invoice&q=rekening')
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+
+    // The control opens a popover with the name input + pin checkbox.
+    expect(w.find('[data-testid="save-view-panel"]').exists()).toBe(false)
+    await w.find('[data-testid="save-view-menu"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="save-view-panel"]').exists()).toBe(true)
+
+    await w.find('[data-testid="save-view-name"]').setValue('Unpaid invoices')
+    await w.find('[data-testid="save-view-pinned"]').setValue(true)
+    await w.find('[data-testid="save-view-panel"] form').trigger('submit')
+    await flushPromises()
+
+    const post = fetchMock.mock.calls.find(
+      (call) => String(call[0]) === '/api/saved-views' && (call[1] as RequestInit)?.method === 'POST',
+    )
+    expect(post).toBeTruthy()
+    // The saved filter_state is the EXACT current URL query (buildDocumentQuery).
+    expect(JSON.parse(String((post![1] as RequestInit).body))).toEqual({
+      name: 'Unpaid invoices',
+      filter_state: { q: 'rekening', kind: 'invoice' },
+      pinned: true,
+    })
+    // A success flash is queued for the next view render.
+    expect(useFlashStore().message).toBe('View saved')
+  })
+
+  it('quick-applies an existing saved view from the popover, navigating home with its query', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    const savedViews = useSavedViewsStore()
+    savedViews.views = [
+      {
+        id: 3,
+        name: 'Tax 2026',
+        filter_state: { tag: 'tax' },
+        pinned: false,
+        sort_order: 0,
+        created_at: '2026-07-01T00:00:00Z',
+        updated_at: '2026-07-01T00:00:00Z',
+      },
+    ]
+    savedViews.loaded = true
+    await w.find('[data-testid="save-view-menu"]').trigger('click')
+    await flushPromises()
+    await w.find('[data-testid="apply-view-3"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ tag: 'tax' })
   })
 
   it('places the Fields button in the sort/tiles controls row', async () => {

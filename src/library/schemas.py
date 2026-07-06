@@ -158,6 +158,31 @@ class DocumentListResponse(BaseModel):
     offset: int
 
 
+class DeletedDocumentItem(DocumentListItem):
+    """One row of GET /api/documents/deleted: a soft-deleted document plus the
+    metadata the Recently-Deleted UI needs to show how long it has left."""
+
+    deleted_at: datetime = Field(description="When the document was soft-deleted.")
+    purge_at: datetime = Field(
+        description="When the daily purge will hard-delete it (deleted_at + retention)."
+    )
+    days_remaining: int = Field(
+        description="Whole days until purge_at, floored at 0 (0 = eligible on the next purge run).",
+    )
+
+
+class DeletedDocumentListResponse(BaseModel):
+    """Paginated body of GET /api/documents/deleted."""
+
+    items: list[DeletedDocumentItem]
+    total: int = Field(description="Total soft-deleted documents before limit/offset.")
+    limit: int
+    offset: int
+    retention_days: int = Field(
+        description="Configured retention window; purge_at = deleted_at + this many days."
+    )
+
+
 class DocumentDetail(DocumentListItem):
     """Body of GET/PATCH /api/documents/{id}: list item plus full content."""
 

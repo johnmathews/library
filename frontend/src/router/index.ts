@@ -26,6 +26,11 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/DocumentDeleteView.vue'),
   },
   {
+    path: '/deleted',
+    name: 'documents-deleted',
+    component: () => import('../views/RecentlyDeletedView.vue'),
+  },
+  {
     path: '/upload',
     name: 'upload',
     component: () => import('../views/UploadView.vue'),
@@ -64,6 +69,11 @@ export const routes: RouteRecordRaw[] = [
     path: '/projects',
     name: 'projects',
     component: () => import('../views/ProjectsListView.vue'),
+  },
+  {
+    path: '/saved-views',
+    name: 'saved-views',
+    component: () => import('../views/SavedViewsView.vue'),
   },
   {
     // Single, shareable chart for one series (stable {sender}-{kind}-{currency} id).

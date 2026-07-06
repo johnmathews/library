@@ -18,6 +18,7 @@ import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { AppBadge, AppBanner, PageHeader } from '@/components/app'
 import DocumentFilterBar from '@/components/DocumentFilterBar.vue'
 import DashboardFieldsMenu from '@/components/DashboardFieldsMenu.vue'
+import SaveViewMenu from '@/components/SaveViewMenu.vue'
 import {
   DOCUMENT_LANGUAGES,
   listDocuments,
@@ -65,6 +66,10 @@ const flashMessage = ref(useFlashStore().consume())
 
 const applied = computed(() => parseDocumentQuery(route.query))
 const isFiltered = computed(() => hasActiveFilters(applied.value))
+
+// The canonical URL query for the current applied state — what the "Save view"
+// control persists so a saved view reproduces the exact filter/search/sort set.
+const currentQuery = computed<LocationQueryRaw>(() => buildDocumentQuery(applied.value))
 
 function clearFilters(): void {
   void router.push({ query: {} })
@@ -475,6 +480,7 @@ function toggleSortDirection(): void {
             </option>
           </select>
         </label>
+        <SaveViewMenu :filter-state="currentQuery" />
         <DashboardFieldsMenu />
       </div>
     </div>

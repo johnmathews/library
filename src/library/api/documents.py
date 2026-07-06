@@ -7,13 +7,13 @@ Search semantics live in ``library.search`` (shared with the MCP server);
 see docs/api.md §1.3.3 for the user-facing description.
 """
 
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.auth.deps import current_user
@@ -36,6 +36,8 @@ from library.models import (
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
 from library.schemas import (
     CommentOut,
+    DeletedDocumentItem,
+    DeletedDocumentListResponse,
     DocumentDetail,
     DocumentListItem,
     DocumentListResponse,
@@ -263,6 +265,49 @@ async def list_documents(
 
 
 @router.get(
+    "/documents/deleted",
+    response_model=DeletedDocumentListResponse,
+    summary="List soft-deleted documents (Recently Deleted)",
+)
+async def list_deleted_documents(
+    session: Annotated[AsyncSession, Depends(get_session)],
+    limit: Annotated[int, Query(ge=1, le=100)] = 25,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> DeletedDocumentListResponse:
+    """The Recently-Deleted holding area: documents with ``deleted_at`` set,
+    newest-deleted first, each annotated with when it will be purged.
+
+    This deliberately *inverts* the ``deleted_at IS NULL`` predicate every other
+    read path applies, so it does not reuse the shared search filter.
+    """
+    retention_days = get_settings().deleted_retention_days
+    now = datetime.now(UTC)
+
+    condition = Document.deleted_at.is_not(None)
+    total = (
+        await session.execute(select(func.count()).select_from(Document).where(condition))
+    ).scalar_one()
+    result = await session.execute(
+        select(Document)
+        .where(condition)
+        .order_by(Document.deleted_at.desc())
+        .limit(limit)
+        .offset(offset)
+    )
+    items = [
+        _deleted_item(document, retention_days=retention_days, now=now)
+        for document in result.scalars().all()
+    ]
+    return DeletedDocumentListResponse(
+        items=items,
+        total=total,
+        limit=limit,
+        offset=offset,
+        retention_days=retention_days,
+    )
+
+
+@router.get(
     "/documents/{document_id}",
     response_model=DocumentDetail,
     summary="Document detail",
@@ -385,13 +430,44 @@ async def delete_document(
 ) -> None:
     """Set ``deleted_at`` and record a ``deleted`` event; the row and file stay.
 
-    Deleted documents 404 on every endpoint. Restore is out of scope for
-    now (clear ``deleted_at`` in the database).
+    Deleted documents 404 on every read endpoint and drop out of every list and
+    search. They surface only in GET /api/documents/deleted until either restored
+    (POST .../restore) or hard-deleted by the daily purge after the retention
+    window.
     """
     document = await _get_document_or_404(session, document_id)
     document.deleted_at = datetime.now(UTC)
     session.add(IngestionEvent(document_id=document.id, event="deleted", detail={}))
     await session.commit()
+
+
+@router.post(
+    "/documents/{document_id}/restore",
+    response_model=DocumentDetail,
+    summary="Restore a soft-deleted document",
+    responses={404: {"description": "Unknown or not-currently-deleted document"}},
+)
+async def restore_document(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> DocumentDetail:
+    """Clear ``deleted_at`` so the document reappears everywhere, and record a
+    ``restored`` event.
+
+    404s unless the document exists and is *currently* soft-deleted — restoring a
+    live document is a no-op the caller should treat as an error. Restore never
+    collides with a re-upload: uploading content matching a soft-deleted document
+    is rejected with 409 (``DeletedDuplicateError``), so at most one row ever
+    holds a given sha256 and there is nothing to reconcile.
+    """
+    document = await _get_deleted_document_or_404(session, document_id)
+    document.deleted_at = None
+    session.add(IngestionEvent(document_id=document.id, event="restored", detail={}))
+    await session.commit()
+    # updated_at has a SQL onupdate (func.now()); expired after the UPDATE, so
+    # refresh it (and the events relationship) before _detail reads them.
+    await session.refresh(document, ["events", "updated_at"])
+    return await _detail(session, document)
 
 
 @router.post(
@@ -528,6 +604,34 @@ async def _get_document_or_404(session: AsyncSession, document_id: int) -> Docum
     if document is None or document.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
     return document
+
+
+async def _get_deleted_document_or_404(session: AsyncSession, document_id: int) -> Document:
+    """The document, or 404 unless it exists and is *currently* soft-deleted.
+
+    The inverse of ``_get_document_or_404``: used by restore, where a live (or
+    unknown) document is not a valid target.
+    """
+    document = await session.get(Document, document_id)
+    if document is None or document.deleted_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="deleted document not found"
+        )
+    return document
+
+
+def _deleted_item(document: Document, *, retention_days: int, now: datetime) -> DeletedDocumentItem:
+    """A Recently-Deleted row: the list fields plus purge timing. ``deleted_at``
+    is never None here (callers filter ``deleted_at IS NOT NULL``)."""
+    assert document.deleted_at is not None  # guaranteed by the query predicate
+    purge_at = document.deleted_at + timedelta(days=retention_days)
+    days_remaining = max(0, (purge_at - now).days)
+    return DeletedDocumentItem(
+        **_list_item_fields(document),
+        deleted_at=document.deleted_at,
+        purge_at=purge_at,
+        days_remaining=days_remaining,
+    )
 
 
 def _list_item_fields(document: Document) -> dict[str, Any]:

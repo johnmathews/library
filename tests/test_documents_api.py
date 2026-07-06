@@ -10,7 +10,7 @@ import asyncio
 import hashlib
 import io
 from collections.abc import Iterable
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
@@ -622,6 +622,106 @@ def test_delete_soft_deletes_and_404s_everywhere(
         lambda: api_client.get(f"/api/documents/{document_id}/thumbnail"),
     ):
         assert request().status_code == 404
+
+
+# --- Recently Deleted: list + restore ----------------------------------------
+
+
+def deleted_docs(client: TestClient, **params: Any) -> dict[str, Any]:
+    response = client.get("/api/documents/deleted", params=params)
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+def test_list_deleted_returns_only_soft_deleted(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    live_id = seed_document(api_database_url, "w1-deleted-live", tag_slugs=["w1-del-live"])
+    # deleted_at = now → sorts to the top of the newest-first deleted list.
+    deleted_id = seed_document(api_database_url, "w1-deleted-gone", deleted_at=datetime.now(UTC))
+
+    body = deleted_docs(api_client, limit=100)
+    ids = {item["id"] for item in body["items"]}
+    assert deleted_id in ids
+    assert live_id not in ids  # a live document never appears in Recently Deleted
+    assert body["retention_days"] >= 1
+
+    item = next(item for item in body["items"] if item["id"] == deleted_id)
+    assert item["deleted_at"] is not None
+    assert item["purge_at"] is not None
+    assert item["days_remaining"] >= 0
+
+    # The live document is still in the normal list; the deleted one is gone.
+    assert list_docs(api_client, tag="w1-del-live")["total"] == 1
+
+
+def test_list_deleted_days_remaining_reflects_retention(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    # Deleted 10 days ago, default 30-day retention → ~20 days left. Allow a
+    # 1-day slack for the sub-second gap between seeding and the endpoint's now().
+    deleted_id = seed_document(
+        api_database_url,
+        "w1-deleted-aged",
+        deleted_at=datetime.now(UTC) - timedelta(days=10),
+    )
+    body = deleted_docs(api_client, limit=100)
+    item = next(item for item in body["items"] if item["id"] == deleted_id)
+    assert item["days_remaining"] in (19, 20)
+
+
+def test_restore_clears_deleted_at_and_reappears(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    document_id = seed_document(api_database_url, "w1-restore", tag_slugs=["w1-restore"])
+    assert api_client.delete(f"/api/documents/{document_id}").status_code == 204
+    assert list_docs(api_client, tag="w1-restore")["total"] == 0
+
+    response = api_client.post(f"/api/documents/{document_id}/restore")
+    assert response.status_code == 200, response.text
+    assert response.json()["id"] == document_id
+
+    # Reappears in the normal list and on the detail endpoint.
+    assert list_docs(api_client, tag="w1-restore")["total"] == 1
+    assert api_client.get(f"/api/documents/{document_id}").status_code == 200
+
+    # A restored event is recorded and deleted_at is cleared.
+    events = fetch_all(
+        api_database_url,
+        "SELECT event FROM ingestion_events WHERE document_id = :id",
+        id=document_id,
+    )
+    assert ("restored",) in events
+    rows = fetch_all(
+        api_database_url, "SELECT deleted_at FROM documents WHERE id = :id", id=document_id
+    )
+    assert rows[0][0] is None
+
+    # No longer in the Recently-Deleted list.
+    body = deleted_docs(api_client, limit=100)
+    assert document_id not in {item["id"] for item in body["items"]}
+
+
+def test_restore_unknown_or_live_document_404(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    assert api_client.post("/api/documents/987654321/restore").status_code == 404
+    live_id = seed_document(api_database_url, "w1-restore-live")
+    assert api_client.post(f"/api/documents/{live_id}/restore").status_code == 404
+
+
+def test_deleted_note_lists_and_restores(api_client: TestClient, api_database_url: str) -> None:
+    # A note is a Document with source=NOTE, so it flows through the same
+    # soft-delete/restore path (the "documents + notes" scope decision).
+    note_id = seed_document(
+        api_database_url,
+        "w1-deleted-note",
+        source=DocumentSource.NOTE,
+        deleted_at=datetime.now(UTC),
+    )
+    body = deleted_docs(api_client, limit=100)
+    assert note_id in {item["id"] for item in body["items"]}
+    assert api_client.post(f"/api/documents/{note_id}/restore").status_code == 200
 
 
 # --- Re-extraction -------------------------------------------------------------

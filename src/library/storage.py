@@ -12,6 +12,7 @@ and idempotent: storing already-present content is a no-op.
 import hashlib
 import os
 import re
+import shutil
 import tempfile
 from pathlib import Path
 from typing import BinaryIO, NamedTuple
@@ -88,3 +89,15 @@ def store(content: bytes, *, data_dir: Path | None = None) -> StoreResult:
 def open_original(sha256: str, *, data_dir: Path | None = None) -> BinaryIO:
     """Open a stored original for reading; raises FileNotFoundError if absent."""
     return path_for(sha256, data_dir=data_dir).open("rb")
+
+
+def remove(sha256: str, *, data_dir: Path | None = None) -> None:
+    """Delete a document's stored original and every derived artifact.
+
+    Idempotent: absent files/directories are ignored, so a partially-purged or
+    never-materialised document deletes cleanly. Safe to call per document
+    because ``documents.sha256`` is unique — exactly one row ever references
+    these paths, so removing them can never affect another document.
+    """
+    path_for(sha256, data_dir=data_dir).unlink(missing_ok=True)
+    shutil.rmtree(derived_path(sha256, data_dir=data_dir), ignore_errors=True)

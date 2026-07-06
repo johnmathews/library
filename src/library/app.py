@@ -21,6 +21,7 @@ from library.api import (
     jobs,
     notes,
     projects,
+    saved_views,
     series,
     settings,
     taxonomy,
@@ -216,6 +217,7 @@ def create_app() -> FastAPI:
     api_router.include_router(series.router)
     api_router.include_router(taxonomy.router)
     api_router.include_router(projects.router)
+    api_router.include_router(saved_views.router)
     api_router.include_router(jobs.router)
     api_router.include_router(events.router)
     api_router.include_router(settings.router)

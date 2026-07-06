@@ -1,14 +1,25 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 import AppSidebar from '../AppSidebar.vue'
 import { useAuthStore } from '@/stores/auth'
+import { useSavedViewsStore } from '@/stores/savedViews'
+import type { SavedView } from '@/api/savedViews'
+
+vi.mock('@/api/savedViews', () => ({
+  listSavedViews: vi.fn().mockResolvedValue([]),
+  createSavedView: vi.fn(),
+  updateSavedView: vi.fn(),
+  deleteSavedView: vi.fn(),
+  reorderSavedViews: vi.fn(),
+}))
 
 const router = createRouter({
   history: createMemoryHistory(),
   routes: [
     { path: '/', name: 'documents', component: { template: '<div/>' } },
+    { path: '/deleted', name: 'documents-deleted', component: { template: '<div/>' } },
     { path: '/upload', name: 'upload', component: { template: '<div/>' } },
     { path: '/notes/new', name: 'note-new', component: { template: '<div/>' } },
     { path: '/ask', name: 'ask', component: { template: '<div/>' } },
@@ -16,6 +27,7 @@ const router = createRouter({
     { path: '/jobs', name: 'jobs', component: { template: '<div/>' } },
     { path: '/charts', name: 'charts', component: { template: '<div/>' } },
     { path: '/projects', name: 'projects', component: { template: '<div/>' } },
+    { path: '/saved-views', name: 'saved-views', component: { template: '<div/>' } },
     { path: '/admin', name: 'admin', component: { template: '<div/>' } },
   ],
 })
@@ -30,6 +42,26 @@ function seedAuth(admin: boolean): void {
     is_admin: admin,
     preferences: { dashboard_fields: [] },
   }
+}
+
+function makeView(overrides: Partial<SavedView> = {}): SavedView {
+  return {
+    id: 1,
+    name: 'View',
+    filter_state: {},
+    pinned: false,
+    sort_order: 0,
+    created_at: '2026-07-01T00:00:00Z',
+    updated_at: '2026-07-01T00:00:00Z',
+    ...overrides,
+  }
+}
+
+/** Directly seed the saved-views store (bypasses the load fetch). */
+function seedViews(views: SavedView[]): void {
+  const store = useSavedViewsStore()
+  store.views = views
+  store.loaded = true
 }
 
 beforeEach(() => {
@@ -94,6 +126,20 @@ describe('AppSidebar', () => {
     expect(chartsLink.text()).toContain('Charts')
   })
 
+  it('renders a Recently Deleted nav link to /deleted', async () => {
+    seedAuth(false)
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    const deletedLink = wrapper.find('[data-testid="sidebar-deleted-link"]')
+    expect(deletedLink.exists()).toBe(true)
+    expect(deletedLink.attributes('href')).toBe('/deleted')
+    expect(deletedLink.text()).toContain('Recently Deleted')
+  })
+
   it('orders the nav: Charts after New note, Projects before Settings', async () => {
     seedAuth(true)
     router.push('/')
@@ -107,15 +153,64 @@ describe('AppSidebar', () => {
       .map((a) => a.attributes('data-testid'))
     expect(order).toEqual([
       'sidebar-documents-link',
+      'sidebar-deleted-link',
       'sidebar-upload-link',
       'sidebar-notes-link',
       'sidebar-charts-link',
       'sidebar-ask-link',
       'sidebar-jobs-link',
       'sidebar-projects-link',
+      'sidebar-saved-views-link',
       'sidebar-settings-link',
       'sidebar-admin-link',
     ])
+  })
+
+  it('renders a Saved views nav link to /saved-views', async () => {
+    seedAuth(false)
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    const link = wrapper.find('[data-testid="sidebar-saved-views-link"]')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('/saved-views')
+    expect(link.text()).toContain('Saved views')
+  })
+
+  it('renders pinned saved views as dashboard links to / with their saved query', async () => {
+    seedAuth(false)
+    seedViews([
+      makeView({ id: 7, name: 'Unpaid invoices', pinned: true, filter_state: { kind: 'invoice' } }),
+      makeView({ id: 8, name: 'Drafts', pinned: false, filter_state: { status: 'draft' } }),
+    ])
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    const pinned = wrapper.find('[data-testid="sidebar-dashboard-7"]')
+    expect(pinned.exists()).toBe(true)
+    expect(pinned.text()).toContain('Unpaid invoices')
+    // Links home with the saved filter state in the query string.
+    expect(pinned.attributes('href')).toBe('/?kind=invoice')
+    // Unpinned views never appear as dashboards.
+    expect(wrapper.find('[data-testid="sidebar-dashboard-8"]').exists()).toBe(false)
+  })
+
+  it('hides the Dashboards section entirely when no views are pinned', async () => {
+    seedAuth(false)
+    seedViews([makeView({ id: 8, pinned: false })])
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    expect(wrapper.find('[data-testid="sidebar-dashboards-section"]').exists()).toBe(false)
   })
 
   it('renders the desktop expand/collapse toggle', async () => {

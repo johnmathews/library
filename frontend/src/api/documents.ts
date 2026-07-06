@@ -101,6 +101,26 @@ export interface DocumentListResponse {
   offset: number
 }
 
+/**
+ * One row of GET /api/documents/deleted: a normal list item plus the
+ * soft-delete lifecycle fields. `deleted_at`/`purge_at` are ISO datetimes;
+ * `days_remaining` counts down to the automatic permanent purge.
+ */
+export interface DeletedDocumentItem extends DocumentListItem {
+  deleted_at: string
+  purge_at: string
+  days_remaining: number
+}
+
+/** Paginated body of GET /api/documents/deleted (adds the retention window). */
+export interface DeletedDocumentListResponse {
+  items: DeletedDocumentItem[]
+  total: number
+  limit: number
+  offset: number
+  retention_days: number
+}
+
 /** One finding from the extraction validation step (detail: adds severity). */
 export interface ValidationFinding extends ValidationFindingSummary {
   severity: 'warn' | 'error'
@@ -283,6 +303,25 @@ export function updateDocument(id: number, patch: DocumentUpdate): Promise<Docum
 /** DELETE /api/documents/{id} — soft delete (204). */
 export function deleteDocument(id: number): Promise<void> {
   return apiFetch<void>(`/api/documents/${id}`, { method: 'DELETE' })
+}
+
+/**
+ * GET /api/documents/deleted — the "Recently Deleted" holding area: soft-deleted
+ * documents awaiting permanent purge, each carrying its deletion lifecycle.
+ */
+export function listDeletedDocuments(
+  params: { limit?: number; offset?: number } = {},
+  signal?: AbortSignal,
+): Promise<DeletedDocumentListResponse> {
+  return apiFetch<DeletedDocumentListResponse>('/api/documents/deleted', {
+    query: { limit: params.limit, offset: params.offset },
+    signal,
+  })
+}
+
+/** POST /api/documents/{id}/restore — undo a soft delete; returns the detail. */
+export function restoreDocument(id: number): Promise<DocumentDetail> {
+  return apiFetch<DocumentDetail>(`/api/documents/${id}/restore`, { method: 'POST' })
 }
 
 /** POST /api/documents/{id}/extract — queue metadata re-extraction (202). */

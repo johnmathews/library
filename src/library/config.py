@@ -4,7 +4,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from library.extraction.pricing import MODEL_PRICING_USD_PER_MTOK
@@ -152,6 +152,17 @@ class Settings(BaseSettings):
     # LLM budget was exhausted — the budget resets daily, so the next tick fills
     # them. Default off: it spends money, so opt in deliberately.
     budget_backfill_enabled: bool = False
+    # Recently-Deleted retention (see docs/api.md, "Soft delete" section).
+    # DELETE /api/documents/{id} soft-deletes (sets deleted_at); a daily worker
+    # task then hard-deletes documents whose deleted_at is older than
+    # ``deleted_retention_days`` (rows + cascaded children + on-disk files).
+    # ``deleted_purge_enabled`` is the kill switch: off = documents stay in the
+    # Recently-Deleted holding area indefinitely (restorable, never purged).
+    # Guard against a negative value: it would make the purge cutoff future-dated
+    # and delete *every* soft-deleted document on the next run (0 = no holding
+    # period, purge on the next daily run).
+    deleted_retention_days: int = Field(default=30, ge=0)
+    deleted_purge_enabled: bool = True
     # paperless-ngx importer (see docs/migration.md).
     paperless_url: str | None = None
     paperless_token: SecretStr | None = None

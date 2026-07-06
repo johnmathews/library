@@ -2,6 +2,7 @@
 
 import hashlib
 from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -16,10 +17,17 @@ from sqlalchemy.ext.asyncio import (
 
 from library import jobs
 from library.config import get_settings
-from library.jobs import advance_pipeline, job_app, process_document, sweep_stalled_jobs
+from library.jobs import (
+    advance_pipeline,
+    job_app,
+    process_document,
+    purge_deleted_documents,
+    sweep_stalled_jobs,
+)
 from library.models import Document, DocumentSource, DocumentStatus, IngestionEvent
 from library.ocr import router as ocr_router
 from library.ocr.base import OcrResult
+from library.storage import path_for, store
 
 pytestmark = pytest.mark.integration
 
@@ -355,6 +363,139 @@ async def test_sweep_is_noop_when_disabled(monkeypatch: pytest.MonkeyPatch) -> N
         get_settings.cache_clear()
 
     assert called is False
+
+
+# --- Recently-Deleted purge --------------------------------------------------
+
+
+@pytest.fixture
+def purge_worker(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Wire the purge task to the test database and tmp data_dir.
+
+    ``purge_deleted_documents`` reaches for the module-level
+    ``get_sessionmaker()`` (a settings-derived, process-wide engine) rather than
+    an injected factory. Redirect that name to the test-bound ``session_factory``
+    so the task hits the testcontainer DB, and pull in ``data_dir`` so stored
+    originals land under tmp_path.
+    """
+    monkeypatch.setattr(jobs, "get_sessionmaker", lambda: session_factory)
+
+
+async def _seed_deleted_document(
+    session_factory: async_sessionmaker[AsyncSession],
+    marker: str,
+    *,
+    deleted_at: datetime | None,
+    source: DocumentSource = DocumentSource.UPLOAD,
+    store_file: bool = True,
+) -> tuple[int, str]:
+    """Insert a document (soft-deleted when ``deleted_at`` is set) and, unless
+    ``store_file`` is False, store its original file. Returns (id, sha256)."""
+    content = marker.encode()
+    sha = hashlib.sha256(content).hexdigest()
+    if store_file:
+        store(content)  # writes under get_settings().data_dir (tmp via data_dir fixture)
+    async with session_factory() as session:
+        document = Document(
+            sha256=sha,
+            mime_type="application/pdf",
+            source=source,
+            original_filename=f"{marker}.pdf",
+            deleted_at=deleted_at,
+        )
+        session.add(document)
+        await session.commit()
+        return document.id, sha
+
+
+def test_purge_deleted_documents_registered_with_daily_cron() -> None:
+    assert purge_deleted_documents.name == "library.jobs.purge_deleted_documents"
+    periodic = job_app.periodic_registry.periodic_tasks[
+        ("library.jobs.purge_deleted_documents", "")
+    ]
+    assert periodic.cron == "41 3 * * *"
+
+
+async def test_purge_hard_deletes_expired_and_keeps_recent(
+    session_factory: async_sessionmaker[AsyncSession], purge_worker: None
+) -> None:
+    """Documents deleted past the retention window are removed (row + file);
+    recently-deleted and live documents survive."""
+    now = datetime.now(UTC)
+    expired_id, expired_sha = await _seed_deleted_document(
+        session_factory, "purge-expired", deleted_at=now - timedelta(days=40)
+    )
+    recent_id, recent_sha = await _seed_deleted_document(
+        session_factory, "purge-recent", deleted_at=now - timedelta(days=5)
+    )
+    live_id, live_sha = await _seed_deleted_document(session_factory, "purge-live", deleted_at=None)
+    assert path_for(expired_sha).is_file()
+
+    await purge_deleted_documents(timestamp=0)
+
+    async with session_factory() as session:
+        assert await session.get(Document, expired_id) is None  # hard-deleted
+        assert await session.get(Document, recent_id) is not None  # inside window
+        assert await session.get(Document, live_id) is not None  # not deleted
+    assert not path_for(expired_sha).exists()  # original unlinked
+    assert path_for(recent_sha).is_file()  # survivor's file untouched
+    assert path_for(live_sha).is_file()
+
+
+async def test_purge_is_noop_when_disabled(
+    session_factory: async_sessionmaker[AsyncSession],
+    purge_worker: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The ``deleted_purge_enabled`` kill switch stops all deletion."""
+    monkeypatch.setenv("LIBRARY_DELETED_PURGE_ENABLED", "false")
+    get_settings.cache_clear()
+    try:
+        expired_id, expired_sha = await _seed_deleted_document(
+            session_factory,
+            "purge-disabled",
+            deleted_at=datetime.now(UTC) - timedelta(days=99),
+        )
+        await purge_deleted_documents(timestamp=0)
+        async with session_factory() as session:
+            assert await session.get(Document, expired_id) is not None
+        assert path_for(expired_sha).is_file()
+    finally:
+        get_settings.cache_clear()
+
+
+async def test_purge_tolerates_missing_file(
+    session_factory: async_sessionmaker[AsyncSession], purge_worker: None
+) -> None:
+    """A document whose original was never materialised still purges cleanly."""
+    expired_id, _sha = await _seed_deleted_document(
+        session_factory,
+        "purge-nofile",
+        deleted_at=datetime.now(UTC) - timedelta(days=40),
+        store_file=False,
+    )
+    await purge_deleted_documents(timestamp=0)  # must not raise on the missing file
+    async with session_factory() as session:
+        assert await session.get(Document, expired_id) is None
+
+
+async def test_purge_removes_expired_note(
+    session_factory: async_sessionmaker[AsyncSession], purge_worker: None
+) -> None:
+    """Notes are documents (source=NOTE) and purge by the same retention window."""
+    note_id, _sha = await _seed_deleted_document(
+        session_factory,
+        "purge-note",
+        deleted_at=datetime.now(UTC) - timedelta(days=40),
+        source=DocumentSource.NOTE,
+    )
+    await purge_deleted_documents(timestamp=0)
+    async with session_factory() as session:
+        assert await session.get(Document, note_id) is None
 
 
 async def test_pipeline_resumes_from_midpipeline_status(

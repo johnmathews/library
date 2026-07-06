@@ -3,10 +3,12 @@ import {
   DOCUMENT_STATUSES,
   documentQueryString,
   fetchDocumentMarkdown,
+  listDeletedDocuments,
   listDocuments,
   listJobs,
   listJobTaskNames,
   originalUrl,
+  restoreDocument,
   searchablePdfUrl,
   thumbnailUrl,
   updateDocument,
@@ -86,6 +88,67 @@ describe('listDocuments', () => {
     await listDocuments({ review_status: 'needs_review' })
     const [url] = fetchMock.mock.calls[0] as [string]
     expect(url).toContain('review_status=needs_review')
+  })
+})
+
+describe('listDeletedDocuments', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+  })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('GETs /api/documents/deleted and returns the typed response', async () => {
+    const body = {
+      items: [],
+      total: 0,
+      limit: 25,
+      offset: 0,
+      retention_days: 30,
+    }
+    fetchMock.mockResolvedValue(new Response(JSON.stringify(body), { status: 200 }))
+    const response = await listDeletedDocuments()
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe('/api/documents/deleted')
+    expect(response.retention_days).toBe(30)
+  })
+
+  it('passes limit and offset as query params', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(
+        JSON.stringify({ items: [], total: 0, limit: 10, offset: 20, retention_days: 30 }),
+        { status: 200 },
+      ),
+    )
+    await listDeletedDocuments({ limit: 10, offset: 20 })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toContain('limit=10')
+    expect(url).toContain('offset=20')
+  })
+})
+
+describe('restoreDocument', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+  })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('POSTs to /api/documents/{id}/restore', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ id: 9, status: 'indexed' }), { status: 200 }),
+    )
+    const detail = await restoreDocument(9)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/documents/9/restore')
+    expect(init.method).toBe('POST')
+    expect(detail).toMatchObject({ id: 9 })
   })
 })
 

@@ -3,6 +3,7 @@
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from library.config import Settings, get_settings
 
@@ -62,3 +63,16 @@ def test_series_defaults() -> None:
 
 def test_retrieve_chunks_per_doc_default() -> None:
     assert Settings().retrieve_chunks_per_doc == 3
+
+
+def test_deleted_retention_defaults() -> None:
+    settings = Settings(_env_file=None)
+    assert settings.deleted_retention_days == 30
+    assert settings.deleted_purge_enabled is True
+
+
+def test_deleted_retention_days_rejects_negative() -> None:
+    # A negative retention would future-date the purge cutoff and delete every
+    # soft-deleted document on the next run — the ge=0 bound forbids it.
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, deleted_retention_days=-1)

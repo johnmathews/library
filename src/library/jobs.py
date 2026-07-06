@@ -11,6 +11,7 @@ stage chunks the text and computes embeddings.
 import asyncio
 import json
 import logging
+from datetime import UTC, datetime, timedelta
 
 from procrastinate import App, PsycopgConnector
 from sqlalchemy import delete, select
@@ -42,6 +43,7 @@ from library.schemas import NotificationEvent
 from library.series_insight import refresh_series_insight
 from library.series_match import propose_authored_matches
 from library.storage import derived_dir, path_for
+from library.storage import remove as remove_stored_files
 
 logger = logging.getLogger(__name__)
 
@@ -641,6 +643,49 @@ async def backfill_budget_skipped(timestamp: int) -> None:
             timestamp,
             len(document_ids),
         )
+
+
+@job_app.periodic(cron="41 3 * * *")
+@job_app.task(name="library.jobs.purge_deleted_documents")
+async def purge_deleted_documents(timestamp: int) -> None:
+    """Daily task: hard-delete documents soft-deleted longer than the retention
+    window — the second half of the Recently-Deleted lifecycle (see
+    docs/api.md, "Soft delete").
+
+    Selects documents whose ``deleted_at`` is older than
+    ``deleted_retention_days``, deletes their rows (chunks, comments, pages,
+    events, note versions, and series/tag/project links all cascade at the DB
+    level), then removes their on-disk originals and derived artifacts. Rows are
+    committed gone *before* files are unlinked, so an unlink failure leaves at
+    worst an orphaned file (harmless, reclaimable) rather than a live row whose
+    file has vanished. Kill switch: an instant no-op unless
+    ``deleted_purge_enabled`` is set.
+    """
+    settings = get_settings()
+    if not settings.deleted_purge_enabled:
+        return
+    cutoff = datetime.now(UTC) - timedelta(days=settings.deleted_retention_days)
+    async with get_sessionmaker()() as session:
+        expired = (
+            await session.execute(
+                select(Document.id, Document.sha256).where(
+                    Document.deleted_at.is_not(None), Document.deleted_at < cutoff
+                )
+            )
+        ).all()
+        if not expired:
+            return
+        await session.execute(delete(Document).where(Document.id.in_([row.id for row in expired])))
+        await session.commit()
+    # Files are content-addressed and sha256 is unique per document, so each
+    # digest belongs to exactly the row we just deleted — unlink is unconditional.
+    for row in expired:
+        remove_stored_files(row.sha256)
+    logger.info(
+        "purge_deleted_documents (scheduled for %s): hard-deleted %s expired document(s)",
+        timestamp,
+        len(expired),
+    )
 
 
 @job_app.periodic(cron=email_poll_cron(get_settings().email_poll_minutes))
