@@ -1737,23 +1737,23 @@ describe('DocumentDetailView', () => {
     })
   })
 
-  // --- Floating island (Ask + lifted metadata Edit/Done) ----------------------
+  // --- ActionDock (Ask + lifted metadata Edit/Done) ----------------------------
 
-  describe('floating island', () => {
+  describe('ActionDock', () => {
     it('is absent while the hero still intersects the viewport', async () => {
       const w = await mountView()
-      expect(w.find('[data-testid="detail-island"]').exists()).toBe(false)
+      expect(w.find('[data-testid="action-dock"]').exists()).toBe(false)
     })
 
     it('appears once the IntersectionObserver reports the hero as not intersecting, and hides again when it returns', async () => {
       const w = await mountView()
       lastIntersectionObserver().trigger(false)
       await flushPromises()
-      expect(w.find('[data-testid="detail-island"]').exists()).toBe(true)
+      expect(w.find('[data-testid="action-dock"]').exists()).toBe(true)
 
       lastIntersectionObserver().trigger(true)
       await flushPromises()
-      expect(w.find('[data-testid="detail-island"]').exists()).toBe(false)
+      expect(w.find('[data-testid="action-dock"]').exists()).toBe(false)
     })
 
     it('disconnects the observer on unmount', async () => {
@@ -1764,41 +1764,41 @@ describe('DocumentDetailView', () => {
       expect(disconnectSpy).toHaveBeenCalled()
     })
 
-    it('island-edit-toggle flips the shared metadata edit mode, and the Details card reflects it', async () => {
+    it('action-dock-edit-toggle flips the shared metadata edit mode, and the Details card reflects it', async () => {
       const w = await mountView()
       lastIntersectionObserver().trigger(false)
       await flushPromises()
 
-      expect(w.find('[data-testid="island-edit-toggle"]').text()).toContain('Edit')
+      expect(w.find('[data-testid="action-dock-edit-toggle"]').text()).toContain('Edit')
       expect(w.find('#edit-title').exists()).toBe(false)
 
-      await w.find('[data-testid="island-edit-toggle"]').trigger('click')
+      await w.find('[data-testid="action-dock-edit-toggle"]').trigger('click')
       await flushPromises()
 
       expect(useMetadataEditMode().editMode.value).toBe(true)
       // The Details card's own toggle and inline editors reflect the same flag.
       expect(w.find('#edit-title').exists()).toBe(true)
       expect(w.find('[data-testid="edit-toggle"]').text()).toBe('Done')
-      expect(w.find('[data-testid="island-edit-toggle"]').text()).toContain('Done')
+      expect(w.find('[data-testid="action-dock-edit-toggle"]').text()).toContain('Done')
 
-      // Toggling back off from the island closes the card's editors too.
-      await w.find('[data-testid="island-edit-toggle"]').trigger('click')
+      // Toggling back off from the dock closes the card's editors too.
+      await w.find('[data-testid="action-dock-edit-toggle"]').trigger('click')
       await flushPromises()
       expect(w.find('#edit-title').exists()).toBe(false)
     })
 
-    it('island-ask links to the same shared /ask href as the hero button', async () => {
+    it('action-dock-ask links to the same shared /ask href as the hero button', async () => {
       const w = await mountView()
       lastIntersectionObserver().trigger(false)
       await flushPromises()
 
-      const islandAsk = w.find('[data-testid="island-ask"]')
+      const dockAsk = w.find('[data-testid="action-dock-ask"]')
       const heroAsk = w.find('[data-testid="ask-about-document"]')
-      expect(islandAsk.attributes('target')).toBe('_blank')
-      expect(islandAsk.attributes('rel')).toContain('noopener')
+      expect(dockAsk.attributes('target')).toBe('_blank')
+      expect(dockAsk.attributes('rel')).toContain('noopener')
       // Both anchors share the same computed href — one code path, two renders.
-      expect(islandAsk.attributes('href')).toBe(heroAsk.attributes('href'))
-      const url = new URL(islandAsk.attributes('href') ?? '', 'http://localhost')
+      expect(dockAsk.attributes('href')).toBe(heroAsk.attributes('href'))
+      const url = new URL(dockAsk.attributes('href') ?? '', 'http://localhost')
       expect(url.pathname).toBe('/ask')
       expect(url.searchParams.get('q') ?? '').toContain('Energierekening mei 2026')
     })

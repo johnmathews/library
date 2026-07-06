@@ -46,6 +46,7 @@ import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
 import NoteEditorPanel from '@/components/NoteEditorPanel.vue'
 import DocumentMetadataEditor from '@/components/DocumentMetadataEditor.vue'
 import DocumentComments from '@/components/DocumentComments.vue'
+import ActionDock from '@/components/ActionDock.vue'
 import { useDocumentLayout, HERO_FIELD_LABELS } from '@/composables/useDocumentLayout'
 import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 
@@ -94,15 +95,13 @@ const {
   resetLayout,
 } = useDocumentLayout()
 
-// The floating island's Edit/Done button drives the SAME metadata edit mode as
+// The ActionDock's Edit/Done button drives the SAME metadata edit mode as
 // the Details card's own "Edit" toggle (not this view's "Edit layout" mode
 // above) — both read/flip the one `useMetadataEditMode` singleton so opening
-// the editors from the island shows exactly what the card's toggle would.
-const {
-  editMode: metadataEditMode,
-  toggle: toggleMetadataEditMode,
-  setEditMode: setMetadataEditMode,
-} = useMetadataEditMode()
+// the editors from the dock shows exactly what the card's toggle would. This
+// view only needs to reset the flag on unmount/navigation; ActionDock owns
+// reading and flipping it.
+const { setEditMode: setMetadataEditMode } = useMetadataEditMode()
 
 /** Display string for every known hero field, resolved from the current doc.
  * An empty string means "no value" — such a field is dropped from the read-mode
@@ -165,8 +164,8 @@ const askPrompt = computed<string>(() => {
 
 /**
  * Where the "Ask about this document" action points: the Ask view,
- * pre-filled with `askPrompt`. Shared so both the hero button and the
- * floating island (which appears once the hero has scrolled off screen, see
+ * pre-filled with `askPrompt`. Shared so both the hero button and
+ * `ActionDock` (which appears once the hero has scrolled off screen, see
  * below) render as anchors pointing at the exact same URL rather than each
  * duplicating the resolve logic. Both render a real `<a href target
  * rel="noopener">` (via `AppButton`), so native new-tab affordances —
@@ -175,14 +174,14 @@ const askPrompt = computed<string>(() => {
  */
 const askHref = computed(() => router.resolve({ name: 'ask', query: { q: askPrompt.value } }).href)
 
-// --- Floating island (Ask + metadata Edit/Done) -------------------------------
+// --- ActionDock (Ask + metadata Edit/Done) ------------------------------------
 //
-// The hero's primary actions (Ask, and — via the island only — metadata Edit)
+// The hero's primary actions (Ask, and — via the dock only — metadata Edit)
 // stay reachable once the hero itself has scrolled out of view: an
-// IntersectionObserver on #document-hero flips `heroVisible` and a small fixed
-// island appears bottom-right. `v-if` (not `v-show`) keeps it fully out of the
-// DOM while the hero is visible, so it never interferes with mobile e2e specs
-// that assert on visibility lower on the page.
+// IntersectionObserver on #document-hero flips `heroVisible`, which mounts
+// `ActionDock`. `v-if` (not `v-show`) keeps it fully out of the DOM while the
+// hero is visible, so it never interferes with mobile e2e specs that assert
+// on visibility lower on the page.
 const heroEl = ref<HTMLElement | null>(null)
 const heroVisible = ref(true)
 let heroObserver: IntersectionObserver | null = null
@@ -199,7 +198,7 @@ function setHeroEl(el: Element | ComponentPublicInstance | null): void {
 
 onMounted(() => {
   // jsdom under Node <22 and some older browsers lack IntersectionObserver;
-  // degrade to "always visible" (the island simply never appears) rather than
+  // degrade to "always visible" (ActionDock simply never appears) rather than
   // throwing.
   if (typeof IntersectionObserver === 'undefined') return
   heroObserver = new IntersectionObserver(([entry]) => {
@@ -637,7 +636,7 @@ onBeforeUnmount(() => {
   destroySortables()
   setLayoutEditMode(false)
   // Same rationale for the metadata edit-mode singleton: never leave the
-  // Details card (or the island) rendering its editors after navigating away.
+  // Details card (or the ActionDock) rendering its editors after navigating away.
   setMetadataEditMode(false)
   heroObserver?.disconnect()
   heroObserver = null
@@ -658,8 +657,8 @@ watch(
     markdownData.value = null
     markdownLoading.value = false
     markdownError.value = false
-    // The edit-mode flags are module singletons (shared with the floating
-    // island), and this view is reused across in-queue Prev/Next navigation
+    // The edit-mode flags are module singletons (shared with ActionDock),
+    // and this view is reused across in-queue Prev/Next navigation
     // (the RouterView in App.vue is unkeyed, so no unmount happens). Reset
     // both here too, or a still-true editMode survives into the new document
     // while the editor's non-immediate hydration watcher never re-fires,
@@ -1191,68 +1190,11 @@ watch(
       </div>
     </div>
 
-    <!-- Floating island: the hero's primary actions, reachable once the hero
-         itself has scrolled off screen (see the IntersectionObserver above).
-         `z-40` sits below AppPopover's `--z-popover` (50) and the chart's
-         absolutely-positioned tooltip is `z-10` scoped to the chart card, so
-         this fixed corner element never competes with either. `v-if` (not
+    <!-- The hero's primary actions, reachable once the hero itself has
+         scrolled off screen (see the IntersectionObserver above). `v-if` (not
          `v-show`) keeps it out of the DOM entirely while the hero is visible,
          so it can't interfere with narrow-viewport e2e specs. -->
-    <div
-      v-if="!heroVisible"
-      data-testid="detail-island"
-      class="fixed bottom-4 right-4 z-40 flex items-center gap-2 rounded-full border border-gray-200 bg-white/95 p-1.5 shadow-lg backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/95"
-    >
-      <button
-        type="button"
-        class="btn-sm rounded-full border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
-        :class="metadataEditMode ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-500/15 dark:text-violet-300' : ''"
-        data-testid="island-edit-toggle"
-        :aria-pressed="metadataEditMode"
-        @click="toggleMetadataEditMode"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke-width="1.5"
-          stroke="currentColor"
-          class="w-4 h-4"
-          aria-hidden="true"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125"
-          />
-        </svg>
-        {{ metadataEditMode ? 'Done' : 'Edit' }}
-      </button>
-      <AppButton
-        :href="askHref"
-        target="_blank"
-        size="sm"
-        class="rounded-full gap-1.5"
-        data-testid="island-ask"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke-width="1.5"
-          stroke="currentColor"
-          class="w-4 h-4"
-          aria-hidden="true"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="M8.625 12a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H8.25m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0H12m4.125 0a.375.375 0 1 1-.75 0 .375.375 0 0 1 .75 0Zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 0 1-2.555-.337A5.972 5.972 0 0 1 5.41 20.97a5.969 5.969 0 0 1-.474-.065 4.48 4.48 0 0 0 .978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25Z"
-          />
-        </svg>
-        Ask
-      </AppButton>
-    </div>
+    <ActionDock v-if="!heroVisible" :ask-href="askHref" />
   </template>
 
   <template v-else-if="notFound">
