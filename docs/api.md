@@ -78,9 +78,9 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/jobs` | Recent background jobs (enriched with document state); filter by `task_name`/`document_id` |
 | GET    | `/api/jobs/task-names` | Distinct task names (for the task-type filter) |
 | GET    | `/api/events` | Live document-pipeline events (Server-Sent Events) |
-| GET    | `/api/settings` | Your display preferences (dashboard fields + page-canvas tone + tile preview) |
+| GET    | `/api/settings` | Your display preferences (dashboard fields + page-canvas tone + tile preview + action dock position) |
 | PUT    | `/api/settings` | Update your dashboard fields |
-| PUT    | `/api/settings/appearance` | Update your page-canvas tone and tile preview |
+| PUT    | `/api/settings/appearance` | Update your page-canvas tone, tile preview, and action dock position |
 | PUT    | `/api/settings/kind-colors` | Update your per-kind tile border colours |
 | PUT    | `/api/settings/notifications` | Update your Pushover notifications + email forwarding addresses |
 | GET    | `/api/admin/system` | System & infra context: version, config, deployment, DB stats (admin only) |
@@ -546,7 +546,7 @@ cookie is dead server-side immediately — and clears both cookies.
 `GET /api/auth/me` returns `{id, username, display_name, preferences}` for
 the authenticated user (either credential). The login response (`POST
 /api/auth/login`) returns the same shape. `preferences` is
-`{"dashboard_fields": [...], "background_tone": "neutral", "tile_preview": "full_width"}` —
+`{"dashboard_fields": [...], "background_tone": "neutral", "tile_preview": "full_width", "dock_position": "top-right"}` —
 the resolved preference set (defaults filled; see 1.10).
 
 ### 1.9.2 CSRF (cookie requests only)
@@ -596,7 +596,8 @@ Revoked or unknown tokens, and tokens of disabled users, get `401`.
 
 Per-user preferences: which metadata fields appear on the dashboard tiles, the
 page-canvas tone behind them, how each tile previews the document's first page,
-the per-kind tile border colours, and Pushover notification settings (incl.
+where the document-detail page's floating action dock sits on screen, the
+per-kind tile border colours, and Pushover notification settings (incl.
 email forwarding addresses). Auth and CSRF rules are identical to the rest of
 `/api` (§1.9). All preferences live in one JSONB `preferences` blob on the user
 row; writes are split per concern (fields vs appearance vs kind-colours vs
@@ -610,7 +611,7 @@ user has never saved preferences, the **default set** is returned (no
 `404` or empty body).
 
 ```json
-{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"], "background_tone": "neutral", "tile_preview": "full_width", "kind_colors": {}, "notifications": {"enabled": false, "pushover_app_token_set": false, "pushover_user_key_set": false, "pushover_device": null, "events": [], "email_forward_addresses": []}}
+{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"], "background_tone": "neutral", "tile_preview": "full_width", "dock_position": "top-right", "kind_colors": {}, "notifications": {"enabled": false, "pushover_app_token_set": false, "pushover_user_key_set": false, "pushover_device": null, "events": [], "email_forward_addresses": []}}
 ```
 
 ### 1.10.2 `PUT /api/settings`
@@ -649,10 +650,11 @@ is returned as-is.
 
 ### 1.10.3 `PUT /api/settings/appearance`
 
-Body: `{"background_tone": "<tone>", "tile_preview": "<mode>"}`. Persists both
-appearance settings and returns the full resolved preference set (same shape
-as GET). Auth + CSRF apply. The tone applies to the light-mode page background
-only — dark mode keeps its `gray-900` canvas.
+Body: `{"background_tone": "<tone>", "tile_preview": "<mode>", "dock_position":
+"<position>"}`. Persists all three appearance settings and returns the full
+resolved preference set (same shape as GET). Auth + CSRF apply. The tone
+applies to the light-mode page background only — dark mode keeps its
+`gray-900` canvas.
 
 **Valid tones:** `neutral` (default — `gray-200`), `light` (`gray-100`,
 the original airier canvas), `soft`, `slate`, `sand`, `mist`. The token is
@@ -665,11 +667,21 @@ fills the tile width, top-aligned, lower part of the page cropped) and
 `whole_page` (the entire first page shown letterboxed inside the tile). The
 token names a render mode; the frontend owns the CSS object-fit for each.
 
-**Tolerant validation.** An unknown tone resolves to `neutral` and an unknown
-tile preview to `full_width` — `200` with the default, never `422` — matching
-`dashboard_fields`. `tile_preview` is also optional in the body (defaults to
-`full_width`), so a client sending only `background_tone` still succeeds. On
-read, absent keys resolve to their defaults.
+**Valid dock positions:** `top-left`, `top-middle`, `top-right` (default),
+`bottom-left`, `bottom-right` — where the document-detail page's floating
+**action dock** ([frontend.md §1.5, DocumentDetailView component
+structure](frontend.md)) sits once it appears. Like `background_tone`, the
+token is a name, not a coordinate: the frontend owns the actual CSS placement
+(and the header-clearance offset for the `top-*` positions) for each, so the
+layout can be retuned without a schema or data migration.
+
+**Tolerant validation.** An unknown tone resolves to `neutral`, an unknown
+tile preview to `full_width`, and an unknown dock position to `top-right` —
+`200` with the default, never `422` — matching `dashboard_fields`.
+`tile_preview` and `dock_position` are both optional in the body (defaulting
+to `full_width` and `top-right` respectively), so a client sending only
+`background_tone` still succeeds. On read, absent keys resolve to their
+defaults.
 
 ### 1.10.4 `PUT /api/settings/kind-colors`
 
