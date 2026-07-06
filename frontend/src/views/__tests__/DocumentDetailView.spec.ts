@@ -2,12 +2,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
+import type Sortable from 'sortablejs'
 import DocumentDetailView from '../DocumentDetailView.vue'
 import type { DocumentDetail, DocumentMarkdownResponse } from '@/api/documents'
 import { listNoteVersions, restoreNoteVersion, updateNote } from '@/api/notes'
 import { useJobsStore } from '@/stores/jobs'
 import { useReviewQueueStore } from '@/stores/reviewQueue'
-import { useDocumentLayout } from '@/composables/useDocumentLayout'
+import { useDocumentLayout, DEFAULT_CARD_COLUMNS } from '@/composables/useDocumentLayout'
 import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 
 // pdfjs-dist can't run its worker/canvas in jsdom — mock the whole module
@@ -18,10 +19,35 @@ vi.mock('pdfjs-dist', () => ({
 }))
 
 // sortablejs manipulates real DOM nodes on drag; in unit tests we exercise the
-// reactive rendering + wiring (not the drag physics), so stub it out.
-vi.mock('sortablejs', () => ({
-  default: { create: vi.fn(() => ({ destroy: vi.fn() })) },
+// reactive rendering + wiring (not the drag physics), so stub it out — but
+// capture each Sortable.create(el, options) call so a test can invoke the
+// component's real onEnd handler with a synthetic drag event (see
+// `cardColumnOnEnd` below). `vi.hoisted` is required because `vi.mock` factories
+// are hoisted above the top-level imports/consts they close over.
+const { capturedSortables } = vi.hoisted(() => ({
+  capturedSortables: [] as { el: HTMLElement; options: Sortable.Options }[],
 }))
+vi.mock('sortablejs', () => ({
+  default: {
+    create: vi.fn((el: HTMLElement, options: Sortable.Options) => {
+      capturedSortables.push({ el, options })
+      return { destroy: vi.fn() }
+    }),
+  },
+}))
+
+/** The shared `onEnd` handler wired to both section-card columns (they use one
+ * function reference, so either captured column Sortable exposes it). Throws
+ * if edit mode was never turned on (no Sortable instances were created). */
+function cardColumnOnEnd(): NonNullable<Sortable.Options['onEnd']> {
+  const found = capturedSortables.find(
+    (s) => s.el.dataset.col === 'left' || s.el.dataset.col === 'right',
+  )
+  if (!found?.options.onEnd) {
+    throw new Error('no section-card Sortable was captured — is edit mode on?')
+  }
+  return found.options.onEnd
+}
 
 // The notes API is exercised only by the note-specific controls; mock it so
 // the existing document fetch mock stays focused on the document endpoints.
@@ -178,6 +204,7 @@ describe('DocumentDetailView', () => {
     }
     markdownResponse = () =>
       jsonResponse({ page_count: 1, pages: [{ page_number: 1, markdown: '# Invoice\n\nTotal: €123.45' }] } satisfies DocumentMarkdownResponse)
+    capturedSortables.length = 0
     FakeIntersectionObserver.instances = []
     vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
     vi.stubGlobal('fetch', fetchMock)
@@ -1551,15 +1578,7 @@ describe('DocumentDetailView', () => {
     })
 
     it('renders section cards in the saved order within a column', async () => {
-      useDocumentLayout().setCardOrder([
-        'markdown',
-        'preview',
-        'series-chart',
-        'notes',
-        'metadata',
-        'actions',
-        'history',
-      ])
+      useDocumentLayout().setColumn('right', ['markdown', 'preview', 'series-chart'])
       const w = await mountView()
       const ids = w
         .find('#document-preview-column')
@@ -1569,16 +1588,7 @@ describe('DocumentDetailView', () => {
     })
 
     it('reorders the metadata column independently of the preview column', async () => {
-      useDocumentLayout().setCardOrder([
-        'preview',
-        'markdown',
-        'series-chart',
-        'notes',
-        'history',
-        'metadata',
-        'comments',
-        'actions',
-      ])
+      useDocumentLayout().setColumn('left', ['notes', 'history', 'metadata', 'comments', 'actions'])
       const w = await mountView()
       const ids = w
         .find('#document-metadata-column')
@@ -1594,18 +1604,76 @@ describe('DocumentDetailView', () => {
       ])
     })
 
+    it('moves a card across columns via the shared-group onEnd handler', async () => {
+      // A note document so 'notes' renders (present === full for both
+      // columns) — isolates the cross-column move itself from the separate
+      // present/full index-mapping concern (covered below).
+      detail = makeDetail({ source: 'note' })
+      const layout = useDocumentLayout()
+      layout.resetLayout()
+      const w = await mountView()
+      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await flushPromises()
+
+      // Both column Sortables share one onEnd (group: 'doc-cards'); grab it
+      // from whichever card-column Sortable.create call was captured.
+      const onEnd = cardColumnOnEnd()
+      // Simulate SortableJS dropping "comments" (left index 2 of the default
+      // left column: notes, metadata, comments, actions, history) into the
+      // right column at index 0.
+      const evt = {
+        from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
+        to: { dataset: { col: 'right' } },
+        item: {},
+        oldIndex: 2,
+        newIndex: 0,
+      } as unknown as Sortable.SortableEvent
+      onEnd(evt)
+      await flushPromises()
+
+      expect(layout.cardColumns.value.right[0]).toBe('comments')
+      expect(layout.cardColumns.value.left).not.toContain('comments')
+      // The manual DOM-revert ran (insertBefore is called with the dragged
+      // item back at its original position in the source list).
+      expect((evt.from as unknown as { insertBefore: ReturnType<typeof vi.fn> }).insertBefore).toHaveBeenCalled()
+    })
+
+    it('maps a rendered-index drop target to the correct full-column index around a hidden card', async () => {
+      // Default document is NOT a note, so 'notes' (always first in the
+      // default left column) renders no drag handle and is absent from
+      // SortableJS's rendered list. evt.newIndex is relative to that rendered
+      // list, so dropping at rendered index 0 of the left column must land
+      // the moved card right after the hidden 'notes' in the FULL column
+      // array — not literally at full index 0 (which would incorrectly sit
+      // ahead of 'notes').
+      const layout = useDocumentLayout()
+      layout.resetLayout()
+      const w = await mountView() // detail defaults to source: 'upload' (not a note)
+      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await flushPromises()
+
+      const onEnd = cardColumnOnEnd()
+      const evt = {
+        from: { dataset: { col: 'right' }, insertBefore: vi.fn(), children: [] },
+        to: { dataset: { col: 'left' } },
+        item: {},
+        oldIndex: 0, // 'preview' — first rendered card in the right column
+        newIndex: 0, // top of the *rendered* left column (before 'metadata', since 'notes' is hidden)
+      } as unknown as Sortable.SortableEvent
+      onEnd(evt)
+      await flushPromises()
+
+      expect(layout.cardColumns.value.left[0]).toBe('notes')
+      expect(layout.cardColumns.value.left[1]).toBe('preview')
+      expect(layout.cardColumns.value.left[2]).toBe('metadata')
+      expect(layout.cardColumns.value.right).not.toContain('preview')
+    })
+
     it('reset layout restores the default hero order and card order', async () => {
       const layout = useDocumentLayout()
       layout.setHeroFieldOrder(['amount', 'kind'])
-      layout.setCardOrder([
-        'history',
-        'actions',
-        'metadata',
-        'notes',
-        'series-chart',
-        'markdown',
-        'preview',
-      ])
+      layout.setColumn('left', [...DEFAULT_CARD_COLUMNS.left].reverse())
+      layout.setColumn('right', [...DEFAULT_CARD_COLUMNS.right].reverse())
       const w = await mountView()
       await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
       await flushPromises()
@@ -1613,7 +1681,7 @@ describe('DocumentDetailView', () => {
       await flushPromises()
 
       expect(layout.heroFields.value[0]!.key).toBe('kind')
-      expect(layout.cardOrder.value[0]).toBe('preview')
+      expect(layout.cardColumns.value).toEqual(DEFAULT_CARD_COLUMNS)
     })
 
     it('resets edit mode when the view unmounts so it never persists across navigation', async () => {

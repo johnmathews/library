@@ -84,13 +84,13 @@ onBeforeUnmount(() => {
 
 const {
   heroFields,
-  cardOrder,
+  cardColumns,
   editMode: layoutEditMode,
   toggleEditMode: toggleLayoutEditMode,
   setEditMode: setLayoutEditMode,
   setHeroFieldVisible,
   moveHeroField,
-  setCardOrder,
+  moveCard,
   resetLayout,
 } = useDocumentLayout()
 
@@ -489,18 +489,16 @@ async function reloadDocument(): Promise<void> {
   }
 }
 
-// --- Section-card reorder (W6) ------------------------------------------------
+// --- Section-card reorder (W6 / Task 1: free-form cross-column drag) --------
 //
-// The two-column grid renders its cards from the persisted `cardOrder`. Each
-// column reorders WITHIN itself only (cross-column moves are out of scope for
-// v1 — the responsive lg:grid-cols-2 / lg:order-* split makes them fiddly). A
-// column filters the flat `cardOrder` to its own member ids, skipping cards not
-// currently present (notes exist only for note docs; the series chart hides
-// itself when there is no qualifying series — the wrapper's `empty:hidden` drops
-// it visually so a seriesless doc reads exactly as before).
-
-const PREVIEW_CARD_IDS = ['preview', 'markdown', 'series-chart']
-const METADATA_CARD_IDS = ['notes', 'metadata', 'comments', 'actions', 'history']
+// The two-column grid renders its cards from the persisted `cardColumns`
+// (`{ left, right }`). Both columns share one SortableJS `group`, so a card
+// can be dragged into either column, not just reordered within its own
+// (see `buildSortables` below). A column's rendered list filters its full,
+// persisted id list down to cards that actually have content for the current
+// document (notes exist only for note docs; the series chart hides itself
+// when there is no qualifying series — the wrapper's `empty:hidden` drops it
+// visually so a seriesless doc reads exactly as before).
 
 /** Whether a card id has content to render for the current document. */
 function cardPresent(id: string): boolean {
@@ -508,30 +506,64 @@ function cardPresent(id: string): boolean {
   return true
 }
 
-const previewCards = computed(() =>
-  cardOrder.value.filter((id) => PREVIEW_CARD_IDS.includes(id) && cardPresent(id)),
-)
-const metadataCards = computed(() =>
-  cardOrder.value.filter((id) => METADATA_CARD_IDS.includes(id) && cardPresent(id)),
-)
+const previewCards = computed(() => cardColumns.value.right.filter(cardPresent))
+const metadataCards = computed(() => cardColumns.value.left.filter(cardPresent))
 
 /**
- * Apply a drag reorder within one column. `present` is the column's current
- * ordered ids; the move is spliced there, then written back into the flat
- * `cardOrder` in place (only the positions occupied by this column's present
- * ids change, so the other column and any absent ids keep their slots and the
- * result stays a valid permutation).
+ * Map a rendered/present-list index (SortableJS only sees rendered DOM nodes,
+ * so `evt.newIndex` is relative to `fullList` filtered to `cardPresent` and
+ * with `excludeId` removed) to the corresponding index in `fullList`. The
+ * moved card lands immediately before whichever id currently sits at
+ * `presentIndex` among those present, excluded-adjusted cards; an index at or
+ * past the end of that list lands at the very end of `fullList`. Excluding
+ * `excludeId` mirrors what `moveCard` itself does (it always removes the
+ * dragged card from both columns before splicing it back in), so the index
+ * this returns is valid input to `moveCard`'s `toIndex` even for a
+ * same-column reorder.
  */
-function reorderCards(present: string[], oldIndex: number, newIndex: number): void {
-  if (oldIndex === newIndex || oldIndex < 0 || newIndex < 0) return
-  const reordered = present.slice()
-  const [moved] = reordered.splice(oldIndex, 1)
-  if (moved === undefined) return
-  reordered.splice(newIndex, 0, moved)
-  const presentSet = new Set(present)
-  let i = 0
-  const next = cardOrder.value.map((id) => (presentSet.has(id) ? reordered[i++]! : id))
-  setCardOrder(next)
+function presentIndexToFullIndex(
+  fullList: readonly string[],
+  presentIndex: number,
+  excludeId: string,
+): number {
+  const withoutDragged = fullList.filter((id) => id !== excludeId)
+  const present = withoutDragged.filter(cardPresent)
+  if (presentIndex >= present.length) return withoutDragged.length
+  const landingId = present[presentIndex]
+  const fullIndex = landingId === undefined ? -1 : withoutDragged.indexOf(landingId)
+  return fullIndex === -1 ? withoutDragged.length : fullIndex
+}
+
+/**
+ * Shared `onEnd` for both section-card column Sortables (`group: 'doc-cards'`
+ * lets a card cross from one to the other). SortableJS has already physically
+ * moved the dragged DOM node into `evt.to` by the time this fires; that move
+ * is reverted first so Vue's own re-render (from the mutated `cardColumns`
+ * below) is the only thing that ever places the node — otherwise the node
+ * would exist twice for one render (the DOM-moved copy plus Vue's newly
+ * rendered one) until the next tick sorted it out.
+ */
+function onCardDragEnd(evt: Sortable.SortableEvent): void {
+  const fromCol = (evt.from as HTMLElement).dataset.col as 'left' | 'right' | undefined
+  const toCol = (evt.to as HTMLElement).dataset.col as 'left' | 'right' | undefined
+  if (!fromCol || !toCol || evt.oldIndex == null || evt.newIndex == null) return
+  // The rendered lists are filtered by cardPresent; map DOM index -> card id
+  // via the present list for the source column so the id is correct even
+  // with hidden cards (e.g. 'notes' on a non-note document).
+  const sourceList = fromCol === 'left' ? metadataCards.value : previewCards.value
+  const cardId = sourceList[evt.oldIndex]
+  if (!cardId) return
+  // Revert SortableJS's DOM mutation so Vue re-renders from the reactive
+  // arrays (prevents a duplicate node when the card crosses into the other
+  // column's DOM subtree).
+  const from = evt.from as HTMLElement
+  const ref = from.children[evt.oldIndex] ?? null
+  from.insertBefore(evt.item, ref)
+  // moveCard's toIndex is an index into the destination column's FULL list
+  // (present + hidden); evt.newIndex is an index into that column's rendered
+  // (present) list, so it needs converting.
+  const toIndex = presentIndexToFullIndex(cardColumns.value[toCol], evt.newIndex, cardId)
+  moveCard(cardId, toCol, toIndex)
 }
 
 // --- Drag wiring: sortablejs, live only while editing the layout --------------
@@ -568,24 +600,20 @@ function buildSortables(): void {
   if (previewColumnEl.value) {
     sortables.push(
       Sortable.create(previewColumnEl.value, {
+        group: 'doc-cards',
         handle: '[data-card-drag-handle]',
         animation: 150,
-        onEnd: (evt: Sortable.SortableEvent) => {
-          if (evt.oldIndex == null || evt.newIndex == null) return
-          reorderCards(previewCards.value, evt.oldIndex, evt.newIndex)
-        },
+        onEnd: onCardDragEnd,
       }),
     )
   }
   if (metadataColumnEl.value) {
     sortables.push(
       Sortable.create(metadataColumnEl.value, {
+        group: 'doc-cards',
         handle: '[data-card-drag-handle]',
         animation: 150,
-        onEnd: (evt: Sortable.SortableEvent) => {
-          if (evt.oldIndex == null || evt.newIndex == null) return
-          reorderCards(metadataCards.value, evt.oldIndex, evt.newIndex)
-        },
+        onEnd: onCardDragEnd,
       }),
     )
   }
@@ -862,7 +890,12 @@ watch(
       <!-- Preview: right column on desktop (lg:order-2), first on mobile.
            min-w-0 lets this grid column shrink below its content's intrinsic
            width so long tokens wrap instead of widening the page (iOS zoom). -->
-      <div id="document-preview-column" ref="previewColumnEl" class="min-w-0 space-y-4 lg:order-2">
+      <div
+        id="document-preview-column"
+        ref="previewColumnEl"
+        data-col="right"
+        class="min-w-0 space-y-4 lg:order-2"
+      >
         <!-- Each card is a reorderable wrapper (drag handle shown in edit mode).
              `empty:hidden` drops a card that rendered nothing (e.g. the series
              chart with no qualifying series) so a seriesless doc reads as before. -->
@@ -1047,7 +1080,12 @@ watch(
 
       <!-- Metadata: left column on desktop (lg:order-1). min-w-0 (as above)
            lets long metadata values wrap rather than widen the page. -->
-      <div id="document-metadata-column" ref="metadataColumnEl" class="min-w-0 space-y-6 lg:order-1">
+      <div
+        id="document-metadata-column"
+        ref="metadataColumnEl"
+        data-col="left"
+        class="min-w-0 space-y-6 lg:order-1"
+      >
         <div
           v-for="cardId in metadataCards"
           :key="cardId"
