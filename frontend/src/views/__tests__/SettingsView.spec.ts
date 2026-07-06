@@ -210,6 +210,74 @@ describe('SettingsView', () => {
     expect(auth.backgroundTone).toBe('neutral')
   })
 
+  it('saves the chosen dock position optimistically', async () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'a',
+      display_name: 'A',
+      is_admin: false,
+      preferences: {
+        dashboard_fields: ['kind'],
+        background_tone: 'neutral',
+        tile_preview: 'full_width',
+        dock_position: 'top-right',
+      },
+    }
+    stubFetch({
+      dashboard_fields: ['kind'],
+      background_tone: 'neutral',
+      tile_preview: 'full_width',
+      dock_position: 'bottom-left',
+    })
+
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+    await wrapper.find('[data-testid="tab-appearance-btn"]').trigger('click')
+    expect(wrapper.find('[data-testid="dock-position-top-right"]').attributes('aria-checked')).toBe('true')
+
+    await wrapper.find('[data-testid="dock-position-bottom-left"]').trigger('click')
+    // Optimistic: the store updates before the round-trip resolves.
+    expect(auth.dockPosition).toBe('bottom-left')
+    await flushPromises()
+
+    const [url, init] = fetchMock.mock.calls.at(-1)!
+    expect(String(url)).toBe('/api/settings/appearance')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({
+      background_tone: 'neutral',
+      tile_preview: 'full_width',
+      dock_position: 'bottom-left',
+    })
+    expect(wrapper.find('[data-testid="dock-position-bottom-left"]').attributes('aria-checked')).toBe('true')
+    expect(auth.dockPosition).toBe('bottom-left')
+  })
+
+  it('reverts the dock position and shows an error when the appearance save fails', async () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'a',
+      display_name: 'A',
+      is_admin: false,
+      preferences: {
+        dashboard_fields: ['kind'],
+        background_tone: 'neutral',
+        tile_preview: 'full_width',
+        dock_position: 'top-right',
+      },
+    }
+    stubFetch({ detail: 'boom' }, 500)
+
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+    await wrapper.find('[data-testid="tab-appearance-btn"]').trigger('click')
+    await wrapper.find('[data-testid="dock-position-bottom-right"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="appearance-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="dock-position-top-right"]').attributes('aria-checked')).toBe('true')
+    expect(auth.dockPosition).toBe('top-right')
+  })
+
   describe('Notifications tab', () => {
     const emptyNotifications = {
       enabled: false,

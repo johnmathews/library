@@ -16,6 +16,7 @@ import {
   BACKGROUND_TONES,
   DEFAULT_BACKGROUND_TONE,
   DEFAULT_TILE_PREVIEW,
+  DOCK_POSITIONS,
   NEUTRAL_KIND_COLOR,
   NOTIFICATION_EVENTS,
   SUGGESTED_COLORS,
@@ -26,6 +27,7 @@ import {
   updateSettings,
   type BackgroundTone,
   type DashboardField,
+  type DockPosition,
   type TilePreview,
 } from '@/api/settings'
 import { listKinds, type KindOption } from '@/api/taxonomy'
@@ -107,6 +109,32 @@ async function selectTilePreview(mode: TilePreview): Promise<void> {
   } catch {
     selectedTilePreview.value = previous
     if (auth.user) auth.applyPreferences({ ...auth.user.preferences, tile_preview: previous })
+    toneError.value = 'Sorry, your appearance preference could not be saved. Try again.'
+  }
+}
+
+// --- Appearance (action dock position) --------------------------------------
+
+/** Human-readable labels for the dock position buttons. */
+const DOCK_POSITION_LABELS: Record<DockPosition, string> = {
+  'top-left': 'Top left',
+  'top-middle': 'Top middle',
+  'top-right': 'Top right',
+  'bottom-left': 'Bottom left',
+  'bottom-right': 'Bottom right',
+}
+
+async function selectDockPosition(position: DockPosition): Promise<void> {
+  if (position === auth.dockPosition) return
+  const previous = auth.dockPosition
+  toneError.value = null
+  // Optimistic: update the store now so the floating dock moves immediately.
+  if (auth.user) auth.applyPreferences({ ...auth.user.preferences, dock_position: position })
+  try {
+    const result = await updateAppearance(selectedTone.value, selectedTilePreview.value, position)
+    auth.applyPreferences(result)
+  } catch {
+    if (auth.user) auth.applyPreferences({ ...auth.user.preferences, dock_position: previous })
     toneError.value = 'Sorry, your appearance preference could not be saved. Try again.'
   }
 }
@@ -415,6 +443,41 @@ const tabClass = (active: boolean): string =>
             >
               <span class="text-sm font-medium text-gray-700 dark:text-gray-200">{{ mode.text }}</span>
               <span class="text-xs text-gray-500 dark:text-gray-400">{{ mode.hint }}</span>
+            </button>
+          </div>
+        </fieldset>
+      </div>
+
+      <div id="settings-card-dock-position" :class="cardClass" class="mt-6">
+        <fieldset>
+          <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+            Action dock position
+          </legend>
+          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Where the floating action dock sits on screen. Saves to your account automatically.
+          </p>
+          <div
+            role="radiogroup"
+            aria-label="Action dock position"
+            data-testid="settings-dock-position"
+            class="grid grid-cols-3 sm:grid-cols-5 gap-3 mt-5"
+          >
+            <button
+              v-for="position in DOCK_POSITIONS"
+              :key="position"
+              type="button"
+              role="radio"
+              :aria-checked="auth.dockPosition === position"
+              :data-testid="`dock-position-${position}`"
+              :class="[
+                'flex items-center justify-center rounded-lg border p-3 text-sm font-medium transition cursor-pointer',
+                auth.dockPosition === position
+                  ? 'border-violet-500 ring-2 ring-violet-500/30 text-violet-600'
+                  : 'border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600',
+              ]"
+              @click="selectDockPosition(position)"
+            >
+              {{ DOCK_POSITION_LABELS[position] }}
             </button>
           </div>
         </fieldset>
