@@ -386,11 +386,42 @@ def _resolve_tile_preview(blob: dict[str, Any]) -> TilePreview:
     return DEFAULT_TILE_PREVIEW
 
 
+class DockPosition(StrEnum):
+    """Where the freeform-card action dock docks on the dashboard.
+
+    A named token, not a coordinate: the frontend owns the actual CSS
+    placement for each position, so the layout can be retuned without a
+    schema or data migration.
+    """
+
+    TOP_LEFT = "top-left"
+    TOP_MIDDLE = "top-middle"
+    TOP_RIGHT = "top-right"  # the default
+    BOTTOM_LEFT = "bottom-left"
+    BOTTOM_RIGHT = "bottom-right"
+
+
+DEFAULT_DOCK_POSITION: Final[DockPosition] = DockPosition.TOP_RIGHT
+
+
+def _resolve_dock_position(blob: dict[str, Any]) -> DockPosition:
+    """Pick the stored dock position, falling back to the default for absent/garbage.
+
+    Tolerant like :func:`_resolve_background_tone`: an unknown or hand-edited
+    value resolves to the default rather than raising.
+    """
+    raw = blob.get("dock_position")
+    if isinstance(raw, str) and raw in {position.value for position in DockPosition}:
+        return DockPosition(raw)
+    return DEFAULT_DOCK_POSITION
+
+
 class AppearancePreferences(BaseModel):
-    """Body of PUT /api/settings/appearance — page-canvas tone + tile preview."""
+    """Body of PUT /api/settings/appearance — page-canvas tone + tile preview + dock position."""
 
     background_tone: BackgroundTone
     tile_preview: TilePreview = DEFAULT_TILE_PREVIEW
+    dock_position: DockPosition = DEFAULT_DOCK_POSITION
 
     @field_validator("background_tone", mode="before")
     @classmethod
@@ -407,6 +438,14 @@ class AppearancePreferences(BaseModel):
         if isinstance(value, str) and value in {mode.value for mode in TilePreview}:
             return TilePreview(value)
         return DEFAULT_TILE_PREVIEW
+
+    @field_validator("dock_position", mode="before")
+    @classmethod
+    def _default_unknown_dock_position(cls, value: object) -> DockPosition:
+        """Coerce an unknown/garbage dock position to the default (never a 422)."""
+        if isinstance(value, str) and value in {position.value for position in DockPosition}:
+            return DockPosition(value)
+        return DEFAULT_DOCK_POSITION
 
 
 # Per-kind tile border colours are stored as raw ``#rrggbb`` hex — unlike the
@@ -641,6 +680,7 @@ class UserPreferences(BaseModel):
     dashboard_fields: list[DashboardField]
     background_tone: BackgroundTone
     tile_preview: TilePreview
+    dock_position: DockPosition
     kind_colors: dict[str, str]
     notifications: NotificationSettingsOut
 
@@ -656,6 +696,7 @@ def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
         dashboard_fields=resolve_dashboard_preferences(blob).dashboard_fields,
         background_tone=_resolve_background_tone(blob),
         tile_preview=_resolve_tile_preview(blob),
+        dock_position=_resolve_dock_position(blob),
         kind_colors=_resolve_kind_colors(blob),
         notifications=resolve_notification_settings(blob),
     )

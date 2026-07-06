@@ -56,11 +56,12 @@ async def put_appearance(
     db: Annotated[AsyncSession, Depends(get_session)],
     user: Annotated[User, Depends(current_user)],
 ) -> UserPreferences:
-    """Persist the page-canvas tone + tile preview. Unknown values default."""
+    """Persist the page-canvas tone + tile preview + dock position. Unknown values default."""
     user.preferences = {
         **(user.preferences or {}),
         "background_tone": payload.background_tone.value,
         "tile_preview": payload.tile_preview.value,
+        "dock_position": payload.dock_position.value,
     }
     await db.commit()
     return resolve_preferences(user.preferences)

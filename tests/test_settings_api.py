@@ -112,6 +112,44 @@ def test_put_appearance_unknown_tile_preview_falls_back_to_default(
     assert put.json()["tile_preview"] == "full_width"
 
 
+def test_get_settings_includes_default_dock_position(api_client: TestClient) -> None:
+    assert api_client.get("/api/settings").json()["dock_position"] == "top-right"
+
+
+def test_get_settings_resolves_unknown_dock_position_to_default(
+    api_client: TestClient, auth_user: AuthUser, api_database_url: str
+) -> None:
+    _seed_raw_preferences(api_database_url, auth_user.id, {"dock_position": "middle-earth"})
+    assert api_client.get("/api/settings").json()["dock_position"] == "top-right"
+
+
+def test_put_appearance_round_trips_dock_position(api_client: TestClient) -> None:
+    put = api_client.put(
+        "/api/settings/appearance",
+        json={
+            "background_tone": "neutral",
+            "tile_preview": "full_width",
+            "dock_position": "bottom-left",
+        },
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["dock_position"] == "bottom-left"
+    assert api_client.get("/api/settings").json()["dock_position"] == "bottom-left"
+
+
+def test_put_appearance_unknown_dock_position_falls_back_to_default(
+    api_client: TestClient,
+) -> None:
+    # Mirrors background_tone/tile_preview: the before-validator coerces an
+    # unknown value to the default rather than raising a 422.
+    put = api_client.put(
+        "/api/settings/appearance",
+        json={"background_tone": "neutral", "dock_position": "center-of-the-universe"},
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["dock_position"] == "top-right"
+
+
 def test_put_appearance_sets_both_tone_and_tile_preview(api_client: TestClient) -> None:
     api_client.put(
         "/api/settings/appearance",
