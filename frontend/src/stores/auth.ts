@@ -3,9 +3,11 @@ import { defineStore } from 'pinia'
 import { ApiError, apiFetch } from '@/api/client'
 import {
   DEFAULT_BACKGROUND_TONE,
+  DEFAULT_DOCK_POSITION,
   DEFAULT_TILE_PREVIEW,
   type BackgroundTone,
   type DashboardField,
+  type DockPosition,
   type NotificationPreferences,
   type TilePreview,
   type UserPreferences,
@@ -51,6 +53,12 @@ export const useAuthStore = defineStore('auth', () => {
   // user is absent or a payload predates the preference.
   const tilePreview = computed<TilePreview>(
     () => user.value?.preferences?.tile_preview ?? DEFAULT_TILE_PREVIEW,
+  )
+
+  // The floating action dock's screen position, defaulting when the user is
+  // absent or a payload predates the preference.
+  const dockPosition = computed<DockPosition>(
+    () => user.value?.preferences?.dock_position ?? DEFAULT_DOCK_POSITION,
   )
 
   // The Pushover/forwarding notification settings, defaulting to an empty,
@@ -115,6 +123,7 @@ export const useAuthStore = defineStore('auth', () => {
     dashboardFields,
     backgroundTone,
     tilePreview,
+    dockPosition,
     notificationSettings,
     kindColors,
     applyPreferences,

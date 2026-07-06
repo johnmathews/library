@@ -37,19 +37,29 @@ describe('settings api', () => {
     expect(JSON.parse(init.body)).toEqual({ dashboard_fields: ['tags'] })
   })
 
-  it('PUT /api/settings/appearance sends both tone and tile preview', async () => {
+  it('PUT /api/settings/appearance sends tone, tile preview, and dock position', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
-        jsonResponse({ dashboard_fields: ['kind'], background_tone: 'slate', tile_preview: 'whole_page' }),
+        jsonResponse({
+          dashboard_fields: ['kind'],
+          background_tone: 'slate',
+          tile_preview: 'whole_page',
+          dock_position: 'bottom-left',
+        }),
       )
     vi.stubGlobal('fetch', fetchMock)
-    const result = await updateAppearance('slate', 'whole_page')
+    const result = await updateAppearance('slate', 'whole_page', 'bottom-left')
     expect(result.tile_preview).toBe('whole_page')
+    expect(result.dock_position).toBe('bottom-left')
     const [url, init] = fetchMock.mock.calls[0]!
     expect(String(url)).toBe('/api/settings/appearance')
     expect(init.method).toBe('PUT')
-    expect(JSON.parse(init.body)).toEqual({ background_tone: 'slate', tile_preview: 'whole_page' })
+    expect(JSON.parse(init.body)).toEqual({
+      background_tone: 'slate',
+      tile_preview: 'whole_page',
+      dock_position: 'bottom-left',
+    })
   })
 
   it('TILE_PREVIEWS contains full_width and whole_page in order', () => {

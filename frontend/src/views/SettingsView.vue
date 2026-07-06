@@ -79,7 +79,7 @@ async function selectTone(tone: BackgroundTone): Promise<void> {
   // instantly, before the round-trip resolves.
   if (auth.user) auth.applyPreferences({ ...auth.user.preferences, background_tone: tone })
   try {
-    const result = await updateAppearance(tone, selectedTilePreview.value)
+    const result = await updateAppearance(tone, selectedTilePreview.value, auth.dockPosition)
     auth.applyPreferences(result)
     selectedTone.value = result.background_tone ?? DEFAULT_BACKGROUND_TONE
   } catch {
@@ -101,7 +101,7 @@ async function selectTilePreview(mode: TilePreview): Promise<void> {
   // Optimistic: update the store now so the dashboard reflects it immediately.
   if (auth.user) auth.applyPreferences({ ...auth.user.preferences, tile_preview: mode })
   try {
-    const result = await updateAppearance(selectedTone.value, mode)
+    const result = await updateAppearance(selectedTone.value, mode, auth.dockPosition)
     auth.applyPreferences(result)
     selectedTilePreview.value = result.tile_preview ?? DEFAULT_TILE_PREVIEW
   } catch {

@@ -72,6 +72,23 @@ export type TilePreview = (typeof TILE_PREVIEWS)[number]['value']
 export const DEFAULT_TILE_PREVIEW: TilePreview = 'full_width'
 
 /**
+ * The screen positions the floating action dock can occupy (Settings →
+ * Appearance). `top-right` is the default (mirrors the backend's
+ * DEFAULT_DOCK_POSITION).
+ */
+export const DOCK_POSITIONS = [
+  'top-left',
+  'top-middle',
+  'top-right',
+  'bottom-left',
+  'bottom-right',
+] as const
+
+export type DockPosition = (typeof DOCK_POSITIONS)[number]
+
+export const DEFAULT_DOCK_POSITION: DockPosition = 'top-right'
+
+/**
  * The built-in default tile-border colour for each document kind, by slug. Only
  * the kinds that meaningfully occur are coloured; every other kind (incl.
  * `other`) has no entry and renders with the tile's neutral default border.
@@ -158,6 +175,7 @@ export interface UserPreferences {
   // key still type-check; consumers fall back to the defaults.
   background_tone?: BackgroundTone
   tile_preview?: TilePreview
+  dock_position?: DockPosition
   // Sparse per-kind border-colour overrides (slug → '#rrggbb'). Absent kinds
   // fall back to DEFAULT_KIND_COLORS; an empty map means "all defaults".
   kind_colors?: Record<string, string>
@@ -174,14 +192,15 @@ export function updateSettings(prefs: { dashboard_fields: DashboardField[] }): P
   return apiFetch<UserPreferences>('/api/settings', { method: 'PUT', body: prefs })
 }
 
-/** PUT /api/settings/appearance — persist the page-canvas tone and tile preview. */
+/** PUT /api/settings/appearance — persist the page-canvas tone, tile preview, and dock position. */
 export function updateAppearance(
   tone: BackgroundTone,
   tilePreview: TilePreview,
+  dockPosition: DockPosition,
 ): Promise<UserPreferences> {
   return apiFetch<UserPreferences>('/api/settings/appearance', {
     method: 'PUT',
-    body: { background_tone: tone, tile_preview: tilePreview },
+    body: { background_tone: tone, tile_preview: tilePreview, dock_position: dockPosition },
   })
 }
 

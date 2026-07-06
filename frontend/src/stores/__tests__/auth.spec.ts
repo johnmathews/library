@@ -141,4 +141,16 @@ describe('useAuthStore', () => {
 
     expect(store.dashboardFields).toEqual(['amount'])
   })
+
+  it('exposes dockPosition from preferences, defaulting to top-right', async () => {
+    fetchMock.mockResolvedValue(jsonResponse(me))
+    const store = useAuthStore()
+    await store.ensureLoaded()
+
+    expect(store.dockPosition).toBe('top-right')
+
+    store.applyPreferences({ ...me.preferences, dock_position: 'bottom-left' })
+
+    expect(store.dockPosition).toBe('bottom-left')
+  })
 })
