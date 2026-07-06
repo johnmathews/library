@@ -1,6 +1,6 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-06-30 (quote kind, chart title/description overrides, authored series, recipient↔user link).
+**Status:** active. **Last updated:** 2026-07-06 (authorization model §1.5.1: shared library, no per-user ownership — deliberate). Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The full decision record (with research and
@@ -239,3 +239,33 @@ hashed, individually revocable.
 A single boolean **admin** role (`users.is_admin`) layers on top: admins
 gate global project mutations and an admin-only views surface
 (`/api/admin/*`, the `/admin` page). See [admin.md](admin.md).
+
+### 1.5.1 Authorization model — shared library, no per-user ownership
+
+This is a **deliberate design decision**, stated here so it is not mistaken for
+a gap: **there is no per-user resource ownership.** Authentication is the only
+gate on the library, and beyond the admin/non-admin split every authenticated
+user has full read **and write** access to the *entire* library.
+
+- The API router applies `current_user` + CSRF globally (`src/library/app.py`),
+  so anonymous requests are rejected (`401`). But no endpoint checks the caller
+  against a resource's creator. Any signed-in user can view, edit, and delete
+  **any** document, its metadata, notes, **comments**, tags, projects, and
+  series — not only the ones they created.
+- `documents.uploader_id` and `document_comments.author_id` are **provenance /
+  attribution** ("who added this"), surfaced for context. They are **not**
+  authorization boundaries and are never enforced on read or mutation.
+- The only elevated boundary is **admin** (`users.is_admin`), which gates global
+  taxonomy/project mutations, user management, and the `/admin` surface.
+
+**Why:** the deployment is a single household — named family accounts sharing
+one library (§1.5). The whole point is a shared, fully visible and collaboratively
+editable corpus (e.g. two family members annotating the same document), not
+per-user silos. Per-user ACLs would work against that.
+
+**For reviewers and automated tooling:** a finding that assumes per-user
+ownership — e.g. "IDOR: user A can edit user B's comment" — describes the
+*intended* model in this deployment, not a vulnerability. This decision would
+need revisiting **only** if the app is ever opened beyond a single trusted
+household; at that point per-resource authorization would have to be added
+across documents, notes, comments, and taxonomy alike.

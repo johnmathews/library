@@ -504,6 +504,14 @@ Two interchangeable credentials, checked by a single dependency on every
 When an `Authorization: Bearer` header is present it is authoritative: the
 token is validated and cookies are ignored.
 
+**Authorization is authentication-only, by design.** Beyond the admin/non-admin
+split, there is no per-user resource ownership: any authenticated user can read
+and mutate the whole library (documents, notes, comments, tags, projects,
+series). Endpoints do not check the caller against a resource's creator, and
+`uploader_id`/`author_id` are provenance, not access control — this is a
+single-family shared library. See [architecture.md §1.5.1](architecture.md) for
+the full rationale (and what would have to change to support multiple tenants).
+
 Passwords are hashed with **Argon2id** (pwdlib). Accounts are managed from
 the host with the bundled CLI — there is no signup endpoint:
 

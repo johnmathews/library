@@ -198,6 +198,14 @@ def create_app() -> FastAPI:
     # Auth gate + CSRF for the whole /api surface, attached at include level
     # so future routers are protected by default. current_user runs first:
     # anonymous requests get 401, not a confusing CSRF 403.
+    #
+    # NOTE (deliberate authorization model): authentication is the ONLY gate on
+    # the library. There is intentionally no per-user resource ownership — beyond
+    # the admin/non-admin split, any authenticated user has full read+write access
+    # to the entire library (every document, note, comment, tag, project, series).
+    # `uploader_id`/`author_id` are provenance, not authz. This is a single-family
+    # shared library by design; endpoints do NOT check the caller against a
+    # resource's creator, and that is not a bug. See docs/architecture.md §1.5.1.
     api_router = APIRouter(
         prefix="/api", dependencies=[Depends(current_user), Depends(csrf_protect)]
     )
