@@ -18,6 +18,7 @@ import { useChartsTimeframe } from '@/composables/useChartsTimeframe'
 import { GROUPING_OPTIONS, type ChartGrouping } from '@/composables/useChartsGrouping'
 
 const props = defineProps<{ documentId: number }>()
+const emit = defineEmits<{ presence: [boolean] }>()
 const series = ref<DocumentSeries | null>(null)
 
 // Same time-range + grouping surface as /charts, but persisted under
@@ -63,6 +64,13 @@ async function load(): Promise<void> {
     series.value = data.status === 'ok' ? data : null
   } catch {
     series.value = null
+  } finally {
+    // Report presence so the parent's draggable "series-chart" card can hide
+    // itself when there's no qualifying series to show — a series whose
+    // current timeframe window happens to be empty is STILL present (it
+    // renders an empty-state with controls), so this mirrors the `v-if`
+    // below, not `hasWindowedData`.
+    emit('presence', series.value !== null)
   }
 }
 

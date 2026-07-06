@@ -10,7 +10,7 @@
  * emits the server's fresh DocumentDetail back up so the hero/preview never
  * freeze on a pre-save snapshot. Drafts are re-hydrated ONLY when the shared
  * edit-mode flag flips on (via a `watch`, so this fires no matter which button —
- * this card's own toggle or the detail view's floating island — flipped it) —
+ * this card's own toggle or the detail view's floating Action dock — flipped it) —
  * never on a prop change — so an external SSE refresh mid-edit never clobbers
  * in-progress drafts.
  */
@@ -288,14 +288,14 @@ function sourceLabel(source: string): string {
 // There is no global Save/Cancel; "Done" just leaves edit mode.
 
 // Lifted into `useMetadataEditMode` (a module singleton, mirroring
-// `useDocumentLayout`'s `editMode`) so the detail view's floating island can
+// `useDocumentLayout`'s `editMode`) so the detail view's floating Action dock can
 // also read and flip this same flag — its Edit/Done button must open these
 // very editors, not an independent second mode. Ephemeral: the detail view
 // resets it to false on unmount.
 //
 // Hydration/reset is driven by a `watch` below (not by whichever function
 // flips the flag): the flag can flip from this card's own toggle OR from the
-// island, and both entry paths must hydrate fresh drafts before the editors
+// Action dock, and both entry paths must hydrate fresh drafts before the editors
 // render — otherwise the path that doesn't call `toggleEditMode` directly
 // would open the editors with stale/empty drafts and risk autosaving them.
 const { editMode, toggle: toggleSharedEditMode } = useMetadataEditMode()
@@ -396,9 +396,9 @@ function resetEditState(): void {
 }
 
 // Hydrate on entry / reset on exit whenever the SHARED flag changes — fired
-// for both this card's own toggle and the detail view's floating island,
+// for both this card's own toggle and the detail view's floating Action dock,
 // since both flip the same singleton. Moving this out of `toggleEditMode`
-// (which only the card's own button called) is what makes the island's
+// (which only the card's own button called) is what makes the Action dock's
 // toggle hydrate fresh drafts too, instead of opening the editors with
 // whatever stale/empty drafts happened to be left over.
 watch(editMode, (on) => {

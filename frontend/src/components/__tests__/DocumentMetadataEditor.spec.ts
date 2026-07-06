@@ -162,11 +162,11 @@ describe('DocumentMetadataEditor', () => {
     expect((wrapper.find('#edit-title').element as HTMLInputElement).value).toBe('Half-typed edit')
   })
 
-  it('hydrates drafts when the shared edit mode is flipped by an external caller (e.g. the island), not just this card\'s own toggle', async () => {
+  it('hydrates drafts when the shared edit mode is flipped by an external caller (e.g. the Action dock), not just this card\'s own toggle', async () => {
     // Regression test: the shared `useMetadataEditMode` flag can be flipped by
-    // DocumentDetailView's floating island as well as this card's own
+    // DocumentDetailView's floating Action dock as well as this card's own
     // `edit-toggle` button. Flip it directly here (bypassing the card's own
-    // button entirely) to simulate the island's path.
+    // button entirely) to simulate the Action dock's path.
     const { wrapper, doc } = mountEditor()
     await flushPromises()
 

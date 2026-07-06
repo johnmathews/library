@@ -5,8 +5,8 @@ import { ref, type Ref } from 'vue'
  *
  * `DocumentMetadataEditor`'s single page-wide Edit toggle used to own this as a
  * local ref. It is lifted here (mirroring `useDocumentLayout`'s `editMode`) so
- * the floating island — a separate component on the same page — can also read
- * and flip it: clicking the island's Edit/Done button must open the very same
+ * the floating Action dock — a separate component on the same page — can also read
+ * and flip it: clicking the Action dock's Edit/Done button must open the very same
  * per-field editors the Details card's own toggle does, not a second
  * independent mode.
  *
