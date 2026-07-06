@@ -199,20 +199,24 @@ const heroFields = useStorage<HeroField[]>(
 // Reconcile whatever was persisted against the current defaults on first load.
 heroFields.value = reconcileHeroFields(heroFields.value, DEFAULT_HERO_FIELDS)
 
+// Capture both localStorage reads BEFORE constructing the `useStorage` ref
+// below: `useStorage` writes the serialized default synchronously on
+// construction (writeDefaults defaults to true), so reading
+// CARD_COLUMNS_STORAGE_KEY *after* construction would always find it
+// present and this migration would never run.
+const legacyOrder = localStorage.getItem(CARD_ORDER_STORAGE_KEY)
+const hadColumns = localStorage.getItem(CARD_COLUMNS_STORAGE_KEY) !== null
+
 const cardColumns = useStorage<CardColumns>(CARD_COLUMNS_STORAGE_KEY, { ...DEFAULT_CARD_COLUMNS })
 // One-time migration: if the new key was empty (freshly defaulted) but an old
 // flat order exists from before the column model, split it into columns so
 // nothing visibly jumps for an existing user's saved order.
-{
-  const legacy = localStorage.getItem(CARD_ORDER_STORAGE_KEY)
-  const isFresh = !localStorage.getItem(CARD_COLUMNS_STORAGE_KEY)
-  if (isFresh && legacy) {
-    try {
-      const flat = JSON.parse(legacy) as unknown
-      if (Array.isArray(flat)) cardColumns.value = migrateCardOrderToColumns(flat as string[])
-    } catch {
-      /* ignore malformed legacy value */
-    }
+if (!hadColumns && legacyOrder) {
+  try {
+    const flat = JSON.parse(legacyOrder) as unknown
+    if (Array.isArray(flat)) cardColumns.value = migrateCardOrderToColumns(flat as string[])
+  } catch {
+    /* ignore malformed legacy value */
   }
 }
 cardColumns.value = reconcileCardColumns(cardColumns.value, DEFAULT_CARD_COLUMNS)

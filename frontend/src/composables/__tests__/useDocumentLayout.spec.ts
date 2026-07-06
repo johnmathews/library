@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { nextTick } from 'vue'
 import {
   useDocumentLayout,
@@ -9,6 +9,7 @@ import {
   DEFAULT_CARD_COLUMNS,
   HERO_FIELD_LABELS,
   HERO_FIELDS_STORAGE_KEY,
+  CARD_ORDER_STORAGE_KEY,
   CARD_COLUMNS_STORAGE_KEY,
   type HeroField,
   type CardColumns,
@@ -90,6 +91,72 @@ describe('migrateCardOrderToColumns', () => {
     const cols = migrateCardOrderToColumns(flat)
     expect(cols.left).toEqual(['history', 'metadata']) // metadata-column ids, in flat order
     expect(cols.right).toEqual(['markdown', 'preview']) // preview-column ids, in flat order
+  })
+})
+
+describe('legacy card-order migration (module init)', () => {
+  // These exercise the actual module-init migration block, not the pure
+  // helpers above. `resetLayout()` (used by the other describe block's
+  // `beforeEach`) never re-runs init, so seed localStorage *before* a fresh
+  // module import via `vi.resetModules()`.
+  beforeEach(() => {
+    localStorage.clear()
+    vi.resetModules()
+  })
+
+  it('migrates a customized legacy flat order into columns on first load', async () => {
+    // Legacy user who moved markdown before preview/series-chart and kept a
+    // custom left-column order, with no card-columns key yet.
+    localStorage.setItem(
+      CARD_ORDER_STORAGE_KEY,
+      JSON.stringify([
+        'history',
+        'metadata',
+        'markdown',
+        'preview',
+        'series-chart',
+        'notes',
+        'actions',
+        'comments',
+      ]),
+    )
+    const mod = await import('../useDocumentLayout')
+    const layout = mod.useDocumentLayout()
+    // Right column preserved the customized order (markdown before preview).
+    expect(layout.cardColumns.value.right).toEqual(['markdown', 'preview', 'series-chart'])
+    // Left column preserved the flat order for its members.
+    expect(layout.cardColumns.value.left).toEqual(['history', 'metadata', 'notes', 'actions', 'comments'])
+  })
+
+  it('appends a known card missing from the legacy flat order to its default column', async () => {
+    // Legacy user from before "comments" existed as a card.
+    localStorage.setItem(
+      CARD_ORDER_STORAGE_KEY,
+      JSON.stringify(['history', 'metadata', 'notes', 'actions', 'markdown', 'preview', 'series-chart']),
+    )
+    const mod = await import('../useDocumentLayout')
+    const layout = mod.useDocumentLayout()
+    expect(layout.cardColumns.value.right).toEqual(['markdown', 'preview', 'series-chart'])
+    // 'comments' wasn't in the legacy order; reconcileCardColumns appends it
+    // to its default (left) column rather than dropping it.
+    expect(layout.cardColumns.value.left).toEqual(['history', 'metadata', 'notes', 'actions', 'comments'])
+  })
+
+  it('a fresh user with no legacy key gets the default columns', async () => {
+    const mod = await import('../useDocumentLayout')
+    const layout = mod.useDocumentLayout()
+    expect(layout.cardColumns.value).toEqual(mod.DEFAULT_CARD_COLUMNS)
+  })
+
+  it('does not migrate when a card-columns value is already persisted', async () => {
+    // Simulate a returning user on the new key; the legacy key existing too
+    // (e.g. never cleaned up) must not override their already-migrated state.
+    localStorage.setItem(CARD_COLUMNS_STORAGE_KEY, JSON.stringify({ left: ['notes'], right: [] }))
+    localStorage.setItem(CARD_ORDER_STORAGE_KEY, JSON.stringify(['history', 'markdown']))
+    const mod = await import('../useDocumentLayout')
+    const layout = mod.useDocumentLayout()
+    expect(layout.cardColumns.value.left[0]).toBe('notes')
+    expect(layout.cardColumns.value.right).not.toContain('history')
   })
 })
 
