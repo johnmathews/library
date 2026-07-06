@@ -74,6 +74,19 @@ resumes idempotently, so a recovered document simply continues from where it
 died and eventually reaches `indexed`. This is why the Jobs view needs no manual
 requeue button for the common crash case.
 
+### 1.2.3 Recently-Deleted purge job
+
+`library.jobs.purge_deleted_documents` is a daily periodic task (small hours)
+that completes the soft-delete lifecycle: it hard-deletes documents whose
+`deleted_at` is older than `LIBRARY_DELETED_RETENTION_DAYS` (default 30),
+removing the row (chunks, comments, pages, events, note versions, and
+series/tag/project links cascade at the DB level) and unlinking the on-disk
+original and derived artifacts. File unlink is safe and unconditional because
+`documents.sha256` is unique — exactly one row references each stored file. The
+task is gated by `LIBRARY_DELETED_PURGE_ENABLED` (default on): with it off,
+soft-deleted documents stay in the Recently-Deleted area indefinitely and remain
+restorable. See [api.md §1.6](api.md) for the delete/restore/list endpoints.
+
 ## 1.3 Scope & non-goals
 
 1. Toasts fire for document processing only — manual re-extract/embed/markdown,

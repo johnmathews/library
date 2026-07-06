@@ -36,6 +36,8 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/documents/{id}/markdown` | Per-page markdown rendering of a document |
 | PATCH  | `/api/documents/{id}` | Edit metadata |
 | DELETE | `/api/documents/{id}` | Soft-delete |
+| GET    | `/api/documents/deleted` | List soft-deleted documents (Recently Deleted) |
+| POST   | `/api/documents/{id}/restore` | Restore a soft-deleted document |
 | POST   | `/api/documents/{id}/extract` | Queue metadata re-extraction |
 | POST   | `/api/documents/{id}/verify` | Mark document metadata as verified |
 | GET    | `/api/documents/{id}/original` | Download the original file |
@@ -101,11 +103,18 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | POST   | `/api/admin/currencies/normalize` | Rename a currency code store-wide (series-aware) (admin only) |
 | GET    | `/api/admin/fx-rates` | FX rates per in-use currency (base = USD) (admin only) |
 | POST   | `/api/admin/fx-rates` | Seed an FX rate (live fetch or manual) (admin only) |
+| GET    | `/api/saved-views` | List the caller's saved views |
+| POST   | `/api/saved-views` | Create a saved view |
+| PATCH  | `/api/saved-views/{id}` | Rename / re-target / pin a saved view |
+| DELETE | `/api/saved-views/{id}` | Delete a saved view |
+| POST   | `/api/saved-views/reorder` | Reorder the caller's saved views |
 
-Soft-deleted documents return **404** from every per-document endpoint and
-never appear in lists. Other error shapes: `404` unknown document, `422`
-validation problem (FastAPI detail body), `409`/`413`/`415` on upload (see
-[ingestion.md](ingestion.md)).
+Soft-deleted documents return **404** from every per-document read endpoint and
+never appear in lists or search. They surface only via
+`GET /api/documents/deleted` until restored (`POST /api/documents/{id}/restore`)
+or purged after the retention window (see §1.6). Other error shapes: `404`
+unknown document, `422` validation problem (FastAPI detail body),
+`409`/`413`/`415` on upload (see [ingestion.md](ingestion.md)).
 
 ## 1.2 Upload — `POST /api/documents`
 
@@ -301,13 +310,35 @@ never silently un-verifies), otherwise `unreviewed`.
 > now indexed for full-text search (§1.3.3), but it is owned by extraction, not
 > the user. `tags` remains the curated, editable cross-document filter facet.
 
-## 1.6 Delete — `DELETE /api/documents/{id}`
+## 1.6 Delete, restore, and purge — the soft-delete lifecycle
 
-Soft delete: sets `deleted_at`, records a `deleted` ingestion event,
-returns `204`. The document then 404s on every endpoint and disappears
-from lists; its file and row are kept. Re-uploading identical content
-returns `409` (see ingestion.md). **Restore is out of scope for now** —
-undeleting means clearing `deleted_at` manually in the database.
+**Delete — `DELETE /api/documents/{id}`.** Soft delete: sets `deleted_at`,
+records a `deleted` ingestion event, returns `204`. The document then 404s on
+every read endpoint and disappears from every list and search; its file and row
+are kept. Re-uploading identical content returns `409` (see ingestion.md) — a
+soft-deleted document is restored, not re-uploaded. Notes are documents
+(`source = note`), so they follow the same path.
+
+**Recently Deleted — `GET /api/documents/deleted`.** Paginated
+(`limit` ≤ 100, `offset`) list of soft-deleted documents, newest-deleted first.
+Each item is a normal list item plus `deleted_at`, `purge_at`, and
+`days_remaining` (whole days until purge, floored at 0). The response also
+carries `retention_days`, the configured window. This is the one endpoint that
+*inverts* the `deleted_at IS NULL` predicate.
+
+**Restore — `POST /api/documents/{id}/restore`.** Clears `deleted_at`, records a
+`restored` event, and returns the document detail. `404` unless the document
+exists and is *currently* soft-deleted (restoring a live document is an error).
+Restore never collides with a re-upload, because `sha256` is unique and uploads
+of soft-deleted content are refused with `409`.
+
+**Purge.** A daily worker task (`purge_deleted_documents`) hard-deletes documents
+whose `deleted_at` is older than `LIBRARY_DELETED_RETENTION_DAYS` (default 30):
+it removes the row (chunks, comments, pages, events, note versions, and
+series/tag/project links cascade) and unlinks the on-disk original and derived
+artifacts. It is gated by `LIBRARY_DELETED_PURGE_ENABLED` (default on) — turn it
+off to keep the Recently-Deleted area indefinitely restorable. See
+[jobs-and-notifications.md](jobs-and-notifications.md).
 
 ## 1.7 File downloads
 
@@ -1431,3 +1462,32 @@ migration `0022`), so a comment surfaces through `semantic_search` like any
 other passage, and the Ask agent's `get_document` tool returns a document's
 comments verbatim as authoritative personal context — see
 [ask.md §1.9](ask.md).
+
+## 1.20 Saved views — `/api/saved-views`
+
+A **saved view** is a named, per-user snapshot of the document-list filter/search
+state (`library.models.SavedView`, table `saved_views`). `filter_state` stores
+the homepage URL query verbatim — the frontend's `buildDocumentQuery(applied)`
+output — so applying a view is just pushing that query at the homepage. A
+`pinned` view also appears in the sidebar as a **custom dashboard**. Views are
+strictly per-user: every endpoint is scoped to the authenticated user, and a view
+owned by another user is indistinguishable from a missing one (`404`, never
+`403`). Auth + CSRF apply as elsewhere (§1.9).
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/saved-views` | The caller's views, ordered by `sort_order` then `id`. |
+| POST | `/api/saved-views` | Body `{"name", "filter_state"?, "pinned"?}`. `201` with the created view, appended after the caller's existing views. Blank `name` `422`. |
+| PATCH | `/api/saved-views/{id}` | Body `{"name"?, "filter_state"?, "pinned"?}`; only fields present change. `200` with the updated view; `404` if not the caller's. |
+| DELETE | `/api/saved-views/{id}` | `204` on success; `404` if not the caller's. |
+| POST | `/api/saved-views/reorder` | Body `{"ids": [...]}` — **exactly** the caller's current view ids, in the desired order. Sets each view's `sort_order` to its position. `200` with the reordered list; `400` if `ids` is not exactly the caller's set (so a stale client can't silently drop a view). |
+
+**Response shape (`SavedViewOut`):**
+
+```json
+{"id": 4, "name": "Unpaid invoices", "filter_state": {"kind": "invoice", "status": "needs_review"}, "pinned": true, "sort_order": 0, "created_at": "2026-07-06T09:15:00Z", "updated_at": "2026-07-06T09:15:00Z"}
+```
+
+`filter_state` values are strings or string arrays (repeated query params such
+as `tag`), matching the homepage's URL contract (§1.3); an empty object is a
+valid "no filters" view.
