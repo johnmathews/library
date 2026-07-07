@@ -7,21 +7,29 @@
  * can be driven by the user's `dockPosition` preference (Settings →
  * Appearance) rather than being hard-coded bottom-right.
  *
- * Positioning: the outer wrapper is `sticky` (not `fixed`) so it stays within
- * the document-detail page's own scroll container (`#app-content`,
+ * Positioning: the dock is `sticky` (not `fixed`) so it stays within the
+ * document-detail page's own scroll container (`#app-content`,
  * `overflow-y-auto` — see `DefaultLayout.vue`) rather than the viewport; that
  * keeps it clipped to the content area instead of floating over the sidebar.
- * It spans the full content width (`flex px-4`) and is `pointer-events-none`
- * so only the pill itself (`pointer-events-auto`) is interactive — the rest
- * of the row lets clicks fall through to whatever is beneath it.
+ * `fixed` can't be scoped to the content column here: the only ancestor that
+ * could establish a containing block for it *is* the scroll container, and a
+ * `fixed` element inside its own scroll container scrolls away with the
+ * content (verified) — so sticky is the correct tool.
  *
- * `AppHeader` is *also* sticky (`top-0`) inside the same scroll container,
- * with a fixed `h-16` (4rem/64px) row and no vertical padding — its total
- * rendered height is exactly 4rem at every breakpoint. Since the dock sits at
- * `z-40` (above the header's `z-30`), a top-anchored dock needs a matching
- * `top-16` offset or it would render on top of (rather than below) the
- * header once scrolled to the top of the page. Bottom-anchored positions
- * have no such neighbour, so they stick flush to `bottom-0`.
+ * A single sticky element can only pin in a direction that has scrollable
+ * content beyond it: `bottom-0` pins to the viewport bottom only when mounted
+ * *late* in the flow (content above scrolls past it), and `top-16` pins below
+ * the header only when mounted *early* in the flow (content below scrolls up
+ * past it). It cannot do both from one slot — so `DocumentDetailView` mounts
+ * this component in the matching slot for the chosen position (early for
+ * `top-*`, late for `bottom-*`).
+ *
+ * The sticky element itself is a zero-height rail (`h-0`); the visible pill
+ * row is absolutely positioned within it. That way the rail reserves no space
+ * in the flow, so mounting/unmounting the dock (it appears only once the hero
+ * scrolls off) never shifts the surrounding content. `top-16` clears
+ * `AppHeader`'s fixed 4rem (`h-16`) height; the row is `pointer-events-none`
+ * so only the pill (`pointer-events-auto`) is interactive.
  */
 import { computed } from 'vue'
 import { AppButton } from '@/components/app'
@@ -35,12 +43,12 @@ defineProps<{
 const { editMode, toggle } = useMetadataEditMode()
 
 const dockPosition = computed(() => useAuthStore().dockPosition)
+const isTop = computed(() => dockPosition.value.startsWith('top'))
 
-// See the header-offset note above: `top-16` clears AppHeader's fixed 4rem
-// height; bottom positions have no header to clear, so `bottom-0` is exact.
-const edgeClass = computed(() =>
-  dockPosition.value.startsWith('top') ? 'top-16 self-start' : 'bottom-0 self-end',
-)
+// Rail sticks to `top-16` (clearing the 4rem header) or `bottom-0`; the pill
+// row anchors to the matching edge of the zero-height rail.
+const edgeClass = computed(() => (isTop.value ? 'top-16' : 'bottom-0'))
+const rowAnchorClass = computed(() => (isTop.value ? 'top-0' : 'bottom-0'))
 const justifyClass = computed(() =>
   dockPosition.value.endsWith('left')
     ? 'justify-start'
@@ -53,13 +61,18 @@ const justifyClass = computed(() =>
 <template>
   <div
     data-testid="action-dock-wrapper"
-    class="pointer-events-none sticky z-40 flex px-4"
-    :class="[edgeClass, justifyClass]"
+    class="sticky z-40 h-0"
+    :class="edgeClass"
   >
     <div
-      data-testid="action-dock"
-      class="pointer-events-auto flex items-center gap-2 rounded-full border border-gray-200 bg-white/95 p-1.5 shadow-lg backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/95"
+      data-testid="action-dock-row"
+      class="pointer-events-none absolute inset-x-0 flex px-4"
+      :class="[rowAnchorClass, justifyClass]"
     >
+      <div
+        data-testid="action-dock"
+        class="pointer-events-auto flex items-center gap-2 rounded-full border border-gray-200 bg-white/95 p-1.5 shadow-lg backdrop-blur dark:border-gray-700/60 dark:bg-gray-800/95"
+      >
       <button
         type="button"
         class="btn-sm rounded-full border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
@@ -109,6 +122,7 @@ const justifyClass = computed(() =>
         </svg>
         Ask
       </AppButton>
+      </div>
     </div>
   </div>
 </template>

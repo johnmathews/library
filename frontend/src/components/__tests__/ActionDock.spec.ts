@@ -27,21 +27,27 @@ describe('ActionDock', () => {
     useMetadataEditMode().setEditMode(false)
   })
 
-  // AppHeader is sticky with a fixed 4rem (h-16) height in the same scroll
-  // container, so top-anchored positions need a top-16 offset to clear it;
-  // bottom-anchored positions have no header to clear and stick flush to
-  // bottom-0 (see the header-offset note in ActionDock.vue).
+  // The sticky rail anchors to `top-16` (clearing AppHeader's fixed 4rem
+  // height) or `bottom-0`; the absolutely-positioned pill row anchors to the
+  // matching edge of the zero-height rail and carries the horizontal justify.
+  // See the positioning note in ActionDock.vue.
   it.each([
-    ['top-left', 'top-16', 'justify-start'],
-    ['top-middle', 'top-16', 'justify-center'],
-    ['top-right', 'top-16', 'justify-end'],
-    ['bottom-left', 'bottom-0', 'justify-start'],
-    ['bottom-right', 'bottom-0', 'justify-end'],
-  ])('positions the dock wrapper for %s', (pos, edgeClass, justifyClass) => {
+    ['top-left', 'top-16', 'top-0', 'justify-start'],
+    ['top-middle', 'top-16', 'top-0', 'justify-center'],
+    ['top-right', 'top-16', 'top-0', 'justify-end'],
+    ['bottom-left', 'bottom-0', 'bottom-0', 'justify-start'],
+    ['bottom-right', 'bottom-0', 'bottom-0', 'justify-end'],
+  ])('positions the dock rail and row for %s', (pos, edgeClass, rowAnchor, justifyClass) => {
     const w = mountDock(pos as DockPosition)
     const wrapper = w.find('[data-testid="action-dock-wrapper"]')
     expect(wrapper.classes()).toContain(edgeClass)
-    expect(wrapper.classes()).toContain(justifyClass)
+    // The rail reserves no vertical space, so mounting the dock never shifts
+    // the surrounding content.
+    expect(wrapper.classes()).toContain('h-0')
+
+    const row = w.find('[data-testid="action-dock-row"]')
+    expect(row.classes()).toContain(rowAnchor)
+    expect(row.classes()).toContain(justifyClass)
   })
 
   it('renders the Ask anchor pointing at askHref and toggles metadata edit mode', async () => {

@@ -37,6 +37,7 @@ import {
 } from '@/api/documents'
 import { ApiError } from '@/api/client'
 import { useJobsStore } from '@/stores/jobs'
+import { useAuthStore } from '@/stores/auth'
 import { useReviewQueueStore } from '@/stores/reviewQueue'
 import { resolveReviewReasons, type ReviewReason } from '@/utils/validationReason'
 import { formatDate, formatDateTime, markdownPageHtml, tagColour } from '@/utils/documentFormat'
@@ -182,6 +183,15 @@ const askHref = computed(() => router.resolve({ name: 'ask', query: { q: askProm
 // `ActionDock`. `v-if` (not `v-show`) keeps it fully out of the DOM while the
 // hero is visible, so it never interferes with mobile e2e specs that assert
 // on visibility lower on the page.
+//
+// `ActionDock` is `position: sticky`, which only pins in a direction that has
+// scrollable content beyond it. So a top-anchored dock must be mounted *early*
+// in the flow (content below to pin `top-16` against) and a bottom-anchored
+// one *late* (content above to pin `bottom-0` against) — hence the two mount
+// slots below, selected by `dockAtTop`. A single slot can't serve both; a dock
+// rendered only at the bottom leaves the three `top-*` positions stuck at the
+// very bottom of the page (see the note in ActionDock.vue).
+const dockAtTop = computed(() => useAuthStore().dockPosition.startsWith('top'))
 const heroEl = ref<HTMLElement | null>(null)
 const heroVisible = ref(true)
 let heroObserver: IntersectionObserver | null = null
@@ -703,6 +713,11 @@ watch(
   <AppBackLink to="/" text="Back to documents" class="mb-4" />
 
   <template v-if="doc">
+    <!-- Top-anchored dock: mounted early in the flow so its `sticky top-16`
+         has content below to pin against (see the ActionDock note above). The
+         zero-height rail reserves no space, so mounting it here shifts nothing.
+         Bottom-anchored positions render from the late slot near the end. -->
+    <ActionDock v-if="!heroVisible && dockAtTop" :ask-href="askHref" />
     <div
       v-if="inQueue"
       class="mb-6 flex flex-col gap-3 rounded-lg border border-violet-300 bg-violet-50 p-3 sm:flex-row sm:items-center dark:border-violet-500/40 dark:bg-violet-500/10"
@@ -1209,8 +1224,10 @@ watch(
     <!-- The hero's primary actions, reachable once the hero itself has
          scrolled off screen (see the IntersectionObserver above). `v-if` (not
          `v-show`) keeps it out of the DOM entirely while the hero is visible,
-         so it can't interfere with narrow-viewport e2e specs. -->
-    <ActionDock v-if="!heroVisible" :ask-href="askHref" />
+         so it can't interfere with narrow-viewport e2e specs. This is the
+         *late* mount slot: bottom-anchored positions pin `bottom-0` from here;
+         top-anchored positions use the early slot near the top instead. -->
+    <ActionDock v-if="!heroVisible && !dockAtTop" :ask-href="askHref" />
   </template>
 
   <template v-else-if="notFound">
