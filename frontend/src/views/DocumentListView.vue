@@ -470,8 +470,10 @@ function toggleSortDirection(): void {
             </button>
           </div>
         </div>
-        <label class="flex flex-col gap-1 text-sm text-gray-500 dark:text-gray-400">
-          <span class="hidden sm:inline text-xs font-medium uppercase tracking-wide text-gray-400">Tiles per row</span>
+        <!-- Tiles-per-row only affects the multi-column desktop grid; below `lg`
+             the grid is fixed (1 col on phones, 2 on tablets), so hide the control. -->
+        <label class="hidden lg:flex flex-col gap-1 text-sm text-gray-500 dark:text-gray-400">
+          <span class="text-xs font-medium uppercase tracking-wide text-gray-400">Tiles per row</span>
           <select
             v-model="gridCols"
             data-testid="grid-cols-select"

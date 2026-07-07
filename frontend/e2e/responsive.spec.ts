@@ -133,6 +133,16 @@ test('the dashboard grid has the expected column count per viewport', async ({
 
   await expect(page.locator('.app-doc-card').first()).toBeVisible()
   expect(await gridColumnCount(page)).toBe(expected)
+
+  // The tiles-per-row control is desktop-only (below `lg` the grid is fixed):
+  // visible on the desktop project, hidden on phone/tablet.
+  const tilesControl = page.getByTestId('grid-cols-select')
+  if (testInfo.project.name === 'chromium') {
+    await expect(tilesControl).toBeVisible()
+  } else {
+    await expect(tilesControl).toBeHidden()
+  }
+
   await expectNoHorizontalOverflow(page, `/ grid (${testInfo.project.name})`)
 })
 
