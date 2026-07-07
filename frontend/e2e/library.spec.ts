@@ -211,6 +211,12 @@ test('detail: open from list, edit title, delete via confirmation page', async (
   await expect(page).toHaveURL(/\/$/)
   await expect(page.getByTestId('flash-banner')).toContainText('has been deleted')
   await expect(page.locator('.app-doc-card__title a', { hasText: newTitle })).toHaveCount(0)
+
+  // Navigating straight to a soft-deleted document now opens it READ-ONLY with a
+  // trash banner (Restore / Delete permanently) rather than the old "Document
+  // not found" page — the document is in Recently Deleted, not gone.
   await page.goto(`/documents/${id}`)
-  await expect(page.getByRole('heading', { name: 'Document not found' })).toBeVisible()
+  await expect(page.getByTestId('trash-banner')).toBeVisible()
+  await expect(page.getByRole('heading', { level: 1, name: newTitle })).toBeVisible()
+  await expect(page.getByRole('heading', { name: 'Document not found' })).toHaveCount(0)
 })

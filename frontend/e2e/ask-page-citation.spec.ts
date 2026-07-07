@@ -87,7 +87,10 @@ test('ask citation deep-links to the cited PDF page', async ({ page }, testInfo)
   // The real document is a text file, which produces preview === 'none' (no
   // iframe). Override the response to present it as a searchable PDF so
   // DocumentDetailView renders the iframe and computes the page-aware src.
-  await page.route(`**/api/documents/${docId}`, async (route, request) => {
+  // Match the detail GET whether or not it carries a query string — the detail
+  // view now fetches `?include_deleted=true` (the regex also avoids matching a
+  // longer id like `${docId}0` or the `/markdown` sub-resource).
+  await page.route(new RegExp(`/api/documents/${docId}(\\?.*)?$`), async (route, request) => {
     if (request.method() !== 'GET') {
       await route.continue()
       return
