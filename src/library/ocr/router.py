@@ -3,6 +3,8 @@
 Routing (see docs/ingestion.md):
 
 - ``text/plain``/``text/markdown`` -> passthrough read (engine "text")
+- ``DOCX_MIME`` (Word ``.docx``)    -> read the derived Markdown ingest wrote from
+                                       the stored original (engine "docx")
 - ``application/pdf`` w/ text layer, NOT scan-like
                                   -> pypdfium2 extraction (engine "text-layer")
 - ``application/pdf`` scan-like (with or without embedded text)
@@ -34,6 +36,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from library.config import Settings, get_settings
+from library.docx import CONVERTED_MARKDOWN_NAME, DOCX_MIME
 from library.images import CONVERTED_JPEG_NAME, HEIC_MIME_TYPES
 from library.models import Document
 from library.ocr import photo, tesseract
@@ -68,6 +71,19 @@ def run_ocr(
     if mime_type in ("text/plain", "text/markdown"):
         text = original_path.read_text(encoding="utf-8", errors="replace").strip()
         return OcrResult(text=text, confidence=None, searchable_pdf=None, engine="text", pages=None)
+
+    if mime_type == DOCX_MIME:
+        # The .docx original is stored; ingest wrote its Markdown conversion to the
+        # derived dir. Prefer that cached artifact; if it is missing (e.g. a
+        # re-process after the derived dir was cleaned), re-convert the original.
+        converted = derived / CONVERTED_MARKDOWN_NAME
+        if converted.is_file():
+            text = converted.read_text(encoding="utf-8", errors="replace").strip()
+        else:
+            from library.docx import docx_to_markdown
+
+            text = docx_to_markdown(original_path.read_bytes()).strip()
+        return OcrResult(text=text, confidence=None, searchable_pdf=None, engine="docx", pages=None)
 
     if mime_type == "application/pdf":
         return _route_pdf(original_path, derived, settings)

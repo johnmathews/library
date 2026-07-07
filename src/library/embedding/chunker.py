@@ -10,8 +10,18 @@ single spaces — fine for both embedding and snippet display.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
+
+from library.docx import DOCX_MIME
 
 _BLANK_LINE_RE = re.compile(r"\n\s*\n+")
+
+# MIME types whose text layer is Markdown (structure-aware chunking applies).
+# Word ``.docx`` is stored under its own MIME but its OCR passthrough yields the
+# Markdown conversion, so it chunks like ``text/markdown``.
+_MARKDOWN_MIME_TYPES: frozenset[str] = frozenset({"text/markdown", DOCX_MIME})
+
+_Chunker = Callable[..., list[str]]
 
 
 def _overlap_tail(words: list[str], overlap: int) -> list[str]:
@@ -113,3 +123,12 @@ def chunk_markdown(text: str, *, max_chars: int, overlap: int) -> list[str]:
     if current:
         chunks.append("\n\n".join(current))
     return chunks
+
+
+def chunker_for_mime(mime_type: str) -> _Chunker:
+    """Pick the structure-aware chunker for Markdown-bearing MIME types.
+
+    ``text/markdown`` and Word ``.docx`` (whose passthrough text is Markdown)
+    use ``chunk_markdown``; everything else uses the plain word-packer.
+    """
+    return chunk_markdown if mime_type in _MARKDOWN_MIME_TYPES else chunk_text

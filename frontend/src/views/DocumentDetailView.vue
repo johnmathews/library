@@ -480,6 +480,20 @@ const previewDownloadUrl = computed(() => {
     : originalUrl(doc.value.id, { includeDeleted: isDeleted.value })
 })
 
+/** True when the stored original is a binary the reader cannot reproduce (e.g. a
+ * Word .docx, ingested as its converted Markdown) and there is no image/pdf
+ * preview — so the only way to obtain the original file is an explicit download
+ * link. Text originals (markdown/plain) are shown verbatim in the reader and
+ * need no such link. */
+const hasDownloadableOriginal = computed(
+  () => preview.value === 'none' && !(doc.value?.mime_type.startsWith('text/') ?? true),
+)
+
+/** Attachment-download URL for the stored original file. */
+const originalDownloadUrl = computed(() =>
+  doc.value ? originalUrl(doc.value.id, { includeDeleted: isDeleted.value }) : '',
+)
+
 // --- Document text reader (markdown, fetched eagerly on load) -----------------
 
 const markdownData = ref<DocumentMarkdownResponse | null>(null)
@@ -1126,6 +1140,38 @@ watch(
               >Download the original file</a
             >
             to view it.
+          </div>
+          <!-- Binary original with readable extracted text (e.g. a .docx shown as
+               its converted Markdown in the reader): no inline preview, but the
+               original file is preserved and downloadable. -->
+          <div
+            v-else-if="hasDownloadableOriginal"
+            class="flex items-center justify-between gap-3 p-4"
+            data-testid="preview-download-original"
+          >
+            <span class="text-sm text-gray-500 dark:text-gray-400">Original file preserved</span>
+            <a
+              :href="originalDownloadUrl"
+              class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
+              data-testid="download-original"
+            >
+              <svg
+                xmlns="http://www.w3.org/2000/svg"
+                fill="none"
+                viewBox="0 0 24 24"
+                stroke-width="1.5"
+                stroke="currentColor"
+                class="w-4 h-4"
+                aria-hidden="true"
+              >
+                <path
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  d="M3 16.5v2.25A2.25 2.25 0 0 0 5.25 21h13.5A2.25 2.25 0 0 0 21 18.75V16.5M16.5 12 12 16.5m0 0L7.5 12m4.5 4.5V3"
+                />
+              </svg>
+              Download original
+            </a>
           </div>
         </div>
 

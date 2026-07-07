@@ -1,6 +1,7 @@
 """Unit tests for the embedding text chunker (no DB, no network)."""
 
-from library.embedding.chunker import chunk_markdown, chunk_text
+from library.docx import DOCX_MIME
+from library.embedding.chunker import chunk_markdown, chunk_text, chunker_for_mime
 
 
 def test_blank_text_yields_no_chunks() -> None:
@@ -85,3 +86,13 @@ def test_chunk_markdown_overlap_carries_a_whole_block() -> None:
     first_blocks = set(chunks[0].split("\n\n"))
     second_blocks = set(chunks[1].split("\n\n"))
     assert first_blocks & second_blocks
+
+
+def test_chunker_for_mime_selects_markdown_for_markdown_and_docx() -> None:
+    # Markdown and .docx (Markdown passthrough) chunk structure-aware.
+    assert chunker_for_mime("text/markdown") is chunk_markdown
+    assert chunker_for_mime(DOCX_MIME) is chunk_markdown
+    # Everything else uses the plain word-packer.
+    assert chunker_for_mime("text/plain") is chunk_text
+    assert chunker_for_mime("application/pdf") is chunk_text
+    assert chunker_for_mime("image/jpeg") is chunk_text

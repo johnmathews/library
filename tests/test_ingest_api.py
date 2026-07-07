@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -9,7 +10,9 @@ import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from library.docx import DOCX_MIME
 from tests.conftest import fetch_all
+from tests.docx_fixtures import make_docx
 from tests.test_images import make_heic
 
 pytestmark = pytest.mark.integration
@@ -124,6 +127,61 @@ def test_heic_upload_stores_original_and_derived_jpeg(
     image = Image.open(io.BytesIO(converted.read_bytes()))
     assert image.format == "JPEG"
     assert image.size == (8, 4)
+
+
+def test_docx_upload_stores_original_and_derived_markdown(
+    api_client: TestClient, api_database_url: str, tmp_path: Path
+) -> None:
+    docx = make_docx(
+        heading="Enrolment Form",
+        paragraph="Please fill in your details.",
+        marker=uuid.uuid4().hex,
+    )
+    sha = hashlib.sha256(docx).hexdigest()
+
+    status_code, body = upload(api_client, docx, filename="form.docx", content_type=DOCX_MIME)
+    assert status_code == 201
+    assert body["sha256"] == sha  # content-addressed over the .docx original
+
+    # The .docx original is the stored source of truth.
+    stored = tmp_path / "originals" / sha[0:2] / sha[2:4] / sha
+    assert stored.read_bytes() == docx
+
+    # The Markdown conversion is a derived artifact.
+    converted = tmp_path / "derived" / sha[0:2] / sha[2:4] / sha / "converted.md"
+    markdown = converted.read_text(encoding="utf-8")
+    assert "# Enrolment Form" in markdown
+    assert "Please fill in your details." in markdown
+
+    # The document keeps the docx MIME (threaded through the pipeline downstream).
+    rows = fetch_all(
+        api_database_url,
+        "SELECT original_filename, mime_type FROM documents WHERE id = :id",
+        id=body["id"],
+    )
+    assert rows == [("form.docx", DOCX_MIME)]
+
+
+def test_docx_conversion_failure_still_creates_document(
+    api_client: TestClient, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # A .docx that sniffs valid but fails to convert must not 500 or orphan the
+    # stored original: the document is created (worker will surface `failed`),
+    # and no derived converted.md is written.
+    def _boom(_content: bytes) -> str:
+        raise ValueError("corrupt docx")
+
+    monkeypatch.setattr("library.ingest.docx_to_markdown", _boom)
+    docx = make_docx(marker=uuid.uuid4().hex)
+    sha = hashlib.sha256(docx).hexdigest()
+
+    status_code, body = upload(api_client, docx, filename="bad.docx", content_type=DOCX_MIME)
+    assert status_code == 201
+    assert body["sha256"] == sha
+
+    # Original stored; no derived markdown artifact.
+    assert (tmp_path / "originals" / sha[0:2] / sha[2:4] / sha).read_bytes() == docx
+    assert not (tmp_path / "derived" / sha[0:2] / sha[2:4] / sha / "converted.md").exists()
 
 
 def test_unsupported_mime_rejected(api_client: TestClient) -> None:

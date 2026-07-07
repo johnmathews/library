@@ -28,6 +28,7 @@ from sqlalchemy.ext.asyncio import (
 
 from library import jobs
 from library.config import Settings, get_settings
+from library.docx import DOCX_MIME
 from library.email_ingest import (
     EmailPollSummary,
     IngestCallable,
@@ -38,6 +39,7 @@ from library.email_ingest import (
 )
 from library.ingest import IngestResult
 from library.models import Document, DocumentSource, IngestionEvent
+from tests.docx_fixtures import make_docx
 
 pytestmark = pytest.mark.integration
 
@@ -363,7 +365,7 @@ async def test_duplicate_attachment_moved_without_new_document(
 
 
 def test_html_to_markdown_preserves_tables_and_drops_noise() -> None:
-    from library.email_ingest import _html_to_markdown
+    from library.markdown.html import html_to_markdown
 
     html = (
         "<html><head><style>.x{color:red}</style></head><body>"
@@ -372,7 +374,7 @@ def test_html_to_markdown_preserves_tables_and_drops_noise() -> None:
         "<tr><td>Widget</td><td>42</td></tr></table>"
         "<script>alert(1)</script></body></html>"
     )
-    md = _html_to_markdown(html)
+    md = html_to_markdown(html)
     assert "# Invoice" in md  # heading survives
     assert "| Item | Total |" in md and "| Widget | 42 |" in md  # table survives
     assert "alert(1)" not in md  # <script> contents dropped
@@ -476,6 +478,71 @@ async def test_empty_body_mail_moved_without_ingest(
     assert await documents_named(session_factory, f"{subject}.md") == []
     assert mailbox.moved == [("3", PROCESSED_FOLDER)]  # still filed away
     assert summary == EmailPollSummary(messages_seen=1, messages_processed=1)
+
+
+async def test_docx_attachment_becomes_document(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # A forwarded .docx is converted to Markdown at ingest and becomes a
+    # document (previously dropped-but-flagged). The .docx is the stored
+    # original; its derived Markdown drives the pipeline.
+    tag = uuid.uuid4().hex[:8]
+    name = f"form-{tag}.docx"
+    raw = make_raw_mail(
+        subject="Enrolment form",
+        attachments=[
+            (
+                name,
+                make_docx(heading="Enrolment Form", marker=tag),
+                "application",
+                "vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="7")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1
+    assert documents[0].mime_type == DOCX_MIME
+    assert documents[0].source is DocumentSource.EMAIL
+    assert mailbox.moved == [("7", PROCESSED_FOLDER)]
+    assert summary.attachments_ingested == 1
+
+
+async def test_docx_attachment_suppresses_body_ingestion(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # A docx attachment that now converts successfully counts as producing a
+    # document, so the cover-note body must not spawn a second document.
+    tag = uuid.uuid4().hex[:8]
+    name = f"form-{tag}.docx"
+    raw = make_raw_mail(
+        subject="Please complete the attached form",
+        attachments=[
+            (
+                name,
+                make_docx(heading="Enrolment Form", marker=tag),
+                "application",
+                "vnd.openxmlformats-officedocument.wordprocessingml.document",
+            )
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="8")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert len(await documents_named(session_factory, name)) == 1
+    assert summary == EmailPollSummary(
+        messages_seen=1, messages_processed=1, attachments_ingested=1
+    )
 
 
 async def test_unsupported_attachment_skipped_message_still_moved(

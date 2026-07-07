@@ -1957,4 +1957,40 @@ describe('DocumentDetailView', () => {
       expect(pushSpy).toHaveBeenCalledWith({ name: 'documents-deleted' })
     })
   })
+
+  describe('binary original download (e.g. .docx)', () => {
+    const DOCX_MIME =
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+
+    it('offers a download link for a .docx original shown as converted text', async () => {
+      // A .docx has no image/pdf preview but its converted Markdown is readable;
+      // the stored original must still be downloadable.
+      detail = makeDetail({
+        mime_type: DOCX_MIME,
+        has_searchable_pdf: false,
+        has_thumbnail: false,
+      })
+      const w = await mountView()
+
+      const affordance = w.find('[data-testid="preview-download-original"]')
+      expect(affordance.exists()).toBe(true)
+      const link = w.find('[data-testid="download-original"]')
+      expect(link.attributes('href')).toContain('/api/documents/12/original')
+      // Not treated as an image/pdf preview.
+      expect(w.find('[data-testid="preview-image"]').exists()).toBe(false)
+      expect(w.find('[data-testid="preview-pdf"]').exists()).toBe(false)
+    })
+
+    it('does not show the download affordance for a text/markdown original', async () => {
+      // A text original is shown verbatim in the reader; no separate download.
+      detail = makeDetail({
+        mime_type: 'text/markdown',
+        has_searchable_pdf: false,
+        has_thumbnail: false,
+      })
+      const w = await mountView()
+
+      expect(w.find('[data-testid="preview-download-original"]').exists()).toBe(false)
+    })
+  })
 })

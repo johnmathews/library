@@ -12,10 +12,12 @@ from pathlib import Path
 import pytest
 
 from library.config import Settings
+from library.docx import CONVERTED_MARKDOWN_NAME, DOCX_MIME
 from library.images import CONVERTED_JPEG_NAME
 from library.models import Document, DocumentSource
 from library.ocr import photo, router, tesseract
 from library.ocr.base import OcrResult
+from tests.docx_fixtures import make_docx
 from tests.ocr_fixtures import make_image, make_image_pdf, make_scanlike_pdf, make_text_pdf
 
 SHA = "0" * 64
@@ -103,6 +105,48 @@ class TestTextPassthrough:
         assert result.confidence is None
         assert result.searchable_pdf is None
         assert result.pages is None
+
+    def test_docx_reads_derived_markdown(
+        self,
+        tmp_path: Path,
+        derived: Path,
+        settings: Settings,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # ingest wrote the Markdown conversion to the derived dir; the router
+        # reads that cached artifact rather than touching the .docx original.
+        forbid(monkeypatch, tesseract, "ocr_pdf")
+        forbid(monkeypatch, photo, "ocr_image")
+        (derived / CONVERTED_MARKDOWN_NAME).write_text("# Enrolment Form\n\nbody", encoding="utf-8")
+        source = tmp_path / "form.docx"
+        source.write_bytes(make_docx())
+
+        result = router.run_ocr(make_document(DOCX_MIME), source, derived, settings=settings)
+
+        assert result.text == "# Enrolment Form\n\nbody"
+        assert result.engine == "docx"
+        assert result.confidence is None
+        assert result.searchable_pdf is None
+        assert result.pages is None
+
+    def test_docx_reconverts_original_when_derived_missing(
+        self,
+        tmp_path: Path,
+        derived: Path,
+        settings: Settings,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        # No cached converted.md (e.g. derived dir cleaned): the router falls back
+        # to re-converting the stored .docx original.
+        forbid(monkeypatch, tesseract, "ocr_pdf")
+        forbid(monkeypatch, photo, "ocr_image")
+        source = tmp_path / "form.docx"
+        source.write_bytes(make_docx(heading="Enrolment Form"))
+
+        result = router.run_ocr(make_document(DOCX_MIME), source, derived, settings=settings)
+
+        assert result.engine == "docx"
+        assert "# Enrolment Form" in result.text
 
 
 class TestPdfRouting:

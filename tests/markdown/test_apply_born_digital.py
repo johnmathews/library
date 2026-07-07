@@ -21,6 +21,7 @@ from sqlalchemy.ext.asyncio import (
 )
 
 from library.config import Settings, get_settings
+from library.docx import DOCX_MIME
 from library.markdown import apply as markdown_apply
 from library.markdown.apply import apply_markdown
 from library.models import Document, DocumentPage, DocumentSource, IngestionEvent
@@ -118,7 +119,7 @@ def _forbid_anthropic(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(markdown_apply, "AsyncAnthropic", _boom)
 
 
-@pytest.mark.parametrize("mime_type", ["text/markdown", "text/plain"])
+@pytest.mark.parametrize("mime_type", ["text/markdown", "text/plain", DOCX_MIME])
 async def test_born_digital_writes_single_page_no_anthropic(
     session_factory: async_sessionmaker[AsyncSession],
     data_dir: Path,

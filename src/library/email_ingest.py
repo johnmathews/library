@@ -32,9 +32,7 @@ from contextlib import AbstractContextManager
 from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
-from bs4 import BeautifulSoup
 from imap_tools import MailBox, MailMessage
-from markdownify import markdownify
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
@@ -47,6 +45,7 @@ from library.ingest import (
     detect_mime,
     ingest_file,
 )
+from library.markdown.html import html_to_markdown
 from library.models import DocumentSource, User
 from library.notifications import dispatch_attachments_dropped_notification
 
@@ -273,21 +272,6 @@ def _body_filename(subject: str | None, extension: str) -> str:
     return f"{stem or 'email'}.{extension}"
 
 
-def _html_to_markdown(html: str) -> str:
-    """Convert an HTML email body to Markdown, dropping script/style noise.
-
-    Markdown is a first-class type downstream (extraction passthrough,
-    ``chunk_markdown``, and the viewer renders it), so invoice tables/formatting
-    survive where raw ``text/html`` — which the pipeline cannot process — would
-    not. ``script``/``style`` subtrees are removed first so their contents don't
-    leak into the text.
-    """
-    soup = BeautifulSoup(html, "html.parser")
-    for tag in soup(["script", "style"]):
-        tag.decompose()
-    return markdownify(str(soup), heading_style="ATX").strip()
-
-
 def _body_candidate(message: MailMessage, max_bytes: int) -> IngestCandidate | None:
     """Build a candidate from the email body: HTML (as Markdown) preferred, else text.
 
@@ -298,7 +282,7 @@ def _body_candidate(message: MailMessage, max_bytes: int) -> IngestCandidate | N
     log line). Called only when no attachment produced a document.
     """
     if (message.html or "").strip():
-        markdown = _html_to_markdown(message.html)
+        markdown = html_to_markdown(message.html)
         if not markdown:
             return None
         body, mime, extension = markdown, "text/markdown", "md"

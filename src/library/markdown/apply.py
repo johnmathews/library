@@ -14,6 +14,7 @@ from sqlalchemy import Numeric, delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
+from library.docx import DOCX_MIME
 from library.markdown.generator import (
     PROMPT_VERSION,
     MarkdownSkipped,
@@ -49,10 +50,10 @@ async def _record_event(
 async def _apply_born_digital_markdown(session: AsyncSession, document: Document) -> None:
     """Synthesize the markdown layer for born-digital text directly from OCR text.
 
-    For ``text/markdown``/``text/plain`` the raw file content (already captured
-    as ``ocr_text`` by the OCR passthrough) is the authoritative text layer, so
-    one ``DocumentPage`` is written verbatim — no Anthropic call, no budget
-    consumption, bypassing ``markdown_max_pages``.
+    For ``text/markdown``/``text/plain`` — and Word ``.docx``, whose derived
+    Markdown is captured as ``ocr_text`` by the OCR passthrough — the text layer
+    is already authoritative, so one ``DocumentPage`` is written verbatim — no
+    Anthropic call, no budget consumption, bypassing ``markdown_max_pages``.
     """
     body = (document.ocr_text or "").strip()
     if not body:
@@ -81,7 +82,7 @@ async def _apply_born_digital_markdown(session: AsyncSession, document: Document
 
 async def apply_markdown(session: AsyncSession, document: Document, settings: Settings) -> None:
     """Generate per-page markdown for one document and persist it (best-effort)."""
-    if document.mime_type in ("text/markdown", "text/plain"):
+    if document.mime_type in ("text/markdown", "text/plain", DOCX_MIME):
         await _apply_born_digital_markdown(session, document)
         return
     if not settings.markdown_enabled:

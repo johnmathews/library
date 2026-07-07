@@ -77,7 +77,10 @@ Derived artifacts (conversions, future `searchable.pdf`, `thumb.webp`,
 ## MIME detection and the allowed set
 
 Accepted types: `application/pdf`, `image/jpeg`, `image/png`,
-`image/heic`, `image/heif`, `image/tiff`, `text/plain`, `text/markdown`.
+`image/heic`, `image/heif`, `image/tiff`, `text/plain`, `text/markdown`,
+and Word `.docx`
+(`application/vnd.openxmlformats-officedocument.wordprocessingml.document`,
+`DOCX_MIME` in `library.docx`).
 
 Detection (`library.ingest.detect_mime`) prefers content sniffing over
 the client-declared type:
@@ -92,8 +95,13 @@ the client-declared type:
 3. Otherwise fall back to the client-declared type (normalised, e.g.
    `image/jpg` → `image/jpeg`, `text/x-markdown` → `text/markdown`).
 
+A `.docx` is a zip, and `filetype` returns the Office wordprocessing MIME
+for it directly (the sniff is keyed off content, not the filename), so it
+is detected the same way whatever channel it arrives on.
+
 Anything that resolves outside the allowed set is rejected with **415**.
-`.docx`/`.epub` are **not** supported — there is no route for them.
+`.epub` and legacy `.doc` (`application/msword`) are **not** supported —
+there is no route for them.
 
 ## HEIC handling (`library.images`)
 
@@ -110,6 +118,53 @@ the conversion is written as the derived artifact `converted.jpg` under
 `derived_dir(sha256)` and is what downstream steps (OCR, thumbnails)
 will consume.
 
+## DOCX handling (`library.docx`)
+
+`docx_to_markdown(content: bytes) -> str`
+
+Word `.docx` is converted to Markdown at ingest rather than given a bespoke
+OCR route — Markdown is already a first-class type, so the conversion lets a
+`.docx` flow through the existing extraction → chunk → search → viewer path.
+The conversion is the "light path": `mammoth.convert_to_html` (semantic HTML
+from the docx structure) → the shared `html_to_markdown` helper
+(`library.markdown.html`: strip `script`/`style` via BeautifulSoup +
+`markdownify` ATX). Headings, tables, lists, and free text survive; mammoth
+warnings (e.g. unmapped styles) are non-fatal.
+
+Storage mirrors HEIC: the **original `.docx` bytes** are what gets
+content-addressed stored (so it stays downloadable and re-convertible), and
+the Markdown is written as the derived artifact `converted.md` under
+`derived_dir(sha256)`. Unlike HEIC, the document keeps its own
+`mime_type` (`DOCX_MIME`), which is threaded through every MIME-routing
+surface so the derived Markdown is what the pipeline actually consumes:
+
+- **OCR router** (`library.ocr.router`): a `DOCX_MIME` branch reads
+  `converted.md` (engine `docx`); if the derived file is missing (e.g. a
+  re-process after the derived dir was cleaned) it re-converts the stored
+  original.
+- **Markdown layer** (`library.markdown.apply`): `DOCX_MIME` joins
+  `text/markdown`/`text/plain` in the born-digital passthrough — the derived
+  Markdown captured as `ocr_text` is written verbatim as one `DocumentPage`,
+  with no Anthropic call.
+- **Embedding** (`library.embedding.chunker.chunker_for_mime`): `DOCX_MIME`
+  chunks with the structure-aware `chunk_markdown`, like `text/markdown`.
+- **Extraction** and the **vision renderer** need no docx branch: extraction
+  reads `ocr_text` (the Markdown) as text; the renderer is never reached
+  because the passthrough handles docx first.
+
+Conversion at ingest is **best-effort**: a corrupt `.docx` that still sniffs as
+`DOCX_MIME` but that mammoth cannot parse does not fail the upload (which would
+orphan the just-stored original) — the derived write is skipped and the document
+is created anyway. The worker's OCR docx branch then re-converts from the stored
+original, so a genuinely unreadable file surfaces as a normal `failed` document
+(visible, retryable) rather than a 500. On the email channel the attachment is
+instead recorded as a per-message skip (`email_ingest` catches per attachment).
+
+The viewer has no inline preview for a `.docx` (it is neither image nor PDF);
+the detail page shows the converted Markdown in the reader and offers a
+**Download original** link for the stored `.docx`
+(`GET /api/documents/{id}/original` serves it with its real MIME/filename).
+
 ## Ingestion service (`library.ingest`)
 
 `ingest_file(session, *, content, filename, mime=None, source,
@@ -118,7 +173,8 @@ entry point used by the upload endpoint (and, later, by the consume
 folder, email, and MCP channels — hence `source`).
 
 Steps: detect/validate MIME → hash → dedup check → store original →
-write `converted.jpg` for HEIC → create `Document`
+write the derived artifact for transform-at-ingest types (`converted.jpg`
+for HEIC, `converted.md` for `.docx`) → create `Document`
 (`status=received`, `source`, `original_filename`, `mime_type`) →
 append a `received` ingestion event → **commit** → defer
 `process_document(document_id)`.
@@ -221,6 +277,7 @@ three engines**, selected by input type, with a confidence gate.
 run_ocr(document, original_path, derived_dir) -> OcrResult
   │
   ├─ text/plain, text/markdown ► passthrough read           engine="text"
+  ├─ DOCX_MIME (.docx) ────► read derived converted.md      engine="docx"
   ├─ application/pdf ──────► analyze_pdf (library.ocr.analysis)
   │    ├─ text layer (avg chars/page ≥
   │    │  LIBRARY_TEXT_LAYER_MIN_CHARS_PER_PAGE, default 50)

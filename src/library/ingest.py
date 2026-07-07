@@ -15,6 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import get_settings
+from library.docx import CONVERTED_MARKDOWN_NAME, DOCX_MIME, docx_to_markdown
 from library.images import CONVERTED_JPEG_NAME, HEIC_MIME_TYPES, normalize_image
 from library.jobs import process_document
 from library.models import Document, DocumentSource, IngestionEvent
@@ -34,6 +35,7 @@ ALLOWED_MIME_TYPES: frozenset[str] = frozenset(
         "image/tiff",
         "text/plain",
         "text/markdown",
+        DOCX_MIME,
     }
 )
 
@@ -188,6 +190,32 @@ async def ingest_file(
         normalized = normalize_image(content, detected)
         converted_path = derived_dir(sha256) / CONVERTED_JPEG_NAME
         converted_path.write_bytes(normalized.content)
+
+    # The .docx original stays the source of truth (downloadable, re-convertible);
+    # its Markdown conversion is written as a derived artifact that the OCR
+    # passthrough, extraction, chunker, and viewer consume as text. The document's
+    # mime_type stays DOCX_MIME, threaded through those surfaces (run_ocr,
+    # markdown.apply, jobs chunker) — see docs/ingestion.md.
+    #
+    # Best-effort: a corrupt .docx that still sniffs as DOCX_MIME may fail to
+    # convert. Don't fail the upload (and orphan the just-stored original) — skip
+    # the derived write and let the pipeline handle it. The worker's OCR docx
+    # branch re-converts from the original when converted.md is missing, so a
+    # genuinely unreadable file surfaces as a normal `failed` document (visible,
+    # retryable) instead of a 500. The email channel already skips such an
+    # attachment (email_ingest catches the error per-attachment).
+    if detected == DOCX_MIME:
+        try:
+            markdown = docx_to_markdown(content)
+        except Exception:
+            logger.warning(
+                "docx conversion failed at ingest for sha %s; deferring to the worker",
+                sha256,
+                exc_info=True,
+            )
+        else:
+            converted_path = derived_dir(sha256) / CONVERTED_MARKDOWN_NAME
+            converted_path.write_text(markdown, encoding="utf-8")
 
     document = Document(
         sha256=sha256,
