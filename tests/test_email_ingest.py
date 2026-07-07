@@ -28,7 +28,15 @@ from sqlalchemy.ext.asyncio import (
 
 from library import jobs
 from library.config import Settings, get_settings
-from library.email_ingest import EmailPollSummary, poll_mailbox, poll_mailbox_async
+from library.email_ingest import (
+    EmailPollSummary,
+    IngestCallable,
+    IngestCandidate,
+    SkippedAttachment,
+    poll_mailbox,
+    poll_mailbox_async,
+)
+from library.ingest import IngestResult
 from library.models import Document, DocumentSource, IngestionEvent
 
 pytestmark = pytest.mark.integration
@@ -491,6 +499,153 @@ async def test_unsupported_attachment_skipped_message_still_moved(
     assert await documents_named(session_factory, "report.docx") == []
     assert mailbox.moved == [("4", PROCESSED_FOLDER)]
     assert summary.attachments_ingested == 1
+
+
+async def test_multiple_supported_attachments_each_become_a_document(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # The doc-135 shape (minus the drop bug): one email, several supported
+    # attachments — every one must become its own document. This path was
+    # previously untested.
+    tag = uuid.uuid4().hex[:8]
+    names = [f"a-{tag}.pdf", f"b-{tag}.pdf", f"c-{tag}.pdf"]
+    raw = make_raw_mail(
+        subject=f"three invoices {tag}",
+        attachments=[
+            (name, make_pdf(f"{tag}-{i}"), "application", "pdf") for i, name in enumerate(names)
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="30")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    for name in names:
+        assert len(await documents_named(session_factory, name)) == 1
+    assert mailbox.moved == [("30", PROCESSED_FOLDER)]
+    assert summary == EmailPollSummary(
+        messages_seen=1, messages_processed=1, attachments_ingested=3
+    )
+
+
+def _recording_ingest(
+    calls: list[IngestCandidate], *, fail_for: str | None = None
+) -> IngestCallable:
+    """A fake ``ingest`` for driving ``poll_mailbox`` directly (no DB/loop).
+
+    Records every candidate it receives; raises an unexpected error for the
+    candidate named ``fail_for`` (to exercise sibling isolation). ``poll_mailbox``
+    only reads ``result.duplicate``, so the fake document is a sentinel.
+    """
+
+    def ingest(candidate: IngestCandidate) -> IngestResult:
+        calls.append(candidate)
+        if fail_for is not None and candidate.filename == fail_for:
+            raise RuntimeError("boom")
+        return IngestResult(document=object(), duplicate=False)  # type: ignore[arg-type]
+
+    return ingest
+
+
+def test_dropped_sibling_stamped_on_survivor_and_notified(settings: Settings) -> None:
+    # A supported PNG plus an unsupported sibling (drives poll_mailbox directly
+    # with a fake ingest — no DB). The PNG candidate is stamped with the dropped
+    # sibling, the summary counts the drop, and notify is called once.
+    tag = uuid.uuid4().hex[:8]
+    png_name = f"photo-{tag}.png"
+    png = b"\x89PNG\r\n\x1a\n" + uuid.uuid4().bytes + b"\x00" * 32
+    raw = make_raw_mail(
+        subject=f"mixed {tag}",
+        attachments=[
+            ("secret.docx", b"\x00\xffPK-not-really" + uuid.uuid4().bytes, "application", "msword"),
+            (png_name, png, "image", "png"),
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="31")])
+    calls: list[IngestCandidate] = []
+    notified: list[tuple[str | None, str | None, list[str | None]]] = []
+
+    def spy_notify(
+        sender: str | None, subject: str | None, skipped: list[SkippedAttachment]
+    ) -> None:
+        assert all(isinstance(s, SkippedAttachment) for s in skipped)
+        notified.append((sender, subject, [s.filename for s in skipped]))
+
+    summary = poll_mailbox(
+        settings,
+        _recording_ingest(calls),
+        mailbox_factory=lambda: mailbox,
+        notify=spy_notify,
+    )
+
+    # The PNG is the only ingested candidate, and it carries the dropped sibling.
+    assert [c.filename for c in calls] == [png_name]
+    dropped = calls[0].extra_document["email_siblings_dropped"]  # type: ignore[index]
+    assert [d["filename"] for d in dropped] == ["secret.docx"]
+    assert dropped[0]["reason"] == "unsupported_type"
+    assert summary.attachments_ingested == 1
+    assert summary.attachments_dropped == 1
+    assert mailbox.moved == [("31", PROCESSED_FOLDER)]
+    # Notified once, with the dropped filename.
+    assert len(notified) == 1
+    assert notified[0][2] == ["secret.docx"]
+
+
+def test_body_fallback_document_carries_dropped_siblings(settings: Settings) -> None:
+    # A mail whose only attachment is unsupported but which has a cover-note body:
+    # the body becomes the document and must still carry the dropped sibling, so
+    # the email_attachments_dropped review reason fires on it.
+    tag = uuid.uuid4().hex[:8]
+    # make_raw_mail always sets a plain-text body ("see attached"); the single
+    # attachment is unsupported, so the body becomes the only document.
+    raw = make_raw_mail(
+        subject=f"cover {tag}",
+        attachments=[
+            ("form.docx", b"\x00\xffPK-nope" + uuid.uuid4().bytes, "application", "msword")
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="33")])
+    calls: list[IngestCandidate] = []
+
+    summary = poll_mailbox(settings, _recording_ingest(calls), mailbox_factory=lambda: mailbox)
+
+    # The only ingested candidate is the body, and it carries the dropped sibling.
+    assert len(calls) == 1
+    assert calls[0].extra_document["email_siblings_dropped"][0]["filename"] == "form.docx"  # type: ignore[index]
+    assert summary.attachments_ingested == 1  # the body
+    assert summary.attachments_dropped == 1
+
+
+def test_attachment_error_does_not_abort_siblings(settings: Settings) -> None:
+    # If ingesting one attachment raises an *unexpected* (non-IngestError)
+    # exception, its siblings must still be ingested and the message still moved
+    # (no permanent-retry wedge). Regression for the whole-message abort.
+    tag = uuid.uuid4().hex[:8]
+    good_name = f"good-{tag}.pdf"
+    bad_name = f"bad-{tag}.pdf"
+    raw = make_raw_mail(
+        subject=f"one bad {tag}",
+        attachments=[
+            (bad_name, make_pdf(f"bad-{tag}"), "application", "pdf"),
+            (good_name, make_pdf(f"good-{tag}"), "application", "pdf"),
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="32")])
+    calls: list[IngestCandidate] = []
+
+    summary = poll_mailbox(
+        settings,
+        _recording_ingest(calls, fail_for=bad_name),
+        mailbox_factory=lambda: mailbox,
+    )
+
+    # Both were attempted; the good one succeeded, the bad one is counted as a drop.
+    assert {c.filename for c in calls} == {good_name, bad_name}
+    assert mailbox.moved == [("32", PROCESSED_FOLDER)]  # not wedged
+    assert summary.attachments_ingested == 1
+    assert summary.attachments_dropped == 1
 
 
 async def test_broken_message_isolated_from_rest_of_run(

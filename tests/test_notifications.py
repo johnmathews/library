@@ -13,6 +13,7 @@ import pytest
 from library import notifications
 from library.notifications import (
     PushoverResult,
+    dispatch_attachments_dropped_notification,
     dispatch_document_completion,
     dispatch_document_notification,
     send_pushover,
@@ -386,4 +387,51 @@ async def test_loaded_document_dispatch_no_owner(captured_sends) -> None:
         doc, NotificationEvent.DUPLICATE
     )
     assert sent is False
+    assert captured_sends == []
+
+
+# --- Attachments-dropped dispatch (document-less; reuses processing_error opt-in) ---
+
+
+async def test_attachments_dropped_notifies_owner(captured_sends) -> None:
+    sent = await dispatch_attachments_dropped_notification(
+        _factory_for(_owner("processing_error")),
+        7,
+        subject="Scan batch",
+        filenames=["invoice-1.pdf", "invoice-2.pdf"],
+    )
+    assert sent is True
+    assert captured_sends[0]["title"] == "Attachments not added"
+    assert captured_sends[0]["priority"] == 1  # high, like processing_error
+    message = captured_sends[0]["message"]
+    assert "2 attachments" in message
+    assert "invoice-1.pdf" in message and "invoice-2.pdf" in message
+    assert "Scan batch" in message
+
+
+async def test_attachments_dropped_respects_opt_in(captured_sends) -> None:
+    # Owner opted into document_success but NOT processing_error → no push.
+    sent = await dispatch_attachments_dropped_notification(
+        _factory_for(_owner("document_success")),
+        7,
+        subject="Scan batch",
+        filenames=["invoice-1.pdf"],
+    )
+    assert sent is False
+    assert captured_sends == []
+
+
+async def test_attachments_dropped_no_owner_or_files_sends_nothing(captured_sends) -> None:
+    assert (
+        await dispatch_attachments_dropped_notification(
+            _factory_for(_owner("processing_error")), None, subject="x", filenames=["a.pdf"]
+        )
+        is False
+    )
+    assert (
+        await dispatch_attachments_dropped_notification(
+            _factory_for(_owner("processing_error")), 7, subject="x", filenames=[]
+        )
+        is False
+    )
     assert captured_sends == []

@@ -27,7 +27,7 @@ from dataclasses import dataclass
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from library.models import Document
+from library.models import Document, User
 from library.schemas import NotificationEvent, get_notification_credentials
 
 logger = logging.getLogger(__name__)
@@ -370,6 +370,75 @@ async def dispatch_loaded_document_notification(
             "could not dispatch %s notification for document %s; continuing",
             kind.value,
             document.id,
+            exc_info=True,
+        )
+        return False
+
+
+def _format_dropped_message(subject: str | None, filenames: list[str | None]) -> str:
+    """Body for the 'attachments couldn't be added' push."""
+    named = [name for name in filenames if name] or ["an attachment"]
+    shown = ", ".join(named[:5])
+    if len(named) > 5:
+        shown += f", +{len(named) - 5} more"
+    where = f" from “{subject}”" if subject else ""
+    count = len(filenames)
+    noun = "attachment" if count == 1 else "attachments"
+    return f"{count} {noun}{where} couldn't be added to your library: {shown}."
+
+
+async def dispatch_attachments_dropped_notification(
+    session_factory: async_sessionmaker[AsyncSession],
+    owner_id: int | None,
+    *,
+    subject: str | None,
+    filenames: list[str | None],
+    document_url_base: str | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> bool:
+    """Best-effort: tell an owner that some email attachments could not be added.
+
+    Unlike the document-centric dispatchers this has *no* document (the content
+    never became a row), so it resolves the owner's credentials directly and
+    reuses the ``processing_error`` opt-in (a dropped attachment is a processing
+    problem) at high priority. Returns ``True`` if a message was sent; never
+    raises — mirrors the other dispatchers.
+    """
+    if owner_id is None or not filenames:
+        return False
+    try:
+        async with session_factory() as session:
+            owner = await session.get(User, owner_id)
+            if owner is None:
+                return False
+            creds = get_notification_credentials(owner.preferences)
+        if creds is None or NotificationEvent.PROCESSING_ERROR not in creds.events:
+            return False
+        _, priority = _EVENT_TITLES[NotificationEvent.PROCESSING_ERROR]
+        url = f"{document_url_base.rstrip('/')}/documents" if document_url_base else None
+        result = await send_pushover(
+            app_token=creds.app_token,
+            user_key=creds.user_key,
+            message=_format_dropped_message(subject, filenames),
+            title="Attachments not added",
+            url=url,
+            url_title="Open Library" if url else None,
+            device=creds.device,
+            priority=priority,
+            client=client,
+        )
+        if not result.ok:
+            logger.warning(
+                "pushover attachments-dropped for owner %s failed: %s",
+                owner_id,
+                ", ".join(result.errors),
+            )
+            return False
+        return True
+    except Exception:  # pragma: no cover - defensive: dispatch is best-effort
+        logger.warning(
+            "could not dispatch attachments-dropped notification for owner %s; continuing",
+            owner_id,
             exc_info=True,
         )
         return False

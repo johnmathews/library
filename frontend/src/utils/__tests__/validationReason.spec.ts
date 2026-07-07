@@ -21,6 +21,22 @@ describe('resolveReviewReason', () => {
   it('falls back to a generic title for an unknown rule', () => {
     expect(resolveReviewReason(finding('brand_new_rule')).title).toBe('Needs a quick check')
   })
+
+  it('titles the new rules and keeps their specific message as detail', () => {
+    const dropped = resolveReviewReason(
+      finding('email_attachments_dropped', 'the email included 3 other attachments that could not be added: a.pdf, b.pdf, c.pdf'),
+    )
+    expect(dropped.title).toBe('Some email attachments could not be added')
+    expect(dropped.detail).toContain('a.pdf')
+
+    const sender = resolveReviewReason(finding('missing_sender', 'sender could not be identified', 'sender_id'))
+    expect(sender.title).toBe('Sender not identified')
+
+    // self_reported_low now carries the model's own note as the detail line.
+    const unsure = resolveReviewReason(finding('self_reported_low', 'the extractor was unsure: two candidate totals'))
+    expect(unsure.title).toBe('Extraction was unsure')
+    expect(unsure.detail).toBe('the extractor was unsure: two candidate totals')
+  })
 })
 
 describe('resolveReviewReasons', () => {

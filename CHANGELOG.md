@@ -6,7 +6,28 @@ All notable changes to Library are documented here. The format follows
 
 ## [Unreleased]
 
+### Fixed
+
+**Email attachments are no longer dropped silently** — when a forwarded email
+carried several files and only some were ingestable (e.g. three PDFs and a
+photo), the rejected files used to vanish with only a container log line: no
+record, no notification, no review flag. Now every dropped attachment is
+recorded on each surviving document (`extra["email_siblings_dropped"]`),
+surfaced as an `email_attachments_dropped` review reason ("N other attachments
+could not be added: …"), and pushed to the owner ("Attachments not added",
+reusing the `processing_error` opt-in). A per-attachment failure is also
+isolated — one bad file can no longer abort its siblings or wedge the message
+into a permanent retry. See [docs/ingestion.md](docs/ingestion.md) "Email-in".
+
 ### Added
+
+**More specific "needs review" reasons** — "extraction was unsure" now carries
+the model's own one-line reason (its `reasoning_note`, e.g. "the extractor was
+unsure: two candidate totals on page 2") instead of a fixed generic string, and
+two new rules name concrete problems: `missing_sender` (a bill/receipt whose
+payee couldn't be identified) and `email_attachments_dropped` (files from the
+same email that couldn't be added). See [docs/ingestion.md](docs/ingestion.md)
+"Validation rules".
 
 **Charts view (`/charts`)** — a new aggregate **charts dashboard** in the web
 app: a responsive grid of bar-chart tiles, one per eligible recurring

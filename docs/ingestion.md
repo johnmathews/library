@@ -552,10 +552,15 @@ Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
 | `amount_currency_coupling` | `currency` | Exactly one of amount/currency is set (the rule checks both fields; the finding's `field` attribute is `currency`) |
 | `ocr_confidence_gate` | (document) | `ocr_confidence` is below `LIBRARY_EXTRACTION_VALIDATION_OCR_FLOOR` (default 50.0) |
 | `empty_extraction` | (document) | Kind is `other` or unset **and** no sender, no `document_date`, no `amount_total`, **and** no `title` and no `summary`. A clean general document (reference/research/note) that has a real title/summary but no sender/amount/date is therefore **not** flagged. |
-| `self_reported_low` | (document) | `extra["extraction"]["confidence"] == "low"` |
+| `missing_sender` | `sender_id` | `amount_total` is set but `sender_id` is not — a bill/receipt whose payee we couldn't identify. Scoped to amount-bearing docs so it stays specific. |
+| `self_reported_low` | (document) | `extra["extraction"]["confidence"] == "low"`. The message carries the model's own one-line `reasoning_note` when present (e.g. "the extractor was unsure: two candidate totals on page 2"), falling back to a generic line otherwise. |
+| `email_attachments_dropped` | (document) | The document came from an email whose *other* attachments could not be added (`extra["email_siblings_dropped"]` is non-empty). The message lists the dropped filenames. See "Email-in". |
 
 **Date-grounding is explicitly out of scope** this phase — locale date-format
-matching is fiddly; revisit once the simpler rules prove out.
+matching is fiddly; revisit once the simpler rules prove out. Per-field and
+"multiple candidate value" confidence (e.g. "ambiguous sender") are also out of
+scope — `ExtractedMetadata` carries one global `confidence` and one value per
+field, so those reasons would need a schema change, not just a new rule.
 
 ### `review_status` lifecycle
 
@@ -965,18 +970,37 @@ poll_email_inbox fires (every LIBRARY_EMAIL_POLL_MINUTES minutes)
   └─ for every message in the folder (ALL, seen flags untouched):
        ├─ sender not in LIBRARY_EMAIL_ALLOWED_SENDERS (when non-empty)
        │   ─► skipped; left in place (visible to the operator)
-       ├─ per attachment: sniff MIME; if in the allowed set and within
-       │   LIBRARY_MAX_UPLOAD_BYTES ─► ingest_file(source=email) — new
-       │   document or `duplicate_upload` on the existing one; anything
-       │   else is skipped with a log line
+       ├─ classify EVERY attachment (two-pass): sniff MIME; in the allowed
+       │   set and within LIBRARY_MAX_UPLOAD_BYTES ─► an ingestable candidate;
+       │   otherwise a recorded drop (oversize / unsupported_type / empty)
+       ├─ per candidate: ingest_file(source=email) — new document or
+       │   `duplicate_upload`; a per-attachment error is recorded as a drop
+       │   and the NEXT candidate still runs (one bad file never aborts siblings)
+       ├─ every surviving document is stamped with the email's dropped siblings
+       │   under extra["email_siblings_dropped"], so validation surfaces an
+       │   `email_attachments_dropped` review reason ("N other attachments
+       │   could not be added: …") — the files are never lost silently
        ├─ if no attachment produced a document ─► ingest the email BODY
        │   (HTML body converted to Markdown as text/markdown, else the
        │   plain text as text/plain); a genuinely empty body creates nothing
+       ├─ any dropped attachment ─► a per-message WARNING summary and a
+       │   best-effort "Attachments not added" push to the resolved owner
+       │   (reuses the processing_error opt-in)
        ├─ move the message to LIBRARY_EMAIL_PROCESSED_FOLDER (also for
        │   empty-bodied mails)
        └─ any per-message error ─► logged, message left in place for
            the next poll; the run continues with the next message
 ```
+
+**Multiple attachments, only some relevant.** One email becomes **N
+documents**, one per supported attachment — the loop is exhaustive, never
+"pick one". When a mail carries a mix (e.g. three PDFs and a photo) and some
+files can't be ingested, the ingestable ones still each become a document and
+the rejected ones are **surfaced, not dropped**: recorded on every sibling
+document's `extra["email_siblings_dropped"]`, shown as the
+`email_attachments_dropped` review reason, and pushed to the owner. A drop is
+only ever silent for an `empty` payload (inline/signature cruft with no
+content), which is logged but not surfaced so it can't flag a real document.
 
 Details and decisions:
 

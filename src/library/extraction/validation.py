@@ -109,6 +109,19 @@ def validate(
             )
         )
 
+    # missing_sender — a monetary document (a bill/receipt/invoice always has a
+    # payee) whose sender we could not identify. Scoped to amount-bearing docs so
+    # it stays specific and doesn't nag on notes or personal letters.
+    if document.amount_total is not None and document.sender_id is None:
+        findings.append(
+            Finding(
+                "missing_sender",
+                "sender_id",
+                "warn",
+                "this looks like a bill or receipt but the sender could not be identified",
+            )
+        )
+
     # ocr_confidence_gate — extraction built on low-confidence OCR.
     if document.ocr_confidence is not None and document.ocr_confidence < ocr_floor:
         findings.append(
@@ -134,10 +147,42 @@ def validate(
             Finding("empty_extraction", None, "warn", "extraction produced no useful metadata")
         )
 
-    # self_reported_low — the model said it was unsure.
+    # self_reported_low — the model said it was unsure. Surface *why* when the
+    # model left a one-line note (captured at apply.py into extra["extraction"]
+    # ["reasoning_note"]); fall back to the generic line when it didn't.
     extraction = document.extra.get("extraction") if isinstance(document.extra, dict) else None
     if isinstance(extraction, dict) and extraction.get("confidence") == "low":
-        findings.append(Finding("self_reported_low", None, "warn", "model reported low confidence"))
+        note = extraction.get("reasoning_note")
+        message = (
+            f"the extractor was unsure: {note.strip()}"
+            if isinstance(note, str) and note.strip()
+            else "the extractor reported low confidence"
+        )
+        findings.append(Finding("self_reported_low", None, "warn", message))
+
+    # email_attachments_dropped — this document came from an email whose *other*
+    # attachments could not be added (stamped on extra at ingest by email_ingest,
+    # only-when-non-empty), so the reviewer knows files are missing from the set.
+    dropped = (
+        document.extra.get("email_siblings_dropped") if isinstance(document.extra, dict) else None
+    )
+    if isinstance(dropped, list) and dropped:
+        names = [
+            str(item.get("filename") or "an unnamed file")
+            for item in dropped
+            if isinstance(item, dict)
+        ]
+        listed = ", ".join(names) if names else "one or more files"
+        count = len(names) or len(dropped)
+        noun = "attachment" if count == 1 else "attachments"
+        findings.append(
+            Finding(
+                "email_attachments_dropped",
+                None,
+                "warn",
+                f"the email included {count} other {noun} that could not be added: {listed}",
+            )
+        )
 
     return findings
 

@@ -27,6 +27,8 @@ const RULE_TITLES: Record<string, string> = {
   ocr_confidence_gate: 'Hard-to-read text (low OCR quality)',
   empty_extraction: 'Little information found',
   self_reported_low: 'Extraction was unsure',
+  missing_sender: 'Sender not identified',
+  email_attachments_dropped: 'Some email attachments could not be added',
 }
 
 const GENERIC_TITLE = 'Needs a quick check'

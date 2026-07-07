@@ -113,6 +113,84 @@ def test_self_reported_low_confidence_fires() -> None:
     )
 
 
+def _finding(findings: list[Finding], rule: str) -> Finding:
+    matches = [f for f in findings if f.rule == rule]
+    assert matches, f"expected a {rule} finding, got {[f.rule for f in findings]}"
+    return matches[0]
+
+
+def test_self_reported_low_surfaces_reasoning_note() -> None:
+    """When the model left a reasoning note, it replaces the generic message."""
+    doc = _doc(
+        extra={
+            "extraction": {"confidence": "low", "reasoning_note": "two candidate totals on page 2"}
+        }
+    )
+    finding = _finding(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY), "self_reported_low"
+    )
+    assert "two candidate totals on page 2" in finding.message
+
+
+def test_self_reported_low_without_note_falls_back_to_generic() -> None:
+    for extra in (
+        {"extraction": {"confidence": "low"}},
+        {"extraction": {"confidence": "low", "reasoning_note": "  "}},
+    ):
+        doc = _doc(extra=extra)
+        finding = _finding(
+            validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY), "self_reported_low"
+        )
+        assert finding.message == "the extractor reported low confidence"
+
+
+def test_missing_sender_fires_on_amount_without_sender() -> None:
+    doc = _doc(amount_total=Decimal("42.00"), currency="EUR", sender_id=None, ocr_text="42.00")
+    finding = _finding(
+        validate(doc, kind_slug="receipt", ocr_floor=FLOOR, today=TODAY), "missing_sender"
+    )
+    assert finding.field == "sender_id"
+    assert "sender" in finding.message
+
+
+def test_missing_sender_does_not_fire_when_sender_present() -> None:
+    doc = _doc(amount_total=Decimal("42.00"), currency="EUR", sender_id=7, ocr_text="42.00")
+    assert "missing_sender" not in _rules(
+        validate(doc, kind_slug="receipt", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_missing_sender_does_not_fire_without_amount() -> None:
+    doc = _doc(title="A note", summary="no money here", sender_id=None)
+    assert "missing_sender" not in _rules(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_email_attachments_dropped_fires_and_lists_files() -> None:
+    doc = _doc(
+        title="Cover photo",
+        extra={
+            "email_siblings_dropped": [
+                {"filename": "invoice-1.pdf", "reason": "unsupported_type", "detail": "x"},
+                {"filename": "invoice-2.pdf", "reason": "unsupported_type", "detail": "x"},
+            ]
+        },
+    )
+    finding = _finding(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY), "email_attachments_dropped"
+    )
+    assert "2 other attachments" in finding.message
+    assert "invoice-1.pdf" in finding.message and "invoice-2.pdf" in finding.message
+
+
+def test_email_attachments_dropped_absent_when_no_siblings() -> None:
+    doc = _doc(title="Cover photo", extra={"email_siblings_dropped": []})
+    assert "email_attachments_dropped" not in _rules(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
 def test_clean_document_has_no_findings() -> None:
     doc = _doc(
         amount_total=Decimal("12.00"),

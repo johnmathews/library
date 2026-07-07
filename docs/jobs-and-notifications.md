@@ -142,14 +142,25 @@ otherwise the `document_success` message (if subscribed). Errors go out at
 Pushover **high priority** (bypassing the recipient's quiet hours); everything
 else at normal priority.
 
+**Dropped email attachments** reuse the `processing_error` opt-in: when an
+inbound email has attachments that could not be added, the poller sends an
+"Attachments not added" push (high priority) listing the dropped filenames. This
+one is **document-less** — the content never became a document — so it resolves
+the owner from the email sender directly rather than from a document row (see
+[ingestion.md](ingestion.md), "Email-in"). No new opt-in key: subscribing to
+`processing_error` covers it.
+
 ### 1.5.3 Where it fires (`library.notifications`)
 
 `document_success` / `processing_error` / `needs_review` are dispatched from the
 **worker** at the pipeline's terminal transition (`library.jobs.advance_pipeline`).
 `duplicate` is dispatched at **ingest time** (`library.ingest.ingest_file`),
-because a duplicate never enters the worker pipeline. Both are **best-effort**:
-the Pushover HTTP call (async `httpx`) runs after the document state is committed,
-and any failure is logged and swallowed — it can never fail a job or an upload.
+because a duplicate never enters the worker pipeline. The document-less
+**attachments-dropped** push fires from the **email poller**
+(`dispatch_attachments_dropped_notification`, once per message with drops). All
+are **best-effort**: the Pushover HTTP call (async `httpx`) runs after the
+relevant state is committed, and any failure is logged and swallowed — it can
+never fail a job, an upload, or a poll.
 
 ### 1.5.4 Deep-linking pushes to the document
 

@@ -29,7 +29,7 @@ import logging
 import re
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Protocol
 
 from bs4 import BeautifulSoup
@@ -48,6 +48,7 @@ from library.ingest import (
     ingest_file,
 )
 from library.models import DocumentSource, User
+from library.notifications import dispatch_attachments_dropped_notification
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +62,37 @@ class EmailPollSummary:
     messages_skipped: int = 0  # allowlist-rejected or errored; left in place
     attachments_ingested: int = 0  # new documents created
     attachments_duplicate: int = 0  # content already in the library
+    attachments_dropped: int = 0  # rejected (oversize/unsupported/error); surfaced
+
+
+@dataclass(frozen=True, slots=True)
+class SkippedAttachment:
+    """One attachment that could not be turned into a document.
+
+    ``reason`` is a stable code: ``empty`` (no payload — usually inline cruft,
+    not surfaced to the user), ``oversize``, ``unsupported_type``, or ``error``
+    (an unexpected failure during ingest). ``detail`` is a human sentence.
+    """
+
+    filename: str | None
+    reason: str
+    detail: str
+
+
+#: Drop reasons a human actually cares about — surfaced on the sibling document
+#: (as a review reason) and in the "attachments couldn't be added" push. An
+#: ``empty`` payload is logged and counted but deliberately not surfaced, so a
+#: stray inline part never flags a real document.
+_USER_FACING_DROP_REASONS: frozenset[str] = frozenset({"oversize", "unsupported_type", "error"})
+
+
+def _dropped_siblings_payload(skipped: list[SkippedAttachment]) -> list[dict[str, str | None]]:
+    """The user-facing subset of ``skipped``, shaped for storage/notification."""
+    return [
+        {"filename": item.filename, "reason": item.reason, "detail": item.detail}
+        for item in skipped
+        if item.reason in _USER_FACING_DROP_REASONS
+    ]
 
 
 @dataclass(frozen=True, slots=True)
@@ -71,10 +103,18 @@ class IngestCandidate:
     filename: str | None
     mime: str | None
     event_detail: dict[str, object]
+    #: Extra keys seeded onto ``Document.extra`` at creation (e.g. the dropped
+    #: siblings of the same email, so validation can flag them). Merged with the
+    #: channel's own ``email_to`` hint in ``_ingest_candidate``.
+    extra_document: dict[str, object] | None = None
 
 
 #: Synchronous bridge into ``ingest_file`` (poll_mailbox runs off-loop).
 IngestCallable = Callable[[IngestCandidate], IngestResult]
+
+#: Synchronous bridge to notify a message's owner that attachments were dropped
+#: (poll_mailbox runs off-loop; the async wrapper marshals this onto the loop).
+DropNotifier = Callable[[str | None, str | None, list[SkippedAttachment]], None]
 
 
 class _FolderManagerProtocol(Protocol):
@@ -139,55 +179,87 @@ def _event_detail(message: MailMessage) -> dict[str, object]:
     return detail
 
 
-def _ingest_attachments(
-    message: MailMessage, ingest: IngestCallable, max_bytes: int
-) -> tuple[int, int]:
-    """Ingest every supported attachment of one message.
+def _classify_attachments(
+    message: MailMessage, max_bytes: int
+) -> tuple[list[IngestCandidate], list[SkippedAttachment]]:
+    """Split a message's attachments into ingestable candidates and skips.
 
-    Returns ``(new_documents, duplicates)``. Unsupported or oversize
-    attachments are skipped with a log line; content-level rejections
-    (``IngestError``) skip the attachment without failing the message.
-    Anything else (database down, ...) propagates so the caller leaves
-    the message in place for the next poll.
+    Side-effect free (it only sniffs bytes) so it can run *before* any
+    ingestion — the poller needs the full skip list up front to stamp the
+    survivors with their dropped siblings. Every rejected attachment becomes a
+    :class:`SkippedAttachment` instead of vanishing with a bare ``continue``.
     """
     detail = _event_detail(message)
-    new = duplicates = 0
+    candidates: list[IngestCandidate] = []
+    skipped: list[SkippedAttachment] = []
     for attachment in message.attachments:
         content = attachment.payload
+        name = attachment.filename or None
         if not content:
+            skipped.append(SkippedAttachment(name, "empty", "attachment had no content"))
             continue
         if len(content) > max_bytes:
-            logger.warning(
-                "email: attachment %r is %d bytes (limit %d); skipped",
-                attachment.filename,
-                len(content),
-                max_bytes,
+            skipped.append(
+                SkippedAttachment(
+                    name, "oversize", f"{len(content)} bytes exceeds the {max_bytes}-byte limit"
+                )
             )
             continue
         mime = detect_mime(content, attachment.content_type)
         if mime not in ALLOWED_MIME_TYPES:
-            logger.info(
-                "email: attachment %r has unsupported type %s; skipped",
-                attachment.filename,
-                mime,
+            skipped.append(
+                SkippedAttachment(name, "unsupported_type", f"unsupported file type ({mime})")
             )
             continue
-        candidate = IngestCandidate(
-            content=content,
-            filename=attachment.filename or None,
-            mime=attachment.content_type,
-            event_detail=detail,
+        candidates.append(
+            IngestCandidate(
+                content=content,
+                filename=name,
+                mime=attachment.content_type,
+                event_detail=detail,
+            )
         )
+    return candidates, skipped
+
+
+def _ingest_attachments(
+    message: MailMessage, ingest: IngestCallable, max_bytes: int
+) -> tuple[int, int, list[SkippedAttachment]]:
+    """Ingest every supported attachment of one message (two passes).
+
+    Pass 1 classifies attachments without side effects; pass 2 ingests the
+    survivors, stamping each with the email's dropped siblings so validation can
+    surface them as a review reason. Returns ``(new_documents, duplicates,
+    skipped)``. A per-attachment failure — a content rejection (``IngestError``)
+    or any other exception — is recorded as a skip and never aborts the message,
+    so one bad attachment can no longer take its siblings down with it.
+    """
+    candidates, skipped = _classify_attachments(message, max_bytes)
+    # Only the classify-pass drops can be stamped onto survivors at creation
+    # (ingest-pass errors below are not yet known and would race the async
+    # processing job); that is exactly the common "unsupported sibling" case.
+    dropped_siblings = _dropped_siblings_payload(skipped)
+    new = duplicates = 0
+    for candidate in candidates:
+        if dropped_siblings:
+            candidate = replace(
+                candidate, extra_document={"email_siblings_dropped": dropped_siblings}
+            )
         try:
             result = ingest(candidate)
         except IngestError as exc:
-            logger.warning("email: attachment %r rejected (%s)", attachment.filename, exc)
+            logger.warning("email: attachment %r rejected (%s)", candidate.filename, exc)
+            skipped.append(SkippedAttachment(candidate.filename, "error", str(exc)))
+            continue
+        except Exception as exc:  # one bad attachment must not abort its siblings
+            logger.exception("email: attachment %r failed to ingest; skipped", candidate.filename)
+            skipped.append(SkippedAttachment(candidate.filename, "error", str(exc)))
             continue
         if result.duplicate:
             duplicates += 1
         else:
             new += 1
-    return new, duplicates
+    return new, duplicates, skipped
 
 
 def _body_filename(subject: str | None, extension: str) -> str:
@@ -251,11 +323,24 @@ def _body_candidate(message: MailMessage, max_bytes: int) -> IngestCandidate | N
     )
 
 
+def _log_dropped(subject: str | None, skipped: list[SkippedAttachment]) -> None:
+    """One WARNING per message summarising the user-facing attachment drops."""
+    dropped = [item for item in skipped if item.reason in _USER_FACING_DROP_REASONS]
+    if dropped:
+        logger.warning(
+            "email: message %r dropped %d attachment(s): %s",
+            subject,
+            len(dropped),
+            "; ".join(f"{item.filename or '<unnamed>'} ({item.reason})" for item in dropped),
+        )
+
+
 def poll_mailbox(
     settings: Settings,
     ingest: IngestCallable,
     *,
     mailbox_factory: Callable[[], AbstractContextManager[MailboxProtocol]] | None = None,
+    notify: DropNotifier | None = None,
 ) -> EmailPollSummary:
     """Poll the configured mailbox once and ingest its documents.
 
@@ -269,15 +354,21 @@ def poll_mailbox(
     what makes polling idempotent. Errors are isolated per message: the mail
     is left in place for the next poll and the run continues.
 
-    No-op (empty summary) when ``email_host`` is unset. ``mailbox_factory``
-    exists for tests; the default connects per ``settings``.
+    Attachments that cannot become documents are no longer dropped silently:
+    each is recorded, the survivors of the same email are stamped with them (so
+    validation can flag the document), and ``notify`` — when supplied — is
+    called once per message with drops so the owner gets a push. Nothing is
+    lost quietly.
+
+    No-op (empty summary) when ``email_host`` is unset. ``mailbox_factory`` and
+    ``notify`` exist for wiring/tests; the default connects per ``settings``.
     """
     if settings.email_host is None:
         logger.debug("email: LIBRARY_EMAIL_HOST unset; poller disabled")
         return EmailPollSummary()
     factory = mailbox_factory or (lambda: _connect(settings))
     allowed = frozenset(settings.email_allowed_senders)
-    seen = processed = skipped = ingested = duplicates = 0
+    seen = processed = skipped = ingested = duplicates = dropped = 0
     with factory() as mailbox:
         if not mailbox.folder.exists(settings.email_processed_folder):
             mailbox.folder.create(settings.email_processed_folder)
@@ -295,10 +386,21 @@ def poll_mailbox(
                     )
                     skipped += 1
                     continue
-                new, dups = _ingest_attachments(message, ingest, settings.max_upload_bytes)
+                new, dups, dropped_attachments = _ingest_attachments(
+                    message, ingest, settings.max_upload_bytes
+                )
                 if new == 0 and dups == 0:
                     body = _body_candidate(message, settings.max_upload_bytes)
                     if body is not None:
+                        # The body is now this email's only document, so it must
+                        # carry the dropped siblings too — otherwise the
+                        # "attachments couldn't be added" review reason would be
+                        # absent exactly when every attachment was dropped.
+                        dropped_siblings = _dropped_siblings_payload(dropped_attachments)
+                        if dropped_siblings:
+                            body = replace(
+                                body, extra_document={"email_siblings_dropped": dropped_siblings}
+                            )
                         try:
                             result = ingest(body)
                         except IngestError as exc:
@@ -312,6 +414,17 @@ def poll_mailbox(
                                 new += 1
                 ingested += new
                 duplicates += dups
+                # Surface every user-facing drop: log a summary, count it, and
+                # push the owner. Done after ingest so ingest-pass errors count
+                # too, and before the move so it never blocks idempotency.
+                user_facing = [
+                    item for item in dropped_attachments if item.reason in _USER_FACING_DROP_REASONS
+                ]
+                if user_facing:
+                    _log_dropped(message.subject, dropped_attachments)
+                    dropped += len(user_facing)
+                    if notify is not None:
+                        notify(message.from_, message.subject, dropped_attachments)
                 mailbox.move(message.uid, settings.email_processed_folder)
                 processed += 1
             except Exception:
@@ -326,6 +439,7 @@ def poll_mailbox(
         messages_skipped=skipped,
         attachments_ingested=ingested,
         attachments_duplicate=duplicates,
+        attachments_dropped=dropped,
     )
     logger.info("email: poll finished: %s", summary)
     return summary
@@ -365,9 +479,15 @@ async def _ingest_candidate(
             default_owner_username=default_owner_username,
         )
         # Carry the To: addresses onto Document.extra so extraction can use them
-        # as the recipient fallback (only-fill-when-empty; see extraction.apply).
+        # as the recipient fallback (only-fill-when-empty; see extraction.apply),
+        # merged with any per-candidate extra (e.g. the email's dropped siblings,
+        # so validation can flag them). Candidate keys win on overlap.
         email_to = candidate.event_detail.get("email_to")
-        extra_document = {"email_to": email_to} if email_to else None
+        extra_document: dict[str, object] = {}
+        if email_to:
+            extra_document["email_to"] = email_to
+        if candidate.extra_document:
+            extra_document.update(candidate.extra_document)
         return await ingest_file(
             session,
             content=candidate.content,
@@ -376,8 +496,39 @@ async def _ingest_candidate(
             source=DocumentSource.EMAIL,
             uploader_id=owner_id,
             extra_event_detail=dict(candidate.event_detail),
-            extra_document=extra_document,
+            extra_document=extra_document or None,
         )
+
+
+async def _notify_dropped(
+    session_factory: async_sessionmaker[AsyncSession],
+    sender: str | None,
+    subject: str | None,
+    skipped: list[SkippedAttachment],
+    *,
+    default_owner_username: str | None,
+    document_url_base: str | None,
+) -> None:
+    """Resolve the sender's owner and push a best-effort "attachments dropped" alert.
+
+    Fired once per message with user-facing drops. Resolves the owner exactly
+    like an attachment would (so the right person is told), then delegates to the
+    notifications module, which respects the owner's opt-in and never raises.
+    """
+    dropped = [item for item in skipped if item.reason in _USER_FACING_DROP_REASONS]
+    if not dropped:
+        return
+    async with session_factory() as session:
+        owner_id = await resolve_sender_owner(
+            session, sender, default_owner_username=default_owner_username
+        )
+    await dispatch_attachments_dropped_notification(
+        session_factory,
+        owner_id,
+        subject=subject,
+        filenames=[item.filename for item in dropped],
+        document_url_base=document_url_base,
+    )
 
 
 async def poll_mailbox_async(
@@ -396,6 +547,7 @@ async def poll_mailbox_async(
     """
     loop = asyncio.get_running_loop()
     default_owner = settings.email_default_owner
+    url_base = settings.public_base_url
 
     def ingest_on_loop(candidate: IngestCandidate) -> IngestResult:
         future = asyncio.run_coroutine_threadsafe(
@@ -404,6 +556,26 @@ async def poll_mailbox_async(
         )
         return future.result()
 
+    def notify_on_loop(
+        sender: str | None, subject: str | None, skipped: list[SkippedAttachment]
+    ) -> None:
+        future = asyncio.run_coroutine_threadsafe(
+            _notify_dropped(
+                session_factory,
+                sender,
+                subject,
+                skipped,
+                default_owner_username=default_owner,
+                document_url_base=url_base,
+            ),
+            loop,
+        )
+        future.result()
+
     return await asyncio.to_thread(
-        poll_mailbox, settings, ingest_on_loop, mailbox_factory=mailbox_factory
+        poll_mailbox,
+        settings,
+        ingest_on_loop,
+        mailbox_factory=mailbox_factory,
+        notify=notify_on_loop,
     )
