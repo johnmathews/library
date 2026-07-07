@@ -141,7 +141,7 @@ describe('AppSidebar', () => {
     expect(deletedLink.text()).toContain('Recently Deleted')
   })
 
-  it('orders the nav: Charts after New note, Projects before Settings', async () => {
+  it('orders the nav: Saved views right after Documents, Recently Deleted last', async () => {
     seedAuth(true)
     router.push('/')
     await router.isReady()
@@ -154,16 +154,16 @@ describe('AppSidebar', () => {
       .map((a) => a.attributes('data-testid'))
     expect(order).toEqual([
       'sidebar-documents-link',
-      'sidebar-deleted-link',
+      'sidebar-saved-views-link',
       'sidebar-upload-link',
       'sidebar-notes-link',
       'sidebar-charts-link',
       'sidebar-ask-link',
       'sidebar-jobs-link',
       'sidebar-projects-link',
-      'sidebar-saved-views-link',
       'sidebar-settings-link',
       'sidebar-admin-link',
+      'sidebar-deleted-link',
     ])
   })
 
@@ -200,6 +200,16 @@ describe('AppSidebar', () => {
     expect(pinned.attributes('href')).toBe('/?kind=invoice')
     // Unpinned views never appear as dashboards.
     expect(wrapper.find('[data-testid="sidebar-dashboard-8"]').exists()).toBe(false)
+    // First-class citizen: it lives in the main nav, right after Saved views
+    // (no separate subsection).
+    const order = wrapper
+      .findAll('#sidebar-nav a[data-testid]')
+      .map((a) => a.attributes('data-testid'))
+    expect(order.slice(0, 3)).toEqual([
+      'sidebar-documents-link',
+      'sidebar-saved-views-link',
+      'sidebar-dashboard-7',
+    ])
   })
 
   it('loads dashboards when auth resolves after mount (persistent shell mounts before the guard)', async () => {
@@ -221,7 +231,7 @@ describe('AppSidebar', () => {
     expect(listSavedViews).toHaveBeenCalledTimes(1)
   })
 
-  it('hides the Dashboards section entirely when no views are pinned', async () => {
+  it('renders no dashboard links when no views are pinned', async () => {
     seedAuth(false)
     seedViews([makeView({ id: 8, pinned: false })])
     router.push('/')
@@ -230,7 +240,10 @@ describe('AppSidebar', () => {
       props: { sidebarOpen: false },
       global: { plugins: [router] },
     })
-    expect(wrapper.find('[data-testid="sidebar-dashboards-section"]').exists()).toBe(false)
+    // Pinned views are first-class nav links now (no separate subsection); an
+    // unpinned view contributes no link.
+    expect(wrapper.find('[data-testid="sidebar-dashboard-8"]').exists()).toBe(false)
+    expect(wrapper.findAll('[data-testid^="sidebar-dashboard-"]')).toHaveLength(0)
   })
 
   it('renders the desktop expand/collapse toggle', async () => {

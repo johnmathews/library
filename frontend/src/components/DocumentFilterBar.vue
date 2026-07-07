@@ -43,14 +43,6 @@ function setPillOpen(name: string, open: boolean): void {
   openPill.value = open ? name : openPill.value === name ? null : openPill.value
 }
 
-// On narrow screens the pill row collapses behind a "Filters" toggle (it is
-// always visible from the `sm` breakpoint up). The chips and search input stay
-// visible at every width.
-const filtersExpanded = ref(false)
-function toggleFilters(): void {
-  filtersExpanded.value = !filtersExpanded.value
-}
-
 // --- Search input (debounced) ---------------------------------------------
 
 const searchText = ref(props.applied.q)
@@ -266,9 +258,6 @@ const chips = computed<Chip[]>(() => {
   return out
 })
 
-// One chip per active filter — also the badge count on the mobile toggle.
-const activeFilterCount = computed<number>(() => chips.value.length)
-
 const languageOptions = DOCUMENT_LANGUAGES
 const statusOptions = DOCUMENT_STATUSES
 </script>
@@ -314,38 +303,11 @@ const statusOptions = DOCUMENT_STATUSES
       </button>
     </div>
 
-    <!-- Filters toggle (small screens only; pills are always shown from sm up) -->
-    <button
-      type="button"
-      data-testid="filter-toggle"
-      class="mb-3 inline-flex items-center gap-2 rounded-lg border border-gray-300 bg-white px-3 py-1.5 text-sm font-medium text-gray-700 hover:bg-gray-50 sm:hidden dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-gray-700/60"
-      :aria-expanded="filtersExpanded"
-      aria-controls="filter-pills"
-      @click="toggleFilters"
-    >
-      Filters
-      <span
-        v-if="activeFilterCount"
-        data-testid="filter-toggle-count"
-        class="inline-flex h-5 min-w-5 items-center justify-center rounded-full bg-violet-600 px-1.5 text-xs font-semibold text-white"
-        >{{ activeFilterCount }}</span
-      >
-      <svg
-        class="h-3 w-3 fill-current opacity-70 transition-transform"
-        :class="{ 'rotate-180': filtersExpanded }"
-        viewBox="0 0 12 12"
-        aria-hidden="true"
-      >
-        <path d="M5.9 11.4L.5 6l1.4-1.4 4 4 4-4L11.3 6z" />
-      </svg>
-    </button>
-
-    <!-- Pills -->
+    <!-- Pills — always visible; wrap onto multiple rows on narrow screens -->
     <div
       id="filter-pills"
       data-testid="filter-pills"
-      class="flex-wrap items-center gap-2"
-      :class="filtersExpanded ? 'flex' : 'hidden sm:flex'"
+      class="flex flex-wrap items-center gap-2"
     >
       <FilterPill
         data-testid="pill-kind"

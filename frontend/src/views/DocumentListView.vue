@@ -431,11 +431,14 @@ function toggleSortDirection(): void {
   </div>
 
   <template v-else-if="!loading">
-    <div v-if="items.length" class="flex items-center justify-between gap-3 mb-4">
+    <div
+      v-if="items.length"
+      class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4"
+    >
       <p class="text-sm text-gray-500 dark:text-gray-400" data-testid="result-count">
         {{ total }} {{ total === 1 ? 'document' : 'documents' }}
       </p>
-      <div class="flex items-end gap-3">
+      <div class="flex flex-wrap items-end gap-3">
         <div
           class="flex flex-col gap-1"
           :title="sortDisabled ? 'Sorted by relevance while searching' : undefined"

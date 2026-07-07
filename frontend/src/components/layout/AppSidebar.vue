@@ -201,8 +201,8 @@ watch(
               </li>
             </RouterLink>
 
-            <!-- Recently Deleted link -->
-            <RouterLink v-slot="{ href, navigate, isActive }" to="/deleted" custom>
+            <!-- Saved views link -->
+            <RouterLink v-slot="{ href, navigate, isActive }" to="/saved-views" custom>
               <li
                 class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
                 :class="
@@ -213,7 +213,7 @@ watch(
                 <a
                   :href="href"
                   class="block truncate transition"
-                  data-testid="sidebar-deleted-link"
+                  data-testid="sidebar-saved-views-link"
                   :class="
                     isActive
                       ? 'text-gray-900 dark:text-white'
@@ -224,23 +224,65 @@ watch(
                   <div class="flex items-center">
                     <svg
                       class="shrink-0 fill-current"
-                      :class="
-                        isActive
-                          ? 'text-violet-500'
-                          : 'text-gray-600 dark:text-gray-300'
-                      "
+                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
                       xmlns="http://www.w3.org/2000/svg"
                       width="16"
                       height="16"
                       viewBox="0 0 16 16"
                     >
                       <path
-                        d="M6 1a1 1 0 0 0-1 1v1H2a1 1 0 0 0 0 2h.5l.5 8a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l.5-8h.5a1 1 0 1 0 0-2h-3V2a1 1 0 0 0-1-1H6Zm1 2V3h2v0H7Zm-1 4a1 1 0 0 1 2 0v4a1 1 0 1 1-2 0V7Zm4 0a1 1 0 1 0-2 0v4a1 1 0 1 0 2 0V7Z"
+                        d="M2 2a1 1 0 0 0-1 1v10a1 1 0 0 0 1.55.83L8 11.2l5.45 2.63A1 1 0 0 0 15 13V3a1 1 0 0 0-1-1H2Zm0 2h12v7.4l-4.45-2.15a1 1 0 0 0-.87 0L4 11.4V4Z"
                       />
                     </svg>
                     <span
                       class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
-                      >Recently Deleted</span
+                      >Saved views</span
+                    >
+                  </div>
+                </a>
+              </li>
+            </RouterLink>
+
+            <!-- Pinned saved views: first-class custom-dashboard links -->
+            <RouterLink
+              v-for="view in pinnedViews"
+              :key="view.id"
+              v-slot="{ href, navigate, isActive }"
+              :to="{ path: '/', query: view.filter_state }"
+              custom
+            >
+              <li
+                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
+                :class="
+                  isActive &&
+                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
+                "
+              >
+                <a
+                  :href="href"
+                  class="block truncate transition"
+                  :data-testid="`sidebar-dashboard-${view.id}`"
+                  :class="
+                    isActive
+                      ? 'text-gray-900 dark:text-white'
+                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
+                  "
+                  @click="navigate"
+                >
+                  <div class="flex items-center">
+                    <svg
+                      class="shrink-0 fill-current"
+                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
+                      xmlns="http://www.w3.org/2000/svg"
+                      width="16"
+                      height="16"
+                      viewBox="0 0 16 16"
+                    >
+                      <path d="M1 1h6v6H1V1Zm8 0h6v3H9V1ZM1 9h6v6H1V9Zm8-3h6v9H9V6Z" />
+                    </svg>
+                    <span
+                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                      >{{ view.name }}</span
                     >
                   </div>
                 </a>
@@ -511,48 +553,6 @@ watch(
               </li>
             </RouterLink>
 
-            <!-- Saved views link -->
-            <RouterLink v-slot="{ href, navigate, isActive }" to="/saved-views" custom>
-              <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
-                :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
-                "
-              >
-                <a
-                  :href="href"
-                  class="block truncate transition"
-                  data-testid="sidebar-saved-views-link"
-                  :class="
-                    isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
-                  "
-                  @click="navigate"
-                >
-                  <div class="flex items-center">
-                    <svg
-                      class="shrink-0 fill-current"
-                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="16"
-                      height="16"
-                      viewBox="0 0 16 16"
-                    >
-                      <path
-                        d="M2 2a1 1 0 0 0-1 1v10a1 1 0 0 0 1.55.83L8 11.2l5.45 2.63A1 1 0 0 0 15 13V3a1 1 0 0 0-1-1H2Zm0 2h12v7.4l-4.45-2.15a1 1 0 0 0-.87 0L4 11.4V4Z"
-                      />
-                    </svg>
-                    <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
-                      >Saved views</span
-                    >
-                  </div>
-                </a>
-              </li>
-            </RouterLink>
-
             <!-- Settings link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/settings" custom>
               <li
@@ -636,24 +636,9 @@ watch(
                 </a>
               </li>
             </RouterLink>
-          </ul>
-        </div>
 
-        <!-- Dashboards: pinned saved views. Hidden entirely when none pinned. -->
-        <div v-if="pinnedViews.length" data-testid="sidebar-dashboards-section">
-          <h3
-            class="pl-3 text-xs font-semibold uppercase text-gray-400 dark:text-gray-500 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
-          >
-            Dashboards
-          </h3>
-          <ul class="mt-3" @click="$emit('close-sidebar')">
-            <RouterLink
-              v-for="view in pinnedViews"
-              :key="view.id"
-              v-slot="{ href, navigate, isActive }"
-              :to="{ path: '/', query: view.filter_state }"
-              custom
-            >
+            <!-- Recently Deleted link (kept at the bottom — a low-traffic destination) -->
+            <RouterLink v-slot="{ href, navigate, isActive }" to="/deleted" custom>
               <li
                 class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
                 :class="
@@ -664,7 +649,7 @@ watch(
                 <a
                   :href="href"
                   class="block truncate transition"
-                  :data-testid="`sidebar-dashboard-${view.id}`"
+                  data-testid="sidebar-deleted-link"
                   :class="
                     isActive
                       ? 'text-gray-900 dark:text-white'
@@ -681,11 +666,13 @@ watch(
                       height="16"
                       viewBox="0 0 16 16"
                     >
-                      <path d="M1 1h6v6H1V1Zm8 0h6v3H9V1ZM1 9h6v6H1V9Zm8-3h6v9H9V6Z" />
+                      <path
+                        d="M6 1a1 1 0 0 0-1 1v1H2a1 1 0 0 0 0 2h.5l.5 8a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2l.5-8h.5a1 1 0 1 0 0-2h-3V2a1 1 0 0 0-1-1H6Zm1 2V3h2v0H7Zm-1 4a1 1 0 0 1 2 0v4a1 1 0 1 1-2 0V7Zm4 0a1 1 0 1 0-2 0v4a1 1 0 1 0 2 0V7Z"
+                      />
                     </svg>
                     <span
                       class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
-                      >{{ view.name }}</span
+                      >Recently Deleted</span
                     >
                   </div>
                 </a>

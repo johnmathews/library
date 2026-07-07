@@ -201,31 +201,14 @@ describe('DocumentFilterBar', () => {
     expect(query).toEqual({ kind: 'invoice', sender_id: '3' })
   })
 
-  it('collapses the pill row behind a Filters toggle on small screens', async () => {
+  it('always shows the pill row (no collapse toggle) and lets it wrap', () => {
     const w = mountBar()
     const pills = w.get('[data-testid="filter-pills"]')
-    // Collapsed by default below the sm breakpoint: hidden until sm:flex.
-    expect(pills.classes()).toContain('hidden')
-    expect(pills.classes()).toContain('sm:flex')
-
-    const toggle = w.get('[data-testid="filter-toggle"]')
-    expect(toggle.attributes('aria-expanded')).toBe('false')
-    await toggle.trigger('click')
-
+    // Visible at every width and wraps onto multiple rows on narrow screens.
     expect(pills.classes()).toContain('flex')
+    expect(pills.classes()).toContain('flex-wrap')
     expect(pills.classes()).not.toContain('hidden')
-    expect(toggle.attributes('aria-expanded')).toBe('true')
-  })
-
-  it('shows the active-filter count on the Filters toggle', async () => {
-    const w = mountBar({ ...EMPTY, q: 'rekening', kind: 'invoice' })
-    await flushPromises()
-    // q + kind = 2 active filters.
-    expect(w.get('[data-testid="filter-toggle-count"]').text()).toBe('2')
-  })
-
-  it('omits the count badge when no filters are active', () => {
-    const w = mountBar()
-    expect(w.find('[data-testid="filter-toggle-count"]').exists()).toBe(false)
+    // The Filters collapse toggle has been removed.
+    expect(w.find('[data-testid="filter-toggle"]').exists()).toBe(false)
   })
 })
