@@ -102,3 +102,21 @@ def test_markdown_endpoint_deleted_document_404(
     assert delete_response.status_code == 204
     response = api_client.get(f"/api/documents/{doc_id}/markdown")
     assert response.status_code == 404
+
+
+def test_markdown_endpoint_deleted_with_include_deleted_returns_pages(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The read-only detail view of a trashed document must still render its text,
+    so markdown honours ?include_deleted=true (404 without it, as above)."""
+    doc_id = seed_document_with_pages(
+        api_database_url,
+        "md-api-deleted-included",
+        [(1, "# Page 1")],
+    )
+    assert api_client.delete(f"/api/documents/{doc_id}").status_code == 204
+    response = api_client.get(f"/api/documents/{doc_id}/markdown", params={"include_deleted": True})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["page_count"] == 1
+    assert body["pages"] == [{"page_number": 1, "markdown": "# Page 1"}]

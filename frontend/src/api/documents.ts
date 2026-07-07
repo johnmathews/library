@@ -144,6 +144,11 @@ export interface DocumentComment {
 export interface DocumentDetail extends DocumentListItem {
   /** Human-readable topic phrases extracted for general/reference docs. */
   topics: string[]
+  /**
+   * When the document was soft-deleted, or null if live. Non-null only when
+   * fetched with `includeDeleted` (the Recently-Deleted read path).
+   */
+  deleted_at: string | null
   ocr_text: string | null
   ocr_confidence: number | null
   due_date: string | null
@@ -290,9 +295,21 @@ export function listDocuments(
   return apiFetch<DocumentListResponse>(`/api/documents${qs ? `?${qs}` : ''}`, { signal })
 }
 
-/** GET /api/documents/{id} — full detail. */
-export function getDocument(id: number, signal?: AbortSignal): Promise<DocumentDetail> {
-  return apiFetch<DocumentDetail>(`/api/documents/${id}`, { signal })
+/**
+ * GET /api/documents/{id} — full detail.
+ *
+ * `includeDeleted` opts into fetching a soft-deleted document (returns it with
+ * `deleted_at` set instead of 404ing) so the Recently-Deleted view can open a
+ * trashed document read-only. Off by default, matching every other read path.
+ */
+export function getDocument(
+  id: number,
+  opts: { includeDeleted?: boolean; signal?: AbortSignal } = {},
+): Promise<DocumentDetail> {
+  return apiFetch<DocumentDetail>(`/api/documents/${id}`, {
+    query: opts.includeDeleted ? { include_deleted: true } : undefined,
+    signal: opts.signal,
+  })
 }
 
 /** PATCH /api/documents/{id} — partial metadata edit; returns the new detail. */
@@ -322,6 +339,15 @@ export function listDeletedDocuments(
 /** POST /api/documents/{id}/restore — undo a soft delete; returns the detail. */
 export function restoreDocument(id: number): Promise<DocumentDetail> {
   return apiFetch<DocumentDetail>(`/api/documents/${id}/restore`, { method: 'POST' })
+}
+
+/**
+ * DELETE /api/documents/{id}/permanent — hard-delete a soft-deleted document
+ * (204). Only valid for a document currently in the trash; the row and its
+ * files are removed for good. 404s a live or unknown document.
+ */
+export function permanentlyDeleteDocument(id: number): Promise<void> {
+  return apiFetch<void>(`/api/documents/${id}/permanent`, { method: 'DELETE' })
 }
 
 /** POST /api/documents/{id}/extract — queue metadata re-extraction (202). */
@@ -416,14 +442,19 @@ export interface DocumentMarkdownResponse {
   pages: DocumentMarkdownPage[]
 }
 
-/** GET /api/documents/{id}/markdown — assembled per-page markdown. */
-export function fetchDocumentMarkdown(id: number): Promise<DocumentMarkdownResponse> {
-  return apiFetch<DocumentMarkdownResponse>(`/api/documents/${id}/markdown`)
-}
-
-/** URL of a document's first-page thumbnail (404 until generated). */
-export function thumbnailUrl(id: number): string {
-  return `/api/documents/${id}/thumbnail`
+/**
+ * GET /api/documents/{id}/markdown — assembled per-page markdown.
+ *
+ * `includeDeleted` renders a soft-deleted document's text (for the read-only
+ * Recently-Deleted detail view); off by default, matching `getDocument`.
+ */
+export function fetchDocumentMarkdown(
+  id: number,
+  opts: { includeDeleted?: boolean } = {},
+): Promise<DocumentMarkdownResponse> {
+  return apiFetch<DocumentMarkdownResponse>(`/api/documents/${id}/markdown`, {
+    query: opts.includeDeleted ? { include_deleted: true } : undefined,
+  })
 }
 
 /**
@@ -432,13 +463,25 @@ export function thumbnailUrl(id: number): string {
  * iframe/img previews); the default is the backend's
  * `Content-Disposition: attachment`, which downloads — an attachment
  * response inside an iframe/img shows nothing and triggers a download.
+ * `includeDeleted: true` appends `include_deleted=true` so a soft-deleted
+ * document's preview/download still resolves in the read-only trash view.
  */
 export interface FileUrlOptions {
   inline?: boolean
+  includeDeleted?: boolean
 }
 
 function fileUrl(path: string, options?: FileUrlOptions): string {
-  return options?.inline ? `${path}?disposition=inline` : path
+  const params = new URLSearchParams()
+  if (options?.inline) params.set('disposition', 'inline')
+  if (options?.includeDeleted) params.set('include_deleted', 'true')
+  const qs = params.toString()
+  return qs ? `${path}?${qs}` : path
+}
+
+/** URL of a document's first-page thumbnail (404 until generated). */
+export function thumbnailUrl(id: number, options?: FileUrlOptions): string {
+  return fileUrl(`/api/documents/${id}/thumbnail`, options)
 }
 
 /** URL of the stored original (attachment by default; see FileUrlOptions). */

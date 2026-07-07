@@ -22,13 +22,16 @@ import {
   AppBanner,
   AppButton,
   AppErrorSummary,
+  ConfirmDialog,
 } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
 import {
   fetchDocumentMarkdown,
   getDocument,
   originalUrl,
+  permanentlyDeleteDocument,
   requestExtraction,
+  restoreDocument,
   searchablePdfUrl,
   thumbnailUrl,
   verifyDocument,
@@ -38,6 +41,7 @@ import {
 import { ApiError } from '@/api/client'
 import { useJobsStore } from '@/stores/jobs'
 import { useAuthStore } from '@/stores/auth'
+import { useFlashStore } from '@/stores/flash'
 import { useReviewQueueStore } from '@/stores/reviewQueue'
 import { resolveReviewReasons, type ReviewReason } from '@/utils/validationReason'
 import { formatDate, formatDateTime, markdownPageHtml, tagColour } from '@/utils/documentFormat'
@@ -75,6 +79,49 @@ let unmounted = false
 onBeforeUnmount(() => {
   unmounted = true
 })
+
+// --- Trash banner (soft-deleted documents) -----------------------------------
+//
+// Reached from Recently Deleted, which links each title here; the fetch below
+// opts into `includeDeleted`, so a soft-deleted document loads read-only with
+// `deleted_at` set instead of 404ing (the bug this view used to hit). The
+// banner offers the two exits: restore, or permanent (confirmed) deletion.
+
+const flash = useFlashStore()
+const isDeleted = computed(() => Boolean(doc.value?.deleted_at))
+const restoringFromTrash = ref(false)
+const pendingPurge = ref(false)
+const purging = ref(false)
+
+async function restoreFromTrash(): Promise<void> {
+  if (!doc.value || restoringFromTrash.value) return
+  restoringFromTrash.value = true
+  try {
+    // Returns the now-live detail (deleted_at cleared), so the banner vanishes.
+    doc.value = await restoreDocument(doc.value.id)
+  } catch {
+    loadError.value = true
+  } finally {
+    restoringFromTrash.value = false
+  }
+}
+
+async function confirmPurge(): Promise<void> {
+  if (!doc.value || purging.value) return
+  purging.value = true
+  const title = doc.value.title ?? 'Document'
+  try {
+    await permanentlyDeleteDocument(doc.value.id)
+    flash.set(`${title} permanently deleted`)
+    pendingPurge.value = false
+    void router.push({ name: 'documents-deleted' })
+  } catch {
+    pendingPurge.value = false
+    loadError.value = true
+  } finally {
+    purging.value = false
+  }
+}
 
 // --- Hero header (title + key stats + tags) -----------------------------------
 //
@@ -402,8 +449,8 @@ const preview = computed<'image' | 'pdf' | 'none'>(() => {
 const pdfPreviewUrl = computed(() =>
   doc.value
     ? doc.value.has_searchable_pdf
-      ? searchablePdfUrl(doc.value.id, { inline: true })
-      : originalUrl(doc.value.id, { inline: true })
+      ? searchablePdfUrl(doc.value.id, { inline: true, includeDeleted: isDeleted.value })
+      : originalUrl(doc.value.id, { inline: true, includeDeleted: isDeleted.value })
     : '',
 )
 
@@ -419,7 +466,8 @@ const pageParam = computed<number | null>(() => {
 const previewOpenUrl = computed(() => {
   if (!doc.value) return ''
   if (preview.value === 'pdf') return pdfPreviewUrl.value
-  if (preview.value === 'image') return originalUrl(doc.value.id, { inline: true })
+  if (preview.value === 'image')
+    return originalUrl(doc.value.id, { inline: true, includeDeleted: isDeleted.value })
   return ''
 })
 
@@ -427,7 +475,9 @@ const previewOpenUrl = computed(() => {
  * the searchable PDF when present, otherwise the original file. */
 const previewDownloadUrl = computed(() => {
   if (!doc.value) return ''
-  return doc.value.has_searchable_pdf ? searchablePdfUrl(doc.value.id) : originalUrl(doc.value.id)
+  return doc.value.has_searchable_pdf
+    ? searchablePdfUrl(doc.value.id, { includeDeleted: isDeleted.value })
+    : originalUrl(doc.value.id, { includeDeleted: isDeleted.value })
 })
 
 // --- Document text reader (markdown, fetched eagerly on load) -----------------
@@ -458,7 +508,11 @@ async function loadMarkdown(id: number): Promise<void> {
   markdownLoading.value = true
   markdownError.value = false
   try {
-    markdownData.value = await fetchDocumentMarkdown(id)
+    // A soft-deleted document's text is only served with the opt-in flag, so the
+    // read-only trash view isn't blank (see the trash banner above).
+    markdownData.value = await fetchDocumentMarkdown(id, {
+      includeDeleted: Boolean(doc.value?.deleted_at),
+    })
   } catch {
     markdownError.value = true
   } finally {
@@ -696,7 +750,9 @@ watch(
       return
     }
     try {
-      doc.value = await getDocument(numericId)
+      // Opt into deleted docs so a title click from Recently Deleted opens the
+      // document read-only (with the trash banner) instead of 404ing.
+      doc.value = await getDocument(numericId, { includeDeleted: true })
     } catch (error: unknown) {
       if (error instanceof ApiError && error.status === 404) notFound.value = true
       else loadError.value = true
@@ -713,6 +769,40 @@ watch(
   <AppBackLink to="/" text="Back to documents" class="mb-4" />
 
   <template v-if="doc">
+    <!-- Trash banner: shown when this document is soft-deleted (reached from
+         Recently Deleted). Offers the two exits — restore, or permanent
+         (confirmed) deletion. -->
+    <div
+      v-if="isDeleted"
+      class="mb-6 flex flex-col gap-3 rounded-lg border border-red-300 bg-red-50 p-3 sm:flex-row sm:items-center dark:border-red-500/40 dark:bg-red-500/10"
+      data-testid="trash-banner"
+    >
+      <p class="flex-1 text-sm font-medium text-red-800 dark:text-red-200">
+        This document is in the trash. It will be permanently removed when its retention window ends.
+      </p>
+      <div class="flex flex-wrap items-center gap-2">
+        <AppButton
+          type="button"
+          variant="secondary"
+          size="sm"
+          :disabled="restoringFromTrash"
+          data-testid="trash-restore"
+          @click="restoreFromTrash"
+        >
+          {{ restoringFromTrash ? 'Restoring…' : 'Restore' }}
+        </AppButton>
+        <AppButton
+          type="button"
+          variant="warning"
+          size="sm"
+          data-testid="trash-purge"
+          @click="pendingPurge = true"
+        >
+          Delete permanently
+        </AppButton>
+      </div>
+    </div>
+
     <!-- Top-anchored dock: mounted early in the flow so its `sticky top-16`
          has content below to pin against (see the ActionDock note above). The
          zero-height rail reserves no space, so mounting it here shifts nothing.
@@ -1011,14 +1101,14 @@ watch(
           <img
             v-if="preview === 'image'"
             class="w-full object-contain bg-gray-100 dark:bg-gray-900/40"
-            :src="originalUrl(doc.id, { inline: true })"
+            :src="originalUrl(doc.id, { inline: true, includeDeleted: isDeleted })"
             :alt="`Preview of ${doc.title ?? 'this document'}`"
             data-testid="preview-image"
           />
           <DocumentPdfPreview
             v-else-if="preview === 'pdf'"
             :src="pdfPreviewUrl"
-            :poster="doc.has_thumbnail ? thumbnailUrl(doc.id) : undefined"
+            :poster="doc.has_thumbnail ? thumbnailUrl(doc.id, { includeDeleted: isDeleted }) : undefined"
             :open-href="previewOpenUrl"
             :download-href="previewDownloadUrl"
             :initial-page="pageParam"
@@ -1030,7 +1120,9 @@ watch(
             data-testid="preview-fallback"
           >
             No preview is available for this file type.
-            <a class="text-violet-600 hover:underline" :href="originalUrl(doc.id)"
+            <a
+              class="text-violet-600 hover:underline"
+              :href="originalUrl(doc.id, { includeDeleted: isDeleted })"
               >Download the original file</a
             >
             to view it.
@@ -1160,7 +1252,7 @@ watch(
           <p class="text-sm mb-2">
             <a
               class="text-violet-600 hover:underline"
-              :href="originalUrl(doc.id)"
+              :href="originalUrl(doc.id, { includeDeleted: isDeleted })"
               data-testid="download-original"
             >
               Download the original file
@@ -1169,7 +1261,7 @@ watch(
           <p v-if="doc.has_searchable_pdf" class="text-sm mb-2">
             <a
               class="text-violet-600 hover:underline"
-              :href="searchablePdfUrl(doc.id)"
+              :href="searchablePdfUrl(doc.id, { includeDeleted: isDeleted })"
               data-testid="download-searchable"
             >
               Download the searchable PDF
@@ -1204,6 +1296,7 @@ watch(
               {{ extracting ? 'Extraction running…' : 'Re-run extraction' }}
             </AppButton>
             <AppButton
+              v-if="!isDeleted"
               variant="warning"
               :to="`/documents/${doc.id}/delete`"
               data-testid="delete-link"
@@ -1228,6 +1321,16 @@ watch(
          *late* mount slot: bottom-anchored positions pin `bottom-0` from here;
          top-anchored positions use the early slot near the top instead. -->
     <ActionDock v-if="!heroVisible && !dockAtTop" :ask-href="askHref" />
+
+    <ConfirmDialog
+      :open="pendingPurge"
+      title="Delete permanently?"
+      :message="`“${doc.title ?? 'This document'}” will be permanently deleted. This cannot be undone.`"
+      confirm-label="Delete permanently"
+      :busy="purging"
+      @confirm="confirmPurge"
+      @cancel="pendingPurge = false"
+    />
   </template>
 
   <template v-else-if="notFound">

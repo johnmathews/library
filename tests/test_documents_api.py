@@ -35,7 +35,7 @@ from library.models import (
     Sender,
     Tag,
 )
-from library.storage import derived_dir, store
+from library.storage import derived_dir, path_for, store
 from library.thumbnails import THUMBNAIL_NAME
 from tests.conftest import fetch_all
 from tests.test_extraction_apply import make_metadata, make_outcome, patch_extract
@@ -708,6 +708,135 @@ def test_restore_unknown_or_live_document_404(
     assert api_client.post("/api/documents/987654321/restore").status_code == 404
     live_id = seed_document(api_database_url, "w1-restore-live")
     assert api_client.post(f"/api/documents/{live_id}/restore").status_code == 404
+
+
+# --- Recently Deleted: view a deleted document (include_deleted) --------------
+
+
+def test_detail_include_deleted_returns_soft_deleted(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Regression: the Recently-Deleted view links each title to the detail
+    route, so the detail endpoint must be able to return a soft-deleted document
+    on demand (?include_deleted=true) instead of the 404 that broke title clicks.
+    The default (no flag) still 404s, preserving the read invariant everywhere else."""
+    document_id = seed_document(api_database_url, "w1-detail-deleted", title="Trashed doc")
+    assert api_client.delete(f"/api/documents/{document_id}").status_code == 204
+
+    # Default path still 404s (the invariant every list/search relies on).
+    assert api_client.get(f"/api/documents/{document_id}").status_code == 404
+
+    # Opt-in returns the document, with deleted_at populated for the UI banner.
+    response = api_client.get(f"/api/documents/{document_id}", params={"include_deleted": True})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["id"] == document_id
+    assert body["title"] == "Trashed doc"
+    assert body["deleted_at"] is not None
+
+    # A live document reports deleted_at = null through the same field.
+    live_id = seed_document(api_database_url, "w1-detail-live", title="Live doc")
+    live = api_client.get(f"/api/documents/{live_id}", params={"include_deleted": True})
+    assert live.status_code == 200
+    assert live.json()["deleted_at"] is None
+
+
+def test_download_original_include_deleted_serves_trashed_file(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The read-only trash view must be able to preview/download a deleted doc's
+    file, so the file endpoints honour ?include_deleted (404 without it)."""
+    document_id = seed_document(api_database_url, "w1-original-deleted", title="Trashed file")
+    store(b"w1-original-deleted")  # materialise the content-addressed original
+    assert api_client.delete(f"/api/documents/{document_id}").status_code == 204
+
+    # Default 404s (deleted docs stay hidden on file endpoints too).
+    assert api_client.get(f"/api/documents/{document_id}/original").status_code == 404
+    # Opt-in serves the bytes.
+    response = api_client.get(
+        f"/api/documents/{document_id}/original", params={"include_deleted": True}
+    )
+    assert response.status_code == 200, response.text
+    assert response.content == b"w1-original-deleted"
+
+
+def test_detail_include_deleted_still_404s_unknown(api_client: TestClient) -> None:
+    assert (
+        api_client.get("/api/documents/987654321", params={"include_deleted": True}).status_code
+        == 404
+    )
+
+
+# --- Recently Deleted: permanent (hard) delete -------------------------------
+
+
+def test_permanent_delete_removes_row_and_files(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A soft-deleted document can be purged on demand: the row is hard-deleted,
+    its stored original is unlinked, and it leaves the Recently-Deleted list."""
+    document_id = seed_document(api_database_url, "w1-purge", tag_slugs=["w1-purge"])
+    # Materialise the content-addressed original so we can assert it is unlinked
+    # (seed_document only inserts the row; sha256 = sha256(marker)).
+    stored = store(b"w1-purge")
+    sha256 = stored.sha256
+    assert path_for(sha256).is_file()
+
+    # Give the document a child row (a comment) so the delete exercises cascade
+    # of a lazy="raise" relationship — a Core delete must not lazy-load it.
+    assert (
+        api_client.post(f"/api/documents/{document_id}/comments", json={"body": "note"}).status_code
+        == 201
+    )
+
+    assert (
+        api_client.delete(f"/api/documents/{document_id}").status_code == 204
+    )  # soft-delete first
+    assert api_client.delete(f"/api/documents/{document_id}/permanent").status_code == 204
+
+    # Row is gone: absent from Recently Deleted and 404 even with include_deleted.
+    body = deleted_docs(api_client, limit=100)
+    assert document_id not in {item["id"] for item in body["items"]}
+    assert (
+        api_client.get(
+            f"/api/documents/{document_id}", params={"include_deleted": True}
+        ).status_code
+        == 404
+    )
+    # Children cascade at the DB level (comment + ingestion events gone).
+    assert (
+        fetch_all(
+            api_database_url,
+            "SELECT id FROM document_comments WHERE document_id = :id",
+            id=document_id,
+        )
+        == []
+    )
+    assert (
+        fetch_all(
+            api_database_url,
+            "SELECT id FROM ingestion_events WHERE document_id = :id",
+            id=document_id,
+        )
+        == []
+    )
+    # Original file unlinked.
+    assert not path_for(sha256).exists()
+
+
+def test_permanent_delete_404_on_live_document(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """You can only permanently delete something already in the trash; a live
+    document must be soft-deleted first (mirrors restore's semantics)."""
+    live_id = seed_document(api_database_url, "w1-purge-live")
+    response = api_client.delete(f"/api/documents/{live_id}/permanent")
+    assert response.status_code == 404
+    assert response.json()["detail"] == "deleted document not found"
+
+
+def test_permanent_delete_404_on_unknown_document(api_client: TestClient) -> None:
+    assert api_client.delete("/api/documents/987654321/permanent").status_code == 404
 
 
 def test_deleted_note_lists_and_restores(api_client: TestClient, api_database_url: str) -> None:

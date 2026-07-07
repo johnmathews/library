@@ -38,6 +38,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | DELETE | `/api/documents/{id}` | Soft-delete |
 | GET    | `/api/documents/deleted` | List soft-deleted documents (Recently Deleted) |
 | POST   | `/api/documents/{id}/restore` | Restore a soft-deleted document |
+| DELETE | `/api/documents/{id}/permanent` | Permanently (hard) delete a soft-deleted document |
 | POST   | `/api/documents/{id}/extract` | Queue metadata re-extraction |
 | POST   | `/api/documents/{id}/verify` | Mark document metadata as verified |
 | GET    | `/api/documents/{id}/original` | Download the original file |
@@ -247,6 +248,17 @@ Everything in the list item, plus:
   shape as §1.19). A comment is a distinct concept from a note (§1.17): it is
   user-authored dated text attached to *this* document, not a document of its
   own, and it is separately indexed for `/ask` (§1.19).
+- `deleted_at` — when the document was soft-deleted, or `null` if live.
+  Non-`null` only when fetched with `?include_deleted=true` (below).
+
+**`?include_deleted=true`.** By default this endpoint `404`s a soft-deleted
+document, the invariant every list/search path relies on. Passing
+`include_deleted=true` returns the document instead (with `deleted_at` set),
+so the Recently-Deleted view can open a trashed document read-only. The default
+is `false`; only the detail view opts in. The same flag is accepted by
+`…/markdown`, `…/original`, `…/searchable.pdf`, and `…/thumbnail`, so the
+read-only trash view can render a deleted document's text, preview, and
+downloads instead of 404ing them.
 
 ### 1.4.1 Per-page markdown — `GET /api/documents/{id}/markdown`
 
@@ -260,7 +272,9 @@ The document's per-page markdown rendering, assembled from the stored
 
 `page_count` is the length of `pages`. A document with no stored pages
 returns `{"page_count": 0, "pages": []}` (still `200`). Unknown or
-soft-deleted documents return `404`.
+soft-deleted documents return `404` — unless `?include_deleted=true` is passed
+(see §1.4.1), which renders a soft-deleted document's text for the read-only
+Recently-Deleted detail view.
 
 ## 1.5 Edit metadata — `PATCH /api/documents/{id}`
 
@@ -332,12 +346,23 @@ exists and is *currently* soft-deleted (restoring a live document is an error).
 Restore never collides with a re-upload, because `sha256` is unique and uploads
 of soft-deleted content are refused with `409`.
 
+**Permanent delete — `DELETE /api/documents/{id}/permanent`.** Hard-deletes a
+document that is already in the trash on demand — the manual equivalent of the
+daily purge, for emptying Recently Deleted without waiting out the retention
+window. Removes the row (chunks, comments, pages, events, note versions, and
+series/tag/project links cascade), commits, then unlinks the on-disk original and
+derived artifacts (row committed gone *before* files are unlinked, so a failed
+unlink leaves at worst a reclaimable orphan file). Returns `204`. `404` unless the
+document exists and is *currently* soft-deleted — you must soft-delete first, so
+this can never one-step nuke a live document (the same guard as restore).
+
 **Purge.** A daily worker task (`purge_deleted_documents`) hard-deletes documents
 whose `deleted_at` is older than `LIBRARY_DELETED_RETENTION_DAYS` (default 30):
 it removes the row (chunks, comments, pages, events, note versions, and
 series/tag/project links cascade) and unlinks the on-disk original and derived
-artifacts. It is gated by `LIBRARY_DELETED_PURGE_ENABLED` (default on) — turn it
-off to keep the Recently-Deleted area indefinitely restorable. See
+artifacts — the same row-then-files ordering as the on-demand endpoint above. It
+is gated by `LIBRARY_DELETED_PURGE_ENABLED` (default on) — turn it off to keep the
+Recently-Deleted area indefinitely restorable. See
 [jobs-and-notifications.md](jobs-and-notifications.md).
 
 ## 1.7 File downloads

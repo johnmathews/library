@@ -36,6 +36,7 @@ function makeNote(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     has_thumbnail: false,
     snippet: null,
     rank: null,
+    deleted_at: null,
     ocr_text: null,
     ocr_confidence: null,
     amount_total: null,

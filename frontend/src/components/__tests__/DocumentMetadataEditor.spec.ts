@@ -62,6 +62,7 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     has_thumbnail: true,
     snippet: null,
     rank: null,
+    deleted_at: null,
     ocr_text: 'Hierbij ontvangt u de rekeningen voor mei.',
     ocr_confidence: 91.4,
     amount_total: '123.45',

@@ -186,6 +186,13 @@ class DeletedDocumentListResponse(BaseModel):
 class DocumentDetail(DocumentListItem):
     """Body of GET/PATCH /api/documents/{id}: list item plus full content."""
 
+    deleted_at: datetime | None = Field(
+        default=None,
+        description=(
+            "When the document was soft-deleted, or null if live. Non-null only "
+            "when fetched with ?include_deleted=true (the Recently-Deleted read path)."
+        ),
+    )
     ocr_text: str | None
     ocr_confidence: float | None
     due_date: date | None

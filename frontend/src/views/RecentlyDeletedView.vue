@@ -7,10 +7,11 @@
  * Restoring a document sends it back to the normal library and drops it from
  * this list. A clean mosaic grid of cards — no filters, no infinite scroll.
  */
-import { onMounted, ref } from 'vue'
-import { AppBanner, AppButton, PageHeader } from '@/components/app'
+import { computed, onMounted, ref } from 'vue'
+import { AppBanner, AppButton, ConfirmDialog, PageHeader } from '@/components/app'
 import {
   listDeletedDocuments,
+  permanentlyDeleteDocument,
   restoreDocument,
   type DeletedDocumentItem,
 } from '@/api/documents'
@@ -23,6 +24,16 @@ const loadError = ref<string | null>(null)
 const items = ref<DeletedDocumentItem[]>([])
 const retentionDays = ref(0)
 const restoringIds = ref<Set<number>>(new Set())
+
+// The card awaiting permanent-delete confirmation (null = dialog closed), and
+// the id currently being purged so the dialog can show a pending state.
+const pendingDelete = ref<DeletedDocumentItem | null>(null)
+const purgingId = ref<number | null>(null)
+const confirmMessage = computed(() =>
+  pendingDelete.value
+    ? `“${pendingDelete.value.title ?? 'This document'}” will be permanently deleted. This cannot be undone.`
+    : '',
+)
 
 // One-shot banner from a restore action (set below, consumed here on mount) so
 // the confirmation survives the card being removed from the list.
@@ -70,6 +81,26 @@ async function restore(item: DeletedDocumentItem): Promise<void> {
     flashMessage.value = flash.consume()
   } finally {
     restoringIds.value.delete(item.id)
+  }
+}
+
+/** Confirm the permanent (irreversible) deletion of the pending card. */
+async function confirmPermanentDelete(): Promise<void> {
+  const item = pendingDelete.value
+  if (!item || purgingId.value !== null) return
+  purgingId.value = item.id
+  try {
+    await permanentlyDeleteDocument(item.id)
+    items.value = items.value.filter((doc) => doc.id !== item.id)
+    flash.set(`${item.title ?? 'Document'} permanently deleted`)
+    flashMessage.value = flash.consume()
+    pendingDelete.value = null
+  } catch {
+    flash.set('Sorry, the document could not be deleted. Try again later.')
+    flashMessage.value = flash.consume()
+    pendingDelete.value = null
+  } finally {
+    purgingId.value = null
   }
 }
 </script>
@@ -135,7 +166,7 @@ async function restore(item: DeletedDocumentItem): Promise<void> {
           >
             {{ purgeLabel(item.days_remaining) }}
           </p>
-          <div class="mt-4">
+          <div class="mt-4 flex flex-wrap items-center gap-2">
             <AppButton
               type="button"
               variant="secondary"
@@ -146,9 +177,28 @@ async function restore(item: DeletedDocumentItem): Promise<void> {
             >
               {{ restoringIds.has(item.id) ? 'Restoring…' : 'Restore' }}
             </AppButton>
+            <AppButton
+              type="button"
+              variant="warning"
+              size="sm"
+              :data-testid="`purge-${item.id}`"
+              @click="pendingDelete = item"
+            >
+              Delete permanently
+            </AppButton>
           </div>
         </div>
       </li>
     </ul>
   </template>
+
+  <ConfirmDialog
+    :open="pendingDelete !== null"
+    title="Delete permanently?"
+    :message="confirmMessage"
+    confirm-label="Delete permanently"
+    :busy="purgingId !== null"
+    @confirm="confirmPermanentDelete"
+    @cancel="pendingDelete = null"
+  />
 </template>

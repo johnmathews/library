@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { createPinia, setActivePinia, type Pinia } from 'pinia'
@@ -9,12 +9,29 @@ import { useFlashStore } from '@/stores/flash'
 vi.mock('@/api/documents', () => ({
   listDeletedDocuments: vi.fn(),
   restoreDocument: vi.fn(),
+  permanentlyDeleteDocument: vi.fn(),
 }))
 
-import { listDeletedDocuments, restoreDocument } from '@/api/documents'
+import { listDeletedDocuments, permanentlyDeleteDocument, restoreDocument } from '@/api/documents'
 
 const listMock = vi.mocked(listDeletedDocuments)
 const restoreMock = vi.mocked(restoreDocument)
+const purgeMock = vi.mocked(permanentlyDeleteDocument)
+
+// jsdom lacks HTMLDialogElement.showModal/close (ConfirmDialog uses <dialog>).
+beforeAll(() => {
+  if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+    HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+      this.setAttribute('open', '')
+    }
+  }
+  if (typeof HTMLDialogElement.prototype.close !== 'function') {
+    HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+      this.removeAttribute('open')
+      this.dispatchEvent(new Event('close'))
+    }
+  }
+})
 
 function makeItem(overrides: Partial<DeletedDocumentItem> = {}): DeletedDocumentItem {
   return {
@@ -64,6 +81,7 @@ describe('RecentlyDeletedView', () => {
   beforeEach(() => {
     listMock.mockReset()
     restoreMock.mockReset()
+    purgeMock.mockReset()
     pinia = createPinia()
     setActivePinia(pinia)
     router = createRouter({
@@ -117,6 +135,60 @@ describe('RecentlyDeletedView', () => {
     expect(w.findAll('[data-testid="doc-card"]')).toHaveLength(1)
     expect(w.find('[data-testid="restore-12"]').exists()).toBe(false)
     expect(w.find('[data-testid="flash-banner"]').text()).toContain('restored')
+  })
+
+  it('keeps the title a link to the document detail route', async () => {
+    // The title link is intentional — clicking it opens the document read-only.
+    // The e2e (recently-deleted.spec) guards that the destination actually loads.
+    listMock.mockResolvedValue(listBody([makeItem()]))
+    const w = await mountView()
+    const link = w.find('[data-testid="doc-card"] a')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('/documents/12')
+  })
+
+  it('permanently deletes after confirmation: calls the API, removes the card, flashes', async () => {
+    listMock.mockResolvedValue(listBody([makeItem(), makeItem({ id: 13, title: 'Contract' })]))
+    purgeMock.mockResolvedValue(undefined)
+    const w = await mountView()
+
+    // Opening the confirm dialog does not delete anything yet.
+    await w.find('[data-testid="purge-12"]').trigger('click')
+    expect(purgeMock).not.toHaveBeenCalled()
+    expect(w.find('[data-testid="confirm-dialog"]').exists()).toBe(true)
+
+    await w.find('[data-testid="confirm-accept"]').trigger('click')
+    await flushPromises()
+
+    expect(purgeMock).toHaveBeenCalledWith(12)
+    expect(w.findAll('[data-testid="doc-card"]')).toHaveLength(1)
+    expect(w.find('[data-testid="purge-12"]').exists()).toBe(false)
+    expect(w.find('[data-testid="flash-banner"]').text()).toContain('permanently deleted')
+  })
+
+  it('cancelling the confirm dialog deletes nothing', async () => {
+    listMock.mockResolvedValue(listBody([makeItem()]))
+    const w = await mountView()
+
+    await w.find('[data-testid="purge-12"]').trigger('click')
+    await w.find('[data-testid="confirm-cancel"]').trigger('click')
+    await flushPromises()
+
+    expect(purgeMock).not.toHaveBeenCalled()
+    expect(w.findAll('[data-testid="doc-card"]')).toHaveLength(1)
+  })
+
+  it('keeps the card and flags an error when permanent delete fails', async () => {
+    listMock.mockResolvedValue(listBody([makeItem()]))
+    purgeMock.mockRejectedValue(new Error('nope'))
+    const w = await mountView()
+
+    await w.find('[data-testid="purge-12"]').trigger('click')
+    await w.find('[data-testid="confirm-accept"]').trigger('click')
+    await flushPromises()
+
+    expect(w.findAll('[data-testid="doc-card"]')).toHaveLength(1)
+    expect(w.find('[data-testid="flash-banner"]').text()).toContain('could not be deleted')
   })
 
   it('renders the empty state when nothing is deleted', async () => {

@@ -90,6 +90,7 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     has_thumbnail: true,
     snippet: null,
     rank: null,
+    deleted_at: null,
     ocr_text: 'Hierbij ontvangt u de rekeningen voor mei.',
     ocr_confidence: 91.4,
     amount_total: '123.45',
@@ -171,6 +172,19 @@ function lastIntersectionObserver(): FakeIntersectionObserver {
   return instance
 }
 
+// jsdom lacks HTMLDialogElement.showModal/close (ConfirmDialog uses <dialog>).
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function (this: HTMLDialogElement) {
+    this.setAttribute('open', '')
+  }
+}
+if (typeof HTMLDialogElement.prototype.close !== 'function') {
+  HTMLDialogElement.prototype.close = function (this: HTMLDialogElement) {
+    this.removeAttribute('open')
+    this.dispatchEvent(new Event('close'))
+  }
+}
+
 describe('DocumentDetailView', () => {
   const fetchMock = vi.fn()
   let router: Router
@@ -224,16 +238,25 @@ describe('DocumentDetailView', () => {
       if (url === '/api/documents/12/extract' && method === 'POST') {
         return Promise.resolve(jsonResponse({ queued: true, job_id: 1 }, 202))
       }
-      if (url === '/api/documents/12' && method === 'GET') {
+      // The detail fetch carries ?include_deleted=true (so trashed docs open
+      // read-only), so match on the path, not the exact query string.
+      const path = url.split('?')[0]
+      if (url === '/api/documents/12/permanent' && method === 'DELETE') {
+        return Promise.resolve(new Response(null, { status: 204 }))
+      }
+      if (url === '/api/documents/12/restore' && method === 'POST') {
+        return Promise.resolve(jsonResponse({ ...detail, deleted_at: null }))
+      }
+      if (path === '/api/documents/12' && method === 'GET') {
         return Promise.resolve(jsonResponse(detail))
       }
-      if (url === '/api/documents/12' && method === 'PATCH') {
+      if (path === '/api/documents/12' && method === 'PATCH') {
         return Promise.resolve(patchResponse())
       }
       if (url === '/api/documents/12/verify' && method === 'POST') {
         return Promise.resolve(jsonResponse({ ...detail, review_status: 'verified' }))
       }
-      if (url === '/api/documents/12/markdown' && method === 'GET') {
+      if (path === '/api/documents/12/markdown' && method === 'GET') {
         return Promise.resolve(markdownResponse())
       }
       return Promise.resolve(jsonResponse({ detail: `unexpected ${method} ${url}` }, 500))
@@ -246,6 +269,7 @@ describe('DocumentDetailView', () => {
         { path: '/', name: 'documents', component: Stub },
         { path: '/documents/:id', name: 'document-detail', component: DocumentDetailView },
         { path: '/documents/:id/delete', name: 'document-delete', component: Stub },
+        { path: '/deleted', name: 'documents-deleted', component: Stub },
         { path: '/jobs', name: 'jobs', component: Stub },
         { path: '/ask', name: 'ask', component: Stub },
       ],
@@ -1199,7 +1223,7 @@ describe('DocumentDetailView', () => {
       const method = init?.method ?? 'GET'
       if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
       if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
-      if (url === '/api/documents/12' && method === 'GET')
+      if (url.split('?')[0] === '/api/documents/12' && method === 'GET')
         return Promise.resolve(jsonResponse(detail))
       if (url === '/api/documents/12/verify' && method === 'POST')
         return Promise.resolve(jsonResponse(verifiedDetail))
@@ -1762,8 +1786,10 @@ describe('DocumentDetailView', () => {
         if (url === '/api/recipients') return Promise.resolve(jsonResponse(RECIPIENTS))
         if (url === '/api/tags') return Promise.resolve(jsonResponse([]))
         if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
-        if (url === '/api/documents/12' && method === 'GET') return Promise.resolve(jsonResponse(detail))
-        if (url === '/api/documents/13' && method === 'GET') return Promise.resolve(jsonResponse(detailB))
+        if (url.split('?')[0] === '/api/documents/12' && method === 'GET')
+          return Promise.resolve(jsonResponse(detail))
+        if (url.split('?')[0] === '/api/documents/13' && method === 'GET')
+          return Promise.resolve(jsonResponse(detailB))
         if (url === '/api/documents/12/markdown' && method === 'GET') return Promise.resolve(markdownResponse())
         if (url === '/api/documents/13/markdown' && method === 'GET') return Promise.resolve(markdownResponse())
         return Promise.resolve(jsonResponse({ detail: `unexpected ${method} ${url}` }, 500))
@@ -1850,6 +1876,85 @@ describe('DocumentDetailView', () => {
       const url = new URL(dockAsk.attributes('href') ?? '', 'http://localhost')
       expect(url.pathname).toBe('/ask')
       expect(url.searchParams.get('q') ?? '').toContain('Energierekening mei 2026')
+    })
+  })
+
+  describe('soft-deleted (trash) documents', () => {
+    it('fetches the detail with include_deleted so a trashed doc opens read-only', async () => {
+      detail = makeDetail({ deleted_at: '2026-07-01T09:00:00Z' })
+      await mountView()
+      const getUrls = fetchMock.mock.calls
+        .filter((call) => ((call[1] as RequestInit | undefined)?.method ?? 'GET') === 'GET')
+        .map((call) => String(call[0]))
+      expect(getUrls).toContain('/api/documents/12?include_deleted=true')
+    })
+
+    it('renders the document and a trash banner instead of "Document not found"', async () => {
+      // Regression: Recently Deleted links each title here; a soft-deleted doc
+      // must render (with the banner), not the not-found error page.
+      detail = makeDetail({ deleted_at: '2026-07-01T09:00:00Z' })
+      const w = await mountView()
+
+      expect(w.find('[data-testid="trash-banner"]').exists()).toBe(true)
+      expect(w.find('h1').text()).toBe('Energierekening mei 2026')
+      expect(w.text()).not.toContain('Document not found')
+      // The soft-delete link is hidden (it would 404 on an already-deleted doc).
+      expect(w.find('[data-testid="delete-link"]').exists()).toBe(false)
+    })
+
+    it('has no trash banner for a live document', async () => {
+      const w = await mountView()
+      expect(w.find('[data-testid="trash-banner"]').exists()).toBe(false)
+    })
+
+    it('threads include_deleted through the preview/download URLs', async () => {
+      // Otherwise a trashed PDF/image opens read-only but its file 404s.
+      detail = makeDetail({ deleted_at: '2026-07-01T09:00:00Z' })
+      const w = await mountView()
+      const href = w.find('[data-testid="download-original"]').attributes('href')
+      expect(href).toContain('include_deleted=true')
+    })
+
+    it('restores from the banner: clears deleted_at and hides the banner', async () => {
+      detail = makeDetail({ deleted_at: '2026-07-01T09:00:00Z' })
+      const w = await mountView()
+
+      await w.find('[data-testid="trash-restore"]').trigger('click')
+      await flushPromises()
+
+      const restoreCalls = fetchMock.mock.calls.filter(
+        (call) => String(call[0]) === '/api/documents/12/restore',
+      )
+      expect(restoreCalls).toHaveLength(1)
+      expect(w.find('[data-testid="trash-banner"]').exists()).toBe(false)
+    })
+
+    it('permanently deletes after confirmation and navigates to Recently Deleted', async () => {
+      detail = makeDetail({ deleted_at: '2026-07-01T09:00:00Z' })
+      const w = await mountView()
+      const pushSpy = vi.spyOn(router, 'push')
+
+      // Opening the dialog does not delete anything yet.
+      await w.find('[data-testid="trash-purge"]').trigger('click')
+      expect(
+        fetchMock.mock.calls.some(
+          (call) =>
+            String(call[0]) === '/api/documents/12/permanent' &&
+            (call[1] as RequestInit).method === 'DELETE',
+        ),
+      ).toBe(false)
+
+      await w.find('[data-testid="confirm-accept"]').trigger('click')
+      await flushPromises()
+
+      expect(
+        fetchMock.mock.calls.some(
+          (call) =>
+            String(call[0]) === '/api/documents/12/permanent' &&
+            (call[1] as RequestInit).method === 'DELETE',
+        ),
+      ).toBe(true)
+      expect(pushSpy).toHaveBeenCalledWith({ name: 'documents-deleted' })
     })
   })
 })

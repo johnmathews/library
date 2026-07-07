@@ -3,11 +3,13 @@ import {
   DOCUMENT_STATUSES,
   documentQueryString,
   fetchDocumentMarkdown,
+  getDocument,
   listDeletedDocuments,
   listDocuments,
   listJobs,
   listJobTaskNames,
   originalUrl,
+  permanentlyDeleteDocument,
   restoreDocument,
   searchablePdfUrl,
   thumbnailUrl,
@@ -59,6 +61,22 @@ describe('file URL helpers', () => {
       '/api/documents/12/searchable.pdf?disposition=inline',
     )
     expect(originalUrl(12, { inline: false })).toBe('/api/documents/12/original')
+  })
+
+  it('append include_deleted=true so trashed-doc previews resolve', () => {
+    expect(thumbnailUrl(12, { includeDeleted: true })).toBe(
+      '/api/documents/12/thumbnail?include_deleted=true',
+    )
+    expect(originalUrl(12, { includeDeleted: true })).toBe(
+      '/api/documents/12/original?include_deleted=true',
+    )
+    // Combines with disposition.
+    expect(originalUrl(12, { inline: true, includeDeleted: true })).toBe(
+      '/api/documents/12/original?disposition=inline&include_deleted=true',
+    )
+    expect(searchablePdfUrl(12, { includeDeleted: true })).toBe(
+      '/api/documents/12/searchable.pdf?include_deleted=true',
+    )
   })
 })
 
@@ -127,6 +145,50 @@ describe('listDeletedDocuments', () => {
     const [url] = fetchMock.mock.calls[0] as [string]
     expect(url).toContain('limit=10')
     expect(url).toContain('offset=20')
+  })
+})
+
+describe('getDocument', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+  })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('GETs /api/documents/{id} without include_deleted by default', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ id: 5 }), { status: 200 }))
+    await getDocument(5)
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toBe('/api/documents/5')
+  })
+
+  it('appends include_deleted=true when opted in', async () => {
+    fetchMock.mockResolvedValue(new Response(JSON.stringify({ id: 5 }), { status: 200 }))
+    await getDocument(5, { includeDeleted: true })
+    const [url] = fetchMock.mock.calls[0] as [string]
+    expect(url).toContain('include_deleted=true')
+  })
+})
+
+describe('permanentlyDeleteDocument', () => {
+  const fetchMock = vi.fn()
+
+  beforeEach(() => {
+    vi.stubGlobal('fetch', fetchMock)
+    fetchMock.mockReset()
+  })
+
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('DELETEs /api/documents/{id}/permanent', async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }))
+    await permanentlyDeleteDocument(7)
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/documents/7/permanent')
+    expect(init.method).toBe('DELETE')
   })
 })
 

@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.auth.deps import current_user
@@ -64,6 +64,7 @@ from library.search import (
 )
 from library.series import serialise_summary, summarize_series
 from library.storage import derived_path, path_for
+from library.storage import remove as remove_stored_files
 from library.thumbnails import THUMBNAIL_NAME
 
 router: APIRouter = APIRouter(tags=["documents"])
@@ -316,9 +317,16 @@ async def list_deleted_documents(
 async def get_document(
     document_id: int,
     session: Annotated[AsyncSession, Depends(get_session)],
+    include_deleted: Annotated[bool, Query()] = False,
 ) -> DocumentDetail:
-    """Full metadata, OCR text, extraction provenance, and the audit trail."""
-    document = await _get_document_or_404(session, document_id)
+    """Full metadata, OCR text, extraction provenance, and the audit trail.
+
+    ``include_deleted=true`` opts into returning a soft-deleted document (with
+    ``deleted_at`` set) instead of 404ing it — the Recently-Deleted view uses
+    this to open a trashed document read-only. The default keeps the invariant
+    every list/search path relies on: deleted documents 404.
+    """
+    document = await _get_document_or_404(session, document_id, include_deleted=include_deleted)
     return await _detail(session, document)
 
 
@@ -331,9 +339,14 @@ async def get_document(
 async def get_document_markdown(
     document_id: int,
     session: Annotated[AsyncSession, Depends(get_session)],
+    include_deleted: Annotated[bool, Query()] = False,
 ) -> MarkdownResponse:
-    """Assembled per-page markdown ordered by page number; empty when the document has none."""
-    await _get_document_or_404(session, document_id)
+    """Assembled per-page markdown ordered by page number; empty when the document has none.
+
+    ``include_deleted=true`` renders a soft-deleted document's text so the
+    read-only Recently-Deleted detail view is not blank (see ``get_document``).
+    """
+    await _get_document_or_404(session, document_id, include_deleted=include_deleted)
     rows = (
         (
             await session.execute(
@@ -470,6 +483,37 @@ async def restore_document(
     return await _detail(session, document)
 
 
+@router.delete(
+    "/documents/{document_id}/permanent",
+    status_code=status.HTTP_204_NO_CONTENT,
+    summary="Permanently delete a soft-deleted document",
+    responses={404: {"description": "Unknown or not-currently-deleted document"}},
+)
+async def purge_document(
+    document_id: int,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> None:
+    """Hard-delete a document that is already in the trash: drop its row and
+    unlink its stored files, the on-demand equivalent of the daily purge job.
+
+    404s unless the document exists and is *currently* soft-deleted — you must
+    soft-delete first, so this can never one-step nuke a live document (mirrors
+    restore's guard). Chunks, comments, pages, events, note versions, and
+    series/tag/project links cascade at the DB level. The row is committed gone
+    *before* files are unlinked, so an unlink failure leaves at worst an orphaned
+    file (harmless, reclaimable) rather than a live row whose file has vanished —
+    identical ordering to ``purge_deleted_documents`` in jobs.py.
+    """
+    document = await _get_deleted_document_or_404(session, document_id)
+    sha256 = document.sha256
+    # Core bulk delete (not session.delete) so children cascade at the DB level,
+    # exactly like the purge job — and so it never triggers an ORM lazy-load of a
+    # lazy="raise" relationship (e.g. comments) on the way out.
+    await session.execute(delete(Document).where(Document.id == document.id))
+    await session.commit()
+    remove_stored_files(sha256)
+
+
 @router.post(
     "/documents/{document_id}/extract",
     response_model=ExtractionQueuedResponse,
@@ -522,14 +566,16 @@ async def download_original(
     document_id: int,
     session: Annotated[AsyncSession, Depends(get_session)],
     disposition: DispositionParam = "attachment",
+    include_deleted: Annotated[bool, Query()] = False,
 ) -> FileResponse:
     """The stored original, with its real content type and original filename.
 
     ``?disposition=inline`` serves ``Content-Disposition: inline`` (keeping
     the filename) so the detail page can embed it; the default stays
-    ``attachment`` for download links.
+    ``attachment`` for download links. ``include_deleted=true`` serves a
+    soft-deleted document's file so the read-only trash view can preview it.
     """
-    document = await _get_document_or_404(session, document_id)
+    document = await _get_document_or_404(session, document_id, include_deleted=include_deleted)
     path = path_for(document.sha256)
     if not path.is_file():
         raise HTTPException(
@@ -553,13 +599,15 @@ async def download_searchable_pdf(
     document_id: int,
     session: Annotated[AsyncSession, Depends(get_session)],
     disposition: DispositionParam = "attachment",
+    include_deleted: Annotated[bool, Query()] = False,
 ) -> FileResponse:
     """The OCR-produced searchable PDF; 404 when the document has none.
 
     ``?disposition=inline`` serves it for in-browser viewing (the detail
     page's iframe preview); the default stays ``attachment``.
+    ``include_deleted=true`` serves it for a soft-deleted document (trash view).
     """
-    document = await _get_document_or_404(session, document_id)
+    document = await _get_document_or_404(session, document_id, include_deleted=include_deleted)
     path = derived_path(document.sha256) / SEARCHABLE_PDF_NAME
     if not path.is_file():
         raise HTTPException(
@@ -587,9 +635,13 @@ async def download_searchable_pdf(
 async def get_thumbnail(
     document_id: int,
     session: Annotated[AsyncSession, Depends(get_session)],
+    include_deleted: Annotated[bool, Query()] = False,
 ) -> FileResponse:
-    """The ~480px-wide first-page WebP rendered by the background worker."""
-    document = await _get_document_or_404(session, document_id)
+    """The ~480px-wide first-page WebP rendered by the background worker.
+
+    ``include_deleted=true`` serves a soft-deleted document's thumbnail so the
+    read-only trash view can show its poster image."""
+    document = await _get_document_or_404(session, document_id, include_deleted=include_deleted)
     path = derived_path(document.sha256) / THUMBNAIL_NAME
     if not path.is_file():
         raise HTTPException(
@@ -598,10 +650,16 @@ async def get_thumbnail(
     return FileResponse(path, media_type="image/webp")
 
 
-async def _get_document_or_404(session: AsyncSession, document_id: int) -> Document:
-    """The document, or 404 if it does not exist or is soft-deleted."""
+async def _get_document_or_404(
+    session: AsyncSession, document_id: int, *, include_deleted: bool = False
+) -> Document:
+    """The document, or 404 if it does not exist.
+
+    Soft-deleted documents also 404 unless ``include_deleted`` is set — the
+    opt-in used by the Recently-Deleted read path to view a trashed document.
+    """
     document = await session.get(Document, document_id)
-    if document is None or document.deleted_at is not None:
+    if document is None or (document.deleted_at is not None and not include_deleted):
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="document not found")
     return document
 
@@ -714,6 +772,7 @@ async def _detail(session: AsyncSession, document: Document) -> DocumentDetail:
     )
     return DocumentDetail(
         **_list_item_fields(document),
+        deleted_at=document.deleted_at,
         ocr_text=document.ocr_text,
         ocr_confidence=document.ocr_confidence,
         due_date=document.due_date,
