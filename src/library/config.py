@@ -18,6 +18,7 @@ _PRICED_MODEL_FIELDS: tuple[str, ...] = (
     "extraction_judge_model",
     "markdown_model",
     "ask_model",
+    "email_label_model",
 )
 
 
@@ -125,6 +126,25 @@ class Settings(BaseSettings):
     # Username that owns email-ingested documents whose sender matches no user's
     # forwarding addresses. Unset = such documents stay unowned (and notify no one).
     email_default_owner: str | None = None
+    # Deterministic noise gate for forwarded-email attachments (see
+    # docs/ingestion.md, "Email item selection"). Filters inline signature
+    # logos, tracking pixels / icons, and non-document parts (calendar, vCard,
+    # PKCS7 signatures, TNEF) before they become documents — recorded in the
+    # decision trace, not surfaced. The thresholds are deliberately conservative
+    # (bias to ingest); a decode failure never drops. Set enabled=False to ingest
+    # every attachment exactly as before.
+    email_filter_noise_enabled: bool = True
+    email_filter_tiny_image_max_bytes: int = 4096  # images smaller than this are icons/pixels
+    email_filter_tiny_image_max_edge_px: int = 64  # or whose longest edge is <= this
+    # Optional per-email LLM label pass (see docs/ingestion.md, "Email item
+    # selection"). One Anthropic call per email classifies each surviving
+    # attachment keep|probably_noise; a probably_noise verdict flags the document
+    # needs_review (it is never dropped). Default OFF — it spends money; enabling
+    # it also requires anthropic_api_key. Spend is budget-gated like extraction.
+    email_label_enabled: bool = False
+    email_label_model: str = "claude-haiku-4-5"
+    email_label_daily_budget_usd: float = 2.0
+    email_label_body_snippet_chars: int = 1000  # body context sent to the labeller
     # Background worker (see docs/ingestion.md, "Job queue").
     # Concurrency: how many jobs the Procrastinate worker runs at once. Default 1
     # (serial) — raising it multiplies peak worker RAM (parallel OCR subprocesses

@@ -191,6 +191,61 @@ def test_email_attachments_dropped_absent_when_no_siblings() -> None:
     )
 
 
+def test_email_item_ambiguous_fires_with_reason() -> None:
+    doc = _doc(
+        title="Calendar invite",
+        extra={
+            "email_selection": {
+                "verdict": "ambiguous",
+                "reason": "looks like a calendar invite",
+                "source": "llm_label",
+            }
+        },
+    )
+    findings = validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    finding = _finding(findings, "email_item_ambiguous")
+    assert "looks like a calendar invite" in finding.message
+    assert derive_review_status(findings) is ReviewStatus.NEEDS_REVIEW
+
+
+def test_email_item_ambiguous_probably_noise_fires() -> None:
+    doc = _doc(
+        extra={
+            "email_selection": {
+                "verdict": "probably_noise",
+                "reason": "email signature logo",
+                "source": "heuristic",
+            }
+        },
+    )
+    assert "email_item_ambiguous" in _rules(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_email_item_ambiguous_absent_when_verdict_keep() -> None:
+    doc = _doc(
+        extra={"email_selection": {"verdict": "keep", "reason": None, "source": "heuristic"}}
+    )
+    assert "email_item_ambiguous" not in _rules(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_email_item_ambiguous_without_reason_generic_message() -> None:
+    for extra in (
+        {"email_selection": {"verdict": "ambiguous"}},
+        {"email_selection": {"verdict": "ambiguous", "reason": None}},
+        {"email_selection": {"verdict": "ambiguous", "reason": "  "}},
+    ):
+        doc = _doc(extra=extra)
+        finding = _finding(
+            validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY), "email_item_ambiguous"
+        )
+        assert "None" not in finding.message
+        assert finding.message.strip()
+
+
 def test_clean_document_has_no_findings() -> None:
     doc = _doc(
         amount_total=Decimal("12.00"),

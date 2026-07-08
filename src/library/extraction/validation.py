@@ -184,6 +184,19 @@ def validate(
             )
         )
 
+    # email_item_ambiguous — this document came from an email item that selection
+    # tagged as "ambiguous" or "probably_noise" (stamped on extra["email_selection"]
+    # by the selection unit), so the reviewer confirms it is a real document.
+    sel = document.extra.get("email_selection") if isinstance(document.extra, dict) else None
+    if isinstance(sel, dict) and sel.get("verdict") in {"ambiguous", "probably_noise"}:
+        note = sel.get("reason")
+        message = (
+            f"this email item was flagged as possibly not a real document: {note.strip()}"
+            if isinstance(note, str) and note.strip()
+            else "this email item was flagged as possibly not a real document"
+        )
+        findings.append(Finding("email_item_ambiguous", None, "warn", message))
+
     return findings
 
 

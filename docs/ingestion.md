@@ -612,6 +612,7 @@ Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
 | `missing_sender` | `sender_id` | `amount_total` is set but `sender_id` is not — a bill/receipt whose payee we couldn't identify. Scoped to amount-bearing docs so it stays specific. |
 | `self_reported_low` | (document) | `extra["extraction"]["confidence"] == "low"`. The message carries the model's own one-line `reasoning_note` when present (e.g. "the extractor was unsure: two candidate totals on page 2"), falling back to a generic line otherwise. |
 | `email_attachments_dropped` | (document) | The document came from an email whose *other* attachments could not be added (`extra["email_siblings_dropped"]` is non-empty). The message lists the dropped filenames. See "Email-in". |
+| `email_item_ambiguous` | (document) | The email item was flagged `probably_noise` (or `ambiguous`) during selection — `extra["email_selection"]["verdict"]`, set by the optional LLM label pass. The message carries the flag's reason. See "Email item selection". |
 
 **Date-grounding is explicitly out of scope** this phase — locale date-format
 matching is fiddly; revisit once the simpler rules prove out. Per-field and
@@ -1027,9 +1028,14 @@ poll_email_inbox fires (every LIBRARY_EMAIL_POLL_MINUTES minutes)
   └─ for every message in the folder (ALL, seen flags untouched):
        ├─ sender not in LIBRARY_EMAIL_ALLOWED_SENDERS (when non-empty)
        │   ─► skipped; left in place (visible to the operator)
-       ├─ classify EVERY attachment (two-pass): sniff MIME; in the allowed
-       │   set and within LIBRARY_MAX_UPLOAD_BYTES ─► an ingestable candidate;
-       │   otherwise a recorded drop (oversize / unsupported_type / empty)
+       ├─ classify EVERY attachment (two-pass): sniff MIME, then the
+       │   deterministic noise gate (inline signature images, tiny pixels/icons,
+       │   calendar/vCard/PKCS7/TNEF parts ─► a quiet `filtered` drop); in the
+       │   allowed set and within LIBRARY_MAX_UPLOAD_BYTES ─► an ingestable
+       │   candidate; otherwise a recorded drop (oversize / unsupported_type)
+       ├─ (optional) LLM label pass: one Anthropic call per email labels each
+       │   surviving attachment keep|probably_noise; probably_noise ─► ingest
+       │   AND flag needs_review (never dropped). OFF by default
        ├─ per candidate: ingest_file(source=email) — new document or
        │   `duplicate_upload`; a per-attachment error is recorded as a drop
        │   and the NEXT candidate still runs (one bad file never aborts siblings)
@@ -1037,27 +1043,35 @@ poll_email_inbox fires (every LIBRARY_EMAIL_POLL_MINUTES minutes)
        │   under extra["email_siblings_dropped"], so validation surfaces an
        │   `email_attachments_dropped` review reason ("N other attachments
        │   could not be added: …") — the files are never lost silently
-       ├─ if no attachment produced a document ─► ingest the email BODY
-       │   (HTML body converted to Markdown as text/markdown, else the
-       │   plain text as text/plain); a genuinely empty body creates nothing
+       ├─ if no attachment produced a document ─► ingest the email BODY when it
+       │   clears the substance gate (quoted replies / signatures / footers
+       │   stripped; a contentless cover note like "FYI see attached" files
+       │   nothing); HTML→Markdown (text/markdown), else plain text (text/plain)
+       ├─ emit the one-line decision trace (always) and persist it as an
+       │   `email_selection` event on each new document (see "Email item
+       │   selection" below)
        ├─ any dropped attachment ─► a per-message WARNING summary and a
        │   best-effort "Attachments not added" push to the resolved owner
-       │   (reuses the processing_error opt-in)
+       │   (reuses the processing_error opt-in); quiet `filtered` noise is NOT
+       │   surfaced (it never flags a real document)
        ├─ move the message to LIBRARY_EMAIL_PROCESSED_FOLDER (also for
        │   empty-bodied mails)
        └─ any per-message error ─► logged, message left in place for
            the next poll; the run continues with the next message
 ```
 
-**Multiple attachments, only some relevant.** One email becomes **N
-documents**, one per supported attachment — the loop is exhaustive, never
-"pick one". When a mail carries a mix (e.g. three PDFs and a photo) and some
-files can't be ingested, the ingestable ones still each become a document and
-the rejected ones are **surfaced, not dropped**: recorded on every sibling
-document's `extra["email_siblings_dropped"]`, shown as the
-`email_attachments_dropped` review reason, and pushed to the owner. A drop is
-only ever silent for an `empty` payload (inline/signature cruft with no
-content), which is logged but not surfaced so it can't flag a real document.
+**Multiple attachments, only some relevant.** One email becomes **up to N
+documents**, one per *useful* attachment. Every supported attachment is still
+ingested by default — the loop is exhaustive, never "pick one" — but two gates
+now remove the noise a forwarded mail carries (signature logos, tracking
+pixels, calendar invites) and a third (optional) gate flags the ambiguous
+middle. The full rules, config, and how to debug them live in **"Email item
+selection"** immediately below. The guiding invariant is unchanged: **never
+lose a real document.** A rejected-but-real file is still surfaced (recorded on
+every sibling's `extra["email_siblings_dropped"]`, shown as the
+`email_attachments_dropped` review reason, and pushed to the owner); only
+unambiguous noise is dropped quietly (`filtered`), and even that is recorded in
+the decision trace and recoverable from the IMAP `Processed` folder.
 
 Details and decisions:
 
@@ -1118,12 +1132,131 @@ Details and decisions:
   `detect_mime` reads to classify the body — see `_body_filename`). Body
   ingestion only fires when attachments produced *zero* documents, so an
   invoice PDF with a "see attached" cover note does not also spawn a body
-  document. A genuinely empty-bodied mail still creates nothing and is
-  filed away.
+  document. The body must also clear the **substance gate** (see "Email item
+  selection" below): quoted replies, signatures, and mobile footers are
+  stripped, and the remainder must reach `_BODY_MIN_WORDS`/`_BODY_MIN_CHARS`,
+  so a contentless cover note ("FYI see attached") with no attachment files
+  nothing. A genuinely empty-bodied mail also creates nothing and is filed away.
 - **Sync IMAP off the worker loop.** imap-tools is synchronous; the
   poll runs in a thread (`asyncio.to_thread`) while each ingest call is
   marshalled back onto the worker's event loop, so the database session
   and job-queue connector stay on their home loop.
+
+### Email item selection
+
+A forwarded email is a list of candidates — `[body, attachment 1 … attachment N]`
+— of which only some are worth filing. Selection decides each one's fate in three
+layers, all in `library.email_ingest` (plus `library.email_label` for the LLM
+layer). Overriding rule: **never lose a real document.** Nothing is deleted; an
+item is either ingested, ingested-and-flagged, or recorded as a quiet/surfaced
+drop, and the original mail always survives in the IMAP `Processed` folder.
+
+**Where each item is decided:**
+
+| Item | Deciding stage | Possible verdicts |
+| --- | --- | --- |
+| Attachment | `classify` (deterministic gate) | `ingested`, `duplicate`, `dropped` (oversize/unsupported/error — surfaced), `filtered` (signature_image / tiny_image / non_document_type — quiet) |
+| Attachment | `llm_label` (optional, if enabled) | `flagged_ambiguous` (ingested **and** flagged needs_review), or falls through to `ingested` |
+| Body | `body_substance` | `ingested`, `duplicate`, `dropped` (rejected), `filtered` (blank / below_substance / not_needed / oversize) |
+
+**Layer 1 — deterministic noise gate** (`_noise_reason`, always on unless
+`LIBRARY_EMAIL_FILTER_NOISE_ENABLED=false`). Runs in `_classify_attachments`,
+*before* the allowed-type check, and drops only unambiguous noise:
+
+- `signature_image` — an `image/*` part that is `Content-Disposition: inline`
+  **or** whose `Content-ID` is referenced (`cid:…`) by the HTML body. This is
+  the shape of a signature logo or embedded banner.
+- `tiny_image` — an image whose longest edge ≤
+  `LIBRARY_EMAIL_FILTER_TINY_IMAGE_MAX_EDGE_PX` (default 64), i.e. an icon or
+  tracking pixel. Dimensions are authoritative (a small-but-normal-sized image
+  is kept); byte size (`…MAX_BYTES`, default 4096) is only the fallback for an
+  image that cannot be decoded. A decode failure never drops (bias to ingest).
+- `non_document_type` — a part whose **declared** `Content-Type` is
+  `text/calendar`, `text/vcard`/`text/x-vcard`,
+  `application/(x-)pkcs7-signature`, or `application/ms-tnef`. The declared type
+  is matched because calendar/vCard bytes sniff as the allowed `text/plain`, so
+  they would otherwise be filed as junk text.
+
+These drops are **quiet**: recorded in the decision trace and counted
+(`attachments_filtered`) but not surfaced as `needs_review` and not pushed —
+otherwise every footer logo would flag its real sibling. Thresholds are
+deliberately conservative; when in doubt the gate keeps the file.
+
+**Layer 2 — body substance gate** (`_body_substance` + `_body_candidate`). The
+body is ingested only as a fallback (no attachment produced a document) *and*
+only when it carries real prose: quoted-reply chains (`> …`, `On … wrote:`,
+forwarded-message banners), signature blocks (`--`), and mobile footers ("Sent
+from my iPhone") are stripped, and the remainder must reach `_BODY_MIN_WORDS`
+(40) **or** `_BODY_MIN_CHARS` (240). The cleaned body is what gets filed, so a
+document is never padded with a reply chain it merely quoted.
+
+**Layer 3 — optional LLM label pass** (`library.email_label`, **OFF by
+default**). When `LIBRARY_EMAIL_LABEL_ENABLED=true` and an `ANTHROPIC_API_KEY`
+is set, one Anthropic call per email (`LIBRARY_EMAIL_LABEL_MODEL`, default
+`claude-haiku-4-5`) labels each *surviving* attachment `keep` or
+`probably_noise`, given the subject, sender, and a cleaned body excerpt
+(`…BODY_SNIPPET_CHARS`). A `probably_noise` verdict **never drops** — the file
+is ingested and its document is flagged `needs_review` via
+`extra["email_selection"]`, which fires the `email_item_ambiguous` validation
+finding. The pass is **fail-open**: a disabled feature, an exhausted daily
+budget (`LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD`, default \$2, summed from
+`email_label_completed` events like extraction), an API error, or a
+malformed/incomplete response all keep every attachment. Spend is recorded as an
+`email_label_completed` event on the first newly-produced document (an email that
+files no *new* document — nothing filed, or only duplicates — has nowhere to hang
+it, so its rare label spend goes uncounted: a deliberate under-count of at most
+one cheap call per such email).
+
+#### Debugging & triage: the decision trace
+
+Every polled message emits exactly one **decision trace** log line — the primary
+surface for "what happened to this email and why". It is always emitted, even
+when the email produced no document (the persisted event cannot cover that
+case). Format (`_log_selection_trace`):
+
+```
+email-selection msg='<subject>' from='<sender>' items=N ingested=a duplicate=b \
+  dropped=c filtered=d flagged=e :: <item> | <item> | …
+```
+
+Each `<item>` renders as `name:stage:verdict(reason)`, e.g.:
+
+```
+email-selection msg='Energy bill' from='biller@example.com' items=3 ingested=1 \
+  duplicate=0 dropped=0 filtered=1 flagged=0 :: \
+  bill.pdf:classify:ingested | logo.png:classify:filtered(signature_image) | \
+  <body>:body_substance:filtered(not_needed)
+```
+
+Pull one email's trace from the logs (plain stdlib logging, so grep/Loki work):
+
+```
+# grep the worker logs
+grep 'email-selection' worker.log | grep 'Energy bill'
+
+# Loki (worker job label)
+{job="library-worker"} |= "email-selection"
+```
+
+When a document **was** produced, the same per-item trace is also stored as an
+`email_selection` `IngestionEvent` on it (visible in the document history's "Show
+all events"), and the LLM billing as an `email_label_completed` event.
+
+**What each verdict/reason means, and what to do:**
+
+| verdict(reason) | Meaning | Action |
+| --- | --- | --- |
+| `ingested` | Filed as a document | none |
+| `duplicate` | Content already in the library | none |
+| `flagged_ambiguous` | Ingested, LLM thought it might be noise | check the needs-review queue; verify the doc |
+| `filtered(signature_image\|tiny_image\|non_document_type)` | Deterministic noise, quietly dropped | none if truly noise; if a real doc was filtered, lower the threshold or set `LIBRARY_EMAIL_FILTER_NOISE_ENABLED=false` and re-forward |
+| `filtered(below_substance\|blank\|not_needed\|oversize)` | Body not filed (thin / empty / an attachment already won / too large) | none |
+| `dropped(oversize\|unsupported_type\|error)` | Surfaced attachment drop — also on the sibling's `email_siblings_dropped` + a push. (A body whose ingest is rejected renders as `dropped(rejected)`.) | investigate; re-send in a supported form if it was real |
+| a trace with `flagged=0` while the LLM pass is on | The label pass was skipped (not a per-item verdict) | look for a `email-label: … skipped (budget\|error)` log line — raise the budget or accept degradation |
+
+**Tuning knobs** (all `LIBRARY_EMAIL_*`, see `config.py`): `FILTER_NOISE_ENABLED`,
+`FILTER_TINY_IMAGE_MAX_BYTES`, `FILTER_TINY_IMAGE_MAX_EDGE_PX`, `LABEL_ENABLED`,
+`LABEL_MODEL`, `LABEL_DAILY_BUDGET_USD`, `LABEL_BODY_SNIPPET_CHARS`.
 
 ### Provider setup
 

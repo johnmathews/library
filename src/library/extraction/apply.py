@@ -43,13 +43,17 @@ from library.models import (
 logger = logging.getLogger(__name__)
 
 
-async def todays_spend_usd(session: AsyncSession) -> float:
-    """Sum today's (UTC) estimated extraction spend from the audit trail."""
+async def todays_spend_usd(session: AsyncSession, event: str = "extraction_completed") -> float:
+    """Sum today's (UTC) estimated spend recorded by the given completion event.
+
+    Defaults to extraction spend; pass another completion event name (e.g.
+    ``email_label_completed``) to gate a different budget on its own daily total.
+    """
     start_of_day = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     statement = select(
         func.coalesce(func.sum(IngestionEvent.detail["cost_usd"].astext.cast(Numeric)), 0)
     ).where(
-        IngestionEvent.event == "extraction_completed",
+        IngestionEvent.event == event,
         IngestionEvent.detail.has_key("cost_usd"),
         IngestionEvent.created_at >= start_of_day,
     )
