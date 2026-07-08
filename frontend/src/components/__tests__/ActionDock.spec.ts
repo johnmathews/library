@@ -29,14 +29,15 @@ describe('ActionDock', () => {
 
   // The sticky rail anchors to `top-16` (clearing AppHeader's fixed 4rem
   // height) or `bottom-0`; the absolutely-positioned pill row anchors to the
-  // matching edge of the zero-height rail and carries the horizontal justify.
+  // matching edge of the zero-height rail, offset inward (`top-4`/`bottom-4`)
+  // for a comfortable gap, and carries the horizontal justify.
   // See the positioning note in ActionDock.vue.
   it.each([
-    ['top-left', 'top-16', 'top-0', 'justify-start'],
-    ['top-middle', 'top-16', 'top-0', 'justify-center'],
-    ['top-right', 'top-16', 'top-0', 'justify-end'],
-    ['bottom-left', 'bottom-0', 'bottom-0', 'justify-start'],
-    ['bottom-right', 'bottom-0', 'bottom-0', 'justify-end'],
+    ['top-left', 'top-16', 'top-4', 'justify-start'],
+    ['top-middle', 'top-16', 'top-4', 'justify-center'],
+    ['top-right', 'top-16', 'top-4', 'justify-end'],
+    ['bottom-left', 'bottom-0', 'bottom-4', 'justify-start'],
+    ['bottom-right', 'bottom-0', 'bottom-4', 'justify-end'],
   ])('positions the dock rail and row for %s', (pos, edgeClass, rowAnchor, justifyClass) => {
     const w = mountDock(pos as DockPosition)
     const wrapper = w.find('[data-testid="action-dock-wrapper"]')

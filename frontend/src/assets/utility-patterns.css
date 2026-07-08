@@ -360,3 +360,16 @@ input[type='search']::-webkit-search-results-decoration {
     border-radius: 0;
   }
 }
+
+/*
+ * Confirmation dialog (ConfirmDialog.vue). Same native <dialog> + showModal()
+ * story as the search modal above: the browser centres a modal dialog via
+ * `dialog { margin: auto }`, but Tailwind Preflight resets `margin: 0`, pinning
+ * it top-left. Reassert the centring margin here (components layer, after
+ * Preflight) so the dialog sits in the middle of the viewport. The content sets
+ * its own width (`max-w-sm`), so no width override is needed.
+ */
+.app-confirm-dialog {
+  margin: auto;
+  border-radius: 0.5rem; /* rounded-lg — a soft edge to match the app's cards */
+}

@@ -6,6 +6,8 @@ import {
   DEFAULT_SORT,
   DEFAULT_SORT_DIRECTION,
   type AppliedFilters,
+  type SortField,
+  type SortDirection,
 } from '../documentQuery'
 
 const EMPTY: AppliedFilters = {
@@ -53,10 +55,34 @@ describe('parseDocumentQuery', () => {
       dateFrom: '2026-05-01',
       dateTo: '2026-05-31',
       review: '',
-      sort: 'document_date',
+      sort: 'added_date',
       dir: 'desc',
       page: 2,
     })
+  })
+
+  it('falls back to the provided sort preference when the URL omits sort/dir', () => {
+    const applied = parseDocumentQuery({}, { sort: 'document_date', dir: 'asc' })
+    expect(applied.sort).toBe('document_date')
+    expect(applied.dir).toBe('asc')
+  })
+
+  it('lets an explicit URL sort override the provided preference', () => {
+    const applied = parseDocumentQuery(
+      { sort: 'added_date', dir: 'desc' },
+      { sort: 'document_date', dir: 'asc' },
+    )
+    expect(applied.sort).toBe('added_date')
+    expect(applied.dir).toBe('desc')
+  })
+
+  it('ignores a garbage preference and uses the hard default', () => {
+    const applied = parseDocumentQuery(
+      {},
+      { sort: 'bogus' as SortField, dir: 'sideways' as SortDirection },
+    )
+    expect(applied.sort).toBe(DEFAULT_SORT)
+    expect(applied.dir).toBe(DEFAULT_SORT_DIRECTION)
   })
 
   it('parses the recipient_id URL param into the recipientId field', () => {
@@ -111,7 +137,7 @@ describe('buildDocumentQuery', () => {
       dateFrom: '2026-05-01',
       dateTo: '2026-05-31',
       review: '',
-      sort: 'document_date',
+      sort: 'added_date',
       dir: 'desc',
       page: 1,
     }
@@ -161,39 +187,42 @@ describe('hasActiveFilters', () => {
   })
 
   it('does NOT treat a non-default sort/direction as an active filter', () => {
-    expect(hasActiveFilters({ ...EMPTY, sort: 'added_date' })).toBe(false)
+    expect(hasActiveFilters({ ...EMPTY, sort: 'document_date' })).toBe(false)
     expect(hasActiveFilters({ ...EMPTY, dir: 'asc' })).toBe(false)
   })
 })
 
 describe('sort round-trip', () => {
+  // The default is added_date/desc, so those are the values omitted from the URL.
   it('omits sort/direction at their defaults', () => {
     expect(buildDocumentQuery(EMPTY)).toEqual({})
-    expect(buildDocumentQuery({ ...EMPTY, sort: 'document_date', dir: 'desc' })).toEqual({})
+    expect(buildDocumentQuery({ ...EMPTY, sort: 'added_date', dir: 'desc' })).toEqual({})
   })
 
   it('emits sort only when the field is non-default', () => {
-    expect(buildDocumentQuery({ ...EMPTY, sort: 'added_date' })).toEqual({ sort: 'added_date' })
+    expect(buildDocumentQuery({ ...EMPTY, sort: 'document_date' })).toEqual({
+      sort: 'document_date',
+    })
   })
 
   it('emits direction only when non-default (field may stay default)', () => {
     expect(buildDocumentQuery({ ...EMPTY, dir: 'asc' })).toEqual({ dir: 'asc' })
-    expect(buildDocumentQuery({ ...EMPTY, sort: 'added_date', dir: 'asc' })).toEqual({
-      sort: 'added_date',
+    expect(buildDocumentQuery({ ...EMPTY, sort: 'document_date', dir: 'asc' })).toEqual({
+      sort: 'document_date',
       dir: 'asc',
     })
   })
 
   it('parse⇄build is symmetric for a non-default sort', () => {
-    const applied = parseDocumentQuery({ sort: 'added_date', dir: 'asc' })
-    expect(applied.sort).toBe('added_date')
+    const applied = parseDocumentQuery({ sort: 'document_date', dir: 'asc' })
+    expect(applied.sort).toBe('document_date')
     expect(applied.dir).toBe('asc')
-    expect(buildDocumentQuery(applied)).toEqual({ sort: 'added_date', dir: 'asc' })
+    expect(buildDocumentQuery(applied)).toEqual({ sort: 'document_date', dir: 'asc' })
   })
 
   it('falls back to defaults for unknown sort/direction values', () => {
     const applied = parseDocumentQuery({ sort: 'bogus', dir: 'sideways' })
-    expect(applied.sort).toBe('document_date')
+    expect(applied.sort).toBe('added_date')
     expect(applied.dir).toBe('desc')
   })
 })

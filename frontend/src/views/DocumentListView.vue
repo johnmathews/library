@@ -42,6 +42,7 @@ import {
   DEFAULT_SORT_DIRECTION,
   type SortField,
   type SortDirection,
+  type SortPreference,
 } from '@/utils/documentQuery'
 
 const PAGE_SIZE = 25
@@ -63,8 +64,17 @@ const thumbnailFitClass = computed<string>(() =>
 const flashMessage = ref(useFlashStore().consume())
 
 // --- Applied state (the URL is the source of truth) -----------------------
+//
+// Sort is the one exception: the URL still wins when it carries a sort param,
+// but a bare `/` (no sort param) falls back to the user's remembered choice
+// (`sortPref`) rather than the hard default. `setSort` writes both the URL and
+// the preference, so a selection sticks across sessions and fresh navigations.
+const sortPref = useStorage<SortPreference>('library:doc-sort-v1', {
+  sort: DEFAULT_SORT,
+  dir: DEFAULT_SORT_DIRECTION,
+})
 
-const applied = computed(() => parseDocumentQuery(route.query))
+const applied = computed(() => parseDocumentQuery(route.query, sortPref.value))
 const isFiltered = computed(() => hasActiveFilters(applied.value))
 
 // The canonical URL query for the current applied state — what the "Save view"
@@ -161,8 +171,11 @@ function buildFilters(
     review_status: (state.review || undefined) as DocumentListItem['review_status'] | undefined,
     date_from: state.dateFrom || undefined,
     date_to: state.dateTo || undefined,
-    sort: state.sort !== DEFAULT_SORT ? state.sort : undefined,
-    direction: state.dir !== DEFAULT_SORT_DIRECTION ? state.dir : undefined,
+    // Always send sort + direction explicitly: the frontend's default
+    // (added_date) differs from the API's default (document_date), so omitting
+    // them at the frontend default would silently order by the wrong field.
+    sort: state.sort,
+    direction: state.dir,
     limit,
     offset,
   }
@@ -368,6 +381,9 @@ const SORT_OPTIONS: { value: SortField; label: string }[] = [
 const sortDisabled = computed(() => Boolean(applied.value.q))
 
 function setSort(sort: SortField, dir: SortDirection): void {
+  // Remember the choice so a later bare `/` reproduces it, then apply it via
+  // the URL like any other filter (resetting to page 1).
+  sortPref.value = { sort, dir }
   applyFilterQuery(buildDocumentQuery({ ...applied.value, sort, dir }, 1))
 }
 
@@ -485,6 +501,18 @@ function toggleSortDirection(): void {
             </option>
           </select>
         </label>
+        <RouterLink
+          to="/saved-views"
+          data-testid="manage-saved-views-link"
+          class="inline-flex items-center gap-1.5 rounded-md border border-gray-300 bg-white px-3 py-1 text-sm text-gray-700 transition-colors hover:bg-violet-50 hover:text-violet-700 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-200 dark:hover:bg-violet-400/10"
+        >
+          <svg class="h-4 w-4 fill-current opacity-70" viewBox="0 0 16 16" aria-hidden="true">
+            <path
+              d="M2 2a1 1 0 0 0-1 1v10a1 1 0 0 0 1.55.83L8 11.2l5.45 2.63A1 1 0 0 0 15 13V3a1 1 0 0 0-1-1H2Zm0 2h12v7.4l-4.45-2.15a1 1 0 0 0-.87 0L4 11.4V4Z"
+            />
+          </svg>
+          Saved views
+        </RouterLink>
         <SaveViewMenu :filter-state="currentQuery" />
         <DashboardFieldsMenu />
       </div>

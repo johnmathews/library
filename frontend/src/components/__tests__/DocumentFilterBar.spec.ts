@@ -2,7 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createPinia, setActivePinia } from 'pinia'
 import DocumentFilterBar from '../DocumentFilterBar.vue'
-import type { AppliedFilters } from '@/utils/documentQuery'
+import {
+  DEFAULT_SORT,
+  DEFAULT_SORT_DIRECTION,
+  type AppliedFilters,
+} from '@/utils/documentQuery'
 
 const EMPTY: AppliedFilters = {
   q: '',
@@ -16,8 +20,9 @@ const EMPTY: AppliedFilters = {
   dateFrom: '',
   dateTo: '',
   review: '',
-  sort: 'document_date',
-  dir: 'desc',
+  // Default sort/dir so a built query omits them (kept in sync with the source).
+  sort: DEFAULT_SORT,
+  dir: DEFAULT_SORT_DIRECTION,
   page: 1,
 }
 

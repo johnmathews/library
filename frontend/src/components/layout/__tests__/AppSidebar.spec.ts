@@ -141,7 +141,7 @@ describe('AppSidebar', () => {
     expect(deletedLink.text()).toContain('Recently Deleted')
   })
 
-  it('orders the nav: Saved views right after Documents, Recently Deleted last', async () => {
+  it('orders the nav: Documents first, Recently Deleted last, with no Saved-views heading', async () => {
     seedAuth(true)
     router.push('/')
     await router.isReady()
@@ -154,7 +154,6 @@ describe('AppSidebar', () => {
       .map((a) => a.attributes('data-testid'))
     expect(order).toEqual([
       'sidebar-documents-link',
-      'sidebar-saved-views-link',
       'sidebar-upload-link',
       'sidebar-notes-link',
       'sidebar-charts-link',
@@ -167,7 +166,7 @@ describe('AppSidebar', () => {
     ])
   })
 
-  it('renders a Saved views nav link to /saved-views', async () => {
+  it('no longer renders a standalone "Saved views" nav link (managed from the dashboard)', async () => {
     seedAuth(false)
     router.push('/')
     await router.isReady()
@@ -175,10 +174,7 @@ describe('AppSidebar', () => {
       props: { sidebarOpen: false },
       global: { plugins: [router] },
     })
-    const link = wrapper.find('[data-testid="sidebar-saved-views-link"]')
-    expect(link.exists()).toBe(true)
-    expect(link.attributes('href')).toBe('/saved-views')
-    expect(link.text()).toContain('Saved views')
+    expect(wrapper.find('[data-testid="sidebar-saved-views-link"]').exists()).toBe(false)
   })
 
   it('renders pinned saved views as dashboard links to / with their saved query', async () => {
@@ -200,15 +196,15 @@ describe('AppSidebar', () => {
     expect(pinned.attributes('href')).toBe('/?kind=invoice')
     // Unpinned views never appear as dashboards.
     expect(wrapper.find('[data-testid="sidebar-dashboard-8"]').exists()).toBe(false)
-    // First-class citizen: it lives in the main nav, right after Saved views
-    // (no separate subsection).
+    // First-class citizen: it lives in the main nav, directly under Documents
+    // (no "Saved views" heading, no separate subsection).
     const order = wrapper
       .findAll('#sidebar-nav a[data-testid]')
       .map((a) => a.attributes('data-testid'))
     expect(order.slice(0, 3)).toEqual([
       'sidebar-documents-link',
-      'sidebar-saved-views-link',
       'sidebar-dashboard-7',
+      'sidebar-upload-link',
     ])
   })
 

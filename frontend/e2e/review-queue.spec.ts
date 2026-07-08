@@ -37,11 +37,12 @@ async function signIn(page: Page): Promise<void> {
 
 /**
  * Seed a document and flag it needs_review via `amount_currency_coupling` —
- * setting a currency with no amount trips that rule on save (W1). We
- * deliberately do NOT set a future document_date: the dashboard sorts by
- * document_date desc (NULLs last), so a future-dated fixture would jump to the
- * first tile and break the other specs that assume "newest upload = first tile"
- * (library.spec, markdown-reader). A dateless flagged doc keeps that invariant.
+ * setting a currency with no amount trips that rule on save (W1). The dashboard
+ * defaults to added_date desc (newest upload first), so a freshly-seeded fixture
+ * lands on the first tile — the invariant the other specs rely on (library.spec,
+ * markdown-reader). We set no document_date; it no longer affects the default
+ * order, but keeping fixtures dateless also leaves the document_date-sort specs
+ * undisturbed.
  */
 async function seedFlaggedDocument(page: Page, marker: string): Promise<number> {
   const csrf = (await page.context().cookies()).find((c) => c.name === 'library_csrftoken')

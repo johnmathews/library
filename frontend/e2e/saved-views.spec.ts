@@ -58,9 +58,10 @@ test('save a pinned view, use it as a sidebar dashboard, and manage it', async (
   expect(seed.status()).toBe(201)
   const { id: docId } = (await seed.json()) as { id: number }
 
-  // A deterministic, non-empty filter state: reorder by added_date ascending
-  // (a non-default sort/dir, so it is captured verbatim in the saved query).
-  await page.goto('/?sort=added_date&dir=asc')
+  // A deterministic, non-empty filter state: reorder by document_date ascending
+  // (a non-default sort/dir — the default is added_date/desc — so it is captured
+  // verbatim in the saved query).
+  await page.goto('/?sort=document_date&dir=asc')
   await expect(page.getByTestId('result-count')).toBeVisible()
 
   // Save the current state as a pinned view.
@@ -76,7 +77,7 @@ test('save a pinned view, use it as a sidebar dashboard, and manage it', async (
     const view = list.find((v) => v.name === viewName)
     expect(view, 'saved view was created').toBeTruthy()
     expect(view!.pinned).toBe(true)
-    expect(view!.filter_state.sort).toBe('added_date')
+    expect(view!.filter_state.sort).toBe('document_date')
   }).toPass()
 
   const list = (await (await page.request.get('/api/saved-views')).json()) as SavedView[]
@@ -88,11 +89,11 @@ test('save a pinned view, use it as a sidebar dashboard, and manage it', async (
   const dashboardLink = page.getByTestId(`sidebar-dashboard-${view.id}`)
   await expect(dashboardLink).toBeAttached()
   const href = await dashboardLink.getAttribute('href')
-  expect(href).toContain('sort=added_date')
+  expect(href).toContain('sort=document_date')
 
   // Following that link reproduces the saved filter state on the homepage.
   await page.goto(href!)
-  await expect(page).toHaveURL(/[?&]sort=added_date(?:&|$)/)
+  await expect(page).toHaveURL(/[?&]sort=document_date(?:&|$)/)
   await expect(page.getByTestId('result-count')).toBeVisible()
 
   // It also appears on the management page.

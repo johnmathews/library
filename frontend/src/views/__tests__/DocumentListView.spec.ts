@@ -84,6 +84,9 @@ describe('DocumentListView', () => {
   let reviewCountResponse: () => Response
 
   beforeEach(async () => {
+    // Isolate persisted UI prefs (e.g. `library:doc-sort-v1`) between tests so a
+    // sort choice in one case never leaks into the next.
+    localStorage.clear()
     // The taxonomy-options cache lives in Pinia now; the fresh `createPinia()`
     // below gives each test an empty cache (no explicit reset needed).
     listResponse = () => jsonResponse(listBody([]))
@@ -143,6 +146,7 @@ describe('DocumentListView', () => {
         { path: '/documents/:id', name: 'document-detail', component: Stub },
         { path: '/documents/:id/delete', name: 'document-delete', component: Stub },
         { path: '/upload', name: 'upload', component: Stub },
+        { path: '/saved-views', name: 'saved-views', component: Stub },
       ],
     })
     await router.push('/')
@@ -237,11 +241,12 @@ describe('DocumentListView', () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()
 
-    // Field select changes the URL and re-fetches with the sort param.
-    await w.find('[data-testid="sort-field-select"]').setValue('added_date')
+    // Default is added_date; selecting a non-default field puts it in the URL
+    // and re-fetches with the sort param.
+    await w.find('[data-testid="sort-field-select"]').setValue('document_date')
     await flushPromises()
-    expect(router.currentRoute.value.query.sort).toBe('added_date')
-    expect(documentUrls().at(-1)).toContain('sort=added_date')
+    expect(router.currentRoute.value.query.sort).toBe('document_date')
+    expect(documentUrls().at(-1)).toContain('sort=document_date')
 
     // Direction toggle flips desc -> asc and appears in the URL.
     await w.find('[data-testid="sort-dir-toggle"]').trigger('click')
@@ -250,9 +255,34 @@ describe('DocumentListView', () => {
     expect(documentUrls().at(-1)).toContain('direction=asc')
 
     // Back to the default field clears the sort param (canonical URL stays clean).
-    await w.find('[data-testid="sort-field-select"]').setValue('document_date')
+    await w.find('[data-testid="sort-field-select"]').setValue('added_date')
     await flushPromises()
     expect(router.currentRoute.value.query.sort).toBeUndefined()
+  })
+
+  it('remembers the sort choice and re-applies it on a fresh bare-URL mount', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+
+    // Choose a non-default field + direction, then confirm it was persisted.
+    // (Each change re-fetches; the controls row unmounts while loading, so flush
+    // between interactions before re-querying the DOM.)
+    await w.find('[data-testid="sort-field-select"]').setValue('document_date')
+    await flushPromises()
+    await w.find('[data-testid="sort-dir-toggle"]').trigger('click')
+    await flushPromises()
+    expect(localStorage.getItem('library:doc-sort-v1')).toContain('document_date')
+
+    // Navigate away, then back to a bare `/` (no sort param) and remount: the
+    // remembered preference drives both the control and the request.
+    w.unmount()
+    await router.push('/')
+    const w2 = await mountView()
+    expect(
+      (w2.find('[data-testid="sort-field-select"]').element as HTMLSelectElement).value,
+    ).toBe('document_date')
+    expect(documentUrls().at(-1)).toContain('sort=document_date')
+    expect(documentUrls().at(-1)).toContain('direction=asc')
   })
 
   it('disables the sort control while a search query is active (rank wins)', async () => {
@@ -420,6 +450,15 @@ describe('DocumentListView', () => {
     expect(controls).toBeTruthy()
     expect(controls!.find('[data-testid="dashboard-fields-button"]').exists()).toBe(true)
     expect(controls!.find('[data-testid="sort-field-select"]').exists()).toBe(true)
+  })
+
+  it('links to the saved-views management page from the dashboard controls row', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    const link = w.find('[data-testid="manage-saved-views-link"]')
+    expect(link.exists()).toBe(true)
+    expect(link.attributes('href')).toBe('/saved-views')
+    expect(link.text()).toContain('Saved views')
   })
 
   it('shows a red "N documents need review" button with the count when some need review', async () => {

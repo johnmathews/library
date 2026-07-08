@@ -201,49 +201,10 @@ watch(
               </li>
             </RouterLink>
 
-            <!-- Saved views link -->
-            <RouterLink v-slot="{ href, navigate, isActive }" to="/saved-views" custom>
-              <li
-                class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r"
-                :class="
-                  isActive &&
-                  'from-violet-500/[0.12] dark:from-violet-500/[0.24] to-violet-500/[0.04]'
-                "
-              >
-                <a
-                  :href="href"
-                  class="block truncate transition"
-                  data-testid="sidebar-saved-views-link"
-                  :class="
-                    isActive
-                      ? 'text-gray-900 dark:text-white'
-                      : 'text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white'
-                  "
-                  @click="navigate"
-                >
-                  <div class="flex items-center">
-                    <svg
-                      class="shrink-0 fill-current"
-                      :class="isActive ? 'text-violet-500' : 'text-gray-600 dark:text-gray-300'"
-                      xmlns="http://www.w3.org/2000/svg"
-                      width="16"
-                      height="16"
-                      viewBox="0 0 16 16"
-                    >
-                      <path
-                        d="M2 2a1 1 0 0 0-1 1v10a1 1 0 0 0 1.55.83L8 11.2l5.45 2.63A1 1 0 0 0 15 13V3a1 1 0 0 0-1-1H2Zm0 2h12v7.4l-4.45-2.15a1 1 0 0 0-.87 0L4 11.4V4Z"
-                      />
-                    </svg>
-                    <span
-                      class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
-                      >Saved views</span
-                    >
-                  </div>
-                </a>
-              </li>
-            </RouterLink>
-
-            <!-- Pinned saved views: first-class custom-dashboard links -->
+            <!-- Pinned saved views: first-class custom-dashboard links, listed
+                 directly under Documents. There is no "Saved views" heading —
+                 the management page is reached from the dashboard's Save-view
+                 controls instead. -->
             <RouterLink
               v-for="view in pinnedViews"
               :key="view.id"

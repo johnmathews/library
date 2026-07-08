@@ -16,8 +16,15 @@ export const SORT_FIELDS = ['document_date', 'added_date'] as const
 export const SORT_DIRECTIONS = ['asc', 'desc'] as const
 export type SortField = (typeof SORT_FIELDS)[number]
 export type SortDirection = (typeof SORT_DIRECTIONS)[number]
-export const DEFAULT_SORT: SortField = 'document_date'
+export const DEFAULT_SORT: SortField = 'added_date'
 export const DEFAULT_SORT_DIRECTION: SortDirection = 'desc'
+
+/** A remembered sort choice (field + direction), persisted per-user so a bare
+ *  dashboard URL reproduces the last selection. See `parseDocumentQuery`. */
+export interface SortPreference {
+  sort: SortField
+  dir: SortDirection
+}
 
 export interface AppliedFilters {
   q: string
@@ -59,8 +66,21 @@ function asEnum<T extends string>(
   return (allowed as readonly string[]).includes(s) ? (s as T) : fallback
 }
 
-/** Parse the route query into the strongly-typed applied state. */
-export function parseDocumentQuery(query: LocationQuery): AppliedFilters {
+/**
+ * Parse the route query into the strongly-typed applied state.
+ *
+ * `sortDefaults` is the caller's remembered sort preference: when the URL
+ * carries no `sort`/`dir` param, we fall back to it (validated) rather than the
+ * hard constants, so a bare `/` reproduces the user's last choice. The
+ * `DEFAULT_SORT`/`DEFAULT_SORT_DIRECTION` constants remain the ultimate fallback
+ * for an unset or garbage preference.
+ */
+export function parseDocumentQuery(
+  query: LocationQuery,
+  sortDefaults?: Partial<SortPreference>,
+): AppliedFilters {
+  const sortFallback = asEnum(sortDefaults?.sort, SORT_FIELDS, DEFAULT_SORT)
+  const dirFallback = asEnum(sortDefaults?.dir, SORT_DIRECTIONS, DEFAULT_SORT_DIRECTION)
   return {
     q: asString(query.q),
     kind: asString(query.kind),
@@ -73,8 +93,8 @@ export function parseDocumentQuery(query: LocationQuery): AppliedFilters {
     dateFrom: asString(query.date_from),
     dateTo: asString(query.date_to),
     review: asString(query.review),
-    sort: asEnum(query.sort, SORT_FIELDS, DEFAULT_SORT),
-    dir: asEnum(query.dir, SORT_DIRECTIONS, DEFAULT_SORT_DIRECTION),
+    sort: asEnum(query.sort, SORT_FIELDS, sortFallback),
+    dir: asEnum(query.dir, SORT_DIRECTIONS, dirFallback),
     page: Math.max(1, Number.parseInt(asString(query.page), 10) || 1),
   }
 }

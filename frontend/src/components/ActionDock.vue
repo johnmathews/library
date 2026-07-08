@@ -46,9 +46,11 @@ const dockPosition = computed(() => useAuthStore().dockPosition)
 const isTop = computed(() => dockPosition.value.startsWith('top'))
 
 // Rail sticks to `top-16` (clearing the 4rem header) or `bottom-0`; the pill
-// row anchors to the matching edge of the zero-height rail.
+// row anchors to the matching edge of the zero-height rail, offset inward
+// (`top-4`/`bottom-4`) so the pill floats with a comfortable gap rather than
+// squished flush against the header edge / viewport bottom.
 const edgeClass = computed(() => (isTop.value ? 'top-16' : 'bottom-0'))
-const rowAnchorClass = computed(() => (isTop.value ? 'top-0' : 'bottom-0'))
+const rowAnchorClass = computed(() => (isTop.value ? 'top-4' : 'bottom-4'))
 const justifyClass = computed(() =>
   dockPosition.value.endsWith('left')
     ? 'justify-start'
@@ -66,7 +68,7 @@ const justifyClass = computed(() =>
   >
     <div
       data-testid="action-dock-row"
-      class="pointer-events-none absolute inset-x-0 flex px-4"
+      class="pointer-events-none absolute inset-x-0 flex px-4 sm:px-6 lg:px-8"
       :class="[rowAnchorClass, justifyClass]"
     >
       <div
