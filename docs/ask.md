@@ -136,6 +136,7 @@ All settings use the `LIBRARY_` env prefix (see `.env.example` /
 | `LIBRARY_RETRIEVE_TOP_K` | `10` | Documents returned by hybrid retrieval. |
 | `LIBRARY_RETRIEVE_CHUNKS_PER_DOC` | `3` | Nearest passages per document folded into the Ask excerpt (best-first, `[…]`-joined); `1` = legacy single-chunk. Does not affect candidate ranking or citations. |
 | `LIBRARY_ASK_MODEL` | `claude-opus-4-8` | Answer model. |
+| `LIBRARY_ASK_TITLE_MODEL` | `claude-haiku-4-5` | Cheap model that names a new conversation from its first Q&A exchange. One bounded call per new thread; failure is non-fatal (keeps the placeholder title). Must have a `MODEL_PRICING_USD_PER_MTOK` row. |
 | `LIBRARY_ASK_MAX_TOOL_TURNS` | `4` | Tool-use loop bound per turn. |
 | `LIBRARY_ASK_MAX_ANSWER_TOKENS` | `1024` | Max answer length. |
 | `LIBRARY_ASK_GET_DOCUMENT_MAX_CHARS` | `8000` | Cap on the text `get_document` returns for one document; longer text is truncated with `text_truncated: true`. |
@@ -172,6 +173,18 @@ is local and effectively free.
   The job is idempotent (it replaces a document's chunks), so it is safe to
   re-run. On CPU the first run is slow for a large archive — let it work through
   the queue.
+- **Backfilling conversation titles.** Threads created before the LLM-titling
+  feature keep their placeholder title (the truncated first question). Re-title
+  them from each thread's first Q&A exchange with a one-off script (requires
+  `LIBRARY_ANTHROPIC_API_KEY`). It is idempotent — a thread already retitled or
+  manually renamed no longer matches the placeholder and is skipped:
+
+  ```console
+  docker compose exec api python -m scripts.backfill_ask_titles --dry-run
+  docker compose exec api python -m scripts.backfill_ask_titles   # apply
+  # --limit N to stop after N retitles
+  ```
+
 - **Deployment** of the embedder sidecar and the pgvector database image:
   see [deployment.md](deployment.md) §1.1 and §1.7.
 
@@ -186,6 +199,19 @@ Each question is a **turn** within a persistent **thread**. Threads are stored
 server-side in two tables: `ask_threads` (one conversation, with a title and
 owner) and `ask_turns` (one Q&A turn, recording the question, answer, citations,
 token cost, and the full serialized Anthropic message blocks this turn produced).
+
+**Conversation titles.** A new thread is created with a placeholder title (the
+truncated first question) so it always has *something* to show, then — after the
+first answer lands — a cheap model (`ask_title_model`, default
+`claude-haiku-4-5`) summarises the question/answer into a short, specific title
+for the sidebar (`generate_thread_title` in `ask.engine`). Titling is
+**fire-and-forget and non-fatal**: it runs after the answer is already produced,
+and any failure leaves the placeholder title in place — an answer is never
+blocked or failed by title generation. The title call's cost is folded into the
+turn's recorded `cost_usd`. Users can override any title via
+`PATCH /api/ask/threads/{id}` (see below). Existing threads created before this
+feature keep their placeholder titles until the backfill script runs (see
+[§1.5 Operations](#15-operations)).
 
 When a follow-up arrives the engine loads the last `LIBRARY_ASK_HISTORY_TURNS`
 turns (default 3) from the database, concatenates their serialized message
@@ -208,10 +234,11 @@ trade-off for bounded token usage.
 ### Using threads via the API
 
 ```
-POST /api/ask        {"question": "..."}                     → creates a new thread
-POST /api/ask        {"question": "...", "thread_id": 42}    → continues thread 42
-GET  /api/ask/threads                                        → list your conversations
-GET  /api/ask/threads/42                                     → thread detail + all turns
+POST   /api/ask      {"question": "..."}                     → creates a new thread
+POST   /api/ask      {"question": "...", "thread_id": 42}    → continues thread 42
+GET    /api/ask/threads                                      → list your conversations
+GET    /api/ask/threads/42                                   → thread detail + all turns
+PATCH  /api/ask/threads/42  {"title": "..."}                 → rename a conversation
 DELETE /api/ask/threads/42                                   → delete a conversation
 ```
 
@@ -221,16 +248,21 @@ See [api.md](api.md) §1.11 for the full wire contract.
 
 The Ask view (`/ask`) is a chat interface: the page title and description sit
 full-width at the top, with the working area below — a conversation sidebar
-listing past threads (by title and relative time) with resume and delete
-actions, a scrollable transcript of Q&A pairs, and a follow-up input pinned
-below. At lg+ the transcript scrolls internally (the header and composer stay
-put) and both the transcript and the thread list show a subtle thin scrollbar
-(`.thin-scrollbar`) so the scroll region reads as independently scrollable —
-rather than hiding the bar, which removed that affordance. On a phone the sidebar stacks beneath the title/description; on wide
-screens it sits beside the answer column. `/ask/:threadId` loads an existing
-thread. **"New conversation"** clears to an empty thread; when the view is already
-an empty new conversation (no thread selected, no turns) the button is greyed out
-and disabled, since starting a new one there would do nothing.
+listing past threads (by title and relative time) with resume, **rename**, and
+delete actions, a transcript of Q&A pairs, and a follow-up input below. The chat
+panel **grows with the conversation and the whole page scrolls** — it is not
+trapped in a fixed viewport-height internal scroller; short/empty conversations
+keep a sensible minimum height so the panel never looks broken. On a phone the
+sidebar stacks beneath the title/description; on wide screens it sits beside the
+answer column. `/ask/:threadId` loads an existing thread. **"New conversation"**
+clears to an empty thread; when the view is already an empty new conversation (no
+thread selected, no turns) the button is greyed out and disabled, since starting
+a new one there would do nothing.
+
+**Renaming.** Each sidebar row has an inline **Rename** affordance (mirroring the
+two-step delete): it swaps the title for an editable input seeded with the
+current title — Enter or **Save** commits via `PATCH /api/ask/threads/{id}`, Esc
+or **Cancel** aborts; a blank or unchanged title is a no-op.
 
 On a **fresh `/ask`** the view reads a **`?q=` query parameter** on initial mount:
 when present (and not resuming a `/ask/:threadId` thread) it seeds the composer

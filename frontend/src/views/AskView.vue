@@ -95,14 +95,23 @@ function openComposer(): void {
   })
 }
 
-// Keep the latest turn in view: the transcript scrolls internally (chat layout),
-// so jump it to the bottom after the DOM updates. Called on a new optimistic
-// turn, on a resolving answer (length unchanged, so a watcher would miss it),
-// and on a rehydrated thread.
+// Keep the latest turn in view after the DOM updates. The transcript now grows
+// with the page rather than scrolling internally, so bring the newest turn to
+// the bottom of the viewport via the page scroll. (If the transcript is ever
+// internally scrollable — a narrow edge case — jump its own scrollTop instead.)
+// Called on a new optimistic turn, on a resolving answer (length unchanged, so
+// a watcher would miss it), and on a rehydrated thread.
 function scrollToBottom(): void {
   void nextTick(() => {
     const el = transcriptRef.value
-    if (el) el.scrollTop = el.scrollHeight
+    if (!el) return
+    if (el.scrollHeight > el.clientHeight + 1) {
+      el.scrollTop = el.scrollHeight
+      return
+    }
+    const turnEls = el.querySelectorAll('[data-testid="ask-turn"]')
+    const last = turnEls[turnEls.length - 1] as HTMLElement | undefined
+    last?.scrollIntoView?.({ behavior: 'smooth', block: 'end' })
   })
 }
 
@@ -388,13 +397,12 @@ defineExpose({ resetConversation })
 </script>
 
 <template>
-  <!-- The whole Ask view is a flex column that fills the shell's content box:
-       100dvh − the h-16 shell header − the app-page py-8 = 100dvh − 8rem. The
-       title block and error summary take their natural height and the chat panel
-       (#ask-page) flexes to fill the rest, so we no longer guess the header's
-       height with a brittle calc() magic number. Below lg the column is a plain
-       block and the page scrolls normally. -->
-  <div class="lg:flex lg:flex-col lg:h-[calc(100dvh-8rem)]">
+  <!-- The Ask view is a normal-flow block that grows with its content: the chat
+       panel (#ask-page) is as tall as the conversation and the whole page
+       scrolls, rather than trapping the transcript in a fixed viewport-height
+       internal scroller. Empty/short conversations keep a sensible minimum
+       height (set on the transcript), so the panel never looks broken. -->
+  <div>
     <!-- Standard layout: the page title + description sit at the top, full
          width, ABOVE the chat panel (a sibling, never inside it). -->
     <PageHeader
@@ -409,14 +417,14 @@ defineExpose({ resetConversation })
       class="mb-6"
     />
 
-    <!-- One cohesive chat panel: the conversation rail, the scrolling message
-         thread and the docked composer all share a single Mosaic surface with
-         internal dividers — not three separate floating cards. On lg+ it is a
-         two-pane row (rail | thread) that fills the column's height; below lg it
-         stacks (rail above, then thread, composer last) and the page scrolls. -->
+    <!-- One cohesive chat panel: the conversation rail, the message thread and
+         the composer all share a single Mosaic surface with internal dividers —
+         not three separate floating cards. On lg+ it is a two-pane row
+         (rail | thread); below lg it stacks (rail above, then thread, composer
+         last). The panel grows with the conversation and the page scrolls. -->
     <div
       id="ask-page"
-      class="flex flex-col lg:flex-row overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 shadow-xs lg:flex-1 lg:min-h-0"
+      class="flex flex-col lg:flex-row overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 shadow-xs"
     >
       <ConversationSidebar
         ref="sidebarRef"
@@ -427,18 +435,18 @@ defineExpose({ resetConversation })
         @threads-changed="(count: number) => (sidebarThreadCount = count)"
       />
 
-      <!-- Thread + composer column. On lg+ it is a full-height flex column (the
-           thread scrolls internally, the composer stays docked); below lg it is
-           a normal block. -->
-      <div class="flex flex-col flex-1 min-w-0 lg:min-h-0">
+      <!-- Thread + composer column: a flex column that flows at its natural
+           height (thread, then composer beneath it) and grows with the
+           conversation. -->
+      <div class="flex flex-col flex-1 min-w-0">
         <!-- Message thread: the user's question as a right-aligned violet chat
-             bubble, the answer beneath it on a subtle surface card. On lg+ it
-             scrolls internally (so the docked composer stays put); below lg it
-             flows and the page scrolls. -->
+             bubble, the answer beneath it on a subtle surface card. It flows at
+             its natural height and grows with the conversation; the page (not
+             this box) scrolls. -->
         <div
           ref="transcriptRef"
           data-testid="ask-transcript"
-          class="min-h-[18rem] lg:min-h-0 lg:flex-1 lg:overflow-y-auto thin-scrollbar p-5 sm:p-6"
+          class="p-5 sm:p-6"
         >
           <div v-if="turns.length" class="space-y-8">
             <section
@@ -534,9 +542,11 @@ defineExpose({ resetConversation })
             </section>
           </div>
 
-          <!-- Empty states — centred in the thread area so the panel never looks
-               broken before the first question. -->
-          <div v-else class="h-full flex items-center justify-center text-center">
+          <!-- Empty states — centred in a minimum-height thread area so the
+               panel never looks broken before the first question. The min-height
+               lives here (not on the growing transcript) so short conversations
+               still get a sensible floor. -->
+          <div v-else class="min-h-[18rem] flex items-center justify-center text-center">
             <p
               v-if="sidebarThreadCount > 0 && threadId === null"
               data-testid="ask-select-thread"
@@ -556,12 +566,11 @@ defineExpose({ resetConversation })
           </div>
         </div>
 
-        <!-- Docked composer. A shrink-0 flex sibling below the internally
-             scrolling thread, divided from it by a top border (NOT
-             position:sticky, which would float over the thread and intercept
-             citation clicks). Below lg it is hidden until opened (via "New
-             conversation" or opening a thread) so it isn't a far-off box the
-             user must scroll to find; at lg+ it is always docked. -->
+        <!-- Composer. A shrink-0 flex sibling below the thread, divided from it
+             by a top border; it flows beneath the conversation and scrolls with
+             the page. Below lg it is hidden until opened (via "New conversation"
+             or opening a thread) so it isn't a far-off box the user must scroll
+             to find; at lg+ it is always shown. -->
         <form
           id="ask-form"
           ref="composerRef"
