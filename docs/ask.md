@@ -251,8 +251,8 @@ full-width at the top, with the working area below — a conversation sidebar
 listing past threads (by title and relative time) with resume, **rename**, and
 delete actions, a transcript of Q&A pairs, and a follow-up input below. The chat
 panel **grows with the conversation and the whole page scrolls** — it is not
-trapped in a fixed viewport-height internal scroller; short/empty conversations
-keep a sensible minimum height so the panel never looks broken. On a phone the
+trapped in a fixed viewport-height internal scroller; the empty state keeps a
+sensible minimum height so the panel never looks broken before the first turn. On a phone the
 sidebar stacks beneath the title/description; on wide screens it sits beside the
 answer column. `/ask/:threadId` loads an existing thread. **"New conversation"**
 clears to an empty thread; when the view is already an empty new conversation (no

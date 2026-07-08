@@ -47,7 +47,7 @@ Run via the engineering-team skill; artifacts in
 
 - `AskView.vue`: dropped `lg:h-[calc(100dvh-8rem)]` and the transcript's
   `lg:overflow-y-auto lg:flex-1`. The chat panel now flows at natural height and
-  the whole page scrolls. Empty/short conversations keep a `min-h-[18rem]` floor
+  the whole page scrolls. The empty state keeps a `min-h-[18rem]` floor
   (moved onto the empty-state block, which no longer relies on a definite parent
   height). The composer stays a normal `shrink-0` sibling that scrolls with the
   content (per the user's choice over a viewport-pinned composer).
@@ -77,8 +77,28 @@ scrolls with the page** (not pinned).
   grows-with-page layout.
 - Repo-wide `ruff check` + `ruff format --check` clean.
 
-Not yet done live: a browser walkthrough of the layout with a running stack +
-Anthropic key, and running the backfill script against the live DB.
+## 4.1 Shipped
+
+Committed on a feature branch, merged `--no-ff` to `main`, pushed. CI run went
+fully green — every job including **e2e** and **promote** (which builds and
+pushes `ghcr.io/johnmathews/library:latest`) — then `make deploy` recreated the
+webserver + worker on `paperless:/srv/apps` (healthy, `/healthz` OK, Alembic head
+`0024` unchanged since there was no schema change).
+
+**Backfill run live:** piped `scripts/backfill_ask_titles.py` into the running
+container and retitled **10 existing conversations** (e.g. "how many times did my
+car go to the mechanic in 2025?" → "Car mechanic visits in 2025"). Idempotent, so
+a re-run now skips them.
+
+**Follow-up fix — ops scripts in the image.** The image only copied `src/`, so the
+documented `docker compose exec … python -m scripts.backfill_ask_titles` couldn't
+find `scripts/` — I had to pipe the file in over stdin. Added `COPY scripts/
+scripts/` to the Dockerfile (after the dependency-sync layer, to keep its cache)
+so the documented invocation works on the next deploy. `docs/frontend.md`'s
+AskView reference was also refreshed away from the old fixed-height/internal-
+scroll description.
+
+Not yet done live: a browser walkthrough of the layout with a running stack.
 
 ## 5. Gotchas for next time
 
