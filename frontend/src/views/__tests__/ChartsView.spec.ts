@@ -53,6 +53,19 @@ function makeSeries(sender: string, senderId: number, kindId: number) {
   }
 }
 
+function makeCandidate(sender: string, senderId: number, kindId: number) {
+  return {
+    sender,
+    sender_id: senderId,
+    kind: 'invoice',
+    kind_id: kindId,
+    currency: 'USD',
+    count: 2,
+    needed: 3,
+    document_ids: [11, 12],
+  }
+}
+
 describe('ChartsView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -232,5 +245,67 @@ describe('ChartsView', () => {
     await flushPromises()
     expect(createAuthoredSeries).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="charts-create-error"]').exists()).toBe(true)
+  })
+
+  it('reveals near-threshold candidates only when the toggle is clicked', async () => {
+    vi.mocked(fetchCharts).mockResolvedValue({
+      series: [],
+      candidates: [makeCandidate('Anthropic', 9, 4)],
+    } as never)
+    const wrapper = mountView()
+    await flushPromises()
+
+    // The toggle shows the count; the panel is hidden until clicked.
+    const toggle = wrapper.find('[data-testid="charts-candidates-toggle"]')
+    expect(toggle.exists()).toBe(true)
+    expect(toggle.text()).toContain('(1)')
+    expect(wrapper.find('[data-testid="charts-candidates"]').exists()).toBe(false)
+
+    await toggle.trigger('click')
+    const panel = wrapper.find('[data-testid="charts-candidates"]')
+    expect(panel.exists()).toBe(true)
+    const row = wrapper.find('[data-testid="charts-candidate"]')
+    expect(row.text()).toContain('Anthropic')
+    expect(row.text()).toContain('invoice')
+    expect(row.text()).toContain('2 of 3')
+  })
+
+  it('has no candidates toggle when the endpoint returns none', async () => {
+    vi.mocked(fetchCharts).mockResolvedValue({
+      series: [makeSeries('Vattenfall', 1, 2)],
+      candidates: [],
+    } as never)
+    const wrapper = mountView()
+    await flushPromises()
+    expect(wrapper.find('[data-testid="charts-candidates-toggle"]').exists()).toBe(false)
+  })
+
+  it('promotes a candidate into an authored series and drops it from the list', async () => {
+    vi.mocked(fetchCharts)
+      .mockResolvedValueOnce({
+        series: [],
+        candidates: [makeCandidate('Anthropic', 9, 4)],
+      } as never)
+      // After promotion the backend suppresses the now-charted bucket (it matches
+      // the new authored series' signature), so the reload returns no candidates.
+      .mockResolvedValueOnce({ series: [], candidates: [] } as never)
+    vi.mocked(createAuthoredSeries).mockResolvedValue({ authored_id: 7 } as never)
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="charts-candidates-toggle"]').trigger('click')
+    await wrapper.find('[data-testid="charts-candidate-promote"]').trigger('click')
+    await flushPromises()
+
+    // Promote seeds an authored series from the bucket's docs, named sender · kind.
+    expect(createAuthoredSeries).toHaveBeenCalledWith({
+      name: 'Anthropic · invoice',
+      currency: 'USD',
+      document_ids: [11, 12],
+    })
+    // The grid reloads and the promoted bucket is gone, so the toggle disappears.
+    expect(fetchCharts).toHaveBeenCalledTimes(2)
+    expect(wrapper.find('[data-testid="charts-candidates-toggle"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="charts-candidate"]').exists()).toBe(false)
   })
 })

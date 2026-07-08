@@ -4,7 +4,9 @@ Backs the ``/charts`` view. Enumerates the ``(sender_id, kind_id)`` pairs with
 enough amount-bearing documents to summarise, then reuses
 ``library.series.summarize_series`` per pair so each entry has the same shape as
 ``GET /api/documents/{id}/series`` (stats + points + cached description). Series
-whose dominant currency bucket is too small are skipped.
+whose dominant currency bucket is too small are skipped from the charted set and
+instead reported (without points) as near-threshold ``candidates`` — buckets one
+or more documents short of ``series_min_documents``.
 """
 
 from typing import Annotated
@@ -73,6 +75,62 @@ async def _eligible_series(session: AsyncSession, min_documents: int) -> list[tu
     return [(sender_id, kind_id, slug) for sender_id, kind_id, slug, _ in rows]
 
 
+async def _candidate_buckets(session: AsyncSession, min_documents: int) -> list[dict[str, object]]:
+    """Near-threshold ``(sender, kind, currency)`` buckets: ``2 <= docs < min``.
+
+    These are the emergent groupings that have not yet reached
+    ``series_min_documents`` and so are absent from the charted set — the
+    "almost there" candidates. One more matching document promotes a bucket
+    into a real chart. Grouping is per currency because that is the granularity
+    at which an emergent series actually charts (``summarize_series`` gates on
+    the dominant currency bucket), so ``count`` here is an honest "N of ``min``".
+
+    Membership is the raw amount-bearing document count per bucket; pin/exclude
+    overrides — which only matter once a series is charted — are not applied.
+    Busiest buckets first. Empty when ``min_documents <= 2`` (no room for a
+    two-or-more candidate below the threshold).
+    """
+    if min_documents <= 2:
+        return []
+    statement = (
+        select(
+            Document.sender_id,
+            Sender.name,
+            Document.kind_id,
+            Kind.slug,
+            Document.currency,
+            func.count().label("n"),
+            func.array_agg(Document.id).label("document_ids"),
+        )
+        .join(Sender, Document.sender_id == Sender.id)
+        .join(Kind, Document.kind_id == Kind.id)
+        .where(
+            Document.deleted_at.is_(None),
+            Document.amount_total.isnot(None),
+            Document.sender_id.isnot(None),
+            Document.kind_id.isnot(None),
+        )
+        .group_by(Document.sender_id, Sender.name, Document.kind_id, Kind.slug, Document.currency)
+        .having(func.count() >= 2)
+        .having(func.count() < min_documents)
+        .order_by(func.count().desc(), Sender.name, Kind.slug)
+    )
+    rows = (await session.execute(statement)).all()
+    return [
+        {
+            "sender_id": sender_id,
+            "sender": sender_name,
+            "kind_id": kind_id,
+            "kind": kind_slug,
+            "currency": currency,
+            "count": n,
+            "needed": min_documents,
+            "document_ids": list(document_ids),
+        }
+        for sender_id, sender_name, kind_id, kind_slug, currency, n, document_ids in rows
+    ]
+
+
 @router.get(
     "/charts",
     summary="Every eligible recurring (sender, kind) series, summarised for charting",
@@ -81,8 +139,13 @@ async def list_charts(
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
-    """List all chartable series. Each entry mirrors the per-document series body
-    (``include_points=True``); series too sparse to summarise are omitted."""
+    """List all chartable series plus near-threshold candidates.
+
+    Each ``series`` entry mirrors the per-document series body
+    (``include_points=True``); series too sparse to summarise are omitted from
+    it and instead surface, without points, under ``candidates`` — emergent
+    ``(sender, kind, currency)`` buckets with ``2 <= docs < min`` that one more
+    matching document would promote into a real chart."""
     eligible = await _eligible_series(session, settings.series_min_documents)
     series: list[dict[str, object]] = []
     for sender_id, _kind_id, kind_slug in eligible:
@@ -114,14 +177,36 @@ async def list_charts(
         .scalars()
         .all()
     )
+    # Signatures of the authored series, so we can suppress candidates that a
+    # user has already promoted (or otherwise curated) into a chart — otherwise
+    # the bucket's documents still form the emergent group and it would keep
+    # being offered for promotion, spawning duplicate authored series.
+    authored_signatures: set[tuple[object, object, object]] = set()
     for authored_id in authored_ids:
         summary = await summarize_authored_series(session, authored_id, settings)
         if summary is None:
             continue
         body = serialise_summary(summary, include_points=True)
         body |= await _authored_signature_extras(session, settings, authored_id)
+        signature = body.get("signature")
+        if isinstance(signature, dict):
+            authored_signatures.add(
+                (signature["sender_id"], signature["kind_id"], signature["currency"])
+            )
         series.append(body)
-    return {"series": series}
+
+    # Near-threshold emergent buckets (2 ≤ docs < min): the "almost there"
+    # candidates the /charts view can reveal on demand. Cheap single GROUP BY;
+    # carries no points, so it's fine to always compute alongside the charts.
+    # Drop any bucket already backed by an authored series (matched on its
+    # dominant signature) so a promoted candidate stops being offered.
+    candidates = [
+        candidate
+        for candidate in await _candidate_buckets(session, settings.series_min_documents)
+        if (candidate["sender_id"], candidate["kind_id"], candidate["currency"])
+        not in authored_signatures
+    ]
+    return {"series": series, "candidates": candidates}
 
 
 def _decode_or_404(series_id: str) -> tuple[int, int, str | None]:

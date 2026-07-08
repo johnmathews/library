@@ -15,6 +15,7 @@ import {
   listDocuments,
   type DocumentSeries,
   type DocumentListItem,
+  type CandidateSeries,
 } from '@/api/documents'
 import SeriesChartTile from '@/components/SeriesChartTile.vue'
 import CurrencySelect from '@/components/CurrencySelect.vue'
@@ -47,6 +48,39 @@ const series = ref<DocumentSeries[]>([])
 const loading = ref(true)
 const error = ref<string | null>(null)
 
+// --- Candidate ("almost there") series -------------------------------------
+// Emergent buckets one document short of charting. Hidden behind an opt-in
+// toggle; a candidate can be promoted into an authored series (which charts
+// immediately) so tracking starts before the next matching document lands.
+// Once promoted, the backend stops offering the bucket (it matches an authored
+// series' signature), so the reload after a promote simply drops the row.
+const candidates = ref<CandidateSeries[]>([])
+const showCandidates = ref(false)
+const promotingKey = ref<string | null>(null)
+const candidateError = ref<string | null>(null)
+
+function candidateKey(c: CandidateSeries): string {
+  return `${c.sender_id}-${c.kind_id}-${c.currency ?? 'none'}`
+}
+
+async function promoteCandidate(c: CandidateSeries): Promise<void> {
+  if (promotingKey.value) return
+  promotingKey.value = candidateKey(c)
+  candidateError.value = null
+  try {
+    await createAuthoredSeries({
+      name: `${c.sender} · ${c.kind}`,
+      currency: c.currency,
+      document_ids: c.document_ids,
+    })
+    await load()
+  } catch {
+    candidateError.value = 'Could not create the chart. Try again.'
+  } finally {
+    promotingKey.value = null
+  }
+}
+
 // Stable per-tile key + deep-link id. Authored series have their own `a-{id}`
 // scheme; emergent series use the shared `{sender}-{kind}-{currency}` id.
 function tileKey(s: DocumentSeries): string {
@@ -63,6 +97,7 @@ async function load(): Promise<void> {
   try {
     const response = await fetchCharts()
     series.value = response.series
+    candidates.value = response.candidates ?? []
   } catch {
     error.value = 'Could not load charts. Try refreshing the page.'
   } finally {
@@ -173,6 +208,15 @@ onMounted(load)
   <div id="charts-view">
     <PageHeader title="Charts">
       <template #actions>
+        <AppButton
+          v-if="candidates.length > 0"
+          variant="secondary"
+          type="button"
+          data-testid="charts-candidates-toggle"
+          @click="showCandidates = !showCandidates"
+        >
+          {{ showCandidates ? 'Hide' : 'Show' }} candidates ({{ candidates.length }})
+        </AppButton>
         <AppButton
           v-if="!showCreate"
           variant="primary"
@@ -325,6 +369,54 @@ onMounted(load)
         </AppButton>
       </div>
     </form>
+
+    <!-- "Almost there" candidates: emergent buckets one document short of
+         charting. Hidden until the header toggle reveals them (W-candidates). -->
+    <section
+      v-if="showCandidates && candidates.length"
+      data-testid="charts-candidates"
+      class="mb-6 card p-5 space-y-3"
+    >
+      <div>
+        <h2 class="text-sm font-semibold text-gray-800 dark:text-gray-100">Almost there</h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          These groups are a document short of charting automatically. Create a chart now to start
+          tracking, or just wait — the next matching document promotes them on its own.
+        </p>
+      </div>
+
+      <AppBanner v-if="candidateError" variant="error" data-testid="charts-candidates-error">
+        {{ candidateError }}
+      </AppBanner>
+
+      <ul class="space-y-2">
+        <li
+          v-for="c in candidates"
+          :key="candidateKey(c)"
+          data-testid="charts-candidate"
+          class="flex items-center justify-between gap-3 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-2"
+        >
+          <div class="min-w-0">
+            <p class="truncate text-sm text-gray-800 dark:text-gray-100">
+              {{ c.sender }} · {{ c.kind }}
+              <span v-if="c.currency" class="text-gray-400 dark:text-gray-500">{{ c.currency }}</span>
+            </p>
+            <p class="text-xs uppercase tracking-wide text-gray-400 dark:text-gray-500">
+              {{ c.count }} of {{ c.needed }} documents
+            </p>
+          </div>
+          <AppButton
+            variant="primary"
+            type="button"
+            data-testid="charts-candidate-promote"
+            :disabled="promotingKey === candidateKey(c)"
+            @click="promoteCandidate(c)"
+          >
+            Create chart
+          </AppButton>
+        </li>
+      </ul>
+    </section>
 
     <p v-if="loading" data-testid="charts-loading" class="text-gray-600 dark:text-gray-300">
       Loading charts…

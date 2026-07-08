@@ -54,7 +54,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | PATCH  | `/api/notes/{id}` | Edit a note's title/body in place (snapshots a version) |
 | GET    | `/api/notes/{id}/versions` | A note's version history (newest first) |
 | POST   | `/api/notes/{id}/versions/{version_no}/restore` | Restore a note to a previous version |
-| GET    | `/api/charts` | Every eligible recurring `(sender, kind)` series, summarised |
+| GET    | `/api/charts` | Every eligible recurring `(sender, kind)` series, summarised, plus near-threshold `candidates` |
 | GET    | `/api/charts/{series_id}` | One series by its stable id (single-chart deep link) |
 | PUT    | `/api/charts/{series_id}/meta` | Override a series' title and/or description |
 | POST   | `/api/charts/authored` | Create an authored (manual) series |
@@ -1027,7 +1027,9 @@ hide the trend widget rather than showing an error.
 
 Enumerates every recurring `(sender, kind)` series with enough amount-bearing
 documents to summarise (at least `LIBRARY_SERIES_MIN_DOCUMENTS`, default 3), and
-returns each one fully summarised. This backs the `/charts` aggregate view.
+returns each one fully summarised. Alongside them it returns `candidates` —
+near-threshold buckets one or more documents short of charting (see below). This
+backs the `/charts` aggregate view.
 
 **Response `200`:**
 
@@ -1050,17 +1052,45 @@ returns each one fully summarised. This backs the `/charts` aggregate view.
         {"date": "2025-06-15", "amount": "138.40", "document_id": 41, "title": "June 2025 bill"}
       ]
     }
+  ],
+  "candidates": [
+    {
+      "sender_id": 9,
+      "sender": "Anthropic",
+      "kind_id": 4,
+      "kind": "invoice",
+      "currency": "USD",
+      "count": 2,
+      "needed": 3,
+      "document_ids": [11, 12]
+    }
   ]
 }
 ```
 
-Each entry has the **same shape** as the `status:"ok"` body of
+Each `series` entry has the **same shape** as the `status:"ok"` body of
 `GET /api/documents/{id}/series` (with `points` always included). Series whose
-dominant currency bucket is too small are omitted, so every returned entry is
-`status:"ok"`. Entries are ordered by document count (busiest series first).
-There is no per-document reference point here, so `reference`/`year_over_year`
-are anchored on the latest member. Use `sender_id`-`kind_id`-`currency` as a
-stable key.
+dominant currency bucket is too small are omitted from `series`, so every entry
+there is `status:"ok"`. Entries are ordered by document count (busiest series
+first). There is no per-document reference point here, so
+`reference`/`year_over_year` are anchored on the latest member. Use
+`sender_id`-`kind_id`-`currency` as a stable key.
+
+**Candidates ("almost there").** `candidates` lists emergent
+`(sender, kind, currency)` buckets with `2 ≤ count < LIBRARY_SERIES_MIN_DOCUMENTS`
+— groupings one or more documents short of charting automatically. Grouping is
+per currency (the granularity at which an emergent series actually charts), so
+`count` of `needed` is an honest "N of min"; `document_ids` are the bucket's
+members and `needed` echoes the threshold. Pin/exclude overrides are **not**
+applied (they only matter once a series charts). The list is empty when
+`LIBRARY_SERIES_MIN_DOCUMENTS ≤ 2`. Candidates carry no `points`. The `/charts`
+view hides them behind an opt-in toggle and offers a one-click **promote**:
+`POST /api/charts/authored` (§1.14.2) seeded with the bucket's `document_ids`
+turns a candidate into a named authored series that charts immediately — no new
+endpoint is involved. A bucket already backed by an authored series is
+**excluded** from `candidates` (matched on that series' dominant
+`(sender, kind, currency)` signature), so a promoted candidate stops being
+offered — this prevents a reload from inviting a duplicate promote.
 
 ### 1.14.1 Single series + editable meta — `/api/charts/{series_id}`
 

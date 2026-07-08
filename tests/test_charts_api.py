@@ -87,6 +87,85 @@ def test_charts_lists_eligible_series_and_excludes_sparse(
     assert all(e["status"] == "ok" for e in series)
 
 
+def test_charts_surfaces_near_threshold_candidates(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    tag = uuid.uuid4().hex[:8]
+    charted = f"ChartsFull-{tag}"
+    candidate = f"ChartsCand-{tag}"
+    # Three docs -> a real chart; two docs -> a candidate (one short of min=3).
+    seed(
+        api_database_url,
+        charted,
+        "utility-bill",
+        [("2025-01-03", "100.00"), ("2025-02-02", "100.00"), ("2025-03-04", "130.00")],
+    )
+    seed(
+        api_database_url,
+        candidate,
+        "invoice",
+        [("2025-01-01", "20.00"), ("2025-02-01", "22.00")],
+    )
+
+    body = api_client.get("/api/charts").json()
+    candidates = {c["sender"]: c for c in body["candidates"]}
+
+    assert candidate in candidates
+    entry = candidates[candidate]
+    assert entry["count"] == 2
+    assert entry["needed"] == 3
+    assert entry["kind"] == "invoice"
+    assert entry["currency"] == "EUR"
+    assert len(entry["document_ids"]) == 2
+    assert entry["sender_id"] is not None and entry["kind_id"] is not None
+
+    # A fully-charted series is a chart, never a candidate...
+    assert charted not in candidates
+    # ...and a candidate never leaks into the charted-series list.
+    assert candidate not in {s["sender"] for s in body["series"]}
+
+
+def test_promoting_a_candidate_removes_it_from_the_list(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Once a candidate is promoted into an authored series, its bucket must stop
+    being offered — otherwise a reload would invite a duplicate authored series."""
+    tag = uuid.uuid4().hex[:8]
+    candidate = f"ChartsPromote-{tag}"
+    seed(
+        api_database_url,
+        candidate,
+        "invoice",
+        [("2025-01-01", "20.00"), ("2025-02-01", "22.00")],
+    )
+
+    before = api_client.get("/api/charts").json()
+    entry = next(c for c in before["candidates"] if c["sender"] == candidate)
+
+    # Promote: create an authored series seeded with the bucket's documents,
+    # exactly as the /charts "Create chart" button does.
+    created = api_client.post(
+        "/api/charts/authored",
+        json={
+            "name": f"{entry['sender']} · {entry['kind']}",
+            "currency": entry["currency"],
+            "document_ids": entry["document_ids"],
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    after = api_client.get("/api/charts").json()
+    # The bucket is no longer offered as a candidate (its signature now backs an
+    # authored series)...
+    assert candidate not in {c["sender"] for c in after["candidates"]}
+    # ...and the authored series it became is present in the charted list
+    # (its title is the name we promoted it under).
+    assert any(
+        s.get("authored_id") is not None and s.get("title") == f"{candidate} · invoice"
+        for s in after["series"]
+    )
+
+
 def test_charts_requires_authentication(anon_client: TestClient) -> None:
     assert anon_client.get("/api/charts").status_code == 401
 

@@ -650,9 +650,29 @@ export function removeSeriesMember(
   )
 }
 
-/** Body of GET /api/charts — every eligible series, summarised for charting. */
+/** A near-threshold emergent bucket: a `(sender, kind, currency)` group with
+ *  `2 ≤ docs < series_min_documents`. Not yet a chart; one more matching
+ *  document promotes it. The `/charts` view can reveal these on demand and
+ *  "promote" one into an authored series right away. */
+export interface CandidateSeries {
+  sender_id: number
+  sender: string
+  kind_id: number
+  /** The document kind's slug (e.g. `invoice`), as on a charted series entry. */
+  kind: string
+  currency: string | null
+  /** How many amount-bearing documents the bucket has so far (≥ 2, < needed). */
+  count: number
+  /** The threshold (`series_min_documents`) the bucket must reach to chart. */
+  needed: number
+  document_ids: number[]
+}
+
+/** Body of GET /api/charts — every eligible series plus near-threshold candidates. */
 export interface ChartsResponse {
   series: DocumentSeries[]
+  /** Emergent buckets one or more documents short of charting (`2 ≤ docs < min`). */
+  candidates: CandidateSeries[]
 }
 
 /** GET /api/charts — all chartable (sender, kind) series. */
