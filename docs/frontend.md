@@ -439,12 +439,24 @@ persists `cardColumns: { left: string[], right: string[] }`
 (`library:doc-layout-card-columns-v1`) rather than one flat order, and the
 metadata (left) and preview (right) columns' two SortableJS instances share
 one `group` (`'doc-cards'`), so a card can be dragged from either column into
-the other, not just reordered within its own. Each column renders its full,
-persisted id list filtered to cards actually present for this document
-(`notes` only for note docs; the series wrapper carries `empty:hidden` so a
-seriesless doc reads exactly as before); the default split is left:
-`notes` · `metadata` · `comments` · `actions` · `history`, right: `preview` ·
-`markdown` · `series-chart`. On drop, `onCardDragEnd` reverts SortableJS's own
+the other, not just reordered within its own. Both columns render their cards
+from **one shared card template** — defined once via VueUse's
+`createReusableTemplate` (`<DefineCard v-slot="{ cardId }">` holds the drag
+handle plus every card body; each column's `v-for` reuses it with
+`<ReuseCard :card-id>`), so a card draws its body in **whichever column
+currently holds it**. (Before this, the two columns had *disjoint*
+`v-if cardId===…` chains, so dragging a card into the other column dropped it —
+the destination had no branch for its id and the wrapper collapsed via
+`empty:hidden`.) Each column renders its full, persisted id list filtered to
+cards actually present for this document via `cardPresent(id)`: `notes` only for
+note docs; `series-chart` gated on `DocumentSeriesTrend`'s emitted `presence`;
+and `preview` only when it would render real content — an image/PDF viewer, a
+downloadable binary original, or (once the text has loaded and is empty) the
+"no preview" fallback — so a text-only note no longer renders an empty preview
+`.card` (a stray thin line) or, in edit mode, a drag handle attached to no
+panel. The default split is left: `notes` · `metadata` · `comments` ·
+`actions` · `history`, right: `preview` · `markdown` · `series-chart`. On drop,
+`onCardDragEnd` reverts SortableJS's own
 DOM move (so Vue's re-render from `cardColumns` is the only thing that ever
 places the node — otherwise the card would briefly exist twice when it
 crosses into the other column's DOM subtree) and translates the rendered

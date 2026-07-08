@@ -1711,6 +1711,39 @@ describe('DocumentDetailView', () => {
       expect((evt.from as unknown as { insertBefore: ReturnType<typeof vi.fn> }).insertBefore).toHaveBeenCalled()
     })
 
+    it('renders a card body in whichever column holds it (cross-column render)', async () => {
+      // Regression: the two columns must share one card renderer. A card
+      // dragged into the *other* column has to render its body there — not
+      // vanish because that column's template lacked a branch for its id.
+      const layout = useDocumentLayout()
+      layout.resetLayout()
+      layout.moveCard('comments', 'right', 0) // comments now lives in the right column
+      const w = await mountView()
+      // The comments card body renders inside the RIGHT (preview) column…
+      expect(
+        w.find('#document-preview-column [data-testid="document-comments"]').exists(),
+      ).toBe(true)
+      // …and no longer in the left column it used to be pinned to.
+      expect(
+        w.find('#document-metadata-column [data-testid="document-comments"]').exists(),
+      ).toBe(false)
+    })
+
+    it('does not render an empty preview card for a text-only note', async () => {
+      // Regression: a note has no image/PDF preview and its original is text,
+      // so the preview card would render an empty `.card` (a stray thin line)
+      // and, in edit mode, a drag handle detached from any visible panel.
+      detail = makeDetail({ source: 'note', mime_type: 'text/markdown', has_searchable_pdf: false })
+      const w = await mountView()
+      expect(w.find('[data-testid="section-card-preview"]').exists()).toBe(false)
+      expect(w.find('#document-preview-card').exists()).toBe(false)
+
+      // …and no stray drag handle for it in edit mode.
+      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await flushPromises()
+      expect(w.find('[data-testid="card-drag-handle-preview"]').exists()).toBe(false)
+    })
+
     it('maps a rendered-index drop target to the correct full-column index around a hidden card', async () => {
       // Default document is NOT a note, so 'notes' (always first in the
       // default left column) renders no drag handle and is absent from

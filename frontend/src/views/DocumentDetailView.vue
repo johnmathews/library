@@ -14,6 +14,7 @@
  * consistent cross-browser rendering on every viewport.
  */
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue'
+import { createReusableTemplate } from '@vueuse/core'
 import Sortable from 'sortablejs'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -590,11 +591,33 @@ const seriesChartPresent = ref(true)
 function cardPresent(id: string): boolean {
   if (id === 'notes') return isNote.value
   if (id === 'series-chart') return seriesChartPresent.value
+  // Present only when the preview card would actually render something: an
+  // image/PDF viewer, a downloadable binary original, or — once the text has
+  // loaded and turned out empty — the "no preview available" fallback. A text
+  // document with a readable body (a note, a .md) has none of these, so treating
+  // it as always-present would render an empty `.card` (a stray thin line) and,
+  // in edit mode, a drag handle attached to no panel. The `markdownData` guard
+  // waits for the text fetch to resolve so a note never flashes the fallback
+  // before its body arrives.
+  if (id === 'preview') {
+    return (
+      preview.value !== 'none' ||
+      hasDownloadableOriginal.value ||
+      (markdownData.value !== null && !hasReadableText.value)
+    )
+  }
   return true
 }
 
 const previewCards = computed(() => cardColumns.value.right.filter(cardPresent))
 const metadataCards = computed(() => cardColumns.value.left.filter(cardPresent))
+
+// Both columns render their cards from ONE shared template (defined once via
+// `<DefineCard>` in the template, reused per card via `<ReuseCard>`), so a card
+// draws its body in whichever column currently holds it. Without this the two
+// columns had disjoint `v-if cardId===…` chains, and dragging a card across
+// columns silently dropped it (the destination had no branch for its id).
+const [DefineCard, ReuseCard] = createReusableTemplate<{ cardId: string }>()
 
 /**
  * Map a rendered/present-list index (SortableJS only sees rendered DOM nodes,
@@ -1019,35 +1042,21 @@ watch(
       </div>
     </div>
 
-    <div id="document-detail-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
-      <!-- Preview: right column on desktop (lg:order-2), first on mobile.
-           min-w-0 lets this grid column shrink below its content's intrinsic
-           width so long tokens wrap instead of widening the page (iOS zoom). -->
-      <div
-        id="document-preview-column"
-        ref="previewColumnEl"
-        data-col="right"
-        class="min-w-0 space-y-4 lg:order-2"
-      >
-        <!-- Each card is a reorderable wrapper (drag handle shown in edit mode).
-             `empty:hidden` drops a card that rendered nothing (e.g. the series
-             chart with no qualifying series) so a seriesless doc reads as before. -->
-        <div
-          v-for="cardId in previewCards"
-          :key="cardId"
-          :data-testid="`section-card-${cardId}`"
-          class="relative empty:hidden"
+    <!-- One shared card renderer: the drag handle + EVERY card body are defined
+         here once (`DefineCard`), and each column reuses it per card
+         (`ReuseCard`). Both columns can therefore render any card, so dragging a
+         card between columns keeps it visible instead of dropping it. -->
+    <DefineCard v-slot="{ cardId }">
+        <button
+          v-if="layoutEditMode"
+          type="button"
+          data-card-drag-handle
+          :data-testid="`card-drag-handle-${cardId}`"
+          class="absolute right-2 top-2 z-10 cursor-grab rounded bg-white/90 px-2 py-1 text-gray-400 shadow-sm hover:text-violet-500 active:cursor-grabbing dark:bg-gray-800/90"
+          aria-label="Drag to reorder this section"
         >
-          <button
-            v-if="layoutEditMode"
-            type="button"
-            data-card-drag-handle
-            :data-testid="`card-drag-handle-${cardId}`"
-            class="absolute right-2 top-2 z-10 cursor-grab rounded bg-white/90 px-2 py-1 text-gray-400 shadow-sm hover:text-violet-500 active:cursor-grabbing dark:bg-gray-800/90"
-            aria-label="Drag to reorder this section"
-          >
-            ⠿
-          </button>
+          ⠿
+        </button>
         <div
           v-if="cardId === 'preview'"
           id="document-preview-card"
@@ -1243,38 +1252,12 @@ watch(
           :document-id="doc.id"
           @presence="seriesChartPresent = $event"
         />
-        </div>
-      </div>
 
-      <!-- Metadata: left column on desktop (lg:order-1). min-w-0 (as above)
-           lets long metadata values wrap rather than widen the page. -->
-      <div
-        id="document-metadata-column"
-        ref="metadataColumnEl"
-        data-col="left"
-        class="min-w-0 space-y-6 lg:order-1"
-      >
-        <div
-          v-for="cardId in metadataCards"
-          :key="cardId"
-          :data-testid="`section-card-${cardId}`"
-          class="relative empty:hidden"
-        >
-          <button
-            v-if="layoutEditMode"
-            type="button"
-            data-card-drag-handle
-            :data-testid="`card-drag-handle-${cardId}`"
-            class="absolute right-2 top-2 z-10 cursor-grab rounded bg-white/90 px-2 py-1 text-gray-400 shadow-sm hover:text-violet-500 active:cursor-grabbing dark:bg-gray-800/90"
-            aria-label="Drag to reorder this section"
-          >
-            ⠿
-          </button>
         <!-- Note-only controls: in-place note editing + version history. Shown
              only for notes (source === 'note'); the generic metadata editor
              below stays available for notes too. -->
         <NoteEditorPanel
-          v-if="cardId === 'notes'"
+          v-else-if="cardId === 'notes'"
           v-model:doc="doc"
           :note-body="noteBody"
           @reload-markdown="loadMarkdown(doc.id)"
@@ -1356,6 +1339,45 @@ watch(
           v-else-if="cardId === 'history'"
           :events="doc.events"
         />
+    </DefineCard>
+
+    <div id="document-detail-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <!-- Preview column: right on desktop (lg:order-2), first on mobile.
+           min-w-0 lets the column shrink below its content's intrinsic width so
+           long tokens wrap instead of widening the page (iOS zoom). -->
+      <div
+        id="document-preview-column"
+        ref="previewColumnEl"
+        data-col="right"
+        class="min-w-0 space-y-4 lg:order-2"
+      >
+        <!-- Each card is a reorderable wrapper (drag handle shown in edit mode).
+             `empty:hidden` drops a wrapper whose card rendered nothing. -->
+        <div
+          v-for="cardId in previewCards"
+          :key="cardId"
+          :data-testid="`section-card-${cardId}`"
+          class="relative empty:hidden"
+        >
+          <ReuseCard :card-id="cardId" />
+        </div>
+      </div>
+
+      <!-- Metadata column: left on desktop (lg:order-1). min-w-0 (as above)
+           lets long metadata values wrap rather than widen the page. -->
+      <div
+        id="document-metadata-column"
+        ref="metadataColumnEl"
+        data-col="left"
+        class="min-w-0 space-y-6 lg:order-1"
+      >
+        <div
+          v-for="cardId in metadataCards"
+          :key="cardId"
+          :data-testid="`section-card-${cardId}`"
+          class="relative empty:hidden"
+        >
+          <ReuseCard :card-id="cardId" />
         </div>
       </div>
     </div>
