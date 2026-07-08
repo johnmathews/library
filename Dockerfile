@@ -36,6 +36,11 @@ COPY src/ src/
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev
 
+# One-off operational scripts, runnable in the container as documented modules
+# (e.g. `docker compose exec api python -m scripts.backfill_ask_titles`). Copied
+# after the dependency sync so editing a script doesn't bust that cache layer.
+COPY scripts/ scripts/
+
 # --- Runtime stage: slim image, non-root user ---
 # Pinned to -bookworm (matching the builder stage) so the compiled C-extension
 # venv copied from the builder runs against the same Debian/glibc. An unqualified
