@@ -66,9 +66,11 @@ describe('settings api', () => {
     expect(TILE_PREVIEWS.map((m) => m.value)).toEqual(['full_width', 'whole_page'])
   })
 
-  it('DASHBOARD_FIELDS contains all 8 canonical field values in order', () => {
+  it('DASHBOARD_FIELDS contains all canonical field values in order (five dates)', () => {
     expect(DASHBOARD_FIELDS.map((f) => f.value)).toEqual([
-      'kind', 'sender', 'tags', 'date', 'language', 'status', 'amount', 'file_type',
+      'kind', 'sender', 'tags',
+      'date', 'due_date', 'expiry_date', 'added_date', 'last_edited',
+      'language', 'status', 'amount', 'file_type',
     ])
   })
 

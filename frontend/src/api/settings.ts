@@ -13,7 +13,15 @@ export const DASHBOARD_FIELDS = [
   { value: 'kind', text: 'Document type' },
   { value: 'sender', text: 'Correspondent' },
   { value: 'tags', text: 'Tags' },
-  { value: 'date', text: 'Date' },
+  // The five document dates, in the same order as the detail-page hero. `date`
+  // keeps its legacy value (= the document's own date) for back-compat with
+  // saved preferences; the others map to due_date / expiry_date / created_at
+  // (added) / updated_at (last edited).
+  { value: 'date', text: 'Document date' },
+  { value: 'due_date', text: 'Due date' },
+  { value: 'expiry_date', text: 'Expiry date' },
+  { value: 'added_date', text: 'Added date' },
+  { value: 'last_edited', text: 'Last edited' },
   { value: 'language', text: 'Language' },
   { value: 'status', text: 'Status' },
   { value: 'amount', text: 'Amount' },

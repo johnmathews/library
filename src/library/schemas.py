@@ -118,11 +118,16 @@ class DocumentListItem(BaseModel):
     topics: list[str] = Field(default_factory=list, description="Extracted free-text topics.")
     projects: list[ProjectRef] = Field(default_factory=list, description="Sorted by slug.")
     document_date: date | None
+    due_date: date | None = None
+    expiry_date: date | None = None
     language: DocumentLanguage
     status: DocumentStatus
     mime_type: str
     page_count: int | None
     created_at: datetime
+    updated_at: datetime = Field(
+        description="Last edit time; bumps on any change, including tags/projects."
+    )
     has_searchable_pdf: bool
     has_thumbnail: bool
     review_status: ReviewStatus
@@ -195,11 +200,6 @@ class DocumentDetail(DocumentListItem):
     )
     ocr_text: str | None
     ocr_confidence: float | None
-    due_date: date | None
-    expiry_date: date | None
-    updated_at: datetime = Field(
-        description="Last edit time; bumps on any change, including tags/projects."
-    )
     source: DocumentSource
     original_filename: str | None
     sha256: str
@@ -293,12 +293,23 @@ class LoginRequest(BaseModel):
 
 
 class DashboardField(StrEnum):
-    """A metadata field that can be shown on a dashboard tile."""
+    """A metadata field that can be shown on a dashboard tile.
+
+    The five date fields mirror the detail page's five document dates: DATE is
+    the document's own date (`document_date`; the value stays ``"date"`` for
+    back-compat with saved preferences), DUE_DATE / EXPIRY_DATE the invoice-due /
+    validity-end dates, ADDED_DATE the library ingest time (`created_at`), and
+    LAST_EDITED the last metadata edit (`updated_at`).
+    """
 
     KIND = "kind"
     SENDER = "sender"
     TAGS = "tags"
     DATE = "date"
+    DUE_DATE = "due_date"
+    EXPIRY_DATE = "expiry_date"
+    ADDED_DATE = "added_date"
+    LAST_EDITED = "last_edited"
     LANGUAGE = "language"
     STATUS = "status"
     AMOUNT = "amount"

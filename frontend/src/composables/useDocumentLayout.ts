@@ -40,15 +40,16 @@ export const CARD_COLUMNS_STORAGE_KEY = 'library:doc-layout-card-columns-v1'
 /**
  * Human labels for every hero-eligible field key. Kept separate from the
  * ordered list so a component can render a label for a key regardless of its
- * current position/visibility. `created_at`/`updated_at` read as "Ingested" /
- * "Last edited" rather than their raw column names.
+ * current position/visibility. `created_at`/`updated_at` read as "Added date" /
+ * "Last edited" rather than their raw column names (matching the dashboard sort
+ * control and the tile field picker).
  */
 export const HERO_FIELD_LABELS: Record<string, string> = {
   kind: 'Kind',
   sender: 'Sender',
   recipient: 'Recipient',
   document_date: 'Document date',
-  created_at: 'Ingested',
+  created_at: 'Added date',
   updated_at: 'Last edited',
   amount: 'Amount',
   language: 'Language',

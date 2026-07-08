@@ -28,11 +28,14 @@ function makeItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
     tags: [],
     projects: [],
     document_date: '2026-05-15',
+    due_date: null,
+    expiry_date: null,
     language: 'nld',
     status: 'indexed',
     mime_type: 'application/pdf',
     page_count: 2,
     created_at: '2026-06-10T12:00:00Z',
+    updated_at: '2026-06-11T09:30:00Z',
     has_searchable_pdf: true,
     has_thumbnail: true,
     amount_total: null,
@@ -219,6 +222,40 @@ describe('DocumentListView', () => {
       '/api/documents/12/thumbnail',
     )
     expect(w.find('[data-testid="result-count"]').text()).toBe('1 document')
+  })
+
+  it('renders the extra date fields (due/expiry/added/last-edited) with prefixed labels', async () => {
+    seedPrefs(['due_date', 'expiry_date', 'added_date', 'last_edited'])
+    listResponse = () =>
+      jsonResponse(
+        listBody([
+          makeItem({
+            due_date: '2026-06-03',
+            expiry_date: '2027-08-12',
+            created_at: '2026-06-10T12:00:00Z',
+            updated_at: '2026-06-11T09:30:00Z',
+          }),
+        ]),
+      )
+    const w = await mountView()
+    expect(w.find('[data-testid="doc-due-date"]').text()).toContain('Due')
+    expect(w.find('[data-testid="doc-due-date"]').text()).toContain('3 June 2026')
+    expect(w.find('[data-testid="doc-expiry-date"]').text()).toContain('Expires')
+    expect(w.find('[data-testid="doc-expiry-date"]').text()).toContain('12 August 2027')
+    // added/last-edited are datetimes: the date portion is shown (no time).
+    expect(w.find('[data-testid="doc-added-date"]').text()).toContain('Added')
+    expect(w.find('[data-testid="doc-added-date"]').text()).toContain('10 June 2026')
+    expect(w.find('[data-testid="doc-last-edited"]').text()).toContain('Edited')
+    expect(w.find('[data-testid="doc-last-edited"]').text()).toContain('11 June 2026')
+    // The bare document-date span is absent when 'date' isn't an enabled field.
+    expect(w.find('.app-doc-card__date').exists()).toBe(false)
+  })
+
+  it('omits an extra date field when the document has no value for it', async () => {
+    seedPrefs(['due_date'])
+    listResponse = () => jsonResponse(listBody([makeItem({ due_date: null })]))
+    const w = await mountView()
+    expect(w.find('[data-testid="doc-due-date"]').exists()).toBe(false)
   })
 
   it('lets the user choose tiles-per-row, persisted to localStorage and applied as a CSS var', async () => {

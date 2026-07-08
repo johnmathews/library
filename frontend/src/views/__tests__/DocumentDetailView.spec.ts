@@ -800,8 +800,8 @@ describe('DocumentDetailView', () => {
     expect(stats).toContain('Invoice') // kind
     expect(stats).toContain('Eneco') // sender
     expect(stats).toContain('15 May 2026') // document date
-    // The read-only ingestion date and last-edited timestamp round out the trio.
-    expect(stats).toContain('Ingested')
+    // The read-only added date and last-edited timestamp round out the trio.
+    expect(stats).toContain('Added date')
     expect(stats).toContain('10 June 2026') // created_at, formatted
     expect(stats).toContain('Last edited')
     expect(stats).toContain('11 June 2026') // updated_at, formatted

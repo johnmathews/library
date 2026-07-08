@@ -21,6 +21,10 @@ describe('DashboardFieldsEditor', () => {
       // remaining catalog fields, disabled, in catalog order
       'dashboard-field-row-sender',
       'dashboard-field-row-tags',
+      'dashboard-field-row-due_date',
+      'dashboard-field-row-expiry_date',
+      'dashboard-field-row-added_date',
+      'dashboard-field-row-last_edited',
       'dashboard-field-row-language',
       'dashboard-field-row-status',
       'dashboard-field-row-amount',

@@ -369,6 +369,25 @@ const gridColsStyle = computed(() =>
   gridCols.value === 'auto' ? {} : { '--doc-grid-cols': gridCols.value },
 )
 
+// Dashboard tile date fields beyond the plain document date. Each configurable
+// date carries a short muted prefix so several dates on one tile stay
+// unambiguous (the document date keeps its bare rendering as the primary date).
+// `created_at`/`updated_at` are datetimes, so `tileDate` slices to the date
+// portion before `formatDate` (which expects `YYYY-MM-DD`).
+const TILE_DATE_FIELDS: Record<
+  string,
+  { label: string; value: (item: DocumentListItem) => string | null }
+> = {
+  due_date: { label: 'Due', value: (i) => i.due_date },
+  expiry_date: { label: 'Expires', value: (i) => i.expiry_date },
+  added_date: { label: 'Added', value: (i) => i.created_at },
+  last_edited: { label: 'Edited', value: (i) => i.updated_at },
+}
+
+function tileDate(iso: string | null): string | null {
+  return iso ? formatDate(iso.slice(0, 10)) : null
+}
+
 // --- Sort control ----------------------------------------------------------
 // Sort round-trips through the URL like the filters, but is not a "filter"
 // (excluded from hasActiveFilters). It has no effect while a search query is
@@ -672,6 +691,14 @@ function toggleSortDirection(): void {
                 class="app-doc-card__date text-sm text-gray-500 dark:text-gray-400"
               >
                 {{ formatDate(item.document_date) }}
+              </span>
+              <span
+                v-else-if="TILE_DATE_FIELDS[field] && tileDate(TILE_DATE_FIELDS[field].value(item))"
+                :class="`app-doc-card__${field.replace('_', '-')} text-sm text-gray-500 dark:text-gray-400`"
+                :data-testid="`doc-${field.replace('_', '-')}`"
+              >
+                <span class="text-gray-400 dark:text-gray-500">{{ TILE_DATE_FIELDS[field].label }}</span>
+                {{ tileDate(TILE_DATE_FIELDS[field].value(item)) }}
               </span>
               <span
                 v-else-if="field === 'amount' && amountLabels.get(item.id)"

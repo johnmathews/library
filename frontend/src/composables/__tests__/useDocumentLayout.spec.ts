@@ -199,7 +199,7 @@ describe('useDocumentLayout', () => {
     for (const field of DEFAULT_HERO_FIELDS) {
       expect(HERO_FIELD_LABELS[field.key]).toBeTruthy()
     }
-    expect(HERO_FIELD_LABELS.created_at).toBe('Ingested')
+    expect(HERO_FIELD_LABELS.created_at).toBe('Added date')
     expect(HERO_FIELD_LABELS.updated_at).toBe('Last edited')
   })
 

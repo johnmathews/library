@@ -166,10 +166,12 @@ row's `created_at`. With `q` present, relevance rank always wins and
       "recipient": {"id": 1, "name": "John"},
       "tags": [{"slug": "energie", "name": "Energie"}],
       "projects": [{"slug": "house-purchase", "name": "House purchase"}],
-      "document_date": "2026-05-15", "language": "nld",
+      "document_date": "2026-05-15", "due_date": null, "expiry_date": null,
+      "language": "nld",
       "status": "indexed", "review_status": "unreviewed",
       "mime_type": "application/pdf",
-      "page_count": 2, "created_at": "2026-06-10T12:00:00Z",
+      "page_count": 2,
+      "created_at": "2026-06-10T12:00:00Z", "updated_at": "2026-06-11T09:30:00Z",
       "has_searchable_pdf": true, "has_thumbnail": true,
       "amount_total": "123.45", "currency": "EUR",
       "snippet": "uw <b>rekening</b> voor mei … totaal",
@@ -191,7 +193,11 @@ populated only when `review_status` is `needs_review`, `[]` otherwise (the full
 provenance blob stays on the detail endpoint's `validation`, §1.4). It lets the
 dashboard and review queue show a short reason without a second request.
 `amount_total` (JSON string, preserves decimal precision) and `currency`
-(3-letter code) are `null` when not set on the document.
+(3-letter code) are `null` when not set on the document. The list item carries
+all five document dates so the dashboard tiles can show any of them: the
+nullable `document_date`, `due_date` and `expiry_date`, plus the always-present
+`created_at` ("Added date") and `updated_at` ("Last edited") — see the
+dashboard-field catalog in §1.10.2.
 
 ### 1.3.3 Search semantics
 
@@ -222,13 +228,10 @@ Without `q`, ordering is `document_date DESC NULLS LAST, created_at DESC`.
 
 ## 1.4 Detail — `GET /api/documents/{id}`
 
-Everything in the list item, plus:
+Everything in the list item (which already carries `document_date`, `due_date`,
+`expiry_date`, `created_at` and `updated_at` — see §1.3.2), plus:
 
 - `ocr_text`, `ocr_confidence`
-- `amount_total` (JSON string), `currency`, `due_date`, `expiry_date`
-- `updated_at` — timestamp of the **last edit** (the list item already carries
-  `created_at`, the *ingestion* time). It bumps on any change, including
-  tag/project-only edits, so "Last edited" reflects the true last human touch.
 - `source`, `original_filename`, `sha256`
 - `extraction` — the provenance block written by Claude extraction
   (`prompt_version`, `model`, `confidence`, token/cost accounting,
@@ -676,18 +679,27 @@ Body: `{"dashboard_fields": [...]}`. Persists the list and returns the
 **full** resolved preference set (same shape as GET, incl. `background_tone`).
 Auth + CSRF apply.
 
-**Valid field keys** (the 8 selectable fields):
+**Valid field keys** (the 12 selectable fields):
 
 | Key | What it controls on the tile |
 |-----|-------------------------------|
 | `kind` | Document type tag (blue) |
 | `sender` | Correspondent name |
 | `tags` | Document tags row (capped at 4 + "+N" overflow) |
-| `date` | Document date |
+| `date` | Document date (the document's own date; value kept as `date` for back-compat) |
+| `due_date` | Due date, prefixed "Due" (invoice/payment due) |
+| `expiry_date` | Expiry date, prefixed "Expires" (validity end) |
+| `added_date` | Added date (`created_at`), prefixed "Added" |
+| `last_edited` | Last edited (`updated_at`), prefixed "Edited" |
 | `language` | Language tag (grey) |
 | `status` | Status tag (red/yellow; only shown when non-indexed) |
 | `amount` | Financial total (`amount_total` + `currency`, formatted) |
 | `file_type` | Derived file type label (PDF / Image / Text / File) |
+
+The five date keys mirror the detail-page hero's five document dates. Only `date`
+is on by default; the others are opt-in. The list response (`GET /api/documents`)
+returns `document_date`, `due_date`, `expiry_date`, `created_at` and `updated_at`
+on every item so the tiles can render whichever the user enabled.
 
 **Default set** (what new users see): `kind`, `sender`, `tags`, `date`,
 `language`, `status`.

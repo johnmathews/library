@@ -69,11 +69,16 @@ export interface DocumentListItem {
   tags: TagRef[]
   projects: ProjectRef[]
   document_date: string | null
+  due_date: string | null
+  expiry_date: string | null
   language: DocumentLanguage
   status: DocumentStatus
   mime_type: string
   page_count: number | null
+  /** Library ingest time ("Added date"). Always present. */
   created_at: string
+  /** Last metadata edit ("Last edited"). Always present. */
+  updated_at: string
   has_searchable_pdf: boolean
   has_thumbnail: boolean
   amount_total: string | null
