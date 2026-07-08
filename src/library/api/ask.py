@@ -323,8 +323,12 @@ async def rename_thread(
     await session.commit()
 
     # Build the summary from a fresh query rather than the just-committed ORM
-    # object: commit expires its attributes, so reading them here would trigger
-    # a lazy reload in a sync context (MissingGreenlet).
+    # object. The aggregates (turn_count / total_cost_usd) need a query anyway,
+    # and it sidesteps the onupdate trap: the sessionmaker keeps attributes on
+    # commit (expire_on_commit=False), but `updated_at` (server-side
+    # onupdate=func.now()) is still expired to fetch its new value, so reading it
+    # off the ORM object would fault with a lazy reload in a sync context
+    # (MissingGreenlet).
     tid, new_title, created, updated, count, cost = (
         await session.execute(
             select(

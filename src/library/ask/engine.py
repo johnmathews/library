@@ -330,7 +330,10 @@ async def generate_thread_title(
     error — the caller owns the fallback, because a title must never block or
     fail an answer.
     """
-    user_text = f"Question:\n{question.strip()}\n\nAnswer:\n{answer.strip()[:2000]}"
+    # Cap both sides so a pathologically long input can't inflate the title
+    # call's token cost (the question is already ≤1000 chars from the API, but
+    # the backfill path reads stored queries — keep the bound explicit).
+    user_text = f"Question:\n{question.strip()[:2000]}\n\nAnswer:\n{answer.strip()[:2000]}"
     response = await client.messages.create(
         model=model,
         max_tokens=32,
