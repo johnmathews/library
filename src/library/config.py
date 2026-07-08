@@ -18,6 +18,7 @@ _PRICED_MODEL_FIELDS: tuple[str, ...] = (
     "extraction_judge_model",
     "markdown_model",
     "ask_model",
+    "ask_title_model",
     "email_label_model",
 )
 
@@ -88,6 +89,10 @@ class Settings(BaseSettings):
     # Natural-language /ask answering (see docs/ask.md). Cost is recorded per
     # turn in ask_turns but not gated in this release.
     ask_model: str = "claude-opus-4-8"
+    # Cheap model that names a new conversation from its first Q&A exchange (a
+    # short title for the sidebar history). One bounded call per new thread;
+    # failure is non-fatal and falls back to the truncated question.
+    ask_title_model: str = "claude-haiku-4-5"
     ask_max_tool_turns: int = 4
     ask_max_answer_tokens: int = 1024
     ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.

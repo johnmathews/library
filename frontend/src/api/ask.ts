@@ -86,6 +86,15 @@ export function getThread(id: number): Promise<ThreadDetail> {
   return apiFetch<ThreadDetail>(`/api/ask/threads/${id}`)
 }
 
+/**
+ * PATCH /api/ask/threads/{id} — rename a thread. `title` must be 1..120 chars
+ * (validated server-side; 422 on violation, 404 if the thread isn't yours).
+ * Resolves with the updated summary row.
+ */
+export function renameThread(id: number, title: string): Promise<ThreadSummary> {
+  return apiFetch<ThreadSummary>(`/api/ask/threads/${id}`, { method: 'PATCH', body: { title } })
+}
+
 /** DELETE /api/ask/threads/{id} — permanently delete a thread. */
 export function deleteThread(id: number): Promise<void> {
   return apiFetch<void>(`/api/ask/threads/${id}`, { method: 'DELETE' })

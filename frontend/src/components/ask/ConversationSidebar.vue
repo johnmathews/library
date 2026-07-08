@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { listThreads, deleteThread, type ThreadSummary } from '@/api/ask'
+import { computed, nextTick, onMounted, ref } from 'vue'
+import { listThreads, deleteThread, renameThread, type ThreadSummary } from '@/api/ask'
 import { AppButton } from '@/components/app'
 
 // `newDisabled` greys out "New conversation" when the view is already an empty
@@ -14,6 +14,10 @@ const query = ref('')
 // Which thread is awaiting delete confirmation (inline two-step delete). Null
 // when no row is in the confirming state.
 const confirmingId = ref<number | null>(null)
+// Which thread is being renamed inline, and the draft title. Null when no row
+// is in the editing state.
+const editingId = ref<number | null>(null)
+const editTitle = ref('')
 
 // Client-side title filter over the loaded threads (the list is small; no need
 // for a server round-trip per keystroke).
@@ -49,6 +53,38 @@ async function confirmDelete(thread: ThreadSummary): Promise<void> {
   if (thread.id === props.activeThreadId) {
     emit('new')
   }
+}
+
+// Inline rename: arm an edit input seeded with the current title, focused and
+// pre-selected so the user can immediately overwrite it. Enter saves, Esc
+// cancels (wired in the template).
+function startRename(thread: ThreadSummary): void {
+  confirmingId.value = null
+  editingId.value = thread.id
+  editTitle.value = thread.title
+  void nextTick(() => {
+    const input = document.querySelector<HTMLInputElement>('[data-testid="thread-rename-input"]')
+    input?.focus()
+    input?.select()
+  })
+}
+
+function cancelRename(): void {
+  editingId.value = null
+  editTitle.value = ''
+}
+
+async function saveRename(thread: ThreadSummary): Promise<void> {
+  const title = editTitle.value.trim()
+  // A blank or unchanged title is a no-op — just close the editor rather than
+  // sending a doomed request (the server 422s on blank).
+  if (!title || title === thread.title) {
+    cancelRename()
+    return
+  }
+  await renameThread(thread.id, title)
+  cancelRename()
+  await refresh()
 }
 
 function formatDate(iso: string): string {
@@ -122,21 +158,56 @@ defineExpose({ refresh })
         @click="emit('select', thread.id)"
       >
         <span class="min-w-0 flex-1">
-          <span
-            class="block truncate text-sm"
-            :class="
-              thread.id === activeThreadId
-                ? 'text-violet-700 dark:text-violet-300 font-medium'
-                : 'text-gray-800 dark:text-gray-100'
-            "
-            >{{ thread.title }}</span
-          >
-          <span class="block text-xs text-gray-500 dark:text-gray-400">{{
-            formatDate(thread.updated_at)
-          }}</span>
+          <!-- Inline rename: an editable title input replaces the label while
+               this row is being renamed. Clicks inside it must not select the
+               row; Enter saves, Esc cancels. -->
+          <input
+            v-if="editingId === thread.id"
+            v-model="editTitle"
+            data-testid="thread-rename-input"
+            type="text"
+            maxlength="120"
+            aria-label="Conversation title"
+            class="form-input w-full text-sm"
+            @click.stop
+            @keydown.enter.prevent.stop="saveRename(thread)"
+            @keydown.esc.prevent.stop="cancelRename"
+          />
+          <template v-else>
+            <span
+              class="block truncate text-sm"
+              :class="
+                thread.id === activeThreadId
+                  ? 'text-violet-700 dark:text-violet-300 font-medium'
+                  : 'text-gray-800 dark:text-gray-100'
+              "
+              >{{ thread.title }}</span
+            >
+            <span class="block text-xs text-gray-500 dark:text-gray-400">{{
+              formatDate(thread.updated_at)
+            }}</span>
+          </template>
         </span>
         <div class="shrink-0 flex items-center gap-2">
-          <template v-if="confirmingId === thread.id">
+          <template v-if="editingId === thread.id">
+            <button
+              data-testid="thread-rename-save"
+              type="button"
+              class="text-xs font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 transition"
+              @click.stop="saveRename(thread)"
+            >
+              Save
+            </button>
+            <button
+              data-testid="thread-rename-cancel"
+              type="button"
+              class="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition"
+              @click.stop="cancelRename"
+            >
+              Cancel
+            </button>
+          </template>
+          <template v-else-if="confirmingId === thread.id">
             <button
               data-testid="thread-delete-confirm"
               type="button"
@@ -154,15 +225,24 @@ defineExpose({ refresh })
               Cancel
             </button>
           </template>
-          <button
-            v-else
-            data-testid="thread-delete"
-            type="button"
-            class="text-xs text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition"
-            @click.stop="requestDelete(thread)"
-          >
-            Delete
-          </button>
+          <template v-else>
+            <button
+              data-testid="thread-rename"
+              type="button"
+              class="text-xs text-gray-400 hover:text-violet-500 dark:hover:text-violet-400 transition"
+              @click.stop="startRename(thread)"
+            >
+              Rename
+            </button>
+            <button
+              data-testid="thread-delete"
+              type="button"
+              class="text-xs text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition"
+              @click.stop="requestDelete(thread)"
+            >
+              Delete
+            </button>
+          </template>
         </div>
       </li>
 

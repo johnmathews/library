@@ -81,6 +81,22 @@ def with_api_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     get_settings.cache_clear()
 
 
+@pytest.fixture(autouse=True)
+def _stub_thread_title(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Don't make a real title-generation model call by default.
+
+    A new thread now fires ``generate_thread_title`` (an extra ``messages.create``
+    the per-test fake response lists don't account for). Stub it to return an
+    empty title so the thread keeps its truncated-question placeholder — the
+    behavior these tests already assert. Titling-specific tests override this.
+    """
+
+    async def _no_title(client: Any, *, model: str, question: str, answer: str) -> Any:
+        return ask_engine.TitleResult(title="", cost_usd=0.0)
+
+    monkeypatch.setattr(ask_module, "generate_thread_title", _no_title)
+
+
 def _unit_vector(index: int) -> list[float]:
     vector = [0.0] * EMBEDDING_DIM
     vector[index] = 1.0
@@ -897,3 +913,151 @@ async def test_run_semantic_search_excerpt_concatenates_passages(
     assert rows[11]["excerpt"] == "first passage\n\n[…]\n\nsecond passage\n\n[…]\n\nthird passage"
     assert rows[22]["excerpt"] == "only passage"
     assert cited == {11, 22}
+
+
+# --- Conversation titles ----------------------------------------------------
+
+
+async def test_generate_thread_title_cleans_and_costs() -> None:
+    """A model title is stripped of quotes/trailing period and priced."""
+    from typing import cast
+
+    fake = _FakeAnthropic(
+        [
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text='  "Travel allowance policy."  ')],
+                usage=_Usage(200, 8),
+            )
+        ]
+    )
+    result = await ask_engine.generate_thread_title(
+        cast(Any, fake),
+        model="claude-haiku-4-5",
+        question="Do I have a travel allowance?",
+        answer="Yes, 0.21 per km.",
+    )
+    assert result.title == "Travel allowance policy"
+    assert result.cost_usd > 0
+
+
+def test_new_thread_gets_generated_title(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A new conversation is named by the title model, not the raw question."""
+
+    async def _titler(client: Any, *, model: str, question: str, answer: str) -> Any:
+        return ask_engine.TitleResult(title="Tax return locations", cost_usd=0.002)
+
+    monkeypatch.setattr(ask_module, "generate_thread_title", _titler)
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="In the top drawer.")],
+                usage=_Usage(8, 3),
+            )
+        ],
+    )
+    response = api_client.post("/api/ask", json={"question": "Where are my tax returns?"})
+    assert response.status_code == 200, response.text
+    thread_id = response.json()["thread_id"]
+
+    summary = next(t for t in api_client.get("/api/ask/threads").json() if t["id"] == thread_id)
+    assert summary["title"] == "Tax return locations"
+    # The title call's cost is folded into the turn cost the response reports.
+    assert response.json()["cost_usd"] > 0
+
+
+def test_title_failure_keeps_placeholder(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A title-generation failure never breaks the answer or the thread."""
+
+    async def _boom(client: Any, *, model: str, question: str, answer: str) -> Any:
+        raise RuntimeError("title model unavailable")
+
+    monkeypatch.setattr(ask_module, "generate_thread_title", _boom)
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="An answer.")],
+                usage=_Usage(8, 3),
+            )
+        ],
+    )
+    response = api_client.post("/api/ask", json={"question": "A question about invoices?"})
+    assert response.status_code == 200, response.text
+    thread_id = response.json()["thread_id"]
+
+    summary = next(t for t in api_client.get("/api/ask/threads").json() if t["id"] == thread_id)
+    assert summary["title"] == "A question about invoices?"
+
+
+def _create_thread(api_client: TestClient, monkeypatch: pytest.MonkeyPatch, question: str) -> int:
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="Answer.")],
+                usage=_Usage(8, 3),
+            )
+        ],
+    )
+    created = api_client.post("/api/ask", json={"question": question})
+    assert created.status_code == 200, created.text
+    return int(created.json()["thread_id"])
+
+
+def test_rename_thread_updates_title(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    thread_id = _create_thread(api_client, monkeypatch, "original question?")
+
+    response = api_client.patch(
+        f"/api/ask/threads/{thread_id}", json={"title": "  My renamed chat  "}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["title"] == "My renamed chat"  # trimmed
+
+    summary = next(t for t in api_client.get("/api/ask/threads").json() if t["id"] == thread_id)
+    assert summary["title"] == "My renamed chat"
+
+
+def test_rename_foreign_thread_is_404(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+) -> None:
+    assert api_client.patch("/api/ask/threads/999999", json={"title": "nope"}).status_code == 404
+
+
+def test_rename_rejects_blank_or_oversized_title(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    thread_id = _create_thread(api_client, monkeypatch, "q?")
+
+    assert api_client.patch(f"/api/ask/threads/{thread_id}", json={"title": ""}).status_code == 422
+    assert (
+        api_client.patch(f"/api/ask/threads/{thread_id}", json={"title": "   "}).status_code == 422
+    )
+    assert (
+        api_client.patch(f"/api/ask/threads/{thread_id}", json={"title": "x" * 121}).status_code
+        == 422
+    )

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { askQuestion, listThreads, getThread, deleteThread } from '../ask'
+import { askQuestion, listThreads, getThread, deleteThread, renameThread } from '../ask'
 import { ApiError } from '../client'
 
 function jsonResponse(body: unknown, status = 200): Response {
@@ -86,5 +86,16 @@ describe('askQuestion', () => {
     const [url, init] = fetchMock.mock.calls[2] as [string, RequestInit]
     expect(url).toBe('/api/ask/threads/1')
     expect(init.method).toBe('DELETE')
+  })
+
+  it('PATCHes a new title when renaming a thread', async () => {
+    const updated = { id: 1, title: 'Utility costs', created_at: '', updated_at: '', turn_count: 3, total_cost_usd: 0.05 }
+    fetchMock.mockResolvedValueOnce(jsonResponse(updated))
+    const result = await renameThread(1, 'Utility costs')
+    const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit]
+    expect(url).toBe('/api/ask/threads/1')
+    expect(init.method).toBe('PATCH')
+    expect(JSON.parse(init.body as string)).toEqual({ title: 'Utility costs' })
+    expect(result.title).toBe('Utility costs')
   })
 })

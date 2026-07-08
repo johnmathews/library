@@ -285,6 +285,62 @@ class AskResult:
     turn_messages: list[dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass(slots=True)
+class TitleResult:
+    """A generated conversation title plus the cost of generating it."""
+
+    title: str
+    cost_usd: float = 0.0
+
+
+_TITLE_SYSTEM_PROMPT: str = (
+    "You name conversations for a document-archive assistant. Given the user's "
+    "question and the assistant's answer, produce a short, specific title of "
+    "three to six words that captures the conversation's subject. Return only "
+    "the title text: no surrounding quotes, no trailing punctuation, and no "
+    'prefix such as "Title:".'
+)
+
+# Titles are for a sidebar row; keep them short enough to read at a glance.
+_TITLE_MAX_CHARS = 60
+
+
+def _clean_title(raw: str) -> str:
+    """Trim a model-produced title to a tidy sidebar label.
+
+    Strips wrapping quotes, collapses whitespace, drops a trailing period, and
+    caps the length. Returns "" when nothing usable remains so the caller keeps
+    its fallback title.
+    """
+    title = " ".join(raw.split()).strip().strip("\"'“”").strip().rstrip(".")
+    return title[:_TITLE_MAX_CHARS].strip()
+
+
+async def generate_thread_title(
+    client: AsyncAnthropic,
+    *,
+    model: str,
+    question: str,
+    answer: str,
+) -> TitleResult:
+    """Summarise a question/answer exchange into a short conversation title.
+
+    One bounded, cheap model call. Returns the cleaned title (possibly "" if the
+    model returned nothing usable) plus the call's estimated cost. Raises on API
+    error — the caller owns the fallback, because a title must never block or
+    fail an answer.
+    """
+    user_text = f"Question:\n{question.strip()}\n\nAnswer:\n{answer.strip()[:2000]}"
+    response = await client.messages.create(
+        model=model,
+        max_tokens=32,
+        system=_TITLE_SYSTEM_PROMPT,
+        messages=[{"role": "user", "content": user_text}],
+    )
+    cost = estimate_cost_usd(model, response.usage.input_tokens, response.usage.output_tokens)
+    return TitleResult(title=_clean_title(_text_of(response.content)), cost_usd=cost)
+
+
 def _parse_date(value: object) -> date | None:
     if not value:
         return None

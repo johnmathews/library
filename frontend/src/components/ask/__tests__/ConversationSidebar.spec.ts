@@ -1,9 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import ConversationSidebar from '../ConversationSidebar.vue'
-import { listThreads, deleteThread } from '@/api/ask'
+import { listThreads, deleteThread, renameThread } from '@/api/ask'
 
-vi.mock('@/api/ask', () => ({ listThreads: vi.fn(), deleteThread: vi.fn() }))
+vi.mock('@/api/ask', () => ({
+  listThreads: vi.fn(),
+  deleteThread: vi.fn(),
+  renameThread: vi.fn(),
+}))
 
 describe('ConversationSidebar', () => {
   beforeEach(() => {
@@ -73,6 +77,67 @@ describe('ConversationSidebar', () => {
     // Back to the plain Delete affordance.
     expect(w.find('[data-testid="thread-delete"]').exists()).toBe(true)
     expect(w.find('[data-testid="thread-delete-confirm"]').exists()).toBe(false)
+  })
+
+  it('renames a thread inline, then refreshes', async () => {
+    vi.mocked(renameThread).mockResolvedValue({
+      id: 1,
+      title: 'Utility costs',
+      created_at: '',
+      updated_at: '',
+      turn_count: 3,
+      total_cost_usd: 0.05,
+    })
+    const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
+    await flushPromises()
+
+    // Arm the inline editor: an input seeded with the current title appears.
+    await w.find('[data-testid="thread-rename"]').trigger('click')
+    const input = w.find('[data-testid="thread-rename-input"]')
+    expect(input.exists()).toBe(true)
+    expect((input.element as HTMLInputElement).value).toBe('Energy bills')
+
+    // Save the new title → PATCH with the trimmed value, then re-list.
+    await input.setValue('  Utility costs  ')
+    await w.find('[data-testid="thread-rename-save"]').trigger('click')
+    await flushPromises()
+    expect(renameThread).toHaveBeenCalledWith(1, 'Utility costs')
+    expect(listThreads).toHaveBeenCalledTimes(2)
+  })
+
+  it('does not select the row when clicking inside the rename input', async () => {
+    const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
+    await flushPromises()
+    await w.find('[data-testid="thread-rename"]').trigger('click')
+    await w.find('[data-testid="thread-rename-input"]').trigger('click')
+    expect(w.emitted('select')).toBeFalsy()
+  })
+
+  it('cancels a rename without calling the API', async () => {
+    const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
+    await flushPromises()
+    await w.find('[data-testid="thread-rename"]').trigger('click')
+    await w.find('[data-testid="thread-rename-input"]').setValue('Something else')
+    await w.find('[data-testid="thread-rename-cancel"]').trigger('click')
+    expect(renameThread).not.toHaveBeenCalled()
+    // Back to the label + plain Rename affordance.
+    expect(w.find('[data-testid="thread-rename-input"]').exists()).toBe(false)
+    expect(w.text()).toContain('Energy bills')
+  })
+
+  it('skips the API on a blank or unchanged rename', async () => {
+    const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
+    await flushPromises()
+    // Unchanged title → no request, editor closes.
+    await w.find('[data-testid="thread-rename"]').trigger('click')
+    await w.find('[data-testid="thread-rename-save"]').trigger('click')
+    await flushPromises()
+    // Blank title → no request either.
+    await w.find('[data-testid="thread-rename"]').trigger('click')
+    await w.find('[data-testid="thread-rename-input"]').setValue('   ')
+    await w.find('[data-testid="thread-rename-save"]').trigger('click')
+    await flushPromises()
+    expect(renameThread).not.toHaveBeenCalled()
   })
 
   it('marks the active thread with a full-perimeter ring, not a left-only bar (W1)', async () => {

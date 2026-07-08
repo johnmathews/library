@@ -5,6 +5,7 @@ semantic + structured retrieval) and records each ask's cost in ``ask_turns``.
 Authentication is enforced at include level in app.py.
 """
 
+import logging
 from datetime import datetime
 from typing import Annotated, Any, Literal
 
@@ -15,10 +16,13 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.ask import run_ask
+from library.ask.engine import generate_thread_title
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
 from library.models import AskThread, AskTurn, User
+
+logger = logging.getLogger(__name__)
 
 router: APIRouter = APIRouter(tags=["ask"])
 
@@ -95,6 +99,12 @@ class ThreadDetail(BaseModel):
     turns: list[TurnView]
 
 
+class ThreadRenameRequest(BaseModel):
+    """Body of PATCH /api/ask/threads/{id} — a user-supplied conversation title."""
+
+    title: str = Field(min_length=1, max_length=120, description="New conversation title.")
+
+
 def _thread_title(question: str) -> str:
     return question.strip()[:120]
 
@@ -153,6 +163,7 @@ async def ask(
     history = await _history_messages(session, thread.id, settings.ask_history_turns)
 
     images = [{"media_type": image.media_type, "data": image.data} for image in request.images]
+    turn_cost = 0.0
     async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as client:
         result = await run_ask(
             session,
@@ -162,6 +173,27 @@ async def ask(
             history_messages=history,
             images=images,
         )
+        turn_cost = result.cost_usd
+        # A brand-new thread was seeded with the truncated question as a
+        # placeholder title. Upgrade it to a concise generated title from the
+        # first exchange. This must never fail or block the answer, which is
+        # already rendered: on any error we keep the placeholder and move on.
+        if request.thread_id is None:
+            try:
+                title = await generate_thread_title(
+                    client,
+                    model=settings.ask_title_model,
+                    question=request.question,
+                    answer=result.answer,
+                )
+                if title.title:
+                    thread.title = title.title
+                turn_cost += title.cost_usd
+            except Exception:
+                logger.warning(
+                    "Ask thread title generation failed; keeping placeholder title",
+                    exc_info=True,
+                )
 
     session.add(
         AskTurn(
@@ -171,7 +203,7 @@ async def ask(
             model=result.model,
             input_tokens=result.input_tokens,
             output_tokens=result.output_tokens,
-            cost_usd=result.cost_usd,
+            cost_usd=turn_cost,
             used_tools={"tools": result.used_tools},
             citations=[
                 {"document_id": c.document_id, "title": c.title, "page_number": c.page_number}
@@ -190,7 +222,7 @@ async def ask(
             for c in result.citations
         ],
         used_tools=result.used_tools,
-        cost_usd=result.cost_usd,
+        cost_usd=turn_cost,
         thread_id=thread.id,
     )
 
@@ -269,6 +301,52 @@ async def get_thread(
             )
             for t in turns
         ],
+    )
+
+
+@router.patch(
+    "/ask/threads/{thread_id}", response_model=ThreadSummary, summary="Rename a conversation"
+)
+async def rename_thread(
+    thread_id: int,
+    request: ThreadRenameRequest,
+    user: Annotated[User, Depends(current_user)],
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> ThreadSummary:
+    """Set a user-chosen title on an owned conversation, overriding the
+    auto-generated one. Rejects a blank (whitespace-only) title."""
+    title = request.title.strip()
+    if not title:
+        raise HTTPException(status_code=422, detail="Title cannot be blank.")
+    thread: AskThread = await _owned_thread(session, thread_id, user)
+    thread.title = title
+    await session.commit()
+
+    # Build the summary from a fresh query rather than the just-committed ORM
+    # object: commit expires its attributes, so reading them here would trigger
+    # a lazy reload in a sync context (MissingGreenlet).
+    tid, new_title, created, updated, count, cost = (
+        await session.execute(
+            select(
+                AskThread.id,
+                AskThread.title,
+                AskThread.created_at,
+                AskThread.updated_at,
+                func.count(AskTurn.id),
+                func.coalesce(func.sum(AskTurn.cost_usd), 0.0),
+            )
+            .outerjoin(AskTurn, AskTurn.thread_id == AskThread.id)
+            .where(AskThread.id == thread_id)
+            .group_by(AskThread.id)
+        )
+    ).one()
+    return ThreadSummary(
+        id=tid,
+        title=new_title,
+        created_at=created,
+        updated_at=updated,
+        turn_count=count,
+        total_cost_usd=float(cost),
     )
 
 

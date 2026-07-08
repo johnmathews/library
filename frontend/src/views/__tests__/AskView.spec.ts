@@ -464,18 +464,17 @@ describe('AskView', () => {
     expect(w.find('[data-testid="ask-form"]').classes()).not.toContain('max-lg:hidden')
   })
 
-  it('renders an internally-scrolling transcript at lg+ (chat layout, Option A)', () => {
+  it('lets the transcript grow with the page rather than scrolling internally', () => {
     const w = mountView()
     const transcript = w.find('[data-testid="ask-transcript"]')
     expect(transcript.exists()).toBe(true)
-    // Internal scroll is gated to lg+ — on mobile/tablet the transcript flows
-    // normally (a fixed-height internal-scroll column trapped citation clicks on
-    // mobile-webkit).
-    expect(transcript.classes()).toContain('lg:overflow-y-auto')
-    // The scroll region shows a subtle scrollbar (affordance that it scrolls),
-    // rather than hiding it entirely — no-scrollbar removed the affordance (item 3).
-    expect(transcript.classes()).toContain('thin-scrollbar')
-    expect(transcript.classes()).not.toContain('no-scrollbar')
+    // The transcript now flows at its natural height and grows with the
+    // conversation; the whole page scrolls instead of a fixed-height internal
+    // scroller. So it must NOT be an overflow-y-auto/fixed-height column.
+    expect(transcript.classes()).not.toContain('lg:overflow-y-auto')
+    expect(transcript.classes()).not.toContain('lg:flex-1')
+    // Likewise the outer view no longer pins itself to the viewport height.
+    expect(w.find('#ask-page').classes()).not.toContain('lg:flex-1')
   })
 
   it('shows the no-threads empty-state prompt when no conversations exist (W10)', async () => {
