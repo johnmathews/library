@@ -144,13 +144,17 @@ const {
   resetLayout,
 } = useDocumentLayout()
 
-// The ActionDock's Edit/Done button drives the SAME metadata edit mode as
-// the Details card's own "Edit" toggle (not this view's "Edit layout" mode
-// above) — both read/flip the one `useMetadataEditMode` singleton so opening
-// the editors from the dock shows exactly what the card's toggle would. This
-// view only needs to reset the flag on unmount/navigation; ActionDock owns
-// reading and flipping it.
-const { setEditMode: setMetadataEditMode } = useMetadataEditMode()
+// The hero's "Edit details" toggle and the ActionDock's Edit/Done button drive
+// the SAME metadata edit mode (not this view's "Edit layout" mode above) — both
+// read/flip the one `useMetadataEditMode` singleton, so every split-out metadata
+// tile opens its editors together. `metadataEditMode` also gates `cardPresent`
+// so an empty section tile (e.g. Financial) reappears when editing. The view
+// resets the flag on unmount/navigation.
+const {
+  editMode: metadataEditMode,
+  toggle: toggleMetadataEditMode,
+  setEditMode: setMetadataEditMode,
+} = useMetadataEditMode()
 
 /** Display string for every known hero field, resolved from the current doc.
  * An empty string means "no value" — such a field is dropped from the read-mode
@@ -606,6 +610,26 @@ function cardPresent(id: string): boolean {
       (markdownData.value !== null && !hasReadableText.value)
     )
   }
+  // Metadata section tiles (the split-out Details card). Content and System
+  // always show; the value-bearing groups appear only when they hold a value OR
+  // metadata edit mode is on — so an empty group (e.g. Financial on a letter)
+  // stays hidden in read mode but reappears to be filled in while editing.
+  const d = doc.value
+  if (id === 'metadata-content' || id === 'metadata-system') return true
+  if (id === 'metadata-classification') {
+    return metadataEditMode.value || !!d?.kind || !!d?.language
+  }
+  if (id === 'metadata-parties') {
+    return (
+      metadataEditMode.value ||
+      !!d?.sender ||
+      !!d?.recipient ||
+      !!d?.document_date ||
+      !!d?.due_date ||
+      !!d?.expiry_date
+    )
+  }
+  if (id === 'metadata-financial') return metadataEditMode.value || d?.amount_total != null
   return true
 }
 
@@ -918,6 +942,35 @@ watch(
           {{ doc.title ?? 'Untitled document' }}
         </h1>
         <div class="flex shrink-0 items-center gap-2">
+          <!-- Page-wide metadata edit toggle. The Details card was split into
+               per-section tiles, so this single control (not a per-tile button)
+               flips the shared `useMetadataEditMode` flag every tile reads. Kept
+               distinct from "Edit layout" (which rearranges tiles/fields). -->
+          <button
+            type="button"
+            class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
+            :class="metadataEditMode ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-500/15 dark:text-violet-300' : ''"
+            data-testid="edit-toggle"
+            :aria-pressed="metadataEditMode"
+            @click="toggleMetadataEditMode"
+          >
+            <svg
+              xmlns="http://www.w3.org/2000/svg"
+              fill="none"
+              viewBox="0 0 24 24"
+              stroke-width="1.5"
+              stroke="currentColor"
+              class="w-4 h-4"
+              aria-hidden="true"
+            >
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125"
+              />
+            </svg>
+            {{ metadataEditMode ? 'Done' : 'Edit details' }}
+          </button>
           <button
             v-if="layoutEditMode"
             type="button"
@@ -1263,7 +1316,33 @@ watch(
           @reload-markdown="loadMarkdown(doc.id)"
         />
 
-        <DocumentMetadataEditor v-else-if="cardId === 'metadata'" v-model:doc="doc" />
+        <!-- The former single "Details" card, now one tile per metadata section
+             (all reading/flipping the shared metadata edit mode). -->
+        <DocumentMetadataEditor
+          v-else-if="cardId === 'metadata-content'"
+          section="content"
+          v-model:doc="doc"
+        />
+        <DocumentMetadataEditor
+          v-else-if="cardId === 'metadata-classification'"
+          section="classification"
+          v-model:doc="doc"
+        />
+        <DocumentMetadataEditor
+          v-else-if="cardId === 'metadata-parties'"
+          section="parties"
+          v-model:doc="doc"
+        />
+        <DocumentMetadataEditor
+          v-else-if="cardId === 'metadata-financial'"
+          section="financial"
+          v-model:doc="doc"
+        />
+        <DocumentMetadataEditor
+          v-else-if="cardId === 'metadata-system'"
+          section="system"
+          v-model:doc="doc"
+        />
 
         <DocumentComments
           v-else-if="cardId === 'comments'"

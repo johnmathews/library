@@ -5,8 +5,10 @@ import {
   reconcileHeroFields,
   reconcileCardColumns,
   migrateCardOrderToColumns,
+  migrateMetadataCard,
   DEFAULT_HERO_FIELDS,
   DEFAULT_CARD_COLUMNS,
+  METADATA_CARD_IDS,
   HERO_FIELD_LABELS,
   HERO_FIELDS_STORAGE_KEY,
   CARD_ORDER_STORAGE_KEY,
@@ -73,15 +75,38 @@ describe('reconcileCardColumns', () => {
   })
 
   it('appends missing known cards, drops unknown, de-dupes', () => {
-    const stored = { left: ['metadata', 'metadata', 'ghost'], right: ['preview'] } // dup + unknown, missing several
+    const stored = { left: ['metadata-content', 'metadata-content', 'ghost'], right: ['preview'] } // dup + unknown, missing several
     const merged = reconcileCardColumns(stored, DEFAULT_CARD_COLUMNS)
     const all = [...merged.left, ...merged.right]
     expect(all).not.toContain('ghost') // unknown dropped
-    expect(all.filter((c) => c === 'metadata')).toHaveLength(1) // de-duped
+    expect(all.filter((c) => c === 'metadata-content')).toHaveLength(1) // de-duped
     expect(new Set(all)).toEqual(
       new Set([...DEFAULT_CARD_COLUMNS.left, ...DEFAULT_CARD_COLUMNS.right]),
     ) // every known card present once
-    expect(merged.left[0]).toBe('metadata') // preserved stored order for survivors
+    expect(merged.left[0]).toBe('metadata-content') // preserved stored order for survivors
+  })
+})
+
+describe('migrateMetadataCard', () => {
+  it('expands the legacy single `metadata` card into the five section tiles in place', () => {
+    // A returning user who moved Details to the top of the right column.
+    const stored: CardColumns = { left: ['notes', 'comments'], right: ['metadata', 'preview'] }
+    const migrated = migrateMetadataCard(stored)
+    expect(migrated.left).toEqual(['notes', 'comments']) // untouched
+    expect(migrated.right).toEqual([...METADATA_CARD_IDS, 'preview']) // expanded at metadata's spot
+  })
+
+  it('leaves a layout without the legacy id structurally unchanged', () => {
+    const stored: CardColumns = { left: ['notes', ...METADATA_CARD_IDS], right: ['preview'] }
+    expect(migrateMetadataCard(stored)).toEqual(stored)
+  })
+
+  it('tolerates partial/absent columns', () => {
+    expect(migrateMetadataCard(null)).toEqual({ left: [], right: [] })
+    expect(migrateMetadataCard({ left: ['metadata'] })).toEqual({
+      left: [...METADATA_CARD_IDS],
+      right: [],
+    })
   })
 })
 
@@ -124,8 +149,15 @@ describe('legacy card-order migration (module init)', () => {
     const layout = mod.useDocumentLayout()
     // Right column preserved the customized order (markdown before preview).
     expect(layout.cardColumns.value.right).toEqual(['markdown', 'preview', 'series-chart'])
-    // Left column preserved the flat order for its members.
-    expect(layout.cardColumns.value.left).toEqual(['history', 'metadata', 'notes', 'actions', 'comments'])
+    // Left column preserved the flat order for its members; the legacy single
+    // `metadata` card expands in place into the five per-section tiles.
+    expect(layout.cardColumns.value.left).toEqual([
+      'history',
+      ...mod.METADATA_CARD_IDS,
+      'notes',
+      'actions',
+      'comments',
+    ])
   })
 
   it('appends a known card missing from the legacy flat order to its default column', async () => {
@@ -138,8 +170,37 @@ describe('legacy card-order migration (module init)', () => {
     const layout = mod.useDocumentLayout()
     expect(layout.cardColumns.value.right).toEqual(['markdown', 'preview', 'series-chart'])
     // 'comments' wasn't in the legacy order; reconcileCardColumns appends it
-    // to its default (left) column rather than dropping it.
-    expect(layout.cardColumns.value.left).toEqual(['history', 'metadata', 'notes', 'actions', 'comments'])
+    // to its default (left) column rather than dropping it. The legacy single
+    // `metadata` card expands in place into the five per-section tiles.
+    expect(layout.cardColumns.value.left).toEqual([
+      'history',
+      ...mod.METADATA_CARD_IDS,
+      'notes',
+      'actions',
+      'comments',
+    ])
+  })
+
+  it('expands a returning user’s persisted single `metadata` card into the five tiles in place', async () => {
+    // Returning user already on the columns key, with the pre-split Details
+    // card moved to a custom spot. Migration must keep that spot.
+    localStorage.setItem(
+      CARD_COLUMNS_STORAGE_KEY,
+      JSON.stringify({
+        left: ['metadata', 'notes', 'comments', 'actions', 'history'],
+        right: ['preview', 'markdown', 'series-chart'],
+      }),
+    )
+    const mod = await import('../useDocumentLayout')
+    const layout = mod.useDocumentLayout()
+    expect(layout.cardColumns.value.left).toEqual([
+      ...mod.METADATA_CARD_IDS,
+      'notes',
+      'comments',
+      'actions',
+      'history',
+    ])
+    expect(layout.cardColumns.value.left).not.toContain('metadata')
   })
 
   it('a fresh user with no legacy key gets the default columns', async () => {

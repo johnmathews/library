@@ -82,9 +82,24 @@ export interface CardColumns {
   right: string[]
 }
 
+/** The pre-split single Details card. Retained only so `migrateMetadataCard`
+ * can rewrite an existing saved layout that still holds it. */
+export const LEGACY_METADATA_CARD_ID = 'metadata'
+
+/** The Details card was split into one tile per metadata section; these are the
+ * resulting card ids, in their default top-to-bottom order. Content leads
+ * (it also carries Topics), System (read-only provenance) trails. */
+export const METADATA_CARD_IDS = [
+  'metadata-content',
+  'metadata-classification',
+  'metadata-parties',
+  'metadata-financial',
+  'metadata-system',
+] as const
+
 /** Stable card ids, split into their default column and default in-column order. */
 export const DEFAULT_CARD_COLUMNS: CardColumns = {
-  left: ['notes', 'metadata', 'comments', 'actions', 'history'],
+  left: ['notes', ...METADATA_CARD_IDS, 'comments', 'actions', 'history'],
   right: ['preview', 'markdown', 'series-chart'],
 }
 
@@ -191,6 +206,23 @@ export function migrateCardOrderToColumns(flatOrder: readonly string[]): CardCol
   return { left, right }
 }
 
+/**
+ * Migrate a stored two-column layout from the single pre-split `metadata`
+ * (Details) card to the five per-section metadata tiles. Wherever the old
+ * `metadata` id sits — either column, any position — it is replaced in place by
+ * `METADATA_CARD_IDS`, so a user who moved or repositioned the Details card
+ * keeps that spot instead of having the new tiles appended at the end by
+ * `reconcileCardColumns`. Pure; a layout without the legacy id is returned
+ * structurally unchanged.
+ */
+export function migrateMetadataCard(cols: Partial<CardColumns> | null | undefined): CardColumns {
+  const expand = (ids: readonly string[] | undefined): string[] =>
+    (ids ?? []).flatMap((id) =>
+      id === LEGACY_METADATA_CARD_ID ? [...METADATA_CARD_IDS] : [id],
+    )
+  return { left: expand(cols?.left), right: expand(cols?.right) }
+}
+
 // --- Singleton state (module-level, shared across every caller) --------------
 
 const heroFields = useStorage<HeroField[]>(
@@ -220,6 +252,10 @@ if (!hadColumns && legacyOrder) {
     /* ignore malformed legacy value */
   }
 }
+// Expand the pre-split single Details card into its five per-section tiles,
+// in place, before reconciliation (which would otherwise drop the unknown
+// `metadata` id and append the new tiles at the column's end).
+cardColumns.value = migrateMetadataCard(cardColumns.value)
 cardColumns.value = reconcileCardColumns(cardColumns.value, DEFAULT_CARD_COLUMNS)
 
 // Ephemeral — deliberately a plain ref, never persisted.

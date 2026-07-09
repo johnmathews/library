@@ -83,12 +83,22 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
   }
 }
 
-function mountEditor(doc: DocumentDetail = makeDetail()) {
+type Section = 'content' | 'classification' | 'parties' | 'financial' | 'system'
+
+function mountEditor(section: Section = 'content', doc: DocumentDetail = makeDetail()) {
   const wrapper = mount(DocumentMetadataEditor, {
-    props: { doc },
+    props: { doc, section },
     global: { stubs: { RouterLink: true } },
   })
   return { wrapper, doc }
+}
+
+/** Enter the shared page-wide metadata edit mode. The Edit toggle now lives in
+ * the detail view's hero (not on any tile), so tests flip the same singleton the
+ * hero button flips, exactly as the Action dock does. */
+async function enterEditMode() {
+  useMetadataEditMode().setEditMode(true)
+  await flushPromises()
 }
 
 describe('DocumentMetadataEditor', () => {
@@ -109,8 +119,7 @@ describe('DocumentMetadataEditor', () => {
     const { wrapper, doc } = mountEditor()
     await flushPromises()
 
-    await wrapper.find('[data-testid="edit-toggle"]').trigger('click')
-    await flushPromises()
+    await enterEditMode()
     // AppInput's native @change commits the field; VTU's setValue dispatches it.
     await wrapper.find('#edit-title').setValue('Nieuwe titel')
     await flushPromises()
@@ -130,8 +139,7 @@ describe('DocumentMetadataEditor', () => {
     const { wrapper } = mountEditor()
     await flushPromises()
 
-    await wrapper.find('[data-testid="edit-toggle"]').trigger('click')
-    await flushPromises()
+    await enterEditMode()
     await wrapper.find('#edit-title').setValue('Nieuwe titel') // first save — now pending
     await wrapper.find('#edit-title').trigger('change') // second save — must no-op
     await flushPromises()
@@ -151,8 +159,7 @@ describe('DocumentMetadataEditor', () => {
     const { wrapper } = mountEditor()
     await flushPromises()
 
-    await wrapper.find('[data-testid="edit-toggle"]').trigger('click')
-    await flushPromises()
+    await enterEditMode()
     await wrapper.find('#edit-title').setValue('Half-typed edit')
 
     // An outside update lands while the field is dirty and edit mode is open.
@@ -168,14 +175,20 @@ describe('DocumentMetadataEditor', () => {
     // DocumentDetailView's floating Action dock as well as this card's own
     // `edit-toggle` button. Flip it directly here (bypassing the card's own
     // button entirely) to simulate the Action dock's path.
-    const { wrapper, doc } = mountEditor()
+    const { wrapper, doc } = mountEditor('content')
     await flushPromises()
 
+    // Flip the shared flag directly (bypassing any button) to simulate the dock.
     useMetadataEditMode().editMode.value = true
     await flushPromises()
 
     expect((wrapper.find('#edit-title').element as HTMLInputElement).value).toBe(doc.title)
-    expect((wrapper.find('#edit-sender').element as HTMLInputElement).value).toBe(
+
+    // A sibling section tile (Sender & dates) hydrates from the same flag — and,
+    // if it only mounts once editing is already on, still hydrates on mount.
+    const parties = mountEditor('parties', doc)
+    await flushPromises()
+    expect((parties.wrapper.find('#edit-sender').element as HTMLInputElement).value).toBe(
       doc.sender?.name ?? '',
     )
     // Entering edit mode alone (no field committed) must never autosave.
@@ -183,11 +196,10 @@ describe('DocumentMetadataEditor', () => {
   })
 
   it('renders the sender datalist adjacent to the sender input', async () => {
-    const { wrapper } = mountEditor()
+    const { wrapper } = mountEditor('parties')
     await flushPromises()
 
-    await wrapper.find('[data-testid="edit-toggle"]').trigger('click')
-    await flushPromises()
+    await enterEditMode()
 
     expect(wrapper.find('#edit-sender').attributes('list')).toBe('sender-options')
     const options = wrapper.find('datalist#sender-options').findAll('option')

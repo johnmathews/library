@@ -47,9 +47,16 @@ import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 import { ApiError } from '@/api/client'
 import { formatDate, tagColour, formatDateTime } from '@/utils/documentFormat'
 
+/** Which metadata section this tile renders. What used to be a single "Details"
+ * card is now one instance per section (the detail view mounts five of them);
+ * `system` is the read-only provenance tile and has no editable field group. */
+type MetadataSection = 'content' | 'classification' | 'parties' | 'financial' | 'system'
+
 const props = defineProps<{
   /** The document being edited (always non-null; the parent gates on `doc`). */
   doc: DocumentDetail
+  /** The section this instance renders as its own standalone tile. */
+  section: MetadataSection
 }>()
 
 const emit = defineEmits<{
@@ -66,20 +73,30 @@ const recipients = ref<RecipientOption[]>([])
 // Existing projects feed the projects multiselect (picking an existing name or
 // typing a new one, which the backend upserts on save).
 const { projects: projectOptions, ensureLoaded: ensureProjectsLoaded } = useTaxonomyOptions()
-void ensureProjectsLoaded()
+// Only the Content tile renders the projects multiselect; the composable caches
+// its fetch, so this is at most one request across the whole page regardless.
+if (props.section === 'content') void ensureProjectsLoaded()
 const projectOptionNames = computed(() => projectOptions.value.map((project) => project.name))
 
 onMounted(async () => {
-  // Best-effort: without options the kind/recipient selects still offer the
-  // current value and "Not set", and the sender input works without suggestions.
-  const [kindResult, senderResult, recipientResult] = await Promise.allSettled([
-    listKinds(),
-    listSenders(),
-    listRecipients(),
-  ])
-  if (kindResult.status === 'fulfilled') kinds.value = kindResult.value
-  if (senderResult.status === 'fulfilled') senders.value = senderResult.value
-  if (recipientResult.status === 'fulfilled') recipients.value = recipientResult.value
+  // Only the tile that renders a given controlled-list editor fetches its
+  // options: the page mounts one instance per section, so loading kinds in the
+  // Classification tile and senders/recipients in the Sender-&-dates tile keeps
+  // this to one request each instead of five. Best-effort — without options the
+  // kind/recipient selects still offer the current value and "Not set", and the
+  // sender input just loses its suggestions.
+  if (props.section === 'classification') {
+    const [kindResult] = await Promise.allSettled([listKinds()])
+    if (kindResult.status === 'fulfilled') kinds.value = kindResult.value
+  }
+  if (props.section === 'parties') {
+    const [senderResult, recipientResult] = await Promise.allSettled([
+      listSenders(),
+      listRecipients(),
+    ])
+    if (senderResult.status === 'fulfilled') senders.value = senderResult.value
+    if (recipientResult.status === 'fulfilled') recipients.value = recipientResult.value
+  }
 })
 
 /** Reload the recipient dropdown options (called after an inline add so a freshly
@@ -232,6 +249,14 @@ const fieldGroups: FieldGroup[] = [
   { key: 'financial', label: 'Financial', accent: 'green', fields: ['amount'] },
 ]
 
+/** The field group this tile renders, wrapped as a 0-or-1 array so the template
+ * can drive its per-field body with `v-for="group in activeGroups"` — the same
+ * body the old single "Details" card used, now emitted for exactly one group.
+ * Empty for the `system` tile (read-only provenance, rendered separately). */
+const activeGroups = computed<FieldGroup[]>(() =>
+  props.section === 'system' ? [] : fieldGroups.filter((group) => group.key === props.section),
+)
+
 /** Fields that read better spanning the full width of the two-column grid. */
 const WIDE_FIELDS = new Set<EditableField>(['title', 'summary', 'tags', 'projects', 'amount'])
 
@@ -280,25 +305,26 @@ function sourceLabel(source: string): string {
 
 // --- Page-wide edit mode (per-field autosave) ---------------------------------
 //
-// A single "Edit" toggle reveals an inline editor for every field at once,
-// replacing the old one-row-at-a-time "Change" reveal (and its ~10 buttons).
-// Each field autosaves independently when committed — native `change` fires on
-// blur for text inputs and on selection for selects/dates, and bubbles up to
-// the field wrapper — via the same per-field PATCH the backend already expects.
-// There is no global Save/Cancel; "Done" just leaves edit mode.
+// A single page-wide "Edit" toggle (now in the detail view's hero, not on any
+// one tile) reveals an inline editor for every field at once, replacing the old
+// one-row-at-a-time "Change" reveal. Each field autosaves independently when
+// committed — native `change` fires on blur for text inputs and on selection for
+// selects/dates, and bubbles up to the field wrapper — via the same per-field
+// PATCH the backend already expects. There is no global Save/Cancel; "Done"
+// just leaves edit mode.
 
-// Lifted into `useMetadataEditMode` (a module singleton, mirroring
-// `useDocumentLayout`'s `editMode`) so the detail view's floating Action dock can
-// also read and flip this same flag — its Edit/Done button must open these
-// very editors, not an independent second mode. Ephemeral: the detail view
-// resets it to false on unmount.
+// `useMetadataEditMode` is a module singleton (mirroring `useDocumentLayout`'s
+// `editMode`), so the hero toggle, every section tile, and the floating Action
+// dock all read and flip ONE flag — flipping it must open these very editors,
+// not an independent second mode. Ephemeral: the detail view resets it to false
+// on unmount.
 //
-// Hydration/reset is driven by a `watch` below (not by whichever function
-// flips the flag): the flag can flip from this card's own toggle OR from the
-// Action dock, and both entry paths must hydrate fresh drafts before the editors
-// render — otherwise the path that doesn't call `toggleEditMode` directly
-// would open the editors with stale/empty drafts and risk autosaving them.
-const { editMode, toggle: toggleSharedEditMode } = useMetadataEditMode()
+// Hydration/reset is driven by a `watch` below (not by whichever button flips
+// the flag): the flag can flip from the hero toggle OR the Action dock, and
+// with the Details card split across several tiles every mounted instance must
+// hydrate fresh drafts before its editors render — otherwise a tile would open
+// with stale/empty drafts and risk autosaving them.
+const { editMode } = useMetadataEditMode()
 
 /** The fields whose draft is a plain string (text inputs + selects). */
 type StringDraftField =
@@ -381,10 +407,6 @@ function hydrateField(field: EditableField, d: DocumentDetail): void {
   }
 }
 
-function toggleEditMode(): void {
-  toggleSharedEditMode()
-}
-
 /** Leave edit mode and clear the transient per-field error / "Saved" state. */
 function resetEditState(): void {
   recipientAdding.value = false
@@ -404,6 +426,14 @@ function resetEditState(): void {
 watch(editMode, (on) => {
   if (on) hydrateDrafts()
   else resetEditState()
+})
+
+// A value-less section tile (e.g. Financial on a non-financial doc) is hidden in
+// read mode and first mounts only once edit mode is already on — so the `watch`
+// above never fires for it. Hydrate on mount in that case so its editors open
+// from the document, not from empty initial drafts.
+onMounted(() => {
+  if (editMode.value) hydrateDrafts()
 })
 
 /** Whether a field's draft differs from the stored value — guards autosave so a
@@ -672,60 +702,31 @@ const latestExtractionEvent = computed(() => {
 </script>
 
 <template>
+  <!-- Each metadata section is its own reorderable tile (card). The detail view
+       renders one instance per section via the `section` prop, so what used to
+       be a single "Details" card is now a Content / Classification / Sender-&-
+       dates / Financial / System tile that can be dragged and reordered
+       independently. There is no per-tile Edit toggle: the single page-wide
+       toggle lives in the hero and flips the shared `useMetadataEditMode` flag
+       every instance reads. `activeGroups` holds this tile's one field group
+       (empty for the read-only System tile, rendered separately below). -->
   <div
-    id="document-details-card"
+    v-for="group in activeGroups"
+    :key="group.key"
+    :id="`document-details-${group.key}`"
     class="card p-5"
+    :data-testid="`metadata-section-${group.key}`"
   >
-    <div class="mb-4 flex items-center justify-between gap-3">
-      <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Details</h2>
-      <button
-        type="button"
-        class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
-        :class="editMode ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-500/15 dark:text-violet-300' : ''"
-        data-testid="edit-toggle"
-        :aria-pressed="editMode"
-        @click="toggleEditMode"
-      >
-        <svg
-          xmlns="http://www.w3.org/2000/svg"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke-width="1.5"
-          stroke="currentColor"
-          class="w-4 h-4"
-          aria-hidden="true"
-        >
-          <path
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125"
-          />
-        </svg>
-        {{ editMode ? 'Done' : 'Edit' }}
-      </button>
-    </div>
-
-    <div id="document-details-list" class="space-y-3">
-      <!-- One themed panel per metadata group: accent rail + tint + heading
-           make each kind of metadata distinguishable at a glance, and the
-           two-column grid uses the width instead of one tall column. -->
-      <!-- v-for on a wrapper template keeps the per-group key off the same
-           element as the section content. Every group renders in both read
-           and edit modes (value-less fields show an em-dash) so a field
-           keeps its position when the Edit toggle flips. -->
-      <template v-for="group in fieldGroups" :key="group.key">
-      <section
-        class="rounded-lg border-l-4 px-4 py-3.5"
-        :class="[ACCENT[group.accent].border, ACCENT[group.accent].bg]"
-      >
-        <div class="mb-3 flex items-center gap-2">
-          <span class="h-3.5 w-1 rounded-full" :class="ACCENT[group.accent].bar"></span>
-          <h3
-            class="text-xs font-semibold uppercase tracking-wider"
+    <div class="min-w-0">
+      <section>
+        <div class="mb-4 flex items-center gap-2">
+          <span class="h-4 w-1.5 rounded-full" :class="ACCENT[group.accent].bar"></span>
+          <h2
+            class="text-sm font-semibold uppercase tracking-wider"
             :class="ACCENT[group.accent].text"
           >
             {{ group.label }}
-          </h3>
+          </h2>
         </div>
         <dl class="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
           <template v-for="field in group.fields" :key="field">
@@ -1010,32 +1011,18 @@ const latestExtractionEvent = computed(() => {
           </div>
           </template>
         </dl>
-      </section>
-      </template>
-
-      <!-- Topics: auto-extracted subject phrases, shown read-only as badge
-           pills (no editor). Rendered in both read and edit modes so the
-           System panel below keeps its position; hidden only when none. -->
-      <section
-        v-if="doc.topics.length"
-        class="rounded-lg border-l-4 px-4 py-3.5"
-        :class="[ACCENT.violet.border, ACCENT.violet.bg]"
-      >
-        <div class="mb-3 flex items-center gap-2">
-          <span class="h-3.5 w-1 rounded-full" :class="ACCENT.violet.bar"></span>
-          <h3
-            class="text-xs font-semibold uppercase tracking-wider"
-            :class="ACCENT.violet.text"
-          >
-            Topics
-          </h3>
-        </div>
-        <dl class="grid grid-cols-1">
+        <!-- Topics: auto-extracted subject phrases, read-only badge pills. They
+             describe what the document is about, so they live in the Content
+             tile; hidden entirely when the document has none. -->
+        <dl
+          v-if="group.key === 'content' && doc.topics.length"
+          class="mt-5 grid grid-cols-1 border-t border-gray-100 pt-4 dark:border-gray-700/60"
+        >
           <div data-testid="row-topics">
             <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
               Topics
             </dt>
-            <dd class="mt-1 flex flex-wrap gap-2" data-testid="row-value">
+            <dd class="mt-2 flex flex-wrap gap-2" data-testid="row-value">
               <AppBadge
                 v-for="topic in doc.topics"
                 :key="topic"
@@ -1047,20 +1034,28 @@ const latestExtractionEvent = computed(() => {
           </div>
         </dl>
       </section>
+    </div>
+  </div>
 
-      <!-- System: read-only provenance, set apart with a neutral accent. -->
-      <section
-        class="rounded-lg border-l-4 px-4 py-3.5"
-        :class="[ACCENT.gray.border, ACCENT.gray.bg]"
-      >
-        <div class="mb-3 flex items-center gap-2">
-          <span class="h-3.5 w-1 rounded-full" :class="ACCENT.gray.bar"></span>
-          <h3
-            class="text-xs font-semibold uppercase tracking-wider"
+  <!-- System tile: read-only provenance (status, OCR, source, extraction), a
+       neutral accent, its own card. Always present, so it never collapses to an
+       empty tile. -->
+  <div
+    v-if="section === 'system'"
+    id="document-details-system"
+    class="card p-5"
+    data-testid="metadata-section-system"
+  >
+    <div class="min-w-0">
+      <section>
+        <div class="mb-4 flex items-center gap-2">
+          <span class="h-4 w-1.5 rounded-full" :class="ACCENT.gray.bar"></span>
+          <h2
+            class="text-sm font-semibold uppercase tracking-wider"
             :class="ACCENT.gray.text"
           >
             System
-          </h3>
+          </h2>
         </div>
         <dl class="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
           <div>

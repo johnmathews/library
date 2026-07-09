@@ -810,7 +810,7 @@ describe('DocumentDetailView', () => {
     expect(stats).not.toContain('—')
   })
 
-  it('hides value-less hero stats, but renders value-less metadata rows/groups in both modes', async () => {
+  it('hides value-less hero stats and value-less metadata tiles in read mode, revealing them on edit', async () => {
     // A general document: a kind and a date, but no sender and no amount.
     detail = makeDetail({
       title: 'Brief van de gemeente',
@@ -829,21 +829,48 @@ describe('DocumentDetailView', () => {
     expect(stats).not.toContain('Sender')
     expect(stats).not.toContain('Amount')
 
-    // The Financial group and the Sender row now render in read mode too (with an
-    // em-dash) so the details list keeps the same shape across the Edit toggle.
-    expect(w.text()).toContain('Financial')
-    expect(w.find('[data-testid="row-amount"]').exists()).toBe(true)
-    expect(rowValue(w, 'amount')).toBe('—')
+    // Now that each metadata group is its own tile, a value-less group hides its
+    // WHOLE tile in read mode — no lone "Amount —" card on a non-financial doc.
+    expect(w.find('[data-testid="section-card-metadata-financial"]').exists()).toBe(false)
+    expect(w.find('[data-testid="row-amount"]').exists()).toBe(false)
+
+    // The Sender-&-dates tile IS present (it has a document date), so a value-less
+    // field inside a present tile (sender) still renders with an em-dash —
+    // group-level hiding, field-level em-dash.
+    expect(w.find('[data-testid="section-card-metadata-parties"]').exists()).toBe(true)
     expect(w.find('[data-testid="row-sender"]').exists()).toBe(true)
     expect(rowValue(w, 'sender')).toBe('—')
     expect(w.find('[data-testid="row-document_date"]').exists()).toBe(true)
 
-    // Edit mode still shows every field and group.
+    // Entering edit mode reveals the empty Financial tile so the amount can be added.
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
-    expect(w.text()).toContain('Financial')
+    expect(w.find('[data-testid="section-card-metadata-financial"]').exists()).toBe(true)
     expect(w.find('[data-testid="row-amount"]').exists()).toBe(true)
     expect(w.find('[data-testid="row-sender"]').exists()).toBe(true)
+  })
+
+  it('renders the split Details card as five separate metadata tiles, folding Topics into Content', async () => {
+    detail = makeDetail({ topics: ['energy', 'utilities'] })
+    const w = await mountView()
+
+    // Each metadata section is now its own reorderable tile (wrapper testid).
+    for (const id of [
+      'section-card-metadata-content',
+      'section-card-metadata-classification',
+      'section-card-metadata-parties',
+      'section-card-metadata-financial',
+      'section-card-metadata-system',
+    ]) {
+      expect(w.find(`[data-testid="${id}"]`).exists()).toBe(true)
+    }
+    // The old monolithic Details card is gone.
+    expect(w.find('#document-details-card').exists()).toBe(false)
+
+    // Topics fold into the Content tile (its "aboutness"), not a tile of their own.
+    const content = w.find('[data-testid="metadata-section-content"]')
+    expect(content.find('[data-testid="row-topics"]').exists()).toBe(true)
+    expect(content.text()).toContain('energy')
   })
 
   it('hero header renders each tag as a coloured badge', async () => {
@@ -1580,7 +1607,7 @@ describe('DocumentDetailView', () => {
       expect(w.find('[data-testid="hero-field-toggle-language"]').exists()).toBe(true)
       // Section cards expose a drag handle in both columns.
       expect(w.find('[data-testid="card-drag-handle-preview"]').exists()).toBe(true)
-      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(true)
+      expect(w.find('[data-testid="card-drag-handle-metadata-content"]').exists()).toBe(true)
       // Reset appears only in edit mode, and the toggle now reads "Done".
       expect(w.find('[data-testid="reset-layout"]').exists()).toBe(true)
       expect(w.find('[data-testid="edit-layout-toggle"]').text()).toBe('Done')
@@ -1661,17 +1688,23 @@ describe('DocumentDetailView', () => {
     })
 
     it('reorders the metadata column independently of the preview column', async () => {
-      useDocumentLayout().setColumn('left', ['notes', 'history', 'metadata', 'comments', 'actions'])
+      useDocumentLayout().setColumn('left', [
+        'notes',
+        'history',
+        'metadata-content',
+        'comments',
+        'actions',
+      ])
       const w = await mountView()
       const ids = w
         .find('#document-metadata-column')
         .findAll('[data-testid^="section-card-"]')
         .map((el) => el.attributes('data-testid') ?? '')
       // notes is absent (not a note doc), so the metadata column is history,
-      // metadata, comments, actions in that saved order.
+      // metadata-content, comments, actions in that saved order.
       expect(ids).toEqual([
         'section-card-history',
-        'section-card-metadata',
+        'section-card-metadata-content',
         'section-card-comments',
         'section-card-actions',
       ])
@@ -1691,14 +1724,16 @@ describe('DocumentDetailView', () => {
       // Both column Sortables share one onEnd (group: 'doc-cards'); grab it
       // from whichever card-column Sortable.create call was captured.
       const onEnd = cardColumnOnEnd()
-      // Simulate SortableJS dropping "comments" (left index 2 of the default
-      // left column: notes, metadata, comments, actions, history) into the
-      // right column at index 0.
+      // Simulate SortableJS dropping "comments" into the right column at index 0.
+      // For this (note) document every metadata tile is present, so the rendered
+      // left column is: notes, metadata-content, metadata-classification,
+      // metadata-parties, metadata-financial, metadata-system, comments (index 6),
+      // actions, history.
       const evt = {
         from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
         to: { dataset: { col: 'right' } },
         item: {},
-        oldIndex: 2,
+        oldIndex: 6,
         newIndex: 0,
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
@@ -1764,14 +1799,14 @@ describe('DocumentDetailView', () => {
         to: { dataset: { col: 'left' } },
         item: {},
         oldIndex: 0, // 'preview' — first rendered card in the right column
-        newIndex: 0, // top of the *rendered* left column (before 'metadata', since 'notes' is hidden)
+        newIndex: 0, // top of the *rendered* left column (before 'metadata-content', since 'notes' is hidden)
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
       await flushPromises()
 
       expect(layout.cardColumns.value.left[0]).toBe('notes')
       expect(layout.cardColumns.value.left[1]).toBe('preview')
-      expect(layout.cardColumns.value.left[2]).toBe('metadata')
+      expect(layout.cardColumns.value.left[2]).toBe('metadata-content')
       expect(layout.cardColumns.value.right).not.toContain('preview')
     })
 
