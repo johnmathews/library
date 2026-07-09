@@ -141,8 +141,10 @@ async def match_existing_recipient(session: AsyncSession, name: str) -> Recipien
     is a real, known person, not an invented recipient). Any other name resolves
     to a plain recipient by case-insensitive name match. Returns ``None`` when
     nothing matches; unlike :func:`upsert_recipient` it never creates a new plain
-    recipient. Used by the extraction/inference path so the LLM cannot conjure a
-    junk recipient row for a name that isn't already known.
+    recipient. The extraction path calls this first (any confidence): a match to
+    a known recipient/user is always assigned. Only an UNMATCHED name is then
+    created — and only when the extraction is high-confidence (see rung 1 in
+    :func:`_apply_outcome`) — so low-confidence guesses still can't seed junk rows.
     """
     cleaned = name.strip()
     user = await _match_user(session, cleaned)
@@ -164,10 +166,10 @@ async def upsert_recipient(session: AsyncSession, name: str) -> Recipient:
     document addressed to either name maps to one recipient. Any other name
     upserts a plain recipient by case-insensitive name match, creating if new.
 
-    This *creates* a recipient when none matches; it backs the **manual** edit
-    path (``documents_service.apply_document_update``) where a user deliberately
-    assigns a new recipient. The extraction/inference path uses
-    :func:`match_existing_recipient` instead, which never invents a row.
+    This *creates* a recipient when none matches. It backs the **manual** edit
+    path (``documents_service.apply_document_update``) unconditionally, and the
+    extraction path uses it for a **high-confidence** document-stated name that
+    matched no existing recipient (rung 1 in :func:`_apply_outcome`).
     """
     existing = await match_existing_recipient(session, name)
     if existing is not None:
@@ -225,6 +227,24 @@ async def resolve_recipient_from_email(session: AsyncSession, addresses: list[st
     return None
 
 
+async def resolve_recipient_hint(session: AsyncSession, addresses: list[str]) -> str | None:
+    """Resolve email ``To:`` addresses to a known user's display name, for the prompt.
+
+    Returns the display name (falling back to the username) of the first address
+    that identifies a user, or ``None``. Fed to ``extract`` as ``recipient_hint``
+    so the model can reconcile the email envelope against the document body — a
+    resolved name, never a raw email address, so no address leaks into the prompt.
+    """
+    for address in addresses or []:
+        user_id = await match_user_by_email(session, address)
+        if user_id is None:
+            continue
+        user = await session.get(User, user_id)
+        if user is not None:
+            return (user.display_name or "").strip() or user.username
+    return None
+
+
 async def get_or_create_tag(session: AsyncSession, slug: str) -> Tag:
     existing = (await session.execute(select(Tag).where(Tag.slug == slug))).scalar_one_or_none()
     if existing is not None:
@@ -271,22 +291,33 @@ async def _apply_outcome(
         document.sender_id = (await upsert_sender(session, metadata.sender_name)).id
         fields_set.append("sender_id")
 
+    # Rung 1 — the recipient NAMED IN THE DOCUMENT is the overriding signal.
+    # Resolution uses the canonical ``recipient_name`` only: the model is told to
+    # leave it null for impersonal material and generic greetings ("Beste klant"),
+    # so honouring that null is what stops junk rows. (``addressee_raw`` is the
+    # *verbatim* salutation target — it is kept in provenance and used by the
+    # deterministic cross-check in ``validation.py``, but it is deliberately NOT a
+    # creation source, because it is populated even for a generic greeting the
+    # model correctly declined to name.) A name that matches a known recipient/user
+    # is always assigned; an UNMATCHED name is created as a plain recipient only
+    # when the extraction is high-confidence, so a confident "Dear Mr de Vries"
+    # becomes recipient "Mr de Vries" while a low-confidence guess drops through to
+    # the context fallbacks below. (Manual edits still use upsert_recipient
+    # unconditionally.)
     if settable("recipient_id", metadata.recipient_name):
         assert metadata.recipient_name is not None
-        # Inference must never INVENT a recipient: only assign when the extracted
-        # name matches an existing recipient (or a known user). An unmatched name
-        # is dropped — recipient stays unset so the To: fallback below can fire
-        # and no junk recipient row is created. Manual edits still use
-        # upsert_recipient (which creates); this constrains inference only.
         matched = await match_existing_recipient(session, metadata.recipient_name)
         if matched is not None:
             document.recipient_id = matched.id
             fields_set.append("recipient_id")
+        elif metadata.confidence == "high":
+            document.recipient_id = (await upsert_recipient(session, metadata.recipient_name)).id
+            fields_set.append("recipient_id")
 
-    # Only-fill-when-empty fallback: when the LLM left recipient unset (and the
-    # user has not locked it), derive it from the email ``To:`` address if that
-    # identifies a known user. The LLM value always wins when present; a user
-    # edit always wins. Threaded onto ``extra["email_to"]`` at ingest time.
+    # Rung 2 — context fallback: when the document named no usable recipient (and
+    # the user has not locked it), derive it from the email ``To:`` address if
+    # that identifies a known user. A document-stated recipient always wins; a
+    # user edit always wins. Threaded onto ``extra["email_to"]`` at ingest time.
     if document.recipient_id is None and "recipient_id" not in user_edited:
         email_to = document.extra.get("email_to")
         if isinstance(email_to, list) and email_to:
@@ -295,13 +326,13 @@ async def _apply_outcome(
                 document.recipient_id = recipient_id
                 fields_set.append("recipient_id")
 
-    # Final fallback: a still-unattributed document belongs to whoever added it.
-    # ``uploader_id`` is resolved at ingest from the forwarder's From: address
-    # (``resolve_sender_owner``), so for personal mail you forward to the library
-    # the owner *is* the recipient — even when the addressee name on the document
-    # matched no known user and the To: header is just the library dropbox. This
-    # only fires when both stronger signals (the LLM name and the To: user) came
-    # up empty; a manual edit still wins.
+    # Rung 3 — final fallback: a still-unattributed document belongs to whoever
+    # added it. ``uploader_id`` is resolved at ingest from the forwarder's From:
+    # address (``resolve_sender_owner``), so for personal mail you forward to the
+    # library the owner *is* the recipient — even when the addressee name on the
+    # document matched no known user and the To: header is just the library
+    # dropbox. This only fires when both stronger signals (the document-stated
+    # name and the To: user) came up empty; a manual edit still wins.
     if (
         document.recipient_id is None
         and "recipient_id" not in user_edited
@@ -357,6 +388,8 @@ async def _apply_outcome(
             "input_mode": outcome.input_mode,
             "fields_set": fields_set,
             "reasoning_note": metadata.reasoning_note,
+            "addressee_raw": metadata.addressee_raw,
+            "signer_raw": metadata.signer_raw,
         },
     }
     return fields_set
@@ -434,10 +467,21 @@ async def apply_extraction(session: AsyncSession, document: Document, settings: 
         )
         return
 
+    # Resolve the email envelope to a known user's name (if any) to hint the
+    # model; the document's own recipient still wins (see rung 1 in _apply_outcome).
+    recipient_hint: str | None = None
+    email_to = document.extra.get("email_to")
+    if isinstance(email_to, list) and email_to:
+        recipient_hint = await resolve_recipient_hint(session, email_to)
+
     try:
         async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as client:
             outcome = await extract(
-                document, document.ocr_text or "", client=client, settings=settings
+                document,
+                document.ocr_text or "",
+                client=client,
+                settings=settings,
+                recipient_hint=recipient_hint,
             )
     except ExtractionSkipped as exc:
         await _record_event(

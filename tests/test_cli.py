@@ -569,6 +569,29 @@ def test_backfill_all_kinds_includes_invoice(cli_database_url: str) -> None:
     assert invoice_old in _deferred_ids(connector, "library.jobs.extract_document")
 
 
+def test_backfill_kinds_filter_scopes_to_named_kinds(cli_database_url: str) -> None:
+    """--kinds overrides the general-only default and restricts to the given slugs."""
+    letter_old = _seed_extraction_document(
+        cli_database_url, kind_slug="letter", prompt_version="old-version"
+    )
+    invoice_old = _seed_extraction_document(
+        cli_database_url, kind_slug="invoice", prompt_version="old-version"
+    )
+    manual_old = _seed_extraction_document(
+        cli_database_url, kind_slug="manual", prompt_version="old-version"
+    )
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["backfill", "--kinds", "letter,invoice"])
+    assert result.exit_code == 0, result.output
+
+    extract_ids = _deferred_ids(connector, "library.jobs.extract_document")
+    assert letter_old in extract_ids  # a named kind
+    assert invoice_old in extract_ids  # a named kind (transactional, normally excluded)
+    assert manual_old not in extract_ids  # a general kind, but not named -> excluded
+
+
 def test_backfill_include_current_includes_up_to_date(cli_database_url: str) -> None:
     ref_current = _seed_extraction_document(
         cli_database_url, kind_slug="reference", prompt_version=PROMPT_VERSION

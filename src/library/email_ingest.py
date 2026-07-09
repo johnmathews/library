@@ -289,6 +289,40 @@ def _to_addresses(message: MailMessage) -> list[str]:
     ]
 
 
+#: A ``To:``/``Aan:`` header line inside a quoted/forwarded block.
+_QUOTED_TO_HEADER_RE = re.compile(r"^\s*>*\s*(?:to|aan)\s*:\s*(.+)$", re.IGNORECASE)
+#: A bare email address, for pulling recipients out of a quoted header line.
+_EMAIL_ADDR_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
+
+
+def _forwarded_to_addresses(message: MailMessage) -> list[str]:
+    """The ``To:`` addresses of the *original* message inside a forwarded body.
+
+    A forwarded document's outer ``To:`` is the library dropbox; the person the
+    document was really sent to appears in the quoted header block after a
+    "--- Forwarded message ---" banner. This scans the plain-text body from the
+    first forward/quote banner for a ``To:``/``Aan:`` header and returns the
+    email addresses found there (lowercased, in order). Best-effort and bounded:
+    only the lines shortly after the banner are inspected. Empty when the body
+    has no forwarded header — nothing is invented.
+    """
+    body = message.text or ""
+    if not body:
+        return []
+    lines = body.splitlines()
+    for index, line in enumerate(lines):
+        if not (_FORWARD_BANNER_RE.match(line) or _QUOTE_HEADER_RE.match(line)):
+            continue
+        # Scan the header block immediately after the banner (bounded window).
+        for header in lines[index + 1 : index + 12]:
+            match = _QUOTED_TO_HEADER_RE.match(header)
+            if match:
+                found = [addr.lower() for addr in _EMAIL_ADDR_RE.findall(match.group(1))]
+                if found:
+                    return found
+    return []
+
+
 def _event_detail(message: MailMessage) -> dict[str, object]:
     """Sender/subject/Message-ID (+ To:) provenance recorded against every ingest."""
     detail: dict[str, object] = {
@@ -296,7 +330,13 @@ def _event_detail(message: MailMessage) -> dict[str, object]:
         "email_subject": message.subject,
         "email_message_id": _message_id(message),
     }
-    to_addresses = _to_addresses(message)
+    # Prefer the ORIGINAL recipient (from a forwarded header) over the outer To:
+    # (the dropbox) — first match wins in resolve_recipient_from_email, so the
+    # earliest known recipient in the chain is chosen. Deduped, order preserved.
+    to_addresses: list[str] = []
+    for address in [*_forwarded_to_addresses(message), *_to_addresses(message)]:
+        if address not in to_addresses:
+            to_addresses.append(address)
     if to_addresses:
         detail["email_to"] = to_addresses
     return detail

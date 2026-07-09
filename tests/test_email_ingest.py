@@ -38,6 +38,7 @@ from library.email_ingest import (
     IngestCandidate,
     SkippedAttachment,
     _body_substance,
+    _forwarded_to_addresses,
     poll_mailbox,
     poll_mailbox_async,
 )
@@ -1295,6 +1296,41 @@ async def test_attachment_email_stores_matching_to_address_in_document_extra(
     # And the same provenance is recorded on the received event.
     events = await events_for(session_factory, documents[0].id, "received")
     assert events[0].detail["email_to"] == [to_address.lower()]
+
+
+def test_forwarded_to_addresses_extracts_original_recipient() -> None:
+    """The original recipient inside a forwarded block is parsed from the body."""
+    from types import SimpleNamespace
+
+    body = (
+        "FYI, please file this.\n\n"
+        "---------- Forwarded message ----------\n"
+        "From: Eneco <billing@eneco.nl>\n"
+        "To: John Mathews <john@example.com>\n"
+        "Subject: Your invoice\n\n"
+        "Dear John, here is your invoice.\n"
+    )
+    assert _forwarded_to_addresses(SimpleNamespace(text=body)) == ["john@example.com"]
+
+
+def test_forwarded_to_addresses_handles_dutch_aan_header_and_quotes() -> None:
+    from types import SimpleNamespace
+
+    body = (
+        "Zie bijlage.\n\n"
+        "On Mon, 1 Jun 2026, Eneco wrote:\n"
+        "> Van: Eneco\n"
+        "> Aan: Jan de Vries <jan@example.nl>\n"
+        "> Onderwerp: Factuur\n"
+    )
+    assert _forwarded_to_addresses(SimpleNamespace(text=body)) == ["jan@example.nl"]
+
+
+def test_forwarded_to_addresses_empty_without_forward_banner() -> None:
+    from types import SimpleNamespace
+
+    assert _forwarded_to_addresses(SimpleNamespace(text="Just a plain note, no forward.")) == []
+    assert _forwarded_to_addresses(SimpleNamespace(text="")) == []
 
 
 async def test_resolve_sender_owner_matches_case_insensitively(

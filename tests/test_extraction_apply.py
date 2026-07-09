@@ -550,7 +550,7 @@ async def test_apply_sets_needs_review_on_flagged_extraction(
         calls=[CallUsage("claude-haiku-4-5", 10, 10, 0.0)],
     )
 
-    async def fake_extract(document, ocr_text, *, client, settings):
+    async def fake_extract(document, ocr_text, *, client, settings, recipient_hint=None):
         return outcome
 
     monkeypatch.setattr(apply_module, "extract", fake_extract)
@@ -606,7 +606,7 @@ async def test_apply_sets_unreviewed_on_clean_extraction(
         calls=[CallUsage("claude-haiku-4-5", 10, 10, 0.0)],
     )
 
-    async def fake_extract(document, ocr_text, *, client, settings):
+    async def fake_extract(document, ocr_text, *, client, settings, recipient_hint=None):
         return outcome
 
     monkeypatch.setattr(apply_module, "extract", fake_extract)
@@ -923,11 +923,10 @@ async def test_apply_falls_back_to_uploader_when_nothing_else_resolves(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A forwarded doc whose addressee matches nobody is attributed to its owner.
+    """A forwarded doc that names no recipient is attributed to its owner.
 
-    The LLM names a recipient that matches no existing recipient/user (so
-    inference drops it) and there is no matching To: address, but the document
-    has an ``uploader_id`` (resolved from the forwarder at ingest). The final
+    The document states no recipient (and there is no matching To: address), but
+    it has an ``uploader_id`` (resolved from the forwarder at ingest). The rung-3
     fallback attributes the document to that owner's recipient.
     """
     async with session_factory() as session:
@@ -937,8 +936,8 @@ async def test_apply_falls_back_to_uploader_when_nothing_else_resolves(
         owner_id = owner.id
         owner_username = owner.username
 
-    # An unmatched full name — inference drops it (never invents a row).
-    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name="John Mathews")))
+    # The document names no recipient → rungs 1 and 2 produce nothing.
+    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=None)))
     document_id = await make_document(
         session_factory,
         f"apply-owner-fallback-{uuid.uuid4().hex[:8]}",
@@ -1035,15 +1034,87 @@ async def test_apply_llm_recipient_matching_existing_is_assigned(
         assert "recipient_id" in document.extra["extraction"]["fields_set"]
 
 
-async def test_apply_llm_recipient_not_in_table_stays_unset_and_creates_nothing(
+async def test_apply_high_confidence_unmatched_recipient_is_created_and_assigned(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An extracted name matching no recipient leaves recipient unset and invents nothing."""
+    """Hybrid rung 1: a confident document-stated name that matches nothing is
+    created as a new recipient and assigned (the user's requested behaviour)."""
+    stated = f"Mr de Vries {uuid.uuid4().hex[:8]}"
+    patch_extract(
+        monkeypatch, make_outcome(make_metadata(recipient_name=stated, confidence="high"))
+    )
+    document_id = await make_document(session_factory, f"apply-stated-{uuid.uuid4().hex[:8]}")
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Recipient)
+                .where(func.lower(Recipient.name) == stated.lower())
+            )
+        ).scalar_one()
+        assert count == 1  # created exactly one plain recipient row
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient is not None and document.recipient.name == stated
+        assert document.recipient.user_id is None  # a plain recipient, not a user
+        assert "recipient_id" in document.extra["extraction"]["fields_set"]
+
+
+async def test_apply_addressee_raw_alone_does_not_create_recipient(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """addressee_raw is provenance/validation only — it never creates a recipient.
+
+    The model leaves recipient_name null for a generic greeting ("Beste klant")
+    while addressee_raw still holds the verbatim text; honouring that null is what
+    stops a junk recipient row (no uploader/To: here, so it stays unset)."""
+    raw = f"klant {uuid.uuid4().hex[:8]}"
+    patch_extract(
+        monkeypatch,
+        make_outcome(make_metadata(recipient_name=None, addressee_raw=raw, confidence="high")),
+    )
+    document_id = await make_document(session_factory, f"apply-raw-{uuid.uuid4().hex[:8]}")
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        count = (
+            await session.execute(
+                select(func.count())
+                .select_from(Recipient)
+                .where(func.lower(Recipient.name) == raw.lower())
+            )
+        ).scalar_one()
+        assert count == 0  # addressee_raw never seeds a recipient row
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient_id is None
+
+
+async def test_apply_low_confidence_unmatched_recipient_creates_nothing(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A LOW-confidence unmatched name is not created (no uploader/To: to catch it)."""
     invented = f"Mathews {uuid.uuid4().hex[:8]}"
-    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=invented)))
-    document_id = await make_document(session_factory, f"apply-invented-{uuid.uuid4().hex[:8]}")
+    patch_extract(
+        monkeypatch, make_outcome(make_metadata(recipient_name=invented, confidence="low"))
+    )
+    document_id = await make_document(session_factory, f"apply-lowconf-{uuid.uuid4().hex[:8]}")
 
     async with session_factory() as session:
         document = await session.get(Document, document_id)
@@ -1058,19 +1129,51 @@ async def test_apply_llm_recipient_not_in_table_stays_unset_and_creates_nothing(
                 .where(func.lower(Recipient.name) == invented.lower())
             )
         ).scalar_one()
-        assert count == 0  # no junk recipient row created
+        assert count == 0  # low confidence: no junk recipient row created
         document = await session.get(Document, document_id)
         assert document is not None
         assert document.recipient_id is None
         assert "recipient_id" not in document.extra["extraction"]["fields_set"]
 
 
-async def test_apply_invented_llm_recipient_falls_back_to_email_to_user(
+async def test_apply_high_confidence_stated_recipient_wins_over_email_to(
     session_factory: async_sessionmaker[AsyncSession],
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """An unmatched LLM name is skipped; the To: fallback then fills the user recipient."""
+    """Rung 1 beats rung 2: a confident document-stated name wins over the To: user."""
+    address = f"env-{uuid.uuid4().hex[:8]}@example.com"
+    await _make_user_with_forward(
+        session_factory,
+        username=f"env-{uuid.uuid4().hex[:8]}",
+        display_name=f"Envelope User {uuid.uuid4().hex[:6]}",
+        forward_addresses=[address],
+    )
+    stated = f"Mr de Vries {uuid.uuid4().hex[:8]}"
+    patch_extract(
+        monkeypatch, make_outcome(make_metadata(recipient_name=stated, confidence="high"))
+    )
+    document_id = await make_document(
+        session_factory, f"apply-stated-wins-{uuid.uuid4().hex[:8]}", extra={"email_to": [address]}
+    )
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.recipient is not None and document.recipient.name == stated
+
+
+async def test_apply_low_confidence_unmatched_recipient_falls_back_to_email_to_user(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Rung 2: a low-confidence unmatched name is dropped; the To: fallback fills the user."""
     address = f"fb-{uuid.uuid4().hex[:8]}@example.com"
     display_name = f"Fallback Wins {uuid.uuid4().hex[:6]}"
     user_id = await _make_user_with_forward(
@@ -1080,7 +1183,9 @@ async def test_apply_invented_llm_recipient_falls_back_to_email_to_user(
         forward_addresses=[address],
     )
     invented = f"Mathews {uuid.uuid4().hex[:8]}"
-    patch_extract(monkeypatch, make_outcome(make_metadata(recipient_name=invented)))
+    patch_extract(
+        monkeypatch, make_outcome(make_metadata(recipient_name=invented, confidence="low"))
+    )
     document_id = await make_document(
         session_factory, f"apply-invented-fb-{uuid.uuid4().hex[:8]}", extra={"email_to": [address]}
     )
@@ -1091,7 +1196,7 @@ async def test_apply_invented_llm_recipient_falls_back_to_email_to_user(
         await apply_extraction(session, document, settings)
 
     async with session_factory() as session:
-        # The invented name created no recipient row.
+        # The low-confidence invented name created no recipient row.
         count = (
             await session.execute(
                 select(func.count())

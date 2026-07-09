@@ -282,3 +282,55 @@ def test_system_prompt_mentions_topics_and_general_kinds() -> None:
     assert "topics" in SYSTEM_PROMPT
     assert "research" in SYSTEM_PROMPT
     assert "household paperwork" not in SYSTEM_PROMPT
+
+
+def test_system_prompt_defines_due_and_expiry_distinctly() -> None:
+    """due_date and expiry_date must be defined and contrasted (not just named)."""
+    assert "due_date:" in SYSTEM_PROMPT
+    assert "expiry_date:" in SYSTEM_PROMPT
+    # The obligation-vs-validity contrast and the Dutch homograph trap.
+    assert "must ACT" in SYSTEM_PROMPT
+    assert "NO LONGER VALID" in SYSTEM_PROMPT
+    assert "vervaldatum" in SYSTEM_PROMPT
+
+
+def test_system_prompt_ties_salutation_to_recipient_and_signoff_to_sender() -> None:
+    """The user's mental model: salutation -> recipient, sign-off -> sender."""
+    assert "SALUTATION" in SYSTEM_PROMPT
+    assert "SIGNER is the sender" in SYSTEM_PROMPT
+    assert "addressee_raw:" in SYSTEM_PROMPT
+    assert "signer_raw:" in SYSTEM_PROMPT
+
+
+async def test_email_recipient_hint_appended_to_text_content(settings: Settings) -> None:
+    client = make_client(make_response(make_metadata()))
+
+    await extract(
+        make_document(),
+        "A letter with plenty of usable text for the text branch.",
+        client=client,
+        settings=settings,
+        recipient_hint="John Mathews",
+    )
+
+    content = client.messages.parse.await_args.kwargs["messages"][0]["content"]
+    hint_blocks = [
+        b for b in content if b["type"] == "text" and "addressed to John Mathews" in b["text"]
+    ]
+    assert len(hint_blocks) == 1
+    # The document's own recipient still takes priority — say so in the hint.
+    assert "takes priority" in hint_blocks[0]["text"]
+
+
+async def test_no_recipient_hint_leaves_content_unchanged(settings: Settings) -> None:
+    client = make_client(make_response(make_metadata()))
+
+    await extract(
+        make_document(),
+        "A letter with plenty of usable text for the text branch.",
+        client=client,
+        settings=settings,
+    )
+
+    content = client.messages.parse.await_args.kwargs["messages"][0]["content"]
+    assert all("addressed to" not in b.get("text", "") for b in content)

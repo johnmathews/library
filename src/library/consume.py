@@ -25,7 +25,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from watchfiles import Change, awatch
 
 from library.config import Settings
-from library.ingest import IngestError, ingest_file
+from library.ingest import IngestError, ingest_file, resolve_owner_id
 from library.models import DocumentSource
 
 logger = logging.getLogger(__name__)
@@ -72,6 +72,7 @@ class ConsumeWatcher:
         force_polling: bool = False,
         on_success: Literal["archive", "delete"] = "archive",
         max_bytes: int = 100 * 1024 * 1024,
+        default_owner_username: str | None = None,
     ) -> None:
         self._root = root
         self._session_factory = session_factory
@@ -81,6 +82,7 @@ class ConsumeWatcher:
         self._force_polling = force_polling
         self._on_success: Literal["archive", "delete"] = on_success
         self._max_bytes = max_bytes
+        self._default_owner_username = default_owner_username
         self._in_flight: set[Path] = set()
         self._tasks: set[asyncio.Task[None]] = set()
 
@@ -99,6 +101,7 @@ class ConsumeWatcher:
             force_polling=settings.consume_force_polling,
             on_success=settings.consume_on_success,
             max_bytes=settings.max_upload_bytes,
+            default_owner_username=settings.import_default_owner,
         )
 
     async def run(self, stop_event: asyncio.Event | None = None) -> None:
@@ -199,12 +202,13 @@ class ConsumeWatcher:
             return
         try:
             async with self._session_factory() as session:
+                owner_id = await resolve_owner_id(session, self._default_owner_username)
                 result = await ingest_file(
                     session,
                     content=content,
                     filename=path.name,
                     source=DocumentSource.CONSUME,
-                    uploader_id=None,
+                    uploader_id=owner_id,
                 )
         except IngestError as exc:
             # Content-level rejection (unsupported MIME, soft-deleted

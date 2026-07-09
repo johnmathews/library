@@ -18,7 +18,7 @@ from library.config import get_settings
 from library.docx import CONVERTED_MARKDOWN_NAME, DOCX_MIME, docx_to_markdown
 from library.images import CONVERTED_JPEG_NAME, HEIC_MIME_TYPES, normalize_image
 from library.jobs import process_document
-from library.models import Document, DocumentSource, IngestionEvent
+from library.models import Document, DocumentSource, IngestionEvent, User
 from library.notifications import dispatch_loaded_document_notification
 from library.schemas import NotificationEvent
 from library.storage import derived_dir, store
@@ -106,6 +106,20 @@ def detect_mime(content: bytes, claimed: str | None, filename: str | None = None
         normalized = claimed.strip().lower()
         return _MIME_ALIASES.get(normalized, normalized)
     return None
+
+
+async def resolve_owner_id(session: AsyncSession, username: str | None) -> int | None:
+    """Resolve a configured default-owner username to a user id, or ``None``.
+
+    Used by the consume-folder and paperless-import paths (which have no inherent
+    uploader) to attribute documents to a default owner so the owner-as-recipient
+    fallback can fire. Unknown or unset usernames resolve to ``None``.
+    """
+    if not username:
+        return None
+    return (
+        await session.execute(select(User.id).where(User.username == username))
+    ).scalar_one_or_none()
 
 
 async def ingest_file(

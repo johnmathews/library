@@ -33,6 +33,7 @@ from library.extraction.judge import JudgeResult, judge
 from library.extraction.validation import derive_review_status, findings_to_payload, validate
 from library.importer.client import PaperlessClient
 from library.importer.runner import ImportReport, format_report, run_import
+from library.ingest import resolve_owner_id
 from library.jobs import embed_document, extract_document, job_app, markdown_document
 from library.models import (
     Document,
@@ -233,10 +234,17 @@ def import_paperless(
 
     async def operation(session: AsyncSession) -> ImportReport:
         # Deferring follow-up jobs (extraction, thumbnails, pipeline) needs
-        # the Procrastinate app open.
+        # the Procrastinate app open. Attribute imported docs to the configured
+        # default owner so the owner-as-recipient fallback can fire.
+        default_owner_id = await resolve_owner_id(session, settings.import_default_owner)
         async with job_app.open_async(), PaperlessClient(base_url, secret) as client:
             return await run_import(
-                session, client, dry_run=dry_run, no_extract=no_extract, limit=limit
+                session,
+                client,
+                dry_run=dry_run,
+                no_extract=no_extract,
+                limit=limit,
+                default_owner_id=default_owner_id,
             )
 
     report = _run(operation)
@@ -263,6 +271,15 @@ def backfill(
             "Restrict to general kinds (manual, reference, research, note) so "
             "transactional documents like invoices are never re-extracted. "
             "Pass --all-kinds to consider every kind."
+        ),
+    ),
+    kinds: str | None = typer.Option(
+        None,
+        "--kinds",
+        help=(
+            "Comma-separated kind slugs to restrict to (e.g. 'letter,invoice,"
+            "receipt' to backfill recipient-bearing documents first). Overrides "
+            "--general-only/--all-kinds."
         ),
     ),
     include_current: bool = typer.Option(
@@ -304,7 +321,12 @@ def backfill(
             statement = statement.where(
                 or_(prompt_version.is_(None), prompt_version != PROMPT_VERSION)
             )
-        if general_only:
+        if kinds:
+            slugs = [slug.strip() for slug in kinds.split(",") if slug.strip()]
+            statement = statement.where(
+                Document.kind_id.in_(select(Kind.id).where(Kind.slug.in_(slugs)))
+            )
+        elif general_only:
             statement = statement.where(
                 Document.kind_id.in_(select(Kind.id).where(Kind.slug.in_(GENERAL_KIND_SLUGS)))
             )
@@ -322,7 +344,10 @@ def backfill(
 
     count = _run(operation)
     if dry_run:
-        kinds_scope = "general kinds" if general_only else "all kinds"
+        if kinds:
+            kinds_scope = f"kinds {kinds}"
+        else:
+            kinds_scope = "general kinds" if general_only else "all kinds"
         version_scope = (
             "all prompt versions" if include_current else f"prompt_version != {PROMPT_VERSION}"
         )

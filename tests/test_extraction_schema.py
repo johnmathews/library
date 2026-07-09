@@ -123,6 +123,46 @@ def test_blank_recipient_becomes_none() -> None:
     assert ExtractedMetadata.model_validate(payload(recipient_name="   ")).recipient_name is None
 
 
+def test_addressee_and_signer_raw_default_none_when_omitted() -> None:
+    """The verbatim salutation/sign-off capture fields are optional."""
+    base = payload()
+    base.pop("addressee_raw", None)
+    base.pop("signer_raw", None)
+    metadata = ExtractedMetadata.model_validate(base)
+    assert metadata.addressee_raw is None
+    assert metadata.signer_raw is None
+
+
+def test_addressee_and_signer_raw_parse_and_trim() -> None:
+    metadata = ExtractedMetadata.model_validate(
+        payload(addressee_raw="  Mr. J. de Vries ", signer_raw=" Eneco B.V. ")
+    )
+    assert metadata.addressee_raw == "Mr. J. de Vries"
+    assert metadata.signer_raw == "Eneco B.V."
+
+
+def test_blank_addressee_and_signer_raw_become_none() -> None:
+    metadata = ExtractedMetadata.model_validate(payload(addressee_raw="   ", signer_raw=""))
+    assert metadata.addressee_raw is None
+    assert metadata.signer_raw is None
+
+
+def test_focus_fields_carry_json_schema_descriptions() -> None:
+    """Per-field descriptions guide the model (Anthropic structured-output best practice)."""
+    props = ExtractedMetadata.model_json_schema()["properties"]
+    for field in (
+        "kind_slug",
+        "sender_name",
+        "recipient_name",
+        "document_date",
+        "due_date",
+        "expiry_date",
+        "addressee_raw",
+        "signer_raw",
+    ):
+        assert props[field].get("description"), f"{field} is missing a schema description"
+
+
 def test_topics_default_empty() -> None:
     """topics is optional and defaults to an empty list when omitted."""
     base = payload()

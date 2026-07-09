@@ -28,7 +28,10 @@ refinement cycle:
   and folded into full-text search; `tags` stays the editable filter facet.
 - **Corpus backfill** — the `library backfill` command (re-enqueues
   extract→markdown→embed for documents on a stale `PROMPT_VERSION`, general-only
-  by default, budget-cap respected worker-side). See
+  by default, `--kinds a,b,c` to scope, budget-cap respected worker-side). Bumping
+  `PROMPT_VERSION` (e.g. the 2026-07 recipient/date extraction upgrade) makes the
+  older corpus stale; run `library backfill --kinds letter,invoice,receipt` to
+  re-derive recipients from the document itself first. See
   [ingestion.md](ingestion.md) "Backfill (stale prompt version)".
 - **E2E coverage** — Playwright specs `markdown-reader`, `projects`, `notes`,
   and `topics-readonly` (run in CI's e2e job). See [frontend.md §1.7](frontend.md).

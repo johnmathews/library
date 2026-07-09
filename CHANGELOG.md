@@ -73,11 +73,22 @@ by document kind (a per-user preference). The tile owns its border in the CSS
 layers, with an e2e guard asserting the computed border colour. See
 [docs/frontend.md](docs/frontend.md).
 
-**Recipient auto-fill + forwarded-mail owner attribution** — email ingestion now
-auto-fills a document's **recipient** from the email `To:` header (matched
-against existing recipients only — extraction never invents one), and when a
-forwarded message's recipient can't be resolved the document is attributed to the
-forwarding **owner** rather than left blank. See
+**Stronger recipient / sender / date / kind extraction** — the metadata
+extraction prompt and resolver were reworked so fields that were often blank or
+wrong get filled reliably. The **recipient** now follows a priority ladder: the
+name stated in the document itself (salutation "Dear/Beste/Geachte/T.a.v. …")
+wins, creating a recipient from a **high-confidence** document-stated name even
+when it was previously unknown; only then does it fall back to the email `To:`
+user, then the forwarding/owner attribution. Forwarded mail's **original**
+`To:`/`Aan:` is parsed from the quoted body so the real recipient beats the
+dropbox address. The prompt now defines **due_date** vs **expiry_date** distinctly
+(with the Dutch "vervaldatum" vs "verloopt" trap), ties the **salutation** to the
+recipient and the **sign-off** to the **sender**, and adds a **kind** rubric. New
+deterministic validation flags a mislabeled due/expiry date, a signed document
+with no sender, and a personally-addressed document with no recipient. Consume-
+folder and paperless-import documents can be attributed to a default owner via
+`LIBRARY_IMPORT_DEFAULT_OWNER`, and `library backfill --kinds letter,invoice,receipt`
+re-derives recipients on the existing corpus after the prompt-version bump. See
 [docs/ingestion.md](docs/ingestion.md).
 
 **Email-body ingestion when there's no attachment** — an inbound email with no

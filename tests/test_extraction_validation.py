@@ -167,6 +167,112 @@ def test_missing_sender_does_not_fire_without_amount() -> None:
     )
 
 
+def test_expiry_before_document_date_fires() -> None:
+    """The expiry-before-document-date rule (previously untested — finding 7)."""
+    doc = _doc(document_date=date(2026, 5, 1), expiry_date=date(2026, 4, 1))
+    finding = _finding(
+        validate(doc, kind_slug="warranty", ocr_floor=FLOOR, today=TODAY), "date_plausibility"
+    )
+    assert finding.field == "expiry_date"
+
+
+def test_due_date_implausibly_old_without_document_date_fires() -> None:
+    """With no document_date to anchor against, a 19xx due date is still caught."""
+    doc = _doc(due_date=date(1970, 1, 1))
+    finding = _finding(
+        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY), "date_plausibility"
+    )
+    assert finding.field == "due_date"
+
+
+def test_due_expiry_grounding_flags_expiry_with_only_due_cue() -> None:
+    """A Dutch 'vervaldatum' (a due date) mislabeled as expiry_date is caught."""
+    doc = _doc(expiry_date=date(2026, 7, 1), ocr_text="Factuur. Vervaldatum: 1 juli 2026.")
+    finding = _finding(
+        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY), "due_expiry_grounding"
+    )
+    assert finding.field == "expiry_date"
+
+
+def test_due_expiry_grounding_flags_due_with_only_expiry_cue() -> None:
+    doc = _doc(due_date=date(2030, 1, 1), ocr_text="Paspoort geldig tot 1 januari 2030.")
+    finding = _finding(
+        validate(doc, kind_slug="certificate", ocr_floor=FLOOR, today=TODAY), "due_expiry_grounding"
+    )
+    assert finding.field == "due_date"
+
+
+def test_due_expiry_grounding_quiet_when_both_cues_present() -> None:
+    doc = _doc(
+        expiry_date=date(2026, 7, 1),
+        ocr_text="Vervaldatum 1 juli 2026. Pas geldig tot 1 juli 2026.",
+    )
+    assert "due_expiry_grounding" not in _rules(
+        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_missing_recipient_fires_on_salutation() -> None:
+    doc = _doc(recipient_id=None, ocr_text="Beste John,\n\nHierbij uw factuur.")
+    finding = _finding(
+        validate(doc, kind_slug="letter", ocr_floor=FLOOR, today=TODAY), "missing_recipient"
+    )
+    assert finding.field == "recipient_id"
+
+
+def test_missing_recipient_fires_on_stored_addressee_raw() -> None:
+    doc = _doc(recipient_id=None, extra={"extraction": {"addressee_raw": "Dhr. J. de Vries"}})
+    assert "missing_recipient" in _rules(
+        validate(doc, kind_slug="letter", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_missing_recipient_quiet_when_recipient_present() -> None:
+    doc = _doc(recipient_id=3, ocr_text="Beste John,")
+    assert "missing_recipient" not in _rules(
+        validate(doc, kind_slug="letter", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_missing_recipient_quiet_on_ordinary_prose() -> None:
+    """The salutation cues must not fire on everyday words (no needs_review noise)."""
+    for prose in (
+        "Gustav Mahler composed the octave range in Batavia.",  # 'tav' substrings
+        "Dit is de beste optie voor uw situatie.",  # mid-sentence Dutch 'beste'
+    ):
+        doc = _doc(recipient_id=None, ocr_text=prose)
+        assert "missing_recipient" not in _rules(
+            validate(doc, kind_slug="research", ocr_floor=FLOOR, today=TODAY)
+        ), prose
+
+
+def test_due_expiry_grounding_quiet_on_passport_vervaldatum() -> None:
+    """A passport/certificate 'vervaldatum' (its expiry) must not be misread as due."""
+    doc = _doc(expiry_date=date(2030, 1, 1), ocr_text="Paspoort. Vervaldatum: 1 januari 2030.")
+    assert "due_expiry_grounding" not in _rules(
+        validate(doc, kind_slug="certificate", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_missing_sender_fires_on_signoff_without_amount() -> None:
+    doc = _doc(
+        sender_id=None,
+        amount_total=None,
+        ocr_text="...\n\nMet vriendelijke groet,\nGemeente Amsterdam",
+    )
+    finding = _finding(
+        validate(doc, kind_slug="letter", ocr_floor=FLOOR, today=TODAY), "missing_sender"
+    )
+    assert "signed" in finding.message
+
+
+def test_missing_sender_signoff_quiet_when_sender_present() -> None:
+    doc = _doc(sender_id=9, amount_total=None, ocr_text="Best regards,\nEneco")
+    assert "missing_sender" not in _rules(
+        validate(doc, kind_slug="letter", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
 def test_email_attachments_dropped_fires_and_lists_files() -> None:
     doc = _doc(
         title="Cover photo",

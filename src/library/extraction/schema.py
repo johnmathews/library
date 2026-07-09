@@ -20,7 +20,7 @@ from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, field_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
 # The seeded rows of the `kinds` table (migration 0001). Constraining the
 # schema to these slugs means the model can never invent a kind; "other" is
@@ -76,31 +76,113 @@ def _coerce_date(value: object) -> object:
     return value
 
 
-OptionalIsoDate = Annotated[date | None, BeforeValidator(_coerce_date)]
-
-
 class ExtractedMetadata(BaseModel):
     """Structured metadata Claude extracts from one document."""
 
     model_config = ConfigDict(extra="forbid")
 
-    kind_slug: KindSlug
-    sender_name: str | None
-    recipient_name: str | None
+    kind_slug: KindSlug = Field(
+        description=(
+            "The single document type that fits best. invoice = a request for "
+            "payment (amount owed, often a due date); receipt = proof a payment "
+            "already happened; utility-bill = a recurring energy/water/telecom/"
+            "municipal charge (prefer over invoice for utilities); letter = "
+            "personal or official correspondence with no contractual terms; "
+            "contract = an agreement both parties are bound by; certificate = "
+            "attests a fact or qualification; warranty = a guarantee tied to a "
+            "purchase; ticket = an admission or travel ticket; manual = product "
+            "or how-to instructions; research = a paper or study; reference = "
+            "general reference material; note = personal notes. Use 'other' only "
+            "when nothing else fits."
+        )
+    )
+    sender_name: str | None = Field(
+        description=(
+            "The organisation or person that ISSUED the document, in short "
+            "canonical form (e.g. 'Eneco', not 'Eneco Services B.V.'). For a "
+            "letter or email the signer is the sender: a sign-off such as 'Met "
+            "vriendelijke groet, Y' / 'Best regards, Y' / 'Hoogachtend, Y' means "
+            "Y (or Y's organisation) is the sender, NOT the recipient. null when "
+            "genuinely unclear."
+        )
+    )
+    recipient_name: str | None = Field(
+        description=(
+            "The person the document is addressed TO. The salutation is the "
+            "strongest signal: 'Dear John' / 'Beste John' / 'Geachte heer "
+            "Mathews' / 'T.a.v. John Mathews' -> John Mathews. A letter, invoice "
+            "or personally-addressed notice almost always HAS a recipient even "
+            "if only a first name; extract it. Never confuse the salutation "
+            "(recipient) with the sign-off (sender). null only for impersonal "
+            "material such as a manual or generic reference document."
+        )
+    )
     title: str
     summary: str
-    document_date: OptionalIsoDate
+    document_date: Annotated[
+        date | None,
+        BeforeValidator(_coerce_date),
+        Field(description="The document's own issue or print date. null when absent."),
+    ]
     amount_total: str | None
     currency: str | None
-    due_date: OptionalIsoDate
-    expiry_date: OptionalIsoDate
+    due_date: Annotated[
+        date | None,
+        BeforeValidator(_coerce_date),
+        Field(
+            description=(
+                "A date by which the recipient must ACT — pay, respond, renew or "
+                "return ('te betalen voor', 'uiterste betaaldatum', 'vervaldatum' "
+                "on an invoice, 'pay by', 'due by'). An obligation deadline, NOT a "
+                "validity end. null when the document imposes no deadline."
+            )
+        ),
+    ]
+    expiry_date: Annotated[
+        date | None,
+        BeforeValidator(_coerce_date),
+        Field(
+            description=(
+                "A date after which the document or entitlement is NO LONGER "
+                "VALID (passports, warranties, insurance, contracts: 'geldig "
+                "tot', 'vervalt op', 'verloopt', 'valid until', 'expires'). A "
+                "validity horizon, NOT a payment deadline. Never copy the same "
+                "date into both due_date and expiry_date — pick the field the "
+                "surrounding words match. null when nothing expires."
+            )
+        ),
+    ]
     language: Literal["nld", "eng", "mixed", "unknown"]
     tags: list[str]
     topics: list[str] = []
     confidence: Literal["high", "low"]
     reasoning_note: str | None
+    addressee_raw: str | None = Field(
+        default=None,
+        description=(
+            "The verbatim name the salutation/addressee block is directed at "
+            "(e.g. the exact text after 'Dear' / 'Beste' / 'T.a.v.'), copied as "
+            "printed, before any canonicalisation. null when the document has no "
+            "salutation or addressee block."
+        ),
+    )
+    signer_raw: str | None = Field(
+        default=None,
+        description=(
+            "The verbatim name in the sign-off block (e.g. the exact text after "
+            "'Met vriendelijke groet,' / 'Best regards,'), copied as printed. "
+            "null when the document is not signed."
+        ),
+    )
 
-    @field_validator("sender_name", "recipient_name", "reasoning_note", mode="after")
+    @field_validator(
+        "sender_name",
+        "recipient_name",
+        "reasoning_note",
+        "addressee_raw",
+        "signer_raw",
+        mode="after",
+    )
     @classmethod
     def _blank_to_none(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():

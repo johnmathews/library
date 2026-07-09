@@ -753,7 +753,7 @@ def test_cli_import_paperless_passes_flags_and_prints_report(
         report,
     )
     assert result.exit_code == 0, result.output
-    assert captured == {"dry_run": True, "no_extract": False, "limit": 3}
+    assert captured == {"dry_run": True, "no_extract": False, "limit": 3, "default_owner_id": None}
     assert "dry run" in result.output
     assert "documents seen:     3" in result.output
 
@@ -768,7 +768,12 @@ def test_cli_import_paperless_uses_env_settings(monkeypatch: pytest.MonkeyPatch)
             monkeypatch, ["import", "paperless", "--no-extract"], report
         )
         assert result.exit_code == 0, result.output
-        assert captured == {"dry_run": False, "no_extract": True, "limit": None}
+        assert captured == {
+            "dry_run": False,
+            "no_extract": True,
+            "limit": None,
+            "default_owner_id": None,
+        }
     finally:
         get_settings.cache_clear()
 

@@ -290,7 +290,7 @@ JSON body; only the fields present in the body change. Editable fields:
 | `document_date`, `due_date`, `expiry_date` | ISO dates, `null` clears |
 | `kind_slug` | Must be an existing kind slug (`422` otherwise); `null` clears the kind |
 | `sender` | Sender **name**; upserted case-insensitively (same rule extraction uses); `null` clears |
-| `recipient` | Recipient **name**; upserted case-insensitively (same rule extraction uses); `null` clears |
+| `recipient` | Recipient **name**; upserted case-insensitively — a manual edit always creates the recipient if new (extraction only creates from a **high-confidence** document-stated name, see ingestion.md); `null` clears |
 | `tags` | **Full replacement** list of slugs; unknown slugs are created; `[]` clears; `null` is rejected |
 | `projects` | **Full replacement** list of project slugs *or names*; unknown identifiers are upserted (a name becomes a new project, slugified); `[]` clears membership; `null` is rejected. Also appends a `project_changed` ingestion event |
 | `language` | `nld` / `eng` / `mixed` / `unknown`; `null` rejected |

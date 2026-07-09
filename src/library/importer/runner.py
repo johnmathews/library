@@ -191,6 +191,7 @@ async def _import_one(
     *,
     batch_id: str,
     no_extract: bool,
+    default_owner_id: int | None = None,
 ) -> int | None:
     """Ingest one downloaded document; returns its Library id (also for dups)."""
     result = await ingest_file(
@@ -199,6 +200,7 @@ async def _import_one(
         filename=mapped.original_filename,
         mime=mapped.mime_type,
         source=DocumentSource.IMPORT,
+        uploader_id=default_owner_id,
         defer_processing=False,
     )
     document = result.document
@@ -302,6 +304,7 @@ async def _process_batch(
     *,
     batch_id: str,
     no_extract: bool,
+    default_owner_id: int | None = None,
 ) -> None:
     """Import one wave: skip known ids, download concurrently, ingest serially."""
     to_download: list[MappedDocument] = []
@@ -325,7 +328,13 @@ async def _process_batch(
             continue
         try:
             document_id = await _import_one(
-                session, mapped, result, report, batch_id=batch_id, no_extract=no_extract
+                session,
+                mapped,
+                result,
+                report,
+                batch_id=batch_id,
+                no_extract=no_extract,
+                default_owner_id=default_owner_id,
             )
         except Exception as exc:
             await session.rollback()
@@ -369,13 +378,16 @@ async def run_import(
     no_extract: bool = False,
     limit: int | None = None,
     progress_every: int = PROGRESS_EVERY,
+    default_owner_id: int | None = None,
 ) -> ImportReport:
     """Import every (non-trashed) paperless document; returns the run report.
 
     ``dry_run`` fetches and maps everything but downloads nothing and
     writes nothing (the database is only read, for duplicate detection).
     ``limit`` caps the number of documents considered (useful for a first
-    careful run against a live instance).
+    careful run against a live instance). ``default_owner_id`` (resolved from
+    ``settings.import_default_owner`` by the caller) attributes imported
+    documents to an owner so the owner-as-recipient fallback can fire.
     """
     report = ImportReport(batch_id=uuid.uuid4().hex, dry_run=dry_run)
     taxonomies = Taxonomies.from_lists(
@@ -403,6 +415,7 @@ async def run_import(
             id_map,
             batch_id=report.batch_id,
             no_extract=no_extract,
+            default_owner_id=default_owner_id,
         )
         for mapped in pending:
             document_id = id_map.get(mapped.paperless_id)

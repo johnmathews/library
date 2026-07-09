@@ -118,6 +118,12 @@ class Settings(BaseSettings):
     consume_poll_interval_s: float = 2.0
     consume_stability_s: float = 3.0
     consume_on_success: Literal["archive", "delete"] = "archive"
+    # Username that owns documents ingested via the consume folder and the
+    # paperless importer — neither channel has an inherent uploader, so these
+    # documents cannot fall back to an owner-as-recipient without this. Unset =
+    # such documents stay unowned (recipient then relies on the name stated in
+    # the document itself). Mirrors ``email_default_owner`` for the ingest paths.
+    import_default_owner: str | None = None
     # Email-in ingestion (see docs/ingestion.md, "Email-in" section).
     email_host: str | None = None  # unset = poller off
     email_port: int = 993

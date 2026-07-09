@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Bump whenever the system prompt or schema changes meaningfully; stored per
 # run so old-prompt documents can be found and re-extracted later.
-PROMPT_VERSION: str = "2026-06-29.1"
+PROMPT_VERSION: str = "2026-07-09.1"
 
 # Short OCR text (<= this many characters) is sent whole: metadata lives on
 # the first pages, and this caps per-document spend for transactional docs.
@@ -59,20 +59,49 @@ Rules:
 - Write ALL free-text output fields (title, summary, reasoning_note) in
   English, even when the document itself is in Dutch or another language.
   Translate as needed; keep proper nouns (names, brands) as-is.
-- kind_slug: one of {", ".join(KIND_SLUGS)}. Use "other" only when nothing
-  else fits.
+- kind_slug: one of {", ".join(KIND_SLUGS)}. Disambiguate the common pairs:
+  invoice = a request for payment (amount owed, usually a due date) vs receipt =
+  proof a payment already happened; utility-bill = a recurring energy/water/
+  telecom/municipal charge (prefer it over invoice for utilities); letter =
+  personal/official correspondence with no binding terms vs contract = an
+  agreement both parties are bound by; certificate = attests a fact/
+  qualification vs warranty = a guarantee tied to a purchase. Use "other" only
+  when nothing else fits.
 - title: short and descriptive, in English.
 - summary: in English, and adaptive to the document. For transactional
   paperwork keep it to at most two sentences. For general reference material
   (manuals, reference docs, research papers, notes) write 3-6 sentences
   capturing what it covers.
-- sender_name: the organisation or person that issued the document, in a
-  short canonical form (e.g. "Eneco", not "Eneco Services B.V., afdeling
-  facturatie"). null when unclear.
-- recipient_name: the household member this document is addressed to / is for
-  (e.g. "John", "Wife"), in short canonical form; null when unclear.
-- Dates are ISO YYYY-MM-DD strings; null when absent. document_date is the
-  issue date of the document.
+- sender_name: the organisation or person that ISSUED the document, in a short
+  canonical form (e.g. "Eneco", not "Eneco Services B.V., afdeling facturatie").
+  For a letter or email the SIGNER is the sender: a sign-off such as "Met
+  vriendelijke groet, Y" / "Best regards, Y" / "Hoogachtend, Y" means Y (or Y's
+  organisation) is the sender, NOT the recipient. Prefer the issuing
+  organisation when both a person and a company sign. null when genuinely unclear.
+- recipient_name: the person the document is addressed TO, in short canonical
+  form (e.g. "John"). The SALUTATION is the strongest signal: "Dear John" /
+  "Beste John" / "Geachte heer Mathews" / "T.a.v. John Mathews" -> the recipient
+  is that person. A letter, invoice, or personally-addressed notice almost
+  always HAS a recipient even if only a first name — extract it. Never confuse
+  the salutation (recipient) with the sign-off (sender). null only for truly
+  impersonal material such as a manual or generic reference document.
+- addressee_raw: the verbatim salutation/addressee text, copied exactly as
+  printed (e.g. "Dhr. J. de Vries" after "T.a.v."), before any shortening. null
+  when there is no salutation or addressee block.
+- signer_raw: the verbatim sign-off name, copied exactly as printed (e.g. the
+  line after "Met vriendelijke groet,"). null when the document is not signed.
+- Dates are ISO YYYY-MM-DD strings; null when absent.
+  - document_date: the document's own issue/print date.
+  - due_date: a date by which the recipient must ACT — pay, respond, renew, or
+    return ("te betalen voor", "uiterste betaaldatum", "vervaldatum" on an
+    invoice, "pay by", "due by"). An obligation deadline.
+  - expiry_date: a date after which the document/entitlement is NO LONGER VALID
+    (passports, warranties, insurance, contracts: "geldig tot", "vervalt op",
+    "verloopt", "valid until", "expires"). A validity horizon, not a payment
+    deadline. Dutch note: "vervaldatum" on an invoice is a due_date, but
+    "vervalt"/"verloopt" on a pass or policy is an expiry_date. Never copy the
+    same date into both fields — choose the one the surrounding words match; a
+    document may have neither, one, or both.
 - amount_total: the document's main total as a plain decimal string, e.g.
   "1234.56", with currency as an ISO 4217 code, e.g. "EUR". Both null when
   not applicable.
@@ -178,16 +207,44 @@ def estimate_cost_usd(model: str, input_tokens: int, output_tokens: int) -> floa
     return input_tokens / 1_000_000 * input_price + output_tokens / 1_000_000 * output_price
 
 
-def build_user_content(document: Document, ocr_text: str) -> tuple[list[dict[str, Any]], str]:
+def _email_context_block(recipient_hint: str | None) -> dict[str, Any] | None:
+    """A one-line envelope hint for an email attachment, or None.
+
+    The document's own salutation always wins; this only helps the model when
+    the document names no recipient. Takes a resolved display name, never a raw
+    email address, so no address leaks into the prompt.
+    """
+    if not recipient_hint:
+        return None
+    return {
+        "type": "text",
+        "text": (
+            f"Context: this document arrived as an attachment to an email "
+            f"addressed to {recipient_hint}. A recipient named in the document "
+            f"itself always takes priority; use this only if the document names "
+            f"no recipient."
+        ),
+    }
+
+
+def build_user_content(
+    document: Document, ocr_text: str, *, recipient_hint: str | None = None
+) -> tuple[list[dict[str, Any]], str]:
     """Build the user message content and report the input mode used.
 
     Prefers truncated OCR text; falls back to sending the original file as a
     base64 ``document``/``image`` block when the text is empty or garbage.
-    Raises :class:`ExtractionSkipped` when neither input is usable.
+    Raises :class:`ExtractionSkipped` when neither input is usable. When
+    ``recipient_hint`` is given (a resolved display name for an email
+    attachment), a one-line envelope hint is appended to the content.
     """
+    hint = _email_context_block(recipient_hint)
     text = ocr_text.strip()
     if len(text) >= MIN_TEXT_CHARS:
-        return [{"type": "text", "text": _sample_long_text(text)}], "text"
+        content: list[dict[str, Any]] = [{"type": "text", "text": _sample_long_text(text)}]
+        if hint is not None:
+            content.append(hint)
+        return content, "text"
 
     mime = document.mime_type
     if mime == "application/pdf":
@@ -225,10 +282,13 @@ def build_user_content(document: Document, ocr_text: str) -> tuple[list[dict[str
             "data": base64.standard_b64encode(raw).decode("ascii"),
         },
     }
-    return [
+    content = [
         block,
         {"type": "text", "text": "Extract the metadata for this document."},
-    ], block_type
+    ]
+    if hint is not None:
+        content.append(hint)
+    return content, block_type
 
 
 async def _attempt(
@@ -262,15 +322,17 @@ async def extract(
     *,
     client: AsyncAnthropic,
     settings: Settings,
+    recipient_hint: str | None = None,
 ) -> ExtractionOutcome:
     """Extract metadata for one document, escalating once when warranted.
 
     Escalates to ``settings.extraction_escalation_model`` when the primary
     model reports low confidence or fails to produce valid structured output
     (``ValidationError``/JSON errors are ``ValueError`` subclasses). API
-    errors propagate to the caller.
+    errors propagate to the caller. ``recipient_hint`` is an optional resolved
+    display name (email-attachment envelope) appended to the prompt as context.
     """
-    content, input_mode = build_user_content(document, ocr_text)
+    content, input_mode = build_user_content(document, ocr_text, recipient_hint=recipient_hint)
     calls: list[CallUsage] = []
 
     metadata: ExtractedMetadata | None = None

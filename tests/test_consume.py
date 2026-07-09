@@ -27,7 +27,7 @@ from sqlalchemy.ext.asyncio import (
 from library import worker
 from library.config import Settings, get_settings
 from library.consume import ConsumeWatcher
-from library.models import Document, DocumentSource, IngestionEvent
+from library.models import Document, DocumentSource, IngestionEvent, User
 
 pytestmark = pytest.mark.integration
 
@@ -118,6 +118,39 @@ def test_consume_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert settings.consume_force_polling is True
     assert settings.consume_stability_s == 0.5
     assert settings.consume_on_success == "delete"
+
+
+async def test_drop_pdf_attributes_to_default_owner_when_configured(
+    consume_root: Path,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    """With import_default_owner set, a consumed doc is owned by that user, so the
+    owner-as-recipient fallback can fire for otherwise-ownerless scans."""
+    username = f"scanowner-{uuid.uuid4().hex[:8]}"
+    async with session_factory() as session:
+        user = User(username=username, password_hash="x", display_name="")
+        session.add(user)
+        await session.commit()
+        owner_id = user.id
+
+    watcher = ConsumeWatcher(
+        consume_root,
+        session_factory,
+        stability_s=0.05,
+        poll_interval_s=0.05,
+        stability_timeout_s=5.0,
+        default_owner_username=username,
+    )
+    name = f"scan-{uuid.uuid4().hex[:8]}.pdf"
+    (consume_root / name).write_bytes(make_pdf())
+
+    await watcher.process_path(consume_root / name)
+
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1
+    assert documents[0].uploader_id == owner_id
 
 
 async def test_drop_pdf_creates_document_and_archives(

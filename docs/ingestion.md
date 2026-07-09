@@ -423,10 +423,11 @@ the SDK converts the model to a JSON schema (with
 | Field | Type | Notes |
 | --- | --- | --- |
 | `kind_slug` | enum | The 14 seeded kind slugs (`invoice` … `other`, including the general-reference kinds `reference`, `research`, `note`); enforced by the JSON schema, so the model cannot invent kinds. |
-| `sender_name` | `str \| None` | Canonical short organisation/person name. |
-| `recipient_name` | `str \| None` | The household member the document is addressed to / is for, in short canonical form (e.g. "John", "Wife"). `None` when unclear. |
+| `sender_name` | `str \| None` | Canonical short organisation/person name. The **signer** (sign-off) is the sender for letters/emails. |
+| `recipient_name` | `str \| None` | The person the document is addressed **to**, in short canonical form (e.g. "John"). The salutation ("Dear/Beste/Geachte/T.a.v. …") is the primary signal. `None` only for impersonal material. |
+| `addressee_raw`, `signer_raw` | `str \| None` | The **verbatim** salutation-target / sign-off names, copied as printed before canonicalisation. Additive (default `None`); feed the hybrid recipient path and the deterministic cross-checks. |
 | `title`, `summary` | `str` | Always in **English** (translated from the source language if needed — prompt-enforced); summary ≤ 2 sentences (also prompt-enforced — string length constraints are not supported in structured-output schemas). |
-| `document_date`, `due_date`, `expiry_date` | `date \| None` | Wire format is an ISO `YYYY-MM-DD` string; a before-validator trims it and maps empty/placeholder values to `None`, so sloppy-but-harmless output degrades to "no date" while a truly malformed date raises (and triggers escalation). |
+| `document_date`, `due_date`, `expiry_date` | `date \| None` | Wire format is an ISO `YYYY-MM-DD` string; a before-validator trims it and maps empty/placeholder values to `None`, so sloppy-but-harmless output degrades to "no date" while a truly malformed date raises (and triggers escalation). The prompt and per-field descriptions define them distinctly: **document_date** = issue date; **due_date** = an act-by deadline (pay/respond/renew — Dutch "vervaldatum" on an invoice); **expiry_date** = a validity end ("geldig tot", "verloopt"). |
 | `amount_total` | `str \| None` | Decimal string, parsed defensively (currency symbols stripped, `12,50` → `12.50`); unparseable values become `None` rather than failing the document. Converted to `Decimal` when applied. |
 | `currency` | `str \| None` | ISO 4217; anything that is not three letters becomes `None`. |
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown`. |
@@ -468,10 +469,18 @@ instructions accordingly: a 2-sentence summary for paperwork but 3–6
 sentences plus `topics` for general material, and an explicit note that a
 missing sender/date/amount is normal for reference material and must **not**
 be treated as a low-confidence signal (so clean general docs are not flagged
-for review). All free-text fields (title, summary, reasoning_note) are
-**in English** (translated from the source language when the document is e.g.
-Dutch), while the `language` field still records the *detected source*
-language. The prompt version, model
+for review). It also gives explicit, contrasting guidance for the fields users
+most often see blank or wrong: the **salutation** identifies the recipient and
+the **sign-off** identifies the sender; **due_date** (an act-by deadline) is
+distinguished from **expiry_date** (a validity end), including the Dutch
+"vervaldatum" (due) vs "verloopt/geldig tot" (expiry) trap; and a short rubric
+disambiguates overlapping `kind_slug` pairs (invoice vs receipt, utility-bill vs
+invoice, letter vs contract, …). The same semantics are mirrored into per-field
+`Field(description=…)` on the schema (Anthropic's structured-output guidance
+recommends per-field descriptions). All free-text fields (title, summary,
+reasoning_note) are **in English** (translated from the source language when the
+document is e.g. Dutch), while the `language` field still records the *detected
+source* language. The prompt version, model
 and token usage of every run are stored on the document
 (`extra["extraction"]`) and in the audit trail, so a future prompt
 change can identify documents extracted with an older prompt.
@@ -481,33 +490,39 @@ change can identify documents extracted with an older prompt.
 On success:
 
 - **Sender** is upserted by case-insensitive name match (create if new).
-- **Recipient** is matched to an **existing** recipient only — never created.
-  `match_existing_recipient` (`extraction/apply.py`) resolves the LLM's name
-  first against known users (by username / display name → that user's linked
-  recipient), then against existing recipients by case-insensitive name. If the
-  extracted name matches nothing it is **dropped** (recipient left unset) rather
-  than inserting a new recipient row, so the LLM can't invent junk recipients
-  (e.g. a family surname). Skipped when a user has already edited `recipient_id`.
-  When the LLM yields **no** valid existing recipient, two fallbacks fire in
-  order (both **fill-only**, both skipped once `recipient_id` is user-edited):
-  1. **Email `To:`** — `resolve_recipient_from_email` (`extraction/apply.py`)
-     matches the `To:` addresses stashed on `extra["email_to"]` against users'
-     `email_forward_addresses` (case-insensitive, via `match_user_by_email`) and,
-     on a hit, sets the recipient to that user's linked recipient.
-  2. **Owner (uploader)** — if recipient is *still* unset and the document has an
-     `uploader_id`, it is attributed to that owner's linked recipient
-     (`get_or_create_user_recipient`). `uploader_id` is resolved at ingest from
-     the forwarder's `From:` address (`resolve_sender_owner`), so a personal
-     document you forward to the library is attributed to **you** even when the
-     addressee name on the page matched no known user and the `To:` header is just
-     the library dropbox. This is the final tier: a valid LLM-matched recipient
-     wins, then the `To:` user, then the owner; a user's manual edit still wins
-     over all of them.
+- **Recipient** resolution follows a **priority ladder**: the recipient named in
+  the document itself is the overriding signal, and the contextual fallbacks only
+  fire when the document names nobody. All tiers are **fill-only** and skipped
+  once a user has edited `recipient_id`:
+  1. **Document-stated recipient (rung 1).** The LLM's `recipient_name` (or the
+     verbatim `addressee_raw` when it gave only that) is resolved by
+     `match_existing_recipient` (`extraction/apply.py`): first against known users
+     (by username / display name → that user's linked recipient), then against
+     existing recipients by case-insensitive name. A match is always assigned. If
+     the name matches **nothing**, a plain recipient is **created**
+     (`upsert_recipient`) — but only when the extraction is **high-confidence**,
+     so a garbled-OCR guess can't seed a junk row (it drops through instead). This
+     is the "hybrid" model: a confident "Beste heer de Vries" becomes recipient
+     "heer de Vries" even if that person was previously unknown.
+  2. **Email `To:` (rung 2).** When the document named nobody usable,
+     `resolve_recipient_from_email` (`extraction/apply.py`) matches the `To:`
+     addresses on `extra["email_to"]` against users' `email_forward_addresses`
+     (case-insensitive, via `match_user_by_email`) and sets that user's linked
+     recipient. For forwarded mail the outer `To:` is the dropbox, so ingest also
+     parses the **original** `To:`/`Aan:` from the forwarded body
+     (`_forwarded_to_addresses` in `email_ingest`) and lists it **first**, so the
+     earliest known recipient in the chain wins.
+  3. **Owner (uploader) (rung 3).** If recipient is *still* unset and the document
+     has an `uploader_id`, it is attributed to that owner's linked recipient
+     (`get_or_create_user_recipient`). For email, `uploader_id` comes from the
+     forwarder's `From:` (`resolve_sender_owner`); for the **consume folder** and
+     **paperless importer** — which have no inherent uploader — it comes from the
+     `import_default_owner` setting (unset = the document stays unowned and relies
+     on rungs 1–2). A user's manual edit still wins over every rung.
 
-  Creating a brand-new recipient is reserved for the **manual** edit path:
-  `upsert_recipient` (still create-if-missing) is used only by
-  `apply_document_update` (`PATCH /api/documents/{id}`), so a user can add a new
-  recipient by hand while inference stays constrained.
+  The **manual** edit path (`apply_document_update`, `PATCH /api/documents/{id}`)
+  also uses `upsert_recipient`, unconditionally — a user assigning a recipient by
+  hand always creates it if new.
 - **Kind** is resolved by slug to the seeded `kinds` row.
 - **Tags** are get-or-created by slug and merged into the document's
   tag set (never removed).
@@ -519,7 +534,9 @@ On success:
   in `fields_set`.
 - `extra["extraction"]` records `{prompt_version, model, confidence,
   input_tokens, output_tokens, cost_usd, escalated, input_mode,
-  fields_set, reasoning_note}`.
+  fields_set, reasoning_note, addressee_raw, signer_raw}`. The last two are
+  the verbatim salutation/sign-off names the model read; they power the
+  deterministic recipient/sender cross-checks in `validation.py`.
 
 **User edits win.** Re-extraction overwrites previous *extraction*
 values but never user-edited ones: any field name listed in
@@ -548,18 +565,29 @@ different** from the current `PROMPT_VERSION`, so an existing corpus picks up th
 latest prompt, long-doc sampling, `topics`, and structure-preserving markdown
 chunking.
 
+Because re-extraction re-runs the current prompt, it is also how an existing
+corpus picks up **recipient/sender/date** improvements: bumping `PROMPT_VERSION`
+makes every older document "stale", and re-extraction now fills the
+document-stated recipient (rung 1). To do the recipient-bearing kinds first
+without re-paying for the whole archive, scope with `--kinds`:
+
 ```console
-library backfill                      # general kinds on an old prompt version
-library backfill --limit 100          # throttle: first 100 matching ids only
-library backfill --all-kinds          # consider every kind, not just general
-library backfill --include-current    # re-enqueue regardless of prompt version
-library backfill --dry-run            # count + scope only; enqueue nothing
+library backfill                              # general kinds on an old prompt version
+library backfill --kinds letter,invoice,receipt   # recipient-bearing kinds first
+library backfill --limit 100                  # throttle: first 100 matching ids only
+library backfill --all-kinds                  # consider every kind, not just general
+library backfill --include-current            # re-enqueue regardless of prompt version
+library backfill --dry-run                    # count + scope only; enqueue nothing
 ```
 
 - **`--general-only` (default) / `--all-kinds`.** By default only the
   general-reference kinds (`manual`, `reference`, `research`, `note`) are
   considered, so transactional documents (invoices, receipts, …) are **never
   re-paid for**. `--all-kinds` lifts that restriction.
+- **`--kinds a,b,c`** restricts to the named kind slugs (overriding the
+  general/all default) — e.g. `letter,invoice,receipt` to backfill
+  recipient-bearing documents first for cost control. Pair with `--dry-run` to
+  see counts before spending.
 - **`--include-current`** re-enqueues documents already at the current prompt
   version too (e.g. to pick up a markdown-chunking change).
 - **`--dry-run`** prints how many documents would be enqueued (with the kind +
@@ -605,20 +633,25 @@ Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
 | Rule | Field(s) | Fires when |
 |---|---|---|
 | `amount_grounding` | `amount_total` | Amount is set but its digit sequence is absent from `ocr_text` (normalised: strips currency symbols and separators, also checks the integer part) |
-| `date_plausibility` | `document_date`, `due_date`, `expiry_date` | `document_date` is in the future or before 1990-01-01; or `due_date`/`expiry_date` is before `document_date` |
+| `date_plausibility` | `document_date`, `due_date`, `expiry_date` | `document_date` is in the future or before 1990-01-01; or `due_date`/`expiry_date` is before `document_date`. When `document_date` is absent, a `due_date`/`expiry_date` before 1990-01-01 still fires ("implausibly old"). |
+| `due_expiry_grounding` | `due_date`, `expiry_date` | A date is set but the OCR text shows **only** the opposite kind of cue word — bilingual (Dutch/English) sets in `validation.py`: due (`vervaldatum`, `te betalen voor`, `due by`, …) vs expiry (`geldig tot`, `verloopt`, `valid until`, …). Catches the model mislabeling a due date as expiry (classically a Dutch "vervaldatum") and vice-versa. |
 | `amount_currency_coupling` | `currency` | Exactly one of amount/currency is set (the rule checks both fields; the finding's `field` attribute is `currency`) |
 | `ocr_confidence_gate` | (document) | `ocr_confidence` is below `LIBRARY_EXTRACTION_VALIDATION_OCR_FLOOR` (default 50.0) |
 | `empty_extraction` | (document) | Kind is `other` or unset **and** no sender, no `document_date`, no `amount_total`, **and** no `title` and no `summary`. A clean general document (reference/research/note) that has a real title/summary but no sender/amount/date is therefore **not** flagged. |
-| `missing_sender` | `sender_id` | `amount_total` is set but `sender_id` is not — a bill/receipt whose payee we couldn't identify. Scoped to amount-bearing docs so it stays specific. |
+| `missing_sender` | `sender_id` | `sender_id` is unset **and** either `amount_total` is set (a bill/receipt whose payee we couldn't identify) **or** the document is signed — a sign-off cue (`met vriendelijke groet`, `best regards`, …) or a stored `signer_raw` — but no sender was resolved. |
+| `missing_recipient` | `recipient_id` | `recipient_id` is unset but the document appears to name an addressee — a stored `addressee_raw`, or a salutation cue (`dear`, `beste`, `geachte`, `t.a.v.`, …) in the OCR text. Surfaces the "a personally-addressed document has a recipient" expectation. |
 | `self_reported_low` | (document) | `extra["extraction"]["confidence"] == "low"`. The message carries the model's own one-line `reasoning_note` when present (e.g. "the extractor was unsure: two candidate totals on page 2"), falling back to a generic line otherwise. |
 | `email_attachments_dropped` | (document) | The document came from an email whose *other* attachments could not be added (`extra["email_siblings_dropped"]` is non-empty). The message lists the dropped filenames. See "Email-in". |
 | `email_item_ambiguous` | (document) | The email item was flagged `probably_noise` (or `ambiguous`) during selection — `extra["email_selection"]["verdict"]`, set by the optional LLM label pass. The message carries the flag's reason. See "Email item selection". |
 
-**Date-grounding is explicitly out of scope** this phase — locale date-format
-matching is fiddly; revisit once the simpler rules prove out. Per-field and
-"multiple candidate value" confidence (e.g. "ambiguous sender") are also out of
-scope — `ExtractedMetadata` carries one global `confidence` and one value per
-field, so those reasons would need a schema change, not just a new rule.
+**Cue-word grounding, not date-format parsing.** The recipient/sender/date
+cross-checks (`due_expiry_grounding`, `missing_recipient`, `missing_sender`
+sign-off branch) match bilingual **cue words** in the OCR text, not localized
+date formats — the fiddly locale date-format matching is still out of scope.
+Per-field and "multiple candidate value" confidence (e.g. "ambiguous sender")
+are also out of scope — `ExtractedMetadata` carries one global `confidence` and
+one value per field, so those reasons would need a schema change, not just a new
+rule.
 
 ### `review_status` lifecycle
 
@@ -901,9 +934,13 @@ Backs the detail-view markdown tab.
 ## Consume folder (`library.consume`, W12)
 
 A watched drop directory: anything placed there is ingested through the
-same `ingest_file` service as an upload (`source=consume`, no uploader).
-This is the primary scanner flow — iOS Notes scan exports land in a
-Syncthing-synced folder that is (or is mounted at) the consume dir.
+same `ingest_file` service as an upload (`source=consume`). This is the primary
+scanner flow — iOS Notes scan exports land in a Syncthing-synced folder that is
+(or is mounted at) the consume dir. A consumed file has no inherent uploader, so
+set `LIBRARY_IMPORT_DEFAULT_OWNER` to a username to attribute scans to an owner —
+that lets the owner-as-recipient fallback (rung 3) fire when a scan states no
+recipient of its own. Unset = the document stays unowned and relies on the
+recipient named in the document itself.
 
 The watcher runs **inside the worker process**: when
 `LIBRARY_CONSUME_DIR` is set, `python -m library.worker` starts a
@@ -1099,20 +1136,20 @@ Details and decisions:
 - **Recipient auto-fill from `To:`.** The message's `To:` address(es) are
   captured onto `document.extra["email_to"]` (`_to_addresses` / `_event_detail`
   in `email_ingest.py`, seeded into `Document.extra` via `ingest_file`'s
-  `extra_document` parameter). During extraction, when the LLM yields **no**
-  valid existing recipient (its name matched no known user or recipient, so it
-  was dropped), the pipeline resolves that `To:` address against every
-  user's configured `email_forward_addresses` (case-insensitive) and, on a
-  match, sets the recipient to that user's linked recipient — see the
-  recipient fallback under "Applying results" in the Extraction section above.
-  When a message is **forwarded** rather than sent straight to the library, the
-  `To:` header is the library dropbox — not you — so this `To:` match cannot
-  fire; the **owner (uploader) fallback** then attributes the document to
-  whoever forwarded it (resolved from `From:` at ingest). Net effect for emails:
-  the recipient comes from the LLM when it names a real known recipient, else the
-  email `To:` user, else the forwarding owner. It is **fill-only** (a valid
-  LLM-matched recipient or a user's manual edit always wins) and reuses the same
-  `email_forward_addresses` as sender→owner attribution — no new configuration.
+  `extra_document` parameter). This is **rung 2** of the recipient ladder (see
+  "Applying results" above): it fills the recipient only when the document itself
+  named nobody usable. On a **forwarded** message the outer `To:` is the library
+  dropbox, so `_event_detail` also parses the **original** `To:`/`Aan:` header out
+  of the forwarded body (`_forwarded_to_addresses`) and lists it **first**, so the
+  person the mail was really sent to — the earliest known recipient in the chain —
+  is chosen over the dropbox. Each address is matched against users'
+  `email_forward_addresses` (case-insensitive) and, on a hit, sets that user's
+  linked recipient. If none match, the **owner (uploader) fallback (rung 3)**
+  attributes the document to whoever forwarded it (resolved from `From:`). Net
+  effect for emails: the recipient comes from the document's own salutation first,
+  else the earliest known email `To:` user, else the forwarding owner. It is
+  **fill-only** (a document-stated recipient or a user's manual edit always wins)
+  and reuses the same `email_forward_addresses` as sender→owner attribution.
 - **Allowlist.** `LIBRARY_EMAIL_ALLOWED_SENDERS` is comma-separated and
   case-insensitive; empty (default) accepts mail from anyone, so set it
   whenever the address is guessable. Rejected mail stays in the inbox
@@ -1421,6 +1458,7 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_CONSUME_POLL_INTERVAL_S` | `2.0` | Poll cadence when force-polling |
 | `LIBRARY_CONSUME_STABILITY_S` | `3.0` | A file's size+mtime must be unchanged this long before ingest |
 | `LIBRARY_CONSUME_ON_SUCCESS` | `archive` | `archive` → move to `consumed/YYYY/MM/`; `delete` → unlink |
+| `LIBRARY_IMPORT_DEFAULT_OWNER` | unset | Username that owns consume-folder and paperless-import documents (they have no inherent uploader); enables the owner-as-recipient fallback for them. Unset = unowned |
 | `LIBRARY_EMAIL_HOST` | unset | IMAP host; unset disables the email poller |
 | `LIBRARY_EMAIL_PORT` | `993` | IMAP TLS port |
 | `LIBRARY_EMAIL_USERNAME` | unset | Mailbox login |

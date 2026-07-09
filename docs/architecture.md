@@ -142,9 +142,12 @@ re-derivable artifact.
 - `recipients` — who it is addressed to (mirrors `senders`, nullable FK;
   migration 0016 seeds a "John" recipient and backfills existing docs). An
   optional `recipients.user_id` (migration 0020) links a recipient to a user:
-  creating a user auto-links a recipient named by their display name, and
-  ingestion resolves a document to that recipient when the extracted name
-  matches the user's username **or** display name (see admin.md §1.2.4).
+  creating a user auto-links a recipient named by their display name. Ingestion
+  fills the recipient via a priority ladder — the recipient **named in the
+  document** (salutation) first, then the email `To:` user, then the uploader/
+  owner — creating a plain recipient from a high-confidence document-stated name
+  when it matches no known person (see ingestion.md, "Applying results", and
+  admin.md §1.2.4).
 - `kinds` — document type. Seeded: invoice, receipt, certificate, utility
   bill, parking ticket, warranty, manual, reference, research, note, letter,
   contract, ticket, other (general-reference kinds added in migration 0010

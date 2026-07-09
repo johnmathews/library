@@ -139,12 +139,15 @@ for a user under either of their names.
   `user_id`. If a recipient with that name already exists *unlinked*, it is
   adopted (its `user_id` is set) rather than duplicated.
 - **Dual-name matching at ingestion.** When extraction resolves a document's
-  recipient (`upsert_recipient`), a name matching a user's **username OR display
-  name** (case-insensitive) resolves to that user's linked recipient (created or
+  recipient, a name matching a user's **username OR display name**
+  (case-insensitive) resolves to that user's linked recipient (created or
   adopted as needed). So a document addressed to `john` and one addressed to
   `John Smith` both land on the same recipient when that user has username
-  `john` / display name `John Smith`. Any name that matches no user upserts a
-  plain recipient by case-insensitive name, exactly as before.
+  `john` / display name `John Smith`. A name that matches **no** user is created
+  as a plain recipient **only when the extraction is high-confidence** (rung 1 of
+  the recipient ladder — see ingestion.md, "Applying results"); a low-confidence
+  unmatched name is dropped so it can't seed a junk row. The manual PATCH edit
+  path still creates unconditionally.
 
 **Delete a user** — `DELETE /api/admin/users/{id}`:
 
