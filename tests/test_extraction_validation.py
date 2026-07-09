@@ -254,6 +254,44 @@ def test_due_expiry_grounding_quiet_on_passport_vervaldatum() -> None:
     )
 
 
+def test_missing_amount_fires_on_payment_cue_without_amount() -> None:
+    """The thin-OCR miss: a payment/due term present but amount_total is null."""
+    doc = _doc(
+        amount_total=None,
+        ocr_text="Garage Spaarndam. Gelieve te betalen binnen 14 dagen.",
+    )
+    finding = _finding(
+        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY), "missing_amount"
+    )
+    assert finding.field == "amount_total"
+
+
+def test_missing_amount_quiet_when_amount_present() -> None:
+    doc = _doc(
+        amount_total=Decimal("144.19"),
+        currency="EUR",
+        ocr_text="Totaal € 144,19. Gelieve te betalen binnen 14 dagen.",
+    )
+    assert "missing_amount" not in _rules(
+        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_missing_amount_quiet_without_payment_cue() -> None:
+    doc = _doc(amount_total=None, ocr_text="A reference note about routers. No money here.")
+    assert "missing_amount" not in _rules(
+        validate(doc, kind_slug="reference", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_missing_amount_quiet_on_non_monetary_vervaldatum() -> None:
+    """A passport's 'vervaldatum' (expiry) with no amount must NOT flag missing_amount."""
+    doc = _doc(amount_total=None, ocr_text="Paspoort. Vervaldatum: 1 januari 2030.")
+    assert "missing_amount" not in _rules(
+        validate(doc, kind_slug="certificate", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
 def test_missing_sender_fires_on_signoff_without_amount() -> None:
     doc = _doc(
         sender_id=None,

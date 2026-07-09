@@ -254,6 +254,28 @@ def validate(
             )
         )
 
+    # missing_amount — the text carries a payment/due term ("te betalen", "due by",
+    # "vervaldatum", …) but no amount was extracted. The classic thin-OCR image-PDF
+    # miss: the letterhead's payment line was OCR'd while the body's total was not.
+    # A safety net for the confident-but-wrong case the vision escalation (which
+    # only fires on low confidence) does not catch. Scoped to monetary kinds so the
+    # Dutch homograph "vervaldatum" (expiry on a passport/ID/warranty, not a due
+    # date) does not spuriously flag those — same guard as due_expiry_grounding.
+    if (
+        document.amount_total is None
+        and kind_slug in _MONETARY_KINDS
+        and text
+        and _DUE_CUES.search(text)
+    ):
+        findings.append(
+            Finding(
+                "missing_amount",
+                "amount_total",
+                "warn",
+                "the document mentions payment or a due date but no amount was extracted",
+            )
+        )
+
     # ocr_confidence_gate — extraction built on low-confidence OCR.
     if document.ocr_confidence is not None and document.ocr_confidence < ocr_floor:
         findings.append(

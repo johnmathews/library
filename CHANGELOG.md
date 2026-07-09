@@ -91,6 +91,16 @@ folder and paperless-import documents can be attributed to a default owner via
 re-derives recipients on the existing corpus after the prompt-version bump. See
 [docs/ingestion.md](docs/ingestion.md).
 
+**Vision fallback for image-based PDFs** — on a scanned/image invoice whose OCR
+captured only the letterhead, the amount, recipient, and date printed on the page
+never reached the model, and the low-confidence retry re-read the same thin text.
+Now a low-confidence extraction with a usable PDF/image original **re-attempts
+with the file itself** (vision), so the model reads those fields off the page; it
+stays within the existing two-call budget and falls back to text when the original
+can't be sent. A deterministic `missing_amount` review flag catches the rarer
+confident-but-wrong case (a payment/due term in the text but no amount extracted).
+See [docs/ingestion.md](docs/ingestion.md) §"Input selection".
+
 **Email-body ingestion when there's no attachment** — an inbound email with no
 attachment is no longer dropped: its body is ingested as the document. See
 [docs/ingestion.md](docs/ingestion.md).

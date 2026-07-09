@@ -415,8 +415,10 @@ the SDK converts the model to a JSON schema (with
 - **Primary model:** `claude-haiku-4-5` ($1/$5 per MTok).
 - **Escalation:** if the parsed result reports `confidence: "low"`, or
   the response fails to parse/validate, the document is retried **once**
-  on `claude-sonnet-4-6` ($3/$15 per MTok). The escalated result is used
-  even if its confidence is also low (there is nothing better to do).
+  on `claude-sonnet-4-6` ($3/$15 per MTok). When the primary ran on OCR text,
+  this retry sends the **original file** (vision) rather than the same text —
+  see "Input selection" below. The escalated result is used even if its
+  confidence is also low (there is nothing better to do).
 
 ### Schema (`library.extraction.schema.ExtractedMetadata`)
 
@@ -457,6 +459,15 @@ prompt-instructed or normalised by validators.
   not sent — extraction is skipped gracefully (`reason:
   "file_too_large"`). TIFF and text without usable OCR text are skipped
   with `reason: "input_unusable"`.
+- **Vision escalation (thin-OCR recovery):** when the primary pass ran on OCR
+  text and comes back **low-confidence**, the escalation re-attempts with the
+  **original file** (`build_user_content(..., force_file=True)`) instead of
+  re-sending the same text — an image PDF whose OCR captured only the letterhead
+  (so the amount/recipient/date never reached the model) is then *read* by the
+  escalation model off the page. It stays a single escalation call (2 total). If
+  the original can't be sent (unusable mime, missing, or oversized) it falls back
+  to the text escalation, so behavior never regresses; the escalated result's
+  `input_mode` records what was actually sent (`document`/`image` vs `text`).
 
 ### Prompt
 
@@ -640,6 +651,7 @@ Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
 | `empty_extraction` | (document) | Kind is `other` or unset **and** no sender, no `document_date`, no `amount_total`, **and** no `title` and no `summary`. A clean general document (reference/research/note) that has a real title/summary but no sender/amount/date is therefore **not** flagged. |
 | `missing_sender` | `sender_id` | `sender_id` is unset **and** either `amount_total` is set (a bill/receipt whose payee we couldn't identify) **or** the document is signed — a sign-off cue (`met vriendelijke groet`, `best regards`, …) or a stored `signer_raw` — but no sender was resolved. |
 | `missing_recipient` | `recipient_id` | `recipient_id` is unset but the document appears to name an addressee — a stored `addressee_raw`, or a salutation cue (`dear`, `beste`, `geachte`, `t.a.v.`, …) in the OCR text. Surfaces the "a personally-addressed document has a recipient" expectation. |
+| `missing_amount` | `amount_total` | `amount_total` is null but the OCR text carries a payment/due cue (`te betalen`, `vervaldatum`, `due by`, …) **and the kind is monetary** (invoice/receipt/utility-bill/quote). The classic thin-OCR image-PDF miss — the letterhead's payment line was OCR'd but the body's total was not. Scoped to monetary kinds so a passport's "vervaldatum" (expiry) doesn't spuriously flag. A safety net for the confident-but-wrong case the vision escalation (low-confidence only) does not catch. |
 | `self_reported_low` | (document) | `extra["extraction"]["confidence"] == "low"`. The message carries the model's own one-line `reasoning_note` when present (e.g. "the extractor was unsure: two candidate totals on page 2"), falling back to a generic line otherwise. |
 | `email_attachments_dropped` | (document) | The document came from an email whose *other* attachments could not be added (`extra["email_siblings_dropped"]` is non-empty). The message lists the dropped filenames. See "Email-in". |
 | `email_item_ambiguous` | (document) | The email item was flagged `probably_noise` (or `ambiguous`) during selection — `extra["email_selection"]["verdict"]`, set by the optional LLM label pass. The message carries the flag's reason. See "Email item selection". |

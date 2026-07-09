@@ -208,6 +208,77 @@ async def test_empty_ocr_text_sends_pdf_document_block(settings: Settings, data_
     assert outcome.input_mode == "document"
 
 
+async def test_low_confidence_escalation_switches_to_vision(
+    settings: Settings, data_dir: Path
+) -> None:
+    """Thin-OCR miss: primary runs on text, low confidence escalates with the FILE."""
+    raw = b"%PDF-1.4 full invoice body the OCR never captured"
+    stored = storage.store(raw)
+    client = make_client(
+        make_response(make_metadata(confidence="low")),  # haiku on thin OCR text
+        make_response(make_metadata(confidence="high")),  # sonnet on the file
+    )
+
+    outcome = await extract(
+        make_document(sha256=stored.sha256),
+        "Garage Spaarndam B.V. IBAN NL82 — letterhead only, over twenty chars",
+        client=client,
+        settings=settings,
+    )
+
+    assert client.messages.parse.await_count == 2
+    first = client.messages.parse.await_args_list[0].kwargs["messages"][0]["content"]
+    second = client.messages.parse.await_args_list[1].kwargs["messages"][0]["content"]
+    assert first[0]["type"] == "text"  # primary saw only the OCR text
+    assert second[0]["type"] == "document"  # escalation sent the original PDF (vision)
+    assert base64.standard_b64decode(second[0]["source"]["data"]) == raw
+    assert outcome.escalated is True
+    assert outcome.input_mode == "document"
+
+
+async def test_escalation_falls_back_to_text_when_original_unusable(
+    settings: Settings,
+) -> None:
+    """When the original can't be sent (unusable mime), escalation stays on text."""
+    client = make_client(
+        make_response(make_metadata(confidence="low")),
+        make_response(make_metadata(confidence="high")),
+    )
+
+    outcome = await extract(
+        make_document(mime_type="text/plain"),
+        "a plain-text note with more than twenty characters of usable content",
+        client=client,
+        settings=settings,
+    )
+
+    assert client.messages.parse.await_count == 2
+    second = client.messages.parse.await_args_list[1].kwargs["messages"][0]["content"]
+    assert second[0]["type"] == "text"  # no usable original → text escalation, no regression
+    assert outcome.escalated is True
+    assert outcome.input_mode == "text"
+
+
+async def test_high_confidence_never_escalates_to_vision(
+    settings: Settings, data_dir: Path
+) -> None:
+    """A confident first pass must not trigger a (costly) vision retry."""
+    raw = b"%PDF-1.4 body"
+    stored = storage.store(raw)
+    client = make_client(make_response(make_metadata(confidence="high")))
+
+    outcome = await extract(
+        make_document(sha256=stored.sha256),
+        "plenty of usable OCR text, well over the twenty character floor",
+        client=client,
+        settings=settings,
+    )
+
+    assert client.messages.parse.await_count == 1  # no escalation, no vision spend
+    assert outcome.escalated is False
+    assert outcome.input_mode == "text"
+
+
 async def test_empty_ocr_text_sends_image_block_for_jpeg(
     settings: Settings, data_dir: Path
 ) -> None:

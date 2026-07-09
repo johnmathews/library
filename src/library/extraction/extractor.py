@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 # Bump whenever the system prompt or schema changes meaningfully; stored per
 # run so old-prompt documents can be found and re-extracted later.
-PROMPT_VERSION: str = "2026-07-09.1"
+PROMPT_VERSION: str = "2026-07-09.2"
 
 # Short OCR text (<= this many characters) is sent whole: metadata lives on
 # the first pages, and this caps per-document spend for transactional docs.
@@ -228,7 +228,11 @@ def _email_context_block(recipient_hint: str | None) -> dict[str, Any] | None:
 
 
 def build_user_content(
-    document: Document, ocr_text: str, *, recipient_hint: str | None = None
+    document: Document,
+    ocr_text: str,
+    *,
+    recipient_hint: str | None = None,
+    force_file: bool = False,
 ) -> tuple[list[dict[str, Any]], str]:
     """Build the user message content and report the input mode used.
 
@@ -237,10 +241,16 @@ def build_user_content(
     Raises :class:`ExtractionSkipped` when neither input is usable. When
     ``recipient_hint`` is given (a resolved display name for an email
     attachment), a one-line envelope hint is appended to the content.
+
+    ``force_file=True`` skips the OCR-text branch and sends the original file
+    even when usable text exists — used by the low-confidence escalation to let
+    the model *read* an image PDF whose OCR captured only the letterhead. It
+    still raises :class:`ExtractionSkipped` when the original cannot be sent
+    (unusable mime, missing, or oversized), so the caller can fall back to text.
     """
     hint = _email_context_block(recipient_hint)
     text = ocr_text.strip()
-    if len(text) >= MIN_TEXT_CHARS:
+    if not force_file and len(text) >= MIN_TEXT_CHARS:
         content: list[dict[str, Any]] = [{"type": "text", "text": _sample_long_text(text)}]
         if hint is not None:
             content.append(hint)
@@ -357,13 +367,30 @@ async def extract(
             calls=calls,
         )
 
-    metadata, usage = await _attempt(client, settings.extraction_escalation_model, content)
+    # Escalation. When the primary ran on OCR text, prefer re-attempting with the
+    # ORIGINAL FILE (vision): a low-confidence result on an image PDF is usually
+    # thin OCR — only the letterhead reached the model — and the model can read
+    # the amount/recipient/date straight off the page. Fall back to the same text
+    # content when the original cannot be sent (unusable mime / missing /
+    # oversized), so escalation never regresses.
+    escalation_content, escalation_mode = content, input_mode
+    if input_mode == "text":
+        try:
+            escalation_content, escalation_mode = build_user_content(
+                document, ocr_text, recipient_hint=recipient_hint, force_file=True
+            )
+        except ExtractionSkipped:
+            escalation_content, escalation_mode = content, input_mode
+
+    metadata, usage = await _attempt(
+        client, settings.extraction_escalation_model, escalation_content
+    )
     calls.append(usage)
     return ExtractionOutcome(
         metadata=metadata,
         model=settings.extraction_escalation_model,
         prompt_version=PROMPT_VERSION,
-        input_mode=input_mode,
+        input_mode=escalation_mode,
         escalated=True,
         calls=calls,
     )
