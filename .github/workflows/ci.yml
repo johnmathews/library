@@ -127,7 +127,10 @@ jobs:
         run: npm run check:assets
 
   e2e:
-    needs: [backend, frontend]
+    # Deliberately NOT gated on backend/frontend: e2e builds its own stack image
+    # and shares no artifacts with them, so it runs fully in parallel to cut total
+    # wall-clock. The deploy gate stays safe — `promote` still needs all of
+    # backend/frontend/e2e/compose-smoke to pass (see its `needs` below).
     runs-on: ubuntu-latest
     env:
       # Both compose files for every compose invocation (up/exec/logs/down).
@@ -141,9 +144,11 @@ jobs:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
       # Build the backend image via bake so it restores from the shared gha
-      # layer cache (populated by the `build` job). `compose up` below finds
-      # the loaded images and skips the build; on a cache/name miss it simply
-      # rebuilds — slower, never broken.
+      # layer cache when warm (the `build` job also writes it). Now that e2e is
+      # un-gated it usually starts before `build`, so the cache is often cold and
+      # this step rebuilds — `compose up` below then finds the loaded images and
+      # skips its own build; on a cache/name miss it simply rebuilds — slower,
+      # never broken.
       - name: Build the stack image (gha layer cache)
         uses: docker/bake-action@v7
         with:
