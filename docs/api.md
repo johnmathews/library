@@ -207,19 +207,29 @@ dashboard-field catalog in §1.10.2.
   `search_vector_en` (`english` config), OR-combined. Stemming therefore
   works in both languages: `q=rekening` finds "rekeningen", `q=policy`
   finds "policies".
-- Each vector folds in `title`, `summary`, `ocr_text`, **and `topics`** (the
-  auto-extracted subject phrases, cast with `coalesce(topics::text,'')`;
+- Each vector folds in `title`, `summary`, the document body, **and `topics`**
+  (the auto-extracted subject phrases, cast with `coalesce(topics::text,'')`;
   migration `0012_topics_fts`), so a document is findable by its topics even
   when the term never appears in its body. `topics` is read-only (see §1.5).
+- The **body term is `coalesce(pages_markdown, ocr_text)`** — it prefers the
+  vision "understood layer" (the concatenated per-page markdown, denormalized
+  onto `documents.pages_markdown`) and falls back to raw `ocr_text` when a
+  document has no markdown pages (migration `0025_fts_page_markdown`). This
+  mirrors how semantic search and Ask read the page markdown, so a thin-OCR
+  image PDF is findable by body text (an invoice number, a line item) that OCR
+  never captured but vision did. Born-digital docs and notes have
+  `pages_markdown == ocr_text`, and the `coalesce` indexes the body once (no
+  double-count).
 - The rank is `greatest(ts_rank(nl), ts_rank(en))` — the best of the two
   language interpretations — and results are ordered by it, descending.
-- `snippet` is `ts_headline` over `ocr_text`, generated with whichever
-  config produced the higher rank, capped with
+- `snippet` is `ts_headline` over the same `coalesce(pages_markdown, ocr_text)`
+  source, generated with whichever config produced the higher rank, capped with
   `MaxFragments=2, MaxWords=12, MinWords=4, ShortWord=2,
-  FragmentDelimiter=" … "` and the **default `<b>`/`</b>` markers**.
+  FragmentDelimiter=" … "` and the **default `<b>`/`</b>` markers**, so an
+  image-PDF snippet shows real body text rather than the thin letterhead.
 
-> **Rendering snippets safely.** `ocr_text` is raw OCR output and is NOT
-> HTML-escaped by the server; a scanned document could contain literal
+> **Rendering snippets safely.** The snippet source (page markdown or raw OCR)
+> is NOT HTML-escaped by the server; a document could contain literal
 > HTML. Clients must render the snippet as plain text and handle the
 > `<b>`…`</b>` markers deliberately (e.g. escape everything, then convert
 > the known markers back to highlighting). Never inject a snippet into the

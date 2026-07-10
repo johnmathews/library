@@ -15,7 +15,10 @@
 - `ruff format` + `ruff check` must be clean before every commit.
 - Tests are required for every task; never skip them. Backend `pytest`, frontend `vitest`, e2e `playwright`.
 - **Best-effort invariant:** the markdown and embed stages must NEVER fail a document. Disabled feature, missing API key, blown budget, unusable input, or API error ⇒ record an ingestion event and return normally; the document still reaches `indexed`.
-- FTS stays on `ocr_text` — do not add markdown to the search vectors.
+- FTS stays on `ocr_text` — do not add markdown to the search vectors. _(Later
+  revisited: migration `0025_fts_page_markdown` (2026-07-10) folds the page
+  markdown into FTS via `coalesce(pages_markdown, ocr_text)` so image-PDF bodies
+  are findable — see [ingestion.md](../../ingestion.md) "Markdown layer".)_
 - Default markdown model is `claude-haiku-4-5`; no escalation this phase.
 - Record cost per run in the `markdown_completed` event so the daily budget guard can sum it. The markdown budget is **independent** of the extraction budget (scope each spend query to its own event name).
 - Migration revision is `0007`, `down_revision = "0006"`.

@@ -796,8 +796,19 @@ headings, lists, and emphasis. The markdown feeds the embed stage (richer
 semantic retrieval) and the detail-view markdown tab; it also supplies
 page provenance for Ask citations (see [ask.md](ask.md)).
 
-FTS stays on `ocr_text` — the markdown layer does not affect full-text
-search.
+**Full-text search reads the markdown layer too.** The concatenated per-page
+markdown is denormalized onto `documents.pages_markdown` (a generated column
+can only read same-row columns, so it cannot reach `document_pages`), and the
+two generated FTS tsvector columns index `coalesce(pages_markdown, ocr_text)` —
+preferring the markdown, falling back to raw OCR when a document has no pages
+(migration `0025_fts_page_markdown`). So a thin-OCR image PDF is findable by
+body text OCR never captured, and search snippets (`ts_headline`) are drawn
+from the same source. `pages_markdown` is a search-only mirror kept in sync by
+the app wherever page rows are written — `apply_markdown` (both the vision and
+born-digital passthrough paths) and `api/notes.py` `_apply_body` — via
+`markdown.apply.document_markdown_text`; `document_pages` remains the source of
+truth for page content. Born-digital docs and notes have
+`pages_markdown == ocr_text`, so the `coalesce` indexes the body once.
 
 ### Generation
 

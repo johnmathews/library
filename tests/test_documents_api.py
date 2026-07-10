@@ -404,6 +404,93 @@ def test_search_no_match_returns_empty(api_client: TestClient, api_database_url:
     assert body == {"items": [], "total": 0, "limit": 25, "offset": 0}
 
 
+# --- Full-text search reads the vision "understood layer" (pages_markdown) ---
+#
+# For a thin-OCR image PDF the real body lives in pages_markdown, not ocr_text.
+# FTS indexes coalesce(pages_markdown, ocr_text), so body text OCR never captured
+# is findable. These tests set pages_markdown directly (the FTS mirror column) —
+# the app-side sync that populates it is covered in tests/markdown and the notes
+# suite; here we exercise the query path (FTS_EXPRESSION + ts_headline).
+
+
+def test_search_finds_body_only_present_in_page_markdown(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A phrase present only in pages_markdown (absent from thin ocr_text) matches."""
+    seed_document(
+        api_database_url,
+        "w25-md-only",
+        tag_slugs=["w25-md-only"],
+        ocr_text="ACME Corporation letterhead",  # thin OCR — no body
+        pages_markdown="Total due EUR 1234.56 for invoice zorptastic-9981",
+    )
+    body = list_docs(api_client, q="zorptastic-9981", tag="w25-md-only")
+    assert body["total"] == 1
+    assert len(body["items"]) == 1
+
+
+def test_search_snippet_comes_from_page_markdown(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The ts_headline snippet is drawn from pages_markdown, not the thin OCR."""
+    seed_document(
+        api_database_url,
+        "w25-md-snippet",
+        tag_slugs=["w25-md-snippet"],
+        ocr_text="Gemeente Amsterdam",  # letterhead only
+        pages_markdown="De totale huur voor het grachtenpand bedraagt 1800 euro per maand.",
+    )
+    body = list_docs(api_client, q="grachtenpand", tag="w25-md-snippet")
+    assert body["total"] == 1
+    snippet = body["items"][0]["snippet"]
+    assert "<b>grachtenpand</b>" in snippet
+
+
+def test_search_falls_back_to_ocr_text_when_no_page_markdown(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """With pages_markdown NULL, FTS still matches on ocr_text (fallback preserved)."""
+    seed_document(
+        api_database_url,
+        "w25-ocr-fallback",
+        tag_slugs=["w25-ocr-fallback"],
+        ocr_text="Een brief over de hypotheek quixolate-4420.",
+        pages_markdown=None,
+    )
+    body = list_docs(api_client, q="quixolate-4420", tag="w25-ocr-fallback")
+    assert body["total"] == 1
+
+
+def test_search_does_not_double_count_markdown_equal_to_ocr(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A doc whose markdown == ocr_text ranks identically to an OCR-only twin.
+
+    The coalesce (prefer markdown, else OCR) indexes the body ONCE. If FTS instead
+    concatenated both, the born-digital/note shape (markdown == ocr_text) would be
+    indexed twice and outrank an equivalent OCR-only document — this guards that.
+    """
+    text = "energie factuur snargleplex voor de maand mei"
+    both = seed_document(
+        api_database_url,
+        "w25-nodup-both",
+        tag_slugs=["w25-nodup"],
+        ocr_text=text,
+        pages_markdown=text,  # born-digital / note shape
+    )
+    ocr_only = seed_document(
+        api_database_url,
+        "w25-nodup-ocr",
+        tag_slugs=["w25-nodup"],
+        ocr_text=text,
+        pages_markdown=None,
+    )
+    body = list_docs(api_client, q="snargleplex", tag="w25-nodup")
+    assert body["total"] == 2
+    ranks = {item["id"]: item["rank"] for item in body["items"]}
+    assert ranks[both] == pytest.approx(ranks[ocr_only])
+
+
 # --- Detail ------------------------------------------------------------------
 
 

@@ -236,6 +236,8 @@ async def test_success_writes_pages_and_event(
         await apply_markdown(session, document, settings)
 
     async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
         pages = (
             (
                 await session.execute(
@@ -251,6 +253,9 @@ async def test_success_writes_pages_and_event(
     assert [p.markdown for p in pages] == ["# Page 1", "# Page 2"]
     assert pages[0].char_count == len("# Page 1")
     assert pages[0].page_number == 1
+    # The FTS mirror column holds the page markdown joined in page order (same
+    # delimiter as the 0025 backfill), so plain full-text search can find it.
+    assert document.pages_markdown == "# Page 1\n\n# Page 2"
 
     events = await get_events(session_factory, document_id)
     completed = [detail for ev, detail in events if ev == "markdown_completed"]

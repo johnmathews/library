@@ -144,11 +144,13 @@ async def test_born_digital_writes_single_page_no_anthropic(
     assert pages[0].markdown == body  # full body verbatim
     assert pages[0].char_count == len(body)
 
-    # page_count is set to match the single synthesized page.
+    # page_count is set to match the single synthesized page, and the FTS mirror
+    # holds the same body (== ocr_text here, so coalesce won't double-count).
     async with session_factory() as session:
         document = await session.get(Document, document_id)
         assert document is not None
         assert document.page_count == 1
+        assert document.pages_markdown == body
 
     events = await get_events(session_factory, document_id)
     completed = [detail for ev, detail in events if ev == "markdown_completed"]
@@ -209,8 +211,10 @@ async def test_born_digital_empty_body_records_no_text(
     assert "markdown_completed" not in [ev for ev, _ in events]
     assert await get_pages(session_factory, document_id) == []
 
-    # The no-text branch writes no page, so page_count stays unchanged (None).
+    # The no-text branch writes no page, so page_count stays unchanged (None)
+    # and the FTS mirror is cleared (FTS falls back to ocr_text, also empty).
     async with session_factory() as session:
         document = await session.get(Document, document_id)
         assert document is not None
         assert document.page_count is None
+        assert document.pages_markdown is None

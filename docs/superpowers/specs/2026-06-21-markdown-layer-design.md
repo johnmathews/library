@@ -50,7 +50,8 @@ that:
 - **New pipeline stage `markdown`** between `extract` and `embed`; embed chunks from the
   per-page markdown. Best-effort, exactly like extraction/embed.
 - **FTS unchanged** — stays on `ocr_text` (exact OCR terms); markdown feeds embeddings,
-  Ask, and display only.
+  Ask, and display only. _(Later revisited: migration `0025_fts_page_markdown`
+  (2026-07-10) folds page markdown into FTS via `coalesce(pages_markdown, ocr_text)`.)_
 - **Default model = `claude-haiku-4-5`** (household tables are simple; cheap). No
   escalation this phase.
 - **Own daily budget guard** (`LIBRARY_MARKDOWN_DAILY_BUDGET_USD`), separate from the

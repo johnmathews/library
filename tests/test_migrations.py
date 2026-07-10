@@ -66,6 +66,16 @@ async def _fetch_scalars(database_url: str, query: str) -> list[object]:
         await engine.dispose()
 
 
+async def _execute(database_url: str, statements: list[str]) -> None:
+    engine = create_async_engine(database_url)
+    try:
+        async with engine.begin() as connection:
+            for statement in statements:
+                await connection.execute(text(statement))
+    finally:
+        await engine.dispose()
+
+
 def _table_names(database_url: str) -> set[str]:
     rows = asyncio.run(
         _fetch_scalars(
@@ -158,6 +168,84 @@ def test_document_chunks_have_page_number_column(migrated_database_url: str) -> 
         """,
     )
     assert rows == [("page_number", "integer", "YES")]
+
+
+def test_documents_have_pages_markdown_column(migrated_database_url: str) -> None:
+    """0025 adds a nullable documents.pages_markdown text column."""
+    rows = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = 'documents' AND column_name = 'pages_markdown'
+        """,
+    )
+    assert rows == [("pages_markdown", "text", "YES")]
+
+
+def test_0025_backfills_pages_markdown_and_fts_from_existing_pages(
+    admin_database_url: str,
+) -> None:
+    """The 0025 backfill fills pages_markdown (and regenerates the FTS vector)
+    for rows that already had document_pages BEFORE the migration ran.
+
+    Fresh-DB schema tests migrate an empty database, so the ``string_agg``
+    backfill touches zero rows — they cover the destination, not the journey.
+    This migrates to 0024, inserts pre-0025-shaped data (pages + thin OCR, no
+    mirror column), upgrades to head, and asserts the backfill populated the
+    mirror and the search vector.
+    """
+    url = create_database(admin_database_url, "library_backfill")
+    config = alembic_config(url)
+
+    command.upgrade(config, "0024")
+    asyncio.run(
+        _execute(
+            url,
+            [
+                # Doc 901: thin OCR letterhead + two out-of-order markdown pages.
+                "INSERT INTO documents (id, sha256, mime_type, status, source, language, ocr_text) "
+                "VALUES (901, 'sha-with-pages', 'application/pdf', 'indexed', 'upload', 'eng', "
+                "'ACME Corporation letterhead')",
+                "INSERT INTO document_pages (document_id, page_number, markdown, char_count) "
+                "VALUES (901, 2, 'Line item widget zorptastic-5501', 99)",
+                "INSERT INTO document_pages (document_id, page_number, markdown, char_count) "
+                "VALUES (901, 1, 'Invoice header', 99)",
+                # Doc 902: OCR body, no pages — the fallback path.
+                "INSERT INTO documents (id, sha256, mime_type, status, source, language, ocr_text) "
+                "VALUES (902, 'sha-no-pages', 'application/pdf', 'indexed', 'upload', 'eng', "
+                "'plain ocr body quixolate-4420')",
+            ],
+        )
+    )
+
+    command.upgrade(config, "head")  # applies 0025 + backfill
+
+    # Doc 901: pages concatenated in page order into the mirror column.
+    assert fetch_all(url, "SELECT pages_markdown FROM documents WHERE id = 901") == [
+        ("Invoice header\n\nLine item widget zorptastic-5501",)
+    ]
+    # Doc 902: no pages -> mirror stays NULL (FTS falls back to ocr_text).
+    assert fetch_all(url, "SELECT pages_markdown FROM documents WHERE id = 902") == [(None,)]
+
+    # The regenerated FTS vector indexes the backfilled page body (901)...
+    from_pages = asyncio.run(
+        _fetch_scalars(
+            url,
+            "SELECT id FROM documents "
+            "WHERE search_vector_en @@ websearch_to_tsquery('english', 'zorptastic-5501')",
+        )
+    )
+    assert [int(row) for row in from_pages] == [901]
+    # ...and still matches the OCR fallback body (902).
+    from_ocr = asyncio.run(
+        _fetch_scalars(
+            url,
+            "SELECT id FROM documents "
+            "WHERE search_vector_en @@ websearch_to_tsquery('english', 'quixolate-4420')",
+        )
+    )
+    assert [int(row) for row in from_ocr] == [902]
 
 
 def test_documents_have_topics_column(migrated_database_url: str) -> None:

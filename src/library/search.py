@@ -9,11 +9,12 @@ Search semantics (see docs/api.md §1.3.3)
   columns (``dutch`` and ``english`` configs), OR-combined; the rank is
   ``greatest`` of the two ``ts_rank`` values so a document matching
   strongly in either language surfaces.
-- Snippets come from ``ts_headline`` over ``ocr_text`` using whichever
-  config produced the higher rank, capped by ``HEADLINE_OPTIONS``. The
-  default ``<b>``/``</b>`` markers are kept; the OCR text is NOT
-  HTML-escaped, so clients must render snippets as text and interpret
-  only the ``<b>`` markers.
+- Snippets come from ``ts_headline`` over ``coalesce(pages_markdown,
+  ocr_text)`` — the same prefer-markdown source the tsvector columns index —
+  using whichever config produced the higher rank, capped by
+  ``HEADLINE_OPTIONS``. The default ``<b>``/``</b>`` markers are kept; the
+  text is NOT HTML-escaped, so clients must render snippets as text and
+  interpret only the ``<b>`` markers.
 """
 
 from collections.abc import Sequence
@@ -208,10 +209,13 @@ def build_document_query(q: str | None, filters: DocumentFilters) -> DocumentQue
             )
         )
         rank = func.greatest(rank_nl, rank_en).label("rank")
-        ocr_source = func.coalesce(Document.ocr_text, "")
+        # Prefer the vision "understood layer" (pages_markdown) and fall back to
+        # raw OCR — the same source the generated tsvector columns index — so an
+        # image-PDF snippet shows real body text, not just the thin letterhead.
+        snippet_source = func.coalesce(Document.pages_markdown, Document.ocr_text, "")
         snippet = case(
-            (rank_nl >= rank_en, func.ts_headline(dutch, ocr_source, tsq_nl, HEADLINE_OPTIONS)),
-            else_=func.ts_headline(english, ocr_source, tsq_en, HEADLINE_OPTIONS),
+            (rank_nl >= rank_en, func.ts_headline(dutch, snippet_source, tsq_nl, HEADLINE_OPTIONS)),
+            else_=func.ts_headline(english, snippet_source, tsq_en, HEADLINE_OPTIONS),
         ).label("snippet")
         statement: Select[Any] = (
             select(Document, rank, snippet)

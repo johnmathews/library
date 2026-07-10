@@ -115,9 +115,11 @@ at any stage, with the reason in `ingestion_events`).
 6. **Index** — metadata and text become searchable (Postgres FTS, both
    Dutch and English stemming; semantic retrieval via `document_chunks`) and
    visible in the UI. The two STORED generated tsvector columns fold in
-   `title`, `summary`, `ocr_text`, **and `topics`** (the auto-extracted subject
+   `title`, `summary`, `coalesce(pages_markdown, ocr_text)` — preferring the
+   vision "understood layer" and falling back to raw OCR (migration
+   `0025_fts_page_markdown`) — **and `topics`** (the auto-extracted subject
    phrases, via an immutable `topics::text` cast; migration `0012_topics_fts`),
-   so a document is findable by its topics.
+   so a document is findable by its topics and by body text OCR never captured.
 
 ## 1.3 Data model (summary)
 

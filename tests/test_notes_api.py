@@ -85,6 +85,22 @@ def test_create_materializes_reader_without_worker(api_client: TestClient) -> No
     assert markdown["pages"][0]["markdown"].strip() == "# Title\n\nbody now."
 
 
+def test_created_note_is_findable_by_body_full_text_search(api_client: TestClient) -> None:
+    """A note's body is findable by plain FTS right after create.
+
+    ``_apply_body`` sets ``pages_markdown`` synchronously, and FTS indexes
+    ``coalesce(pages_markdown, ocr_text)`` — so a distinctive body phrase matches
+    without waiting for the worker. The coined term is globally unique in the test
+    DB, so it scopes the assertion on its own.
+    """
+    create_note(api_client, "Searchable", "The quarterly report mentions flibbernaut-7734 here.")
+    response = api_client.get("/api/documents", params={"q": "flibbernaut-7734"})
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == 1
+    assert body["items"][0]["title"] == "Searchable"
+
+
 def test_create_empty_body_has_no_page(api_client: TestClient) -> None:
     """A whitespace-only body materializes no page (the _apply_body else-branch)."""
     note = create_note(api_client, "Empty", "   ")

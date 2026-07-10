@@ -7,8 +7,12 @@ Design notes
   types. Adding a value is then an ordinary migration (drop/recreate the
   check) rather than ``ALTER TYPE``, and values stay readable in psql.
 - Full-text search uses two STORED generated tsvector columns (Dutch and
-  English configs) over title + summary + ocr_text, each with a GIN index.
-  Stemming differs per language, so one column cannot serve both.
+  English configs) over title + summary + coalesce(pages_markdown, ocr_text)
+  + topics, each with a GIN index. Stemming differs per language, so one
+  column cannot serve both. The body term prefers the vision "understood
+  layer" (``pages_markdown``, the concatenated per-page markdown) and falls
+  back to raw ``ocr_text`` — mirroring the embed/Ask retrieval paths — so
+  image PDFs are findable by body text OCR never captured.
 - ``documents.deleted_at`` implements soft delete; ``ingestion_events`` is an
   append-only audit trail.
 """
@@ -59,7 +63,7 @@ NAMING_CONVENTION: dict[str, str] = {
 # Postgres text-search config ('dutch' / 'english').
 FTS_EXPRESSION: str = (
     "to_tsvector('{config}', coalesce(title, '') || ' ' "
-    "|| coalesce(summary, '') || ' ' || coalesce(ocr_text, '') || ' ' "
+    "|| coalesce(summary, '') || ' ' || coalesce(pages_markdown, ocr_text, '') || ' ' "
     "|| coalesce(topics::text, ''))"
 )
 
@@ -368,6 +372,14 @@ class Document(Base):
     )
 
     ocr_text: Mapped[str | None] = mapped_column(Text)
+    # Concatenated ``DocumentPage.markdown`` (the vision "understood layer"),
+    # denormalized onto the document so the same-row generated FTS columns can
+    # index it — a generated column cannot read the child ``document_pages``
+    # table. Kept in sync by the app wherever page rows are (re)written
+    # (markdown/apply.py, api/notes.py); NULL when the document has no pages, in
+    # which case FTS falls back to ``ocr_text``. Not the source of truth for
+    # page content — ``document_pages`` is; this is a search-only mirror.
+    pages_markdown: Mapped[str | None] = mapped_column(Text)
     ocr_confidence: Mapped[float | None] = mapped_column(Float)
     searchable_pdf: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")

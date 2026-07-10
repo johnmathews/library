@@ -31,6 +31,7 @@ from library.api.documents import _detail
 from library.auth.deps import current_user
 from library.db import get_session
 from library.jobs import embed_document, extract_document, process_document
+from library.markdown.apply import document_markdown_text
 from library.models import (
     Document,
     DocumentPage,
@@ -152,8 +153,10 @@ async def _apply_body(session: AsyncSession, document: Document, body_markdown: 
             )
         )
         document.page_count = 1
+        document.pages_markdown = document_markdown_text([body])
     else:
         document.page_count = None
+        document.pages_markdown = None
 
 
 def _lock_title(document: Document, title: str) -> None:

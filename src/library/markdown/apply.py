@@ -6,6 +6,7 @@ skip/failed audit event and a normal return, so the pipeline continues.
 """
 
 import logging
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -25,6 +26,20 @@ from library.models import Document, DocumentPage, IngestionEvent
 from library.storage import derived_dir, path_for
 
 logger = logging.getLogger(__name__)
+
+
+def document_markdown_text(page_markdowns: Sequence[str]) -> str | None:
+    """Concatenate a document's page markdown (in page order) for the FTS mirror.
+
+    ``documents.pages_markdown`` denormalizes the per-page "understood layer" so
+    the same-row generated FTS columns can index it. This joins the ordered page
+    markdown with the SAME ``\\n\\n`` delimiter the 0025 migration's ``string_agg``
+    backfill uses, and returns ``None`` for a page-less document so the column is
+    NULL and FTS falls back to ``ocr_text``.
+    """
+    if not page_markdowns:
+        return None
+    return "\n\n".join(page_markdowns)
 
 
 async def todays_markdown_spend_usd(session: AsyncSession) -> float:
@@ -57,6 +72,7 @@ async def _apply_born_digital_markdown(session: AsyncSession, document: Document
     """
     body = (document.ocr_text or "").strip()
     if not body:
+        document.pages_markdown = None
         await _record_event(session, document, "markdown_skipped", {"reason": "no_text"})
         return
     await session.execute(delete(DocumentPage).where(DocumentPage.document_id == document.id))
@@ -69,6 +85,7 @@ async def _apply_born_digital_markdown(session: AsyncSession, document: Document
         )
     )
     document.page_count = 1
+    document.pages_markdown = document_markdown_text([body])
     await _record_event(
         session,
         document,
@@ -165,6 +182,8 @@ async def apply_markdown(session: AsyncSession, document: Document, settings: Se
                 char_count=len(page.markdown),
             )
         )
+    # result.pages is page-ordered; mirror the concatenation into the FTS column.
+    document.pages_markdown = document_markdown_text([page.markdown for page in result.pages])
     await _record_event(
         session,
         document,
