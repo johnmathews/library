@@ -111,6 +111,24 @@ def test_low_ocr_confidence_fires() -> None:
     )
 
 
+def test_low_ocr_confidence_does_not_fire_when_extraction_read_the_image() -> None:
+    # When the accepted extraction read the page IMAGE (vision fallback /
+    # born-unusable-OCR), a low OCR confidence is irrelevant — the OCR text was not
+    # the input we used, so don't flag it for review.
+    for mode in ("document", "image"):
+        doc = _doc(ocr_confidence=30.0, extra={"extraction": {"input_mode": mode}})
+        assert "ocr_confidence_gate" not in _rules(
+            validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        ), f"ocr_confidence_gate should be suppressed for input_mode={mode}"
+
+
+def test_low_ocr_confidence_still_fires_when_extraction_read_the_text() -> None:
+    doc = _doc(ocr_confidence=30.0, extra={"extraction": {"input_mode": "text"}})
+    assert "ocr_confidence_gate" in _rules(
+        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
 def test_empty_extraction_fires() -> None:
     doc = _doc()  # kind other, no sender, no date, no amount
     assert "empty_extraction" in _rules(

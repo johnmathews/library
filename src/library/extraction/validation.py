@@ -284,8 +284,16 @@ def validate(
             )
         )
 
-    # ocr_confidence_gate — extraction built on low-confidence OCR.
-    if document.ocr_confidence is not None and document.ocr_confidence < ocr_floor:
+    # ocr_confidence_gate — extraction built on low-confidence OCR. Moot when the
+    # model read the page IMAGE instead (input_mode document/image — the vision
+    # fallback or born-unusable-OCR path): the accepted extraction did not consume
+    # the OCR text, so its confidence says nothing about the result. Same
+    # image-vs-text gate as amount_grounding above.
+    if (
+        document.ocr_confidence is not None
+        and document.ocr_confidence < ocr_floor
+        and not read_the_image
+    ):
         findings.append(
             Finding(
                 "ocr_confidence_gate",
