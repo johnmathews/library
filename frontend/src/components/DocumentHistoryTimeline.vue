@@ -8,8 +8,9 @@ const props = defineProps<{ events: IngestionEvent[] }>()
 
 /** Human labels for the milestone events shown in the curated timeline.
  * Anything not listed here falls back to a humanized version of its raw name;
- * genuinely noisy events (per-stage status_changed, *_skipped) are hidden by
- * default and only appear under "Show all". */
+ * genuinely noisy events (per-stage status_changed, low-signal *_skipped) are
+ * hidden by default and only appear under "Show all". Extraction skips and all
+ * *_failed events are processing-relevant and always surface. */
 const MILESTONE_LABELS: Record<string, string> = {
   received: 'Ingested',
   paperless_imported: 'Imported from Paperless',
@@ -17,6 +18,7 @@ const MILESTONE_LABELS: Record<string, string> = {
   ocr_completed: 'OCR complete',
   ocr_failed: 'OCR failed',
   extraction_completed: 'Description & metadata added',
+  extraction_skipped: 'Extraction skipped',
   extraction_failed: 'Extraction failed',
   markdown_completed: 'Page markdown generated',
   markdown_failed: 'Markdown failed',
@@ -36,9 +38,13 @@ function humanize(name: string): string {
 }
 
 /** True for events that are noise in the at-a-glance view: the per-stage
- * pipeline transitions (except the final "indexed") and skipped stages. */
+ * pipeline transitions (except the final "indexed") and the low-signal skips.
+ * `extraction_skipped` is NOT noise — extraction is the headline step, so a
+ * skip there (disabled / no key / budget / unusable input) is worth showing;
+ * failures (`*_failed`) are never skips and always surface. */
 function isNoise(event: IngestionEvent): boolean {
   if (event.event === 'status_changed') return event.detail?.to !== 'indexed'
+  if (event.event === 'extraction_skipped') return false
   return event.event.endsWith('_skipped')
 }
 
@@ -49,7 +55,85 @@ function label(event: IngestionEvent): string {
   return MILESTONE_LABELS[event.event] ?? humanize(event.event)
 }
 
-/** A short secondary line for events that carry meaningful detail. */
+// --- Extraction breakdown -------------------------------------------------
+// `input_mode` = what was sent on the FINAL attempt; `escalated` = whether the
+// low-confidence retry ran. The four combinations tell distinct stories — most
+// importantly the VISION fallback, where a low-confidence retry re-read the
+// ORIGINAL FILE (thin-OCR image-PDF recovery). See docs/ingestion.md.
+type ExtractionBreakdown = {
+  method: string
+  isVisionFallback: boolean
+  chips: { label: string; value: string }[]
+}
+
+function titleCase(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1)
+}
+
+function extractionBreakdown(event: IngestionEvent): ExtractionBreakdown | null {
+  if (event.event !== 'extraction_completed') return null
+  const detail = event.detail ?? {}
+  const escalated = detail.escalated === true
+  const fromFile = detail.input_mode === 'document' || detail.input_mode === 'image'
+  const isVisionFallback = escalated && fromFile
+
+  let method: string
+  if (isVisionFallback) {
+    method = 'Low confidence — re-read the original file (vision fallback)'
+  } else if (escalated) {
+    method = 'Low confidence — retried with a stronger model'
+  } else if (fromFile) {
+    method = 'Read the original file directly (OCR text was unusable)'
+  } else {
+    method = 'Read the OCR text'
+  }
+
+  const chips: { label: string; value: string }[] = []
+  if (typeof detail.model === 'string' && detail.model) {
+    chips.push({ label: 'Model', value: detail.model })
+  }
+  if (typeof detail.confidence === 'string' && detail.confidence) {
+    chips.push({ label: 'Confidence', value: titleCase(detail.confidence) })
+  }
+  if (typeof detail.cost_usd === 'number' && detail.cost_usd > 0) {
+    chips.push({ label: 'Cost', value: `$${detail.cost_usd.toFixed(4)}` })
+  }
+
+  return { method, isVisionFallback, chips }
+}
+
+// --- Skips and failures ---------------------------------------------------
+const SKIP_REASONS: Record<string, string> = {
+  disabled: 'Extraction is disabled',
+  missing_api_key: 'No API key configured',
+  input_unusable: 'Input unusable',
+  file_too_large: 'File too large',
+}
+
+function skipReason(detail: Record<string, unknown>): string {
+  const reason = typeof detail.reason === 'string' ? detail.reason : ''
+  if (reason === 'budget') {
+    const spent = typeof detail.spent_usd === 'number' ? `$${detail.spent_usd.toFixed(2)}` : '?'
+    const budget = typeof detail.budget_usd === 'number' ? `$${detail.budget_usd.toFixed(2)}` : '?'
+    return `Daily budget reached — ${spent} of ${budget} spent`
+  }
+  // Unusable/oversized input carries a human "detail" string worth showing verbatim.
+  if (typeof detail.detail === 'string' && detail.detail) {
+    const reasonLabel = SKIP_REASONS[reason] ?? (reason ? humanize(reason) : 'Skipped')
+    return `${reasonLabel} — ${detail.detail}`
+  }
+  return SKIP_REASONS[reason] ?? (reason ? humanize(reason) : 'Skipped')
+}
+
+/** The error/detail string carried by a failure event, if any. */
+function failureDetail(detail: Record<string, unknown>): string | null {
+  if (typeof detail.error === 'string' && detail.error) return detail.error
+  if (typeof detail.detail === 'string' && detail.detail) return detail.detail
+  return null
+}
+
+/** A short secondary line for events that carry meaningful detail. Extraction
+ * successes render their own breakdown block instead (see the template). */
 function secondary(event: IngestionEvent): string | null {
   const detail = event.detail ?? {}
   if (event.event === 'user_edited' && Array.isArray(detail.fields) && detail.fields.length) {
@@ -58,6 +142,12 @@ function secondary(event: IngestionEvent): string | null {
   if (event.event === 'project_changed' && Array.isArray(detail.projects)) {
     const projects = detail.projects as string[]
     return projects.length ? `Projects: ${projects.join(', ')}` : 'Projects cleared'
+  }
+  if (event.event === 'extraction_skipped') {
+    return skipReason(detail)
+  }
+  if (event.event.endsWith('_failed')) {
+    return failureDetail(detail)
   }
   return null
 }
@@ -110,8 +200,42 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
         <div class="text-xs text-gray-400 dark:text-gray-500">
           {{ formatDateTime(event.created_at) }}
         </div>
+
+        <!-- Extraction success: a compact breakdown of how it was processed. -->
+        <template v-if="extractionBreakdown(event)">
+          <div
+            data-testid="history-extraction-method"
+            class="text-xs mt-0.5 break-words"
+            :class="
+              extractionBreakdown(event)!.isVisionFallback
+                ? 'text-violet-600 dark:text-violet-300 font-medium'
+                : 'text-gray-500 dark:text-gray-400'
+            "
+          >
+            {{ extractionBreakdown(event)!.method }}
+          </div>
+          <div
+            v-if="extractionBreakdown(event)!.chips.length"
+            class="flex flex-wrap gap-1.5 mt-1.5"
+          >
+            <span
+              v-for="chip in extractionBreakdown(event)!.chips"
+              :key="chip.label"
+              data-testid="history-extraction-chip"
+              class="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-gray-700/50 px-2 py-0.5 text-xs text-gray-600 dark:text-gray-300"
+            >
+              <span class="uppercase tracking-wide text-[10px] text-gray-400 dark:text-gray-500">
+                {{ chip.label }}
+              </span>
+              <span class="font-medium break-all">{{ chip.value }}</span>
+            </span>
+          </div>
+        </template>
+
+        <!-- Everything else with a meaningful detail line (skips, failures, edits). -->
         <div
-          v-if="secondary(event)"
+          v-else-if="secondary(event)"
+          data-testid="history-secondary"
           class="text-xs text-gray-500 dark:text-gray-400 mt-0.5 break-words"
         >
           {{ secondary(event) }}

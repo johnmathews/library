@@ -97,3 +97,164 @@ describe('DocumentHistoryTimeline', () => {
     expect(w.find('[data-testid="history-empty"]').exists()).toBe(true)
   })
 })
+
+describe('DocumentHistoryTimeline — extraction breakdown', () => {
+  function extractionItem(detail: Record<string, unknown>) {
+    const w = mount(DocumentHistoryTimeline, {
+      props: { events: [ev('extraction_completed', '2026-06-10T10:00:10Z', detail)] },
+    })
+    return w
+  }
+
+  it('narrates the VISION fallback when the low-confidence retry re-read the file', () => {
+    const w = extractionItem({
+      model: 'claude-opus-4-8',
+      confidence: 'high',
+      escalated: true,
+      input_mode: 'document',
+      cost_usd: 0.0123,
+    })
+    const method = w.find('[data-testid="history-extraction-method"]')
+    expect(method.exists()).toBe(true)
+    expect(method.text().toLowerCase()).toContain('vision fallback')
+    // It gets a violet accent so the important case is unmissable.
+    expect(method.classes().some((c) => c.includes('violet'))).toBe(true)
+  })
+
+  it('image input on the escalated retry is also the vision fallback', () => {
+    const w = extractionItem({ escalated: true, input_mode: 'image', confidence: 'low' })
+    expect(w.find('[data-testid="history-extraction-method"]').text().toLowerCase()).toContain(
+      'vision fallback',
+    )
+  })
+
+  it('narrates a model-only escalation (file could not be sent)', () => {
+    const w = extractionItem({ escalated: true, input_mode: 'text', confidence: 'high' })
+    const t = w.find('[data-testid="history-extraction-method"]').text().toLowerCase()
+    expect(t).toContain('stronger model')
+    expect(t).not.toContain('vision')
+  })
+
+  it('narrates an original-file-first read when OCR was unusable (no escalation)', () => {
+    const w = extractionItem({ escalated: false, input_mode: 'document', confidence: 'high' })
+    const t = w.find('[data-testid="history-extraction-method"]').text().toLowerCase()
+    expect(t).toContain('original file')
+    expect(t).not.toContain('vision fallback')
+  })
+
+  it('narrates a normal OCR-text read', () => {
+    const w = extractionItem({ escalated: false, input_mode: 'text', confidence: 'high' })
+    const t = w.find('[data-testid="history-extraction-method"]').text().toLowerCase()
+    expect(t).toContain('ocr text')
+  })
+
+  it('shows model, confidence and cost as chips (but not raw token counts)', () => {
+    const w = extractionItem({
+      model: 'claude-opus-4-8',
+      confidence: 'high',
+      escalated: false,
+      input_mode: 'text',
+      input_tokens: 5000,
+      output_tokens: 200,
+      cost_usd: 0.0123,
+    })
+    const chips = w.findAll('[data-testid="history-extraction-chip"]')
+    const chipText = chips.map((c) => c.text()).join(' | ')
+    expect(chipText).toContain('claude-opus-4-8')
+    expect(chipText.toLowerCase()).toContain('high')
+    expect(chipText).toContain('$0.0123')
+    // Raw token counts stay in the "Show all" JSON, not the curated chips.
+    expect(chipText).not.toContain('5000')
+  })
+
+  it('omits the cost chip when no cost was recorded', () => {
+    const w = extractionItem({ model: 'claude-opus-4-8', confidence: 'high', input_mode: 'text' })
+    const chipText = w
+      .findAll('[data-testid="history-extraction-chip"]')
+      .map((c) => c.text())
+      .join(' | ')
+    expect(chipText).not.toContain('$')
+  })
+})
+
+describe('DocumentHistoryTimeline — skips and failures', () => {
+  it('surfaces extraction_skipped as a milestone with a labelled reason', () => {
+    const w = mount(DocumentHistoryTimeline, {
+      props: { events: [ev('extraction_skipped', '2026-06-10T10:00:10Z', { reason: 'disabled' })] },
+    })
+    const items = w.findAll('[data-testid="history-item"]')
+    expect(items).toHaveLength(1)
+    expect(items[0]!.text()).toContain('Extraction skipped')
+    expect(items[0]!.text().toLowerCase()).toContain('disabled')
+  })
+
+  it('shows spent-of-budget for a budget skip', () => {
+    const w = mount(DocumentHistoryTimeline, {
+      props: {
+        events: [
+          ev('extraction_skipped', '2026-06-10T10:00:10Z', {
+            reason: 'budget',
+            spent_usd: 5,
+            budget_usd: 5,
+          }),
+        ],
+      },
+    })
+    const t = w.find('[data-testid="history-secondary"]').text()
+    expect(t.toLowerCase()).toContain('budget')
+    expect(t).toContain('$5.00')
+  })
+
+  it('shows the detail string for an input/file skip', () => {
+    const w = mount(DocumentHistoryTimeline, {
+      props: {
+        events: [
+          ev('extraction_skipped', '2026-06-10T10:00:10Z', {
+            reason: 'input_unusable',
+            detail: 'no usable OCR text and mime image/heic cannot be sent directly',
+          }),
+        ],
+      },
+    })
+    expect(w.find('[data-testid="history-secondary"]').text()).toContain('image/heic')
+  })
+
+  it('surfaces the error message on extraction_failed', () => {
+    const w = mount(DocumentHistoryTimeline, {
+      props: {
+        events: [
+          ev('extraction_failed', '2026-06-10T10:00:10Z', {
+            error: 'overloaded_error: server busy',
+            prompt_version: 7,
+          }),
+        ],
+      },
+    })
+    const items = w.findAll('[data-testid="history-item"]')
+    expect(items[0]!.text()).toContain('Extraction failed')
+    expect(w.find('[data-testid="history-secondary"]').text()).toContain('overloaded_error')
+  })
+
+  it('surfaces the error on stage failures (ocr/markdown/embedding)', () => {
+    const w = mount(DocumentHistoryTimeline, {
+      props: {
+        events: [ev('ocr_failed', '2026-06-10T10:00:10Z', { error: 'tesseract exited 1' })],
+      },
+    })
+    expect(w.find('[data-testid="history-secondary"]').text()).toContain('tesseract exited 1')
+  })
+
+  it('keeps low-signal skips (embedding_skipped) hidden from the curated view', () => {
+    const w = mount(DocumentHistoryTimeline, {
+      props: {
+        events: [
+          ev('received', '2026-06-10T10:00:00Z'),
+          ev('embedding_skipped', '2026-06-10T10:00:11Z', { reason: 'disabled' }),
+        ],
+      },
+    })
+    // Only "received" is a milestone; embedding_skipped stays in "Show all" only.
+    expect(w.findAll('[data-testid="history-item"]')).toHaveLength(1)
+    expect(w.find('ol').text()).not.toContain('Embedding skipped')
+  })
+})
