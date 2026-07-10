@@ -46,6 +46,36 @@ def test_amount_absent_from_text_fires() -> None:
     )
 
 
+def test_amount_absent_but_read_from_image_does_not_fire() -> None:
+    # The vision fallback: the model read the ORIGINAL FILE (input_mode "document"),
+    # so the amount is grounded in the page image, not the thin OCR text. Its absence
+    # from ocr_text is expected — do not flag it for review. (Regression: doc 144.)
+    for mode in ("document", "image"):
+        doc = _doc(
+            amount_total=Decimal("144.19"),
+            currency="EUR",
+            ocr_text="Some letterhead only — no total here",
+            extra={"extraction": {"input_mode": mode}},
+        )
+        assert "amount_grounding" not in _rules(
+            validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+        ), f"amount_grounding should be suppressed for input_mode={mode}"
+
+
+def test_amount_absent_from_text_still_fires_when_ocr_text_was_the_input() -> None:
+    # When the model read the OCR text (input_mode "text"), an amount that isn't in
+    # that text is genuinely ungrounded and still warrants review.
+    doc = _doc(
+        amount_total=Decimal("999.99"),
+        currency="EUR",
+        ocr_text="Totaal € 12,00 voldaan",
+        extra={"extraction": {"input_mode": "text"}},
+    )
+    assert "amount_grounding" in _rules(
+        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+    )
+
+
 def test_future_document_date_fires() -> None:
     doc = _doc(document_date=date(2027, 1, 1))
     assert "date_plausibility" in _rules(

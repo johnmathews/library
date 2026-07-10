@@ -643,7 +643,7 @@ Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
 
 | Rule | Field(s) | Fires when |
 |---|---|---|
-| `amount_grounding` | `amount_total` | Amount is set but its digit sequence is absent from `ocr_text` (normalised: strips currency symbols and separators, also checks the integer part) |
+| `amount_grounding` | `amount_total` | Amount is set but its digit sequence is absent from `ocr_text` (normalised: strips currency symbols and separators, also checks the integer part). **Only fires when extraction read the OCR text** (`extra.extraction.input_mode == "text"`, or a legacy doc with no recorded mode): when the model read the page *image* instead (`input_mode` `document`/`image` — the vision fallback or born-unusable-OCR path), the amount was grounded in the image, so its absence from thin OCR is expected and the rule is suppressed. |
 | `date_plausibility` | `document_date`, `due_date`, `expiry_date` | `document_date` is in the future or before 1990-01-01; or `due_date`/`expiry_date` is before `document_date`. When `document_date` is absent, a `due_date`/`expiry_date` before 1990-01-01 still fires ("implausibly old"). |
 | `due_expiry_grounding` | `due_date`, `expiry_date` | A date is set but the OCR text shows **only** the opposite kind of cue word — bilingual (Dutch/English) sets in `validation.py`: due (`vervaldatum`, `te betalen voor`, `due by`, …) vs expiry (`geldig tot`, `verloopt`, `valid until`, …). Catches the model mislabeling a due date as expiry (classically a Dutch "vervaldatum") and vice-versa. |
 | `amount_currency_coupling` | `currency` | Exactly one of amount/currency is set (the rule checks both fields; the finding's `field` attribute is `currency`) |

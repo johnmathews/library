@@ -95,9 +95,17 @@ def validate(
     extraction = extraction if isinstance(extraction, dict) else {}
 
     # amount_grounding — amount set but its digits are absent from the text.
+    # Only meaningful when the model actually read the OCR text. When extraction
+    # ran on the page IMAGE instead (input_mode "document"/"image" — the vision
+    # fallback or the born-unusable-OCR path), the amount was grounded in the
+    # image, not the OCR text, so its absence from thin OCR is expected, not a
+    # review concern. Absent/legacy input_mode predates the image paths and was
+    # always text, so it keeps the check.
+    read_the_image = extraction.get("input_mode") in ("document", "image")
     if (
         document.amount_total is not None
         and text
+        and not read_the_image
         and not _amount_appears(document.amount_total, text)
     ):
         findings.append(
