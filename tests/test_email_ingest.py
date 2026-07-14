@@ -11,11 +11,13 @@ import asyncio
 import hashlib
 import io
 import logging
+import re
 import uuid
 from collections.abc import AsyncIterator, Iterator
+from datetime import UTC, datetime
 from email.message import EmailMessage
 from pathlib import Path
-from types import TracebackType
+from types import SimpleNamespace, TracebackType
 from typing import Self
 
 import pytest
@@ -39,11 +41,13 @@ from library.email_ingest import (
     IngestCandidate,
     SkippedAttachment,
     _body_substance,
+    _connect,
     _forwarded_to_addresses,
     poll_mailbox,
     poll_mailbox_async,
 )
-from library.email_label import LabelOutcome
+from library.email_label import EmailLabelResult, ItemLabel, LabelOutcome
+from library.extraction.apply import todays_spend_usd
 from library.ingest import IngestResult, ingest_file
 from library.models import Document, DocumentSource, IngestionEvent, ReviewStatus
 from tests.docx_fixtures import make_docx
@@ -212,12 +216,20 @@ class FakeFolderManager:
 
 
 class FakeMailBox:
-    """Mock at the imap-tools boundary: fetch/move/folder over a message list."""
+    """Mock at the imap-tools boundary: fetch/move/folder over a message list.
 
-    def __init__(self, messages: list[MailMessage]) -> None:
+    ``fail_move_uids``: uids whose ``move`` raises (the message stays in place),
+    for exercising move-failure retry semantics. Clear the set to let a later
+    poll's move succeed.
+    """
+
+    def __init__(
+        self, messages: list[MailMessage], *, fail_move_uids: set[str] | None = None
+    ) -> None:
         self.messages = list(messages)
         self.folder = FakeFolderManager({"INBOX"})
         self.moved: list[tuple[str, str]] = []
+        self.fail_move_uids: set[str] = set(fail_move_uids or ())
 
     def __enter__(self) -> Self:
         return self
@@ -235,6 +247,8 @@ class FakeMailBox:
         return iter(list(self.messages))
 
     def move(self, uid_list: str, destination_folder: str) -> None:
+        if uid_list in self.fail_move_uids:
+            raise OSError("move failed")
         self.moved.append((uid_list, destination_folder))
         self.messages = [message for message in self.messages if message.uid != uid_list]
 
@@ -261,10 +275,88 @@ async def events_for(
         return list(result.scalars().all())
 
 
+#: One manifest line as ``library.email_label._manifest`` renders it; ``kind=`` is
+#: optional so the fake survives the v1 → v2 manifest evolution.
+_MANIFEST_ITEM_RE = re.compile(r"\[(\d+)\](?: kind=\w+)? filename=(?:'([^']*)'|None)")
+
+
+class FakeAnthropic:
+    """Stands in for ``library.email_ingest.AsyncAnthropic``.
+
+    Mirrors ``tests/test_email_label.py::_FakeClient`` — ``messages.parse``
+    returns a ``SimpleNamespace(parsed_output=EmailLabelResult(...), usage=...)``
+    and records every call — plus the async-context-manager lifetime the poller
+    manages via its ``AsyncExitStack``. Every manifest item is labelled ``keep``
+    unless its filename contains a ``noise_markers`` substring, which yields
+    ``probably_noise`` instead.
+    """
+
+    def __init__(self) -> None:
+        self.calls: list[dict[str, object]] = []
+        self.api_keys: list[str] = []
+        self.entered = 0
+        self.exited = 0
+        self.noise_markers: list[str] = []
+        self.messages = SimpleNamespace(parse=self._parse)
+
+    def constructor(self, *, api_key: str) -> Self:
+        """The ``AsyncAnthropic(api_key=...)`` call the poller makes."""
+        self.api_keys.append(api_key)
+        return self
+
+    async def __aenter__(self) -> Self:
+        self.entered += 1
+        return self
+
+    async def __aexit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        self.exited += 1
+
+    async def _parse(self, **kwargs: object) -> SimpleNamespace:
+        self.calls.append(kwargs)
+        content = kwargs["messages"][0]["content"]  # type: ignore[index]
+        items: list[ItemLabel] = []
+        for match in _MANIFEST_ITEM_RE.finditer(str(content)):
+            index, filename = int(match.group(1)), match.group(2) or ""
+            if any(marker in filename for marker in self.noise_markers):
+                items.append(
+                    ItemLabel(index=index, verdict="probably_noise", reason="looks decorative")
+                )
+            else:
+                items.append(ItemLabel(index=index, verdict="keep"))
+        return SimpleNamespace(
+            parsed_output=EmailLabelResult(items=items),
+            usage=SimpleNamespace(input_tokens=120, output_tokens=40),
+        )
+
+
+@pytest.fixture
+def patched_anthropic(monkeypatch: pytest.MonkeyPatch) -> FakeAnthropic:
+    """Replace the poller's AsyncAnthropic with a recording fake client."""
+    fake = FakeAnthropic()
+    monkeypatch.setattr("library.email_ingest.AsyncAnthropic", fake.constructor)
+    return fake
+
+
+def label_settings(**overrides: object) -> Settings:
+    """Poller settings with the LLM label pass enabled (client always faked)."""
+    return Settings(
+        email_host="imap.example.test",
+        email_label_enabled=True,
+        anthropic_api_key="test-key",  # type: ignore[arg-type]  # env form
+        **overrides,  # type: ignore[arg-type]
+    )
+
+
 def test_email_settings_defaults() -> None:
     settings = Settings()
     assert settings.email_host is None  # feature off by default
     assert settings.email_port == 993
+    assert settings.email_imap_timeout_seconds == 60.0
     assert settings.email_username is None
     assert settings.email_password is None
     assert settings.email_folder == "INBOX"
@@ -287,10 +379,12 @@ def test_email_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LIBRARY_EMAIL_USERNAME", "library@example.com")
     monkeypatch.setenv("LIBRARY_EMAIL_PASSWORD", "app-password")
     monkeypatch.setenv("LIBRARY_EMAIL_POLL_MINUTES", "5")
+    monkeypatch.setenv("LIBRARY_EMAIL_IMAP_TIMEOUT_SECONDS", "30")
     # Comma-separated allowlist, normalised to lowercase, blanks dropped.
     monkeypatch.setenv("LIBRARY_EMAIL_ALLOWED_SENDERS", " John@Example.com, jane@example.com ,")
     settings = Settings()
     assert settings.email_host == "imap.example.com"
+    assert settings.email_imap_timeout_seconds == 30.0
     assert settings.email_username is not None
     assert settings.email_username.get_secret_value() == "library@example.com"
     assert settings.email_password is not None
@@ -1499,3 +1593,554 @@ async def test_resolve_sender_owner_matches_case_insensitively(
         assert await resolve_sender_owner(session, "  Me@Example.COM ") == owner_id
         # Unknown sender, no default → None.
         assert await resolve_sender_owner(session, "nobody@example.com") is None
+
+
+# --- IMAP socket timeout + bounded loop bridges (W3) ---
+
+
+def test_connect_passes_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The configured socket timeout must reach the MailBox constructor (keyword),
+    # where it bounds connect and every subsequent IMAP command.
+    captured: dict[str, object] = {}
+
+    class SpyMailBox:
+        def __init__(self, host: str, port: int, *, timeout: float | None = None) -> None:
+            captured.update(host=host, port=port, timeout=timeout)
+
+        def login(self, username: str, password: str, initial_folder: str) -> "SpyMailBox":
+            captured.update(username=username, initial_folder=initial_folder)
+            return self
+
+    monkeypatch.setattr("library.email_ingest.MailBox", SpyMailBox)
+    settings = Settings(
+        email_host="imap.example.test",
+        email_username="library@example.test",  # type: ignore[arg-type]  # env form
+        email_password="app-password",  # type: ignore[arg-type]  # env form
+        email_imap_timeout_seconds=17.5,
+    )
+
+    _connect(settings)
+
+    assert captured["timeout"] == 17.5
+    assert captured["host"] == "imap.example.test"
+    assert captured["port"] == 993
+    assert captured["username"] == "library@example.test"
+    assert captured["initial_folder"] == "INBOX"
+
+
+def test_connect_requires_host_and_credentials() -> None:
+    with pytest.raises(ValueError, match="LIBRARY_EMAIL_HOST"):
+        _connect(Settings(email_host=None))
+    with pytest.raises(ValueError, match="LIBRARY_EMAIL_USERNAME/LIBRARY_EMAIL_PASSWORD"):
+        _connect(Settings(email_host="imap.example.test"))
+
+
+def test_poll_survives_mailbox_factory_raising_oserror(
+    settings: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A dead/wedged server (socket timeout surfaces as OSError) aborts the poll
+    # with a WARNING and an empty summary — never an exception out of the task.
+    def broken_factory() -> FakeMailBox:
+        raise OSError("connection reset by peer")
+
+    with caplog.at_level(logging.WARNING, logger="library.email_ingest"):
+        summary = poll_mailbox(
+            settings,
+            ingest=lambda candidate: pytest.fail("must not ingest"),
+            mailbox_factory=broken_factory,
+        )
+
+    assert summary == EmailPollSummary()
+    assert any("poll aborted" in record.getMessage() for record in caplog.records)
+
+
+async def test_label_bridge_timeout_fails_open(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A label call that never completes on the loop must not wedge the poll
+    # thread: the bridge times out and fails open — the attachment is ingested
+    # unflagged and the message is still moved.
+    settings = label_settings()
+    tag = uuid.uuid4().hex[:8]
+    name = f"slowlabel-{tag}.pdf"
+    raw = make_raw_mail(
+        subject=f"slow label {tag}", attachments=[(name, make_pdf(tag), "application", "pdf")]
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="90")])
+
+    async def hang(*args: object, **kwargs: object) -> LabelOutcome:
+        await asyncio.sleep(30)
+        raise AssertionError("unreachable")
+
+    monkeypatch.setattr("library.email_ingest._label_email_on_loop", hang)
+    monkeypatch.setattr("library.email_ingest._LOOP_BRIDGE_TIMEOUT_SECONDS", 0.2)
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1  # fail-open: still ingested…
+    assert documents[0].extra.get("email_selection") is None  # …and unflagged
+    assert documents[0].review_status is not ReviewStatus.NEEDS_REVIEW
+    assert mailbox.moved == [("90", PROCESSED_FOLDER)]
+    assert summary.attachments_ingested == 1
+    assert summary.messages_processed == 1
+
+
+async def test_notify_bridge_timeout_does_not_wedge_message(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The drop notification is best-effort by contract: a push that never
+    # completes on the loop times out with a WARNING and the message is still
+    # processed and moved.
+    tag = uuid.uuid4().hex[:8]
+    pdf_name = f"good-{tag}.pdf"
+    raw = make_raw_mail(
+        subject=f"stuck notify {tag}",
+        attachments=[
+            ("bad.docx", b"\x00\xffPK-nope" + uuid.uuid4().bytes, "application", "msword"),
+            (pdf_name, make_pdf(tag), "application", "pdf"),
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="91")])
+
+    async def hang(*args: object, **kwargs: object) -> None:
+        await asyncio.sleep(30)
+
+    monkeypatch.setattr("library.email_ingest._notify_dropped", hang)
+    monkeypatch.setattr("library.email_ingest._LOOP_BRIDGE_TIMEOUT_SECONDS", 0.2)
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert len(await documents_named(session_factory, pdf_name)) == 1
+    assert mailbox.moved == [("91", PROCESSED_FOLDER)]
+    assert summary.messages_processed == 1
+    assert summary.attachments_dropped == 1
+
+
+# --- Label budget integrity (W5) ---
+
+
+async def test_label_budget_round_trip(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+) -> None:
+    # One labelled poll records its spend; a second poll whose budget is at or
+    # below today's spend must observably skip the labeller (zero client calls,
+    # attachment ingested unflagged). The DB is shared across tests, so only the
+    # spend DELTA is asserted, never an absolute total.
+    tag = uuid.uuid4().hex[:8]
+    name = f"budget-{tag}.pdf"
+    patched_anthropic.noise_markers.append("budget-")  # a labelled poll observably flags
+    raw = make_raw_mail(
+        subject=f"budget {tag}", attachments=[(name, make_pdf(tag), "application", "pdf")]
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="100")])
+    async with session_factory() as session:
+        spend_before = await todays_spend_usd(session, "email_label_completed")
+
+    await poll_mailbox_async(label_settings(), session_factory, mailbox_factory=lambda: mailbox)
+
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1
+    assert documents[0].extra["email_selection"]["verdict"] == "probably_noise"  # labeller ran
+    label_events = await events_for(session_factory, documents[0].id, "email_label_completed")
+    assert len(label_events) == 1
+    cost = label_events[0].detail["cost_usd"]
+    assert cost > 0
+    async with session_factory() as session:
+        spend_after = await todays_spend_usd(session, "email_label_completed")
+    assert spend_after - spend_before == pytest.approx(cost)
+    assert len(patched_anthropic.calls) == 1
+
+    # Second poll, budget below today's spend: the gate binds.
+    name_two = f"budget-{tag}-second.pdf"
+    raw_two = make_raw_mail(
+        subject=f"budget second {tag}",
+        attachments=[(name_two, make_pdf(f"{tag}-2"), "application", "pdf")],
+    )
+    mailbox_two = FakeMailBox([mail_message(raw_two, uid="101")])
+
+    await poll_mailbox_async(
+        label_settings(email_label_daily_budget_usd=spend_after / 2),
+        session_factory,
+        mailbox_factory=lambda: mailbox_two,
+    )
+
+    assert len(patched_anthropic.calls) == 1  # no new call — the budget gate bound
+    documents_two = await documents_named(session_factory, name_two)
+    assert len(documents_two) == 1  # fail-open: still ingested…
+    assert documents_two[0].extra.get("email_selection") is None  # …and unflagged
+    assert documents_two[0].review_status is not ReviewStatus.NEEDS_REVIEW
+
+
+async def test_label_spend_recorded_on_all_duplicate_resend(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+) -> None:
+    # Poll 1 (labeller off) files the document. Poll 2 re-sends the same bytes
+    # with the labeller on: everything is a duplicate, yet the call cost money —
+    # the spend event must anchor on the existing (duplicate) document instead
+    # of vanishing (the old deliberate under-count).
+    tag = uuid.uuid4().hex[:8]
+    name = f"resend-{tag}.pdf"
+    content = make_pdf(tag)
+    first = make_raw_mail(
+        subject=f"first {tag}", attachments=[(name, content, "application", "pdf")]
+    )
+    mailbox_one = FakeMailBox([mail_message(first, uid="110")])
+    await poll_mailbox_async(
+        Settings(email_host="imap.example.test"),
+        session_factory,
+        mailbox_factory=lambda: mailbox_one,
+    )
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1
+    anchor = documents[0]
+    assert await events_for(session_factory, anchor.id, "email_label_completed") == []
+    selection_before = len(await events_for(session_factory, anchor.id, "email_selection"))
+
+    resend = make_raw_mail(
+        subject=f"resend {tag}", attachments=[(f"copy-{name}", content, "application", "pdf")]
+    )
+    mailbox_two = FakeMailBox([mail_message(resend, uid="111")])
+
+    summary = await poll_mailbox_async(
+        label_settings(), session_factory, mailbox_factory=lambda: mailbox_two
+    )
+
+    assert summary.attachments_duplicate == 1
+    assert summary.attachments_ingested == 0
+    assert len(patched_anthropic.calls) == 1
+    label_events = await events_for(session_factory, anchor.id, "email_label_completed")
+    assert len(label_events) == 1
+    assert label_events[0].detail["cost_usd"] > 0
+    # No new document, so no NEW email_selection event — that still needs a new
+    # row (poll 1 already wrote the anchor's own).
+    selection_after = len(await events_for(session_factory, anchor.id, "email_selection"))
+    assert selection_after == selection_before
+
+
+# --- Production label wiring + uncovered branches (W7) ---
+
+
+async def test_label_wiring_end_to_end_under_poll_mailbox_async(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+) -> None:
+    # The real production wiring: poll_mailbox_async constructs the Anthropic
+    # client (faked), holds it open for the whole poll (AsyncExitStack), and the
+    # label verdicts flow through to the produced documents and budget event.
+    tag = uuid.uuid4().hex[:8]
+    keep_name = f"invoice-{tag}.pdf"
+    flag_name = f"banner-{tag}.pdf"
+    patched_anthropic.noise_markers.append("banner-")
+    raw = make_raw_mail(
+        subject=f"wired {tag}",
+        attachments=[
+            (keep_name, make_pdf(f"{tag}-a"), "application", "pdf"),
+            (flag_name, make_pdf(f"{tag}-b"), "application", "pdf"),
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="120")])
+
+    summary = await poll_mailbox_async(
+        label_settings(), session_factory, mailbox_factory=lambda: mailbox
+    )
+
+    assert summary.attachments_ingested == 2  # the label never drops
+    assert patched_anthropic.api_keys == ["test-key"]
+    assert patched_anthropic.entered == 1 and patched_anthropic.exited == 1
+    assert len(patched_anthropic.calls) == 1
+    flagged = (await documents_named(session_factory, flag_name))[0]
+    assert flagged.extra["email_selection"] == {
+        "verdict": "probably_noise",
+        "reason": "looks decorative",
+        "source": "llm_label",
+    }
+    kept = (await documents_named(session_factory, keep_name))[0]
+    assert kept.extra.get("email_selection") is None
+    # The budget event landed on the anchor (first produced) document.
+    label_events = await events_for(session_factory, kept.id, "email_label_completed")
+    assert len(label_events) == 1
+    assert label_events[0].detail["cost_usd"] > 0
+    assert label_events[0].detail["model"] == "claude-haiku-4-5"
+
+
+async def test_label_not_wired_without_api_key(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+) -> None:
+    # email_label_enabled=True but no API key: the client must never be
+    # constructed and everything ingests unflagged.
+    settings = Settings(email_host="imap.example.test", email_label_enabled=True)
+    tag = uuid.uuid4().hex[:8]
+    name = f"nokey-{tag}.pdf"
+    patched_anthropic.noise_markers.append("nokey-")  # would flag, were it called
+    raw = make_raw_mail(
+        subject=f"no key {tag}", attachments=[(name, make_pdf(tag), "application", "pdf")]
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="121")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert patched_anthropic.api_keys == []  # constructor never called
+    assert patched_anthropic.calls == []
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1
+    assert documents[0].extra.get("email_selection") is None
+    assert documents[0].review_status is not ReviewStatus.NEEDS_REVIEW
+    assert summary.attachments_ingested == 1
+
+
+async def test_notify_dropped_integration(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The full async notify path (_notify_dropped): the sender is resolved to
+    # the owning user and the dispatcher is called once with the drop.
+    tag = uuid.uuid4().hex[:8]
+    sender = f"jane-{tag}@example.org"
+    owner_id = await _make_user(
+        session_factory, username=f"notify-{tag}", forward_addresses=[sender]
+    )
+    pdf_name = f"kept-{tag}.pdf"
+    raw = make_raw_mail(
+        from_addr=f"Jane <{sender}>",
+        subject=f"notify {tag}",
+        attachments=[
+            ("secret.docx", b"\x00\xffPK-nope" + uuid.uuid4().bytes, "application", "msword"),
+            (pdf_name, make_pdf(tag), "application", "pdf"),
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="122")])
+    recorded: list[tuple[int | None, str | None, list[str | None]]] = []
+
+    async def spy_dispatch(
+        session_factory_: object,
+        owner: int | None,
+        *,
+        subject: str | None,
+        filenames: list[str | None],
+        document_url_base: str | None,
+    ) -> None:
+        recorded.append((owner, subject, filenames))
+
+    monkeypatch.setattr(
+        "library.email_ingest.dispatch_attachments_dropped_notification", spy_dispatch
+    )
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert recorded == [(owner_id, f"notify {tag}", ["secret.docx"])]
+    assert summary.attachments_dropped == 1
+    assert mailbox.moved == [("122", PROCESSED_FOLDER)]
+
+
+def test_oversize_attachment_dropped_and_notified(caplog: pytest.LogCaptureFixture) -> None:
+    # An attachment over max_upload_bytes is a user-facing drop: recorded with
+    # reason "oversize", counted, and pushed to the owner.
+    settings = Settings(email_host="imap.example.test", max_upload_bytes=512)
+    tag = uuid.uuid4().hex[:8]
+    big_name = f"huge-{tag}.pdf"
+    raw = make_raw_mail(
+        subject=f"oversize {tag}",
+        attachments=[(big_name, make_pdf(tag) + b"\x00" * 1024, "application", "pdf")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="123")])
+    calls: list[IngestCandidate] = []
+    notified: list[list[str | None]] = []
+
+    def spy_notify(
+        sender: str | None, subject: str | None, skipped: list[SkippedAttachment]
+    ) -> None:
+        notified.append([item.filename for item in skipped])
+
+    with caplog.at_level(logging.INFO, logger="library.email_ingest"):
+        summary = poll_mailbox(
+            settings, _recording_ingest(calls), mailbox_factory=lambda: mailbox, notify=spy_notify
+        )
+
+    assert calls == []  # nothing reached ingest
+    assert summary.attachments_dropped == 1
+    assert notified == [[big_name]]
+    assert mailbox.moved == [("123", PROCESSED_FOLDER)]
+    assert f"{big_name}:classify:dropped(oversize)" in _selection_trace_lines(caplog)[0]
+
+
+def test_oversize_body_skipped_with_trace_reason(caplog: pytest.LogCaptureFixture) -> None:
+    # A body that clears the substance gate but exceeds max_upload_bytes is
+    # skipped with the oversize reason in the trace, and the message still moves.
+    settings = Settings(email_host="imap.example.test", max_upload_bytes=100)
+    tag = uuid.uuid4().hex[:8]
+    raw = make_body_mail(subject=f"big body {tag}", text=long_body(tag))
+    mailbox = FakeMailBox([mail_message(raw, uid="124")])
+    calls: list[IngestCandidate] = []
+
+    with caplog.at_level(logging.INFO, logger="library.email_ingest"):
+        summary = poll_mailbox(settings, _recording_ingest(calls), mailbox_factory=lambda: mailbox)
+
+    assert calls == []
+    assert summary == EmailPollSummary(messages_seen=1, messages_processed=1)
+    assert mailbox.moved == [("124", PROCESSED_FOLDER)]
+    assert "<body>:body_substance:filtered(oversize)" in _selection_trace_lines(caplog)[0]
+
+
+async def _soft_delete(session_factory: async_sessionmaker[AsyncSession], document_id: int) -> None:
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        document.deleted_at = datetime.now(UTC)
+        await session.commit()
+
+
+async def test_deleted_duplicate_attachment_dropped_not_recreated(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # Re-forwarding content whose document was soft-deleted must not recreate
+    # it: ingest raises DeletedDuplicateError (an IngestError), recorded as a
+    # dropped attachment while the message still completes.
+    tag = uuid.uuid4().hex[:8]
+    name = f"deleted-{tag}.pdf"
+    content = make_pdf(tag)
+    first = make_raw_mail(
+        subject=f"orig {tag}", attachments=[(name, content, "application", "pdf")]
+    )
+    mailbox_one = FakeMailBox([mail_message(first, uid="125")])
+    await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox_one)
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1
+    await _soft_delete(session_factory, documents[0].id)
+
+    resend = make_raw_mail(
+        subject=f"resend {tag}", attachments=[(name, content, "application", "pdf")]
+    )
+    mailbox_two = FakeMailBox([mail_message(resend, uid="126")])
+
+    summary = await poll_mailbox_async(
+        settings, session_factory, mailbox_factory=lambda: mailbox_two
+    )
+
+    assert len(await documents_named(session_factory, name)) == 1  # not recreated
+    assert summary.attachments_ingested == 0
+    assert summary.attachments_duplicate == 0
+    assert summary.attachments_dropped == 1  # surfaced as an error drop
+    assert mailbox_two.moved == [("126", PROCESSED_FOLDER)]
+
+
+async def test_deleted_duplicate_body_dropped_not_recreated(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # The body variant of the deleted-duplicate rejection: the body ingest's
+    # IngestError branch records a dropped body decision and the message moves.
+    tag = uuid.uuid4().hex[:8]
+    subject = f"deleted body {tag}"
+    text = long_body(tag)
+    mailbox_one = FakeMailBox([mail_message(make_body_mail(subject=subject, text=text), uid="127")])
+    await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox_one)
+    documents = await documents_named(session_factory, f"{subject}.txt")
+    assert len(documents) == 1
+    await _soft_delete(session_factory, documents[0].id)
+
+    mailbox_two = FakeMailBox([mail_message(make_body_mail(subject=subject, text=text), uid="128")])
+    with caplog.at_level(logging.INFO, logger="library.email_ingest"):
+        summary = await poll_mailbox_async(
+            settings, session_factory, mailbox_factory=lambda: mailbox_two
+        )
+
+    assert len(await documents_named(session_factory, f"{subject}.txt")) == 1  # not recreated
+    assert summary.attachments_ingested == 0
+    assert mailbox_two.moved == [("128", PROCESSED_FOLDER)]
+    assert f"{subject}.txt:body_substance:dropped(rejected)" in _selection_trace_lines(caplog)[0]
+
+
+# --- Notify only after a successful move (W6) ---
+
+
+async def test_move_failure_message_retried_without_duplicates_or_repeat_notification(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A move that fails once must leave the message for the next poll WITHOUT
+    # notifying (the retry would notify again). The retry re-ingests as
+    # duplicates (no new rows) and sends the one and only push after its move.
+    tag = uuid.uuid4().hex[:8]
+    pdf_name = f"retrymove-{tag}.pdf"
+    raw = make_raw_mail(
+        subject=f"retry move {tag}",
+        attachments=[
+            ("bad.docx", b"\x00\xffPK-nope" + tag.encode(), "application", "msword"),
+            (pdf_name, make_pdf(tag), "application", "pdf"),
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="130")], fail_move_uids={"130"})
+    recorded: list[tuple[str | None, list[str | None]]] = []
+
+    async def spy_dispatch(
+        session_factory_: object,
+        owner: int | None,
+        *,
+        subject: str | None,
+        filenames: list[str | None],
+        document_url_base: str | None,
+    ) -> None:
+        recorded.append((subject, filenames))
+
+    monkeypatch.setattr(
+        "library.email_ingest.dispatch_attachments_dropped_notification", spy_dispatch
+    )
+
+    with caplog.at_level(logging.ERROR, logger="library.email_ingest"):
+        summary_one = await poll_mailbox_async(
+            settings, session_factory, mailbox_factory=lambda: mailbox
+        )
+
+    assert len(await documents_named(session_factory, pdf_name)) == 1  # ingested
+    assert recorded == []  # NO notification before a successful move
+    assert mailbox.moved == []
+    assert len(mailbox.messages) == 1  # message stays for the next poll
+    assert summary_one.messages_skipped == 1
+    assert summary_one.messages_processed == 0
+    assert any("will be reprocessed next poll" in record.getMessage() for record in caplog.records)
+
+    mailbox.fail_move_uids.clear()  # the server recovers
+    summary_two = await poll_mailbox_async(
+        settings, session_factory, mailbox_factory=lambda: mailbox
+    )
+
+    assert len(await documents_named(session_factory, pdf_name)) == 1  # no duplicate row
+    assert summary_two.attachments_ingested == 0
+    assert summary_two.attachments_duplicate == 1
+    assert summary_two.messages_processed == 1
+    assert mailbox.moved == [("130", PROCESSED_FOLDER)]
+    assert len(recorded) == 1  # exactly one notification across both polls
+    assert recorded[0] == (f"retry move {tag}", ["bad.docx"])

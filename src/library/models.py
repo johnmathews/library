@@ -128,6 +128,19 @@ class SuggestionState(enum.StrEnum):
     DISMISSED = "dismissed"
 
 
+class HeldEmailStatus(enum.StrEnum):
+    """Lifecycle of a held email (see ``HeldEmail``).
+
+    An email the poller declined to auto-file lands as ``held``; the owner
+    either ingests it (``ingested``) or dismisses it (``dismissed``). Resolved
+    rows are kept as an audit trail rather than deleted.
+    """
+
+    HELD = "held"
+    INGESTED = "ingested"
+    DISMISSED = "dismissed"
+
+
 class Base(DeclarativeBase):
     """Declarative base with deterministic constraint names for Alembic."""
 
@@ -898,6 +911,74 @@ class AuthoredSeriesSuggestion(Base):
             "authored_series_id",
             "document_id",
             name="authored_series_suggestions_series_document",
+        ),
+    )
+
+
+class HeldEmail(Base):
+    """An email the mailbox poller held for human review instead of auto-filing.
+
+    Rather than silently filing (or dropping) a message the pipeline is unsure
+    about, ``poll_mailbox`` records it here and leaves the original in the IMAP
+    folder. ``verdict`` names the hold trigger (``llm_hold`` /
+    ``below_substance`` / ``nothing_ingested`` / ``sender_unknown``) and
+    ``trace`` snapshots the full selection trace (the
+    ``_selection_event_detail`` shape) so the review UI can show what the
+    pipeline saw. ``imap_folder``/``imap_uid`` locate the original message for
+    a later ingest (the UID is a hint only — UIDs are not stable across
+    mailbox UIDVALIDITY changes). Resolution stamps ``status``,
+    ``resolved_by_id``/``resolved_at`` and, on ingest, the created
+    ``document_ids``; ``last_error`` keeps the most recent failed-resolution
+    error. The partial unique index permits only one *open* (``held``) row per
+    ``message_id``, so re-polling an unresolved message is idempotent while
+    resolved rows keep their history.
+    """
+
+    __tablename__ = "held_emails"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    message_id: Mapped[str | None] = mapped_column(Text)
+    sender: Mapped[str | None] = mapped_column(Text)
+    subject: Mapped[str | None] = mapped_column(Text)
+    received_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    verdict: Mapped[str] = mapped_column(String(32))
+    reason: Mapped[str | None] = mapped_column(Text)
+    trace: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, server_default=text("'{}'::jsonb"), default=dict
+    )
+    imap_folder: Mapped[str] = mapped_column(String(255))
+    imap_uid: Mapped[str | None] = mapped_column(String(64))
+    status: Mapped[HeldEmailStatus] = mapped_column(
+        Enum(
+            HeldEmailStatus,
+            name="held_email_status",
+            native_enum=False,
+            length=16,
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        default=HeldEmailStatus.HELD,
+        server_default=HeldEmailStatus.HELD.value,
+        index=True,
+    )
+    owner_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), index=True
+    )
+    resolved_by_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    resolved_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    document_ids: Mapped[list[Any]] = mapped_column(
+        JSONB, server_default=text("'[]'::jsonb"), default=list
+    )
+    last_error: Mapped[str | None] = mapped_column(Text)
+
+    __table_args__ = (
+        # Poll idempotency: at most one open (held) row per message_id; resolved
+        # rows and messages without a Message-ID are exempt.
+        Index(
+            "ix_held_emails_message_id_held",
+            "message_id",
+            unique=True,
+            postgresql_where=text("status = 'held' AND message_id IS NOT NULL"),
         ),
     )
 

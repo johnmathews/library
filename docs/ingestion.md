@@ -1291,10 +1291,10 @@ finding. The pass is **fail-open**: a disabled feature, an exhausted daily
 budget (`LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD`, default \$2, summed from
 `email_label_completed` events like extraction), an API error, or a
 malformed/incomplete response all keep every attachment. Spend is recorded as an
-`email_label_completed` event on the first newly-produced document (an email that
-files no *new* document — nothing filed, or only duplicates — has nowhere to hang
-it, so its rare label spend goes uncounted: a deliberate under-count of at most
-one cheap call per such email).
+`email_label_completed` event on the first document the email **produced — new or
+duplicate** — so an all-duplicate re-send still counts against the budget. (An
+email that produces no document at all has nowhere to hang the event; that rare
+spend is visible only in the `email-label` log line.)
 
 #### Debugging & triage: the decision trace
 
@@ -1524,6 +1524,7 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_IMPORT_DEFAULT_OWNER` | unset | Username that owns consume-folder and paperless-import documents (they have no inherent uploader); enables the owner-as-recipient fallback for them. Unset = unowned |
 | `LIBRARY_EMAIL_HOST` | unset | IMAP host; unset disables the email poller |
 | `LIBRARY_EMAIL_PORT` | `993` | IMAP TLS port |
+| `LIBRARY_EMAIL_IMAP_TIMEOUT_SECONDS` | `60.0` | IMAP socket timeout; bounds connect and every subsequent command so a wedged server aborts the poll instead of hanging it |
 | `LIBRARY_EMAIL_USERNAME` | unset | Mailbox login |
 | `LIBRARY_EMAIL_PASSWORD` | unset | Mailbox password (use an app password — see provider table) |
 | `LIBRARY_EMAIL_FOLDER` | `INBOX` | Folder polled for new mail |

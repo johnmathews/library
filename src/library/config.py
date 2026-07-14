@@ -135,6 +135,9 @@ class Settings(BaseSettings):
     # Email-in ingestion (see docs/ingestion.md, "Email-in" section).
     email_host: str | None = None  # unset = poller off
     email_port: int = 993
+    # IMAP socket timeout in seconds — bounds connect and every subsequent
+    # socket op (fetch, move, …) so a wedged server can never hang a poll.
+    email_imap_timeout_seconds: float = 60.0
     email_username: SecretStr | None = None
     email_password: SecretStr | None = None
     email_folder: str = "INBOX"

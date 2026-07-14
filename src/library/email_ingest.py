@@ -23,7 +23,12 @@ Idempotency is folder-based: every fully processed message is moved to
 is never scanned twice; content dedup in ``ingest_file`` (sha256) backs
 that up if the same attachment arrives in a different mail. Per-message
 errors are isolated — a broken mail is logged and left in place for the
-next poll, and never aborts the run.
+next poll, and never aborts the run. A message whose Processed-move fails
+is retried whole on the next poll: the retry re-ingests as all-duplicates
+and may re-run the label pass — tolerated, because that spend is recorded
+(anchored on the duplicate document) and bounded by the daily label budget.
+The dropped-attachments push fires only *after* a successful move, so it is
+at-most-once per message, never repeated across retries.
 
 IMAP I/O is synchronous (imap-tools); the periodic task runs
 ``poll_mailbox`` in a worker thread via ``poll_mailbox_async`` while the
@@ -31,6 +36,7 @@ ingest calls themselves are marshalled back onto the event loop.
 """
 
 import asyncio
+import imaplib
 import io
 import logging
 import re
@@ -61,6 +67,13 @@ from library.models import DocumentSource, IngestionEvent, User
 from library.notifications import dispatch_attachments_dropped_notification
 
 logger = logging.getLogger(__name__)
+
+#: Upper bound (seconds) on each ``future.result()`` marshalled from the poll's
+#: worker thread onto the event loop (ingest / notify / trace / label). A wedged
+#: loop-side coroutine must never hang the poll thread forever. Deliberately a
+#: constant, not a setting: it is a last-resort safety net, generous enough
+#: (5 min) that a healthy call never trips it.
+_LOOP_BRIDGE_TIMEOUT_SECONDS = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -218,10 +231,15 @@ IngestCallable = Callable[[IngestCandidate], IngestResult]
 DropNotifier = Callable[[str | None, str | None, list[SkippedAttachment]], None]
 
 #: Synchronous bridge to persist the per-email decision trace as an
-#: ``email_selection`` event on each produced document, plus (when present) one
-#: ``email_label_completed`` budget event. The async wrapper marshals it onto the
-#: loop. Given the new document ids, the trace detail, and the label detail.
-TracePersister = Callable[[list[int], dict[str, object], dict[str, object] | None], None]
+#: ``email_selection`` event on each new document, plus (when present) one
+#: ``email_label_completed`` budget event on the anchor document — the first
+#: document the email produced, new **or duplicate**, so an all-duplicate
+#: re-send still records its spend. The async wrapper marshals it onto the
+#: loop. Given the new document ids, the trace detail, the label detail, and
+#: the anchor document id.
+TracePersister = Callable[
+    [list[int], dict[str, object], dict[str, object] | None, int | None], None
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -262,7 +280,9 @@ def _connect(settings: Settings) -> AbstractContextManager[Any]:
         raise ValueError("LIBRARY_EMAIL_HOST is not configured")
     if settings.email_username is None or settings.email_password is None:
         raise ValueError("LIBRARY_EMAIL_USERNAME/LIBRARY_EMAIL_PASSWORD are not configured")
-    return MailBox(settings.email_host, settings.email_port).login(
+    return MailBox(
+        settings.email_host, settings.email_port, timeout=settings.email_imap_timeout_seconds
+    ).login(
         settings.email_username.get_secret_value(),
         settings.email_password.get_secret_value(),
         initial_folder=settings.email_folder,
@@ -804,8 +824,9 @@ def poll_mailbox(
     Attachments that cannot become documents are no longer dropped silently:
     each is recorded, the survivors of the same email are stamped with them (so
     validation can flag the document), and ``notify`` — when supplied — is
-    called once per message with drops so the owner gets a push. Nothing is
-    lost quietly.
+    called once per message with drops so the owner gets a push. The push fires
+    only after the message has been safely moved, so it is at-most-once per
+    message. Nothing is lost quietly.
 
     Every message also emits a one-line decision trace (``_log_selection_trace``)
     recording what happened to each item and why; when ``persist_trace`` is
@@ -822,100 +843,133 @@ def poll_mailbox(
     factory = mailbox_factory or (lambda: _connect(settings))
     allowed = frozenset(settings.email_allowed_senders)
     seen = processed = skipped = ingested = duplicates = dropped = filtered = 0
-    with factory() as mailbox:
-        if not mailbox.folder.exists(settings.email_processed_folder):
-            mailbox.folder.create(settings.email_processed_folder)
-        # Materialise before moving: moving mid-fetch confuses some servers.
-        messages = list(mailbox.fetch("ALL", mark_seen=False))
-        for message in messages:
-            seen += 1
-            try:
-                sender = (message.from_ or "").strip().lower()
-                if allowed and sender not in allowed:
-                    logger.warning(
-                        "email: message %r from %r not in allowlist; left in place",
-                        message.subject,
-                        sender,
+    try:
+        with factory() as mailbox:
+            if not mailbox.folder.exists(settings.email_processed_folder):
+                mailbox.folder.create(settings.email_processed_folder)
+            # Materialise before moving: moving mid-fetch confuses some servers.
+            messages = list(mailbox.fetch("ALL", mark_seen=False))
+            for message in messages:
+                seen += 1
+                try:
+                    sender = (message.from_ or "").strip().lower()
+                    if allowed and sender not in allowed:
+                        logger.warning(
+                            "email: message %r from %r not in allowlist; left in place",
+                            message.subject,
+                            sender,
+                        )
+                        skipped += 1
+                        continue
+                    outcome = _ingest_attachments(
+                        message, ingest, settings.max_upload_bytes, settings, label
                     )
-                    skipped += 1
-                    continue
-                outcome = _ingest_attachments(
-                    message, ingest, settings.max_upload_bytes, settings, label
-                )
-                new, dups = outcome.new, outcome.duplicates
-                dropped_attachments = outcome.skipped
-                filtered += sum(1 for item in dropped_attachments if item.reason in _NOISE_REASONS)
-                decisions = outcome.decisions
-                produced = list(outcome.produced)
-                if new == 0 and dups == 0:
-                    body, body_skip_reason = _body_candidate(message, settings.max_upload_bytes)
-                    if body is not None:
-                        # The body is now this email's only document, so it must
-                        # carry the dropped siblings too — otherwise the
-                        # "attachments couldn't be added" review reason would be
-                        # absent exactly when every attachment was dropped.
-                        dropped_siblings = _dropped_siblings_payload(dropped_attachments)
-                        if dropped_siblings:
-                            body = replace(
-                                body, extra_document={"email_siblings_dropped": dropped_siblings}
-                            )
-                        try:
-                            result = ingest(body)
-                        except IngestError as exc:
-                            logger.warning(
-                                "email: body of message %r rejected (%s)", message.subject, exc
-                            )
-                            decisions.append(_body_decision(body, "dropped", "rejected"))
-                        else:
-                            produced.append(result)
-                            if result.duplicate:
-                                dups += 1
-                                decisions.append(_body_decision(body, "duplicate"))
+                    new, dups = outcome.new, outcome.duplicates
+                    dropped_attachments = outcome.skipped
+                    filtered += sum(
+                        1 for item in dropped_attachments if item.reason in _NOISE_REASONS
+                    )
+                    decisions = outcome.decisions
+                    produced = list(outcome.produced)
+                    if new == 0 and dups == 0:
+                        body, body_skip_reason = _body_candidate(message, settings.max_upload_bytes)
+                        if body is not None:
+                            # The body is now this email's only document, so it must
+                            # carry the dropped siblings too — otherwise the
+                            # "attachments couldn't be added" review reason would be
+                            # absent exactly when every attachment was dropped.
+                            dropped_siblings = _dropped_siblings_payload(dropped_attachments)
+                            if dropped_siblings:
+                                body = replace(
+                                    body,
+                                    extra_document={"email_siblings_dropped": dropped_siblings},
+                                )
+                            try:
+                                result = ingest(body)
+                            except IngestError as exc:
+                                logger.warning(
+                                    "email: body of message %r rejected (%s)", message.subject, exc
+                                )
+                                decisions.append(_body_decision(body, "dropped", "rejected"))
                             else:
-                                new += 1
-                                decisions.append(_body_decision(body, "ingested"))
+                                produced.append(result)
+                                if result.duplicate:
+                                    dups += 1
+                                    decisions.append(_body_decision(body, "duplicate"))
+                                else:
+                                    new += 1
+                                    decisions.append(_body_decision(body, "ingested"))
+                        else:
+                            decisions.append(_body_skip_decision(body_skip_reason or "no_body"))
                     else:
-                        decisions.append(_body_skip_decision(body_skip_reason or "no_body"))
-                else:
-                    decisions.append(_body_skip_decision("not_needed"))
-                ingested += new
-                duplicates += dups
-                # Surface every user-facing drop: log a summary, count it, and
-                # push the owner. Done after ingest so ingest-pass errors count
-                # too, and before the move so it never blocks idempotency.
-                user_facing = [
-                    item for item in dropped_attachments if item.reason in _USER_FACING_DROP_REASONS
-                ]
-                if user_facing:
-                    _log_dropped(message.subject, dropped_attachments)
-                    dropped += len(user_facing)
-                    if notify is not None:
-                        notify(message.from_, message.subject, dropped_attachments)
-                # The always-on decision trace (covers the zero-document case too),
-                # then persist it onto each new document — best-effort and keyed on
-                # document_id, so an email that produced nothing lives only in the log.
-                _log_selection_trace(message, decisions)
-                if persist_trace is not None:
-                    new_document_ids = [
-                        result.document.id for result in produced if not result.duplicate
+                        decisions.append(_body_skip_decision("not_needed"))
+                    ingested += new
+                    duplicates += dups
+                    # Surface every user-facing drop: log a summary and count it.
+                    # Done after ingest so ingest-pass errors count too. The push
+                    # itself waits until after the move (below), so a failed move
+                    # can never notify the owner twice across retries.
+                    user_facing = [
+                        item
+                        for item in dropped_attachments
+                        if item.reason in _USER_FACING_DROP_REASONS
                     ]
-                    if new_document_ids:
+                    if user_facing:
+                        _log_dropped(message.subject, dropped_attachments)
+                        dropped += len(user_facing)
+                    # The always-on decision trace (covers the zero-document case too),
+                    # then persist it onto each new document — best-effort and keyed on
+                    # document_id, so an email that produced nothing lives only in the log.
+                    _log_selection_trace(message, decisions)
+                    if persist_trace is not None:
+                        new_document_ids = [
+                            result.document.id for result in produced if not result.duplicate
+                        ]
+                        # The label budget event anchors on the FIRST produced
+                        # document — new or duplicate — so an all-duplicate
+                        # re-send still records its spend for the budget gate.
+                        anchor_id = produced[0].document.id if produced else None
                         label_detail = (
                             outcome.label_usage.as_detail() if outcome.label_usage else None
                         )
-                        persist_trace(
-                            new_document_ids,
-                            _selection_event_detail(message, decisions),
-                            label_detail,
+                        if new_document_ids or (label_detail is not None and anchor_id is not None):
+                            persist_trace(
+                                new_document_ids,
+                                _selection_event_detail(message, decisions),
+                                label_detail,
+                                anchor_id,
+                            )
+                    # The move is what makes polling idempotent, so it precedes the
+                    # (at-most-once) drop notification: on a move failure the
+                    # message stays put and is re-run whole next poll — the retry
+                    # ingests as all-duplicates and only then notifies.
+                    try:
+                        mailbox.move(message.uid, settings.email_processed_folder)
+                    except Exception:
+                        logger.error(
+                            "email: failed to move message %r (uid %s) to %r; "
+                            "message will be reprocessed next poll",
+                            message.subject,
+                            message.uid,
+                            settings.email_processed_folder,
+                            exc_info=True,
                         )
-                mailbox.move(message.uid, settings.email_processed_folder)
-                processed += 1
-            except Exception:
-                logger.exception(
-                    "email: failed to process message %r; left in place for the next poll",
-                    message.subject,
-                )
-                skipped += 1
+                        raise
+                    processed += 1
+                    if user_facing and notify is not None:
+                        notify(message.from_, message.subject, dropped_attachments)
+                except Exception:
+                    logger.exception(
+                        "email: failed to process message %r; left in place for the next poll",
+                        message.subject,
+                    )
+                    skipped += 1
+    except (OSError, TimeoutError, imaplib.IMAP4.error):
+        # A dead/wedged server (socket timeout, dropped connection, protocol
+        # error) aborts this poll, not the worker: whatever was already
+        # processed is counted below, and everything else stays in the inbox
+        # untouched for the next idempotent poll.
+        logger.warning("email: poll aborted (imap timeout/connection error)", exc_info=True)
     summary = EmailPollSummary(
         messages_seen=seen,
         messages_processed=processed,
@@ -1020,19 +1074,23 @@ async def _persist_selection_trace(
     document_ids: list[int],
     detail: dict[str, object],
     label_detail: dict[str, object] | None = None,
+    anchor_id: int | None = None,
 ) -> None:
     """Append the per-email ``email_selection`` trace (and label budget event).
 
     Writes ``email_selection`` on every new document; when the LLM label pass
     billed, also writes one ``email_label_completed`` event (carrying its cost)
-    on the first document — this is what the label budget gate later sums. Best-
-    effort audit data: it never blocks the poll and never raises past this
-    boundary. An email that produced no *new* document (nothing filed, or only
-    duplicates) has no row to hang either event on — that case is covered by the
-    always-on trace log line instead, and its (rare) label spend goes unrecorded
-    (a deliberate under-count of at most one cheap call per such email).
+    on the **anchor** document — the first document the email produced, new or
+    duplicate — this is what the label budget gate later sums. Anchoring on any
+    produced document (not just new ones) keeps the budget honest for the
+    all-duplicate re-send: the call still cost money and must count against the
+    daily cap. Best-effort audit data: it never blocks the poll and never raises
+    past this boundary. An email that produced no document at all has no anchor
+    — that case is covered by the always-on trace log line, and its label spend
+    (only possible when every judged item errored out of ingest) stays visible
+    in the log alone.
     """
-    if not document_ids:
+    if not document_ids and (label_detail is None or anchor_id is None):
         return
     try:
         async with session_factory() as session:
@@ -1040,10 +1098,10 @@ async def _persist_selection_trace(
                 session.add(
                     IngestionEvent(document_id=document_id, event="email_selection", detail=detail)
                 )
-            if label_detail is not None:
+            if label_detail is not None and anchor_id is not None:
                 session.add(
                     IngestionEvent(
-                        document_id=document_ids[0],
+                        document_id=anchor_id,
                         event="email_label_completed",
                         detail=label_detail,
                     )
@@ -1095,7 +1153,14 @@ async def poll_mailbox_async(
             _ingest_candidate(session_factory, candidate, default_owner_username=default_owner),
             loop,
         )
-        return future.result()
+        try:
+            return future.result(timeout=_LOOP_BRIDGE_TIMEOUT_SECONDS)
+        except TimeoutError:
+            # Propagate: the caller records this candidate as an `error` skip
+            # and its siblings continue. Cancel is best-effort — the loop-side
+            # coroutine may already be past its await points.
+            future.cancel()
+            raise
 
     def notify_on_loop(
         sender: str | None, subject: str | None, skipped: list[SkippedAttachment]
@@ -1111,18 +1176,37 @@ async def poll_mailbox_async(
             ),
             loop,
         )
-        future.result()
+        try:
+            future.result(timeout=_LOOP_BRIDGE_TIMEOUT_SECONDS)
+        except Exception:  # best-effort by contract: a push must never wedge a poll
+            future.cancel()
+            logger.warning(
+                "email: dropped-attachments notification failed for %r; continuing",
+                subject,
+                exc_info=True,
+            )
 
     def persist_trace_on_loop(
         document_ids: list[int],
         detail: dict[str, object],
         label_detail: dict[str, object] | None,
+        anchor_id: int | None,
     ) -> None:
         future = asyncio.run_coroutine_threadsafe(
-            _persist_selection_trace(session_factory, document_ids, detail, label_detail),
+            _persist_selection_trace(
+                session_factory, document_ids, detail, label_detail, anchor_id
+            ),
             loop,
         )
-        future.result()
+        try:
+            future.result(timeout=_LOOP_BRIDGE_TIMEOUT_SECONDS)
+        except Exception:  # best-effort audit data: never blocks the poll
+            future.cancel()
+            logger.warning(
+                "email: selection-trace persistence failed for %s; continuing",
+                document_ids,
+                exc_info=True,
+            )
 
     # The optional per-email LLM label pass is wired only when enabled AND an API
     # key is set; the Anthropic client's lifetime spans the whole poll.
@@ -1138,7 +1222,15 @@ async def poll_mailbox_async(
                     _label_email_on_loop(session_factory, client, settings, request),
                     loop,
                 )
-                return future.result()
+                try:
+                    return future.result(timeout=_LOOP_BRIDGE_TIMEOUT_SECONDS)
+                except Exception:  # fail-open: the label pass may only ever add flags
+                    future.cancel()
+                    logger.warning(
+                        "email-label: loop bridge failed or timed out; keeping all items",
+                        exc_info=True,
+                    )
+                    return LabelOutcome({}, None, "error")
 
             label = label_on_loop
 

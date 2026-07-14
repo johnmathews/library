@@ -77,9 +77,13 @@ async def _label(client: _FakeClient, items: list[LabelItem] = ITEMS) -> object:
 def test_schema_forbids_unknown_fields() -> None:
     with pytest.raises(ValidationError):
         ItemLabel(index=0, verdict="keep", bogus="x")  # type: ignore[call-arg]
-    # A valid parse round-trips.
+    with pytest.raises(ValidationError):
+        EmailLabelResult(items=[], bogus="x")  # type: ignore[call-arg]
+    # A valid parse round-trips, and the email-level verdict defaults to "file".
     result = EmailLabelResult(items=[ItemLabel(index=0, verdict="keep")])
     assert result.items[0].verdict == "keep"
+    assert result.email_verdict == "file"
+    assert result.email_reason is None
 
 
 async def test_verdicts_mapped_by_index() -> None:
@@ -93,6 +97,8 @@ async def test_verdicts_mapped_by_index() -> None:
 
     assert outcome.skip_reason is None
     assert outcome.verdicts == {0: ("keep", None), 1: ("probably_noise", "signature logo")}
+    assert outcome.email_verdict == "file"  # schema default when the model omits it
+    assert outcome.email_reason is None
     assert outcome.usage is not None
     assert outcome.usage.item_count == 2
     assert outcome.usage.cost_usd > 0
@@ -109,6 +115,7 @@ async def test_budget_gate_skips_without_calling(monkeypatch: pytest.MonkeyPatch
 
     assert outcome.skip_reason == "budget"
     assert outcome.verdicts == {}
+    assert outcome.email_verdict == "file"  # a skipped pass must never hold
     assert outcome.usage is None
     assert client.messages.calls == []  # no API call when over budget
 
@@ -118,6 +125,7 @@ async def test_api_error_fails_open() -> None:
 
     assert outcome.skip_reason == "error"
     assert outcome.verdicts == {}  # keep everything
+    assert outcome.email_verdict == "file"  # an errored pass must never hold
     assert outcome.usage is None
 
 
@@ -135,6 +143,7 @@ async def test_budget_read_failure_fails_open(monkeypatch: pytest.MonkeyPatch) -
 
     assert outcome.skip_reason == "error"
     assert outcome.verdicts == {}  # keep everything
+    assert outcome.email_verdict == "file"  # a DB failure must never hold
     assert client.messages.calls == []  # never reached the API
 
 
@@ -143,6 +152,24 @@ async def test_no_parseable_output_fails_open() -> None:
 
     assert outcome.skip_reason == "error"
     assert outcome.verdicts == {}
+    assert outcome.email_verdict == "file"
+
+
+async def test_hold_verdict_mapped_through() -> None:
+    parsed = EmailLabelResult(
+        items=[
+            ItemLabel(index=0, verdict="keep"),
+            ItemLabel(index=1, verdict="probably_noise", reason="signature logo"),
+        ],
+        email_verdict="hold",
+        email_reason="marketing newsletter, nothing to file",
+    )
+    outcome = await _label(_FakeClient(parsed=parsed))
+
+    assert outcome.skip_reason is None
+    assert outcome.email_verdict == "hold"
+    assert outcome.email_reason == "marketing newsletter, nothing to file"
+    assert outcome.verdicts == {0: ("keep", None), 1: ("probably_noise", "signature logo")}
 
 
 async def test_index_mismatch_discarded_but_billed() -> None:
@@ -156,7 +183,44 @@ async def test_index_mismatch_discarded_but_billed() -> None:
     assert outcome.usage is not None  # billed even though discarded
 
 
+async def test_index_mismatch_forces_file_even_when_response_holds() -> None:
+    # An untrustworthy response (wrong index set) must not be allowed to hold the
+    # email, even when it says "hold" — clearing verdicts alone is not enough.
+    parsed = EmailLabelResult(
+        items=[ItemLabel(index=0, verdict="keep")],  # ITEMS has indices {0, 1}
+        email_verdict="hold",
+        email_reason="newsletter",
+    )
+    outcome = await _label(_FakeClient(parsed=parsed))
+
+    assert outcome.skip_reason == "error"
+    assert outcome.verdicts == {}
+    assert outcome.email_verdict == "file"
+    assert outcome.email_reason is None
+    assert outcome.usage is not None  # billed even though discarded
+
+
+async def test_body_item_rendered_in_manifest() -> None:
+    body_items = [
+        LabelItem(index=0, filename="invoice.pdf", mime="application/pdf", size=50_000),
+        LabelItem(index=1, filename=None, mime="text/plain", size=845, kind="body"),
+    ]
+    parsed = EmailLabelResult(
+        items=[ItemLabel(index=0, verdict="keep"), ItemLabel(index=1, verdict="keep")]
+    )
+    client = _FakeClient(parsed=parsed)
+
+    outcome = await _label(client, items=body_items)
+
+    assert outcome.verdicts == {0: ("keep", None), 1: ("keep", None)}
+    (call,) = client.messages.calls
+    manifest = call["messages"][0]["content"]
+    assert "[0] kind=attachment filename='invoice.pdf'" in manifest
+    assert "[1] kind=body filename=None" in manifest
+
+
 async def test_no_items_returns_empty() -> None:
     outcome = await _label(_FakeClient(parsed=EmailLabelResult(items=[])), items=[])
 
     assert outcome == email_label.LabelOutcome({}, None, None)
+    assert outcome.email_verdict == "file"

@@ -1,27 +1,30 @@
-"""Optional per-email LLM label pass for forwarded-mail attachment selection.
+"""Optional per-email LLM label pass for email item selection.
 
 The deterministic gate in :mod:`library.email_ingest` filters *unambiguous* noise
 (inline logos, tiny pixels, calendar/vCard parts). This module handles the
-ambiguous middle: one Anthropic call per email classifies each *surviving*
-attachment as ``keep`` or ``probably_noise``, given the subject, sender, and a
-body excerpt for context. The body itself is judged separately by the substance
-gate, so it is only context here.
+ambiguous middle: one Anthropic call per polled email classifies each *surviving*
+item — the attachments plus, when present, the message body — as ``keep`` or
+``probably_noise``, given the subject, sender, and a body excerpt for context.
+The same call also renders a whole-email verdict: ``file`` (proceed with normal
+ingestion) or ``hold`` (route the entire email to a human review queue).
 
 Two invariants, both honouring "never lose a real document":
 
 1. **A ``probably_noise`` verdict never drops anything.** The caller ingests the
-   attachment anyway and merely flags it ``needs_review`` (via
+   item anyway and merely flags it ``needs_review`` (via
    ``Document.extra["email_selection"]`` → the ``email_item_ambiguous`` validation
    finding). A false positive costs one review click, not a lost document.
+   Likewise a ``hold`` never deletes: the held email waits for a human.
 2. **Fail-open.** Disabled feature, blown budget, an API error, or a malformed /
-   incomplete response all keep every attachment. The labeller can only *add* a
-   flag, never remove or reject an item.
+   incomplete response all keep every item AND force ``email_verdict="file"``.
+   The labeller can only *add* a flag or route to review — a failure can never
+   hold an email or reject an item.
 
 Spend is budget-gated exactly like extraction: today's ``email_label_completed``
 event totals are summed and compared to ``email_label_daily_budget_usd`` before
-each call. The completion event is written by the caller (it needs a document to
-hang on); this module only reads the running total. See docs/ingestion.md,
-"Email item selection".
+each call. The completion event is written by the caller, which anchors it on
+the first document the email produces; this module only reads the running
+total. See docs/ingestion.md, "Email item selection".
 """
 
 import logging
@@ -39,36 +42,48 @@ from library.extraction.extractor import estimate_cost_usd
 logger = logging.getLogger(__name__)
 
 #: Bump when the prompt or schema changes so stored events stay interpretable.
-PROMPT_VERSION = "email-label-v1"
+PROMPT_VERSION = "email-label-v2"
 
 #: The completion event whose daily total gates this pass (written by the caller).
 LABEL_EVENT = "email_label_completed"
 
 _MAX_OUTPUT_TOKENS = 1024
 
-SYSTEM_PROMPT = """You triage the attachments of a forwarded email for a personal \
-document library. You are given the email's subject, sender, a short body excerpt, \
-and a numbered list of attachments (filename, MIME type, size in bytes) — judged \
-BEFORE any OCR, so you have only this metadata and context.
+SYSTEM_PROMPT = """You triage an email for a personal document library. You are \
+given the email's subject, sender, a short body excerpt, and a numbered list of \
+items — the attachments and, when listed, the message body itself (kind, filename, \
+MIME type, size in bytes) — judged BEFORE any OCR, so you have only this metadata \
+and context.
 
-For each attachment, return a verdict:
+You have two tasks.
+
+Task 1 — for each item, return a verdict:
 - "keep": a real document worth filing (an invoice, receipt, statement, letter, \
-scanned form, photo of a document, etc.).
+scanned form, photo of a document, a substantive message body, etc.).
 - "probably_noise": almost certainly not a filed document — a signature logo or \
 banner, a social-media icon, a decorative or boilerplate image, a small embedded \
-graphic referenced by the message body.
+graphic referenced by the message body, a body that is only a cover note.
+
+Task 2 — for the email as a whole, return "email_verdict":
+- "file": any part of this email plausibly belongs in a personal document library.
+- "hold": the ENTIRE email is almost certainly not library material — a \
+newsletter, a marketing blast, an automated notification, or clearly misdirected \
+mail. Held emails go to a human review queue; nothing is deleted.
 
 Rules:
-- When in doubt, choose "keep". A wrong "probably_noise" only flags a real \
-document for human review; it never deletes anything, but it should still be rare.
-- Judge by filename, type, size, and how the body talks about the attachments \
+- When in doubt, choose "keep" and "file". A wrong "probably_noise" or "hold" \
+only sends a real document to human review; it never deletes anything, but it \
+should still be rare.
+- Judge by kind, filename, type, size, and how the body talks about the items \
 (e.g. a body that says "see attached invoice" strongly implies the PDF is a keep).
-- Give a short reason only for "probably_noise"; "keep" needs no reason.
-- Return exactly one entry per attachment index provided, and no others."""
+- Give a short reason only for "probably_noise"; "keep" needs no reason. A short \
+"email_reason" is required for "hold".
+- Return exactly one entry per item index provided — including the body item, \
+when one is listed — and no others."""
 
 
 class ItemLabel(BaseModel):
-    """The verdict for one attachment, keyed by its manifest ``index``."""
+    """The verdict for one item (attachment or body), keyed by its manifest ``index``."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -78,21 +93,32 @@ class ItemLabel(BaseModel):
 
 
 class EmailLabelResult(BaseModel):
-    """The structured output: one :class:`ItemLabel` per attachment judged."""
+    """The structured output: per-item labels plus a whole-email verdict.
+
+    ``email_verdict`` defaults to ``file`` so a response that omits it can only
+    proceed with normal ingestion, never hold — fail-open at the schema level.
+    """
 
     model_config = ConfigDict(extra="forbid")
 
     items: list[ItemLabel]
+    email_verdict: Literal["file", "hold"] = "file"
+    email_reason: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class LabelItem:
-    """One attachment presented to the labeller (pre-OCR metadata only)."""
+    """One item presented to the labeller (pre-OCR metadata only).
+
+    ``kind`` is ``"attachment"`` or ``"body"`` — the message body is judged as
+    an item of its own, not just context.
+    """
 
     index: int
     filename: str | None
     mime: str | None
     size: int | None
+    kind: str = "attachment"
 
 
 @dataclass(frozen=True, slots=True)
@@ -120,22 +146,27 @@ class LabelUsage:
 
 @dataclass(frozen=True, slots=True)
 class LabelOutcome:
-    """Result of a label pass: per-index verdicts, usage, and any skip reason.
+    """Result of a label pass: per-index verdicts, whole-email verdict, usage.
 
-    ``verdicts`` maps an attachment index to ``(verdict, reason)``. It is empty
+    ``verdicts`` maps an item index to ``(verdict, reason)``. It is empty
     whenever the pass was skipped or its response could not be trusted — the
-    caller then keeps every attachment (fail-open). ``usage`` is present only
-    when a call actually billed, so the caller records the budget event.
+    caller then keeps every item (fail-open). ``email_verdict`` is ``"hold"``
+    only for a trusted response that said so; every skip and error path leaves
+    it at ``"file"``, so a failure can never hold an email. ``usage`` is present
+    only when a call actually billed, so the caller records the budget event.
     """
 
     verdicts: dict[int, tuple[str, str | None]]
     usage: LabelUsage | None
     skip_reason: str | None  # "budget" | "error" | None
+    email_verdict: str = "file"  # "file" | "hold"
+    email_reason: str | None = None
 
 
 def _manifest(items: list[LabelItem]) -> str:
     return "\n".join(
-        f"[{item.index}] filename={item.filename!r} type={item.mime} bytes={item.size}"
+        f"[{item.index}] kind={item.kind} filename={item.filename!r} "
+        f"type={item.mime} bytes={item.size}"
         for item in items
     )
 
@@ -150,16 +181,18 @@ async def label_email_items(
     body_snippet: str,
     items: list[LabelItem],
 ) -> LabelOutcome:
-    """Label each attachment ``keep``/``probably_noise`` — fail-open on any problem.
+    """Label each item ``keep``/``probably_noise`` and the email ``file``/``hold``.
 
-    Reads today's label spend and skips (keeping all) when the budget is reached.
-    A response that does not cover exactly the requested indices is discarded
-    (verdicts cleared) but its cost is still reported, so budget accounting stays
-    honest even when the model misbehaves.
+    Fail-open on any problem: every skip and error path keeps all items AND
+    returns ``email_verdict="file"``. Reads today's label spend and skips when
+    the budget is reached. A response that does not cover exactly the requested
+    indices is discarded entirely — verdicts cleared and the email forced to
+    ``file`` (an untrustworthy response must not hold) — but its cost is still
+    reported, so budget accounting stays honest even when the model misbehaves.
 
     The **entire** body is guarded: the budget read, the API call, and the cost
-    estimate can all raise, and any of them doing so must keep every attachment,
-    never propagate. This function is called before the ingest loop, so a raised
+    estimate can all raise, and any of them doing so must keep every item, never
+    propagate. This function is called before the ingest loop, so a raised
     exception here would otherwise abort the whole message and leave real
     attachments un-ingested — exactly what "the labeller only adds a flag" forbids.
     """
@@ -180,7 +213,7 @@ async def label_email_items(
             f"Subject: {subject or '(none)'}\n"
             f"From: {sender or '(unknown)'}\n"
             f"Body excerpt:\n{body_snippet or '(no body)'}\n\n"
-            f"Attachments to judge:\n{_manifest(items)}"
+            f"Items to judge:\n{_manifest(items)}"
         )
         response = await client.messages.parse(
             model=settings.email_label_model,
@@ -210,8 +243,9 @@ async def label_email_items(
         wanted = {item.index for item in items}
         verdicts = {label.index: (label.verdict, label.reason) for label in parsed.items}
         if set(verdicts) != wanted:
-            # A mismatched index set is untrustworthy — keep everything, but the
-            # call still cost money, so return the usage for the budget event.
+            # A mismatched index set is untrustworthy — keep everything and force
+            # the email to "file" (an untrustworthy response must not hold), but
+            # the call still cost money, so return the usage for the budget event.
             logger.warning(
                 "email-label: verdict indices %s do not match items %s; keeping all",
                 sorted(verdicts),
@@ -219,7 +253,13 @@ async def label_email_items(
             )
             return LabelOutcome({}, usage, "error")
 
-        return LabelOutcome(verdicts, usage, None)
+        return LabelOutcome(
+            verdicts,
+            usage,
+            None,
+            email_verdict=parsed.email_verdict,
+            email_reason=parsed.email_reason,
+        )
     except Exception:
         logger.exception("email-label: labelling failed; keeping all attachments")
         return LabelOutcome({}, None, "error")
