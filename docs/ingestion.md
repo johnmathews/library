@@ -1153,8 +1153,9 @@ documents**, one per *useful* attachment. Every supported attachment is still
 ingested by default — the loop is exhaustive, never "pick one" — but two gates
 now remove the noise a forwarded mail carries (signature logos, tracking
 pixels, calendar invites) and a third (optional) gate flags the ambiguous
-middle. The full rules, config, and how to debug them live in **"Email item
-selection"** immediately below. The guiding invariant is unchanged: **never
+middle. The full rules and config live in **"Email item selection"**
+immediately below; how to debug an individual decision lives in the
+[email-triage runbook](runbooks/email-triage.md). The guiding invariant is unchanged: **never
 lose a real document.** A rejected-but-real file is still surfaced (recorded on
 every sibling's `extra["email_siblings_dropped"]`, shown as the
 `email_attachments_dropped` review reason, and pushed to the owner); only
@@ -1298,61 +1299,14 @@ spend is visible only in the `email-label` log line.)
 
 #### Debugging & triage: the decision trace
 
-Every **processed** message emits exactly one **decision trace** log line — the
-primary surface for "what happened to this email and why". It is emitted even
-when the email produced no document (the persisted event cannot cover that
-case), but two kinds of message never reach the trace:
-
-- **Allowlist-rejected mail** — skipped before selection runs; each poll logs a
-  per-message WARNING instead (`grep 'not in allowlist'`).
-- **Messages whose processing raised** — the error is logged and the message is
-  left in place for the next poll (`grep 'failed to process message'`).
-
-Format (`_log_selection_trace`):
-
-```
-email-selection msg='<subject>' from='<sender>' items=N ingested=a duplicate=b \
-  dropped=c filtered=d flagged=e :: <item> | <item> | …
-```
-
-Each `<item>` renders as `name:stage:verdict(reason)`, e.g.:
-
-```
-email-selection msg='Energy bill' from='biller@example.com' items=3 ingested=1 \
-  duplicate=0 dropped=0 filtered=1 flagged=0 :: \
-  bill.pdf:classify:ingested | logo.png:classify:filtered(signature_image) | \
-  <body>:body_substance:filtered(not_needed)
-```
-
-Pull one email's trace from the logs (plain stdlib logging, so grep/Loki work):
-
-```
-# grep the worker logs
-grep 'email-selection' worker.log | grep 'Energy bill'
-
-# Loki (worker job label)
-{job="library-worker"} |= "email-selection"
-```
-
-When a document **was** produced, the same per-item trace is also stored as an
-`email_selection` `IngestionEvent` on it (visible in the document history's "Show
-all events"), and the LLM billing as an `email_label_completed` event.
-
-**What each verdict/reason means, and what to do:**
-
-| verdict(reason) | Meaning | Action |
-| --- | --- | --- |
-| `ingested` | Filed as a document | none |
-| `duplicate` | Content already in the library | none |
-| `flagged_ambiguous` | Ingested, LLM thought it might be noise | check the needs-review queue; verify the doc |
-| `filtered(signature_image\|tiny_image\|non_document_type)` | Deterministic noise, quietly dropped | none if truly noise; if a real doc was filtered, lower the threshold or set `LIBRARY_EMAIL_FILTER_NOISE_ENABLED=false` and re-forward |
-| `filtered(below_substance:<n>w\|blank\|not_needed\|oversize)` | Body not filed (thin — `<n>w` is the post-strip word count, e.g. `below_substance:8w` / empty / an attachment already won / too large) | none |
-| `dropped(oversize\|unsupported_type\|error)` | Surfaced attachment drop — also on the sibling's `email_siblings_dropped` + a push. (A body whose ingest is rejected renders as `dropped(rejected)`.) | investigate; re-send in a supported form if it was real |
-| a trace with `flagged=0` while the LLM pass is on | The label pass was skipped (not a per-item verdict) | look for a `email-label: … skipped (budget\|error)` log line — raise the budget or accept degradation |
-
-**Tuning knobs**: the noise-gate and label-pass settings
-(`LIBRARY_EMAIL_FILTER_*`, `LIBRARY_EMAIL_LABEL_*`) are listed with their
-defaults in the [Configuration](#configuration) table below.
+Every processed **and every held** message emits one `email-selection` decision
+trace log line — the primary surface for "what happened to this email and why".
+When a document was produced, the same trace is persisted as an
+`email_selection` event on each new document (with LLM billing as
+`email_label_completed`); a held email keeps it in its `held_emails` row.
+The line format, grep/Loki queries, the no-trace cases, and the full
+action-per-reason table live in the
+[email-triage runbook](runbooks/email-triage.md).
 
 ### Provider setup
 

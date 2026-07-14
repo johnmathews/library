@@ -714,3 +714,25 @@ async def poll_email_inbox(timestamp: int) -> None:
 
     summary = await poll_mailbox_async(settings, get_sessionmaker())
     logger.info("email poll (scheduled for %s): %s", timestamp, summary)
+
+
+@job_app.task(name="library.jobs.ingest_held_email")
+async def ingest_held_email(held_email_id: int, resolved_by_id: int | None = None) -> None:
+    """On-demand task: ingest a held email anyway (the human override, W12).
+
+    Deferred by ``POST /api/held-emails/{id}/ingest``. Re-fetches the message
+    from the Held folder by Message-ID and runs it through the normal ingest
+    path with override semantics (no label call, body-substance gate bypassed
+    when the attachments produce nothing); resolves the ``held_emails`` row to
+    ``ingested`` and moves the message to the Processed folder. A row that is
+    no longer ``held`` makes this a logged no-op, so a double-fired job is
+    harmless.
+    """
+    settings = get_settings()
+    # Imported lazily: email_ingest imports library.ingest, which imports
+    # this module for process_document — a top-level import would cycle.
+    from library.email_ingest import ingest_held_email_async
+
+    await ingest_held_email_async(
+        settings, get_sessionmaker(), held_email_id, resolved_by_id=resolved_by_id
+    )

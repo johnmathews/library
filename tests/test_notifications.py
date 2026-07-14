@@ -16,6 +16,7 @@ from library.notifications import (
     dispatch_attachments_dropped_notification,
     dispatch_document_completion,
     dispatch_document_notification,
+    dispatch_email_held_notification,
     send_pushover,
     validate_pushover,
 )
@@ -435,3 +436,57 @@ async def test_attachments_dropped_no_owner_or_files_sends_nothing(captured_send
         is False
     )
     assert captured_sends == []
+
+
+# --- Email-held dispatch (document-less; dedicated email_held opt-in, W17) ---
+
+
+async def test_email_held_notifies_opted_in_owner(captured_sends) -> None:
+    sent = await dispatch_email_held_notification(
+        _factory_for(_owner("email_held")),
+        7,
+        subject="Weekly digest",
+        reason="newsletter blast",
+        held_url_base="https://lib.example.com/",
+    )
+    assert sent is True
+    assert len(captured_sends) == 1
+    assert captured_sends[0]["title"] == "Email held for review"
+    assert captured_sends[0]["priority"] == 0  # review work, not an error
+    assert captured_sends[0]["url"] == "https://lib.example.com/held-emails"
+    message = str(captured_sends[0]["message"])
+    assert "Weekly digest" in message
+    assert "newsletter blast" in message
+
+
+async def test_email_held_respects_opt_in(captured_sends) -> None:
+    # Owner opted into other events but NOT email_held → no push.
+    sent = await dispatch_email_held_notification(
+        _factory_for(_owner("processing_error", "document_success")),
+        7,
+        subject="Weekly digest",
+        reason="newsletter blast",
+    )
+    assert sent is False
+    assert captured_sends == []
+
+
+async def test_email_held_no_owner_sends_nothing(captured_sends) -> None:
+    sent = await dispatch_email_held_notification(
+        _factory_for(_owner("email_held")), None, subject="x", reason="y"
+    )
+    assert sent is False
+    assert captured_sends == []
+
+
+async def test_email_held_send_failure_returns_false_not_raise(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def _failing_send(**kwargs: object) -> PushoverResult:
+        return PushoverResult(ok=False, errors=("boom",))
+
+    monkeypatch.setattr(notifications, "send_pushover", _failing_send)
+    sent = await dispatch_email_held_notification(
+        _factory_for(_owner("email_held")), 7, subject="x", reason="y"
+    )
+    assert sent is False

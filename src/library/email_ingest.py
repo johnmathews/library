@@ -23,7 +23,15 @@ than silently processed (``email_hold_enabled``, on by default): a durable
 ``held_emails`` row is written first, then the message is moved to
 ``LIBRARY_EMAIL_HELD_FOLDER`` — row-before-move, so a hold can never lose its
 pointer (a failed row leaves the mail in place for the next poll; a failed move
-retries idempotently against the existing row). Four triggers hold: an
+retries idempotently against the existing row). A held email is resolved by a
+human: "ingest anyway" (``ingest_held_email_async``, run as the
+``library.jobs.ingest_held_email`` task) re-fetches the message from the Held
+folder by Message-ID and ingests it with override semantics — deterministic
+gates still apply, no label call, and the body-substance gate is bypassed when
+the attachments produce nothing — while "dismiss" (``dismiss_held_email``) is a
+pure DB status flip that leaves the bytes in the Held folder forever. Holding
+also fires a best-effort ``email_held`` push to the resolved owner (opt-in, see
+``library.notifications``). Four triggers hold: an
 allowlist-rejected sender (``sender_unknown``), a body-only email below the
 substance gate (``below_substance``), an email whose user-facing drops left
 nothing ingested (``nothing_ingested``), and the label pass's whole-email
@@ -61,12 +69,12 @@ import re
 from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, AsyncExitStack
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from anthropic import AsyncAnthropic
-from imap_tools import MailBox, MailMessage
+from imap_tools import AND, H, MailBox, MailMessage
 from PIL import Image
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
@@ -83,7 +91,10 @@ from library.ingest import (
 )
 from library.markdown.html import html_to_markdown
 from library.models import DocumentSource, HeldEmail, HeldEmailStatus, IngestionEvent, User
-from library.notifications import dispatch_attachments_dropped_notification
+from library.notifications import (
+    dispatch_attachments_dropped_notification,
+    dispatch_email_held_notification,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -311,6 +322,8 @@ class _FolderManagerProtocol(Protocol):
     def exists(self, folder: str) -> bool: ...
 
     def create(self, folder: str) -> Any: ...
+
+    def set(self, folder: str) -> Any: ...
 
 
 class MailboxProtocol(Protocol):
@@ -763,7 +776,9 @@ def _body_substance(text: str) -> str:
     return "\n".join(kept).strip()
 
 
-def _body_candidate(message: MailMessage, max_bytes: int) -> tuple[IngestCandidate | None, str]:
+def _body_candidate(
+    message: MailMessage, max_bytes: int, *, ignore_substance: bool = False
+) -> tuple[IngestCandidate | None, str]:
     """Build a candidate from the email body, gated on substance.
 
     HTML (converted to Markdown, ``text/markdown``) is preferred over plain text
@@ -773,7 +788,11 @@ def _body_candidate(message: MailMessage, max_bytes: int) -> tuple[IngestCandida
     still filing a genuine body-as-invoice. Returns ``(candidate, "")`` on
     success, or ``(None, reason)`` where ``reason`` is ``blank`` / ``oversize`` /
     ``below_substance:<n>w`` for the decision trace. Called only when no
-    attachment produced a document.
+    attachment produced a document. ``ignore_substance`` is the ingest-anyway
+    override (``ingest_held_email_async``): a *non-empty* body is filed even
+    below the threshold — a ``below_substance`` hold must ingest its body when a
+    human says so — while blank/oversize still apply (there is nothing to file,
+    or it cannot be stored).
     """
     if (message.html or "").strip():
         markdown = html_to_markdown(message.html)
@@ -786,7 +805,7 @@ def _body_candidate(message: MailMessage, max_bytes: int) -> tuple[IngestCandida
         return None, "blank"
     body = _body_substance(raw_body)
     words = len(body.split())
-    if words < _BODY_MIN_WORDS and len(body) < _BODY_MIN_CHARS:
+    if words < _BODY_MIN_WORDS and len(body) < _BODY_MIN_CHARS and not (ignore_substance and body):
         logger.info(
             "email: body of message %r below substance threshold (%dw/%dc); not ingested",
             message.subject,
@@ -825,14 +844,18 @@ def _log_dropped(subject: str | None, skipped: list[SkippedAttachment]) -> None:
 
 
 def _log_selection_trace(message: MailMessage, decisions: list[SelectionDecision]) -> None:
-    """Emit the always-on, single-line, greppable decision trace for one email.
+    """Emit the single-line, greppable decision trace for one email.
 
     This is the primary debug/triage surface: it records what happened to every
     item — ``[body, att1 … attN]`` — at which stage and why, even when the email
     produced no document (the persisted ``email_selection`` event cannot cover
-    that case, as it has no document to hang on). The stable ``email-selection``
-    prefix lets Loki/``grep`` pull one email's full trace. See the runbook in
-    docs/ for the format and the action-per-reason table.
+    that case, as it has no document to hang on). Emitted once per processed
+    message and once per held message (``_hold_message`` traces too, so even an
+    allowlist hold leaves a line); the only untraced mail is an allowlist reject
+    while holds are off (left in place) and a message whose processing raised.
+    The stable ``email-selection`` prefix lets Loki/``grep`` pull one email's
+    full trace. See docs/runbooks/email-triage.md for the format and the
+    action-per-reason table.
     """
     counts = Counter(decision.verdict for decision in decisions)
     logger.info(
@@ -1402,6 +1425,7 @@ async def _persist_held_email(
     *,
     imap_folder: str,
     default_owner_username: str | None = None,
+    held_url_base: str | None = None,
 ) -> None:
     """Insert the durable ``held_emails`` row for one held message (idempotent).
 
@@ -1416,6 +1440,12 @@ async def _persist_held_email(
     Unlike the trace persister this RAISES on failure: the row precedes the
     move, and a hold without its row would be invisible to review — the
     per-message handler then leaves the mail in place for the next poll.
+
+    After a *fresh* insert commits, a best-effort ``email_held`` push goes to
+    the resolved owner (opt-in; deep-link built from ``held_url_base``). The
+    skip-if-exists retry path never re-notifies, so the push is at-most-once
+    per hold — and a notification failure is NOT a hold failure: it is caught
+    and logged here, never raised into the row-before-move contract above.
     """
     async with session_factory() as session:
         if record.message_id is not None:
@@ -1452,6 +1482,20 @@ async def _persist_held_email(
             )
         )
         await session.commit()
+    try:
+        await dispatch_email_held_notification(
+            session_factory,
+            owner_id,
+            subject=record.subject,
+            reason=record.reason or record.verdict,
+            held_url_base=held_url_base,
+        )
+    except Exception:  # the push must never fail the hold (the row is committed)
+        logger.warning(
+            "email: email-held notification failed for %r; continuing",
+            record.subject,
+            exc_info=True,
+        )
 
 
 async def _label_email_on_loop(
@@ -1561,6 +1605,7 @@ async def poll_mailbox_async(
                 record,
                 imap_folder=settings.email_held_folder,
                 default_owner_username=default_owner,
+                held_url_base=url_base,
             ),
             loop,
         )
@@ -1608,3 +1653,258 @@ async def poll_mailbox_async(
             label=label,
             persist_hold=persist_hold_on_loop,
         )
+
+
+# --- Held-email resolution: ingest anyway (override) and dismiss ---------------
+
+
+@dataclass(frozen=True, slots=True)
+class _OverrideOutcome:
+    """What the ingest-anyway IMAP worker brought back to the event loop.
+
+    ``error`` is recorded on the row's ``last_error`` (message not found, or a
+    post-ingest move failure). ``trace_detail``/``new_document_ids`` feed the
+    best-effort ``email_selection`` persistence, exactly like the poll path.
+    """
+
+    error: str | None = None
+    new_document_ids: list[int] = field(default_factory=list)
+    trace_detail: dict[str, object] | None = None
+
+
+async def _mark_held_email_ingested(
+    session_factory: async_sessionmaker[AsyncSession],
+    held_email_id: int,
+    resolved_by_id: int | None,
+    document_ids: list[int],
+) -> None:
+    """Resolve the held row as ingested (status/resolver/timestamp/documents).
+
+    NOT best-effort: this runs *before* the Processed-folder move (row before
+    move, mirroring the hold path) and raising here leaves the row held and the
+    message in the Held folder — the override can simply be retried.
+    """
+    async with session_factory() as session:
+        row = await session.get(HeldEmail, held_email_id)
+        if row is None:  # deleted mid-flight; nothing to resolve
+            raise ValueError(f"held email {held_email_id} vanished during ingest-anyway")
+        row.status = HeldEmailStatus.INGESTED
+        row.resolved_by_id = resolved_by_id
+        row.resolved_at = datetime.now(UTC)
+        row.document_ids = list(document_ids)
+        row.last_error = None
+        await session.commit()
+
+
+async def _record_held_email_error(
+    session_factory: async_sessionmaker[AsyncSession], held_email_id: int, error: str
+) -> None:
+    """Stamp ``last_error`` on the held row (status untouched)."""
+    async with session_factory() as session:
+        row = await session.get(HeldEmail, held_email_id)
+        if row is None:
+            return
+        row.last_error = error
+        await session.commit()
+
+
+async def ingest_held_email_async(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    held_email_id: int,
+    resolved_by_id: int | None,
+    *,
+    mailbox_factory: Callable[[], AbstractContextManager[MailboxProtocol]] | None = None,
+) -> None:
+    """Ingest a held email anyway: the human override for a hold (W12).
+
+    Re-fetches the message from the row's ``imap_folder`` by **Message-ID
+    header search** — never by ``imap_uid``, which is folder-scoped and changed
+    on the Held move — and runs the per-message processing with override
+    semantics: the deterministic classify gates still apply, the LLM label pass
+    is NOT consulted (the human already overruled it), and the body-substance
+    gate is bypassed when the attachments produce nothing, so overriding a
+    ``below_substance`` hold files its body. Ingestion goes through the same
+    ``_ingest_candidate`` path as the poll (source ``email``, owner resolved
+    from the sender), and the decision trace is persisted as ``email_selection``
+    events on the new documents.
+
+    Ordering mirrors the hold's row-before-move: the row is resolved
+    (``ingested`` + resolver + ``document_ids``) *before* the message moves
+    Held → Processed; a move failure only stamps ``last_error`` (the documents
+    are the truth — sha256 dedup makes any re-ingest a duplicate). A row that
+    is not currently ``held`` makes the whole call a logged no-op, so a
+    double-fired job cannot ingest twice. A message that cannot be found in the
+    Held folder stamps ``last_error`` and leaves the row held.
+
+    Runs the synchronous IMAP work in a worker thread (like
+    ``poll_mailbox_async``), marshalling the ingest and row writes back onto
+    this event loop.
+    """
+    async with session_factory() as session:
+        row = await session.get(HeldEmail, held_email_id)
+    if row is None:
+        logger.warning("email: held email %s not found; nothing to ingest", held_email_id)
+        return
+    if row.status is not HeldEmailStatus.HELD:
+        logger.info(
+            "email: held email %s is already %s; ingest-anyway is a no-op",
+            held_email_id,
+            row.status.value,
+        )
+        return
+    message_id = row.message_id
+    held_folder = row.imap_folder
+    if message_id is None:
+        await _record_held_email_error(
+            session_factory,
+            held_email_id,
+            "held email has no Message-ID; cannot re-fetch it from IMAP",
+        )
+        return
+
+    loop = asyncio.get_running_loop()
+    default_owner = settings.email_default_owner
+    factory = mailbox_factory or (lambda: _connect(settings))
+    criteria = str(AND(header=H("Message-ID", message_id)))
+
+    def ingest_on_loop(candidate: IngestCandidate) -> IngestResult:
+        future = asyncio.run_coroutine_threadsafe(
+            _ingest_candidate(session_factory, candidate, default_owner_username=default_owner),
+            loop,
+        )
+        try:
+            return future.result(timeout=_LOOP_BRIDGE_TIMEOUT_SECONDS)
+        except TimeoutError:
+            future.cancel()
+            raise
+
+    def resolve_row_on_loop(document_ids: list[int]) -> None:
+        future = asyncio.run_coroutine_threadsafe(
+            _mark_held_email_ingested(session_factory, held_email_id, resolved_by_id, document_ids),
+            loop,
+        )
+        try:
+            future.result(timeout=_LOOP_BRIDGE_TIMEOUT_SECONDS)
+        except TimeoutError:
+            future.cancel()
+            raise
+
+    def run() -> _OverrideOutcome:
+        with factory() as mailbox:
+            mailbox.folder.set(held_folder)
+            # The IMAP HEADER search is substring-based; pin the exact id.
+            matches = [
+                message
+                for message in mailbox.fetch(criteria, mark_seen=False)
+                if _message_id(message) == message_id
+            ]
+            if not matches:
+                return _OverrideOutcome(
+                    error=f"message {message_id} not found in folder {held_folder!r}"
+                )
+            message = matches[0]
+            candidates, classify_skipped = _classify_attachments(
+                message, settings.max_upload_bytes, settings
+            )
+            # Override semantics: deterministic gates only — no label call.
+            outcome = _ingest_attachments(message, ingest_on_loop, candidates, classify_skipped, {})
+            decisions = outcome.decisions
+            produced = list(outcome.produced)
+            if outcome.new == 0 and outcome.duplicates == 0:
+                body, body_skip_reason = _body_candidate(
+                    message, settings.max_upload_bytes, ignore_substance=True
+                )
+                if body is not None:
+                    dropped_siblings = _dropped_siblings_payload(outcome.skipped)
+                    if dropped_siblings:
+                        body = replace(
+                            body, extra_document={"email_siblings_dropped": dropped_siblings}
+                        )
+                    try:
+                        result = ingest_on_loop(body)
+                    except IngestError as exc:
+                        logger.warning(
+                            "email: body of held message %r rejected (%s)", message.subject, exc
+                        )
+                        decisions.append(_body_decision(body, "dropped", "rejected"))
+                    else:
+                        produced.append(result)
+                        decisions.append(
+                            _body_decision(body, "duplicate" if result.duplicate else "ingested")
+                        )
+                else:
+                    decisions.append(_body_skip_decision(body_skip_reason or "no_body"))
+            else:
+                decisions.append(_body_skip_decision("not_needed"))
+            decisions.append(
+                SelectionDecision(
+                    kind="email",
+                    filename=None,
+                    mime=None,
+                    size=None,
+                    stage="email_verdict",
+                    verdict="ingested",
+                    reason="manual_override",
+                )
+            )
+            _log_selection_trace(message, decisions)
+            document_ids = [result.document.id for result in produced]
+            new_document_ids = [result.document.id for result in produced if not result.duplicate]
+            trace_detail = _selection_event_detail(message, decisions)
+            # Row before move: resolve first (raising on failure so the retry
+            # sees a still-held row), then file the message away.
+            resolve_row_on_loop(document_ids)
+            error: str | None = None
+            try:
+                if not mailbox.folder.exists(settings.email_processed_folder):
+                    mailbox.folder.create(settings.email_processed_folder)
+                mailbox.move(message.uid, settings.email_processed_folder)
+            except Exception as exc:
+                logger.error(
+                    "email: held email %s ingested but the move of message %r to %r failed; "
+                    "status stays ingested (document_ids are the truth)",
+                    held_email_id,
+                    message.subject,
+                    settings.email_processed_folder,
+                    exc_info=True,
+                )
+                error = (
+                    f"ingested (documents {document_ids}) but the move to "
+                    f"{settings.email_processed_folder!r} failed: {exc}"
+                )
+            return _OverrideOutcome(
+                error=error, new_document_ids=new_document_ids, trace_detail=trace_detail
+            )
+
+    outcome = await asyncio.to_thread(run)
+    if outcome.trace_detail is not None and outcome.new_document_ids:
+        await _persist_selection_trace(
+            session_factory, outcome.new_document_ids, outcome.trace_detail
+        )
+    if outcome.error is not None:
+        logger.warning("email: held email %s: %s", held_email_id, outcome.error)
+        await _record_held_email_error(session_factory, held_email_id, outcome.error)
+
+
+async def dismiss_held_email(
+    session: AsyncSession, held_email_id: int, resolved_by_id: int | None
+) -> HeldEmail:
+    """Dismiss a held email: a pure DB status flip, no IMAP round-trip (D5).
+
+    The message's bytes stay in the Held folder forever (the row keeps the
+    pointer), so "never lose a real document" survives a wrong dismiss — a
+    human can still recover the mail by hand. Raises ``ValueError`` when the
+    row does not exist or is not currently ``held`` (the API maps it to 409).
+    Commits and returns the updated row.
+    """
+    row = await session.get(HeldEmail, held_email_id)
+    if row is None:
+        raise ValueError(f"held email {held_email_id} does not exist")
+    if row.status is not HeldEmailStatus.HELD:
+        raise ValueError(f"held email {held_email_id} is already {row.status.value}")
+    row.status = HeldEmailStatus.DISMISSED
+    row.resolved_by_id = resolved_by_id
+    row.resolved_at = datetime.now(UTC)
+    await session.commit()
+    return row

@@ -13,7 +13,13 @@ from typing import Annotated, Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
-from library.models import DocumentLanguage, DocumentSource, DocumentStatus, ReviewStatus
+from library.models import (
+    DocumentLanguage,
+    DocumentSource,
+    DocumentStatus,
+    HeldEmailStatus,
+    ReviewStatus,
+)
 
 
 class DocumentUploadResponse(BaseModel):
@@ -186,6 +192,66 @@ class DeletedDocumentListResponse(BaseModel):
     retention_days: int = Field(
         description="Configured retention window; purge_at = deleted_at + this many days."
     )
+
+
+class HeldEmailItem(BaseModel):
+    """One row of GET /api/held-emails: an email the poller held for review."""
+
+    id: int
+    message_id: str | None = Field(
+        description="The RFC 5322 Message-ID — the authoritative IMAP pointer."
+    )
+    sender: str | None
+    subject: str | None
+    received_at: datetime | None = Field(description="The message's Date: header, if parseable.")
+    created_at: datetime = Field(description="When the poller held the email.")
+    verdict: str = Field(
+        description="Hold trigger: llm_hold, below_substance, nothing_ingested, or sender_unknown."
+    )
+    reason: str | None = Field(description="Human-readable trigger detail (e.g. the LLM's reason).")
+    status: HeldEmailStatus
+    owner_id: int | None
+    owner: str | None = Field(
+        description=(
+            "The resolved owner's display name (falls back to username); null when "
+            "the sender matched no user and no default owner is configured."
+        )
+    )
+    resolved_at: datetime | None
+    document_ids: list[int] = Field(
+        description="Documents created by an ingest-anyway resolution; empty otherwise."
+    )
+    last_error: str | None = Field(
+        description="Most recent failed-resolution error (e.g. message not found on re-fetch)."
+    )
+
+
+class HeldEmailDetail(HeldEmailItem):
+    """Body of GET /api/held-emails/{id}: list item plus the full decision trace."""
+
+    trace: dict[str, Any] = Field(
+        description=(
+            "Snapshot of the per-item selection trace the poller recorded at hold "
+            "time (the email_selection event shape, plus label_usage when the LLM "
+            "pass billed)."
+        )
+    )
+
+
+class HeldEmailListResponse(BaseModel):
+    """Paginated body of GET /api/held-emails."""
+
+    items: list[HeldEmailItem]
+    total: int = Field(description="Filtered count before limit/offset.")
+    limit: int
+    offset: int
+
+
+class HeldEmailIngestQueuedResponse(BaseModel):
+    """202 body of POST /api/held-emails/{id}/ingest."""
+
+    queued: bool
+    job_id: int = Field(description="The Procrastinate job id (see GET /api/jobs).")
 
 
 class DocumentDetail(DocumentListItem):
@@ -549,6 +615,7 @@ class NotificationEvent(StrEnum):
     PROCESSING_ERROR = "processing_error"  # failed somewhere in the pipeline
     NEEDS_REVIEW = "needs_review"  # processed but low-confidence / flagged
     DUPLICATE = "duplicate"  # ingested content already in the library
+    EMAIL_HELD = "email_held"  # an email was held for review instead of filed
 
 
 #: New users get nothing until they opt in — notifications are off by default.

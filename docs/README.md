@@ -31,7 +31,7 @@ New to the codebase? Read in this order:
 
 ## 3. Sub-directories
 
-- [`runbooks/`](runbooks/) — operational runbooks (e.g. the [deploy runbook](runbooks/deploy.md)).
+- [`runbooks/`](runbooks/) — operational runbooks: the [deploy runbook](runbooks/deploy.md) and the [email-triage runbook](runbooks/email-triage.md) (reading the email decision trace and the held queue).
 - [`benchmarks/`](benchmarks/) — performance benchmarks (e.g. the OCR engine comparison).
 - [`archive/`](archive/) — superseded docs, kept for their decisions and rationale.
 - [`superpowers/`](superpowers/) — historical implementation plans and design specs (completed work, kept as a decision record).

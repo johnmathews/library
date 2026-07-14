@@ -74,9 +74,9 @@ describe('settings api', () => {
     ])
   })
 
-  it('NOTIFICATION_EVENTS contains the four canonical event keys in order', () => {
+  it('NOTIFICATION_EVENTS contains the five canonical event keys in order', () => {
     expect(NOTIFICATION_EVENTS.map((e) => e.value)).toEqual([
-      'document_success', 'processing_error', 'needs_review', 'duplicate',
+      'document_success', 'processing_error', 'needs_review', 'duplicate', 'email_held',
     ])
   })
 

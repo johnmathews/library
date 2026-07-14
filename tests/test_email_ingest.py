@@ -213,23 +213,42 @@ def mail_message(raw: bytes, uid: str) -> MailMessage:
 
 
 class FakeFolderManager:
-    """In-memory stand-in for ``MailBox.folder``."""
+    """In-memory stand-in for ``MailBox.folder`` (folder-aware, W12)."""
 
-    def __init__(self, folders: set[str]) -> None:
-        self.folders = set(folders)
+    def __init__(self, mailbox: "FakeMailBox") -> None:
+        self._mailbox = mailbox
         self.created: list[str] = []
 
     def exists(self, folder: str) -> bool:
-        return folder in self.folders
+        return folder in self._mailbox.folders
 
     def create(self, folder: str) -> tuple[object, ...]:
-        self.folders.add(folder)
+        self._mailbox.folders.setdefault(folder, [])
         self.created.append(folder)
         return ()
 
+    def set(self, folder: str) -> tuple[object, ...]:
+        if folder not in self._mailbox.folders:
+            raise OSError(f"folder {folder!r} does not exist")
+        self._mailbox.active_folder = folder
+        return ()
+
+
+#: The Message-ID header search criteria imap-tools renders for
+#: ``AND(header=H("Message-ID", value))`` — what ingest-anyway fetches with.
+_MESSAGE_ID_CRITERIA_RE = re.compile(r'HEADER "Message-ID" "([^"]+)"')
+
 
 class FakeMailBox:
-    """Mock at the imap-tools boundary: fetch/move/folder over a message list.
+    """Mock at the imap-tools boundary: fetch/move/folder over per-folder lists.
+
+    Folder-aware (W12): messages live in ``folders[name]`` lists; ``folder.set``
+    switches the active folder (like selecting an IMAP folder) and ``move``
+    relocates a message between them, so a held message is still fetchable from
+    the Held folder by a later ingest-anyway. ``fetch`` supports ``"ALL"`` and
+    the Message-ID header search (substring match, like a real IMAP HEADER
+    search). ``messages`` reads/writes the *active* folder's list, keeping the
+    original single-folder call sites working unchanged.
 
     ``fail_move_uids``: uids whose ``move`` raises (the message stays in place),
     for exercising move-failure retry semantics. Clear the set to let a later
@@ -239,10 +258,19 @@ class FakeMailBox:
     def __init__(
         self, messages: list[MailMessage], *, fail_move_uids: set[str] | None = None
     ) -> None:
-        self.messages = list(messages)
-        self.folder = FakeFolderManager({"INBOX"})
+        self.folders: dict[str, list[MailMessage]] = {"INBOX": list(messages)}
+        self.active_folder = "INBOX"
+        self.folder = FakeFolderManager(self)
         self.moved: list[tuple[str, str]] = []
         self.fail_move_uids: set[str] = set(fail_move_uids or ())
+
+    @property
+    def messages(self) -> list[MailMessage]:
+        return self.folders[self.active_folder]
+
+    @messages.setter
+    def messages(self, value: list[MailMessage]) -> None:
+        self.folders[self.active_folder] = list(value)
 
     def __enter__(self) -> Self:
         return self
@@ -257,13 +285,24 @@ class FakeMailBox:
 
     def fetch(self, criteria: str = "ALL", *, mark_seen: bool = True) -> Iterator[MailMessage]:
         assert mark_seen is False  # the poller must not touch seen flags
-        return iter(list(self.messages))
+        current = list(self.folders[self.active_folder])
+        if str(criteria) == "ALL":
+            return iter(current)
+        match = _MESSAGE_ID_CRITERIA_RE.search(str(criteria))
+        assert match is not None, f"unsupported fetch criteria {criteria!r}"
+        needle = match.group(1)
+        return iter([message for message in current if needle in (message.obj["Message-ID"] or "")])
 
     def move(self, uid_list: str, destination_folder: str) -> None:
         if uid_list in self.fail_move_uids:
             raise OSError("move failed")
+        source = self.folders[self.active_folder]
+        moving = [message for message in source if message.uid == uid_list]
+        self.folders[self.active_folder] = [
+            message for message in source if message.uid != uid_list
+        ]
+        self.folders.setdefault(destination_folder, []).extend(moving)
         self.moved.append((uid_list, destination_folder))
-        self.messages = [message for message in self.messages if message.uid != uid_list]
 
 
 async def documents_named(
@@ -1761,13 +1800,19 @@ async def _make_user(
     *,
     username: str,
     forward_addresses: list[str] | None = None,
+    notifications: dict[str, object] | None = None,
 ) -> int:
     from library.models import User
 
     async with session_factory() as session:
-        prefs: dict[str, object] = {}
+        notification_prefs: dict[str, object] = {}
         if forward_addresses is not None:
-            prefs = {"notifications": {"email_forward_addresses": forward_addresses}}
+            notification_prefs["email_forward_addresses"] = forward_addresses
+        if notifications is not None:
+            notification_prefs.update(notifications)
+        prefs: dict[str, object] = (
+            {"notifications": notification_prefs} if notification_prefs else {}
+        )
         user = User(username=username, password_hash="x", preferences=prefs)
         session.add(user)
         await session.commit()
@@ -2024,7 +2069,9 @@ async def test_label_bridge_timeout_fails_open(
         raise AssertionError("unreachable")
 
     monkeypatch.setattr("library.email_ingest._label_email_on_loop", hang)
-    monkeypatch.setattr("library.email_ingest._LOOP_BRIDGE_TIMEOUT_SECONDS", 0.2)
+    # Generous enough that a REAL bridge call (the ingest) never trips it under
+    # full-suite load, while the 30 s hang above still does.
+    monkeypatch.setattr("library.email_ingest._LOOP_BRIDGE_TIMEOUT_SECONDS", 2.0)
 
     summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
 
@@ -2062,7 +2109,9 @@ async def test_notify_bridge_timeout_does_not_wedge_message(
         await asyncio.sleep(30)
 
     monkeypatch.setattr("library.email_ingest._notify_dropped", hang)
-    monkeypatch.setattr("library.email_ingest._LOOP_BRIDGE_TIMEOUT_SECONDS", 0.2)
+    # Generous enough that a REAL bridge call (the ingest) never trips it under
+    # full-suite load, while the 30 s hang above still does.
+    monkeypatch.setattr("library.email_ingest._LOOP_BRIDGE_TIMEOUT_SECONDS", 2.0)
 
     summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
 
@@ -2702,6 +2751,134 @@ async def test_flagged_body_document_needs_review_at_ingest(
     label_events = await events_for(session_factory, document.id, "email_label_completed")
     assert len(label_events) == 1
     assert summary.attachments_ingested == 1
+
+
+# --- Email-held push notification (W17) ---
+
+
+_PUSHOVER_PREFS: dict[str, object] = {
+    "enabled": True,
+    "pushover_app_token": "app-token",
+    "pushover_user_key": "user-key",
+    "events": ["email_held"],
+}
+
+
+async def test_email_held_notification_fired_once_for_opted_in_owner(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A hold fires exactly one push to the resolved owner, through the REAL
+    # dispatcher (opt-in resolution included) — only the Pushover HTTP call is
+    # faked, at the send_pushover boundary.
+    from library import notifications
+
+    tag = uuid.uuid4().hex[:8]
+    sender = f"jane-{tag}@example.org"
+    await _make_user(
+        session_factory,
+        username=f"held-push-{tag}",
+        forward_addresses=[sender],
+        notifications=_PUSHOVER_PREFS,
+    )
+    sends: list[dict[str, object]] = []
+
+    async def fake_send(**kwargs: object) -> notifications.PushoverResult:
+        sends.append(kwargs)
+        return notifications.PushoverResult(ok=True, request_id="r")
+
+    monkeypatch.setattr(notifications, "send_pushover", fake_send)
+    subject = f"held push {tag}"
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_body_mail(
+        from_addr=f"Jane <{sender}>",
+        subject=subject,
+        text="FYI see attached",
+        message_id=message_id,
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="170")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert summary.messages_held == 1
+    assert len(await held_rows(session_factory, message_id)) == 1
+    assert len(sends) == 1
+    assert sends[0]["title"] == "Email held for review"
+    assert subject in str(sends[0]["message"])
+
+
+async def test_email_held_notification_not_sent_without_opt_in(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # An owner who never opted into email_held gets nothing — the hold itself
+    # is unaffected.
+    from library import notifications
+
+    tag = uuid.uuid4().hex[:8]
+    sender = f"jane-{tag}@example.org"
+    await _make_user(
+        session_factory,
+        username=f"held-nopush-{tag}",
+        forward_addresses=[sender],
+        notifications={**_PUSHOVER_PREFS, "events": ["processing_error"]},
+    )
+    sends: list[dict[str, object]] = []
+
+    async def fake_send(**kwargs: object) -> notifications.PushoverResult:
+        sends.append(kwargs)
+        return notifications.PushoverResult(ok=True, request_id="r")
+
+    monkeypatch.setattr(notifications, "send_pushover", fake_send)
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_body_mail(
+        from_addr=f"Jane <{sender}>",
+        subject=f"held nopush {tag}",
+        text="FYI see attached",
+        message_id=message_id,
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="171")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert summary.messages_held == 1
+    assert len(await held_rows(session_factory, message_id)) == 1
+    assert sends == []
+
+
+async def test_email_held_notification_failure_does_not_fail_hold(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A notification path that RAISES must never fail the hold: the row is
+    # committed, the message still moves to Held, and the poll counts the hold.
+    async def exploding_dispatch(*args: object, **kwargs: object) -> bool:
+        raise RuntimeError("pushover is down")
+
+    monkeypatch.setattr("library.email_ingest.dispatch_email_held_notification", exploding_dispatch)
+    tag = uuid.uuid4().hex[:8]
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_body_mail(
+        subject=f"held broken push {tag}", text="FYI see attached", message_id=message_id
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="172")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    rows = await held_rows(session_factory, message_id)
+    assert len(rows) == 1
+    assert rows[0].status is HeldEmailStatus.HELD
+    assert mailbox.moved == [("172", HELD_FOLDER)]
+    assert summary == EmailPollSummary(messages_seen=1, messages_held=1)
 
 
 async def test_below_substance_hold_records_label_usage(

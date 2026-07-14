@@ -18,6 +18,7 @@ from library.api import (
     comments,
     documents,
     events,
+    held_emails,
     jobs,
     notes,
     projects,
@@ -97,6 +98,13 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         "name": "jobs",
         "description": "Visibility into the background processing queue (OCR, "
         "extraction, thumbnails).",
+    },
+    {
+        "name": "held-emails",
+        "description": (
+            "Emails the mailbox poller held for review instead of auto-filing: "
+            "list them, inspect the decision trace, ingest anyway, or dismiss."
+        ),
     },
     {"name": "settings", "description": "Per-user display preferences."},
     {
@@ -219,6 +227,7 @@ def create_app() -> FastAPI:
     api_router.include_router(projects.router)
     api_router.include_router(saved_views.router)
     api_router.include_router(jobs.router)
+    api_router.include_router(held_emails.router)
     api_router.include_router(events.router)
     api_router.include_router(settings.router)
     api_router.include_router(ask.router)

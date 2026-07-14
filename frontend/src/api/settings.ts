@@ -146,6 +146,7 @@ export const NOTIFICATION_EVENTS = [
   { value: 'processing_error', label: 'Processing failed' },
   { value: 'needs_review', label: 'Needs review (low confidence)' },
   { value: 'duplicate', label: 'Duplicate detected' },
+  { value: 'email_held', label: 'Email held for review' },
 ] as const
 
 export type NotificationEvent = (typeof NOTIFICATION_EVENTS)[number]['value']

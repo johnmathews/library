@@ -444,6 +444,71 @@ async def dispatch_attachments_dropped_notification(
         return False
 
 
+def _format_email_held_message(subject: str | None, reason: str | None) -> str:
+    """Body for the 'email held for review' push."""
+    label = f"“{subject}”" if subject else "An email"
+    why = f" ({reason})" if reason else ""
+    return f"{label} was held for review{why}. Ingest it anyway or dismiss it."
+
+
+async def dispatch_email_held_notification(
+    session_factory: async_sessionmaker[AsyncSession],
+    owner_id: int | None,
+    *,
+    subject: str | None,
+    reason: str | None,
+    held_url_base: str | None = None,
+    client: httpx.AsyncClient | None = None,
+) -> bool:
+    """Best-effort: tell an owner that one of their emails was held for review.
+
+    Like :func:`dispatch_attachments_dropped_notification` this has no document
+    (nothing was ingested — that is the point of a hold), so it resolves the
+    owner's credentials directly. Opt-in via the dedicated ``email_held``
+    event, at normal priority (a hold is review work, not an error). The link
+    goes to the held-emails review queue (``{held_url_base}/held-emails``).
+    Returns ``True`` if a message was sent; never raises — a Pushover outage
+    must never affect the poll.
+    """
+    if owner_id is None:
+        return False
+    try:
+        async with session_factory() as session:
+            owner = await session.get(User, owner_id)
+            if owner is None:
+                return False
+            creds = get_notification_credentials(owner.preferences)
+        if creds is None or NotificationEvent.EMAIL_HELD not in creds.events:
+            return False
+        url = f"{held_url_base.rstrip('/')}/held-emails" if held_url_base else None
+        result = await send_pushover(
+            app_token=creds.app_token,
+            user_key=creds.user_key,
+            message=_format_email_held_message(subject, reason),
+            title="Email held for review",
+            url=url,
+            url_title="Open held emails" if url else None,
+            device=creds.device,
+            priority=_PRIORITY_NORMAL,
+            client=client,
+        )
+        if not result.ok:
+            logger.warning(
+                "pushover email-held for owner %s failed: %s",
+                owner_id,
+                ", ".join(result.errors),
+            )
+            return False
+        return True
+    except Exception:  # pragma: no cover - defensive: dispatch is best-effort
+        logger.warning(
+            "could not dispatch email-held notification for owner %s; continuing",
+            owner_id,
+            exc_info=True,
+        )
+        return False
+
+
 async def dispatch_document_completion(
     session_factory: async_sessionmaker[AsyncSession],
     document_id: int,
