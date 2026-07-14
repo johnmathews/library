@@ -63,6 +63,15 @@ class Settings(BaseSettings):
     extraction_enabled: bool = True
     extraction_model: str = "claude-haiku-4-5"
     extraction_escalation_model: str = "claude-sonnet-4-6"
+    # Thin-scan density trigger (docs/ingestion.md, "Input selection"): when
+    # OCR actually ran (ocr_confidence set — born-digital docs have it NULL and
+    # are exempt) and the stripped OCR text averages fewer than this many chars
+    # per page, the PRIMARY extraction call sends the original file (vision)
+    # instead of the thin text — a garbled scan can otherwise come back
+    # confidently wrong and never reach the low-confidence escalation. 0
+    # disables the trigger. Calibration: failing scans ran 321-460 chars/page;
+    # scanned letters ~2700 and contracts ~10000 must stay on text.
+    extraction_vision_min_chars_per_page: int = 800
     extraction_daily_budget_usd: float = 5.0
     extraction_validation_ocr_floor: float = 50.0
     extraction_judge_model: str = "claude-sonnet-4-6"

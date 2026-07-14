@@ -66,6 +66,38 @@ into a permanent retry. See [docs/ingestion.md](docs/ingestion.md) "Email-in".
 
 ### Added
 
+**Receipt / thin-scan extraction hardening (2026-07-14)** — closes the
+production failure of document 150: a scanned restaurant receipt whose garbled
+460-char OCR extracted *confidently* with no date and the generic sender
+"Restaurant", produced zero validation findings, and never reached the review
+queue. Four coordinated changes. (1) Two new validation rules — `missing_date`
+(a monetary document with an amount but no `document_date`) and
+`generic_sender` (the resolved sender's name is a bare category word such as
+"Restaurant" or "Winkel"; full-string match only, so "Garage Spaarndam" never
+fires) — so this failure shape now lands in the review queue. (2) The
+extraction prompt (`PROMPT_VERSION` → `2026-07-14.1`) now requires the
+**printed merchant/organisation name** and forbids category words (null when
+no name is legible). (3) A **density-based vision trigger**: a scanned
+document (`ocr_confidence` set — born-digital documents are exempt) whose OCR
+text averages fewer than `LIBRARY_EXTRACTION_VISION_MIN_CHARS_PER_PAGE` (new
+setting, default 800) characters per page sends the **original file** on the
+primary extraction call instead of the untrustworthy text; `0` disables, and
+an unsendable original falls back to text so nothing regresses. (4) A
+**fill-only repair pass** (`library.extraction.repair`) at the tail of the
+markdown stage: when a repairable finding
+(`missing_date`/`missing_sender`/`generic_sender`) remains and the vision
+`pages_markdown` exists, one cheap structured call fills **only null fields**
+(one carve-out: it may replace a generic-named sender with the real merchant),
+then revalidates — idempotent per `REPAIR_PROMPT_VERSION`, spend counts toward
+the **extraction** daily budget, audited via new
+`extraction_repair_completed`/`extraction_repair_skipped` events. See
+[docs/ingestion.md](docs/ingestion.md) "Input selection", "Validation rules",
+and "Fill-only extraction repair". **Operator action (production):** run the
+post-deploy sweep ([docs/ingestion.md](docs/ingestion.md) "Post-deploy
+sweep"): `library backfill-validation`, then re-extract flagged receipts
+(`POST /api/documents/{id}/extract` or `library backfill --kinds receipt`),
+then one-off merge/delete the generic prod sender "Restaurant".
+
 **Email hold-for-review + whole-email LLM verdict** — an inbound email the
 pipeline judges *not library-worthy* is now **held for review** instead of
 silently processed or left in the inbox: a durable `held_emails` row

@@ -76,6 +76,39 @@ def _coerce_date(value: object) -> object:
     return value
 
 
+def normalize_amount_string(value: str | None) -> str | None:
+    """Defensively normalise a decimal string; unparseable becomes None.
+
+    A wrong amount is recoverable in the UI, but failing a whole structured
+    output over "€ 12,50" is not worth it — hence normalise-or-drop instead of
+    raise. Shared by :class:`ExtractedMetadata` and the repair schema
+    (``library.extraction.repair.RepairMetadata``).
+    """
+    if value is None:
+        return None
+    cleaned = re.sub(r"[^\d.,\-]", "", value)
+    if "," in cleaned and "." in cleaned:
+        # Whichever separator comes last is the decimal point.
+        if cleaned.rfind(",") > cleaned.rfind("."):
+            cleaned = cleaned.replace(".", "").replace(",", ".")
+        else:
+            cleaned = cleaned.replace(",", "")
+    elif "," in cleaned:
+        cleaned = cleaned.replace(",", ".")
+    try:
+        return str(Decimal(cleaned))
+    except InvalidOperation:
+        return None
+
+
+def normalize_currency_code(value: str | None) -> str | None:
+    """Uppercase and validate an ISO 4217 code; anything else becomes None."""
+    if value is None:
+        return None
+    code = value.strip().upper()
+    return code if re.fullmatch(r"[A-Z]{3}", code) else None
+
+
 class ExtractedMetadata(BaseModel):
     """Structured metadata Claude extracts from one document."""
 
@@ -198,29 +231,12 @@ class ExtractedMetadata(BaseModel):
         extraction over "€ 12,50" is not worth it — hence normalise-or-drop
         instead of raise.
         """
-        if value is None:
-            return None
-        cleaned = re.sub(r"[^\d.,\-]", "", value)
-        if "," in cleaned and "." in cleaned:
-            # Whichever separator comes last is the decimal point.
-            if cleaned.rfind(",") > cleaned.rfind("."):
-                cleaned = cleaned.replace(".", "").replace(",", ".")
-            else:
-                cleaned = cleaned.replace(",", "")
-        elif "," in cleaned:
-            cleaned = cleaned.replace(",", ".")
-        try:
-            return str(Decimal(cleaned))
-        except InvalidOperation:
-            return None
+        return normalize_amount_string(value)
 
     @field_validator("currency", mode="after")
     @classmethod
     def _normalize_currency(cls, value: str | None) -> str | None:
-        if value is None:
-            return None
-        code = value.strip().upper()
-        return code if re.fullmatch(r"[A-Z]{3}", code) else None
+        return normalize_currency_code(value)
 
     @field_validator("tags", mode="after")
     @classmethod

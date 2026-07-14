@@ -78,7 +78,10 @@ at any stage, with the reason in `ingestion_events`).
    - Confidence gate: a low-confidence Tesseract result is retried via
      the neural path and the better result kept.
 3. **Extract** — Claude (Haiku 4.5, structured outputs via
-   `messages.parse()`) turns OCR text into metadata: kind, sender, title,
+   `messages.parse()`) turns the document — normally its OCR text; for a
+   thin scan (average OCR text below
+   `LIBRARY_EXTRACTION_VISION_MIN_CHARS_PER_PAGE` chars/page) or
+   unusable OCR, the original file itself (vision) — into metadata: kind, sender, title,
    summary, document date, amounts, expiry, language, suggested tags, and —
    for general-reference material — `topics`. The prompt spans both
    transactional paperwork and general material (manuals, reference docs,
@@ -103,8 +106,14 @@ at any stage, with the reason in `ingestion_events`).
    `document_pages` row with no API call or budget spend. Best-effort,
    exactly like extraction: disabled feature, missing API key, blown
    budget, unusable input, or an API error all produce a skip/failed event
-   and the document continues to `embed`. See
-   [ingestion.md](ingestion.md) "Markdown layer".
+   and the document continues to `embed`. At the tail of this stage a
+   **fill-only extraction repair pass** (`library.extraction.repair`) gets one
+   look at the fresh page markdown: when validation still reports
+   `missing_date`/`missing_sender`/`generic_sender`, a single cheap call fills
+   only the null fields (or replaces a generic-named sender) and revalidates —
+   equally best-effort, audited via `extraction_repair_completed`/`_skipped`
+   events. See [ingestion.md](ingestion.md) "Markdown layer" and
+   "Fill-only extraction repair".
 5. **Embed** — the document's text is chunked and embedded (bge-m3, 1024-dim)
    by the local `embedder` sidecar; vectors land in `document_chunks` (HNSW
    index) for semantic retrieval. When `document_pages` exist the embed

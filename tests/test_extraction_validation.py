@@ -36,14 +36,14 @@ def _rules(findings: list[Finding]) -> set[str]:
 def test_amount_grounded_in_text_does_not_fire() -> None:
     doc = _doc(amount_total=Decimal("12.00"), currency="EUR", ocr_text="Totaal € 12,00 voldaan")
     assert "amount_grounding" not in _rules(
-        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="invoice", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_amount_absent_from_text_fires() -> None:
     doc = _doc(amount_total=Decimal("999.99"), currency="EUR", ocr_text="Totaal € 12,00 voldaan")
     assert "amount_grounding" in _rules(
-        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="invoice", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -59,7 +59,7 @@ def test_amount_absent_but_read_from_image_does_not_fire() -> None:
             extra={"extraction": {"input_mode": mode}},
         )
         assert "amount_grounding" not in _rules(
-            validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+            validate(doc, kind_slug="invoice", sender_name=None, ocr_floor=FLOOR, today=TODAY)
         ), f"amount_grounding should be suppressed for input_mode={mode}"
 
 
@@ -73,42 +73,42 @@ def test_amount_absent_from_text_still_fires_when_ocr_text_was_the_input() -> No
         extra={"extraction": {"input_mode": "text"}},
     )
     assert "amount_grounding" in _rules(
-        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="invoice", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_future_document_date_fires() -> None:
     doc = _doc(document_date=date(2027, 1, 1))
     assert "date_plausibility" in _rules(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_implausibly_old_document_date_fires() -> None:
     doc = _doc(document_date=date(1980, 1, 1))
     assert "date_plausibility" in _rules(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_due_before_document_date_fires() -> None:
     doc = _doc(document_date=date(2026, 5, 1), due_date=date(2026, 4, 1))
     assert "date_plausibility" in _rules(
-        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="invoice", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_amount_without_currency_fires() -> None:
     doc = _doc(amount_total=Decimal("10.00"), currency=None, ocr_text="10.00")
     assert "amount_currency_coupling" in _rules(
-        validate(doc, kind_slug="receipt", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="receipt", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_low_ocr_confidence_fires() -> None:
     doc = _doc(ocr_confidence=30.0)
     assert "ocr_confidence_gate" in _rules(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -119,21 +119,21 @@ def test_low_ocr_confidence_does_not_fire_when_extraction_read_the_image() -> No
     for mode in ("document", "image"):
         doc = _doc(ocr_confidence=30.0, extra={"extraction": {"input_mode": mode}})
         assert "ocr_confidence_gate" not in _rules(
-            validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+            validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
         ), f"ocr_confidence_gate should be suppressed for input_mode={mode}"
 
 
 def test_low_ocr_confidence_still_fires_when_extraction_read_the_text() -> None:
     doc = _doc(ocr_confidence=30.0, extra={"extraction": {"input_mode": "text"}})
     assert "ocr_confidence_gate" in _rules(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_empty_extraction_fires() -> None:
     doc = _doc()  # kind other, no sender, no date, no amount
     assert "empty_extraction" in _rules(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -142,7 +142,7 @@ def test_general_doc_with_summary_not_flagged_empty() -> None:
     informative, so empty_extraction must NOT fire."""
     doc = _doc(title="Router setup guide", summary="How to configure the home router.")
     assert "empty_extraction" not in _rules(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -151,14 +151,14 @@ def test_reference_kind_never_empty() -> None:
     even with no sender/date/amount/title/summary."""
     doc = _doc()
     assert "empty_extraction" not in _rules(
-        validate(doc, kind_slug="reference", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="reference", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_self_reported_low_confidence_fires() -> None:
     doc = _doc(extra={"extraction": {"confidence": "low"}})
     assert "self_reported_low" in _rules(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -176,7 +176,8 @@ def test_self_reported_low_surfaces_reasoning_note() -> None:
         }
     )
     finding = _finding(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY), "self_reported_low"
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+        "self_reported_low",
     )
     assert "two candidate totals on page 2" in finding.message
 
@@ -188,7 +189,8 @@ def test_self_reported_low_without_note_falls_back_to_generic() -> None:
     ):
         doc = _doc(extra=extra)
         finding = _finding(
-            validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY), "self_reported_low"
+            validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+            "self_reported_low",
         )
         assert finding.message == "the extractor reported low confidence"
 
@@ -196,7 +198,8 @@ def test_self_reported_low_without_note_falls_back_to_generic() -> None:
 def test_missing_sender_fires_on_amount_without_sender() -> None:
     doc = _doc(amount_total=Decimal("42.00"), currency="EUR", sender_id=None, ocr_text="42.00")
     finding = _finding(
-        validate(doc, kind_slug="receipt", ocr_floor=FLOOR, today=TODAY), "missing_sender"
+        validate(doc, kind_slug="receipt", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+        "missing_sender",
     )
     assert finding.field == "sender_id"
     assert "sender" in finding.message
@@ -205,14 +208,14 @@ def test_missing_sender_fires_on_amount_without_sender() -> None:
 def test_missing_sender_does_not_fire_when_sender_present() -> None:
     doc = _doc(amount_total=Decimal("42.00"), currency="EUR", sender_id=7, ocr_text="42.00")
     assert "missing_sender" not in _rules(
-        validate(doc, kind_slug="receipt", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="receipt", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_missing_sender_does_not_fire_without_amount() -> None:
     doc = _doc(title="A note", summary="no money here", sender_id=None)
     assert "missing_sender" not in _rules(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -220,7 +223,8 @@ def test_expiry_before_document_date_fires() -> None:
     """The expiry-before-document-date rule (previously untested — finding 7)."""
     doc = _doc(document_date=date(2026, 5, 1), expiry_date=date(2026, 4, 1))
     finding = _finding(
-        validate(doc, kind_slug="warranty", ocr_floor=FLOOR, today=TODAY), "date_plausibility"
+        validate(doc, kind_slug="warranty", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+        "date_plausibility",
     )
     assert finding.field == "expiry_date"
 
@@ -229,7 +233,8 @@ def test_due_date_implausibly_old_without_document_date_fires() -> None:
     """With no document_date to anchor against, a 19xx due date is still caught."""
     doc = _doc(due_date=date(1970, 1, 1))
     finding = _finding(
-        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY), "date_plausibility"
+        validate(doc, kind_slug="invoice", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+        "date_plausibility",
     )
     assert finding.field == "due_date"
 
@@ -238,7 +243,8 @@ def test_due_expiry_grounding_flags_expiry_with_only_due_cue() -> None:
     """A Dutch 'vervaldatum' (a due date) mislabeled as expiry_date is caught."""
     doc = _doc(expiry_date=date(2026, 7, 1), ocr_text="Factuur. Vervaldatum: 1 juli 2026.")
     finding = _finding(
-        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY), "due_expiry_grounding"
+        validate(doc, kind_slug="invoice", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+        "due_expiry_grounding",
     )
     assert finding.field == "expiry_date"
 
@@ -246,7 +252,8 @@ def test_due_expiry_grounding_flags_expiry_with_only_due_cue() -> None:
 def test_due_expiry_grounding_flags_due_with_only_expiry_cue() -> None:
     doc = _doc(due_date=date(2030, 1, 1), ocr_text="Paspoort geldig tot 1 januari 2030.")
     finding = _finding(
-        validate(doc, kind_slug="certificate", ocr_floor=FLOOR, today=TODAY), "due_expiry_grounding"
+        validate(doc, kind_slug="certificate", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+        "due_expiry_grounding",
     )
     assert finding.field == "due_date"
 
@@ -257,14 +264,15 @@ def test_due_expiry_grounding_quiet_when_both_cues_present() -> None:
         ocr_text="Vervaldatum 1 juli 2026. Pas geldig tot 1 juli 2026.",
     )
     assert "due_expiry_grounding" not in _rules(
-        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="invoice", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_missing_recipient_fires_on_salutation() -> None:
     doc = _doc(recipient_id=None, ocr_text="Beste John,\n\nHierbij uw factuur.")
     finding = _finding(
-        validate(doc, kind_slug="letter", ocr_floor=FLOOR, today=TODAY), "missing_recipient"
+        validate(doc, kind_slug="letter", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+        "missing_recipient",
     )
     assert finding.field == "recipient_id"
 
@@ -272,14 +280,14 @@ def test_missing_recipient_fires_on_salutation() -> None:
 def test_missing_recipient_fires_on_stored_addressee_raw() -> None:
     doc = _doc(recipient_id=None, extra={"extraction": {"addressee_raw": "Dhr. J. de Vries"}})
     assert "missing_recipient" in _rules(
-        validate(doc, kind_slug="letter", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="letter", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_missing_recipient_quiet_when_recipient_present() -> None:
     doc = _doc(recipient_id=3, ocr_text="Beste John,")
     assert "missing_recipient" not in _rules(
-        validate(doc, kind_slug="letter", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="letter", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -291,7 +299,7 @@ def test_missing_recipient_quiet_on_ordinary_prose() -> None:
     ):
         doc = _doc(recipient_id=None, ocr_text=prose)
         assert "missing_recipient" not in _rules(
-            validate(doc, kind_slug="research", ocr_floor=FLOOR, today=TODAY)
+            validate(doc, kind_slug="research", sender_name=None, ocr_floor=FLOOR, today=TODAY)
         ), prose
 
 
@@ -299,7 +307,7 @@ def test_due_expiry_grounding_quiet_on_passport_vervaldatum() -> None:
     """A passport/certificate 'vervaldatum' (its expiry) must not be misread as due."""
     doc = _doc(expiry_date=date(2030, 1, 1), ocr_text="Paspoort. Vervaldatum: 1 januari 2030.")
     assert "due_expiry_grounding" not in _rules(
-        validate(doc, kind_slug="certificate", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="certificate", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -310,7 +318,8 @@ def test_missing_amount_fires_on_payment_cue_without_amount() -> None:
         ocr_text="Garage Spaarndam. Gelieve te betalen binnen 14 dagen.",
     )
     finding = _finding(
-        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY), "missing_amount"
+        validate(doc, kind_slug="invoice", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+        "missing_amount",
     )
     assert finding.field == "amount_total"
 
@@ -322,14 +331,14 @@ def test_missing_amount_quiet_when_amount_present() -> None:
         ocr_text="Totaal € 144,19. Gelieve te betalen binnen 14 dagen.",
     )
     assert "missing_amount" not in _rules(
-        validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="invoice", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
 def test_missing_amount_quiet_without_payment_cue() -> None:
     doc = _doc(amount_total=None, ocr_text="A reference note about routers. No money here.")
     assert "missing_amount" not in _rules(
-        validate(doc, kind_slug="reference", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="reference", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -337,8 +346,92 @@ def test_missing_amount_quiet_on_non_monetary_vervaldatum() -> None:
     """A passport's 'vervaldatum' (expiry) with no amount must NOT flag missing_amount."""
     doc = _doc(amount_total=None, ocr_text="Paspoort. Vervaldatum: 1 januari 2030.")
     assert "missing_amount" not in _rules(
-        validate(doc, kind_slug="certificate", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="certificate", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
+
+
+def test_missing_date_fires_on_monetary_amount_without_date() -> None:
+    """The date analogue of missing_amount: a receipt's total was read but its
+    printed date was not — a bill or receipt always carries a date."""
+    doc = _doc(
+        amount_total=Decimal("47.50"),
+        currency="EUR",
+        document_date=None,
+        sender_id=7,
+        ocr_text="Totaal € 47,50",
+    )
+    findings = validate(doc, kind_slug="receipt", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    finding = _finding(findings, "missing_date")
+    assert finding.field == "document_date"
+    assert finding.severity == "warn"
+    assert derive_review_status(findings) is ReviewStatus.NEEDS_REVIEW
+
+
+def test_missing_date_quiet_on_non_monetary_kind() -> None:
+    """An undated amount on a non-monetary kind (e.g. a reference doc quoting a
+    price) is not a bill — no nagging."""
+    doc = _doc(amount_total=Decimal("47.50"), currency="EUR", ocr_text="Totaal € 47,50")
+    assert "missing_date" not in _rules(
+        validate(doc, kind_slug="reference", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_missing_date_quiet_when_date_present() -> None:
+    doc = _doc(
+        amount_total=Decimal("47.50"),
+        currency="EUR",
+        document_date=date(2026, 5, 1),
+        ocr_text="Totaal € 47,50",
+    )
+    assert "missing_date" not in _rules(
+        validate(doc, kind_slug="receipt", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_missing_date_quiet_without_amount() -> None:
+    """No amount extracted => missing_amount's territory, not missing_date's."""
+    doc = _doc(amount_total=None, document_date=None, ocr_text="Gelieve te betalen")
+    assert "missing_date" not in _rules(
+        validate(doc, kind_slug="invoice", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_generic_sender_fires_on_category_word() -> None:
+    """A sender resolved to a bare category word ('Restaurant') is not a
+    merchant name — flag it for review. (Regression: prod doc 150.)"""
+    doc = _doc(sender_id=7, ocr_text="Bedankt voor uw bezoek")
+    findings = validate(
+        doc, kind_slug="receipt", sender_name="Restaurant", ocr_floor=FLOOR, today=TODAY
+    )
+    finding = _finding(findings, "generic_sender")
+    assert finding.field == "sender"
+    assert finding.severity == "warn"
+    assert derive_review_status(findings) is ReviewStatus.NEEDS_REVIEW
+
+
+def test_generic_sender_matches_case_insensitively_and_bilingually() -> None:
+    for name in ("RESTAURANT", "restaurant", "Winkel", "SUPERMARKT", "Café", "Pharmacy"):
+        doc = _doc(sender_id=7)
+        assert "generic_sender" in _rules(
+            validate(doc, kind_slug="receipt", sender_name=name, ocr_floor=FLOOR, today=TODAY)
+        ), name
+
+
+def test_generic_sender_quiet_on_real_name_containing_category_word() -> None:
+    """Full-string match only: 'Garage Spaarndam' is a real merchant name."""
+    for name in ("Garage Spaarndam", "Hotel New York", "Restaurant De Kas"):
+        doc = _doc(sender_id=7)
+        assert "generic_sender" not in _rules(
+            validate(doc, kind_slug="receipt", sender_name=name, ocr_floor=FLOOR, today=TODAY)
+        ), name
+
+
+def test_generic_sender_quiet_when_sender_unset() -> None:
+    """A null sender is missing_sender's job, not generic_sender's."""
+    doc = _doc(amount_total=Decimal("10.00"), currency="EUR", sender_id=None, ocr_text="10.00")
+    findings = validate(doc, kind_slug="receipt", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    assert "generic_sender" not in _rules(findings)
+    assert "missing_sender" in _rules(findings)
 
 
 def test_missing_sender_fires_on_signoff_without_amount() -> None:
@@ -348,7 +441,8 @@ def test_missing_sender_fires_on_signoff_without_amount() -> None:
         ocr_text="...\n\nMet vriendelijke groet,\nGemeente Amsterdam",
     )
     finding = _finding(
-        validate(doc, kind_slug="letter", ocr_floor=FLOOR, today=TODAY), "missing_sender"
+        validate(doc, kind_slug="letter", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+        "missing_sender",
     )
     assert "signed" in finding.message
 
@@ -356,7 +450,7 @@ def test_missing_sender_fires_on_signoff_without_amount() -> None:
 def test_missing_sender_signoff_quiet_when_sender_present() -> None:
     doc = _doc(sender_id=9, amount_total=None, ocr_text="Best regards,\nEneco")
     assert "missing_sender" not in _rules(
-        validate(doc, kind_slug="letter", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="letter", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -371,7 +465,8 @@ def test_email_attachments_dropped_fires_and_lists_files() -> None:
         },
     )
     finding = _finding(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY), "email_attachments_dropped"
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+        "email_attachments_dropped",
     )
     assert "2 other attachments" in finding.message
     assert "invoice-1.pdf" in finding.message and "invoice-2.pdf" in finding.message
@@ -380,7 +475,7 @@ def test_email_attachments_dropped_fires_and_lists_files() -> None:
 def test_email_attachments_dropped_absent_when_no_siblings() -> None:
     doc = _doc(title="Cover photo", extra={"email_siblings_dropped": []})
     assert "email_attachments_dropped" not in _rules(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -395,7 +490,7 @@ def test_email_item_ambiguous_fires_with_reason() -> None:
             }
         },
     )
-    findings = validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+    findings = validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     finding = _finding(findings, "email_item_ambiguous")
     assert "looks like a calendar invite" in finding.message
     assert derive_review_status(findings) is ReviewStatus.NEEDS_REVIEW
@@ -412,7 +507,7 @@ def test_email_item_ambiguous_probably_noise_fires() -> None:
         },
     )
     assert "email_item_ambiguous" in _rules(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -421,7 +516,7 @@ def test_email_item_ambiguous_absent_when_verdict_keep() -> None:
         extra={"email_selection": {"verdict": "keep", "reason": None, "source": "heuristic"}}
     )
     assert "email_item_ambiguous" not in _rules(
-        validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
     )
 
 
@@ -433,7 +528,8 @@ def test_email_item_ambiguous_without_reason_generic_message() -> None:
     ):
         doc = _doc(extra=extra)
         finding = _finding(
-            validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY), "email_item_ambiguous"
+            validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY),
+            "email_item_ambiguous",
         )
         assert "None" not in finding.message
         assert finding.message.strip()
@@ -491,7 +587,7 @@ def test_email_findings_agrees_with_validate() -> None:
     doc = _doc(title="t", summary="s", extra=extra)
     via_validate = [
         f
-        for f in validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        for f in validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
         if f.rule in {"email_attachments_dropped", "email_item_ambiguous"}
     ]
     assert via_validate == email_findings(extra)
@@ -507,7 +603,9 @@ def test_clean_document_has_no_findings() -> None:
         sender_id=7,
         extra={"extraction": {"confidence": "high"}},
     )
-    assert validate(doc, kind_slug="invoice", ocr_floor=FLOOR, today=TODAY) == []
+    assert (
+        validate(doc, kind_slug="invoice", sender_name="Eneco", ocr_floor=FLOOR, today=TODAY) == []
+    )
 
 
 def test_derive_status_and_payload() -> None:

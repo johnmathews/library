@@ -17,6 +17,7 @@ from library import storage
 from library.config import Settings, get_settings
 from library.extraction.extractor import (
     MAX_TEXT_CHARS_LONG,
+    PROMPT_VERSION,
     SYSTEM_PROMPT,
     ExtractionSkipped,
     extract,
@@ -60,8 +61,19 @@ def make_client(*responses: object) -> SimpleNamespace:
     return SimpleNamespace(messages=SimpleNamespace(parse=AsyncMock(side_effect=responses)))
 
 
-def make_document(mime_type: str = "application/pdf", sha256: str = "0" * 64) -> Document:
-    return Document(sha256=sha256, mime_type=mime_type, source=DocumentSource.UPLOAD)
+def make_document(
+    mime_type: str = "application/pdf",
+    sha256: str = "0" * 64,
+    ocr_confidence: float | None = None,
+    page_count: int | None = None,
+) -> Document:
+    return Document(
+        sha256=sha256,
+        mime_type=mime_type,
+        source=DocumentSource.UPLOAD,
+        ocr_confidence=ocr_confidence,
+        page_count=page_count,
+    )
 
 
 @pytest.fixture
@@ -279,6 +291,185 @@ async def test_high_confidence_never_escalates_to_vision(
     assert outcome.input_mode == "text"
 
 
+def make_thin_receipt_text(chars: int = 460) -> str:
+    """Garbled-but-substantial OCR text, doc-150 shaped (>= MIN_TEXT_CHARS)."""
+    return ("kassabon 102,50 eur totaal x7#q " * 40)[:chars]
+
+
+async def test_thin_scanned_doc_sends_file_on_primary_call(
+    settings: Settings, data_dir: Path
+) -> None:
+    """Doc-150 shape: OCR ran (confidence set), 460 chars on 1 page — below the
+    800 chars/page density threshold, so the PRIMARY call goes vision."""
+    raw = b"%PDF-1.4 scanned till receipt"
+    stored = storage.store(raw)
+    client = make_client(make_response(make_metadata()))
+
+    outcome = await extract(
+        make_document(sha256=stored.sha256, ocr_confidence=71.9, page_count=1),
+        make_thin_receipt_text(460),
+        client=client,
+        settings=settings,
+    )
+
+    assert client.messages.parse.await_count == 1  # no escalation needed
+    content = client.messages.parse.await_args.kwargs["messages"][0]["content"]
+    assert content[0]["type"] == "document"  # the original PDF, not the thin text
+    assert base64.standard_b64decode(content[0]["source"]["data"]) == raw
+    assert outcome.input_mode == "document"
+    assert outcome.escalated is False
+
+
+async def test_born_digital_doc_with_thin_text_stays_text(
+    settings: Settings, data_dir: Path
+) -> None:
+    """Same char count, but ocr_confidence is NULL (born-digital text layer):
+    the density trigger must not fire — short receipts extract fine on text."""
+    stored = storage.store(b"%PDF-1.4 born digital receipt")
+    client = make_client(make_response(make_metadata()))
+
+    outcome = await extract(
+        make_document(sha256=stored.sha256, ocr_confidence=None, page_count=1),
+        make_thin_receipt_text(460),
+        client=client,
+        settings=settings,
+    )
+
+    content = client.messages.parse.await_args.kwargs["messages"][0]["content"]
+    assert content[0]["type"] == "text"
+    assert outcome.input_mode == "text"
+
+
+async def test_dense_scanned_doc_stays_text(settings: Settings, data_dir: Path) -> None:
+    """A well-OCR'd scan (3,000 chars/page) is above the threshold: no vision spend."""
+    stored = storage.store(b"%PDF-1.4 scanned letter")
+    client = make_client(make_response(make_metadata()))
+
+    outcome = await extract(
+        make_document(sha256=stored.sha256, ocr_confidence=90.0, page_count=1),
+        make_thin_receipt_text(3_000),
+        client=client,
+        settings=settings,
+    )
+
+    content = client.messages.parse.await_args.kwargs["messages"][0]["content"]
+    assert content[0]["type"] == "text"
+    assert outcome.input_mode == "text"
+
+
+async def test_density_uses_per_page_average(settings: Settings, data_dir: Path) -> None:
+    """2,000 chars over 4 pages is 500/page — below 800, so the trigger fires."""
+    raw = b"%PDF-1.4 multi page scan"
+    stored = storage.store(raw)
+    client = make_client(make_response(make_metadata()))
+
+    outcome = await extract(
+        make_document(sha256=stored.sha256, ocr_confidence=80.0, page_count=4),
+        make_thin_receipt_text(2_000),
+        client=client,
+        settings=settings,
+    )
+
+    assert outcome.input_mode == "document"
+
+
+async def test_missing_page_count_treated_as_one_page(settings: Settings, data_dir: Path) -> None:
+    """page_count NULL (legacy rows) counts as 1 page, not a division crash."""
+    stored = storage.store(b"%PDF-1.4 legacy row")
+    client = make_client(make_response(make_metadata()))
+
+    outcome = await extract(
+        make_document(sha256=stored.sha256, ocr_confidence=71.9, page_count=None),
+        make_thin_receipt_text(460),
+        client=client,
+        settings=settings,
+    )
+
+    assert outcome.input_mode == "document"
+
+
+async def test_thin_doc_with_unusable_mime_falls_back_to_text(settings: Settings) -> None:
+    """Density fires but the original can't be sent (text/plain): fall back to
+    the text call instead of skipping — the trigger must never regress a doc."""
+    client = make_client(make_response(make_metadata()))
+
+    outcome = await extract(
+        make_document(mime_type="text/plain", ocr_confidence=71.9, page_count=1),
+        make_thin_receipt_text(460),
+        client=client,
+        settings=settings,
+    )
+
+    assert client.messages.parse.await_count == 1
+    content = client.messages.parse.await_args.kwargs["messages"][0]["content"]
+    assert content[0]["type"] == "text"
+    assert outcome.input_mode == "text"
+
+
+async def test_thin_doc_with_missing_artifact_falls_back_to_text(
+    settings: Settings, data_dir: Path
+) -> None:
+    """Density fires but the original artifact is missing on disk: text fallback."""
+    client = make_client(make_response(make_metadata()))
+
+    outcome = await extract(
+        make_document(ocr_confidence=71.9, page_count=1),  # sha never stored
+        make_thin_receipt_text(460),
+        client=client,
+        settings=settings,
+    )
+
+    assert client.messages.parse.await_count == 1
+    assert outcome.input_mode == "text"
+
+
+async def test_density_threshold_zero_disables_trigger(data_dir: Path) -> None:
+    """extraction_vision_min_chars_per_page=0 is the no-deploy kill switch."""
+    settings = Settings(anthropic_api_key="test-key", extraction_vision_min_chars_per_page=0)
+    stored = storage.store(b"%PDF-1.4 scanned till receipt")
+    client = make_client(make_response(make_metadata()))
+
+    outcome = await extract(
+        make_document(sha256=stored.sha256, ocr_confidence=71.9, page_count=1),
+        make_thin_receipt_text(460),
+        client=client,
+        settings=settings,
+    )
+
+    assert outcome.input_mode == "text"
+
+
+async def test_thin_vision_primary_still_escalates_once_on_low_confidence(
+    settings: Settings, data_dir: Path
+) -> None:
+    """Density trigger sends vision on the primary AND the model self-reports
+    low confidence: escalate exactly once, reusing the same vision content."""
+    raw = b"%PDF-1.4 scanned till receipt"
+    stored = storage.store(raw)
+    client = make_client(
+        make_response(make_metadata(confidence="low")),
+        make_response(make_metadata(confidence="high")),
+    )
+
+    outcome = await extract(
+        make_document(sha256=stored.sha256, ocr_confidence=71.9, page_count=1),
+        make_thin_receipt_text(460),
+        client=client,
+        settings=settings,
+    )
+
+    assert client.messages.parse.await_count == 2
+    first = client.messages.parse.await_args_list[0].kwargs["messages"][0]["content"]
+    second = client.messages.parse.await_args_list[1].kwargs["messages"][0]["content"]
+    assert first[0]["type"] == "document"
+    assert second[0]["type"] == "document"  # same vision content, not a text retry
+    assert base64.standard_b64decode(second[0]["source"]["data"]) == raw
+    assert outcome.escalated is True
+    assert outcome.input_mode == "document"
+    models = [call.kwargs["model"] for call in client.messages.parse.await_args_list]
+    assert models == ["claude-haiku-4-5", "claude-sonnet-4-6"]
+
+
 async def test_empty_ocr_text_sends_image_block_for_jpeg(
     settings: Settings, data_dir: Path
 ) -> None:
@@ -363,6 +554,16 @@ def test_system_prompt_defines_due_and_expiry_distinctly() -> None:
     assert "must ACT" in SYSTEM_PROMPT
     assert "NO LONGER VALID" in SYSTEM_PROMPT
     assert "vervaldatum" in SYSTEM_PROMPT
+
+
+def test_system_prompt_forbids_generic_category_sender_names() -> None:
+    """The sender must be the printed merchant/organisation name, never a
+    category word like "Restaurant" — null when no name is legible. Bumped with
+    the receipt-hardening prompt version so backfill re-extracts old docs."""
+    assert "PRINTED" in SYSTEM_PROMPT
+    assert '"Restaurant"' in SYSTEM_PROMPT
+    assert "category word" in SYSTEM_PROMPT
+    assert PROMPT_VERSION == "2026-07-14.1"
 
 
 def test_system_prompt_ties_salutation_to_recipient_and_signoff_to_sender() -> None:
