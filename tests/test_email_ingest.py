@@ -2179,6 +2179,65 @@ async def test_label_budget_round_trip(
     assert documents_two[0].review_status is not ReviewStatus.NEEDS_REVIEW
 
 
+async def test_held_email_spend_counts_toward_label_budget(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # A held email's label call is billed into the held row's trace, not an
+    # email_label_completed event — the budget gate must count it anyway, or a
+    # stream of held newsletters could run the label pass indefinitely past the
+    # cap. The DB is shared across tests, so only spend DELTAS are asserted.
+    patched_anthropic.email_verdict = "hold"
+    patched_anthropic.email_reason = "newsletter blast"
+    tag = uuid.uuid4().hex[:8]
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_raw_mail(
+        subject=f"held budget {tag}",
+        message_id=message_id,
+        attachments=[(f"digest-{tag}.pdf", make_pdf(tag), "application", "pdf")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="160")])
+
+    await poll_mailbox_async(label_settings(), session_factory, mailbox_factory=lambda: mailbox)
+
+    rows = await held_rows(session_factory, message_id)
+    assert len(rows) == 1
+    held_cost = rows[0].trace["label_usage"]["cost_usd"]
+    assert held_cost > 0
+    assert len(patched_anthropic.calls) == 1
+    async with session_factory() as session:
+        filed_spend = await todays_spend_usd(session, "email_label_completed")
+
+    # Poll 2, fresh mail. The budget sits ABOVE today's filed (event) spend but
+    # BELOW filed + held spend: the gate binds only if held spend counts.
+    patched_anthropic.email_verdict = "file"
+    patched_anthropic.email_reason = None
+    patched_anthropic.noise_markers.append("heldbudget-")  # a labelled poll would flag
+    name_two = f"heldbudget-{tag}.pdf"
+    raw_two = make_raw_mail(
+        subject=f"held budget second {tag}",
+        attachments=[(name_two, make_pdf(f"{tag}-2"), "application", "pdf")],
+    )
+    mailbox_two = FakeMailBox([mail_message(raw_two, uid="161")])
+
+    with caplog.at_level(logging.INFO, logger="library.email_label"):
+        await poll_mailbox_async(
+            label_settings(email_label_daily_budget_usd=filed_spend + held_cost / 2),
+            session_factory,
+            mailbox_factory=lambda: mailbox_two,
+        )
+
+    assert len(patched_anthropic.calls) == 1  # no new call — the budget gate bound
+    assert any("daily budget" in record.message for record in caplog.records)  # budget skip
+    documents_two = await documents_named(session_factory, name_two)
+    assert len(documents_two) == 1  # fail-open: still ingested…
+    assert documents_two[0].extra.get("email_selection") is None  # …and unflagged
+    assert documents_two[0].review_status is not ReviewStatus.NEEDS_REVIEW
+
+
 async def test_label_spend_recorded_on_all_duplicate_resend(
     session_factory: async_sessionmaker[AsyncSession],
     data_dir: Path,

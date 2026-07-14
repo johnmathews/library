@@ -79,3 +79,24 @@ services → REST API → frontend queue + dashboard affordance → `email_held`
 push → runbook → these docs). Production enablement (W20) follows: migration
 0026, `LIBRARY_EMAIL_LABEL_ENABLED=true`, worker restart — recipe in
 `docs/runbooks/email-triage.md` §7.
+
+## 3. Wrap-up findings (post-review)
+
+The wrap-up code review caught one real bug in decision 7's residual: held-email
+label spend lived only in `trace["label_usage"]`, which the daily budget gate
+never read — so a stream of newsletters (exactly the held-worthy traffic) could
+run the label pass past `LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD` indefinitely.
+Fixed without a migration: the gate in `email_label.label_email_items` now sums
+`email_label_completed` events **plus** today's `held_emails.trace` costs over
+the same UTC-day window (`_todays_held_label_spend_usd`), failing open on a read
+error like the existing budget path. Known residual, documented in the runbook:
+a poll retry after a failed Held-folder move re-bills without recording the
+second call (the row already exists) — bounded by the gate itself.
+
+The docs freshness audit fixed six drift items: the events-table anchor wording,
+two runbook claims that the billing event renders in the "Email triage"
+breakdown (it is telemetry, visible only under "Show all events"), README's
+notification-event list and email-in description, a missing `held_emails` row in
+architecture.md's data-model inventory, and the missing `held-emails` spec in
+frontend.md's e2e list. The CHANGELOG operator action no longer implies a manual
+migration step (the `migrate` service runs `alembic upgrade head` on deploy).

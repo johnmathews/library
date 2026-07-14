@@ -12,9 +12,11 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
 [`docs/architecture.md`](docs/architecture.md) for the design):
 
 - **Ingestion from anywhere:** web upload (camera-friendly on mobile), a
-  watched consume folder (Syncthing/scanner drops), email-in (IMAP
-  attachment polling), in-app note authoring (markdown, edited in place with
-  version history), REST, MCP, and a paperless-ngx importer.
+  watched consume folder (Syncthing/scanner drops), email-in (IMAP polling
+  of attachments and message bodies, with LLM triage that holds
+  not-library-worthy mail in a reviewable queue), in-app note authoring
+  (markdown, edited in place with version history), REST, MCP, and a
+  paperless-ngx importer.
 - **Routed OCR:** born-digital PDFs keep their text layer; scans go
   through OCRmyPDF/Tesseract (`nld+eng`, searchable-PDF output); photos
   get OpenCV perspective correction + RapidOCR; a confidence gate retries
@@ -33,7 +35,7 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
   document finishes — pushed live over Server-Sent Events (no polling).
   Each user can also opt into **Pushover** push notifications (their own
   credentials, owner-targeted, per-event toggles for success, errors,
-  needs-review and duplicates). See
+  needs-review, duplicates and held emails). See
   [`docs/jobs-and-notifications.md`](docs/jobs-and-notifications.md).
 - **Interfaces:** cookie/bearer-authenticated REST API (OpenAPI at
   `/docs`) and an MCP server at `/mcp`, so LLM clients can search, read

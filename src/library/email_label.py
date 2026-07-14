@@ -20,24 +20,33 @@ Two invariants, both honouring "never lose a real document":
    The labeller can only *add* a flag or route to review — a failure can never
    hold an email or reject an item.
 
-Spend is budget-gated exactly like extraction: today's ``email_label_completed``
-event totals are summed and compared to ``email_label_daily_budget_usd`` before
-each call. The completion event is written by the caller, which anchors it on
-the first document the email produces; this module only reads the running
-total. See docs/ingestion.md, "Email item selection".
+Spend is budget-gated exactly like extraction: before each call, today's spend
+is summed and compared to ``email_label_daily_budget_usd``. The sum has two
+parts, because a billed call lands in one of two places: emails that *filed*
+record an ``email_label_completed`` event (written by the caller, anchored on
+the first document the email produced), while emails that were *held* produced
+no document, so their billing rides in the held row's
+``held_emails.trace["label_usage"]`` instead. The gate adds both
+(:func:`todays_spend_usd` + :func:`_todays_held_label_spend_usd`) — otherwise a
+stream of held newsletters would be invisible to the cap and could run the
+pass indefinitely. This module only reads the running totals. See
+docs/ingestion.md, "Email item selection".
 """
 
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Literal
 
 from anthropic import AsyncAnthropic
 from pydantic import BaseModel, ConfigDict
+from sqlalchemy import Numeric, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
 from library.extraction.apply import todays_spend_usd
 from library.extraction.extractor import estimate_cost_usd
+from library.models import HeldEmail
 
 logger = logging.getLogger(__name__)
 
@@ -163,6 +172,27 @@ class LabelOutcome:
     email_reason: str | None = None
 
 
+async def _todays_held_label_spend_usd(session: AsyncSession) -> float:
+    """Sum today's (UTC) label spend recorded on held emails.
+
+    A held email produced no document, so its billed label call has no
+    ``email_label_completed`` event to anchor on — the usage lives in the held
+    row's ``trace["label_usage"]`` instead (``email_ingest._hold_message``).
+    Mirrors :func:`library.extraction.apply.todays_spend_usd` exactly: "today"
+    is UTC midnight onwards (``created_at >= start_of_day``), and only rows
+    whose trace actually carries a ``label_usage.cost_usd`` key count, so the
+    two sums cover the same window without double- or under-counting.
+    """
+    start_of_day = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    statement = select(
+        func.coalesce(func.sum(HeldEmail.trace["label_usage"]["cost_usd"].astext.cast(Numeric)), 0)
+    ).where(
+        HeldEmail.trace["label_usage"].has_key("cost_usd"),
+        HeldEmail.created_at >= start_of_day,
+    )
+    return float((await session.execute(statement)).scalar_one())
+
+
 def _manifest(items: list[LabelItem]) -> str:
     return "\n".join(
         f"[{item.index}] kind={item.kind} filename={item.filename!r} "
@@ -184,8 +214,10 @@ async def label_email_items(
     """Label each item ``keep``/``probably_noise`` and the email ``file``/``hold``.
 
     Fail-open on any problem: every skip and error path keeps all items AND
-    returns ``email_verdict="file"``. Reads today's label spend and skips when
-    the budget is reached. A response that does not cover exactly the requested
+    returns ``email_verdict="file"``. Reads today's label spend — the
+    ``email_label_completed`` event total for filed emails *plus* the
+    ``trace["label_usage"]`` total for held ones — and skips when the budget is
+    reached. A response that does not cover exactly the requested
     indices is discarded entirely — verdicts cleared and the email forced to
     ``file`` (an untrustworthy response must not hold) — but its cost is still
     reported, so budget accounting stays honest even when the model misbehaves.
@@ -200,7 +232,9 @@ async def label_email_items(
         return LabelOutcome({}, None, None)
 
     try:
-        spend = await todays_spend_usd(session, LABEL_EVENT)
+        spend = await todays_spend_usd(session, LABEL_EVENT) + await _todays_held_label_spend_usd(
+            session
+        )
         if spend >= settings.email_label_daily_budget_usd:
             logger.info(
                 "email-label: daily budget $%.2f reached ($%.4f spent); keeping all attachments",

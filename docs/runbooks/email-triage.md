@@ -124,11 +124,15 @@ The log line is ephemeral; two durable copies exist:
   stored as an `email_selection` `IngestionEvent` on each *new* document, and
   the LLM billing as an `email_label_completed` event anchored on the **first
   produced document — new or duplicate** (so an all-duplicate re-send still
-  records its spend). Both render in the document history's **"Email triage"**
-  breakdown (`DocumentHistoryTimeline.vue`).
+  records its spend). The per-item trace renders in the document history's
+  **"Email triage"** breakdown (`DocumentHistoryTimeline.vue`); the billing
+  event is telemetry — hidden from the milestone timeline, visible under
+  **"Show all events"**.
 - **Held emails.** A held email produced no document, so its `held_emails` row
   snapshots the full trace in the `trace` column (the `email_selection` event
-  shape, plus `label_usage` when the LLM pass billed for the email).
+  shape, plus `label_usage` when the LLM pass billed for the email). The
+  `label_usage` cost is not audit-only: it counts toward the daily label
+  budget alongside the `email_label_completed` event totals.
 
 An email that was neither held nor produced any document lives only in the log
 line — which is why the trace is the primary triage surface.
@@ -157,7 +161,13 @@ All email settings are **env-only** (no admin API), so the change takes effect
 only after a **worker container restart**. Expect roughly **$0.002–0.007 per
 email** at Haiku pricing (one small call per polled message), hard-capped by
 the daily budget — over budget the pass skips and everything files as before
-(fail-open).
+(fail-open). The cap counts **all** billed calls: spend from emails that filed
+(`email_label_completed` events) *and* spend from emails that were held (the
+`label_usage` in each held row's trace), so a day of nothing-but-newsletters
+still stops at the budget. Known residual: a poll retry after a failed
+Held-folder move re-bills the label call without recording the second call's
+cost (the held row already exists) — a small under-count, itself bounded by
+the budget gate.
 
 **Verify** within one poll cycle (`LIBRARY_EMAIL_POLL_MINUTES`, default 10):
 
@@ -165,8 +175,8 @@ the daily budget — over budget the pass skips and everything files as before
    `grep 'email-label'` for skip lines (`pass skipped (budget|error)` means
    fail-open degradation, not a crash).
 2. An email that produced a document records an `email_label_completed` event
-   (nonzero `cost_usd`) — visible in the document history's "Email triage"
-   breakdown.
+   (nonzero `cost_usd`) — visible under the document history's **"Show all
+   events"** list (billing telemetry, not a milestone).
 3. Send a newsletter to the dropbox: it should appear in `/held-emails` with
    verdict `llm_hold` and the model's reason. A forwarded invoice should file
    normally.

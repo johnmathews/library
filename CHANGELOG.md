@@ -78,7 +78,8 @@ and an opt-in `email_held` push. *Held* is deliberately distinct from
 [docs/ingestion.md](docs/ingestion.md) "Held for review",
 [docs/api.md](docs/api.md) §1.21, and the
 [email-triage runbook](docs/runbooks/email-triage.md). **Operator action
-(production):** run migration 0026, set `LIBRARY_EMAIL_LABEL_ENABLED=true`
+(production):** migration 0026 applies automatically on deploy (the `migrate`
+service runs `alembic upgrade head`); set `LIBRARY_EMAIL_LABEL_ENABLED=true`
 (the hold switches default on; `LIBRARY_ANTHROPIC_API_KEY` is already set
 where extraction runs), and restart the **worker** container — the enablement
 recipe is in the runbook §7.

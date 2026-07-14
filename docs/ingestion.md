@@ -1334,16 +1334,23 @@ body excerpt (`…BODY_SNIPPET_CHARS`). It returns two things:
   review" below).
 
 The pass is **fail-open**, schema-enforced: a disabled feature, an exhausted
-daily budget (`LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD`, default \$2, summed from
-`email_label_completed` events like extraction), an API error, or a
-malformed/incomplete/index-mismatched response all keep every item **and force
-`email_verdict="file"`** — degrading to exactly the pre-verdict ingest
-behaviour; a label failure can never hold an email. Spend is recorded as an
-`email_label_completed` event on the first document the email **produced — new
-or duplicate** — so an all-duplicate re-send still counts against the budget.
-(An email that was *held* keeps its billing in the held row's trace instead; an
-email that produced neither has its rare spend visible only in the
-`email-label` log line.)
+daily budget (`LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD`, default \$2), an API
+error, or a malformed/incomplete/index-mismatched response all keep every item
+**and force `email_verdict="file"`** — degrading to exactly the pre-verdict
+ingest behaviour; a label failure can never hold an email. A billed call's
+spend lands in one of two places, and the budget gate sums **both** (same
+UTC-day window): an email that *filed* records an `email_label_completed`
+event on the first document it **produced — new or duplicate** (so an
+all-duplicate re-send still counts), while an email that was *held* produced
+no document, so its billing rides in the held row's
+`held_emails.trace["label_usage"]` — which counts toward the gate all the
+same, so a stream of held newsletters cannot run the pass past the cap. One
+known residual under-count: a poll retry after a failed Held-folder move
+re-bills the label call, but the skip-if-exists row insert records nothing for
+that second call — the gap is bounded by the gate itself (each such retry
+costs at most one call while the day's budget lasts). An email that neither
+filed nor was held has its rare spend visible only in the `email-label` log
+line.
 
 #### Held for review
 
@@ -1527,7 +1534,7 @@ Append-only audit trail in `ingestion_events`:
 | `received` | ingest | `{filename, size, mime_type, source}`; email adds `{email_from, email_subject, email_message_id}`; a note records `{source: "note", size}` |
 | `duplicate_upload` | ingest | `{filename, source}`; email adds the same `email_*` keys |
 | `email_selection` | email poller | Per-item decision trace, persisted on each new document the email produced: `{email_from, email_subject, email_message_id, email_to?, items}` where each item is `{kind, filename, mime, size, stage, verdict, reason}` (see "Email item selection"). A *held* email produced no document, so its trace is snapshotted on the `held_emails` row instead — no ingestion event |
-| `email_label_completed` | email poller | `{cost_usd, model, input_tokens, output_tokens, prompt_version, items}` — one per billed LLM label pass, written on the first new document; what the label budget gate sums |
+| `email_label_completed` | email poller | `{cost_usd, model, input_tokens, output_tokens, prompt_version, items}` — one per billed LLM label pass whose email filed, written on the first produced document (new or duplicate); the label budget gate sums these **plus** the `trace["label_usage"]` costs on today's `held_emails` rows |
 | `note_edited` | notes router | `{fields}` — the note fields changed by a `PATCH /api/notes/{id}` |
 | `note_restored` | notes router | `{restored_version_no, restored_at}` |
 | `status_changed` | pipeline | `{from, to}` |
@@ -1596,7 +1603,7 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_EMAIL_FILTER_TINY_IMAGE_MAX_EDGE_PX` | `64` | Images whose longest edge is ≤ this are filtered as icons/tracking pixels |
 | `LIBRARY_EMAIL_LABEL_ENABLED` | `false` | Optional per-email LLM label pass; flags probable noise `needs_review` (never drops). Spends money and needs `LIBRARY_ANTHROPIC_API_KEY` |
 | `LIBRARY_EMAIL_LABEL_MODEL` | `claude-haiku-4-5` | Model used by the label pass |
-| `LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD` | `2.0` | Daily spend cap for the label pass (summed from `email_label_completed` events); over budget → skip, all attachments kept |
+| `LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD` | `2.0` | Daily spend cap for the label pass (summed from `email_label_completed` events plus held rows' `trace["label_usage"]` costs); over budget → skip, all attachments kept |
 | `LIBRARY_EMAIL_LABEL_BODY_SNIPPET_CHARS` | `1000` | Length of the cleaned body excerpt sent to the labeller |
 | `LIBRARY_EMAIL_HOLD_ENABLED` | `true` | Master switch for hold-for-review (see "Held for review"); `false` is the rollback lever — every trigger reverts to the pre-hold behaviour exactly |
 | `LIBRARY_EMAIL_HELD_FOLDER` | `Library/Held` | Where held messages are moved (created if missing); dismissed mail stays here forever, so the bytes remain recoverable |

@@ -48,12 +48,16 @@ class _FakeClient:
 
 @pytest.fixture(autouse=True)
 def _cheap_budget(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Default: no spend today, so the budget gate is open unless overridden."""
+    """Default: no spend today (filed or held), so the gate is open unless overridden."""
 
     async def _spend(session: object, event: str) -> float:
         return 0.0
 
+    async def _held_spend(session: object) -> float:
+        return 0.0
+
     monkeypatch.setattr(email_label, "todays_spend_usd", _spend)
+    monkeypatch.setattr(email_label, "_todays_held_label_spend_usd", _held_spend)
 
 
 ITEMS = [
@@ -120,6 +124,28 @@ async def test_budget_gate_skips_without_calling(monkeypatch: pytest.MonkeyPatch
     assert client.messages.calls == []  # no API call when over budget
 
 
+async def test_budget_gate_counts_held_spend(monkeypatch: pytest.MonkeyPatch) -> None:
+    # Filed (event) spend alone is under budget; held-trace spend pushes the
+    # combined total over. The gate must bind on the SUM — held spend has no
+    # email_label_completed event, only held_emails.trace["label_usage"].
+    async def _filed(session: object, event: str) -> float:
+        return 1.0  # under the $2 budget on its own
+
+    async def _held(session: object) -> float:
+        return 1.5  # combined 2.5 >= 2.0
+
+    monkeypatch.setattr(email_label, "todays_spend_usd", _filed)
+    monkeypatch.setattr(email_label, "_todays_held_label_spend_usd", _held)
+    client = _FakeClient(parsed=EmailLabelResult(items=[]))
+
+    outcome = await _label(client)
+
+    assert outcome.skip_reason == "budget"
+    assert outcome.verdicts == {}
+    assert outcome.email_verdict == "file"
+    assert client.messages.calls == []  # no API call when over the combined budget
+
+
 async def test_api_error_fails_open() -> None:
     outcome = await _label(_FakeClient(error=RuntimeError("boom")))
 
@@ -137,6 +163,24 @@ async def test_budget_read_failure_fails_open(monkeypatch: pytest.MonkeyPatch) -
         raise RuntimeError("db down")
 
     monkeypatch.setattr(email_label, "todays_spend_usd", _boom)
+    client = _FakeClient(parsed=EmailLabelResult(items=[ItemLabel(index=0, verdict="keep")]))
+
+    outcome = await _label(client)
+
+    assert outcome.skip_reason == "error"
+    assert outcome.verdicts == {}  # keep everything
+    assert outcome.email_verdict == "file"  # a DB failure must never hold
+    assert client.messages.calls == []  # never reached the API
+
+
+async def test_held_spend_read_failure_fails_open(monkeypatch: pytest.MonkeyPatch) -> None:
+    # The held-spend read is part of the guarded budget read: a DB hiccup there
+    # must fail open exactly like a todays_spend_usd failure — keep everything,
+    # never hold, never reach the API, never propagate.
+    async def _boom(session: object) -> float:
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(email_label, "_todays_held_label_spend_usd", _boom)
     client = _FakeClient(parsed=EmailLabelResult(items=[ItemLabel(index=0, verdict="keep")]))
 
     outcome = await _label(client)

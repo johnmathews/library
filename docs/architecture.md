@@ -172,6 +172,11 @@ re-derivable artifact.
   `page_number` when generated from `document_pages`, `NULL` when falling back
   to `ocr_text`.
 - `ingestion_events` — append-only audit trail.
+- `held_emails` — lifecycle records for emails the email-in triage held for
+  review instead of filing (`held` → `ingested`/`dismissed`, migration 0026);
+  snapshots the per-item decision trace and points at the message in the Held
+  IMAP folder by Message-ID. See [ingestion.md](ingestion.md), "Held for
+  review".
 - `note_versions` — append-only; one (title, body) snapshot per edit/restore of
   an in-app note (`source = note`, migration 0013, which also adds `note` to the
   `document_source` CHECK).
