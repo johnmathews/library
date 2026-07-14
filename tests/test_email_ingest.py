@@ -37,6 +37,7 @@ from library.config import Settings, get_settings
 from library.docx import DOCX_MIME
 from library.email_ingest import (
     EmailPollSummary,
+    HoldRecord,
     IngestCallable,
     IngestCandidate,
     SkippedAttachment,
@@ -49,12 +50,20 @@ from library.email_ingest import (
 from library.email_label import EmailLabelResult, ItemLabel, LabelOutcome
 from library.extraction.apply import todays_spend_usd
 from library.ingest import IngestResult, ingest_file
-from library.models import Document, DocumentSource, IngestionEvent, ReviewStatus
+from library.models import (
+    Document,
+    DocumentSource,
+    HeldEmail,
+    HeldEmailStatus,
+    IngestionEvent,
+    ReviewStatus,
+)
 from tests.docx_fixtures import make_docx
 
 pytestmark = pytest.mark.integration
 
 PROCESSED_FOLDER = "Library/Processed"
+HELD_FOLDER = "Library/Held"
 
 
 @pytest.fixture
@@ -171,17 +180,21 @@ def make_body_mail(
     message_id: str | None = None,
     text: str | None = None,
     html: str | None = None,
+    date: str | None = None,
 ) -> bytes:
     """Raw RFC822 bytes for a body-only mail (no attachments).
 
     ``text`` and/or ``html`` populate the alternative parts; passing neither
-    yields a genuinely empty-bodied message.
+    yields a genuinely empty-bodied message. ``date`` sets an RFC 2822 ``Date:``
+    header (omitted by default, like the other fixtures).
     """
     message = EmailMessage()
     message["From"] = from_addr
     message["To"] = to_addr
     message["Subject"] = subject
     message["Message-ID"] = message_id or f"<{uuid.uuid4().hex}@example.com>"
+    if date is not None:
+        message["Date"] = date
     if text is not None:
         message.set_content(text)
     if html is not None:
@@ -275,6 +288,15 @@ async def events_for(
         return list(result.scalars().all())
 
 
+async def held_rows(
+    session_factory: async_sessionmaker[AsyncSession], message_id: str
+) -> list[HeldEmail]:
+    """Every ``held_emails`` row for one Message-ID (the DB is shared; scope by id)."""
+    async with session_factory() as session:
+        result = await session.execute(select(HeldEmail).where(HeldEmail.message_id == message_id))
+        return list(result.scalars().all())
+
+
 #: One manifest line as ``library.email_label._manifest`` renders it; ``kind=`` is
 #: optional so the fake survives the v1 → v2 manifest evolution.
 _MANIFEST_ITEM_RE = re.compile(r"\[(\d+)\](?: kind=\w+)? filename=(?:'([^']*)'|None)")
@@ -297,6 +319,9 @@ class FakeAnthropic:
         self.entered = 0
         self.exited = 0
         self.noise_markers: list[str] = []
+        #: Whole-email verdict returned with every response ("file" | "hold").
+        self.email_verdict: str = "file"
+        self.email_reason: str | None = None
         self.messages = SimpleNamespace(parse=self._parse)
 
     def constructor(self, *, api_key: str) -> Self:
@@ -329,7 +354,11 @@ class FakeAnthropic:
             else:
                 items.append(ItemLabel(index=index, verdict="keep"))
         return SimpleNamespace(
-            parsed_output=EmailLabelResult(items=items),
+            parsed_output=EmailLabelResult(
+                items=items,
+                email_verdict=self.email_verdict,  # type: ignore[arg-type]
+                email_reason=self.email_reason,
+            ),
             usage=SimpleNamespace(input_tokens=120, output_tokens=40),
         )
 
@@ -372,6 +401,12 @@ def test_email_settings_defaults() -> None:
     assert settings.email_label_model == "claude-haiku-4-5"
     assert settings.email_label_daily_budget_usd == 2.0
     assert settings.email_label_body_snippet_chars == 1000
+    # Hold-for-review: on by default (holding is strictly safer than a silent
+    # drop); email_hold_enabled=False is the rollback lever.
+    assert settings.email_hold_enabled is True
+    assert settings.email_held_folder == "Library/Held"
+    assert settings.email_hold_below_substance is True
+    assert settings.email_hold_unknown_senders is True
 
 
 def test_email_settings_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -445,13 +480,18 @@ async def test_allowlist_rejects_unknown_sender(
     data_dir: Path,
     job_connector: InMemoryConnector,
 ) -> None:
+    # An allowlist-rejected sender is HELD: durable row + moved to the Held
+    # folder, nothing ingested — visible and recoverable instead of lingering
+    # in the inbox forever.
     settings = Settings(
         email_host="imap.example.test",
         email_allowed_senders="john@example.com",  # type: ignore[arg-type]  # env form
     )
     name = f"spam-{uuid.uuid4().hex[:8]}.pdf"
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
     raw = make_raw_mail(
         from_addr="stranger@evil.example",
+        message_id=message_id,
         attachments=[(name, make_pdf(), "application", "pdf")],
     )
     mailbox = FakeMailBox([mail_message(raw, uid="7")])
@@ -459,7 +499,71 @@ async def test_allowlist_rejects_unknown_sender(
     summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
 
     assert await documents_named(session_factory, name) == []
+    rows = await held_rows(session_factory, message_id)
+    assert len(rows) == 1
+    assert rows[0].status is HeldEmailStatus.HELD
+    assert rows[0].verdict == "sender_unknown"
+    assert rows[0].sender == "stranger@evil.example"
+    assert rows[0].imap_folder == HELD_FOLDER
+    assert rows[0].imap_uid == "7"
+    assert rows[0].owner_id is None  # unknown sender matches no user
+    assert mailbox.moved == [("7", HELD_FOLDER)]
+    assert summary == EmailPollSummary(messages_seen=1, messages_held=1)
+
+
+async def test_allowlist_reject_left_in_place_when_hold_disabled(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # The rollback lever: with the master switch off, an allowlist reject
+    # behaves exactly as before the hold feature — left in place, no row.
+    settings = Settings(
+        email_host="imap.example.test",
+        email_allowed_senders="john@example.com",  # type: ignore[arg-type]  # env form
+        email_hold_enabled=False,
+    )
+    name = f"spam-{uuid.uuid4().hex[:8]}.pdf"
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_raw_mail(
+        from_addr="stranger@evil.example",
+        message_id=message_id,
+        attachments=[(name, make_pdf(), "application", "pdf")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="7")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert await documents_named(session_factory, name) == []
+    assert await held_rows(session_factory, message_id) == []
     assert mailbox.moved == []  # left in place, visible to the operator
+    assert summary == EmailPollSummary(messages_seen=1, messages_skipped=1)
+
+
+def test_allowlist_reject_left_in_place_when_trigger_disabled() -> None:
+    # The per-trigger flag alone (master switch still on) also restores the
+    # pre-hold behavior for unknown senders.
+    settings = Settings(
+        email_host="imap.example.test",
+        email_allowed_senders="john@example.com",  # type: ignore[arg-type]  # env form
+        email_hold_unknown_senders=False,
+    )
+    raw = make_raw_mail(
+        from_addr="stranger@evil.example",
+        attachments=[(f"spam-{uuid.uuid4().hex[:8]}.pdf", make_pdf(), "application", "pdf")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="7")])
+    holds: list[HoldRecord] = []
+
+    summary = poll_mailbox(
+        settings,
+        ingest=lambda candidate: pytest.fail("must not ingest"),
+        mailbox_factory=lambda: mailbox,
+        persist_hold=holds.append,
+    )
+
+    assert holds == []
+    assert mailbox.moved == []
     assert summary == EmailPollSummary(messages_seen=1, messages_skipped=1)
 
 
@@ -643,24 +747,267 @@ async def test_empty_body_mail_moved_without_ingest(
     assert summary == EmailPollSummary(messages_seen=1, messages_processed=1)
 
 
-async def test_cover_note_body_below_threshold_not_ingested(
+async def test_cover_note_body_below_threshold_held_for_review(
     settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
     data_dir: Path,
     job_connector: InMemoryConnector,
 ) -> None:
-    # "FYI see attached" with no attachment is not worth filing — but the mail is
-    # still moved so it is not re-polled forever.
+    # "FYI see attached" with no attachment produces no document — the email is
+    # HELD (durable row + Held folder) so a human can ingest-anyway or dismiss,
+    # instead of it silently filing away to Processed.
     tag = uuid.uuid4().hex[:8]
     subject = f"cover only {tag}"
-    raw = make_body_mail(subject=subject, text="FYI see attached")
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_body_mail(subject=subject, text="FYI see attached", message_id=message_id)
     mailbox = FakeMailBox([mail_message(raw, uid="60")])
 
     summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
 
     assert await documents_named(session_factory, f"{subject}.txt") == []
+    rows = await held_rows(session_factory, message_id)
+    assert len(rows) == 1
+    assert rows[0].status is HeldEmailStatus.HELD
+    assert rows[0].verdict == "below_substance"
+    assert rows[0].reason is not None and rows[0].reason.startswith("below_substance:")
+    assert rows[0].subject == subject
+    assert rows[0].imap_folder == HELD_FOLDER
+    # The trace snapshots the decision list, including the whole-email verdict.
+    items = rows[0].trace["items"]
+    assert any(
+        item["kind"] == "email" and item["stage"] == "email_verdict" and item["verdict"] == "held"
+        for item in items
+    )
+    assert any(item["kind"] == "body" and item["verdict"] == "filtered" for item in items)
+    assert mailbox.moved == [("60", HELD_FOLDER)]
+    assert summary == EmailPollSummary(messages_seen=1, messages_held=1)
+
+
+async def test_below_substance_body_processed_when_hold_disabled(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # Master switch off: the cover note files away to Processed exactly as
+    # before the hold feature — no row, no Held folder.
+    settings = Settings(email_host="imap.example.test", email_hold_enabled=False)
+    tag = uuid.uuid4().hex[:8]
+    subject = f"cover only {tag}"
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_body_mail(subject=subject, text="FYI see attached", message_id=message_id)
+    mailbox = FakeMailBox([mail_message(raw, uid="60")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert await documents_named(session_factory, f"{subject}.txt") == []
+    assert await held_rows(session_factory, message_id) == []
     assert mailbox.moved == [("60", PROCESSED_FOLDER)]
     assert summary == EmailPollSummary(messages_seen=1, messages_processed=1)
+
+
+def test_below_substance_body_processed_when_trigger_disabled() -> None:
+    # The per-trigger flag alone restores the pre-hold behavior for thin bodies.
+    settings = Settings(email_host="imap.example.test", email_hold_below_substance=False)
+    tag = uuid.uuid4().hex[:8]
+    raw = make_body_mail(subject=f"cover only {tag}", text="FYI see attached")
+    mailbox = FakeMailBox([mail_message(raw, uid="60")])
+    holds: list[HoldRecord] = []
+
+    summary = poll_mailbox(
+        settings, _recording_ingest([]), mailbox_factory=lambda: mailbox, persist_hold=holds.append
+    )
+
+    assert holds == []
+    assert mailbox.moved == [("60", PROCESSED_FOLDER)]
+    assert summary == EmailPollSummary(messages_seen=1, messages_processed=1)
+
+
+async def test_held_row_carries_owner_and_received_at_for_matching_sender(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # The held row resolves its owner from the sender exactly like a document
+    # would, and captures the Date: header, so the review queue can scope/sort.
+    tag = uuid.uuid4().hex[:8]
+    sender = f"jane-{tag}@example.org"
+    owner_id = await _make_user(
+        session_factory, username=f"held-owner-{tag}", forward_addresses=[sender]
+    )
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_body_mail(
+        from_addr=f"Jane <{sender}>",
+        subject=f"held owner {tag}",
+        text="FYI see attached",
+        message_id=message_id,
+        date="Mon, 13 Jul 2026 09:30:00 +0200",
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="61")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    rows = await held_rows(session_factory, message_id)
+    assert len(rows) == 1
+    assert rows[0].owner_id == owner_id
+    assert rows[0].received_at is not None
+    assert rows[0].received_at == datetime(2026, 7, 13, 7, 30, tzinfo=UTC)
+    assert summary.messages_held == 1
+
+
+async def test_nothing_ingested_drops_hold_email(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Only user-facing drops (an unsupported attachment) and a blank body:
+    # nothing was ingested, so the email is held — the drop is recoverable from
+    # review instead of filed out of sight. No drop push fires for a held
+    # message (the review queue is the surface).
+    tag = uuid.uuid4().hex[:8]
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_raw_mail(
+        subject=f"drops only {tag}",
+        message_id=message_id,
+        body="",
+        attachments=[
+            ("form.docx", b"\x00\xffPK-nope" + uuid.uuid4().bytes, "application", "msword")
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="140")])
+    notified: list[object] = []
+
+    async def spy_dispatch(*args: object, **kwargs: object) -> None:
+        notified.append(kwargs)
+
+    monkeypatch.setattr(
+        "library.email_ingest.dispatch_attachments_dropped_notification", spy_dispatch
+    )
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    rows = await held_rows(session_factory, message_id)
+    assert len(rows) == 1
+    assert rows[0].verdict == "nothing_ingested"
+    assert rows[0].reason == "no attachment or body produced a document"
+    items = rows[0].trace["items"]
+    assert any(item["filename"] == "form.docx" and item["verdict"] == "dropped" for item in items)
+    assert notified == []  # the push waits: the whole email is in review
+    assert mailbox.moved == [("140", HELD_FOLDER)]
+    assert summary == EmailPollSummary(messages_seen=1, messages_held=1, attachments_dropped=1)
+
+
+def test_nothing_ingested_processed_and_notified_when_hold_disabled() -> None:
+    # Master switch off: the drops-only email files to Processed and the drop
+    # push fires, exactly as before the hold feature.
+    settings = Settings(email_host="imap.example.test", email_hold_enabled=False)
+    tag = uuid.uuid4().hex[:8]
+    raw = make_raw_mail(
+        subject=f"drops only {tag}",
+        body="",
+        attachments=[
+            ("form.docx", b"\x00\xffPK-nope" + uuid.uuid4().bytes, "application", "msword")
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="141")])
+    holds: list[HoldRecord] = []
+    notified: list[list[str | None]] = []
+
+    def spy_notify(
+        sender: str | None, subject: str | None, skipped: list[SkippedAttachment]
+    ) -> None:
+        notified.append([item.filename for item in skipped])
+
+    summary = poll_mailbox(
+        settings,
+        _recording_ingest([]),
+        mailbox_factory=lambda: mailbox,
+        notify=spy_notify,
+        persist_hold=holds.append,
+    )
+
+    assert holds == []
+    assert notified == [["form.docx"]]
+    assert mailbox.moved == [("141", PROCESSED_FOLDER)]
+    assert summary == EmailPollSummary(messages_seen=1, messages_processed=1, attachments_dropped=1)
+
+
+async def test_hold_move_failure_retried_without_duplicate_row(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # Row-before-move: a Held-folder move that fails once leaves the message in
+    # place WITH its row already written. The retry poll finds the open row
+    # (skip-if-exists on the partial unique index), does not duplicate it, and
+    # completes the move.
+    tag = uuid.uuid4().hex[:8]
+    subject = f"retry hold {tag}"
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_body_mail(subject=subject, text="FYI see attached", message_id=message_id)
+    mailbox = FakeMailBox([mail_message(raw, uid="142")], fail_move_uids={"142"})
+
+    summary_one = await poll_mailbox_async(
+        settings, session_factory, mailbox_factory=lambda: mailbox
+    )
+
+    rows = await held_rows(session_factory, message_id)
+    assert len(rows) == 1  # the durable row landed before the failed move
+    assert rows[0].verdict == "below_substance"
+    assert mailbox.moved == []
+    assert len(mailbox.messages) == 1  # message stays for the next poll
+    assert summary_one.messages_held == 0
+    assert summary_one.messages_skipped == 1
+
+    mailbox.fail_move_uids.clear()  # the server recovers
+    summary_two = await poll_mailbox_async(
+        settings, session_factory, mailbox_factory=lambda: mailbox
+    )
+
+    rows_after = await held_rows(session_factory, message_id)
+    assert len(rows_after) == 1  # skip-if-exists: no duplicate row
+    assert rows_after[0].id == rows[0].id
+    assert mailbox.moved == [("142", HELD_FOLDER)]
+    assert summary_two.messages_held == 1
+
+
+async def test_duplicate_only_email_still_processed_not_held(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # An email whose every item is already in the library files to Processed —
+    # a re-send is not review-worthy (the content is safe), so no hold.
+    tag = uuid.uuid4().hex[:8]
+    name = f"dup-{tag}.pdf"
+    content = make_pdf(tag)
+    first = make_raw_mail(
+        subject=f"first {tag}", attachments=[(name, content, "application", "pdf")]
+    )
+    mailbox_one = FakeMailBox([mail_message(first, uid="143")])
+    await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox_one)
+
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    resend = make_raw_mail(
+        subject=f"resend {tag}",
+        message_id=message_id,
+        attachments=[(name, content, "application", "pdf")],
+    )
+    mailbox_two = FakeMailBox([mail_message(resend, uid="144")])
+
+    summary = await poll_mailbox_async(
+        settings, session_factory, mailbox_factory=lambda: mailbox_two
+    )
+
+    assert await held_rows(session_factory, message_id) == []
+    assert mailbox_two.moved == [("144", PROCESSED_FOLDER)]
+    assert summary == EmailPollSummary(
+        messages_seen=1, messages_processed=1, attachments_duplicate=1
+    )
 
 
 def test_quoted_reply_stripped_before_substance_check(settings: Settings) -> None:
@@ -1957,8 +2304,12 @@ async def test_notify_dropped_integration(
 
 def test_oversize_attachment_dropped_and_notified(caplog: pytest.LogCaptureFixture) -> None:
     # An attachment over max_upload_bytes is a user-facing drop: recorded with
-    # reason "oversize", counted, and pushed to the owner.
-    settings = Settings(email_host="imap.example.test", max_upload_bytes=512)
+    # reason "oversize", counted, and pushed to the owner. Hold disabled: with
+    # holds on, a drops-only email is held instead (test_nothing_ingested_*);
+    # this test pins the notify path itself.
+    settings = Settings(
+        email_host="imap.example.test", max_upload_bytes=512, email_hold_enabled=False
+    )
     tag = uuid.uuid4().hex[:8]
     big_name = f"huge-{tag}.pdf"
     raw = make_raw_mail(
@@ -2013,14 +2364,16 @@ async def _soft_delete(session_factory: async_sessionmaker[AsyncSession], docume
 
 
 async def test_deleted_duplicate_attachment_dropped_not_recreated(
-    settings: Settings,
     session_factory: async_sessionmaker[AsyncSession],
     data_dir: Path,
     job_connector: InMemoryConnector,
 ) -> None:
     # Re-forwarding content whose document was soft-deleted must not recreate
     # it: ingest raises DeletedDuplicateError (an IngestError), recorded as a
-    # dropped attachment while the message still completes.
+    # dropped attachment while the message still completes. Hold disabled to
+    # pin the not-recreated semantics; with holds on such an email is held
+    # (its drop is user-facing and nothing ingested).
+    settings = Settings(email_host="imap.example.test", email_hold_enabled=False)
     tag = uuid.uuid4().hex[:8]
     name = f"deleted-{tag}.pdf"
     content = make_pdf(tag)
@@ -2144,3 +2497,238 @@ async def test_move_failure_message_retried_without_duplicates_or_repeat_notific
     assert mailbox.moved == [("130", PROCESSED_FOLDER)]
     assert len(recorded) == 1  # exactly one notification across both polls
     assert recorded[0] == (f"retry move {tag}", ["bad.docx"])
+
+
+# --- Message-level LLM evaluation + llm_hold (W11) ---
+
+
+async def test_llm_hold_holds_email_end_to_end(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+) -> None:
+    # The LLM's whole-email "hold" verdict: nothing is ingested at all, the
+    # durable row carries the LLM's reason AND the label billing (there is no
+    # document to anchor the budget event on), and the message moves to Held.
+    patched_anthropic.email_verdict = "hold"
+    patched_anthropic.email_reason = "newsletter blast"
+    tag = uuid.uuid4().hex[:8]
+    name = f"newsletter-{tag}.pdf"
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_raw_mail(
+        subject=f"weekly digest {tag}",
+        message_id=message_id,
+        attachments=[(name, make_pdf(tag), "application", "pdf")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="150")])
+
+    summary = await poll_mailbox_async(
+        label_settings(), session_factory, mailbox_factory=lambda: mailbox
+    )
+
+    assert await documents_named(session_factory, name) == []  # zero ingests
+    rows = await held_rows(session_factory, message_id)
+    assert len(rows) == 1
+    assert rows[0].verdict == "llm_hold"
+    assert rows[0].reason == "newsletter blast"
+    assert rows[0].status is HeldEmailStatus.HELD
+    # The label pass billed; its usage rides in the held row's trace.
+    label_usage = rows[0].trace["label_usage"]
+    assert label_usage["cost_usd"] > 0
+    assert label_usage["model"] == "claude-haiku-4-5"
+    assert label_usage["prompt_version"] == "email-label-v2"
+    items = rows[0].trace["items"]
+    assert any(
+        item["kind"] == "email" and item["stage"] == "email_verdict" and item["verdict"] == "held"
+        for item in items
+    )
+    assert len(patched_anthropic.calls) == 1
+    assert mailbox.moved == [("150", HELD_FOLDER)]
+    assert summary == EmailPollSummary(messages_seen=1, messages_held=1)
+
+
+def test_llm_hold_makes_zero_ingest_calls(settings: Settings) -> None:
+    # The hold branch runs BEFORE any ingest: the ingest callable is never
+    # invoked for a held email (sync wiring, recording fakes).
+    tag = uuid.uuid4().hex[:8]
+    raw = make_raw_mail(
+        subject=f"held outright {tag}",
+        attachments=[(f"promo-{tag}.pdf", make_pdf(tag), "application", "pdf")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="151")])
+    calls: list[IngestCandidate] = []
+    holds: list[HoldRecord] = []
+
+    def fake_label(request: object) -> LabelOutcome:
+        return LabelOutcome({}, None, None, email_verdict="hold", email_reason="marketing")
+
+    summary = poll_mailbox(
+        settings,
+        _recording_ingest(calls),
+        mailbox_factory=lambda: mailbox,
+        label=fake_label,
+        persist_hold=holds.append,
+    )
+
+    assert calls == []  # nothing reached ingest
+    assert len(holds) == 1
+    assert holds[0].verdict == "llm_hold"
+    assert holds[0].reason == "marketing"
+    assert holds[0].imap_uid == "151"
+    assert mailbox.moved == [("151", HELD_FOLDER)]
+    assert summary == EmailPollSummary(messages_seen=1, messages_held=1)
+
+
+def test_llm_hold_verdict_ignored_when_hold_disabled() -> None:
+    # Rollback lever vs the LLM verdict: with holds off, a "hold" response is
+    # inert — the email ingests and files exactly as today.
+    settings = Settings(email_host="imap.example.test", email_hold_enabled=False)
+    tag = uuid.uuid4().hex[:8]
+    name = f"promo-{tag}.pdf"
+    raw = make_raw_mail(
+        subject=f"held? {tag}", attachments=[(name, make_pdf(tag), "application", "pdf")]
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="152")])
+    calls: list[IngestCandidate] = []
+    holds: list[HoldRecord] = []
+
+    def fake_label(request: object) -> LabelOutcome:
+        verdicts = {item.index: ("keep", None) for item in request.items}  # type: ignore[attr-defined]
+        return LabelOutcome(verdicts, None, None, email_verdict="hold", email_reason="marketing")
+
+    summary = poll_mailbox(
+        settings,
+        _recording_ingest(calls),
+        mailbox_factory=lambda: mailbox,
+        label=fake_label,
+        persist_hold=holds.append,
+    )
+
+    assert [c.filename for c in calls] == [name]
+    assert holds == []
+    assert mailbox.moved == [("152", PROCESSED_FOLDER)]
+    assert summary == EmailPollSummary(
+        messages_seen=1, messages_processed=1, attachments_ingested=1
+    )
+
+
+def test_label_error_on_would_be_held_email_ingests_as_today(settings: Settings) -> None:
+    # The loss-proof: a label failure fails open to email_verdict="file", so a
+    # newsletter-shaped body-only email that WOULD have been held ingests
+    # exactly as today — an outage can never hold (or lose) mail.
+    tag = uuid.uuid4().hex[:8]
+    subject = f"digest {tag}"
+    raw = make_body_mail(subject=subject, text=long_body(tag))
+    mailbox = FakeMailBox([mail_message(raw, uid="153")])
+    calls: list[IngestCandidate] = []
+    holds: list[HoldRecord] = []
+
+    def failing_label(request: object) -> LabelOutcome:
+        return LabelOutcome({}, None, "error")  # the fail-open shape the bridge returns
+
+    summary = poll_mailbox(
+        settings,
+        _recording_ingest(calls),
+        mailbox_factory=lambda: mailbox,
+        label=failing_label,
+        persist_hold=holds.append,
+    )
+
+    assert [c.filename for c in calls] == [f"{subject}.txt"]  # the body filed
+    assert holds == []
+    assert mailbox.moved == [("153", PROCESSED_FOLDER)]
+    assert summary.attachments_ingested == 1
+    assert summary.messages_held == 0
+
+
+async def test_body_only_email_reaches_labeller_as_body_item(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+) -> None:
+    # The label call is message-level: a body-only email (no attachments) is
+    # judged too, with the body presented as a kind="body" manifest item.
+    tag = uuid.uuid4().hex[:8]
+    subject = f"body only label {tag}"
+    raw = make_body_mail(subject=subject, text=long_body(tag))
+    mailbox = FakeMailBox([mail_message(raw, uid="154")])
+
+    summary = await poll_mailbox_async(
+        label_settings(), session_factory, mailbox_factory=lambda: mailbox
+    )
+
+    assert len(patched_anthropic.calls) == 1
+    manifest = str(patched_anthropic.calls[0]["messages"][0]["content"])  # type: ignore[index]
+    assert "kind=body" in manifest
+    assert f"filename='{subject}.txt'" in manifest
+    assert len(await documents_named(session_factory, f"{subject}.txt")) == 1
+    assert summary.attachments_ingested == 1
+    assert summary.messages_processed == 1
+
+
+async def test_flagged_body_document_needs_review_at_ingest(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+) -> None:
+    # A probably_noise verdict on the BODY item flags the body document exactly
+    # like a flagged attachment: extra["email_selection"] stamped at creation →
+    # needs_review at ingest (no extraction involved), but still ingested.
+    tag = uuid.uuid4().hex[:8]
+    subject = f"noisebody-{tag}"
+    patched_anthropic.noise_markers.append("noisebody-")
+    raw = make_body_mail(subject=subject, text=long_body(tag))
+    mailbox = FakeMailBox([mail_message(raw, uid="155")])
+
+    summary = await poll_mailbox_async(
+        label_settings(), session_factory, mailbox_factory=lambda: mailbox
+    )
+
+    documents = await documents_named(session_factory, f"{subject}.txt")
+    assert len(documents) == 1  # the label never drops
+    document = documents[0]
+    assert document.extra["email_selection"] == {
+        "verdict": "probably_noise",
+        "reason": "looks decorative",
+        "source": "llm_label",
+    }
+    assert document.review_status is ReviewStatus.NEEDS_REVIEW
+    rules = [finding["rule"] for finding in document.extra["validation"]["findings"]]
+    assert "email_item_ambiguous" in rules
+    # The budget event anchors on the body document (the only produced one).
+    label_events = await events_for(session_factory, document.id, "email_label_completed")
+    assert len(label_events) == 1
+    assert summary.attachments_ingested == 1
+
+
+async def test_below_substance_hold_records_label_usage(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+) -> None:
+    # A deterministic hold on an email the labeller also judged (and billed
+    # for): the spend has no document to anchor on, so it rides in the held
+    # row's trace — the below-substance body IS presented as a body item.
+    tag = uuid.uuid4().hex[:8]
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_body_mail(
+        subject=f"thin but judged {tag}", text="FYI see attached", message_id=message_id
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="156")])
+
+    summary = await poll_mailbox_async(
+        label_settings(), session_factory, mailbox_factory=lambda: mailbox
+    )
+
+    assert len(patched_anthropic.calls) == 1  # the thin body was still judged
+    manifest = str(patched_anthropic.calls[0]["messages"][0]["content"])  # type: ignore[index]
+    assert "kind=body" in manifest
+    rows = await held_rows(session_factory, message_id)
+    assert len(rows) == 1
+    assert rows[0].verdict == "below_substance"
+    assert rows[0].trace["label_usage"]["cost_usd"] > 0
+    assert summary == EmailPollSummary(messages_seen=1, messages_held=1)

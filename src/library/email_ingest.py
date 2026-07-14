@@ -18,6 +18,24 @@ docs/ingestion.md, "Email item selection". The overriding invariant: **never los
 a real document** — nothing is deleted; an item is ingested, ingested-and-flagged
 (``needs_review``), or recorded as a recoverable/quiet drop.
 
+An email the pipeline judges *not library-worthy* is **held for review** rather
+than silently processed (``email_hold_enabled``, on by default): a durable
+``held_emails`` row is written first, then the message is moved to
+``LIBRARY_EMAIL_HELD_FOLDER`` — row-before-move, so a hold can never lose its
+pointer (a failed row leaves the mail in place for the next poll; a failed move
+retries idempotently against the existing row). Four triggers hold: an
+allowlist-rejected sender (``sender_unknown``), a body-only email below the
+substance gate (``below_substance``), an email whose user-facing drops left
+nothing ingested (``nothing_ingested``), and the label pass's whole-email
+verdict (``llm_hold``). The label pass (when enabled) now runs once per
+*message* — the surviving attachments plus the body as a judged item, so
+body-only emails are judged too — and returns ``email_verdict``:
+``file`` proceeds with normal ingestion, ``hold`` routes the whole email to
+review before anything is ingested. Fail-open is absolute: any label skip,
+error, budget stop, or untrusted response degrades to ``file`` — exactly
+today's ingest behavior — never a hold, never a loss. With
+``email_hold_enabled=false`` every trigger reverts to the pre-hold behavior.
+
 Idempotency is folder-based: every fully processed message is moved to
 ``LIBRARY_EMAIL_PROCESSED_FOLDER`` (created on first use), so a message
 is never scanned twice; content dedup in ``ingest_file`` (sha256) backs
@@ -44,6 +62,7 @@ from collections import Counter
 from collections.abc import Callable, Iterator
 from contextlib import AbstractContextManager, AsyncExitStack
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from typing import Any, Protocol
 
 from anthropic import AsyncAnthropic
@@ -63,7 +82,7 @@ from library.ingest import (
     ingest_file,
 )
 from library.markdown.html import html_to_markdown
-from library.models import DocumentSource, IngestionEvent, User
+from library.models import DocumentSource, HeldEmail, HeldEmailStatus, IngestionEvent, User
 from library.notifications import dispatch_attachments_dropped_notification
 
 logger = logging.getLogger(__name__)
@@ -82,7 +101,8 @@ class EmailPollSummary:
 
     messages_seen: int = 0
     messages_processed: int = 0  # moved to the processed folder
-    messages_skipped: int = 0  # allowlist-rejected or errored; left in place
+    messages_skipped: int = 0  # errored (or allowlist-rejected, holds off); left in place
+    messages_held: int = 0  # held for review (durable row + moved to the held folder)
     attachments_ingested: int = 0  # new documents created
     attachments_duplicate: int = 0  # content already in the library
     attachments_dropped: int = 0  # rejected (oversize/unsupported/error); surfaced
@@ -243,6 +263,35 @@ TracePersister = Callable[
 
 
 @dataclass(frozen=True, slots=True)
+class HoldRecord:
+    """Everything ``_persist_held_email`` needs to write one ``held_emails`` row.
+
+    ``trace`` is the ``_selection_event_detail`` shape (plus ``label_usage``
+    when the LLM pass billed) so the review UI can show what the pipeline saw.
+    ``imap_uid`` is a hint only — UIDs are folder-scoped and change on move;
+    the Message-ID is the authoritative pointer for a later re-fetch.
+    """
+
+    message_id: str | None
+    sender: str | None
+    subject: str | None
+    received_at: datetime | None
+    verdict: str
+    reason: str | None
+    trace: dict[str, object]
+    imap_uid: str | None
+
+
+#: Synchronous bridge to persist the durable ``held_emails`` row for one held
+#: message (poll_mailbox runs off-loop; the async wrapper marshals it onto the
+#: loop). Unlike ``TracePersister`` this is NOT best-effort: it MUST raise on
+#: failure — the row precedes the move, and a hold without its row would be
+#: invisible to review — so the per-message handler leaves the mail in place
+#: for the next poll to retry.
+HoldPersister = Callable[[HoldRecord], None]
+
+
+@dataclass(frozen=True, slots=True)
 class LabelRequest:
     """One email's attachments (plus context) presented to the LLM label pass."""
 
@@ -293,6 +342,27 @@ def _message_id(message: MailMessage) -> str | None:
     """The raw Message-ID header, if present."""
     raw = message.obj["Message-ID"]
     return raw.strip() if raw else None
+
+
+#: imap-tools' sentinel for an unparseable ``Date:`` header.
+_UNPARSED_DATE = datetime(1900, 1, 1)
+
+
+def _received_at(message: MailMessage) -> datetime | None:
+    """The message's ``Date:`` header as a datetime, when present and parseable.
+
+    imap-tools returns ``datetime(1900, 1, 1)`` for an unparseable header; both
+    that sentinel and a missing header map to ``None``. A naive result is pinned
+    to UTC so the timezone-aware ``held_emails.received_at`` column stores a
+    deterministic instant. ``getattr`` guards a message stub (best-effort
+    provenance must never itself raise).
+    """
+    if not (getattr(message, "date_str", "") or "").strip():
+        return None
+    value = getattr(message, "date", None)
+    if not isinstance(value, datetime) or value == _UNPARSED_DATE:
+        return None
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
 
 
 def _to_addresses(message: MailMessage) -> list[str]:
@@ -493,7 +563,6 @@ class _AttachmentOutcome:
     skipped: list[SkippedAttachment]
     decisions: list[SelectionDecision]
     produced: list[IngestResult]  # every candidate that ingested (new or duplicate)
-    label_usage: LabelUsage | None  # billing for the LLM label pass, if it ran
 
 
 def _candidate_decision(
@@ -519,14 +588,43 @@ def _body_snippet(message: MailMessage, max_chars: int) -> str:
     return _body_substance(raw)[:max_chars]
 
 
-def _label_request(
-    message: MailMessage, candidates: list[IngestCandidate], settings: Settings
-) -> LabelRequest:
-    """Build the LLM label request from the surviving attachment candidates."""
+def _label_items(
+    candidates: list[IngestCandidate], body: IngestCandidate | None, body_skip_reason: str
+) -> list[LabelItem]:
+    """The item manifest for one message-level label call.
+
+    Attachments come first (indices ``0..n-1``, matching their candidate order,
+    so the caller can map verdicts back). The message body is a judged item of
+    its own — index ``len(candidates)``, ``kind="body"`` — when it is a viable
+    candidate OR when it failed only the substance gate (a thin cover note
+    still informs the whole-email verdict; body-only emails must be judged). A
+    blank or oversize body is context only, never an item.
+    """
     items = [
         LabelItem(index=index, filename=c.filename, mime=c.mime, size=len(c.content))
         for index, c in enumerate(candidates)
     ]
+    if body is not None:
+        items.append(
+            LabelItem(
+                index=len(candidates),
+                filename=body.filename,
+                mime=body.mime,
+                size=len(body.content),
+                kind="body",
+            )
+        )
+    elif body_skip_reason.startswith("below_substance"):
+        items.append(
+            LabelItem(index=len(candidates), filename=None, mime=None, size=None, kind="body")
+        )
+    return items
+
+
+def _label_request(
+    message: MailMessage, items: list[LabelItem], settings: Settings
+) -> LabelRequest:
+    """Build the LLM label request for one message's judged items."""
     return LabelRequest(
         subject=message.subject,
         sender=message.from_,
@@ -544,40 +642,29 @@ def _error_skip(candidate: IngestCandidate, exc: Exception) -> SkippedAttachment
 def _ingest_attachments(
     message: MailMessage,
     ingest: IngestCallable,
-    max_bytes: int,
-    settings: Settings,
-    label: LabelCallable | None = None,
+    candidates: list[IngestCandidate],
+    classify_skipped: list[SkippedAttachment],
+    verdicts: dict[int, tuple[str, str | None]],
 ) -> _AttachmentOutcome:
-    """Ingest every supported attachment of one message (classify → label → ingest).
+    """Ingest one message's surviving attachment candidates.
 
-    Pass 1 classifies attachments without side effects. When ``label`` is
-    supplied, the surviving candidates are then labelled ``keep``/
-    ``probably_noise`` by one LLM call; a ``probably_noise`` verdict flags the
-    document (``extra["email_selection"]``) but is **still ingested** — the label
-    never drops. Pass 2 ingests the survivors, stamping each with the email's
-    dropped siblings (so validation can surface them). Returns an
-    :class:`_AttachmentOutcome` with counts, skips, the per-attachment decision
-    trace, the ingest results, and the label billing. A per-attachment failure —
-    a content rejection (``IngestError``) or any other exception — is recorded as
-    a skip and never aborts the message.
+    ``candidates``/``classify_skipped`` come from ``_classify_attachments`` and
+    ``verdicts`` from the (message-level) label pass, keyed by candidate index —
+    the label call itself is hoisted to ``poll_mailbox`` so the whole email is
+    judged once, body included. A ``probably_noise`` verdict flags the document
+    (``extra["email_selection"]``) but is **still ingested** — the label never
+    drops. Each survivor is stamped with the email's dropped siblings (so
+    validation can surface them). Returns an :class:`_AttachmentOutcome` with
+    counts, skips, the per-attachment decision trace, and the ingest results. A
+    per-attachment failure — a content rejection (``IngestError``) or any other
+    exception — is recorded as a skip and never aborts the message.
     """
-    candidates, skipped = _classify_attachments(message, max_bytes, settings)
+    skipped = list(classify_skipped)
     # Only the classify-pass drops can be stamped onto survivors at creation
     # (ingest-pass errors below are not yet known and would race the async
     # processing job); that is exactly the common "unsupported sibling" case.
     dropped_siblings = _dropped_siblings_payload(skipped)
     decisions: list[SelectionDecision] = [_skip_decision(item) for item in skipped]
-
-    verdicts: dict[int, tuple[str, str | None]] = {}
-    label_usage: LabelUsage | None = None
-    if label is not None and candidates:
-        outcome = label(_label_request(message, candidates, settings))
-        verdicts = outcome.verdicts
-        label_usage = outcome.usage
-        if outcome.skip_reason:
-            logger.info(
-                "email-label: pass skipped (%s) for %r", outcome.skip_reason, message.subject
-            )
 
     produced: list[IngestResult] = []
     new = duplicates = 0
@@ -620,7 +707,7 @@ def _ingest_attachments(
         else:
             new += 1
             decisions.append(_candidate_decision(candidate, "ingested"))
-    return _AttachmentOutcome(new, duplicates, skipped, decisions, produced, label_usage)
+    return _AttachmentOutcome(new, duplicates, skipped, decisions, produced)
 
 
 def _body_filename(subject: str | None, extension: str) -> str:
@@ -773,7 +860,7 @@ def _selection_event_detail(
 
 
 def _body_decision(
-    body: IngestCandidate, verdict: str, reason: str | None = None
+    body: IngestCandidate, verdict: str, reason: str | None = None, stage: str = "body_substance"
 ) -> SelectionDecision:
     """The body-stage decision for a body candidate that reached ingest."""
     return SelectionDecision(
@@ -781,7 +868,7 @@ def _body_decision(
         filename=body.filename,
         mime=body.mime,
         size=len(body.content),
-        stage="body_substance",
+        stage=stage,
         verdict=verdict,
         reason=reason,
     )
@@ -800,6 +887,71 @@ def _body_skip_decision(reason: str) -> SelectionDecision:
     )
 
 
+def _hold_message(
+    mailbox: MailboxProtocol,
+    message: MailMessage,
+    settings: Settings,
+    persist_hold: HoldPersister | None,
+    decisions: list[SelectionDecision],
+    *,
+    verdict: str,
+    reason: str | None,
+    label_usage: LabelUsage | None = None,
+) -> None:
+    """Hold one message for review: durable row first, then move to the Held folder.
+
+    The ordering is load-bearing (row-before-move): ``persist_hold`` failures
+    PROPAGATE to the per-message handler, which leaves the mail in place for the
+    next poll — a hold must never move a message without its row. A failed
+    *move* leaves the row behind instead; the retry's insert is skip-if-exists
+    (backed by the partial unique index on ``message_id WHERE status='held'``)
+    and completes the move. The whole-email decision is appended to the trace so
+    both the log line and the persisted row show it. ``label_usage`` (when the
+    LLM pass billed for this email) rides in ``trace["label_usage"]`` — the held
+    email produced no document, so there is no budget-event anchor. When
+    ``persist_hold`` is ``None`` (direct ``poll_mailbox`` wiring in tests) the
+    row is skipped and only the move happens.
+    """
+    decisions.append(
+        SelectionDecision(
+            kind="email",
+            filename=None,
+            mime=None,
+            size=None,
+            stage="email_verdict",
+            verdict="held",
+            reason=reason or verdict,
+        )
+    )
+    _log_selection_trace(message, decisions)
+    if not mailbox.folder.exists(settings.email_held_folder):
+        mailbox.folder.create(settings.email_held_folder)
+    trace = _selection_event_detail(message, decisions)
+    if label_usage is not None:
+        trace["label_usage"] = label_usage.as_detail()
+    if persist_hold is not None:
+        persist_hold(
+            HoldRecord(
+                message_id=_message_id(message),
+                sender=message.from_,
+                subject=message.subject,
+                received_at=_received_at(message),
+                verdict=verdict,
+                reason=reason,
+                trace=trace,
+                imap_uid=message.uid,
+            )
+        )
+    mailbox.move(message.uid, settings.email_held_folder)
+    logger.info(
+        "email: message %r held for review (%s: %s); moved to %r",
+        message.subject,
+        verdict,
+        reason,
+        settings.email_held_folder,
+    )
+
+
 def poll_mailbox(
     settings: Settings,
     ingest: IngestCallable,
@@ -808,18 +960,31 @@ def poll_mailbox(
     notify: DropNotifier | None = None,
     persist_trace: TracePersister | None = None,
     label: LabelCallable | None = None,
+    persist_hold: HoldPersister | None = None,
 ) -> EmailPollSummary:
     """Poll the configured mailbox once and ingest its documents.
 
     Fetches every message in ``email_folder`` (``ALL``, not unseen-only —
     the seen flag is fragile when a human also reads the mailbox) and, per
-    message: rejects senders outside ``email_allowed_senders`` (when
-    non-empty; the mail stays in place, visible to the operator), ingests
+    message: checks the sender against ``email_allowed_senders`` (when
+    non-empty), classifies the attachments, runs the optional message-level
+    LLM label pass (``label``) over the survivors plus the body, ingests
     each supported attachment via ``ingest`` and — when no attachment
     produced a document — the email body itself (HTML preferred, else plain
     text), then moves the message to ``email_processed_folder`` — the move is
     what makes polling idempotent. Errors are isolated per message: the mail
     is left in place for the next poll and the run continues.
+
+    A message the pipeline judges not library-worthy is **held** instead of
+    processed (``email_hold_enabled``): an allowlist-rejected sender, a
+    body-only email below the substance gate, an email whose user-facing drops
+    left nothing ingested (all-duplicate emails still file to Processed), or an
+    LLM ``email_verdict="hold"`` each write a durable row via ``persist_hold``
+    (raising on failure — see :class:`HoldPersister`) and move the message to
+    ``email_held_folder`` instead. Held messages skip the Processed move, the
+    drop notification, and the ``processed`` count. With holds disabled the
+    pre-hold behavior applies: rejected senders stay in place, everything else
+    files to Processed.
 
     Attachments that cannot become documents are no longer dropped silently:
     each is recorded, the survivors of the same email are stamped with them (so
@@ -834,15 +999,16 @@ def poll_mailbox(
     new document so it shows in the document's history.
 
     No-op (empty summary) when ``email_host`` is unset. ``mailbox_factory``,
-    ``notify``, and ``persist_trace`` exist for wiring/tests; the default
-    connects per ``settings``.
+    ``notify``, ``persist_trace``, and ``persist_hold`` exist for wiring/tests;
+    the default connects per ``settings``.
     """
     if settings.email_host is None:
         logger.debug("email: LIBRARY_EMAIL_HOST unset; poller disabled")
         return EmailPollSummary()
     factory = mailbox_factory or (lambda: _connect(settings))
     allowed = frozenset(settings.email_allowed_senders)
-    seen = processed = skipped = ingested = duplicates = dropped = filtered = 0
+    hold_enabled = settings.email_hold_enabled
+    seen = processed = skipped = held = ingested = duplicates = dropped = filtered = 0
     try:
         with factory() as mailbox:
             if not mailbox.folder.exists(settings.email_processed_folder):
@@ -854,36 +1020,119 @@ def poll_mailbox(
                 try:
                     sender = (message.from_ or "").strip().lower()
                     if allowed and sender not in allowed:
-                        logger.warning(
-                            "email: message %r from %r not in allowlist; left in place",
-                            message.subject,
-                            sender,
+                        if hold_enabled and settings.email_hold_unknown_senders:
+                            logger.warning(
+                                "email: message %r from %r not in allowlist; holding for review",
+                                message.subject,
+                                sender,
+                            )
+                            _hold_message(
+                                mailbox,
+                                message,
+                                settings,
+                                persist_hold,
+                                [],
+                                verdict="sender_unknown",
+                                reason=f"sender {sender or '(unknown)'} not in allowlist",
+                            )
+                            held += 1
+                        else:
+                            logger.warning(
+                                "email: message %r from %r not in allowlist; left in place",
+                                message.subject,
+                                sender,
+                            )
+                            skipped += 1
+                        continue
+                    candidates, classify_skipped = _classify_attachments(
+                        message, settings.max_upload_bytes, settings
+                    )
+                    filtered += sum(1 for item in classify_skipped if item.reason in _NOISE_REASONS)
+                    # Precompute the body candidate so the label pass judges the
+                    # body too (body-only emails included); whether the body is
+                    # INGESTED is still decided below, only after the attachments
+                    # produced nothing — exactly as before.
+                    body, body_skip_reason = _body_candidate(message, settings.max_upload_bytes)
+                    label_outcome = LabelOutcome({}, None, None)
+                    if label is not None:
+                        label_items = _label_items(candidates, body, body_skip_reason)
+                        if label_items:
+                            label_outcome = label(_label_request(message, label_items, settings))
+                            if label_outcome.skip_reason:
+                                logger.info(
+                                    "email-label: pass skipped (%s) for %r",
+                                    label_outcome.skip_reason,
+                                    message.subject,
+                                )
+                    if hold_enabled and label_outcome.email_verdict == "hold":
+                        # The LLM judged the WHOLE email as not library material:
+                        # nothing is ingested; the message waits in review. The
+                        # label pass is fail-open, so this branch is unreachable
+                        # on any label failure (email_verdict stays "file").
+                        _hold_message(
+                            mailbox,
+                            message,
+                            settings,
+                            persist_hold,
+                            [_skip_decision(item) for item in classify_skipped],
+                            verdict="llm_hold",
+                            reason=label_outcome.email_reason,
+                            label_usage=label_outcome.usage,
                         )
-                        skipped += 1
+                        held += 1
                         continue
                     outcome = _ingest_attachments(
-                        message, ingest, settings.max_upload_bytes, settings, label
+                        message,
+                        ingest,
+                        candidates,
+                        classify_skipped,
+                        {
+                            index: verdict
+                            for index, verdict in label_outcome.verdicts.items()
+                            if index < len(candidates)
+                        },
                     )
                     new, dups = outcome.new, outcome.duplicates
                     dropped_attachments = outcome.skipped
-                    filtered += sum(
-                        1 for item in dropped_attachments if item.reason in _NOISE_REASONS
-                    )
                     decisions = outcome.decisions
                     produced = list(outcome.produced)
+                    # Surface every user-facing drop: log a summary and count it.
+                    # Done after ingest so ingest-pass errors count too (held
+                    # messages count their drops as well). The push itself waits
+                    # until after the Processed move (below), so a failed move
+                    # can never notify the owner twice across retries.
+                    user_facing = [
+                        item
+                        for item in dropped_attachments
+                        if item.reason in _USER_FACING_DROP_REASONS
+                    ]
+                    if user_facing:
+                        _log_dropped(message.subject, dropped_attachments)
+                        dropped += len(user_facing)
                     if new == 0 and dups == 0:
-                        body, body_skip_reason = _body_candidate(message, settings.max_upload_bytes)
                         if body is not None:
                             # The body is now this email's only document, so it must
                             # carry the dropped siblings too — otherwise the
                             # "attachments couldn't be added" review reason would be
                             # absent exactly when every attachment was dropped.
                             dropped_siblings = _dropped_siblings_payload(dropped_attachments)
+                            body_verdict = label_outcome.verdicts.get(len(candidates))
+                            body_flagged = (
+                                body_verdict is not None and body_verdict[0] == "probably_noise"
+                            )
+                            extra: dict[str, object] = {}
                             if dropped_siblings:
-                                body = replace(
-                                    body,
-                                    extra_document={"email_siblings_dropped": dropped_siblings},
-                                )
+                                extra["email_siblings_dropped"] = dropped_siblings
+                            if body_flagged:
+                                # Ingest-and-flag, identical to a flagged attachment:
+                                # the LLM only annotates, never drops.
+                                extra["email_selection"] = {
+                                    "verdict": "probably_noise",
+                                    "reason": body_verdict[1],
+                                    "source": "llm_label",
+                                }
+                            if extra:
+                                body = replace(body, extra_document=extra)
                             try:
                                 result = ingest(body)
                             except IngestError as exc:
@@ -896,27 +1145,62 @@ def poll_mailbox(
                                 if result.duplicate:
                                     dups += 1
                                     decisions.append(_body_decision(body, "duplicate"))
+                                elif body_flagged:
+                                    new += 1
+                                    decisions.append(
+                                        _body_decision(
+                                            body,
+                                            "flagged_ambiguous",
+                                            body_verdict[1],
+                                            stage="llm_label",
+                                        )
+                                    )
                                 else:
                                     new += 1
                                     decisions.append(_body_decision(body, "ingested"))
+                        elif (
+                            hold_enabled
+                            and settings.email_hold_below_substance
+                            and body_skip_reason.startswith("below_substance")
+                        ):
+                            # Nothing ingested and the body is a thin cover note:
+                            # hold instead of quietly filing the email away.
+                            decisions.append(_body_skip_decision(body_skip_reason))
+                            _hold_message(
+                                mailbox,
+                                message,
+                                settings,
+                                persist_hold,
+                                decisions,
+                                verdict="below_substance",
+                                reason=body_skip_reason,
+                                label_usage=label_outcome.usage,
+                            )
+                            held += 1
+                            continue
                         else:
                             decisions.append(_body_skip_decision(body_skip_reason or "no_body"))
                     else:
                         decisions.append(_body_skip_decision("not_needed"))
+                    if hold_enabled and new == 0 and dups == 0 and user_facing:
+                        # User-facing drops and NOTHING ingested (new or duplicate):
+                        # moving to Processed would file the drops out of sight, so
+                        # hold instead. All-duplicate emails still file to Processed
+                        # (the content is already in the library).
+                        _hold_message(
+                            mailbox,
+                            message,
+                            settings,
+                            persist_hold,
+                            decisions,
+                            verdict="nothing_ingested",
+                            reason="no attachment or body produced a document",
+                            label_usage=label_outcome.usage,
+                        )
+                        held += 1
+                        continue
                     ingested += new
                     duplicates += dups
-                    # Surface every user-facing drop: log a summary and count it.
-                    # Done after ingest so ingest-pass errors count too. The push
-                    # itself waits until after the move (below), so a failed move
-                    # can never notify the owner twice across retries.
-                    user_facing = [
-                        item
-                        for item in dropped_attachments
-                        if item.reason in _USER_FACING_DROP_REASONS
-                    ]
-                    if user_facing:
-                        _log_dropped(message.subject, dropped_attachments)
-                        dropped += len(user_facing)
                     # The always-on decision trace (covers the zero-document case too),
                     # then persist it onto each new document — best-effort and keyed on
                     # document_id, so an email that produced nothing lives only in the log.
@@ -930,7 +1214,7 @@ def poll_mailbox(
                         # re-send still records its spend for the budget gate.
                         anchor_id = produced[0].document.id if produced else None
                         label_detail = (
-                            outcome.label_usage.as_detail() if outcome.label_usage else None
+                            label_outcome.usage.as_detail() if label_outcome.usage else None
                         )
                         if new_document_ids or (label_detail is not None and anchor_id is not None):
                             persist_trace(
@@ -974,6 +1258,7 @@ def poll_mailbox(
         messages_seen=seen,
         messages_processed=processed,
         messages_skipped=skipped,
+        messages_held=held,
         attachments_ingested=ingested,
         attachments_duplicate=duplicates,
         attachments_dropped=dropped,
@@ -1111,6 +1396,64 @@ async def _persist_selection_trace(
         logger.exception("email: failed to persist selection trace for %s", document_ids)
 
 
+async def _persist_held_email(
+    session_factory: async_sessionmaker[AsyncSession],
+    record: HoldRecord,
+    *,
+    imap_folder: str,
+    default_owner_username: str | None = None,
+) -> None:
+    """Insert the durable ``held_emails`` row for one held message (idempotent).
+
+    Skip-if-exists on ``(message_id, status='held')``: a retry after a failed
+    Held-folder move finds the open row from the first attempt and returns
+    without inserting (the partial unique index backstops a race). The owner is
+    resolved from the sender exactly like a document's would be
+    (``resolve_sender_owner``), so the review queue can scope to its user.
+    ``imap_folder`` is the *held* folder — where the message lives once the
+    move (or its retry) lands.
+
+    Unlike the trace persister this RAISES on failure: the row precedes the
+    move, and a hold without its row would be invisible to review — the
+    per-message handler then leaves the mail in place for the next poll.
+    """
+    async with session_factory() as session:
+        if record.message_id is not None:
+            existing = (
+                await session.execute(
+                    select(HeldEmail.id).where(
+                        HeldEmail.message_id == record.message_id,
+                        HeldEmail.status == HeldEmailStatus.HELD,
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing is not None:
+                logger.info(
+                    "email: held row %s already open for message %r; not duplicating",
+                    existing,
+                    record.message_id,
+                )
+                return
+        owner_id = await resolve_sender_owner(
+            session, record.sender, default_owner_username=default_owner_username
+        )
+        session.add(
+            HeldEmail(
+                message_id=record.message_id,
+                sender=record.sender,
+                subject=record.subject,
+                received_at=record.received_at,
+                verdict=record.verdict,
+                reason=record.reason,
+                trace=dict(record.trace),
+                imap_folder=imap_folder,
+                imap_uid=record.imap_uid,
+                owner_id=owner_id,
+            )
+        )
+        await session.commit()
+
+
 async def _label_email_on_loop(
     session_factory: async_sessionmaker[AsyncSession],
     client: AsyncAnthropic,
@@ -1208,6 +1551,27 @@ async def poll_mailbox_async(
                 exc_info=True,
             )
 
+    def persist_hold_on_loop(record: HoldRecord) -> None:
+        # NOT best-effort (unlike notify/trace): a failure here must propagate
+        # so the per-message handler leaves the mail in place — a hold must
+        # never move a message without its durable row.
+        future = asyncio.run_coroutine_threadsafe(
+            _persist_held_email(
+                session_factory,
+                record,
+                imap_folder=settings.email_held_folder,
+                default_owner_username=default_owner,
+            ),
+            loop,
+        )
+        try:
+            future.result(timeout=_LOOP_BRIDGE_TIMEOUT_SECONDS)
+        except TimeoutError:
+            # Cancel is best-effort — the loop-side coroutine may already be
+            # past its await points — and the timeout still propagates.
+            future.cancel()
+            raise
+
     # The optional per-email LLM label pass is wired only when enabled AND an API
     # key is set; the Anthropic client's lifetime spans the whole poll.
     async with AsyncExitStack() as stack:
@@ -1242,4 +1606,5 @@ async def poll_mailbox_async(
             notify=notify_on_loop,
             persist_trace=persist_trace_on_loop,
             label=label,
+            persist_hold=persist_hold_on_loop,
         )

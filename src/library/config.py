@@ -167,6 +167,19 @@ class Settings(BaseSettings):
     email_label_model: str = "claude-haiku-4-5"
     email_label_daily_budget_usd: float = 2.0
     email_label_body_snippet_chars: int = 1000  # body context sent to the labeller
+    # Hold-for-review (see docs/ingestion.md, "Email item selection"). An email
+    # the pipeline judges not library-worthy is HELD — a durable ``held_emails``
+    # row plus a move to ``email_held_folder`` — instead of silently processed,
+    # so a human can ingest-anyway or dismiss it later. ``email_hold_enabled``
+    # is the master switch and the rollback lever: False restores the
+    # pre-feature behavior exactly (below-substance bodies and unmatched
+    # senders are quietly dropped/left in place again). The two trigger flags
+    # gate the deterministic holds individually; the LLM ``hold`` verdict needs
+    # only the master switch (plus ``email_label_enabled``).
+    email_hold_enabled: bool = True
+    email_held_folder: str = "Library/Held"
+    email_hold_below_substance: bool = True
+    email_hold_unknown_senders: bool = True
     # Background worker (see docs/ingestion.md, "Job queue").
     # Concurrency: how many jobs the Procrastinate worker runs at once. Default 1
     # (serial) — raising it multiplies peak worker RAM (parallel OCR subprocesses
