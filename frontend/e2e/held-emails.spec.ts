@@ -57,5 +57,6 @@ test('unauthenticated /held-emails redirects to login with the target preserved'
   page,
 }) => {
   await page.goto('/held-emails')
-  await expect(page).toHaveURL(/\/login\?redirect=%2Fheld-emails/)
+  // Vue Router leaves `/` unencoded in query values, so match either form.
+  await expect(page).toHaveURL(/\/login\?redirect=(%2F|\/)held-emails/)
 })
