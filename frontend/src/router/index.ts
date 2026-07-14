@@ -31,6 +31,12 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/RecentlyDeletedView.vue'),
   },
   {
+    // Hold-for-review queue: emails the ingest pipeline held instead of filing.
+    path: '/held-emails',
+    name: 'held-emails',
+    component: () => import('../views/HeldEmailsView.vue'),
+  },
+  {
     path: '/upload',
     name: 'upload',
     component: () => import('../views/UploadView.vue'),

@@ -33,6 +33,7 @@ import { summarizeReviewReasons } from '@/utils/validationReason'
 import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import { useReviewQueueStore } from '@/stores/reviewQueue'
+import { useHeldEmailsStore } from '@/stores/heldEmails'
 import { useJobsStore } from '@/stores/jobs'
 import {
   parseDocumentQuery,
@@ -148,6 +149,17 @@ const reviewButtonLabel = computed(() => {
   return `${n} ${n === 1 ? 'document needs' : 'documents need'} review`
 })
 
+// Held-emails affordance, cloning the needs-review pattern: a cheap total-only
+// probe refreshed from the list-load path (NOT onMounted — auth-guard timing),
+// a button that hides entirely at zero, and the same responsive classes.
+const heldEmails = useHeldEmailsStore()
+const heldEmailsLabel = computed(() => {
+  const n = heldEmails.count
+  return `${n} ${n === 1 ? 'email' : 'emails'} held`
+})
+// The attention row hosts both affordances; render it when either shows.
+const showAttentionRow = computed(() => showReviewButton.value || heldEmails.count > 0)
+
 let abortController: AbortController | null = null
 let generation = 0
 
@@ -226,6 +238,7 @@ watch(
       total.value = response.total
       loading.value = false
       void refreshReviewCount()
+      void heldEmails.refreshCount()
     } catch (error: unknown) {
       if (error instanceof DOMException && error.name === 'AbortError') return
       if (gen !== generation) return
@@ -424,8 +437,9 @@ function toggleSortDirection(): void {
 
   <DocumentFilterBar :applied="applied" @apply="applyFilterQuery" @clear="clearFilters" />
 
-  <div v-if="showReviewButton" class="flex flex-col sm:flex-row sm:items-center gap-2 mb-4">
+  <div v-if="showAttentionRow" class="flex flex-col sm:flex-row sm:items-center gap-2 mb-4">
     <button
+      v-if="showReviewButton"
       type="button"
       :class="[
         'flex w-full sm:w-auto items-center gap-2 rounded-md border px-3 py-2 text-sm font-medium transition-colors',
@@ -455,6 +469,19 @@ function toggleSortDirection(): void {
     >
       {{ startingQueue ? 'Starting…' : 'Review these one by one →' }}
     </button>
+    <RouterLink
+      v-if="heldEmails.count > 0"
+      to="/held-emails"
+      class="flex w-full sm:w-auto items-center justify-center gap-1.5 rounded-md border border-violet-300 bg-violet-50 px-3 py-2 text-sm font-medium text-violet-700 transition-colors hover:bg-violet-100 dark:border-violet-500/40 dark:bg-violet-500/10 dark:text-violet-300 dark:hover:bg-violet-500/20"
+      data-testid="held-emails-button"
+    >
+      <svg class="h-4 w-4 shrink-0 fill-current" viewBox="0 0 16 16" aria-hidden="true">
+        <path
+          d="M2 3a1 1 0 0 0-1 1v8a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1V4a1 1 0 0 0-1-1H2Zm1.4 2h9.2L8 8.25 3.4 5ZM3 6.7l4.7 3.3a.5.5 0 0 0 .6 0L13 6.7V11H3V6.7Z"
+        />
+      </svg>
+      <span>{{ heldEmailsLabel }} →</span>
+    </RouterLink>
   </div>
 
   <div

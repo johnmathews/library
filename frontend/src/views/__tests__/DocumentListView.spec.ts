@@ -85,6 +85,9 @@ describe('DocumentListView', () => {
   /** What the "needs review" count probe (review_status=needs_review&limit=1)
    *  responds with; defaults to zero so the button is hidden unless a test opts in. */
   let reviewCountResponse: () => Response
+  /** What the held-emails count probe (GET /api/held-emails, limit=1) responds
+   *  with; defaults to zero so the button is hidden unless a test opts in. */
+  let heldCountResponse: () => Response
 
   beforeEach(async () => {
     // Isolate persisted UI prefs (e.g. `library:doc-sort-v1`) between tests so a
@@ -94,6 +97,7 @@ describe('DocumentListView', () => {
     // below gives each test an empty cache (no explicit reset needed).
     listResponse = () => jsonResponse(listBody([]))
     reviewCountResponse = () => jsonResponse(listBody([], 0))
+    heldCountResponse = () => jsonResponse({ items: [], total: 0, limit: 1, offset: 0 })
     vi.stubGlobal('fetch', fetchMock)
     fetchMock.mockReset()
     fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
@@ -128,6 +132,9 @@ describe('DocumentListView', () => {
         }
         return Promise.resolve(jsonResponse([]))
       }
+      if (url.startsWith('/api/held-emails')) {
+        return Promise.resolve(heldCountResponse())
+      }
       if (url.startsWith('/api/documents')) {
         // The needs-review count probe is a distinct total-only query.
         if (/review_status=needs_review/.test(url) && /[?&]limit=1(&|$)/.test(url)) {
@@ -150,6 +157,7 @@ describe('DocumentListView', () => {
         { path: '/documents/:id/delete', name: 'document-delete', component: Stub },
         { path: '/upload', name: 'upload', component: Stub },
         { path: '/saved-views', name: 'saved-views', component: Stub },
+        { path: '/held-emails', name: 'held-emails', component: Stub },
       ],
     })
     await router.push('/')
@@ -524,6 +532,48 @@ describe('DocumentListView', () => {
     reviewCountResponse = () => jsonResponse(listBody([], 0))
     const w = await mountView()
     expect(w.find('[data-testid="needs-review-filter"]').exists()).toBe(false)
+  })
+
+  it('hides the held-emails button entirely when nothing is held', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    expect(w.find('[data-testid="held-emails-button"]').exists()).toBe(false)
+  })
+
+  it('shows "N emails held" with the probe total, next to the review button', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    reviewCountResponse = () => jsonResponse(listBody([], 2))
+    heldCountResponse = () => jsonResponse({ items: [], total: 3, limit: 1, offset: 0 })
+    const w = await mountView()
+
+    const button = w.find('[data-testid="held-emails-button"]')
+    expect(button.exists()).toBe(true)
+    expect(button.text()).toContain('3 emails held')
+    expect(button.attributes('href')).toBe('/held-emails')
+    // Same responsive show/hide classes as the review affordances beside it.
+    expect(button.classes()).toContain('w-full')
+    expect(button.classes()).toContain('sm:w-auto')
+    // It shares the attention row with the review button.
+    expect(w.find('[data-testid="needs-review-filter"]').exists()).toBe(true)
+  })
+
+  it('shows the held-emails button even when nothing needs review', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    heldCountResponse = () => jsonResponse({ items: [], total: 1, limit: 1, offset: 0 })
+    const w = await mountView()
+    expect(w.find('[data-testid="needs-review-filter"]').exists()).toBe(false)
+    expect(w.find('[data-testid="held-emails-button"]').text()).toContain('1 email held')
+  })
+
+  it('navigates to /held-emails when the held-emails button is clicked', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    heldCountResponse = () => jsonResponse({ items: [], total: 2, limit: 1, offset: 0 })
+    const w = await mountView()
+
+    await w.find('[data-testid="held-emails-button"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.path).toBe('/held-emails')
   })
 
   it('toggles the needs_review filter through the URL when clicked', async () => {
