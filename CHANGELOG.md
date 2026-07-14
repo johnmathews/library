@@ -6,6 +6,25 @@ All notable changes to Library are documented here. The format follows
 
 ## [Unreleased]
 
+### Changed
+
+**Consume archive dirs are now siblings of the consume folder** — successful
+and rejected files move to `LIBRARY_CONSUMED_DIR` / `LIBRARY_FAILED_DIR`
+(new env vars, defaulting to `<parent-of-consume-dir>/consumed` and
+`<parent-of-consume-dir>/failed` when `LIBRARY_CONSUME_DIR` is set) instead of
+`consumed/` and `failed/` *inside* the consume dir, so the consume folder holds
+only pending items. Both dirs are created at worker startup, moves work across
+mounts (EXDEV-safe), and a one-time startup migration relocates any legacy
+in-consume archive trees to the new locations (collision-safe merge). Archived
+files therefore **no longer sync back** to the device that dropped them via the
+Syncthing-shared consume folder — deliberately dropped in favour of the cleaner
+layout. **Operator action (production):** the consume dir is its own NFS mount
+at `/consume`, so the sibling default would land on the ephemeral container
+root — set `LIBRARY_CONSUMED_DIR=/data/consumed` and
+`LIBRARY_FAILED_DIR=/data/failed` on the worker in the proxmox-setup compose
+**before** pulling this image. See [docs/ingestion.md](docs/ingestion.md)
+"Archive layout" and [docs/deployment.md](docs/deployment.md) §1.7.2.
+
 ### Fixed
 
 **Email attachments are no longer dropped silently** — when a forwarded email

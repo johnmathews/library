@@ -103,7 +103,14 @@ need semantic Ask you can omit the `embedder` service and set
    Syncthing-synced scan folder over `/data/consume` on the `worker`
    service), email-in (`LIBRARY_EMAIL_*`), paperless-ngx import
    (`docs/migration.md`): all configured via `.env`; see
-   [ingestion.md](ingestion.md).
+   [ingestion.md](ingestion.md). Consumed/failed files are archived to
+   **siblings of the consume dir** by default
+   (`LIBRARY_CONSUMED_DIR`/`LIBRARY_FAILED_DIR`, defaulting to
+   `<parent-of-consume-dir>/consumed` and `…/failed`). That default is
+   fine when the consume dir lives inside a persistent volume (here:
+   `/data/consumed`, `/data/failed`), but if you bind-mount the consume
+   dir as its **own mount root** the parent is ephemeral container
+   storage — set both vars explicitly to persistent paths.
 
 ## 1.3 How the frontend is served
 
@@ -322,8 +329,14 @@ image; proxmox-setup owns how it is run. Concrete details:
 3. **Storage & backups (see §1.6).** Library's file store (`/data`) and consume
    folder are bind-mounted from the **TrueNAS `document-store` NFS dataset**
    (`/mnt/nfs/document-store` → `data/`→`/data`, `consume/`→`/consume`), so the
-   corpus is not on the 16 GB LXC rootfs. The database (`pgdata`) stays **local**
-   at `/srv/apps/library/pgdata` on the LXC disk. Backup coverage follows from
+   corpus is not on the 16 GB LXC rootfs. Because `/consume` is its **own mount
+   root**, the automatic sibling default for the consume archive dirs would
+   resolve to the ephemeral container root (`/consumed`, `/failed`) — the
+   `library-worker` service **must** set `LIBRARY_CONSUMED_DIR=/data/consumed`
+   and `LIBRARY_FAILED_DIR=/data/failed` explicitly in the proxmox-setup compose
+   **before** pulling an image with the sibling-archive change (the startup
+   auto-migration moves the archive to wherever these resolve). The database
+   (`pgdata`) stays **local** at `/srv/apps/library/pgdata` on the LXC disk. Backup coverage follows from
    this split: the **daily PBS backup of the LXC** captures `pgdata` (local),
    while the file store is covered by **TrueNAS ZFS snapshots + replication** of
    `tank`. No separate `pg_dump` cron is required for disaster recovery.

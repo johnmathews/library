@@ -5,8 +5,11 @@ the primary iOS-Notes-scan flow) is ingested through the same
 ``ingest_file`` service as an upload (``source=consume``, no uploader).
 Files may arrive incrementally (partial copies, Syncthing temp files +
 renames), so each candidate must be size/mtime-stable before ingest.
-Successes are archived under ``consumed/YYYY/MM/`` (or deleted),
-rejections move to ``failed/``. See docs/ingestion.md, "Consume folder".
+Successes are archived under ``<consumed_dir>/YYYY/MM/`` (or deleted),
+rejections move to ``<failed_dir>/`` — both configurable
+(``LIBRARY_CONSUMED_DIR``/``LIBRARY_FAILED_DIR``) and defaulting to
+siblings of the consume dir, so the watched folder holds only pending
+items. See docs/ingestion.md, "Consume folder".
 
 The watcher runs as an asyncio task inside the worker process (see
 ``library.worker``); per-file errors are caught and logged so a bad file
@@ -14,8 +17,11 @@ can never take the Procrastinate worker down with it.
 """
 
 import asyncio
+import errno
 import logging
 import os
+import shutil
+import tempfile
 import time
 from datetime import UTC, datetime
 from pathlib import Path
@@ -47,6 +53,8 @@ SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
     }
 )
 
+#: Legacy in-consume-dir archive locations; used only by the one-time
+#: startup migration to the configured (sibling by default) dirs.
 CONSUMED_DIR_NAME: str = "consumed"
 FAILED_DIR_NAME: str = "failed"
 
@@ -66,6 +74,8 @@ class ConsumeWatcher:
         root: Path,
         session_factory: async_sessionmaker[AsyncSession],
         *,
+        consumed_dir: Path,
+        failed_dir: Path,
         stability_s: float = 3.0,
         poll_interval_s: float = 2.0,
         stability_timeout_s: float = DEFAULT_STABILITY_TIMEOUT_S,
@@ -76,6 +86,8 @@ class ConsumeWatcher:
     ) -> None:
         self._root = root
         self._session_factory = session_factory
+        self._consumed_dir = consumed_dir
+        self._failed_dir = failed_dir
         self._stability_s = stability_s
         self._poll_interval_s = poll_interval_s
         self._stability_timeout_s = stability_timeout_s
@@ -93,9 +105,15 @@ class ConsumeWatcher:
         """Build a watcher from application settings (consume_dir must be set)."""
         if settings.consume_dir is None:
             raise ValueError("LIBRARY_CONSUME_DIR is not configured")
+        if settings.consumed_dir is None or settings.failed_dir is None:
+            # Unreachable with a set consume_dir (the settings validator
+            # fills sibling defaults), but guard against direct construction.
+            raise ValueError("LIBRARY_CONSUMED_DIR / LIBRARY_FAILED_DIR are not configured")
         return cls(
             settings.consume_dir,
             session_factory,
+            consumed_dir=settings.consumed_dir,
+            failed_dir=settings.failed_dir,
             stability_s=settings.consume_stability_s,
             poll_interval_s=settings.consume_poll_interval_s,
             force_polling=settings.consume_force_polling,
@@ -107,6 +125,11 @@ class ConsumeWatcher:
     async def run(self, stop_event: asyncio.Event | None = None) -> None:
         """Sweep pre-existing files, then watch until ``stop_event`` is set."""
         self._root.mkdir(parents=True, exist_ok=True)
+        # Create the archive targets up front so an unwritable location
+        # fails loudly once at startup instead of per ingested file.
+        self._consumed_dir.mkdir(parents=True, exist_ok=True)
+        self._failed_dir.mkdir(parents=True, exist_ok=True)
+        self._migrate_legacy_dirs()
         logger.info(
             "consume: watching %s (force_polling=%s, stability=%.1fs)",
             self._root,
@@ -128,6 +151,40 @@ class ConsumeWatcher:
             # process_path never raises, so a plain gather drains cleanly.
             await asyncio.gather(*self._tasks)
         logger.info("consume: watcher for %s stopped", self._root)
+
+    def _migrate_legacy_dirs(self) -> None:
+        """One-time startup migration of legacy in-consume archive trees.
+
+        Earlier releases archived under ``<consume_dir>/consumed/`` and
+        parked rejects in ``<consume_dir>/failed/``. Merge any such
+        leftovers into the configured dirs (preserving the ``YYYY/MM``
+        structure, suffixing file collisions) and remove the emptied
+        legacy trees. No-op when a legacy dir is absent or *is* the
+        configured target (override pointing inside the consume dir).
+        Non-regular entries (symlinks, sockets) are left in place with a
+        warning rather than crashing the watcher — the legacy dir then
+        survives with only those entries and is retried next startup.
+        """
+        for legacy, target in (
+            (self._root / CONSUMED_DIR_NAME, self._consumed_dir),
+            (self._root / FAILED_DIR_NAME, self._failed_dir),
+        ):
+            if legacy == target or not legacy.is_dir():
+                continue
+            moved = 0
+            for path in sorted(legacy.rglob("*")):
+                if path.is_symlink() or not path.is_file():
+                    if not path.is_dir():
+                        logger.warning("consume: leaving non-regular entry %s in %s", path, legacy)
+                    continue
+                self._move_into(path, target / path.parent.relative_to(legacy))
+                moved += 1
+            for directory in sorted([*legacy.rglob("*"), legacy], reverse=True):
+                try:
+                    directory.rmdir()  # children first: the tree is file-free now
+                except OSError:
+                    logger.warning("consume: could not remove legacy dir entry %s", directory)
+            logger.info("consume: migrated %d file(s) from legacy %s to %s", moved, legacy, target)
 
     async def sweep(self) -> None:
         """Process every candidate file already present (drop-while-down case)."""
@@ -168,7 +225,9 @@ class ConsumeWatcher:
             relative = path.relative_to(self._root)
         except ValueError:
             return False
-        if relative.parts and relative.parts[0] in (CONSUMED_DIR_NAME, FAILED_DIR_NAME):
+        # Never reprocess archived/parked files — matters when a configured
+        # dir points back inside the consume dir (would loop otherwise).
+        if path.is_relative_to(self._consumed_dir) or path.is_relative_to(self._failed_dir):
             return False
         # Dotfile components cover Syncthing's `.syncthing.<name>.tmp`
         # temps (and `.stfolder` etc.); `~syncthing~` is its legacy
@@ -191,7 +250,7 @@ class ConsumeWatcher:
         except FileNotFoundError:
             return  # renamed away under us (e.g. Syncthing temp promotion)
         if len(content) > self._max_bytes:
-            target = self._move_into(path, self._root / FAILED_DIR_NAME)
+            target = self._move_into(path, self._failed_dir)
             logger.warning(
                 "consume: %s is %d bytes (limit %d); moved to %s",
                 path,
@@ -215,7 +274,7 @@ class ConsumeWatcher:
             # duplicate): retrying cannot help, so park it in failed/.
             # No ingestion event exists — these paths never create a
             # document row and events require one (see docs/ingestion.md).
-            target = self._move_into(path, self._root / FAILED_DIR_NAME)
+            target = self._move_into(path, self._failed_dir)
             logger.warning("consume: %s rejected (%s); moved to %s", path, exc, target)
             return
         self._finish(path)
@@ -258,12 +317,12 @@ class ConsumeWatcher:
         return (stat.st_size, stat.st_mtime)
 
     def _finish(self, path: Path) -> None:
-        """Apply the on-success policy: archive to consumed/YYYY/MM or delete."""
+        """Apply the on-success policy: archive to <consumed_dir>/YYYY/MM or delete."""
         if self._on_success == "delete":
             path.unlink(missing_ok=True)
             return
         now = datetime.now(tz=UTC)
-        target_dir = self._root / CONSUMED_DIR_NAME / f"{now.year:04d}" / f"{now.month:02d}"
+        target_dir = self._consumed_dir / f"{now.year:04d}" / f"{now.month:02d}"
         self._move_into(path, target_dir)
 
     @staticmethod
@@ -275,5 +334,22 @@ class ConsumeWatcher:
         while target.exists():
             target = target_dir / f"{path.stem}-{counter}{path.suffix}"
             counter += 1
-        os.replace(path, target)  # same filesystem: atomic rename
+        try:
+            os.replace(path, target)  # same filesystem: atomic rename
+        except OSError as exc:
+            if exc.errno != errno.EXDEV:
+                raise
+            # Archive dir on another filesystem: copy to a temp name in the
+            # target dir, then atomically rename (the storage.py pattern) —
+            # a crash mid-copy never leaves a partial file under the final
+            # name, and the source survives for a clean retry.
+            fd, tmp_name = tempfile.mkstemp(dir=target_dir, prefix=f".{path.name}.")
+            os.close(fd)
+            try:
+                shutil.copy2(path, tmp_name)
+                os.replace(tmp_name, target)
+            except BaseException:
+                os.unlink(tmp_name)
+                raise
+            path.unlink()
         return target

@@ -118,6 +118,14 @@ class Settings(BaseSettings):
     consume_poll_interval_s: float = 2.0
     consume_stability_s: float = 3.0
     consume_on_success: Literal["archive", "delete"] = "archive"
+    # Where successfully ingested files are archived (consumed/YYYY/MM/) and
+    # rejected files are parked. Unset, both default to siblings of the
+    # consume dir (filled by ``_default_consume_archive_dirs`` below) so the
+    # watched folder holds only pending items. Set them explicitly when the
+    # consume dir is the root of its own mount — the sibling default would
+    # otherwise land outside the persistent volume.
+    consumed_dir: Path | None = None
+    failed_dir: Path | None = None
     # Username that owns documents ingested via the consume folder and the
     # paperless importer — neither channel has an inherent uploader, so these
     # documents cannot fall back to an owner-as-recipient without this. Unset =
@@ -207,6 +215,20 @@ class Settings(BaseSettings):
         if isinstance(value, list):
             return [str(item).strip().lower() for item in value if str(item).strip()]
         return value
+
+    @model_validator(mode="after")
+    def _default_consume_archive_dirs(self) -> "Settings":
+        """Default ``consumed_dir``/``failed_dir`` to siblings of the consume dir.
+
+        Only fills fields left unset, and only when the watcher is on
+        (``consume_dir`` set) — with the watcher off both stay ``None``.
+        """
+        if self.consume_dir is not None:
+            if self.consumed_dir is None:
+                self.consumed_dir = self.consume_dir.parent / "consumed"
+            if self.failed_dir is None:
+                self.failed_dir = self.consume_dir.parent / "failed"
+        return self
 
     @model_validator(mode="after")
     def _require_pricing_for_configured_models(self) -> "Settings":

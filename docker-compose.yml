@@ -117,6 +117,10 @@ services:
       # Lives inside the /data volume; in production bind-mount your
       # Syncthing-synced scan folder over it (and set
       # LIBRARY_CONSUME_FORCE_POLLING=true if that mount is NFS/SMB).
+      # Archives land in siblings of this dir (here: /data/consumed and
+      # /data/failed) — override with LIBRARY_CONSUMED_DIR / LIBRARY_FAILED_DIR
+      # (via .env) if the consume dir is its own mount root, or the defaults
+      # resolve to ephemeral container storage.
       # See docs/ingestion.md, "Consume folder".
       LIBRARY_CONSUME_DIR: ${LIBRARY_CONSUME_DIR:-/data/consume}
       LIBRARY_EMBEDDING_SERVICE_URL: ${LIBRARY_EMBEDDING_SERVICE_URL:-http://embedder:80}

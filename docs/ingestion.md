@@ -977,7 +977,8 @@ and the worker behaves exactly as before.
 file appears in {LIBRARY_CONSUME_DIR}
   │
   ├─ candidate? (supported extension; not a dotfile / Syncthing temp /
-  │   *.part; not under consumed/ or failed/) ── no ─► ignored entirely
+  │   *.part; not under the configured consumed/failed archive
+  │   dirs) ── no ─► ignored entirely
   ├─ stability wait: size+mtime must be unchanged for
   │   LIBRARY_CONSUME_STABILITY_S (re-sampled until stable, up to a
   │   5-minute cap) ── still changing at the cap ─► skipped; retried on
@@ -985,10 +986,10 @@ file appears in {LIBRARY_CONSUME_DIR}
   ├─ ingest_file(content, filename, source=consume)
   │    ├─ new document ─► row + "received" event + process_document job
   │    └─ duplicate    ─► "duplicate_upload" event on the existing row
-  ├─ success (incl. duplicate) ─► move to consumed/YYYY/MM/  (or unlink
-  │   when LIBRARY_CONSUME_ON_SUCCESS=delete)
+  ├─ success (incl. duplicate) ─► move to {LIBRARY_CONSUMED_DIR}/YYYY/MM/
+  │   (or unlink when LIBRARY_CONSUME_ON_SUCCESS=delete)
   └─ rejected (unsupported MIME, oversize, soft-deleted duplicate)
-      ─► move to failed/ + warning log
+      ─► move to {LIBRARY_FAILED_DIR}/ + warning log
 ```
 
 Details and decisions:
@@ -1013,7 +1014,9 @@ Details and decisions:
 - **Ignored names.** Dotfiles (any path component starting with `.`,
   which covers Syncthing's `.syncthing.<name>.tmp` temps), Syncthing's
   legacy `~syncthing~<name>.tmp` pattern, `*.part` partial downloads,
-  and everything under the `consumed/` and `failed/` subdirectories.
+  and everything under the configured consumed/failed archive dirs
+  (relevant when an override places an archive dir within the consume
+  tree).
   Syncthing writes to a temp name and renames into place, so the
   finished file appears atomically as a single `added` event.
 - **Duplicates are consumed.** A file whose content already exists gets
@@ -1021,35 +1024,46 @@ Details and decisions:
   like a success — the document is in the library, so the drop is done.
 - **Failures.** Unsupported MIME, content over
   `LIBRARY_MAX_UPLOAD_BYTES`, or a soft-deleted-duplicate collision
-  move the file to `failed/` with a warning log. No ingestion event is
-  written — these paths never create a document row, and
-  `ingestion_events.document_id` is non-nullable, so the `failed/` dir
+  move the file to `{LIBRARY_FAILED_DIR}/` with a warning log. No
+  ingestion event is written — these paths never create a document row,
+  and `ingestion_events.document_id` is non-nullable, so the failed dir
   plus the log *is* the audit trail. Transient errors (database down,
-  I/O) do **not** go to `failed/`: the file stays in place and is
-  retried on a later event or the next sweep.
+  I/O) do **not** go to `{LIBRARY_FAILED_DIR}/`: the file stays in
+  place and is retried on a later event or the next sweep.
 - **Per-file isolation.** All per-file exceptions are caught and logged
   inside the watcher loop; nothing a dropped file does can take down
   the Procrastinate worker sharing the process.
 
 ### Archive layout
 
-Successful files are moved (same filesystem, `os.replace`) to
-`{consume_dir}/consumed/YYYY/MM/<original name>` — year/month of
-consumption, so the archive stays browsable and Syncthing keeps syncing
-it back to the devices that dropped the files. Failures go to
-`{consume_dir}/failed/<original name>`. Name collisions get a numeric
-suffix (`scan-1.pdf`). Set `LIBRARY_CONSUME_ON_SUCCESS=delete` to
-unlink instead of archiving.
+Successful files are moved to
+`{LIBRARY_CONSUMED_DIR}/YYYY/MM/<original name>` — year/month of
+consumption, so the archive stays browsable. Failures go to
+`{LIBRARY_FAILED_DIR}/<original name>`. Both dirs default to
+**siblings of the consume dir** (`<parent-of-consume-dir>/consumed` and
+`<parent-of-consume-dir>/failed`) and are created at worker startup, so
+the consume dir itself holds only pending items. Moves are EXDEV-safe:
+`os.replace` on the same filesystem, with a copy-based fallback when
+the archive dir sits on a different mount. Name collisions get a
+numeric suffix (`scan-1.pdf`). Set `LIBRARY_CONSUME_ON_SUCCESS=delete`
+to unlink instead of archiving.
+
+Earlier releases kept both archive dirs *within* the consume dir
+(`consumed/` and `failed/` directly under it). On startup the
+worker runs a one-time migration: any legacy trees found there are
+moved into the configured locations (collision-safe merge, EXDEV-safe)
+and the emptied legacy dirs are removed. Subsequent startups are
+no-ops.
 
 ### Supported extensions
 
 `.pdf .jpg .jpeg .png .heic .heif .tif .tiff .txt .md .markdown`
 (case-insensitive).
 Anything else is ignored in place — extensionless or unknown files are
-*not* moved to `failed/`, because Syncthing folders routinely contain
+*not* moved to `{LIBRARY_FAILED_DIR}/`, because Syncthing folders routinely contain
 foreign files (e.g. `.stfolder`) that are not ours to touch. Content
 validation still happens at ingest: a `.pdf` that is not actually a PDF
-is rejected by MIME sniffing and lands in `failed/`.
+is rejected by MIME sniffing and lands in `{LIBRARY_FAILED_DIR}/`.
 
 ### Syncthing / NAS notes
 
@@ -1057,6 +1071,20 @@ is rejected by MIME sniffing and lands in `failed/`.
   the shared `/data` volume. In production, bind-mount your
   Syncthing-synced folder over it (e.g.
   `- /srv/syncthing/scans:/data/consume`).
+- **Archive dirs must live on a persistent mount.** The sibling
+  defaults (`<parent-of-consume-dir>/consumed` and `…/failed`) are
+  right when the consume dir sits inside a persistent volume (the
+  compose default resolves to `/data/consumed` and `/data/failed`). But
+  when the consume dir is its **own mount root** — as in production,
+  where the NFS export is bind-mounted directly at `/consume` — the
+  parent is the ephemeral container root and the archive would be lost
+  on container replacement. Production must set
+  `LIBRARY_CONSUMED_DIR=/data/consumed` and
+  `LIBRARY_FAILED_DIR=/data/failed` explicitly (in the proxmox-setup
+  compose) before deploying an image with this behavior.
+- Archived files no longer sync back to the device that dropped them:
+  the archive dirs sit outside the Syncthing-synced consume folder by
+  design, so `/consume` holds only pending items.
 - **inotify does not cross NFS/SMB.** If the consume dir is a network
   mount (NAS export, SMB share), file events never reach the container —
   set `LIBRARY_CONSUME_FORCE_POLLING=true` so watchfiles polls instead
@@ -1477,10 +1505,12 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_STALLED_WORKER_PRUNE_SECONDS` | `86400.0` | How long a dead worker's row survives before startup-prune; kept high so the sweep can still see stranded jobs after a redeploy |
 | `LIBRARY_BUDGET_BACKFILL_ENABLED` | `false` | Daily 03:17 UTC re-enqueue of budget-skipped documents (spends; off by default) |
 | `LIBRARY_CONSUME_DIR` | unset | Consume folder to watch; unset disables the watcher |
+| `LIBRARY_CONSUMED_DIR` | `<parent-of-consume-dir>/consumed` | Archive dir for successful files (`YYYY/MM` subtree); created at worker startup. Default only applies when `LIBRARY_CONSUME_DIR` is set |
+| `LIBRARY_FAILED_DIR` | `<parent-of-consume-dir>/failed` | Archive dir for rejected files; created at worker startup. Default only applies when `LIBRARY_CONSUME_DIR` is set |
 | `LIBRARY_CONSUME_FORCE_POLLING` | `false` | Poll instead of inotify — required for NFS/SMB-mounted consume dirs |
 | `LIBRARY_CONSUME_POLL_INTERVAL_S` | `2.0` | Poll cadence when force-polling |
 | `LIBRARY_CONSUME_STABILITY_S` | `3.0` | A file's size+mtime must be unchanged this long before ingest |
-| `LIBRARY_CONSUME_ON_SUCCESS` | `archive` | `archive` → move to `consumed/YYYY/MM/`; `delete` → unlink |
+| `LIBRARY_CONSUME_ON_SUCCESS` | `archive` | `archive` → move to `{LIBRARY_CONSUMED_DIR}/YYYY/MM/`; `delete` → unlink |
 | `LIBRARY_IMPORT_DEFAULT_OWNER` | unset | Username that owns consume-folder and paperless-import documents (they have no inherent uploader); enables the owner-as-recipient fallback for them. Unset = unowned |
 | `LIBRARY_EMAIL_HOST` | unset | IMAP host; unset disables the email poller |
 | `LIBRARY_EMAIL_PORT` | `993` | IMAP TLS port |
