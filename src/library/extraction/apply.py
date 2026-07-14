@@ -43,17 +43,28 @@ from library.models import (
 logger = logging.getLogger(__name__)
 
 
-async def todays_spend_usd(session: AsyncSession, event: str = "extraction_completed") -> float:
-    """Sum today's (UTC) estimated spend recorded by the given completion event.
+# Completion events whose cost counts toward the EXTRACTION daily budget: the
+# main extraction pass plus the fill-only repair pass over the markdown layer
+# (library.extraction.repair) — repair is extraction spend, not markdown spend.
+EXTRACTION_SPEND_EVENTS: tuple[str, ...] = ("extraction_completed", "extraction_repair_completed")
 
-    Defaults to extraction spend; pass another completion event name (e.g.
-    ``email_label_completed``) to gate a different budget on its own daily total.
+
+async def todays_spend_usd(
+    session: AsyncSession, event: str | tuple[str, ...] = EXTRACTION_SPEND_EVENTS
+) -> float:
+    """Sum today's (UTC) estimated spend recorded by the given completion event(s).
+
+    Defaults to extraction spend (``extraction_completed`` plus
+    ``extraction_repair_completed`` — the repair pass draws on the same budget);
+    pass another completion event name (e.g. ``email_label_completed``) to gate
+    a different budget on its own daily total.
     """
+    events = (event,) if isinstance(event, str) else event
     start_of_day = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
     statement = select(
         func.coalesce(func.sum(IngestionEvent.detail["cost_usd"].astext.cast(Numeric)), 0)
     ).where(
-        IngestionEvent.event == event,
+        IngestionEvent.event.in_(events),
         IngestionEvent.detail.has_key("cost_usd"),
         IngestionEvent.created_at >= start_of_day,
     )
@@ -410,10 +421,18 @@ async def revalidate_document(
     if document.kind_id is not None:
         kind = await session.get(Kind, document.kind_id)
         kind_slug = kind.slug if kind is not None else None
+    # Resolve the sender name for the generic_sender rule the same way as the
+    # kind slug: an explicit session.get, never the lazy relationship (which
+    # raises MissingGreenlet on an expired async instance).
+    sender_name: str | None = None
+    if document.sender_id is not None:
+        sender = await session.get(Sender, document.sender_id)
+        sender_name = sender.name if sender is not None else None
 
     findings = validate(
         document,
         kind_slug=kind_slug,
+        sender_name=sender_name,
         ocr_floor=settings.extraction_validation_ocr_floor,
         today=datetime.now(UTC).date(),
     )

@@ -47,6 +47,37 @@ _SALUTATION_CUES = re.compile(
 # so a passport's "vervaldatum" is not misread as a mislabeled due date.
 _MONETARY_KINDS: frozenset[str] = frozenset({"invoice", "utility-bill", "receipt", "quote"})
 _VALIDITY_KINDS: frozenset[str] = frozenset({"certificate", "warranty", "contract", "ticket"})
+# Bilingual (Dutch/English) CATEGORY words that are not merchant names. A sender
+# resolved to one of these (classically a till receipt where the model fell back
+# to "Restaurant" because the printed name was hard to read) is effectively
+# useless for finding the document later. Matched full-string, case-insensitive,
+# NEVER substring: "Garage Spaarndam" is a real merchant name and must not fire.
+_GENERIC_SENDER_NAMES: frozenset[str] = frozenset(
+    {
+        "restaurant",
+        "café",
+        "cafe",
+        "bar",
+        "hotel",
+        "shop",
+        "store",
+        "winkel",
+        "supermarkt",
+        "supermarket",
+        "bakkerij",
+        "bakery",
+        "garage",
+        "tankstation",
+        "apotheek",
+        "pharmacy",
+        "ziekenhuis",
+        "hospital",
+        "gemeente",
+        "webshop",
+        "market",
+        "markt",
+    }
+)
 # A sign-off block signals the document is signed (its sender).
 _SIGNOFF_CUES = re.compile(
     r"met\s+vriendelijke\s+groet|vriendelijke\s+groeten|hoogachtend"
@@ -138,6 +169,7 @@ def validate(
     document: Document,
     *,
     kind_slug: str | None,
+    sender_name: str | None,
     ocr_floor: float,
     today: date,
 ) -> list[Finding]:
@@ -278,6 +310,24 @@ def validate(
             )
         )
 
+    # generic_sender — the sender resolved to a bare category word ("Restaurant",
+    # "Winkel", …), not a merchant/organisation name. Classically a scanned till
+    # receipt where the printed shop name was hard to read and the model fell
+    # back to the venue type. Full-string match only: a real name that contains
+    # a category word ("Garage Spaarndam") must not fire. A null sender is
+    # missing_sender's job, not this rule's. The caller resolves the name from
+    # the document's sender relationship and threads it in as ``sender_name``.
+    if sender_name is not None and sender_name.strip().casefold() in _GENERIC_SENDER_NAMES:
+        findings.append(
+            Finding(
+                "generic_sender",
+                "sender",
+                "warn",
+                f'the sender "{sender_name.strip()}" is a generic category word, '
+                "not the merchant or organisation name printed on the document",
+            )
+        )
+
     # missing_recipient — the document appears to name an addressee (a stored
     # verbatim addressee, or a salutation in the text) yet no recipient was
     # recorded. Serves the "a personally-addressed document has a recipient" goal.
@@ -334,6 +384,25 @@ def validate(
                 "amount_total",
                 "warn",
                 "the document mentions payment or a due date but no amount was extracted",
+            )
+        )
+
+    # missing_date — a monetary document with an amount but no document_date: a
+    # bill or receipt always carries a printed date. The date analogue of
+    # missing_amount for the confident-but-wrong thin-OCR case (the total was
+    # read but the date line was not). Scoped to monetary kinds so undated
+    # reference material quoting a price is not nagged about.
+    if (
+        document.amount_total is not None
+        and document.document_date is None
+        and kind_slug in _MONETARY_KINDS
+    ):
+        findings.append(
+            Finding(
+                "missing_date",
+                "document_date",
+                "warn",
+                "this looks like a bill or receipt but no document date was extracted",
             )
         )
 

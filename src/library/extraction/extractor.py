@@ -1,9 +1,10 @@
 """Call Claude to extract document metadata via structured outputs.
 
 ``extract()`` is pure orchestration around the Anthropic SDK: build input
-content (OCR text, or the original file when OCR produced nothing usable),
-call ``client.messages.parse()`` on the primary model, and escalate once to
-the bigger model on low confidence or a parse/validation failure. API
+content (OCR text; the original file when OCR produced nothing usable, or
+when a scanned document's text is too thin per page to trust — the density
+trigger), call ``client.messages.parse()`` on the primary model, and escalate
+once to the bigger model on low confidence or a parse/validation failure. API
 errors propagate (the SDK already retried 429/5xx); the caller decides what
 a failure means for the document.
 """
@@ -25,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump whenever the system prompt or schema changes meaningfully; stored per
 # run so old-prompt documents can be found and re-extracted later.
-PROMPT_VERSION: str = "2026-07-09.2"
+PROMPT_VERSION: str = "2026-07-14.1"
 
 # Short OCR text (<= this many characters) is sent whole: metadata lives on
 # the first pages, and this caps per-document spend for transactional docs.
@@ -77,7 +78,11 @@ Rules:
   For a letter or email the SIGNER is the sender: a sign-off such as "Met
   vriendelijke groet, Y" / "Best regards, Y" / "Hoogachtend, Y" means Y (or Y's
   organisation) is the sender, NOT the recipient. Prefer the issuing
-  organisation when both a person and a company sign. null when genuinely unclear.
+  organisation when both a person and a company sign. It must be the name
+  PRINTED on the document (on a till receipt: the shop name in the header),
+  never a generic category word such as "Restaurant", "Shop", or "Winkel" —
+  a category is not a name. If no name is legible anywhere, return null
+  rather than a category word. null when genuinely unclear.
 - recipient_name: the person the document is addressed TO, in short canonical
   form (e.g. "John"). The SALUTATION is the strongest signal: "Dear John" /
   "Beste John" / "Geachte heer Mathews" / "T.a.v. John Mathews" -> the recipient
@@ -301,6 +306,25 @@ def build_user_content(
     return content, block_type
 
 
+def _thin_scan_prefers_vision(document: Document, text: str, min_chars_per_page: int) -> bool:
+    """True when a scanned document's OCR text is too thin to trust as input.
+
+    Density (chars per page) is an *input-based* vision trigger: garbled
+    tesseract output on a till receipt can come back confidently wrong on
+    text, so the low-confidence escalation alone never fires (prod doc 150).
+    Only documents where OCR actually ran are eligible — born-digital
+    text-layer documents have ``ocr_confidence`` NULL and their short-but-clean
+    text extracts fine. A non-positive threshold disables the trigger, and the
+    ``MIN_TEXT_CHARS`` empty/garbage floor keeps its own (unconditional)
+    file-fallback path in :func:`build_user_content`.
+    """
+    if min_chars_per_page <= 0 or document.ocr_confidence is None:
+        return False
+    if len(text) < MIN_TEXT_CHARS:
+        return False  # empty/garbage: build_user_content falls back on its own
+    return len(text) / max(document.page_count or 1, 1) < min_chars_per_page
+
+
 async def _attempt(
     client: AsyncAnthropic, model: str, content: list[dict[str, Any]]
 ) -> tuple[ExtractedMetadata, CallUsage]:
@@ -342,7 +366,27 @@ async def extract(
     errors propagate to the caller. ``recipient_hint`` is an optional resolved
     display name (email-attachment envelope) appended to the prompt as context.
     """
-    content, input_mode = build_user_content(document, ocr_text, recipient_hint=recipient_hint)
+    # Density-based vision trigger: a thin scan (OCR ran, few chars per page)
+    # sends the original file on the PRIMARY call. When the file cannot be
+    # sent (unusable mime / missing artifact / oversized), fall back to the
+    # normal text path — the trigger must never fail a document that extracts
+    # today.
+    prefer_vision = _thin_scan_prefers_vision(
+        document, ocr_text.strip(), settings.extraction_vision_min_chars_per_page
+    )
+    try:
+        content, input_mode = build_user_content(
+            document, ocr_text, recipient_hint=recipient_hint, force_file=prefer_vision
+        )
+    except ExtractionSkipped:
+        if not prefer_vision:
+            raise
+        logger.info(
+            "document %s: thin-scan vision trigger fired but the original cannot "
+            "be sent; falling back to text input",
+            document.id,
+        )
+        content, input_mode = build_user_content(document, ocr_text, recipient_hint=recipient_hint)
     calls: list[CallUsage] = []
 
     metadata: ExtractedMetadata | None = None

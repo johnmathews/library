@@ -24,6 +24,7 @@ from library.db import get_sessionmaker
 from library.embedding import EmbeddingError, embed_texts
 from library.embedding.chunker import chunker_for_mime
 from library.extraction.apply import apply_extraction
+from library.extraction.repair import maybe_repair_extraction
 from library.markdown.apply import apply_markdown
 from library.models import (
     Document,
@@ -182,8 +183,16 @@ async def run_extraction(session: AsyncSession, document: Document) -> None:
 
 
 async def run_markdown(session: AsyncSession, document: Document) -> None:
-    """Markdown stage: Claude vision per-page markdown (best-effort, never raises)."""
-    await apply_markdown(session, document, get_settings())
+    """Markdown stage: Claude vision per-page markdown (best-effort, never raises).
+
+    After the markdown layer is written, the fill-only extraction repair pass
+    (``library.extraction.repair``) gets one look at ``pages_markdown`` to fill
+    a missing date/sender the extract stage left behind. Also best-effort: it
+    records its own completed/skipped event and never raises.
+    """
+    settings = get_settings()
+    await apply_markdown(session, document, settings)
+    await maybe_repair_extraction(session, document, settings)
 
 
 async def _record_embed_event(
@@ -517,13 +526,17 @@ async def markdown_document(document_id: int) -> None:
 
     Deferred by the backfill CLI (and after a prompt upgrade), independent of
     pipeline status. Best-effort and idempotent (replaces a document's pages
-    and, via run_embed, its chunks).
+    and, via run_embed, its chunks). Like the pipeline stage, it runs the
+    fill-only extraction repair pass after the markdown layer is written; the
+    repair's ``already_repaired`` guard keeps re-runs from re-spending.
     """
     async with get_sessionmaker()() as session:
         document = await session.get(Document, document_id)
         if document is None:
             raise ValueError(f"document {document_id} not found")
-        await apply_markdown(session, document, get_settings())
+        settings = get_settings()
+        await apply_markdown(session, document, settings)
+        await maybe_repair_extraction(session, document, settings)
         await run_embed(session, document)
 
 

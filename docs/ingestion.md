@@ -225,7 +225,8 @@ Decisions:
   commit and one `status_changed` ingestion event (`detail: {"from": …, "to": …}`)
   per transition. Entering `ocr` runs the OCR stage (below); entering `extract`
   runs Claude metadata extraction (see "Extraction"); entering `markdown` runs
-  Claude vision markdown generation (see "Markdown layer"); entering `embed` chunks
+  Claude vision markdown generation followed by the fill-only extraction repair
+  pass (see "Markdown layer" and "Fill-only extraction repair"); entering `embed` chunks
   the text and stores bge-m3 vectors for semantic search (best-effort — a
   document that fails to embed still reaches `indexed`; see [ask.md](ask.md)).
 - Stage hooks are `async def run_ocr(session, document)` / `run_extraction(session, document)` / `run_markdown(session, document)` / `run_embed(session, document)` in `library.jobs`. The OCR work
@@ -396,7 +397,9 @@ and re-raises (so the standard `failed` handling also applies).
 
 ## Extraction (`library.extraction`)
 
-The `extract` pipeline stage turns OCR text into structured metadata
+The `extract` pipeline stage turns the document — normally its OCR text;
+for thin scans or unusable OCR, the original file itself (see "Input
+selection") — into structured metadata
 with Claude (decision 3 in the improvement plan): kind, sender, recipient,
 title, summary, dates, total amount + currency, language, suggested tags. The
 guiding invariant is that **extraction is best-effort**: whatever
@@ -459,6 +462,25 @@ prompt-instructed or normalised by validators.
   not sent — extraction is skipped gracefully (`reason:
   "file_too_large"`). TIFF and text without usable OCR text are skipped
   with `reason: "input_unusable"`.
+- **Thin-scan density trigger (vision on the primary call):** when OCR
+  actually ran (`ocr_confidence` is set — born-digital text-layer documents
+  have it NULL and are exempt) and the stripped OCR text averages fewer than
+  `LIBRARY_EXTRACTION_VISION_MIN_CHARS_PER_PAGE` (default 800) characters per
+  page, the **primary** call sends the original file (vision) instead of the
+  text — the same `force_file` path the escalation uses. Rationale: a garbled
+  scan can come back *confidently wrong* on text (prod doc 150: a 460-char
+  1-page till receipt self-reported `confidence: "high"`, so the
+  low-confidence escalation below never fired); density is an input-based
+  signal that acts before the model answers. Threshold calibration: the
+  scanned receipts that failed on text ran 321–460 chars/page (prod docs
+  144/150 — must trigger), while scanned letters average ~2,700 and contracts
+  ~10,000 chars/page (must not trigger); born-digital receipts (540–1,000
+  chars/page) are exempt via the `ocr_confidence IS NULL` gate, not the
+  threshold. If the original cannot be sent (unusable mime, missing artifact,
+  oversized), the primary falls back to plain text — the trigger never fails
+  a document that extracts today. Setting the threshold to `0` disables the
+  trigger entirely. The empty/garbage floor (`MIN_TEXT_CHARS`, above) is
+  unchanged and independent of this trigger.
 - **Vision escalation (thin-OCR recovery):** when the primary pass ran on OCR
   text and comes back **low-confidence**, the escalation re-attempts with the
   **original file** (`build_user_content(..., force_file=True)`) instead of
@@ -468,6 +490,9 @@ prompt-instructed or normalised by validators.
   the original can't be sent (unusable mime, missing, or oversized) it falls back
   to the text escalation, so behavior never regresses; the escalated result's
   `input_mode` records what was actually sent (`document`/`image` vs `text`).
+  When the density trigger already sent the file on the primary call, a
+  low-confidence result still escalates once — the escalation simply reuses
+  the same vision content (there is nothing better to send).
 
 ### Prompt
 
@@ -486,7 +511,12 @@ the **sign-off** identifies the sender; **due_date** (an act-by deadline) is
 distinguished from **expiry_date** (a validity end), including the Dutch
 "vervaldatum" (due) vs "verloopt/geldig tot" (expiry) trap; and a short rubric
 disambiguates overlapping `kind_slug` pairs (invoice vs receipt, utility-bill vs
-invoice, letter vs contract, …). The same semantics are mirrored into per-field
+invoice, letter vs contract, …). Since `PROMPT_VERSION = "2026-07-14.1"` the
+sender rule is hardened for receipts: `sender_name` must be the **printed
+merchant/organisation name** on the document, never a generic category word
+such as "Restaurant" or "Shop" — when no name is legible the model must return
+null instead (the `generic_sender` validation rule catches any that slip
+through). The same semantics are mirrored into per-field
 `Field(description=…)` on the schema (Anthropic's structured-output guidance
 recommends per-field descriptions). All free-text fields (title, summary,
 reasoning_note) are **in English** (translated from the source language when the
@@ -652,6 +682,8 @@ Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
 | `missing_sender` | `sender_id` | `sender_id` is unset **and** either `amount_total` is set (a bill/receipt whose payee we couldn't identify) **or** the document is signed — a sign-off cue (`met vriendelijke groet`, `best regards`, …) or a stored `signer_raw` — but no sender was resolved. |
 | `missing_recipient` | `recipient_id` | `recipient_id` is unset but the document appears to name an addressee — a stored `addressee_raw`, or a salutation cue (`dear`, `beste`, `geachte`, `t.a.v.`, …) in the OCR text. Surfaces the "a personally-addressed document has a recipient" expectation. |
 | `missing_amount` | `amount_total` | `amount_total` is null but the OCR text carries a payment/due cue (`te betalen`, `vervaldatum`, `due by`, …) **and the kind is monetary** (invoice/receipt/utility-bill/quote). The classic thin-OCR image-PDF miss — the letterhead's payment line was OCR'd but the body's total was not. Scoped to monetary kinds so a passport's "vervaldatum" (expiry) doesn't spuriously flag. A safety net for the confident-but-wrong case the vision escalation (low-confidence only) does not catch. |
+| `missing_date` | `document_date` | `amount_total` is set but `document_date` is null **and the kind is monetary** (invoice/receipt/utility-bill/quote). The date analogue of `missing_amount` for the confident-but-wrong thin-OCR case: a receipt/invoice whose total was read but whose printed date was not — a bill or receipt always carries one. |
+| `generic_sender` | `sender` | The resolved sender's **name** case-insensitively equals — full-string, never substring — one of the bilingual (Dutch/English) category words in `_GENERIC_SENDER_NAMES` (`restaurant`, `café`, `shop`, `winkel`, `supermarkt`, `garage`, `apotheek`, …). A category word is not a merchant name, so the extraction is effectively useless for finding the document later. A real name that merely *contains* a category word ("Garage Spaarndam") does **not** fire, and a null sender does not fire (that is `missing_sender`'s job). Requires the caller to thread the resolved sender name into `validate(..., sender_name=…)`. |
 | `self_reported_low` | (document) | `extra["extraction"]["confidence"] == "low"`. The message carries the model's own one-line `reasoning_note` when present (e.g. "the extractor was unsure: two candidate totals on page 2"), falling back to a generic line otherwise. |
 | `email_attachments_dropped` | (document) | The document came from an email whose *other* attachments could not be added (`extra["email_siblings_dropped"]` is non-empty). The message lists the dropped filenames. See "Email-in". |
 | `email_item_ambiguous` | (document) | The email item was flagged `probably_noise` during selection — `extra["email_selection"]["verdict"]`, set by the optional LLM label pass (the only verdict it ever writes for a flagged item). The message carries the flag's reason. See "Email item selection". |
@@ -665,6 +697,12 @@ depending on) extraction. A later successful extraction re-derives the status
 via the full `validate()` (which includes the same rules), so the flag
 survives; extraction's early-return paths leave the ingest-time status
 untouched.
+
+**Repairable findings.** `missing_date`, `missing_sender`, and
+`generic_sender` do double duty: besides flagging the document for review,
+they arm the fill-only repair pass that runs at the tail of the markdown stage
+and reads the missing value off `pages_markdown` — see "Fill-only extraction
+repair" under the Markdown layer.
 
 **Cue-word grounding, not date-format parsing.** The recipient/sender/date
 cross-checks (`due_expiry_grounding`, `missing_recipient`, `missing_sender`
@@ -737,6 +775,31 @@ library backfill-validation --limit 100  # first 100 only (throttle)
 Idempotent: re-running recomputes from current field values using the current
 rule set. Useful after deploying new validation rules.
 
+**Post-deploy sweep (2026-07-14 receipt hardening).** After deploying the
+`missing_date`/`generic_sender` rules, the density trigger, and the repair
+pass, sweep the existing corpus:
+
+1. `library backfill-validation` — flags every existing dateless monetary
+   document and generic-named sender (`missing_date`/`generic_sender`) so
+   they surface in the review queue. Zero API cost.
+2. Re-extract the flagged documents: per document via
+   `POST /api/documents/{id}/extract` (the re-run now benefits from the
+   thin-scan density trigger), or in bulk with
+   `library backfill --kinds receipt` — the `PROMPT_VERSION` bump to
+   `2026-07-14.1` makes every pre-hardening document stale, so the backfill
+   picks them all up. Note the difference in what gets re-run:
+   `POST …/extract` queues the extraction task only, while the bulk
+   backfill enqueues the markdown task per document as well — whose tail
+   now includes the fill-only repair pass (its `already_repaired` guard
+   keeps repeated backfills from re-spending).
+3. **Prod document 150** (the scanned restaurant receipt that motivated this
+   work) is the canary: after the sweep it should carry a real merchant name
+   and `document_date` — or a `needs_review` flag if recovery failed.
+4. Repair re-points documents away from a generic sender but never deletes
+   the row, so the prod sender **"Restaurant"** needs a one-off manual
+   merge/delete afterwards (admin Metadata tab: rename-or-merge, or
+   reassign-then-delete).
+
 ### Eval harness — `library eval-extractions`
 
 Combines two ground-truth sources to produce per-field accuracy numbers:
@@ -776,9 +839,11 @@ seeded sampling is a documented follow-up.
 **Cost guard:** every completed call stores its estimated cost
 (`cost_usd`, from the pricing constants above) in the event detail.
 Before each extraction, one query sums today's `cost_usd` across
-`ingestion_events`; at or over `LIBRARY_EXTRACTION_DAILY_BUDGET_USD`
-(default 5.0) extraction is skipped with `reason: "budget"` until the
-next UTC day.
+`ingestion_events` — over both `extraction_completed` **and**
+`extraction_repair_completed` events (the fill-only repair pass draws on this
+same budget; see "Fill-only extraction repair" under the Markdown layer); at
+or over `LIBRARY_EXTRACTION_DAILY_BUDGET_USD` (default 5.0) extraction is
+skipped with `reason: "budget"` until the next UTC day.
 
 **Budget-skip visibility & recovery.** A burst that exhausts the daily budget
 leaves documents `indexed` but without LLM metadata. These are surfaced so they
@@ -892,7 +957,10 @@ failed, or text-only), or the chunk came from a page past the render cap.
 
 `run_markdown(session, document)` in `library.jobs` is the stage hook,
 placed between `run_extraction` and `run_embed`. It calls
-`apply_markdown(session, document, settings)` from `library.markdown.apply`.
+`apply_markdown(session, document, settings)` from `library.markdown.apply`,
+then hands the document to the fill-only extraction repair pass
+(`maybe_repair_extraction` — see "Fill-only extraction repair" below), which
+is equally best-effort and never fails the stage.
 
 **Born-digital text bypass.** For `text/markdown` and `text/plain` the raw
 file content is already the authoritative text layer (captured verbatim as
@@ -925,6 +993,63 @@ the document continues to `embed` and reaches `indexed`:
 The accepted limitation: a final DB-commit failure after the API call can
 fail the document — the same edge case exists in extraction.
 
+### Fill-only extraction repair (`library.extraction.repair`)
+
+A narrow second chance for the scanned-receipt failure shape (prod doc 150):
+extraction left `document_date` NULL and/or the sender a generic category word
+("Restaurant"), while the markdown stage's **vision** output plainly contains
+the real merchant name and printed date. At the **tail of the markdown stage**
+— `run_markdown` in `library.jobs`, and the `markdown_document` backfill task —
+`maybe_repair_extraction` gets one look at `pages_markdown` and asks
+`LIBRARY_EXTRACTION_MODEL` (structured output, single call, no escalation, own
+`REPAIR_PROMPT_VERSION`) to read **only** `sender_name`, `document_date`,
+`amount_total`, and `currency` off it — no kind, title, or summary: repair
+fills gaps in an extraction that already ran, it never re-describes the
+document. There is no new pipeline status; the pass is part of the markdown
+stage and shares its best-effort contract (a repair failure is logged, gets an
+`extraction_repair_skipped {reason: "error"}` event, and never fails the
+stage).
+
+**Trigger.** Repair runs only when *all* of these hold, otherwise it records
+an `extraction_repair_skipped` event with the first matching reason (checked
+in this order; no API call is made on any skip path):
+
+| Skip reason | Condition |
+|---|---|
+| `disabled` / `missing_api_key` | Repair is **extraction** spend, so extraction's own switches govern it (`LIBRARY_EXTRACTION_ENABLED`, `LIBRARY_ANTHROPIC_API_KEY`) |
+| `no_markdown` | `pages_markdown` is empty — nothing to read |
+| `no_extraction` | `extra["extraction"]` is absent (extraction never ran/was skipped) — without it repair would become a covert extraction pass for disabled/skipped documents |
+| `already_repaired` | `extra["extraction_repair"]["prompt_version"]` equals the current `REPAIR_PROMPT_VERSION` — the idempotency guard; backfills and markdown re-runs never re-spend on the same document |
+| `no_gaps` | Re-running `validate()` yields none of the repairable findings `missing_date` / `missing_sender` / `generic_sender` |
+| `budget` | Today's **extraction** spend is at/over `LIBRARY_EXTRACTION_DAILY_BUDGET_USD` (checked last so a clean document is never mislabelled a budget skip) |
+
+**Fill-only apply semantics (the safety property).** Scalars
+(`document_date`, `amount_total`, `currency`) are written **only when
+currently NULL** and not listed in `extra["user_edited_fields"]`. The sender
+is filled when unset; additionally, an existing sender whose name is itself on
+the `_GENERIC_SENDER_NAMES` blocklist (full-string casefold match) **may be
+replaced** by a non-generic repair result — the one deliberate carve-out,
+since a bare "Restaurant" is useless for finding the document. A non-generic
+or user-edited sender is never touched, a repair result that is itself a
+generic word is never written, and the old generic `senders` row is re-pointed
+away from, not deleted. Sender resolution reuses `upsert_sender`
+(case-insensitive match-or-create).
+
+**Provenance, revalidation, budget.** A successful call stamps
+`extra["extraction_repair"]` = `{prompt_version, model, input: "markdown",
+confidence, input_tokens, output_tokens, cost_usd, fields_filled}` (also the
+idempotency marker — it is written even when nothing qualified to fill) and
+records `extraction_repair_completed` with the same detail plus the `gaps`
+that triggered it. Validation and `derive_review_status` are then re-run
+(via `revalidate_document`), so a fully repaired document leaves
+`needs_review` while a still-incomplete one stays flagged. Repair spend counts
+toward the **extraction** daily budget, not the markdown one:
+`todays_spend_usd` sums `extraction_completed` **and**
+`extraction_repair_completed` costs (`EXTRACTION_SPEND_EVENTS` in
+`extraction/apply.py`), so both the extraction gate and the repair gate see
+the combined total — the same principle as held-email labels counting toward
+the email budget.
+
 ### Page-aware embedding
 
 After the markdown stage, `run_embed` picks a chunker by MIME type and
@@ -954,8 +1079,10 @@ library backfill-markdown --include-existing  # re-render all documents
 ```
 
 Enqueues a `markdown_document` Procrastinate task per document. That task
-runs `apply_markdown` then `run_embed` so the chunks are replaced from the
-new pages. Idempotent; the worker must be running.
+runs `apply_markdown`, then the fill-only extraction repair pass (see
+"Fill-only extraction repair" above — its `already_repaired` guard keeps
+re-runs from re-spending), then `run_embed` so the chunks are replaced from
+the new pages. Idempotent; the worker must be running.
 
 ### `GET /api/documents/{id}/markdown`
 
@@ -1546,6 +1673,8 @@ Append-only audit trail in `ingestion_events`:
 | `markdown_completed` | markdown stage | `{model, prompt_version, pages, input_tokens, output_tokens, cost_usd}`; born-digital text instead records `{engine: "passthrough", model: null, pages: 1, cost_usd: 0.0}` |
 | `markdown_skipped` | markdown stage | `{reason, ...}` — `disabled`, `missing_api_key`, `budget`, `input_unusable`, `no_text` |
 | `markdown_failed` | markdown stage | `{error, prompt_version}` |
+| `extraction_repair_completed` | markdown stage (repair pass) | `{model, prompt_version, input: "markdown", confidence, input_tokens, output_tokens, cost_usd, fields_filled, gaps}` — counts toward the **extraction** daily budget (see "Fill-only extraction repair") |
+| `extraction_repair_skipped` | markdown stage (repair pass) | `{reason, ...}` — `disabled`, `missing_api_key`, `no_markdown`, `no_extraction`, `already_repaired`, `no_gaps`, `budget`, `error` |
 | `failed` | pipeline | `{error, status}` |
 
 ## Configuration
@@ -1565,6 +1694,7 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_EXTRACTION_ENABLED` | `true` | Master switch for the extraction stage |
 | `LIBRARY_EXTRACTION_MODEL` | `claude-haiku-4-5` | Primary extraction model |
 | `LIBRARY_EXTRACTION_ESCALATION_MODEL` | `claude-sonnet-4-6` | Retry model on low confidence / parse failure |
+| `LIBRARY_EXTRACTION_VISION_MIN_CHARS_PER_PAGE` | `800` | Thin-scan density trigger: when OCR ran (`ocr_confidence` set) and the OCR text averages fewer chars/page than this, the primary extraction call sends the original file (vision) instead of the text; `0` disables |
 | `LIBRARY_EXTRACTION_DAILY_BUDGET_USD` | `5.0` | Estimated daily API spend cap; over budget → skip with `reason: "budget"` |
 | `LIBRARY_EXTRACTION_VALIDATION_OCR_FLOOR` | `50.0` | OCR-confidence threshold for the `ocr_confidence_gate` validation rule |
 | `LIBRARY_EXTRACTION_JUDGE_MODEL` | `claude-sonnet-4-6` | Model used by `library eval-extractions` to judge extraction quality |

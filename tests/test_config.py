@@ -46,6 +46,20 @@ def test_markdown_settings_env_override(monkeypatch: pytest.MonkeyPatch) -> None
     assert settings.markdown_max_pages == 5
 
 
+def test_extraction_vision_density_threshold_default() -> None:
+    # Calibration: prod thin scans ran 321-460 chars/page (must trigger);
+    # scanned letters ~2700 and contracts ~10000 must not. See docs/ingestion.md.
+    assert Settings(_env_file=None).extraction_vision_min_chars_per_page == 800
+
+
+def test_extraction_vision_density_threshold_env_override(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LIBRARY_EXTRACTION_VISION_MIN_CHARS_PER_PAGE", "0")
+    settings = Settings(_env_file=None)
+    assert settings.extraction_vision_min_chars_per_page == 0
+
+
 def test_ask_history_turns_default() -> None:
     from library.config import Settings
 

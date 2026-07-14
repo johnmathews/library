@@ -42,6 +42,7 @@ from library.models import (
     DocumentStatus,
     EvalRun,
     Kind,
+    Sender,
     User,
 )
 
@@ -416,7 +417,13 @@ def backfill_validation(
             if document.kind_id is not None:
                 kind = await session.get(Kind, document.kind_id)
                 kind_slug = kind.slug if kind is not None else None
-            findings = validate(document, kind_slug=kind_slug, ocr_floor=floor, today=today)
+            sender_name = None
+            if document.sender_id is not None:
+                sender = await session.get(Sender, document.sender_id)
+                sender_name = sender.name if sender is not None else None
+            findings = validate(
+                document, kind_slug=kind_slug, sender_name=sender_name, ocr_floor=floor, today=today
+            )
             document.review_status = derive_review_status(findings)
             document.extra = {
                 **document.extra,

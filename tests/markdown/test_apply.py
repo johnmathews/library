@@ -487,6 +487,10 @@ async def test_extraction_budget_query_excludes_markdown_events(
     document_id = await make_document(session_factory, "md-apply-budget-isolation")
 
     async with session_factory() as session:
+        # Delta-based: the test database is shared, so other tests may already
+        # have seeded extraction spend today.
+        extraction_before = await extraction_spend(session)
+        markdown_before = await todays_markdown_spend_usd(session)
         # Add a markdown_completed event with cost — must not appear in extraction budget.
         session.add(
             IngestionEvent(
@@ -502,6 +506,6 @@ async def test_extraction_budget_query_excludes_markdown_events(
         markdown_total = await todays_markdown_spend_usd(session)
 
     # Extraction budget must not include the markdown event.
-    assert extraction_total == pytest.approx(0.0)
+    assert extraction_total == pytest.approx(extraction_before)
     # Markdown budget must include it.
-    assert markdown_total >= 99.0
+    assert markdown_total == pytest.approx(markdown_before + 99.0)
