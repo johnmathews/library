@@ -29,6 +29,7 @@ const RULE_TITLES: Record<string, string> = {
   self_reported_low: 'Extraction was unsure',
   missing_sender: 'Sender not identified',
   email_attachments_dropped: 'Some email attachments could not be added',
+  email_item_ambiguous: 'Might not be a real document',
 }
 
 const GENERIC_TITLE = 'Needs a quick check'

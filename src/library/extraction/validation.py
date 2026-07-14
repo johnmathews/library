@@ -65,6 +65,59 @@ class Finding:
     message: str
 
 
+def email_findings(extra: dict[str, Any] | None) -> list[Finding]:
+    """The email-channel rules, computable from ``Document.extra`` alone.
+
+    Pure over the hints the email channel stamps at ingest
+    (``email_siblings_dropped``, ``email_selection``) — no other document
+    field is read. That independence is the point: the email channel runs
+    these at document creation (``library.ingest.ingest_file``) so a flagged
+    email item is ``needs_review`` immediately, even when extraction is
+    disabled or has not run yet; :func:`validate` reuses them verbatim so an
+    extraction pass later recomputes the same findings.
+    """
+    extra = extra if isinstance(extra, dict) else {}
+    findings: list[Finding] = []
+
+    # email_attachments_dropped — this document came from an email whose *other*
+    # attachments could not be added (stamped on extra at ingest by email_ingest,
+    # only-when-non-empty), so the reviewer knows files are missing from the set.
+    dropped = extra.get("email_siblings_dropped")
+    if isinstance(dropped, list) and dropped:
+        names = [
+            str(item.get("filename") or "an unnamed file")
+            for item in dropped
+            if isinstance(item, dict)
+        ]
+        listed = ", ".join(names) if names else "one or more files"
+        count = len(names) or len(dropped)
+        noun = "attachment" if count == 1 else "attachments"
+        findings.append(
+            Finding(
+                "email_attachments_dropped",
+                None,
+                "warn",
+                f"the email included {count} other {noun} that could not be added: {listed}",
+            )
+        )
+
+    # email_item_ambiguous — this document came from an email item that selection
+    # tagged as "probably_noise" (stamped on extra["email_selection"] by the
+    # selection unit; that is the only verdict it ever writes for a flagged
+    # item), so the reviewer confirms it is a real document.
+    sel = extra.get("email_selection")
+    if isinstance(sel, dict) and sel.get("verdict") == "probably_noise":
+        note = sel.get("reason")
+        message = (
+            f"this email item was flagged as possibly not a real document: {note.strip()}"
+            if isinstance(note, str) and note.strip()
+            else "this email item was flagged as possibly not a real document"
+        )
+        findings.append(Finding("email_item_ambiguous", None, "warn", message))
+
+    return findings
+
+
 def _amount_appears(amount: Decimal, text: str) -> bool:
     """True if the amount's digits appear in the OCR text.
 
@@ -330,42 +383,10 @@ def validate(
         )
         findings.append(Finding("self_reported_low", None, "warn", message))
 
-    # email_attachments_dropped — this document came from an email whose *other*
-    # attachments could not be added (stamped on extra at ingest by email_ingest,
-    # only-when-non-empty), so the reviewer knows files are missing from the set.
-    dropped = (
-        document.extra.get("email_siblings_dropped") if isinstance(document.extra, dict) else None
-    )
-    if isinstance(dropped, list) and dropped:
-        names = [
-            str(item.get("filename") or "an unnamed file")
-            for item in dropped
-            if isinstance(item, dict)
-        ]
-        listed = ", ".join(names) if names else "one or more files"
-        count = len(names) or len(dropped)
-        noun = "attachment" if count == 1 else "attachments"
-        findings.append(
-            Finding(
-                "email_attachments_dropped",
-                None,
-                "warn",
-                f"the email included {count} other {noun} that could not be added: {listed}",
-            )
-        )
-
-    # email_item_ambiguous — this document came from an email item that selection
-    # tagged as "ambiguous" or "probably_noise" (stamped on extra["email_selection"]
-    # by the selection unit), so the reviewer confirms it is a real document.
-    sel = document.extra.get("email_selection") if isinstance(document.extra, dict) else None
-    if isinstance(sel, dict) and sel.get("verdict") in {"ambiguous", "probably_noise"}:
-        note = sel.get("reason")
-        message = (
-            f"this email item was flagged as possibly not a real document: {note.strip()}"
-            if isinstance(note, str) and note.strip()
-            else "this email item was flagged as possibly not a real document"
-        )
-        findings.append(Finding("email_item_ambiguous", None, "warn", message))
+    # Email-channel rules (email_attachments_dropped, email_item_ambiguous) —
+    # they read only Document.extra, so they live in the pure email_findings
+    # helper the email channel also runs at ingest (before any extraction).
+    findings.extend(email_findings(document.extra if isinstance(document.extra, dict) else None))
 
     return findings
 

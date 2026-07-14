@@ -244,6 +244,21 @@ describe('DocumentHistoryTimeline — skips and failures', () => {
     expect(w.find('[data-testid="history-secondary"]').text()).toContain('tesseract exited 1')
   })
 
+  it('keeps the email labelling budget event hidden from the curated view', () => {
+    const w = mount(DocumentHistoryTimeline, {
+      props: {
+        events: [
+          ev('received', '2026-06-10T10:00:00Z'),
+          ev('email_label_completed', '2026-06-10T10:00:02Z', { model: 'claude-haiku-4', cost_usd: 0.0002 }),
+        ],
+      },
+    })
+    // Only "received" is a milestone; the billing event stays in "Show all" only.
+    expect(w.findAll('[data-testid="history-item"]')).toHaveLength(1)
+    expect(w.find('ol').text()).not.toContain('Email label completed')
+    expect(w.find('[data-testid="history-raw-list"]').text()).toContain('email_label_completed')
+  })
+
   it('keeps low-signal skips (embedding_skipped) hidden from the curated view', () => {
     const w = mount(DocumentHistoryTimeline, {
       props: {
@@ -256,5 +271,100 @@ describe('DocumentHistoryTimeline — skips and failures', () => {
     // Only "received" is a milestone; embedding_skipped stays in "Show all" only.
     expect(w.findAll('[data-testid="history-item"]')).toHaveLength(1)
     expect(w.find('ol').text()).not.toContain('Embedding skipped')
+  })
+})
+
+describe('DocumentHistoryTimeline — email triage', () => {
+  // Shape produced by _selection_event_detail in src/library/email_ingest.py.
+  const SELECTION_DETAIL = {
+    email_from: 'Alice Accounts <alice@example.com>',
+    email_subject: 'Invoice March 2026',
+    email_message_id: '<abc123@mail.example.com>',
+    email_to: ['john@example.com'],
+    items: [
+      {
+        kind: 'attachment',
+        filename: 'invoice.pdf',
+        mime: 'application/pdf',
+        size: 12345,
+        stage: 'classify',
+        verdict: 'ingested',
+        reason: null,
+      },
+      {
+        kind: 'attachment',
+        filename: 'logo.png',
+        mime: 'image/png',
+        size: 512,
+        stage: 'classify',
+        verdict: 'filtered',
+        reason: 'inline image',
+      },
+      {
+        kind: 'body',
+        filename: null,
+        mime: 'text/markdown',
+        size: 900,
+        stage: 'llm_label',
+        verdict: 'flagged_ambiguous',
+        reason: 'looks like a signature-only body',
+      },
+    ],
+  }
+
+  function triage(detail: Record<string, unknown>) {
+    return mount(DocumentHistoryTimeline, {
+      props: { events: [ev('email_selection', '2026-06-10T10:00:01Z', detail)] },
+    })
+  }
+
+  it('renders email_selection as an "Email triage" milestone with one line per item', () => {
+    const w = triage(SELECTION_DETAIL)
+    const items = w.findAll('[data-testid="history-item"]')
+    expect(items).toHaveLength(1)
+    expect(items[0]!.text()).toContain('Email triage')
+
+    const lines = w.findAll('[data-testid="history-email-item"]')
+    expect(lines).toHaveLength(3)
+    // Attachments show their filename and verdict.
+    expect(lines[0]!.text()).toContain('invoice.pdf')
+    expect(lines[0]!.text()).toContain('Ingested')
+    // A reason, when present, is shown alongside the verdict.
+    expect(lines[1]!.text()).toContain('logo.png')
+    expect(lines[1]!.text()).toContain('Filtered')
+    expect(lines[1]!.text()).toContain('inline image')
+    // The body item has no filename and falls back to <body>.
+    expect(lines[2]!.text()).toContain('<body>')
+    expect(lines[2]!.text()).toContain('Flagged ambiguous')
+    expect(lines[2]!.text()).toContain('signature-only body')
+  })
+
+  it('shows From/Subject provenance as chips', () => {
+    const w = triage(SELECTION_DETAIL)
+    const chips = w.findAll('[data-testid="history-email-chip"]')
+    const chipText = chips.map((c) => c.text()).join(' | ')
+    expect(chipText).toContain('alice@example.com')
+    expect(chipText).toContain('Invoice March 2026')
+  })
+
+  it('renders nothing extra when detail is missing or items is not an array', () => {
+    for (const detail of [{}, { items: 'oops' }, { items: 42, email_from: 'x@y.z' }]) {
+      const w = triage(detail as Record<string, unknown>)
+      // The milestone itself still renders, just without a breakdown.
+      expect(w.findAll('[data-testid="history-item"]')).toHaveLength(1)
+      expect(w.find('[data-testid="history-item"]').text()).toContain('Email triage')
+      expect(w.findAll('[data-testid="history-email-item"]')).toHaveLength(0)
+      expect(w.findAll('[data-testid="history-email-chip"]')).toHaveLength(0)
+    }
+  })
+
+  it('skips malformed entries inside an otherwise valid items array', () => {
+    const w = triage({
+      email_from: 'alice@example.com',
+      items: [null, 'junk', { filename: 'ok.pdf', verdict: 'ingested' }],
+    })
+    const lines = w.findAll('[data-testid="history-email-item"]')
+    expect(lines).toHaveLength(1)
+    expect(lines[0]!.text()).toContain('ok.pdf')
   })
 })

@@ -30,6 +30,7 @@ const MILESTONE_LABELS: Record<string, string> = {
   mcp_source_note: 'Source note added',
   review_verified: 'Verified',
   deleted: 'Deleted',
+  email_selection: 'Email triage',
 }
 
 function humanize(name: string): string {
@@ -45,6 +46,9 @@ function humanize(name: string): string {
 function isNoise(event: IngestionEvent): boolean {
   if (event.event === 'status_changed') return event.detail?.to !== 'indexed'
   if (event.event === 'extraction_skipped') return false
+  // Pure billing/telemetry for the per-email LLM label pass; the outcome it
+  // produced is already narrated by the email_selection triage breakdown.
+  if (event.event === 'email_label_completed') return true
   return event.event.endsWith('_skipped')
 }
 
@@ -100,6 +104,56 @@ function extractionBreakdown(event: IngestionEvent): ExtractionBreakdown | null 
   }
 
   return { method, isVisionFallback, chips }
+}
+
+// --- Email triage breakdown -------------------------------------------------
+// `email_selection` carries the decision trace written by
+// `_selection_event_detail` (src/library/email_ingest.py): sender/subject
+// provenance plus one entry per email item (body + attachments) with the
+// verdict the selection pipeline reached and why. Rendered as one line per
+// item so the raw JSON stays in "Show all".
+type EmailSelectionItem = {
+  /** Display name: the attachment filename, or `<body>` for the email body. */
+  name: string
+  verdict: string
+  reason: string | null
+  /** The labeller thought this might not be a real document — worth an accent. */
+  isAmbiguous: boolean
+}
+
+type EmailSelectionBreakdown = {
+  items: EmailSelectionItem[]
+  chips: { label: string; value: string }[]
+}
+
+function emailSelectionBreakdown(event: IngestionEvent): EmailSelectionBreakdown | null {
+  if (event.event !== 'email_selection') return null
+  const detail = event.detail ?? {}
+  // Tolerate missing/malformed detail: no items array → no breakdown at all.
+  if (!Array.isArray(detail.items)) return null
+
+  const items: EmailSelectionItem[] = []
+  for (const raw of detail.items as unknown[]) {
+    if (typeof raw !== 'object' || raw === null) continue
+    const item = raw as Record<string, unknown>
+    const verdict = typeof item.verdict === 'string' && item.verdict ? item.verdict : 'unknown'
+    items.push({
+      name: typeof item.filename === 'string' && item.filename ? item.filename : '<body>',
+      verdict: humanize(verdict),
+      reason: typeof item.reason === 'string' && item.reason ? item.reason : null,
+      isAmbiguous: verdict === 'flagged_ambiguous',
+    })
+  }
+
+  const chips: { label: string; value: string }[] = []
+  if (typeof detail.email_from === 'string' && detail.email_from) {
+    chips.push({ label: 'From', value: detail.email_from })
+  }
+  if (typeof detail.email_subject === 'string' && detail.email_subject) {
+    chips.push({ label: 'Subject', value: detail.email_subject })
+  }
+
+  return { items, chips }
 }
 
 // --- Skips and failures ---------------------------------------------------
@@ -222,6 +276,47 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
               v-for="chip in extractionBreakdown(event)!.chips"
               :key="chip.label"
               data-testid="history-extraction-chip"
+              class="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-gray-700/50 px-2 py-0.5 text-xs text-gray-600 dark:text-gray-300"
+            >
+              <span class="uppercase tracking-wide text-[10px] text-gray-400 dark:text-gray-500">
+                {{ chip.label }}
+              </span>
+              <span class="font-medium break-all">{{ chip.value }}</span>
+            </span>
+          </div>
+        </template>
+
+        <!-- Email triage: what happened to each item of the source email. -->
+        <template v-else-if="emailSelectionBreakdown(event)">
+          <ul
+            v-if="emailSelectionBreakdown(event)!.items.length"
+            data-testid="history-email-items"
+            class="mt-0.5 space-y-0.5"
+          >
+            <li
+              v-for="(item, itemIndex) in emailSelectionBreakdown(event)!.items"
+              :key="itemIndex"
+              data-testid="history-email-item"
+              class="text-xs break-words"
+              :class="
+                item.isAmbiguous
+                  ? 'text-violet-600 dark:text-violet-300 font-medium'
+                  : 'text-gray-500 dark:text-gray-400'
+              "
+            >
+              <span class="font-medium">{{ item.name }}</span>
+              <span> — {{ item.verdict }}</span>
+              <span v-if="item.reason"> ({{ item.reason }})</span>
+            </li>
+          </ul>
+          <div
+            v-if="emailSelectionBreakdown(event)!.chips.length"
+            class="flex flex-wrap gap-1.5 mt-1.5"
+          >
+            <span
+              v-for="chip in emailSelectionBreakdown(event)!.chips"
+              :key="chip.label"
+              data-testid="history-email-chip"
               class="inline-flex items-center gap-1 rounded-full bg-gray-100 dark:bg-gray-700/50 px-2 py-0.5 text-xs text-gray-600 dark:text-gray-300"
             >
               <span class="uppercase tracking-wide text-[10px] text-gray-400 dark:text-gray-500">

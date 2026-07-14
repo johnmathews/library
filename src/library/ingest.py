@@ -8,14 +8,22 @@ See docs/ingestion.md for the full flow.
 import hashlib
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 
 import filetype
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import get_settings
 from library.docx import CONVERTED_MARKDOWN_NAME, DOCX_MIME, docx_to_markdown
+from library.extraction.extractor import PROMPT_VERSION
+from library.extraction.validation import (
+    derive_review_status,
+    email_findings,
+    findings_to_payload,
+)
 from library.images import CONVERTED_JPEG_NAME, HEIC_MIME_TYPES, normalize_image
 from library.jobs import process_document
 from library.models import Document, DocumentSource, IngestionEvent, User
@@ -122,6 +130,48 @@ async def resolve_owner_id(session: AsyncSession, username: str | None) -> int |
     ).scalar_one_or_none()
 
 
+async def _duplicate_result(
+    session: AsyncSession,
+    existing: Document,
+    *,
+    filename: str | None,
+    source: DocumentSource,
+    extra_event_detail: dict[str, object] | None,
+) -> IngestResult:
+    """Record a ``duplicate_upload`` event against ``existing`` and notify.
+
+    The shared exit for both duplicate paths: the pre-insert sha256 check and
+    the IntegrityError fallback when two ingests race the same content past
+    that check.
+    """
+    session.add(
+        IngestionEvent(
+            document_id=existing.id,
+            event="duplicate_upload",
+            detail={
+                "filename": filename,
+                "source": source.value,
+                **(extra_event_detail or {}),
+            },
+        )
+    )
+    await session.commit()
+    logger.info("duplicate upload of document %s (sha256 %s)", existing.id, existing.sha256)
+    # Duplicates never enter the worker pipeline, so notify here from the
+    # already-loaded document rather than from jobs.py. `existing.uploader`
+    # is populated by the selectin load on the caller's query and stays valid
+    # after commit because every session factory uses expire_on_commit=False
+    # (library.db.get_sessionmaker) — so no lazy reload fires in this sync
+    # access path. Best-effort — never fails the ingest. Guarded end-to-end
+    # by tests/test_ingest_api.py::test_duplicate_upload_notifies_owner.
+    await dispatch_loaded_document_notification(
+        existing,
+        NotificationEvent.DUPLICATE,
+        document_url_base=get_settings().public_base_url,
+    )
+    return IngestResult(existing, duplicate=True)
+
+
 async def ingest_file(
     session: AsyncSession,
     *,
@@ -169,32 +219,13 @@ async def ingest_file(
     if existing is not None:
         if existing.deleted_at is not None:
             raise DeletedDuplicateError(existing)
-        session.add(
-            IngestionEvent(
-                document_id=existing.id,
-                event="duplicate_upload",
-                detail={
-                    "filename": filename,
-                    "source": source.value,
-                    **(extra_event_detail or {}),
-                },
-            )
-        )
-        await session.commit()
-        logger.info("duplicate upload of document %s (sha256 %s)", existing.id, sha256)
-        # Duplicates never enter the worker pipeline, so notify here from the
-        # already-loaded document rather than from jobs.py. `existing.uploader`
-        # is populated by the selectin load on the query above and stays valid
-        # after commit because every session factory uses expire_on_commit=False
-        # (library.db.get_sessionmaker) — so no lazy reload fires in this sync
-        # access path. Best-effort — never fails the ingest. Guarded end-to-end
-        # by tests/test_ingest_api.py::test_duplicate_upload_notifies_owner.
-        await dispatch_loaded_document_notification(
+        return await _duplicate_result(
+            session,
             existing,
-            NotificationEvent.DUPLICATE,
-            document_url_base=get_settings().public_base_url,
+            filename=filename,
+            source=source,
+            extra_event_detail=extra_event_detail,
         )
-        return IngestResult(existing, duplicate=True)
 
     stored = store(content)
 
@@ -239,24 +270,65 @@ async def ingest_file(
         uploader_id=uploader_id,
         extra={**(extra_document or {})},
     )
-    session.add(document)
-    await session.flush()
-    session.add(
-        IngestionEvent(
-            document_id=document.id,
-            event="received",
-            detail={
-                "filename": filename,
-                "size": len(content),
-                "mime_type": detected,
-                "source": source.value,
-                **(extra_event_detail or {}),
+    # Email triage flags (dropped siblings, a probably_noise label verdict —
+    # carried in via ``extra_document``) must be visible even when extraction is
+    # disabled or has not run yet, so compute them at creation: set the review
+    # status and seed ``extra["validation"]`` in the exact shape
+    # ``extraction.apply._apply_validation`` writes, so the frontend reason
+    # panel reads it unchanged. A later successful extraction recomputes both
+    # via the full ``validate()`` (which includes these same rules); extraction
+    # early-returns leave this ingest-time status untouched. Non-email channels
+    # carry no email hints, so this is a no-op for them.
+    flags = email_findings(extra_document)
+    if flags:
+        document.review_status = derive_review_status(flags)
+        document.extra = {
+            **document.extra,
+            "validation": {
+                "prompt_version": PROMPT_VERSION,
+                "findings": findings_to_payload(flags),
+                "validated_at": datetime.now(UTC).isoformat(),
             },
+        }
+    session.add(document)
+    try:
+        await session.flush()
+        session.add(
+            IngestionEvent(
+                document_id=document.id,
+                event="received",
+                detail={
+                    "filename": filename,
+                    "size": len(content),
+                    "mime_type": detected,
+                    "source": source.value,
+                    **(extra_event_detail or {}),
+                },
+            )
         )
-    )
-    # Commit before deferring: Procrastinate defers over its own connection,
-    # so a job deferred first could be picked up before the row is visible.
-    await session.commit()
+        # Commit before deferring: Procrastinate defers over its own connection,
+        # so a job deferred first could be picked up before the row is visible.
+        await session.commit()
+    except IntegrityError:
+        # Two ingests raced the same content past the pre-insert check (sha256
+        # is unique). The stored file is content-addressed, so the winner's
+        # bytes are identical — recover by re-reading the winning row and
+        # reporting a normal duplicate instead of an error.
+        await session.rollback()
+        existing = (
+            await session.execute(select(Document).where(Document.sha256 == sha256))
+        ).scalar_one_or_none()
+        if existing is None:
+            raise  # not the dedup race — propagate the original failure
+        if existing.deleted_at is not None:
+            raise DeletedDuplicateError(existing) from None
+        return await _duplicate_result(
+            session,
+            existing,
+            filename=filename,
+            source=source,
+            extra_event_detail=extra_event_detail,
+        )
     if defer_processing:
         await process_document.defer_async(document_id=document.id)
     logger.info(

@@ -8,6 +8,7 @@ onto the loop), against the real testcontainers database.
 """
 
 import asyncio
+import hashlib
 import io
 import logging
 import uuid
@@ -43,8 +44,8 @@ from library.email_ingest import (
     poll_mailbox_async,
 )
 from library.email_label import LabelOutcome
-from library.ingest import IngestResult
-from library.models import Document, DocumentSource, IngestionEvent
+from library.ingest import IngestResult, ingest_file
+from library.models import Document, DocumentSource, IngestionEvent, ReviewStatus
 from tests.docx_fixtures import make_docx
 
 pytestmark = pytest.mark.integration
@@ -1117,6 +1118,152 @@ def test_label_flags_probably_noise_but_still_ingests(
     assert f"{flag_name}:llm_label:flagged_ambiguous" in trace
 
 
+async def test_flagged_document_needs_review_at_ingest_without_extraction(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # A probably_noise label verdict must surface as needs_review AT INGEST —
+    # extraction never runs here (jobs stay parked in the InMemoryConnector),
+    # so the flag cannot depend on the extraction pipeline. Regression for the
+    # flag being invisible while LIBRARY_EXTRACTION_ENABLED=false.
+    settings = Settings(
+        email_host="imap.example.test",
+        email_label_enabled=True,
+        anthropic_api_key="test-key",  # type: ignore[arg-type]  # env form
+    )
+    tag = uuid.uuid4().hex[:8]
+    name = f"noise-{tag}.pdf"
+    raw = make_raw_mail(
+        subject=f"flagged {tag}", attachments=[(name, make_pdf(tag), "application", "pdf")]
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="80")])
+
+    async def fake_label(
+        session: object,
+        client: object,
+        label_settings: object,
+        *,
+        subject: str | None,
+        sender: str | None,
+        body_snippet: str,
+        items: list[object],
+    ) -> LabelOutcome:
+        verdicts = {
+            item.index: ("probably_noise", "looks like marketing")  # type: ignore[attr-defined]
+            for item in items
+        }
+        return LabelOutcome(verdicts=verdicts, usage=None, skip_reason=None)
+
+    monkeypatch.setattr("library.email_ingest.label_email_items", fake_label)
+
+    await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1
+    document = documents[0]
+    assert document.review_status is ReviewStatus.NEEDS_REVIEW
+    validation = document.extra["validation"]
+    assert validation["prompt_version"]
+    assert validation["validated_at"]
+    rules = [finding["rule"] for finding in validation["findings"]]
+    assert rules == ["email_item_ambiguous"]
+    assert "looks like marketing" in validation["findings"][0]["message"]
+    # Extraction genuinely never ran: no extraction output on the document, and
+    # the pipeline job is still waiting (nothing executes InMemoryConnector jobs).
+    assert document.extra.get("extraction") is None
+    process_jobs = [
+        job
+        for job in job_connector.jobs.values()
+        if job["task_name"] == "library.jobs.process_document"
+        and job["args"] == {"document_id": document.id}
+    ]
+    assert len(process_jobs) == 1
+
+
+async def test_dropped_sibling_sets_needs_review_at_ingest(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # The surviving attachment of a mixed email carries its dropped sibling and
+    # must be flagged needs_review at ingest, before/without extraction.
+    tag = uuid.uuid4().hex[:8]
+    pdf_name = f"survivor-{tag}.pdf"
+    raw = make_raw_mail(
+        subject=f"mixed ingest {tag}",
+        attachments=[
+            (
+                "rejected.docx",
+                b"\x00\xffPK-not-really" + uuid.uuid4().bytes,
+                "application",
+                "msword",
+            ),
+            (pdf_name, make_pdf(tag), "application", "pdf"),
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="81")])
+
+    await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    documents = await documents_named(session_factory, pdf_name)
+    assert len(documents) == 1
+    document = documents[0]
+    assert document.review_status is ReviewStatus.NEEDS_REVIEW
+    findings = document.extra["validation"]["findings"]
+    dropped = [f for f in findings if f["rule"] == "email_attachments_dropped"]
+    assert len(dropped) == 1
+    assert "rejected.docx" in dropped[0]["message"]
+
+
+async def test_concurrent_same_content_ingest_returns_duplicate(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # The dedup race: both ingests pass the sha256 pre-check, one wins the
+    # insert. Deterministic reproduction: the test session's flush first lands
+    # a conflicting row via a second session, then delegates to the real flush,
+    # which hits the unique constraint. The loser must recover into a normal
+    # duplicate result, not an error.
+    content = make_pdf()
+    sha256 = hashlib.sha256(content).hexdigest()
+    name = f"race-{uuid.uuid4().hex[:8]}.pdf"
+
+    async with session_factory() as session:
+        real_flush = session.flush
+        raced = False
+
+        async def racing_flush(*args: object, **kwargs: object) -> None:
+            nonlocal raced
+            if not raced:
+                raced = True
+                async with session_factory() as rival:
+                    await ingest_file(
+                        rival, content=content, filename=name, source=DocumentSource.EMAIL
+                    )
+            await real_flush(*args, **kwargs)  # type: ignore[arg-type]
+
+        monkeypatch.setattr(session, "flush", racing_flush)
+        result = await ingest_file(
+            session, content=content, filename=name, source=DocumentSource.EMAIL
+        )
+
+    assert result.duplicate is True
+    async with session_factory() as check:
+        rows = list(
+            (await check.execute(select(Document).where(Document.sha256 == sha256))).scalars().all()
+        )
+    assert len(rows) == 1
+    assert result.document.id == rows[0].id
+    duplicate_events = await events_for(session_factory, rows[0].id, "duplicate_upload")
+    assert len(duplicate_events) == 1
+    assert duplicate_events[0].detail["filename"] == name
+
+
 def test_poller_disabled_when_host_unset() -> None:
     def explode() -> FakeMailBox:
         raise AssertionError("mailbox must not be opened when the poller is off")
@@ -1141,6 +1288,10 @@ def test_periodic_task_registered_with_default_cron() -> None:
     periodic = jobs.job_app.periodic_registry.periodic_tasks[("library.jobs.poll_email_inbox", "")]
     assert periodic.cron == "*/10 * * * *"
     assert periodic.task is jobs.poll_email_inbox
+    # Overlap guard: at most one queued poll (queueing_lock — the periodic
+    # deferrer skips AlreadyEnqueued ticks) and never two running at once (lock).
+    assert periodic.task.queueing_lock == "poll_email_inbox"
+    assert periodic.task.lock == "poll_email_inbox"
 
 
 async def test_periodic_task_noops_when_host_unset(monkeypatch: pytest.MonkeyPatch) -> None:

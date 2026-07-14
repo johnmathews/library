@@ -689,14 +689,21 @@ async def purge_deleted_documents(timestamp: int) -> None:
 
 
 @job_app.periodic(cron=email_poll_cron(get_settings().email_poll_minutes))
-@job_app.task(name="library.jobs.poll_email_inbox")
+@job_app.task(
+    name="library.jobs.poll_email_inbox",
+    queueing_lock="poll_email_inbox",
+    lock="poll_email_inbox",
+)
 async def poll_email_inbox(timestamp: int) -> None:
     """Periodic task: poll the IMAP inbox for attachment documents (W14).
 
     Instant no-op while ``LIBRARY_EMAIL_HOST`` is unset (the schedule
     still ticks; the task just returns). The synchronous IMAP work runs
     in a thread via ``poll_mailbox_async`` so the worker loop stays
-    responsive.
+    responsive. Overlap-guarded: ``queueing_lock`` keeps at most one poll
+    queued (the periodic deferrer skips ``AlreadyEnqueued`` ticks) and
+    ``lock`` stops two polls from ever running concurrently, so a slow
+    IMAP round-trip cannot pile up overlapping runs.
     """
     settings = get_settings()
     if settings.email_host is None:

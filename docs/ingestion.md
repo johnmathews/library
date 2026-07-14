@@ -1135,9 +1135,9 @@ poll_email_inbox fires (every LIBRARY_EMAIL_POLL_MINUTES minutes)
        │   clears the substance gate (quoted replies / signatures / footers
        │   stripped; a contentless cover note like "FYI see attached" files
        │   nothing); HTML→Markdown (text/markdown), else plain text (text/plain)
-       ├─ emit the one-line decision trace (always) and persist it as an
-       │   `email_selection` event on each new document (see "Email item
-       │   selection" below)
+       ├─ emit the one-line decision trace (one per processed message) and
+       │   persist it as an `email_selection` event on each new document
+       │   (see "Email item selection" below)
        ├─ any dropped attachment ─► a per-message WARNING summary and a
        │   best-effort "Attachments not added" push to the resolved owner
        │   (reuses the processing_error opt-in); quiet `filtered` noise is NOT
@@ -1279,8 +1279,9 @@ from my iPhone") are stripped, and the remainder must reach `_BODY_MIN_WORDS`
 document is never padded with a reply chain it merely quoted.
 
 **Layer 3 — optional LLM label pass** (`library.email_label`, **OFF by
-default**). When `LIBRARY_EMAIL_LABEL_ENABLED=true` and an `ANTHROPIC_API_KEY`
-is set, one Anthropic call per email (`LIBRARY_EMAIL_LABEL_MODEL`, default
+default**). When `LIBRARY_EMAIL_LABEL_ENABLED=true` and `LIBRARY_ANTHROPIC_API_KEY`
+is set (the same key extraction uses), one Anthropic call per email
+(`LIBRARY_EMAIL_LABEL_MODEL`, default
 `claude-haiku-4-5`) labels each *surviving* attachment `keep` or
 `probably_noise`, given the subject, sender, and a cleaned body excerpt
 (`…BODY_SNIPPET_CHARS`). A `probably_noise` verdict **never drops** — the file
@@ -1297,10 +1298,17 @@ one cheap call per such email).
 
 #### Debugging & triage: the decision trace
 
-Every polled message emits exactly one **decision trace** log line — the primary
-surface for "what happened to this email and why". It is always emitted, even
+Every **processed** message emits exactly one **decision trace** log line — the
+primary surface for "what happened to this email and why". It is emitted even
 when the email produced no document (the persisted event cannot cover that
-case). Format (`_log_selection_trace`):
+case), but two kinds of message never reach the trace:
+
+- **Allowlist-rejected mail** — skipped before selection runs; each poll logs a
+  per-message WARNING instead (`grep 'not in allowlist'`).
+- **Messages whose processing raised** — the error is logged and the message is
+  left in place for the next poll (`grep 'failed to process message'`).
+
+Format (`_log_selection_trace`):
 
 ```
 email-selection msg='<subject>' from='<sender>' items=N ingested=a duplicate=b \
@@ -1338,13 +1346,13 @@ all events"), and the LLM billing as an `email_label_completed` event.
 | `duplicate` | Content already in the library | none |
 | `flagged_ambiguous` | Ingested, LLM thought it might be noise | check the needs-review queue; verify the doc |
 | `filtered(signature_image\|tiny_image\|non_document_type)` | Deterministic noise, quietly dropped | none if truly noise; if a real doc was filtered, lower the threshold or set `LIBRARY_EMAIL_FILTER_NOISE_ENABLED=false` and re-forward |
-| `filtered(below_substance\|blank\|not_needed\|oversize)` | Body not filed (thin / empty / an attachment already won / too large) | none |
+| `filtered(below_substance:<n>w\|blank\|not_needed\|oversize)` | Body not filed (thin — `<n>w` is the post-strip word count, e.g. `below_substance:8w` / empty / an attachment already won / too large) | none |
 | `dropped(oversize\|unsupported_type\|error)` | Surfaced attachment drop — also on the sibling's `email_siblings_dropped` + a push. (A body whose ingest is rejected renders as `dropped(rejected)`.) | investigate; re-send in a supported form if it was real |
 | a trace with `flagged=0` while the LLM pass is on | The label pass was skipped (not a per-item verdict) | look for a `email-label: … skipped (budget\|error)` log line — raise the budget or accept degradation |
 
-**Tuning knobs** (all `LIBRARY_EMAIL_*`, see `config.py`): `FILTER_NOISE_ENABLED`,
-`FILTER_TINY_IMAGE_MAX_BYTES`, `FILTER_TINY_IMAGE_MAX_EDGE_PX`, `LABEL_ENABLED`,
-`LABEL_MODEL`, `LABEL_DAILY_BUDGET_USD`, `LABEL_BODY_SNIPPET_CHARS`.
+**Tuning knobs**: the noise-gate and label-pass settings
+(`LIBRARY_EMAIL_FILTER_*`, `LIBRARY_EMAIL_LABEL_*`) are listed with their
+defaults in the [Configuration](#configuration) table below.
 
 ### Provider setup
 
@@ -1459,6 +1467,8 @@ Append-only audit trail in `ingestion_events`:
 | --- | --- | --- |
 | `received` | ingest | `{filename, size, mime_type, source}`; email adds `{email_from, email_subject, email_message_id}`; a note records `{source: "note", size}` |
 | `duplicate_upload` | ingest | `{filename, source}`; email adds the same `email_*` keys |
+| `email_selection` | email poller | Per-item decision trace, persisted on each new document the email produced: `{email_from, email_subject, email_message_id, email_to?, items}` where each item is `{kind, filename, mime, size, stage, verdict, reason}` (see "Email item selection") |
+| `email_label_completed` | email poller | `{cost_usd, model, input_tokens, output_tokens, prompt_version, items}` — one per billed LLM label pass, written on the first new document; what the label budget gate sums |
 | `note_edited` | notes router | `{fields}` — the note fields changed by a `PATCH /api/notes/{id}` |
 | `note_restored` | notes router | `{restored_version_no, restored_at}` |
 | `status_changed` | pipeline | `{from, to}` |
@@ -1521,3 +1531,10 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_EMAIL_POLL_MINUTES` | `10` | Poll cadence (cron step; clamped to 1–59) |
 | `LIBRARY_EMAIL_ALLOWED_SENDERS` | empty | Comma-separated sender allowlist; empty accepts anyone |
 | `LIBRARY_EMAIL_DEFAULT_OWNER` | unset | Username owning email documents whose sender matches no user's forwarding addresses; unset leaves them unowned |
+| `LIBRARY_EMAIL_FILTER_NOISE_ENABLED` | `true` | Deterministic noise gate for email attachments (signature logos, tiny images, calendar/vCard/PKCS7/TNEF parts); `false` ingests every attachment as before |
+| `LIBRARY_EMAIL_FILTER_TINY_IMAGE_MAX_BYTES` | `4096` | Byte-size fallback for the tiny-image filter, used only when an image cannot be decoded |
+| `LIBRARY_EMAIL_FILTER_TINY_IMAGE_MAX_EDGE_PX` | `64` | Images whose longest edge is ≤ this are filtered as icons/tracking pixels |
+| `LIBRARY_EMAIL_LABEL_ENABLED` | `false` | Optional per-email LLM label pass; flags probable noise `needs_review` (never drops). Spends money and needs `LIBRARY_ANTHROPIC_API_KEY` |
+| `LIBRARY_EMAIL_LABEL_MODEL` | `claude-haiku-4-5` | Model used by the label pass |
+| `LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD` | `2.0` | Daily spend cap for the label pass (summed from `email_label_completed` events); over budget → skip, all attachments kept |
+| `LIBRARY_EMAIL_LABEL_BODY_SNIPPET_CHARS` | `1000` | Length of the cleaned body excerpt sent to the labeller |

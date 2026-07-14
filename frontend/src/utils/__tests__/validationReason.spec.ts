@@ -37,6 +37,14 @@ describe('resolveReviewReason', () => {
     expect(unsure.title).toBe('Extraction was unsure')
     expect(unsure.detail).toBe('the extractor was unsure: two candidate totals')
   })
+
+  it('titles the email-labeller ambiguity flag', () => {
+    const ambiguous = resolveReviewReason(
+      finding('email_item_ambiguous', 'the email labeller flagged this item as possible noise'),
+    )
+    expect(ambiguous.title).toBe('Might not be a real document')
+    expect(ambiguous.detail).toBe('the email labeller flagged this item as possible noise')
+  })
 })
 
 describe('resolveReviewReasons', () => {
@@ -57,6 +65,12 @@ describe('summarizeReviewReasons', () => {
   it('joins titles up to the limit', () => {
     expect(summarizeReviewReasons([finding('date_plausibility'), finding('empty_extraction')])).toBe(
       'Unlikely date, Little information found',
+    )
+  })
+
+  it('summarizes the email ambiguity flag with its friendly title', () => {
+    expect(summarizeReviewReasons([finding('email_item_ambiguous')])).toBe(
+      'Might not be a real document',
     )
   })
 

@@ -6,6 +6,7 @@ from decimal import Decimal
 from library.extraction.validation import (
     Finding,
     derive_review_status,
+    email_findings,
     findings_to_payload,
     validate,
 )
@@ -388,7 +389,7 @@ def test_email_item_ambiguous_fires_with_reason() -> None:
         title="Calendar invite",
         extra={
             "email_selection": {
-                "verdict": "ambiguous",
+                "verdict": "probably_noise",
                 "reason": "looks like a calendar invite",
                 "source": "llm_label",
             }
@@ -426,9 +427,9 @@ def test_email_item_ambiguous_absent_when_verdict_keep() -> None:
 
 def test_email_item_ambiguous_without_reason_generic_message() -> None:
     for extra in (
-        {"email_selection": {"verdict": "ambiguous"}},
-        {"email_selection": {"verdict": "ambiguous", "reason": None}},
-        {"email_selection": {"verdict": "ambiguous", "reason": "  "}},
+        {"email_selection": {"verdict": "probably_noise"}},
+        {"email_selection": {"verdict": "probably_noise", "reason": None}},
+        {"email_selection": {"verdict": "probably_noise", "reason": "  "}},
     ):
         doc = _doc(extra=extra)
         finding = _finding(
@@ -436,6 +437,64 @@ def test_email_item_ambiguous_without_reason_generic_message() -> None:
         )
         assert "None" not in finding.message
         assert finding.message.strip()
+
+
+# --- email_findings: the pure, extra-only helper the email channel runs at ingest ---
+
+
+def test_email_findings_empty_for_none_and_irrelevant_extra() -> None:
+    assert email_findings(None) == []
+    assert email_findings({}) == []
+    assert email_findings({"email_to": ["a@b.com"], "extraction": {"confidence": "high"}}) == []
+    assert email_findings({"email_siblings_dropped": []}) == []
+    assert email_findings({"email_selection": {"verdict": "keep", "reason": None}}) == []
+
+
+def test_email_findings_fires_on_probably_noise_with_reason() -> None:
+    findings = email_findings(
+        {
+            "email_selection": {
+                "verdict": "probably_noise",
+                "reason": "looks like a banner",
+                "source": "llm_label",
+            }
+        }
+    )
+    assert [f.rule for f in findings] == ["email_item_ambiguous"]
+    assert "looks like a banner" in findings[0].message
+    assert derive_review_status(findings) is ReviewStatus.NEEDS_REVIEW
+
+
+def test_email_findings_dead_ambiguous_verdict_no_longer_fires() -> None:
+    # "ambiguous" was accepted but never written by any producer (selection only
+    # writes "probably_noise"); the dead value is dropped from the rule.
+    assert email_findings({"email_selection": {"verdict": "ambiguous", "reason": "x"}}) == []
+
+
+def test_email_findings_fires_on_dropped_siblings() -> None:
+    findings = email_findings(
+        {
+            "email_siblings_dropped": [
+                {"filename": "form.docx", "reason": "unsupported_type", "detail": "x"}
+            ]
+        }
+    )
+    assert [f.rule for f in findings] == ["email_attachments_dropped"]
+    assert "form.docx" in findings[0].message
+
+
+def test_email_findings_agrees_with_validate() -> None:
+    extra = {
+        "email_siblings_dropped": [{"filename": "a.docx", "reason": "unsupported_type"}],
+        "email_selection": {"verdict": "probably_noise", "reason": "logo", "source": "llm_label"},
+    }
+    doc = _doc(title="t", summary="s", extra=extra)
+    via_validate = [
+        f
+        for f in validate(doc, kind_slug="other", ocr_floor=FLOOR, today=TODAY)
+        if f.rule in {"email_attachments_dropped", "email_item_ambiguous"}
+    ]
+    assert via_validate == email_findings(extra)
 
 
 def test_clean_document_has_no_findings() -> None:
