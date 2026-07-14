@@ -234,3 +234,65 @@ export function updateNotifications(payload: NotificationUpdate): Promise<UserPr
     body: payload,
   })
 }
+
+// --- Email triage (read-only, instance-wide) ---------------------------------
+
+/** The hold-for-review switches (`enabled` is the master switch). */
+export interface EmailTriageHold {
+  enabled: boolean
+  below_substance: boolean
+  unknown_senders: boolean
+}
+
+/** Sender allowlist state — the count only; the addresses are never returned. */
+export interface EmailTriageAllowlist {
+  configured: boolean
+  count: number
+}
+
+/** The deterministic noise gate and its tiny-image thresholds. */
+export interface EmailTriageNoiseFilter {
+  enabled: boolean
+  tiny_image_max_bytes: number
+  tiny_image_max_edge_px: number
+}
+
+/** The optional per-email LLM label pass. `active` = enabled AND API key present. */
+export interface EmailTriageLabel {
+  enabled: boolean
+  active: boolean
+  model: string
+  daily_budget_usd: number
+  body_snippet_chars: number
+  prompt_version: string
+}
+
+/** The body-substance gate thresholds (fixed in code, not configuration). */
+export interface EmailTriageBodySubstance {
+  min_words: number
+  min_chars: number
+}
+
+/**
+ * The effective email-in triage configuration (GET /api/settings/email-triage).
+ * Instance-wide and read-only — secret-free by construction (no credentials,
+ * no host, no allowlist addresses). See docs/ingestion.md, "Email item
+ * selection" / "Held for review" for the semantics of each gate.
+ */
+export interface EmailTriageConfig {
+  email_in_configured: boolean
+  poll_minutes: number
+  held_folder: string
+  processed_folder: string
+  hold: EmailTriageHold
+  allowlist: EmailTriageAllowlist
+  noise_filter: EmailTriageNoiseFilter
+  label: EmailTriageLabel
+  body_substance: EmailTriageBodySubstance
+  imap_timeout_seconds: number
+}
+
+/** GET /api/settings/email-triage — the live triage pipeline configuration. */
+export function getEmailTriage(): Promise<EmailTriageConfig> {
+  return apiFetch<EmailTriageConfig>('/api/settings/email-triage')
+}

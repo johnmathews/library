@@ -419,6 +419,150 @@ describe('SettingsView', () => {
     })
   })
 
+  describe('Email triage tab', () => {
+    const baseTriage = {
+      email_in_configured: true,
+      poll_minutes: 10,
+      held_folder: 'Library/Held',
+      processed_folder: 'Library/Processed',
+      hold: { enabled: true, below_substance: true, unknown_senders: true },
+      allowlist: { configured: false, count: 0 },
+      noise_filter: { enabled: true, tiny_image_max_bytes: 4096, tiny_image_max_edge_px: 64 },
+      label: {
+        enabled: true,
+        active: true,
+        model: 'claude-haiku-4-5',
+        daily_budget_usd: 2,
+        body_snippet_chars: 1000,
+        prompt_version: 'email-label-v2',
+      },
+      body_substance: { min_words: 40, min_chars: 240 },
+      imap_timeout_seconds: 60,
+    }
+
+    /** Route the triage endpoint to `triage`; kinds and everything else as usual. */
+    function stubTriageFetch(triage: unknown): void {
+      fetchMock.mockImplementation((input: unknown) => {
+        if (String(input) === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
+        if (String(input) === '/api/settings/email-triage')
+          return Promise.resolve(jsonResponse(triage))
+        return Promise.resolve(jsonResponse({ dashboard_fields: ['kind'] }))
+      })
+    }
+
+    async function mountAndOpenTab(triage: unknown) {
+      const auth = useAuthStore()
+      auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
+      stubTriageFetch(triage)
+      const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+      await wrapper.find('[data-testid="tab-email-triage-btn"]').trigger('click')
+      await flushPromises()
+      return wrapper
+    }
+
+    it('loads the config lazily when the tab is first shown', async () => {
+      const wrapper = await mountAndOpenTab(baseTriage)
+      const triageCalls = fetchMock.mock.calls.filter(
+        ([url]) => String(url) === '/api/settings/email-triage',
+      )
+      expect(triageCalls).toHaveLength(1)
+      expect(wrapper.find('[data-testid="email-triage-config"]').exists()).toBe(true)
+      // Re-opening the tab does not refetch.
+      await wrapper.find('[data-testid="tab-dashboard-btn"]').trigger('click')
+      await wrapper.find('[data-testid="tab-email-triage-btn"]').trigger('click')
+      await flushPromises()
+      expect(
+        fetchMock.mock.calls.filter(([url]) => String(url) === '/api/settings/email-triage'),
+      ).toHaveLength(1)
+    })
+
+    it('renders the pipeline values, badges, and the held-emails link', async () => {
+      const wrapper = await mountAndOpenTab(baseTriage)
+
+      expect(wrapper.find('[data-testid="email-triage-hold-master"]').text()).toBe('Hold pipeline ON')
+      expect(wrapper.find('[data-testid="view-held-emails"]').attributes('to')).toBe('/held-emails')
+      expect(wrapper.find('[data-testid="triage-poll-minutes"]').text()).toContain('10 min')
+      expect(wrapper.find('[data-testid="triage-held-folder"]').text()).toBe('Library/Held')
+      expect(wrapper.find('[data-testid="triage-processed-folder"]').text()).toBe('Library/Processed')
+      expect(wrapper.find('[data-testid="triage-imap-timeout"]').text()).toContain('60 s')
+
+      // Step 1: accept-all variant (no allowlist configured), hold badge ON.
+      expect(wrapper.find('[data-testid="triage-allowlist-mode"]').text()).toContain('Accept all senders')
+      expect(wrapper.find('[data-testid="triage-allowlist-hold-badge"]').text()).toBe('Unknown-sender hold ON')
+      // Step 2: noise gate ON with its thresholds.
+      expect(wrapper.find('[data-testid="triage-noise-badge"]').text()).toBe('ON')
+      expect(wrapper.find('[data-testid="triage-noise-thresholds"]').text()).toContain('4096 bytes')
+      expect(wrapper.find('[data-testid="triage-noise-thresholds"]').text()).toContain('64 px')
+      // Step 3: label pass active, with model / budget / prompt version + fail-open.
+      expect(wrapper.find('[data-testid="triage-label-badge"]').text()).toBe('Active')
+      expect(wrapper.find('[data-testid="triage-label-state"]').text()).toBe('Active')
+      expect(wrapper.find('[data-testid="triage-label-model"]').text()).toBe('claude-haiku-4-5')
+      expect(wrapper.find('[data-testid="triage-label-budget"]').text()).toBe('$2')
+      expect(wrapper.find('[data-testid="triage-label-prompt-version"]').text()).toBe('email-label-v2')
+      expect(wrapper.find('[data-testid="triage-label-failopen"]').text()).toContain('Fail-open')
+      // Step 4: substance thresholds + hold badge.
+      expect(wrapper.find('[data-testid="triage-substance-thresholds"]').text()).toContain('40 words')
+      expect(wrapper.find('[data-testid="triage-substance-thresholds"]').text()).toContain('240 characters')
+      expect(wrapper.find('[data-testid="triage-substance-badge"]').text()).toBe('Below-substance hold ON')
+      // Step 5 + footnote.
+      expect(wrapper.find('[data-testid="triage-step-nothing"]').text()).toContain('held for review')
+      expect(wrapper.find('[data-testid="email-triage-footnote"]').text()).toContain('email-triage.md')
+    })
+
+    it('shows the allowlist count and OFF badges when switches are disabled', async () => {
+      const wrapper = await mountAndOpenTab({
+        ...baseTriage,
+        hold: { enabled: false, below_substance: false, unknown_senders: false },
+        allowlist: { configured: true, count: 3 },
+        noise_filter: { ...baseTriage.noise_filter, enabled: false },
+      })
+
+      expect(wrapper.find('[data-testid="email-triage-hold-master"]').text()).toBe('Hold pipeline OFF')
+      expect(wrapper.find('[data-testid="triage-allowlist-mode"]').text()).toContain('3 allowed senders')
+      expect(wrapper.find('[data-testid="triage-allowlist-hold-badge"]').text()).toBe('Unknown-sender hold OFF')
+      expect(wrapper.find('[data-testid="triage-noise-badge"]').text()).toBe('OFF')
+      expect(wrapper.find('[data-testid="triage-substance-badge"]').text()).toBe('Below-substance hold OFF')
+    })
+
+    it('distinguishes label inactive-without-key from disabled-by-flag', async () => {
+      const noKey = await mountAndOpenTab({
+        ...baseTriage,
+        label: { ...baseTriage.label, enabled: true, active: false },
+      })
+      expect(noKey.find('[data-testid="triage-label-badge"]').text()).toBe('Inactive')
+      expect(noKey.find('[data-testid="triage-label-state"]').text()).toContain('no API key')
+
+      const disabled = await mountAndOpenTab({
+        ...baseTriage,
+        label: { ...baseTriage.label, enabled: false, active: false },
+      })
+      expect(disabled.find('[data-testid="triage-label-state"]').text()).toContain('disabled by configuration')
+    })
+
+    it('shows the unconfigured empty state instead of the flow', async () => {
+      const wrapper = await mountAndOpenTab({ ...baseTriage, email_in_configured: false })
+      const empty = wrapper.find('[data-testid="email-triage-unconfigured"]')
+      expect(empty.exists()).toBe(true)
+      expect(empty.text()).toContain('Email-in is not configured on this server')
+      expect(wrapper.find('[data-testid="email-triage-config"]').exists()).toBe(false)
+    })
+
+    it('shows an error when the config cannot be loaded', async () => {
+      const auth = useAuthStore()
+      auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
+      fetchMock.mockImplementation((input: unknown) => {
+        if (String(input) === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
+        if (String(input) === '/api/settings/email-triage')
+          return Promise.resolve(jsonResponse({ detail: 'boom' }, 500))
+        return Promise.resolve(jsonResponse({ dashboard_fields: ['kind'] }))
+      })
+      const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+      await wrapper.find('[data-testid="tab-email-triage-btn"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="email-triage-error"]').exists()).toBe(true)
+    })
+  })
+
   describe('Document type colours', () => {
     function seedUser(kindColors: Record<string, string> = {}): ReturnType<typeof useAuthStore> {
       const auth = useAuthStore()

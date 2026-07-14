@@ -91,6 +91,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | PUT    | `/api/settings/appearance` | Update your page-canvas tone, tile preview, and action dock position |
 | PUT    | `/api/settings/kind-colors` | Update your per-kind tile border colours |
 | PUT    | `/api/settings/notifications` | Update your Pushover notifications + email forwarding addresses |
+| GET    | `/api/settings/email-triage` | Effective email-in triage configuration (instance-wide, read-only, secret-free) |
 | GET    | `/api/admin/system` | System & infra context: version, config, deployment, DB stats (admin only) |
 | GET    | `/api/admin/architecture` | Architecture docs as markdown (admin only) |
 | GET    | `/api/admin/coverage` | Latest CI-generated test coverage (admin only) |
@@ -666,7 +667,7 @@ curl -H "Authorization: Bearer library_3q2…" \
 Bearer requests are CSRF-exempt (the header cannot be set cross-site).
 Revoked or unknown tokens, and tokens of disabled users, get `401`.
 
-## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`, `PUT /api/settings/kind-colors`, `PUT /api/settings/notifications`
+## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`, `PUT /api/settings/kind-colors`, `PUT /api/settings/notifications`, `GET /api/settings/email-triage`
 
 Per-user preferences: which metadata fields appear on the dashboard tiles, the
 page-canvas tone behind them, how each tile previews the document's first page,
@@ -840,6 +841,40 @@ The GET / login / `/api/auth/me` read model embeds a `notifications` object,
 e.g. `{"enabled": false, "pushover_app_token_set": false,
 "pushover_user_key_set": false, "pushover_device": null, "events": [],
 "email_forward_addresses": []}`.
+
+### 1.10.6 `GET /api/settings/email-triage`
+
+The **effective email-in triage configuration** — instance-wide (not
+per-user) and **read-only**; it backs the Settings → Email triage tab so the
+hold/label pipeline's logic is visible rather than hidden. Computed from the
+live environment on every request. The semantics of each gate live in
+[ingestion.md](ingestion.md) ("Email item selection", "Held for review");
+changing any value is environment-only (server `.env` + worker restart — see
+[runbooks/email-triage.md](runbooks/email-triage.md)).
+
+```json
+{
+  "email_in_configured": true,
+  "poll_minutes": 10,
+  "held_folder": "Library/Held",
+  "processed_folder": "Library/Processed",
+  "hold": {"enabled": true, "below_substance": true, "unknown_senders": true},
+  "allowlist": {"configured": true, "count": 2},
+  "noise_filter": {"enabled": true, "tiny_image_max_bytes": 4096, "tiny_image_max_edge_px": 64},
+  "label": {"enabled": true, "active": true, "model": "claude-haiku-4-5", "daily_budget_usd": 2.0, "body_snippet_chars": 1000, "prompt_version": "email-label-v2"},
+  "body_substance": {"min_words": 40, "min_chars": 240},
+  "imap_timeout_seconds": 60.0
+}
+```
+
+**Secret-free by construction.** Never the IMAP credentials or host (only the
+`email_in_configured` boolean), never the Anthropic key (only `label.active` =
+enabled **and** a key is present, so the UI can distinguish "disabled by flag"
+from "no API key"), and never the allowlisted addresses (only
+`allowlist.count` — any authenticated user can read this endpoint).
+`body_substance` reports the module constants in `email_ingest`
+(`BODY_MIN_WORDS` / `BODY_MIN_CHARS`) — fixed in code, not configuration.
+`prompt_version` is `email_label.PROMPT_VERSION`.
 
 ## 1.11 Ask — `POST /api/ask`
 

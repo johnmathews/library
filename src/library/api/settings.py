@@ -1,4 +1,5 @@
-"""User settings: per-user display preferences (docs/api.md)."""
+"""User settings: per-user display preferences, plus the read-only
+instance-wide email-triage configuration view (docs/api.md)."""
 
 from typing import Annotated
 
@@ -7,11 +8,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from library import notifications
 from library.auth.deps import current_user
+
+# Aliased: the GET /settings route handler below is itself named get_settings.
+from library.config import get_settings as get_app_settings
 from library.db import get_session
+from library.email_ingest import BODY_MIN_CHARS, BODY_MIN_WORDS
+from library.email_label import PROMPT_VERSION
 from library.models import User
 from library.schemas import (
     AppearancePreferences,
     DashboardPreferences,
+    EmailTriageAllowlistOut,
+    EmailTriageBodySubstanceOut,
+    EmailTriageHoldOut,
+    EmailTriageLabelOut,
+    EmailTriageNoiseFilterOut,
+    EmailTriageOut,
     KindColorsPreferences,
     NotificationSettingsIn,
     UserPreferences,
@@ -27,6 +39,60 @@ async def get_settings(
 ) -> UserPreferences:
     """Resolved display preferences (defaults filled when unset)."""
     return resolve_preferences(user.preferences)
+
+
+@router.get(
+    "/settings/email-triage",
+    response_model=EmailTriageOut,
+    summary="Effective email triage configuration (read-only)",
+)
+async def get_email_triage(
+    user: Annotated[User, Depends(current_user)],
+) -> EmailTriageOut:
+    """The live email-in triage pipeline configuration, for the Settings tab.
+
+    Instance-wide (not per-user), read-only, and secret-free: never the IMAP
+    credentials or host, never the Anthropic key, never the allowlisted
+    addresses — only booleans/counts plus the non-secret thresholds. Settings
+    are environment-only (server .env + worker restart); see
+    docs/runbooks/email-triage.md and docs/ingestion.md ("Email item
+    selection", "Held for review") for semantics.
+    """
+    settings = get_app_settings()
+    allowlist = settings.email_allowed_senders
+    return EmailTriageOut(
+        email_in_configured=bool(settings.email_host),
+        poll_minutes=settings.email_poll_minutes,
+        held_folder=settings.email_held_folder,
+        processed_folder=settings.email_processed_folder,
+        hold=EmailTriageHoldOut(
+            enabled=settings.email_hold_enabled,
+            below_substance=settings.email_hold_below_substance,
+            unknown_senders=settings.email_hold_unknown_senders,
+        ),
+        allowlist=EmailTriageAllowlistOut(
+            configured=bool(allowlist),
+            count=len(allowlist),
+        ),
+        noise_filter=EmailTriageNoiseFilterOut(
+            enabled=settings.email_filter_noise_enabled,
+            tiny_image_max_bytes=settings.email_filter_tiny_image_max_bytes,
+            tiny_image_max_edge_px=settings.email_filter_tiny_image_max_edge_px,
+        ),
+        label=EmailTriageLabelOut(
+            enabled=settings.email_label_enabled,
+            active=settings.email_label_enabled and settings.anthropic_api_key is not None,
+            model=settings.email_label_model,
+            daily_budget_usd=settings.email_label_daily_budget_usd,
+            body_snippet_chars=settings.email_label_body_snippet_chars,
+            prompt_version=PROMPT_VERSION,
+        ),
+        body_substance=EmailTriageBodySubstanceOut(
+            min_words=BODY_MIN_WORDS,
+            min_chars=BODY_MIN_CHARS,
+        ),
+        imap_timeout_seconds=settings.email_imap_timeout_seconds,
+    )
 
 
 @router.put("/settings", response_model=UserPreferences, summary="Update your dashboard fields")

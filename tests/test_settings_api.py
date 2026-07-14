@@ -10,6 +10,9 @@ from sqlalchemy.ext.asyncio import create_async_engine
 from sqlalchemy.pool import NullPool
 
 from library import notifications
+from library.config import get_settings
+from library.email_ingest import BODY_MIN_CHARS, BODY_MIN_WORDS
+from library.email_label import PROMPT_VERSION
 from library.jobs import job_app, procrastinate_conninfo
 from library.notifications import PushoverValidation
 from tests.conftest import AuthUser, create_user, fetch_all, login
@@ -466,6 +469,135 @@ def test_notifications_independent_of_other_preferences(
     assert body["dashboard_fields"] == ["amount"]
     assert body["background_tone"] == "mist"
     assert body["notifications"]["pushover_app_token_set"] is True
+
+
+# --- GET /api/settings/email-triage ------------------------------------------
+
+
+def _set_email_env(monkeypatch: pytest.MonkeyPatch, env: dict[str, str | None]) -> None:
+    """Apply email-related env overrides and rebuild the cached Settings.
+
+    ``None`` deletes the variable. The endpoint calls ``get_settings()`` at
+    request time, so clearing the cache here makes the next request see these
+    values; the ``api_app`` fixture clears the cache again at teardown.
+    """
+    for key, value in env.items():
+        if value is None:
+            monkeypatch.delenv(key, raising=False)
+        else:
+            monkeypatch.setenv(key, value)
+    get_settings.cache_clear()
+
+
+def test_email_triage_reflects_instance_config(
+    api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_email_env(
+        monkeypatch,
+        {
+            "LIBRARY_EMAIL_HOST": "imap.example.com",
+            "LIBRARY_EMAIL_POLL_MINUTES": "7",
+            "LIBRARY_EMAIL_HELD_FOLDER": "Custom/Held",
+            "LIBRARY_EMAIL_PROCESSED_FOLDER": "Custom/Processed",
+            "LIBRARY_EMAIL_HOLD_ENABLED": "true",
+            "LIBRARY_EMAIL_HOLD_BELOW_SUBSTANCE": "false",
+            "LIBRARY_EMAIL_HOLD_UNKNOWN_SENDERS": "true",
+            "LIBRARY_EMAIL_ALLOWED_SENDERS": "Alice@Example.com, bob@example.com",
+            "LIBRARY_EMAIL_FILTER_NOISE_ENABLED": "true",
+            "LIBRARY_EMAIL_FILTER_TINY_IMAGE_MAX_BYTES": "8192",
+            "LIBRARY_EMAIL_FILTER_TINY_IMAGE_MAX_EDGE_PX": "128",
+            "LIBRARY_EMAIL_LABEL_ENABLED": "true",
+            "LIBRARY_ANTHROPIC_API_KEY": "sk-ant-fake-triage-test",
+            "LIBRARY_EMAIL_LABEL_MODEL": "claude-sonnet-4-6",
+            "LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD": "3.5",
+            "LIBRARY_EMAIL_LABEL_BODY_SNIPPET_CHARS": "500",
+            "LIBRARY_EMAIL_IMAP_TIMEOUT_SECONDS": "30.5",
+        },
+    )
+    resp = api_client.get("/api/settings/email-triage")
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "email_in_configured": True,
+        "poll_minutes": 7,
+        "held_folder": "Custom/Held",
+        "processed_folder": "Custom/Processed",
+        "hold": {"enabled": True, "below_substance": False, "unknown_senders": True},
+        "allowlist": {"configured": True, "count": 2},
+        "noise_filter": {
+            "enabled": True,
+            "tiny_image_max_bytes": 8192,
+            "tiny_image_max_edge_px": 128,
+        },
+        "label": {
+            "enabled": True,
+            "active": True,
+            "model": "claude-sonnet-4-6",
+            "daily_budget_usd": 3.5,
+            "body_snippet_chars": 500,
+            "prompt_version": PROMPT_VERSION,
+        },
+        "body_substance": {"min_words": BODY_MIN_WORDS, "min_chars": BODY_MIN_CHARS},
+        "imap_timeout_seconds": 30.5,
+    }
+    # The allowlisted addresses themselves are never exposed — any
+    # authenticated user can read this page.
+    assert "alice@example.com" not in resp.text.lower()
+    assert "bob@example.com" not in resp.text.lower()
+
+
+def test_email_triage_label_inactive_without_api_key(
+    api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_email_env(
+        monkeypatch,
+        {
+            "LIBRARY_EMAIL_HOST": "imap.example.com",
+            "LIBRARY_EMAIL_LABEL_ENABLED": "true",
+            "LIBRARY_ANTHROPIC_API_KEY": None,
+        },
+    )
+    label = api_client.get("/api/settings/email-triage").json()["label"]
+    assert label["enabled"] is True
+    assert label["active"] is False  # flag on, but no key → the pass never runs
+
+
+def test_email_triage_unconfigured_when_no_host(
+    api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_email_env(monkeypatch, {"LIBRARY_EMAIL_HOST": None})
+    resp = api_client.get("/api/settings/email-triage")
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["email_in_configured"] is False
+
+
+def test_email_triage_never_leaks_secrets(
+    api_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _set_email_env(
+        monkeypatch,
+        {
+            "LIBRARY_EMAIL_HOST": "imap.secret-host.example",
+            "LIBRARY_EMAIL_USERNAME": "triage-bot@secret-host.example",
+            "LIBRARY_EMAIL_PASSWORD": "fake-email-password-do-not-leak",
+            "LIBRARY_ANTHROPIC_API_KEY": "sk-ant-fake-key-do-not-leak",
+            "LIBRARY_EMAIL_LABEL_ENABLED": "true",
+        },
+    )
+    resp = api_client.get("/api/settings/email-triage")
+    assert resp.status_code == 200, resp.text
+    # SecretStr values, the username, and the host must never appear in the
+    # serialized response — only the configured boolean.
+    for secret in (
+        "fake-email-password-do-not-leak",
+        "sk-ant-fake-key-do-not-leak",
+        "triage-bot@secret-host.example",
+        "imap.secret-host.example",
+    ):
+        assert secret not in resp.text
+
+
+def test_email_triage_requires_auth(anon_client: TestClient) -> None:
+    assert anon_client.get("/api/settings/email-triage").status_code == 401
 
 
 def test_put_settings_isolated_per_user(

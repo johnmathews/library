@@ -812,6 +812,71 @@ def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
     )
 
 
+class EmailTriageHoldOut(BaseModel):
+    """The hold-for-review switches (see docs/ingestion.md, "Held for review")."""
+
+    enabled: bool  # master switch — false reverts every trigger to pre-hold behaviour
+    below_substance: bool
+    unknown_senders: bool
+
+
+class EmailTriageAllowlistOut(BaseModel):
+    """Sender allowlist state — the count only, never the addresses.
+
+    Any authenticated user can read this page, so the allowlisted addresses
+    themselves (other people's email addresses) are not exposed.
+    """
+
+    configured: bool  # false = empty allowlist = accept all senders
+    count: int
+
+
+class EmailTriageNoiseFilterOut(BaseModel):
+    """The deterministic noise gate and its tiny-image thresholds."""
+
+    enabled: bool
+    tiny_image_max_bytes: int
+    tiny_image_max_edge_px: int
+
+
+class EmailTriageLabelOut(BaseModel):
+    """The optional per-email LLM label pass (see library.email_label)."""
+
+    enabled: bool  # the LIBRARY_EMAIL_LABEL_ENABLED flag
+    active: bool  # enabled AND an Anthropic API key is configured
+    model: str
+    daily_budget_usd: float
+    body_snippet_chars: int
+    prompt_version: str
+
+
+class EmailTriageBodySubstanceOut(BaseModel):
+    """The body-substance gate thresholds (module constants in email_ingest)."""
+
+    min_words: int
+    min_chars: int
+
+
+class EmailTriageOut(BaseModel):
+    """Effective email-in triage configuration (GET /api/settings/email-triage).
+
+    Instance-wide and read-only — computed from ``get_settings()`` so it always
+    reflects the live environment. Secret-free by construction: no credentials,
+    no host details beyond the configured boolean, no allowlist addresses.
+    """
+
+    email_in_configured: bool  # LIBRARY_EMAIL_HOST is set (the poller runs)
+    poll_minutes: int
+    held_folder: str
+    processed_folder: str
+    hold: EmailTriageHoldOut
+    allowlist: EmailTriageAllowlistOut
+    noise_filter: EmailTriageNoiseFilterOut
+    label: EmailTriageLabelOut
+    body_substance: EmailTriageBodySubstanceOut
+    imap_timeout_seconds: float
+
+
 class UserOut(BaseModel):
     """The authenticated user (login response and GET /api/auth/me)."""
 

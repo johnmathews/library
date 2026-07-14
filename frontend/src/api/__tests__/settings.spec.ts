@@ -3,6 +3,7 @@ import {
   DASHBOARD_FIELDS,
   NOTIFICATION_EVENTS,
   TILE_PREVIEWS,
+  getEmailTriage,
   getSettings,
   updateAppearance,
   updateNotifications,
@@ -116,5 +117,33 @@ describe('settings api', () => {
       events: ['document_success'],
       email_forward_addresses: ['me@example.com'],
     })
+  })
+
+  it('GET /api/settings/email-triage returns the triage config', async () => {
+    const config = {
+      email_in_configured: true,
+      poll_minutes: 10,
+      held_folder: 'Library/Held',
+      processed_folder: 'Library/Processed',
+      hold: { enabled: true, below_substance: true, unknown_senders: true },
+      allowlist: { configured: true, count: 2 },
+      noise_filter: { enabled: true, tiny_image_max_bytes: 4096, tiny_image_max_edge_px: 64 },
+      label: {
+        enabled: false,
+        active: false,
+        model: 'claude-haiku-4-5',
+        daily_budget_usd: 2,
+        body_snippet_chars: 1000,
+        prompt_version: 'email-label-v2',
+      },
+      body_substance: { min_words: 40, min_chars: 240 },
+      imap_timeout_seconds: 60,
+    }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(config))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await getEmailTriage()).toEqual(config)
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('/api/settings/email-triage')
+    expect(init.method).toBe('GET')
   })
 })

@@ -1254,7 +1254,7 @@ Details and decisions:
   invoice PDF with a "see attached" cover note does not also spawn a body
   document. The body must also clear the **substance gate** (see "Email item
   selection" below): quoted replies, signatures, and mobile footers are
-  stripped, and the remainder must reach `_BODY_MIN_WORDS`/`_BODY_MIN_CHARS`,
+  stripped, and the remainder must reach `BODY_MIN_WORDS`/`BODY_MIN_CHARS`,
   so a contentless cover note ("FYI see attached") with no attachment files
   nothing. A genuinely empty-bodied mail also creates nothing and is filed away.
 - **Sync IMAP off the worker loop.** imap-tools is synchronous; the
@@ -1308,8 +1308,8 @@ deliberately conservative; when in doubt the gate keeps the file.
 body is ingested only as a fallback (no attachment produced a document) *and*
 only when it carries real prose: quoted-reply chains (`> …`, `On … wrote:`,
 forwarded-message banners), signature blocks (`--`), and mobile footers ("Sent
-from my iPhone") are stripped, and the remainder must reach `_BODY_MIN_WORDS`
-(40) **or** `_BODY_MIN_CHARS` (240). The cleaned body is what gets filed, so a
+from my iPhone") are stripped, and the remainder must reach `BODY_MIN_WORDS`
+(40) **or** `BODY_MIN_CHARS` (240). The cleaned body is what gets filed, so a
 document is never padded with a reply chain it merely quoted.
 
 **Layer 3 — optional LLM label pass** (`library.email_label`, **OFF by

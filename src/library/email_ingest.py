@@ -737,8 +737,10 @@ def _body_filename(subject: str | None, extension: str) -> str:
 #: A body must reach one of these to be worth filing as a document — filters
 #: contentless cover notes ("FYI see attached") without dropping a real
 #: body-as-invoice. Either bound satisfies (short-but-dense or long-but-sparse).
-_BODY_MIN_WORDS = 40
-_BODY_MIN_CHARS = 240
+#: Public (no underscore): surfaced read-only by GET /api/settings/email-triage.
+#: Module constants, not Settings fields — changing them is a code change.
+BODY_MIN_WORDS = 40
+BODY_MIN_CHARS = 240
 
 #: "On <date>, <someone> wrote:" — the reply-quote header most clients emit.
 _QUOTE_HEADER_RE = re.compile(r"^\s*On\b.+\bwrote:\s*$", re.IGNORECASE)
@@ -805,7 +807,7 @@ def _body_candidate(
         return None, "blank"
     body = _body_substance(raw_body)
     words = len(body.split())
-    if words < _BODY_MIN_WORDS and len(body) < _BODY_MIN_CHARS and not (ignore_substance and body):
+    if words < BODY_MIN_WORDS and len(body) < BODY_MIN_CHARS and not (ignore_substance and body):
         logger.info(
             "email: body of message %r below substance threshold (%dw/%dc); not ingested",
             message.subject,

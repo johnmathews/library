@@ -7,10 +7,13 @@
  *     live and auto-save per click (PUT /api/settings/appearance).
  *   - Notifications: Pushover push notifications + the email addresses a user
  *     forwards documents from (explicit save; PUT /api/settings/notifications).
+ *   - Email triage: a READ-ONLY view of the instance-wide email-in triage
+ *     pipeline (GET /api/settings/email-triage, loaded lazily on first show).
+ *     Nothing here is editable — the settings are environment-only.
  * All preferences live per-user on the server and in the auth store.
  */
-import { computed, onMounted, ref } from 'vue'
-import { AppButton, AppBanner, AppCheckboxes, AppErrorSummary, AppInput, AppTextarea, PageHeader } from '@/components/app'
+import { computed, onMounted, ref, watch } from 'vue'
+import { AppBadge, AppButton, AppBanner, AppCheckboxes, AppErrorSummary, AppInput, AppTextarea, PageHeader } from '@/components/app'
 import { ApiError } from '@/api/client'
 import {
   BACKGROUND_TONES,
@@ -21,6 +24,7 @@ import {
   NOTIFICATION_EVENTS,
   SUGGESTED_COLORS,
   TILE_PREVIEWS,
+  getEmailTriage,
   updateAppearance,
   updateKindColors,
   updateNotifications,
@@ -28,6 +32,7 @@ import {
   type BackgroundTone,
   type DashboardField,
   type DockPosition,
+  type EmailTriageConfig,
   type TilePreview,
 } from '@/api/settings'
 import { listKinds, type KindOption } from '@/api/taxonomy'
@@ -37,7 +42,7 @@ import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 
-type Tab = 'dashboard' | 'appearance' | 'notifications'
+type Tab = 'dashboard' | 'appearance' | 'notifications' | 'email-triage'
 const tab = ref<Tab>('dashboard')
 
 // --- Dashboard fields --------------------------------------------------------
@@ -288,6 +293,45 @@ async function onNotificationsSubmit(): Promise<void> {
   }
 }
 
+// --- Email triage (read-only pipeline view) ----------------------------------
+
+// Loaded lazily on the tab's first show: the config is instance-wide and
+// read-only, so there is nothing to fetch until the user actually looks.
+const triage = ref<EmailTriageConfig | null>(null)
+const triageLoading = ref(false)
+const triageError = ref<string | null>(null)
+
+async function loadTriage(): Promise<void> {
+  triageLoading.value = true
+  triageError.value = null
+  try {
+    triage.value = await getEmailTriage()
+  } catch {
+    triageError.value = 'Sorry, the email triage configuration could not be loaded. Try again.'
+  } finally {
+    triageLoading.value = false
+  }
+}
+
+watch(tab, (current) => {
+  if (current === 'email-triage' && !triage.value && !triageLoading.value) void loadTriage()
+})
+
+/** The LLM label pass status line — distinguishes WHY it is inactive. */
+const triageLabelState = computed<string>(() => {
+  const label = triage.value?.label
+  if (!label) return ''
+  if (label.active) return 'Active'
+  if (label.enabled) return 'Inactive — no API key is configured'
+  return 'Inactive — disabled by configuration'
+})
+
+/** Uppercase-xs label above a read-only triage value (mosaic convention). */
+const triageLabelClass = 'block text-xs font-medium uppercase tracking-wide text-gray-500 dark:text-gray-400'
+const triageValueClass = 'text-sm text-gray-800 dark:text-gray-100'
+const triageStepTitleClass = 'text-sm font-semibold text-gray-800 dark:text-gray-100'
+const triageStepTextClass = 'text-sm text-gray-500 dark:text-gray-400 mt-1'
+
 const cardClass = 'card p-6'
 const tabClass = (active: boolean): string =>
   [
@@ -338,6 +382,18 @@ const tabClass = (active: boolean): string =>
         @click="tab = 'notifications'"
       >
         Notifications
+      </button>
+      <button
+        id="settings-tab-email-triage"
+        role="tab"
+        type="button"
+        :aria-selected="tab === 'email-triage'"
+        :tabindex="tab === 'email-triage' ? 0 : -1"
+        :class="tabClass(tab === 'email-triage')"
+        data-testid="tab-email-triage-btn"
+        @click="tab = 'email-triage'"
+      >
+        Email triage
       </button>
     </div>
 
@@ -664,6 +720,192 @@ const tabClass = (active: boolean): string =>
           </div>
         </form>
       </div>
+    </section>
+
+    <!-- Email triage tab (read-only) -->
+    <section
+      id="settings-panel-email-triage"
+      v-show="tab === 'email-triage'"
+      role="tabpanel"
+      data-testid="tab-email-triage"
+    >
+      <AppErrorSummary
+        v-if="triageError"
+        :errors="[{ text: triageError }]"
+        data-testid="email-triage-error"
+      />
+
+      <div v-if="triageLoading" :class="cardClass" data-testid="email-triage-loading">
+        <p class="text-sm text-gray-500 dark:text-gray-400">Loading the email triage configuration…</p>
+      </div>
+
+      <template v-else-if="triage">
+        <div
+          v-if="!triage.email_in_configured"
+          id="settings-card-email-triage"
+          :class="cardClass"
+          data-testid="email-triage-unconfigured"
+        >
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Email triage</h2>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Email-in is not configured on this server.
+          </p>
+        </div>
+
+        <div v-else id="settings-card-email-triage" :class="cardClass" data-testid="email-triage-config">
+          <div class="flex flex-wrap items-center gap-3">
+            <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+              How inbound email is triaged
+            </h2>
+            <AppBadge
+              :colour="triage.hold.enabled ? 'purple' : 'grey'"
+              data-testid="email-triage-hold-master"
+            >
+              Hold pipeline {{ triage.hold.enabled ? 'ON' : 'OFF' }}
+            </AppBadge>
+          </div>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            Emails sent to the library are evaluated before being added. Anything judged
+            not library-worthy is held for review — never silently lost.
+            <RouterLink
+              to="/held-emails"
+              class="text-violet-500 underline"
+              data-testid="view-held-emails"
+            >View held emails</RouterLink>.
+          </p>
+
+          <dl class="mt-5 grid grid-cols-2 gap-x-6 gap-y-4 sm:grid-cols-4">
+            <div>
+              <dt :class="triageLabelClass">Poll interval</dt>
+              <dd :class="triageValueClass" data-testid="triage-poll-minutes">
+                Every {{ triage.poll_minutes }} min
+              </dd>
+            </div>
+            <div>
+              <dt :class="triageLabelClass">Held folder</dt>
+              <dd :class="triageValueClass" data-testid="triage-held-folder">{{ triage.held_folder }}</dd>
+            </div>
+            <div>
+              <dt :class="triageLabelClass">Processed folder</dt>
+              <dd :class="triageValueClass" data-testid="triage-processed-folder">
+                {{ triage.processed_folder }}
+              </dd>
+            </div>
+            <div>
+              <dt :class="triageLabelClass">IMAP timeout</dt>
+              <dd :class="triageValueClass" data-testid="triage-imap-timeout">
+                {{ triage.imap_timeout_seconds }} s
+              </dd>
+            </div>
+          </dl>
+
+          <h3 :class="triageLabelClass" class="mt-8">Decision flow, per email</h3>
+          <ol class="mt-3 space-y-5 list-decimal pl-5 marker:text-gray-400 marker:text-sm">
+            <li data-testid="triage-step-allowlist">
+              <div class="flex flex-wrap items-center gap-2">
+                <span :class="triageStepTitleClass">Sender allowlist</span>
+                <AppBadge
+                  :colour="triage.hold.unknown_senders ? 'green' : 'grey'"
+                  data-testid="triage-allowlist-hold-badge"
+                >
+                  Unknown-sender hold {{ triage.hold.unknown_senders ? 'ON' : 'OFF' }}
+                </AppBadge>
+              </div>
+              <p :class="triageStepTextClass" data-testid="triage-allowlist-mode">
+                <template v-if="triage.allowlist.configured">
+                  {{ triage.allowlist.count }} allowed
+                  {{ triage.allowlist.count === 1 ? 'sender' : 'senders' }} — mail from anyone
+                  else is held as <em>sender unknown</em>.
+                </template>
+                <template v-else>Accept all senders — no allowlist is configured.</template>
+              </p>
+            </li>
+
+            <li data-testid="triage-step-noise">
+              <div class="flex flex-wrap items-center gap-2">
+                <span :class="triageStepTitleClass">Noise gate</span>
+                <AppBadge
+                  :colour="triage.noise_filter.enabled ? 'green' : 'grey'"
+                  data-testid="triage-noise-badge"
+                >
+                  {{ triage.noise_filter.enabled ? 'ON' : 'OFF' }}
+                </AppBadge>
+              </div>
+              <p :class="triageStepTextClass" data-testid="triage-noise-thresholds">
+                Deterministic filter for inline signature images, calendar invites, and vCards.
+                Tiny images are dropped when smaller than
+                {{ triage.noise_filter.tiny_image_max_bytes }} bytes or with a longest edge of
+                {{ triage.noise_filter.tiny_image_max_edge_px }} px or less.
+              </p>
+            </li>
+
+            <li data-testid="triage-step-label">
+              <div class="flex flex-wrap items-center gap-2">
+                <span :class="triageStepTitleClass">LLM verdict</span>
+                <AppBadge
+                  :colour="triage.label.active ? 'green' : 'grey'"
+                  data-testid="triage-label-badge"
+                >
+                  {{ triage.label.active ? 'Active' : 'Inactive' }}
+                </AppBadge>
+              </div>
+              <p :class="triageStepTextClass" data-testid="triage-label-state">{{ triageLabelState }}</p>
+              <dl class="mt-2 grid grid-cols-2 gap-x-6 gap-y-3 sm:grid-cols-3">
+                <div>
+                  <dt :class="triageLabelClass">Model</dt>
+                  <dd :class="triageValueClass" data-testid="triage-label-model">{{ triage.label.model }}</dd>
+                </div>
+                <div>
+                  <dt :class="triageLabelClass">Daily budget</dt>
+                  <dd :class="triageValueClass" data-testid="triage-label-budget">
+                    ${{ triage.label.daily_budget_usd }}
+                  </dd>
+                </div>
+                <div>
+                  <dt :class="triageLabelClass">Prompt version</dt>
+                  <dd :class="triageValueClass" data-testid="triage-label-prompt-version">
+                    {{ triage.label.prompt_version }}
+                  </dd>
+                </div>
+              </dl>
+              <p :class="triageStepTextClass" data-testid="triage-label-failopen">
+                Fail-open — if the model can't be reached, everything files as before.
+              </p>
+            </li>
+
+            <li data-testid="triage-step-substance">
+              <div class="flex flex-wrap items-center gap-2">
+                <span :class="triageStepTitleClass">Body substance gate</span>
+                <AppBadge
+                  :colour="triage.hold.below_substance ? 'green' : 'grey'"
+                  data-testid="triage-substance-badge"
+                >
+                  Below-substance hold {{ triage.hold.below_substance ? 'ON' : 'OFF' }}
+                </AppBadge>
+              </div>
+              <p :class="triageStepTextClass" data-testid="triage-substance-thresholds">
+                A body-only email must reach {{ triage.body_substance.min_words }} words or
+                {{ triage.body_substance.min_chars }} characters (quoted replies and signatures
+                stripped) to be filed as a document.
+              </p>
+            </li>
+
+            <li data-testid="triage-step-nothing">
+              <span :class="triageStepTitleClass">Nothing-ingested hold</span>
+              <p :class="triageStepTextClass">
+                When every part of an email was dropped and nothing was filed, the whole email
+                is held for review rather than silently marked processed.
+              </p>
+            </li>
+          </ol>
+
+          <p class="mt-8 text-xs text-gray-500 dark:text-gray-400" data-testid="email-triage-footnote">
+            These settings are environment-only: change them in the server's
+            <code>.env</code> and restart the worker — see
+            <code>docs/runbooks/email-triage.md</code> for the how.
+          </p>
+        </div>
+      </template>
     </section>
   </div>
 </template>

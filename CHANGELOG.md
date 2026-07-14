@@ -6,6 +6,12 @@ All notable changes to Library are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+
+**Email triage settings tab** — read-only view of the hold/label pipeline
+configuration at `/settings` (new tab + `GET /api/settings/email-triage`,
+instance-wide and secret-free).
+
 ### Changed
 
 **Consume archive dirs are now siblings of the consume folder** — successful
