@@ -82,6 +82,10 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/jobs` | Recent background jobs (enriched with document state); filter by `task_name`/`document_id` |
 | GET    | `/api/jobs/task-names` | Distinct task names (for the task-type filter) |
 | GET    | `/api/events` | Live document-pipeline events (Server-Sent Events) |
+| GET    | `/api/held-emails` | The hold-for-review queue (emails the poller held instead of filing) |
+| GET    | `/api/held-emails/{id}` | One held email with its full decision trace |
+| POST   | `/api/held-emails/{id}/ingest` | Ingest a held email anyway (queues the override task; `202`) |
+| POST   | `/api/held-emails/{id}/dismiss` | Dismiss a held email (DB-only; the message stays in the Held folder) |
 | GET    | `/api/settings` | Your display preferences (dashboard fields + page-canvas tone + tile preview + action dock position) |
 | PUT    | `/api/settings` | Update your dashboard fields |
 | PUT    | `/api/settings/appearance` | Update your page-canvas tone, tile preview, and action dock position |
@@ -811,8 +815,9 @@ Documents with no owner (consume-folder, paperless import) notify no one.
 ```
 
 **Event keys:** `document_success`, `processing_error`, `needs_review`,
-`duplicate`. New users start with **none** selected (opt-in). Unknown keys are
-dropped (`200`, never `422`).
+`duplicate`, `email_held` (an inbound email was held for review instead of
+filed — see [ingestion.md](ingestion.md), "Held for review"). New users start
+with **none** selected (opt-in). Unknown keys are dropped (`200`, never `422`).
 
 **Secrets are write-only.** The read model returns booleans
 `pushover_app_token_set` / `pushover_user_key_set` and the non-secret
@@ -1569,3 +1574,28 @@ owned by another user is indistinguishable from a missing one (`404`, never
 `filter_state` values are strings or string arrays (repeated query params such
 as `tag`), matching the homepage's URL contract (§1.3); an empty object is a
 valid "no filters" view.
+
+## 1.21 Held emails — `/api/held-emails`
+
+The **hold-for-review queue**: emails the mailbox poller judged not
+library-worthy sit in `held_emails` (their messages safe in the IMAP Held
+folder) until a human resolves them. The hold triggers, the row-before-move
+contract, and the override/dismiss semantics live in
+[ingestion.md](ingestion.md), "Held for review" — this section only documents
+the HTTP surface (`library.api.held_emails`). Auth + CSRF apply as elsewhere
+(§1.9). Backs the web app's `/held-emails` view.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/held-emails` | Newest-held first. `?status=held` (default — the open queue) `\|ingested\|dismissed\|all`; `limit` 1–100 (default 25), `offset`. Returns `{items, total, limit, offset}`. |
+| GET | `/api/held-emails/{id}` | The list item plus `trace` — the full per-item decision trace the poller snapshotted. `404` unknown. |
+| POST | `/api/held-emails/{id}/ingest` | **Ingest anyway**: defers the `library.jobs.ingest_held_email` override task and returns `202` `{"queued": true, "job_id": …}`. Track the outcome via the row's `status`/`document_ids`/`last_error` (GET detail) or `GET /api/jobs`. `409` when the row is already resolved; the task itself also no-ops on a non-held row, so a race can never double-ingest. |
+| POST | `/api/held-emails/{id}/dismiss` | **Dismiss**: DB-only status flip, returns the updated detail (`200`). The record is kept and the message stays in the Held folder. `409` when already resolved. |
+
+**Row shape** (list item; detail adds `trace`): `id`, `message_id`, `sender`,
+`subject`, `received_at`, `created_at`, `verdict` (`llm_hold` /
+`below_substance` / `nothing_ingested` / `sender_unknown`), `reason`, `status`
+(`held` / `ingested` / `dismissed`), `owner_id` + `owner` (display label,
+resolved from the sender like a document's would be), `resolved_at`,
+`document_ids` (populated by a successful ingest-anyway), `last_error` (the
+most recent failed-resolution error, e.g. the message could not be re-fetched).

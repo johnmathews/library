@@ -85,8 +85,9 @@ grep 'email-selection' worker.log | grep 'Energy bill'
 ```
 
 **What is currently held:** held emails are durable rows in the `held_emails`
-table (`status='held'`), each carrying the full trace — queryable directly and
-via the upcoming `/held-emails` UI + API.
+table (`status='held'`), each carrying the full trace — queryable directly,
+via `GET /api/held-emails` ([../api.md](../api.md) §1.21), and in the web
+app's `/held-emails` view.
 
 ```sql
 SELECT id, created_at, sender, subject, verdict, reason
@@ -132,8 +133,40 @@ The log line is ephemeral; two durable copies exist:
 An email that was neither held nor produced any document lives only in the log
 line — which is why the trace is the primary triage surface.
 
-**Tuning knobs**: the noise-gate and label-pass settings
-(`LIBRARY_EMAIL_FILTER_*`, `LIBRARY_EMAIL_LABEL_*`) are listed with their
-defaults in [../ingestion.md](../ingestion.md), "Configuration"; the hold
-switches (`LIBRARY_EMAIL_HOLD_*`, `LIBRARY_EMAIL_HELD_FOLDER`) are defined in
-the email block of `src/library/config.py`.
+**Tuning knobs**: the noise-gate, label-pass, and hold settings
+(`LIBRARY_EMAIL_FILTER_*`, `LIBRARY_EMAIL_LABEL_*`, `LIBRARY_EMAIL_HOLD_*`,
+`LIBRARY_EMAIL_HELD_FOLDER`) are all listed with their defaults in
+[../ingestion.md](../ingestion.md), "Configuration".
+
+## 7. Enabling the LLM email verdict
+
+The label pass — the per-item `keep`/`probably_noise` labels **and** the
+whole-email `file`/`hold` verdict — is off by default because it spends money.
+To enable it:
+
+```sh
+LIBRARY_EMAIL_LABEL_ENABLED=true
+# LIBRARY_ANTHROPIC_API_KEY must be set — it is already, wherever extraction
+# runs (the label pass reuses the same key). Optional knobs (defaults shown):
+#LIBRARY_EMAIL_LABEL_MODEL=claude-haiku-4-5
+#LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD=2.0
+#LIBRARY_EMAIL_LABEL_BODY_SNIPPET_CHARS=1000
+```
+
+All email settings are **env-only** (no admin API), so the change takes effect
+only after a **worker container restart**. Expect roughly **$0.002–0.007 per
+email** at Haiku pricing (one small call per polled message), hard-capped by
+the daily budget — over budget the pass skips and everything files as before
+(fail-open).
+
+**Verify** within one poll cycle (`LIBRARY_EMAIL_POLL_MINUTES`, default 10):
+
+1. Worker logs show the pass at work: `grep 'email-selection'` for the traces,
+   `grep 'email-label'` for skip lines (`pass skipped (budget|error)` means
+   fail-open degradation, not a crash).
+2. An email that produced a document records an `email_label_completed` event
+   (nonzero `cost_usd`) — visible in the document history's "Email triage"
+   breakdown.
+3. Send a newsletter to the dropbox: it should appear in `/held-emails` with
+   verdict `llm_hold` and the model's reason. A forwarded invoice should file
+   normally.

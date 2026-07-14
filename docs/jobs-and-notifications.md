@@ -128,8 +128,9 @@ a database compromise exposes them.
 
 ### 1.5.2 Events and recipient
 
-Four opt-in event kinds: `document_success`, `processing_error`, `needs_review`
-(processed but extraction flagged it low-confidence), and `duplicate`. A
+Five opt-in event kinds: `document_success`, `processing_error`, `needs_review`
+(processed but extraction flagged it low-confidence), `duplicate`, and
+`email_held` (an inbound email was held for review instead of filed). A
 notification is sent to the **document's owner** (`uploader_id`) only — so for a
 family deployment, each person hears about their own documents. Documents with
 no owner (consume-folder, paperless import) notify no one; email-in documents are
@@ -150,6 +151,15 @@ the owner from the email sender directly rather than from a document row (see
 [ingestion.md](ingestion.md), "Email-in"). No new opt-in key: subscribing to
 `processing_error` covers it.
 
+**Held emails** get their own dedicated opt-in key, `email_held`: when the
+poller holds an inbound email for review instead of filing it (see
+[ingestion.md](ingestion.md), "Held for review"), a normal-priority push
+("Email held for review", deep-linked to the `/held-emails` queue) goes to the
+owner resolved from the sender — also document-less, at-most-once per hold
+(the skip-if-exists retry path never re-notifies). A held email deliberately
+does **not** fire the attachments-dropped push: the held queue and this event
+are its surface. Normal priority because a hold is review work, not an error.
+
 ### 1.5.3 Where it fires (`library.notifications`)
 
 `document_success` / `processing_error` / `needs_review` are dispatched from the
@@ -157,7 +167,10 @@ the owner from the email sender directly rather than from a document row (see
 `duplicate` is dispatched at **ingest time** (`library.ingest.ingest_file`),
 because a duplicate never enters the worker pipeline. The document-less
 **attachments-dropped** push fires from the **email poller**
-(`dispatch_attachments_dropped_notification`, once per message with drops). All
+(`dispatch_attachments_dropped_notification`, once per message with drops, only
+after the message's successful Processed move), and the document-less
+**email-held** push (`dispatch_email_held_notification`) fires from the same
+poller after a fresh `held_emails` row commits. All
 are **best-effort**: the Pushover HTTP call (async `httpx`) runs after the
 relevant state is committed, and any failure is logged and swallowed — it can
 never fail a job, an upload, or a poll.

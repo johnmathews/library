@@ -27,6 +27,26 @@ root — set `LIBRARY_CONSUMED_DIR=/data/consumed` and
 
 ### Fixed
 
+**Email triage flags are visible without extraction** — the two email review
+reasons (`email_item_ambiguous`, `email_attachments_dropped`) used to be
+computed only by the extraction stage, so a flagged document stayed
+`unreviewed` whenever extraction was disabled, budget-skipped, or failed.
+They now run **at ingest** (a pure `email_findings` pass over `Document.extra`
+when the document is created), so the `needs_review` badge and its reason
+appear immediately; a later extraction re-derives the status without losing
+the flag. See [docs/ingestion.md](docs/ingestion.md) "Validation rules".
+
+**Email poller robustness** — four hardening fixes to the IMAP poll:
+a socket timeout (`LIBRARY_EMAIL_IMAP_TIMEOUT_SECONDS`, default 60 s) bounds
+every IMAP operation and a wedged/dead server now aborts the poll with a
+warning instead of hanging the worker forever; the periodic poll task is
+**overlap-guarded** (Procrastinate `queueing_lock` + `lock`, so a slow poll
+can never pile up concurrent runs); the "attachments couldn't be added" push
+fires only **after** a message's successful move to the Processed folder, so
+it is at-most-once per message across retries; and the LLM label pass's spend
+event anchors on the **first produced document — new or duplicate** — so an
+all-duplicate re-send still counts against the daily label budget.
+
 **Email attachments are no longer dropped silently** — when a forwarded email
 carried several files and only some were ingestable (e.g. three PDFs and a
 photo), the rejected files used to vanish with only a container log line: no
@@ -39,6 +59,29 @@ isolated — one bad file can no longer abort its siblings or wedge the message
 into a permanent retry. See [docs/ingestion.md](docs/ingestion.md) "Email-in".
 
 ### Added
+
+**Email hold-for-review + whole-email LLM verdict** — an inbound email the
+pipeline judges *not library-worthy* is now **held for review** instead of
+silently processed or left in the inbox: a durable `held_emails` row
+(**migration 0026**) plus a move to the Held IMAP folder
+(`LIBRARY_EMAIL_HELD_FOLDER`, default `Library/Held`). Four triggers hold —
+the LLM label pass's new **whole-email verdict** (`email-label-v2` now judges
+the message as a whole, body included, so body-only newsletters are caught;
+fail-open: any label failure files exactly as before), a thin body-only mail,
+an email whose drops left nothing ingested, and an allowlist-unknown sender —
+all behind a master switch (`LIBRARY_EMAIL_HOLD_ENABLED`, default on;
+`false` is the rollback lever). Held emails surface in a new **`/held-emails`
+queue** (web view + REST API: list/detail/**ingest anyway**/**dismiss** —
+dismiss keeps the record and the bytes forever) with a dashboard affordance
+and an opt-in `email_held` push. *Held* is deliberately distinct from
+`needs_review`: no document exists while held. See
+[docs/ingestion.md](docs/ingestion.md) "Held for review",
+[docs/api.md](docs/api.md) §1.21, and the
+[email-triage runbook](docs/runbooks/email-triage.md). **Operator action
+(production):** run migration 0026, set `LIBRARY_EMAIL_LABEL_ENABLED=true`
+(the hold switches default on; `LIBRARY_ANTHROPIC_API_KEY` is already set
+where extraction runs), and restart the **worker** container — the enablement
+recipe is in the runbook §7.
 
 **More specific "needs review" reasons** — "extraction was unsure" now carries
 the model's own one-line reason (its `reasoning_note`, e.g. "the extractor was

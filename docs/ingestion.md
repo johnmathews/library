@@ -654,7 +654,17 @@ Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
 | `missing_amount` | `amount_total` | `amount_total` is null but the OCR text carries a payment/due cue (`te betalen`, `vervaldatum`, `due by`, …) **and the kind is monetary** (invoice/receipt/utility-bill/quote). The classic thin-OCR image-PDF miss — the letterhead's payment line was OCR'd but the body's total was not. Scoped to monetary kinds so a passport's "vervaldatum" (expiry) doesn't spuriously flag. A safety net for the confident-but-wrong case the vision escalation (low-confidence only) does not catch. |
 | `self_reported_low` | (document) | `extra["extraction"]["confidence"] == "low"`. The message carries the model's own one-line `reasoning_note` when present (e.g. "the extractor was unsure: two candidate totals on page 2"), falling back to a generic line otherwise. |
 | `email_attachments_dropped` | (document) | The document came from an email whose *other* attachments could not be added (`extra["email_siblings_dropped"]` is non-empty). The message lists the dropped filenames. See "Email-in". |
-| `email_item_ambiguous` | (document) | The email item was flagged `probably_noise` (or `ambiguous`) during selection — `extra["email_selection"]["verdict"]`, set by the optional LLM label pass. The message carries the flag's reason. See "Email item selection". |
+| `email_item_ambiguous` | (document) | The email item was flagged `probably_noise` during selection — `extra["email_selection"]["verdict"]`, set by the optional LLM label pass (the only verdict it ever writes for a flagged item). The message carries the flag's reason. See "Email item selection". |
+
+**The two email rules also run at ingest.** `email_attachments_dropped` and
+`email_item_ambiguous` read only `Document.extra` (hints the email channel
+stamps at creation), so they live in the pure `email_findings` helper that
+`ingest_file` runs when the document is created — the flag and its
+`needs_review` status are visible **immediately**, without waiting for (or
+depending on) extraction. A later successful extraction re-derives the status
+via the full `validate()` (which includes the same rules), so the flag
+survives; extraction's early-return paths leave the ingest-time status
+untouched.
 
 **Cue-word grounding, not date-format parsing.** The recipient/sender/date
 cross-checks (`due_expiry_grounding`, `missing_recipient`, `missing_sender`
@@ -1108,22 +1118,31 @@ ticks (cron built from `LIBRARY_EMAIL_POLL_MINUTES`, default
 ### Flow
 
 ```
-poll_email_inbox fires (every LIBRARY_EMAIL_POLL_MINUTES minutes)
+poll_email_inbox fires (every LIBRARY_EMAIL_POLL_MINUTES minutes;
+    overlap-guarded — the task's queueing_lock/lock keep at most one poll
+    queued and at most one running, so a slow IMAP round-trip cannot pile
+    up concurrent runs)
   │
   ├─ LIBRARY_EMAIL_HOST unset ─► instant no-op
-  ├─ connect (IMAP over TLS, port 993) and select LIBRARY_EMAIL_FOLDER;
+  ├─ connect (IMAP over TLS, port 993; every socket op bounded by
+  │   LIBRARY_EMAIL_IMAP_TIMEOUT_SECONDS) and select LIBRARY_EMAIL_FOLDER;
   │   create LIBRARY_EMAIL_PROCESSED_FOLDER if missing
   └─ for every message in the folder (ALL, seen flags untouched):
        ├─ sender not in LIBRARY_EMAIL_ALLOWED_SENDERS (when non-empty)
-       │   ─► skipped; left in place (visible to the operator)
+       │   ─► HELD for review (verdict sender_unknown) when
+       │   LIBRARY_EMAIL_HOLD_ENABLED + LIBRARY_EMAIL_HOLD_UNKNOWN_SENDERS
+       │   (both default true); with either off ─► skipped, left in place
        ├─ classify EVERY attachment (two-pass): sniff MIME, then the
        │   deterministic noise gate (inline signature images, tiny pixels/icons,
        │   calendar/vCard/PKCS7/TNEF parts ─► a quiet `filtered` drop); in the
        │   allowed set and within LIBRARY_MAX_UPLOAD_BYTES ─► an ingestable
        │   candidate; otherwise a recorded drop (oversize / unsupported_type)
-       ├─ (optional) LLM label pass: one Anthropic call per email labels each
-       │   surviving attachment keep|probably_noise; probably_noise ─► ingest
-       │   AND flag needs_review (never dropped). OFF by default
+       ├─ (optional) LLM label pass: one Anthropic call per email judges the
+       │   surviving attachments AND the body, each keep|probably_noise, plus
+       │   the WHOLE email (email_verdict file|hold); probably_noise ─► ingest
+       │   AND flag needs_review (never dropped); email_verdict=hold ─► the
+       │   message is HELD (verdict llm_hold) before anything is ingested.
+       │   OFF by default; fail-open (any failure ⇒ file, never a hold)
        ├─ per candidate: ingest_file(source=email) — new document or
        │   `duplicate_upload`; a per-attachment error is recorded as a drop
        │   and the NEXT candidate still runs (one bad file never aborts siblings)
@@ -1133,15 +1152,25 @@ poll_email_inbox fires (every LIBRARY_EMAIL_POLL_MINUTES minutes)
        │   could not be added: …") — the files are never lost silently
        ├─ if no attachment produced a document ─► ingest the email BODY when it
        │   clears the substance gate (quoted replies / signatures / footers
-       │   stripped; a contentless cover note like "FYI see attached" files
-       │   nothing); HTML→Markdown (text/markdown), else plain text (text/plain)
-       ├─ emit the one-line decision trace (one per processed message) and
-       │   persist it as an `email_selection` event on each new document
+       │   stripped); HTML→Markdown (text/markdown), else plain text (text/plain);
+       │   a body-only mail BELOW the gate ─► HELD (verdict below_substance,
+       │   with LIBRARY_EMAIL_HOLD_BELOW_SUBSTANCE, default true) instead of
+       │   being quietly filed away
+       ├─ nothing ingested (no new document, no duplicate) and there were
+       │   user-facing drops ─► HELD (verdict nothing_ingested); all-duplicate
+       │   mail still files to Processed
+       ├─ a HELD message: durable held_emails row FIRST (row-before-move), then
+       │   moved to LIBRARY_EMAIL_HELD_FOLDER; it skips the Processed move and
+       │   the attachments-dropped push, and fires an opt-in `email_held` push
+       │   instead — see "Held for review" below
+       ├─ emit the one-line decision trace (one per processed or held message)
+       │   and persist it as an `email_selection` event on each new document
        │   (see "Email item selection" below)
        ├─ any dropped attachment ─► a per-message WARNING summary and a
        │   best-effort "Attachments not added" push to the resolved owner
-       │   (reuses the processing_error opt-in); quiet `filtered` noise is NOT
-       │   surfaced (it never flags a real document)
+       │   (reuses the processing_error opt-in), sent only AFTER a successful
+       │   Processed move (at-most-once per message); quiet `filtered` noise is
+       │   NOT surfaced (it never flags a real document)
        ├─ move the message to LIBRARY_EMAIL_PROCESSED_FOLDER (also for
        │   empty-bodied mails)
        └─ any per-message error ─► logged, message left in place for
@@ -1204,9 +1233,11 @@ Details and decisions:
   and reuses the same `email_forward_addresses` as sender→owner attribution.
 - **Allowlist.** `LIBRARY_EMAIL_ALLOWED_SENDERS` is comma-separated and
   case-insensitive; empty (default) accepts mail from anyone, so set it
-  whenever the address is guessable. Rejected mail stays in the inbox
-  (it would otherwise vanish silently on a sender typo) — expect a
-  warning log per poll until it is dealt with.
+  whenever the address is guessable. Rejected mail is **held for review**
+  (verdict `sender_unknown` — see "Held for review" below) when
+  `LIBRARY_EMAIL_HOLD_ENABLED` and `LIBRARY_EMAIL_HOLD_UNKNOWN_SENDERS` are on
+  (both default); with either off it reverts to the old behaviour — left in
+  the inbox with a warning log per poll until it is dealt with.
 - **Body ingestion when there's no attachment.** When a message yields no
   attachment document — nothing attached, or nothing of a supported type —
   the email body itself is ingested as a document. The **HTML** body is
@@ -1237,16 +1268,18 @@ A forwarded email is a list of candidates — `[body, attachment 1 … attachmen
 — of which only some are worth filing. Selection decides each one's fate in three
 layers, all in `library.email_ingest` (plus `library.email_label` for the LLM
 layer). Overriding rule: **never lose a real document.** Nothing is deleted; an
-item is either ingested, ingested-and-flagged, or recorded as a quiet/surfaced
-drop, and the original mail always survives in the IMAP `Processed` folder.
+item is either ingested, ingested-and-flagged, held for a human decision, or
+recorded as a quiet/surfaced drop — and the original mail always survives in an
+IMAP folder (`Processed`, or `Held` for a held email).
 
 **Where each item is decided:**
 
 | Item | Deciding stage | Possible verdicts |
 | --- | --- | --- |
+| Whole email | `email_verdict` (the LLM label pass, Layer 3) plus the deterministic hold triggers | `file` (proceed to the per-item verdicts below — the default and every failure path), or `held` (`llm_hold` / `below_substance` / `nothing_ingested` / `sender_unknown` — nothing is ingested; see "Held for review" below) |
 | Attachment | `classify` (deterministic gate) | `ingested`, `duplicate`, `dropped` (oversize/unsupported/error — surfaced), `filtered` (signature_image / tiny_image / non_document_type — quiet) |
 | Attachment | `llm_label` (optional, if enabled) | `flagged_ambiguous` (ingested **and** flagged needs_review), or falls through to `ingested` |
-| Body | `body_substance` | `ingested`, `duplicate`, `dropped` (rejected), `filtered` (blank / below_substance / not_needed / oversize) |
+| Body | `body_substance` | `ingested`, `duplicate`, `dropped` (rejected), `filtered` (blank / below_substance / not_needed / oversize); a body-only mail below substance is *held* instead when the hold switches are on |
 
 **Layer 1 — deterministic noise gate** (`_noise_reason`, always on unless
 `LIBRARY_EMAIL_FILTER_NOISE_ENABLED=false`). Runs in `_classify_attachments`,
@@ -1280,22 +1313,94 @@ from my iPhone") are stripped, and the remainder must reach `_BODY_MIN_WORDS`
 document is never padded with a reply chain it merely quoted.
 
 **Layer 3 — optional LLM label pass** (`library.email_label`, **OFF by
-default**). When `LIBRARY_EMAIL_LABEL_ENABLED=true` and `LIBRARY_ANTHROPIC_API_KEY`
-is set (the same key extraction uses), one Anthropic call per email
-(`LIBRARY_EMAIL_LABEL_MODEL`, default
-`claude-haiku-4-5`) labels each *surviving* attachment `keep` or
-`probably_noise`, given the subject, sender, and a cleaned body excerpt
-(`…BODY_SNIPPET_CHARS`). A `probably_noise` verdict **never drops** — the file
-is ingested and its document is flagged `needs_review` via
-`extra["email_selection"]`, which fires the `email_item_ambiguous` validation
-finding. The pass is **fail-open**: a disabled feature, an exhausted daily
-budget (`LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD`, default \$2, summed from
+default**, prompt version `email-label-v2`). When
+`LIBRARY_EMAIL_LABEL_ENABLED=true` and `LIBRARY_ANTHROPIC_API_KEY` is set (the
+same key extraction uses), one Anthropic call per email
+(`LIBRARY_EMAIL_LABEL_MODEL`, default `claude-haiku-4-5`) judges the **whole
+message**: the *surviving* attachments **and the body as an item of its own**
+(so a body-only email is judged too), given the subject, sender, and a cleaned
+body excerpt (`…BODY_SNIPPET_CHARS`). It returns two things:
+
+- a per-item verdict, `keep` or `probably_noise`. A `probably_noise` verdict
+  **never drops** — the item is ingested and its document is flagged
+  `needs_review` via `extra["email_selection"]`, which fires the
+  `email_item_ambiguous` validation finding. The flag is applied **at ingest**
+  (`ingest_file` runs the pure `email_findings` rules over `Document.extra` at
+  document creation), so a flagged document shows `needs_review` immediately —
+  even when extraction is disabled, budget-skipped, or hasn't run yet.
+- a whole-email verdict, `email_verdict`: `file` (proceed with normal
+  ingestion) or `hold` (the entire email is judged not library material —
+  it is **held for review** before anything is ingested; see "Held for
+  review" below).
+
+The pass is **fail-open**, schema-enforced: a disabled feature, an exhausted
+daily budget (`LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD`, default \$2, summed from
 `email_label_completed` events like extraction), an API error, or a
-malformed/incomplete response all keep every attachment. Spend is recorded as an
-`email_label_completed` event on the first document the email **produced — new or
-duplicate** — so an all-duplicate re-send still counts against the budget. (An
-email that produces no document at all has nowhere to hang the event; that rare
-spend is visible only in the `email-label` log line.)
+malformed/incomplete/index-mismatched response all keep every item **and force
+`email_verdict="file"`** — degrading to exactly the pre-verdict ingest
+behaviour; a label failure can never hold an email. Spend is recorded as an
+`email_label_completed` event on the first document the email **produced — new
+or duplicate** — so an all-duplicate re-send still counts against the budget.
+(An email that was *held* keeps its billing in the held row's trace instead; an
+email that produced neither has its rare spend visible only in the
+`email-label` log line.)
+
+#### Held for review
+
+An email the pipeline judges *not library-worthy* is **held** — a durable
+`held_emails` row (migration 0026) plus a move to the Held IMAP folder
+(`LIBRARY_EMAIL_HELD_FOLDER`, default `Library/Held`, created on first use) —
+rather than silently processed or silently left in the inbox. Nothing from a
+held email is ingested until a human decides. Four triggers hold, each named
+by the row's `verdict`:
+
+| Trigger (`verdict`) | Fires when | Switch (besides the master) |
+| --- | --- | --- |
+| `llm_hold` | The label pass returned `email_verdict="hold"` — the whole email is judged not library material (newsletter, marketing, automated notification) | `LIBRARY_EMAIL_LABEL_ENABLED` (the pass itself must be on) |
+| `below_substance` | A body-only email (no ingestable attachment) fell below the body-substance gate | `LIBRARY_EMAIL_HOLD_BELOW_SUBSTANCE` |
+| `nothing_ingested` | The email had user-facing drops and produced nothing at all — no new document *and* no duplicate (all-duplicate mail still files to Processed) | — (master switch only) |
+| `sender_unknown` | The sender is not in the configured `LIBRARY_EMAIL_ALLOWED_SENDERS` | `LIBRARY_EMAIL_HOLD_UNKNOWN_SENDERS` |
+
+All four also require the master switch `LIBRARY_EMAIL_HOLD_ENABLED` (default
+`true` — holding is strictly safer than a silent drop); setting it `false` is
+the rollback lever and restores the pre-hold behaviour exactly.
+
+- **Row before move; Message-ID is the authoritative pointer.** The
+  `held_emails` row is committed *first* (raising on failure, so the message
+  stays in the inbox for the next idempotent poll), then the message is moved
+  to the Held folder. A failed move retries against the existing row (one open
+  row per Message-ID, enforced by a partial unique index). IMAP UIDs are
+  folder-scoped and change on move, so the stored `imap_uid` is only a hint —
+  resolution re-fetches by `Message-ID` header search.
+- ***Held* is not `needs_review`.** They answer different doubts:
+  `needs_review` marks a **filed document** whose *metadata* is in doubt; a
+  held email has **no document at all** — its *library-worthiness* is in
+  doubt. A hold never touches `Document.review_status` and never appears in
+  the review queue; it lives in its own queue (`/held-emails`).
+- **Resolutions.** *Ingest anyway* (`POST /api/held-emails/{id}/ingest` →
+  the `library.jobs.ingest_held_email` task) re-fetches the message from the
+  Held folder by Message-ID and ingests it with **override semantics**: the
+  deterministic gates still apply, the LLM label pass is **not** consulted
+  (the human already overruled it), and the body-substance gate is bypassed
+  when the attachments produce nothing — so overriding a `below_substance`
+  hold files its body. The row is resolved (`ingested` + the created
+  `document_ids`) before the message moves Held → Processed. *Dismiss*
+  (`POST /api/held-emails/{id}/dismiss`) is **DB-only**: an instant status
+  flip — the record is kept as an audit trail and the bytes stay in the Held
+  folder forever, so a wrong dismiss never loses a real document. Both are
+  exposed in the web app's `/held-emails` view and documented in
+  [api.md](api.md) §1.21.
+- **Push.** A fresh hold fires a best-effort `email_held` Pushover event to
+  the resolved owner — **opt-in** like every notification event (see
+  [jobs-and-notifications.md](jobs-and-notifications.md) §1.5.2), deep-linked
+  to `/held-emails`, at-most-once per hold, and never able to fail the poll.
+
+Two behaviour changes versus the pre-hold pipeline, both reverted by the
+master switch: **unknown senders are held** instead of left in the inbox
+(when an allowlist is configured and the trigger is on), and a drops-only
+email that is held does **not** fire the attachments-dropped push — the held
+queue and the `email_held` push are its surface (the dropped push fires only
+after a successful Processed move, which a held message never makes).
 
 #### Debugging & triage: the decision trace
 
@@ -1421,7 +1526,7 @@ Append-only audit trail in `ingestion_events`:
 | --- | --- | --- |
 | `received` | ingest | `{filename, size, mime_type, source}`; email adds `{email_from, email_subject, email_message_id}`; a note records `{source: "note", size}` |
 | `duplicate_upload` | ingest | `{filename, source}`; email adds the same `email_*` keys |
-| `email_selection` | email poller | Per-item decision trace, persisted on each new document the email produced: `{email_from, email_subject, email_message_id, email_to?, items}` where each item is `{kind, filename, mime, size, stage, verdict, reason}` (see "Email item selection") |
+| `email_selection` | email poller | Per-item decision trace, persisted on each new document the email produced: `{email_from, email_subject, email_message_id, email_to?, items}` where each item is `{kind, filename, mime, size, stage, verdict, reason}` (see "Email item selection"). A *held* email produced no document, so its trace is snapshotted on the `held_emails` row instead — no ingestion event |
 | `email_label_completed` | email poller | `{cost_usd, model, input_tokens, output_tokens, prompt_version, items}` — one per billed LLM label pass, written on the first new document; what the label budget gate sums |
 | `note_edited` | notes router | `{fields}` — the note fields changed by a `PATCH /api/notes/{id}` |
 | `note_restored` | notes router | `{restored_version_no, restored_at}` |
@@ -1493,3 +1598,7 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_EMAIL_LABEL_MODEL` | `claude-haiku-4-5` | Model used by the label pass |
 | `LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD` | `2.0` | Daily spend cap for the label pass (summed from `email_label_completed` events); over budget → skip, all attachments kept |
 | `LIBRARY_EMAIL_LABEL_BODY_SNIPPET_CHARS` | `1000` | Length of the cleaned body excerpt sent to the labeller |
+| `LIBRARY_EMAIL_HOLD_ENABLED` | `true` | Master switch for hold-for-review (see "Held for review"); `false` is the rollback lever — every trigger reverts to the pre-hold behaviour exactly |
+| `LIBRARY_EMAIL_HELD_FOLDER` | `Library/Held` | Where held messages are moved (created if missing); dismissed mail stays here forever, so the bytes remain recoverable |
+| `LIBRARY_EMAIL_HOLD_BELOW_SUBSTANCE` | `true` | Hold a body-only email that fails the substance gate instead of quietly filing it to Processed |
+| `LIBRARY_EMAIL_HOLD_UNKNOWN_SENDERS` | `true` | Hold allowlist-rejected mail instead of leaving it in the inbox (meaningful only when `LIBRARY_EMAIL_ALLOWED_SENDERS` is set) |
