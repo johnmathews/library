@@ -10,10 +10,11 @@ import asyncio
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from typing import Any
 
 import typer
 from anthropic import AsyncAnthropic
-from sqlalchemy import exists, or_, select
+from sqlalchemy import BigInteger, Select, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -41,6 +42,7 @@ from library.models import (
     DocumentPage,
     DocumentStatus,
     EvalRun,
+    IngestionEvent,
     Kind,
     Sender,
     User,
@@ -510,6 +512,153 @@ def backfill_summaries(
 
     count = _run(operation)
     typer.echo(f"queued extraction for {count} document(s)")
+
+
+# Junk image documents (email logo/tracker PNGs) carry almost no OCR text and
+# are tiny on disk. A real photographed/scanned page fails BOTH tests: dense
+# OCR output and a file comfortably over 20 kB.
+JUNK_OCR_CHARS_MAX: int = 100
+JUNK_IMAGE_BYTES_MAX: int = 20_000
+
+
+def _sweep_candidates_statement() -> Select[Any]:
+    """Select (Document, ocr_chars, size_bytes) rows matching the junk-image heuristic.
+
+    Size comes from the first ``received`` IngestionEvent's ``detail->>'size'``
+    (documents have no size column); paperless-imported documents may lack it,
+    in which case the size branch is NULL and only the OCR branch can match.
+    """
+    received_size = (
+        select(cast(IngestionEvent.detail["size"].astext, BigInteger))
+        .where(
+            IngestionEvent.document_id == Document.id,
+            IngestionEvent.event == "received",
+        )
+        .order_by(IngestionEvent.id)
+        .limit(1)
+        .scalar_subquery()
+    )
+    ocr_chars = func.length(func.coalesce(Document.ocr_text, ""))
+    return (
+        select(Document, ocr_chars.label("ocr_chars"), received_size.label("size_bytes"))
+        .where(
+            Document.deleted_at.is_(None),
+            Document.mime_type.like("image/%"),
+            or_(ocr_chars < JUNK_OCR_CHARS_MAX, received_size < JUNK_IMAGE_BYTES_MAX),
+        )
+        .order_by(Document.id)
+    )
+
+
+@app.command("sweep-junk")
+def sweep_junk(
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Soft-delete the documents named via --ids (default: dry run, list only).",
+    ),
+    ids: str | None = typer.Option(
+        None,
+        "--ids",
+        help="Comma-separated document ids to soft-delete (required with --apply).",
+    ),
+) -> None:
+    """Find (and with --apply, soft-delete) junk image documents.
+
+    Candidates are non-deleted ``image/*`` documents whose OCR text is under
+    100 characters OR whose original upload was under 20 kB (size read from the
+    ``received`` ingestion event; absent for some paperless imports). The
+    default is a DRY RUN that only lists candidates. ``--apply`` requires an
+    explicit ``--ids`` list, refuses any id outside the candidate set, skips
+    already-deleted ids, and never hard-deletes: it mirrors the API delete
+    endpoint (sets ``deleted_at`` and records a ``deleted`` event with empty
+    detail), so swept documents can be restored until the retention purge.
+    """
+    if apply and not ids:
+        typer.echo(
+            "error: --apply requires --ids with an explicit comma-separated list of "
+            "document ids (run without --apply first to list candidates)"
+        )
+        raise typer.Exit(code=1)
+    if ids and not apply:
+        typer.echo("error: --ids only makes sense with --apply")
+        raise typer.Exit(code=1)
+
+    if not apply:
+
+        async def list_operation(session: AsyncSession) -> list[tuple[Document, int, int | None]]:
+            rows = (await session.execute(_sweep_candidates_statement())).all()
+            return [(row[0], row[1], row[2]) for row in rows]
+
+        candidates = _run(list_operation)
+        for document, ocr_chars, size_bytes in candidates:
+            size = "?" if size_bytes is None else str(size_bytes)
+            typer.echo(
+                f"{document.id}\t{document.original_filename or '-'}\t{document.mime_type}"
+                f"\t{size} B\t{ocr_chars} OCR chars\t{document.source.value}"
+            )
+        typer.echo(f"{len(candidates)} junk image candidate(s) — dry run, nothing deleted")
+        if candidates:
+            id_list = ",".join(str(document.id) for document, _, _ in candidates)
+            typer.echo(f"apply with: library sweep-junk --apply --ids {id_list}")
+        return
+
+    try:
+        target_ids = sorted({int(part) for part in (ids or "").split(",") if part.strip()})
+    except ValueError:
+        typer.echo(f"error: --ids must be a comma-separated list of integers, got: {ids}")
+        raise typer.Exit(code=1) from None
+    if not target_ids:
+        typer.echo("error: --ids is empty")
+        raise typer.Exit(code=1)
+
+    async def apply_operation(session: AsyncSession) -> tuple[list[int], list[int]]:
+        candidate_ids = {
+            row[0].id for row in (await session.execute(_sweep_candidates_statement())).all()
+        }
+        documents = {
+            document.id: document
+            for document in (
+                await session.execute(select(Document).where(Document.id.in_(target_ids)))
+            ).scalars()
+        }
+        missing = [i for i in target_ids if i not in documents]
+        already = [i for i in target_ids if i in documents and documents[i].deleted_at is not None]
+        refused = [
+            i
+            for i in target_ids
+            if i in documents and documents[i].deleted_at is None and i not in candidate_ids
+        ]
+        if missing or refused:
+            # Refuse the whole batch before touching anything: --ids must name
+            # only current candidates (or already-deleted ids, which are skipped).
+            for document_id in missing:
+                typer.echo(f"error: {document_id} does not exist")
+            for document_id in refused:
+                typer.echo(
+                    f"error: {document_id} is not a junk-image candidate — refusing to delete it"
+                )
+            typer.echo("nothing deleted")
+            raise typer.Exit(code=1)
+
+        deleted: list[int] = []
+        for document_id in target_ids:
+            if document_id in already:
+                continue
+            document = documents[document_id]
+            # Mirror DELETE /api/documents/{id}: soft-delete + audit event.
+            document.deleted_at = datetime.now(UTC)
+            session.add(IngestionEvent(document_id=document.id, event="deleted", detail={}))
+            deleted.append(document_id)
+        await session.commit()
+        return deleted, already
+
+    deleted, already = _run(apply_operation)
+    for document_id in already:
+        typer.echo(f"{document_id} already deleted — skipped")
+    for document_id in deleted:
+        typer.echo(f"soft-deleted {document_id}")
+    typer.echo(f"soft-deleted {len(deleted)} document(s), skipped {len(already)} already deleted")
 
 
 @app.command("eval-extractions")

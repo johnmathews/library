@@ -1,5 +1,6 @@
 import asyncio
 import json
+import uuid
 
 import pytest
 from fastapi import FastAPI
@@ -506,6 +507,8 @@ def test_email_triage_reflects_instance_config(
             "LIBRARY_EMAIL_FILTER_NOISE_ENABLED": "true",
             "LIBRARY_EMAIL_FILTER_TINY_IMAGE_MAX_BYTES": "8192",
             "LIBRARY_EMAIL_FILTER_TINY_IMAGE_MAX_EDGE_PX": "128",
+            "LIBRARY_EMAIL_FILTER_DECORATION_MAX_BYTES": "32768",
+            "LIBRARY_EMAIL_FILTER_DECORATION_MAX_EDGE_PX": "256",
             "LIBRARY_EMAIL_LABEL_ENABLED": "true",
             "LIBRARY_ANTHROPIC_API_KEY": "sk-ant-fake-triage-test",
             "LIBRARY_EMAIL_LABEL_MODEL": "claude-sonnet-4-6",
@@ -527,6 +530,8 @@ def test_email_triage_reflects_instance_config(
             "enabled": True,
             "tiny_image_max_bytes": 8192,
             "tiny_image_max_edge_px": 128,
+            "decoration_max_bytes": 32768,
+            "decoration_max_edge_px": 256,
         },
         "label": {
             "enabled": True,
@@ -598,6 +603,132 @@ def test_email_triage_never_leaks_secrets(
 
 def test_email_triage_requires_auth(anon_client: TestClient) -> None:
     assert anon_client.get("/api/settings/email-triage").status_code == 401
+
+
+# --- GET /api/settings/email-triage/recent-skips ------------------------------
+
+
+def _seed_skip_trace(
+    database_url: str,
+    *,
+    subject: str,
+    message_id: str | None = None,
+    from_address: str | None = "sender@example.com",
+    decisions: list[dict[str, object]],
+) -> int:
+    """Insert one email_selection_traces row directly; returns its id."""
+
+    async def _run() -> int:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with engine.begin() as conn:
+                result = await conn.execute(
+                    text(
+                        "INSERT INTO email_selection_traces "
+                        "(message_id, subject, from_address, decisions) "
+                        "VALUES (:m, :s, :f, CAST(:d AS jsonb)) RETURNING id"
+                    ),
+                    {
+                        "m": message_id,
+                        "s": subject,
+                        "f": from_address,
+                        "d": json.dumps(decisions),
+                    },
+                )
+                return int(result.scalar_one())
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_run())
+
+
+def _decision(**overrides: object) -> dict[str, object]:
+    """One SelectionDecision.as_detail()-shaped dict (the stored JSONB shape)."""
+    base: dict[str, object] = {
+        "kind": "attachment",
+        "filename": "image001.png",
+        "mime": "image/png",
+        "size": 6144,
+        "stage": "classify",
+        "verdict": "filtered",
+        "reason": "decoration_image",
+        "detail": "filename, size and shape signals fired",
+    }
+    return {**base, **overrides}
+
+
+def test_recent_skips_payload_is_compact_and_skip_only(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    tag = uuid.uuid4().hex[:8]
+    subject = f"skips payload {tag}"
+    message_id = f"<{tag}@example.com>"
+    row_id = _seed_skip_trace(
+        api_database_url,
+        subject=subject,
+        message_id=message_id,
+        decisions=[
+            # The ingested sibling and the bookkeeping body decision are stored
+            # in the row but must NOT be echoed by the API (skips only).
+            _decision(filename="real.pdf", verdict="ingested", reason=None, detail=None),
+            _decision(),
+            _decision(
+                kind="body",
+                filename=None,
+                mime=None,
+                size=None,
+                stage="body_substance",
+                verdict="filtered",
+                reason="not_needed",
+                detail=None,
+            ),
+        ],
+    )
+
+    resp = api_client.get("/api/settings/email-triage/recent-skips")
+    assert resp.status_code == 200, resp.text
+    mine = [row for row in resp.json()["recent_skips"] if row["id"] == row_id]
+    assert len(mine) == 1
+    row = mine[0]
+    assert row["subject"] == subject
+    assert row["message_id"] == message_id
+    assert row["from_address"] == "sender@example.com"
+    assert row["created_at"]  # newest-first ordering key, shown in the UI
+    # Only the genuinely skipped item survives, in a compact shape.
+    assert row["decisions"] == [
+        {
+            "kind": "attachment",
+            "filename": "image001.png",
+            "reason": "decoration_image",
+            "detail": "filename, size and shape signals fired",
+        }
+    ]
+
+
+def test_recent_skips_newest_first_and_capped_at_20(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    tag = uuid.uuid4().hex[:8]
+    ids = [
+        _seed_skip_trace(
+            api_database_url,
+            subject=f"skips bulk {tag} {index}",
+            decisions=[_decision(reason="tiny_image", detail=f"row {index}")],
+        )
+        for index in range(25)
+    ]
+
+    resp = api_client.get("/api/settings/email-triage/recent-skips")
+    assert resp.status_code == 200, resp.text
+    returned = [row["id"] for row in resp.json()["recent_skips"]]
+    assert len(returned) == 20
+    # These 25 are the newest rows in the shared DB at this moment, so the
+    # response is exactly their newest 20, newest first.
+    assert returned == sorted(ids, reverse=True)[:20]
+
+
+def test_recent_skips_requires_auth(anon_client: TestClient) -> None:
+    assert anon_client.get("/api/settings/email-triage/recent-skips").status_code == 401
 
 
 def test_put_settings_isolated_per_user(

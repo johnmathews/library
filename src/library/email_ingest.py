@@ -7,10 +7,18 @@ upload (``source=email``; the uploader is resolved from the sender via
 ``resolve_sender_owner``), attaching the sender, subject, and Message-ID to the
 recorded ingestion event. Which items are worth filing is decided by the
 selection gates — a deterministic noise gate (``_noise_reason``: inline
-signature images, tiny pixels/icons, calendar/vCard/PKCS7/TNEF parts), an
-optional per-email LLM label pass (``library.email_label``, off by default), and
+signature images, tiny pixels/icons, decoration images such as logos and
+banners, calendar/vCard/PKCS7/TNEF parts), an
+optional per-email LLM label pass (``library.email_label``, off by default;
+its ``probably_noise`` verdict normally ingests-and-flags, but becomes a quiet
+``llm_noise_corroborated`` skip when at least one deterministic decoration
+signal agrees — see ``_ingest_attachments``), and
 a body-substance gate (``_body_substance``) — all recorded in a per-email
-decision trace (``_log_selection_trace`` + an ``email_selection`` event). When no
+decision trace (``_log_selection_trace`` + an ``email_selection`` event on each
+new document, plus one durable ``email_selection_traces`` row whenever anything
+was skipped, however quietly — ``_skip_trace_record`` — so a wrongly-skipped
+attachment is discoverable without grepping logs, even when the email produced
+zero documents). When no
 attachment produces a document, the email body itself is ingested *if it clears
 the substance gate* — HTML converted to Markdown (``text/markdown``), else plain
 text (``text/plain``) — so "the email is the invoice" works too. See
@@ -26,8 +34,11 @@ pointer (a failed row leaves the mail in place for the next poll; a failed move
 retries idempotently against the existing row). A held email is resolved by a
 human: "ingest anyway" (``ingest_held_email_async``, run as the
 ``library.jobs.ingest_held_email`` task) re-fetches the message from the Held
-folder by Message-ID and ingests it with override semantics — deterministic
-gates still apply, no label call, and the body-substance gate is bypassed when
+folder by Message-ID and ingests it with override semantics — the hard
+deterministic gates (signature/tiny/non-document/oversize/unsupported) still
+apply, but the decoration heuristics (``decoration_image`` and the
+LLM-corroborated skip) are bypassed and no label call is made (the human
+already overruled them), and the body-substance gate is bypassed when
 the attachments produce nothing — while "dismiss" (``dismiss_held_email``) is a
 pure DB status flip that leaves the bytes in the Held folder forever. Holding
 also fires a best-effort ``email_held`` push to the resolved owner (opt-in, see
@@ -90,7 +101,14 @@ from library.ingest import (
     ingest_file,
 )
 from library.markdown.html import html_to_markdown
-from library.models import DocumentSource, HeldEmail, HeldEmailStatus, IngestionEvent, User
+from library.models import (
+    DocumentSource,
+    EmailSelectionTrace,
+    HeldEmail,
+    HeldEmailStatus,
+    IngestionEvent,
+    User,
+)
 from library.notifications import (
     dispatch_attachments_dropped_notification,
     dispatch_email_held_notification,
@@ -117,7 +135,7 @@ class EmailPollSummary:
     attachments_ingested: int = 0  # new documents created
     attachments_duplicate: int = 0  # content already in the library
     attachments_dropped: int = 0  # rejected (oversize/unsupported/error); surfaced
-    attachments_filtered: int = 0  # deterministic noise (signature/tiny/non-document); quiet
+    attachments_filtered: int = 0  # deterministic noise (signature/tiny/decoration/non-document)
 
 
 @dataclass(frozen=True, slots=True)
@@ -126,10 +144,13 @@ class SkippedAttachment:
 
     ``reason`` is a stable code: ``empty`` (no payload — usually inline cruft,
     not surfaced to the user), ``oversize``, ``unsupported_type``, ``error``
-    (an unexpected failure during ingest), or one of the deterministic noise
-    filters (``signature_image``, ``tiny_image``, ``non_document_type`` — see
-    ``_noise_reason``). ``detail`` is a human sentence. ``size``/``mime`` are the
-    attachment's byte length and detected type, carried for the decision trace.
+    (an unexpected failure during ingest), one of the deterministic noise
+    filters (``signature_image``, ``tiny_image``, ``decoration_image``,
+    ``non_document_type`` — see ``_noise_reason``), or the LLM-corroborated
+    skip (``llm_noise_corroborated`` — a ``probably_noise`` label verdict on an
+    image that at least one decoration signal agrees with). ``detail`` is a human
+    sentence. ``size``/``mime`` are the attachment's byte length and detected
+    type, carried for the decision trace.
     """
 
     filename: str | None
@@ -146,9 +167,27 @@ class SkippedAttachment:
 #: signature logo never flags a real document.
 _USER_FACING_DROP_REASONS: frozenset[str] = frozenset({"oversize", "unsupported_type", "error"})
 
-#: Deterministic-noise skip reasons produced by ``_noise_reason``. Recorded in the
-#: decision trace and counted (``attachments_filtered``) but never surfaced.
-_NOISE_REASONS: frozenset[str] = frozenset({"signature_image", "tiny_image", "non_document_type"})
+#: Quiet noise skip reasons: the deterministic gate's (``_noise_reason``) plus
+#: the LLM-corroborated skip (``llm_noise_corroborated``, ``_ingest_attachments``).
+#: Recorded in the decision trace and counted (``attachments_filtered``) but
+#: never surfaced.
+_NOISE_REASONS: frozenset[str] = frozenset(
+    {
+        "signature_image",
+        "tiny_image",
+        "decoration_image",
+        "non_document_type",
+        "llm_noise_corroborated",
+    }
+)
+
+#: Every reason that means "this item was skipped, however quietly" — the
+#: union of the quiet noise skips and the user-facing drops. An email whose
+#: decision trace contains at least one of these gets a durable
+#: ``email_selection_traces`` row (``_skip_trace_record``), and the settings
+#: API's recent-skips view filters a stored trace down to these decisions.
+#: Public: imported by ``library.api.settings``.
+SKIP_TRACE_REASONS: frozenset[str] = _NOISE_REASONS | _USER_FACING_DROP_REASONS
 
 #: Content-Types that are never a filed document — email/client protocol cruft.
 #: Matched against the part's *declared* Content-Type: calendar/vCard bytes are
@@ -203,6 +242,10 @@ class SelectionDecision:
     stage: str
     verdict: str
     reason: str | None = None
+    #: The human sentence behind ``reason`` (e.g. which decoration signals
+    #: fired) — persisted in the ``email_selection`` event so the audit trail is
+    #: self-explanatory, but kept out of the compact ``render()`` log token.
+    detail: str | None = None
 
     def as_detail(self) -> dict[str, object]:
         """JSON-serialisable form for the persisted ``email_selection`` event."""
@@ -214,6 +257,7 @@ class SelectionDecision:
             "stage": self.stage,
             "verdict": self.verdict,
             "reason": self.reason,
+            "detail": self.detail,
         }
 
     def render(self) -> str:
@@ -227,16 +271,18 @@ def _skip_verdict(reason: str) -> str:
     return "dropped" if reason in _USER_FACING_DROP_REASONS else "filtered"
 
 
-def _skip_decision(item: SkippedAttachment) -> SelectionDecision:
-    """The classify-stage decision for one skipped attachment."""
+def _skip_decision(item: SkippedAttachment, stage: str = "classify") -> SelectionDecision:
+    """The decision for one skipped attachment (classify-stage by default;
+    ``llm_label`` for the corroborated-noise skip)."""
     return SelectionDecision(
         kind="attachment",
         filename=item.filename,
         mime=item.mime,
         size=item.size,
-        stage="classify",
+        stage=stage,
         verdict=_skip_verdict(item.reason),
         reason=item.reason,
+        detail=item.detail,
     )
 
 
@@ -271,6 +317,32 @@ DropNotifier = Callable[[str | None, str | None, list[SkippedAttachment]], None]
 TracePersister = Callable[
     [list[int], dict[str, object], dict[str, object] | None, int | None], None
 ]
+
+
+@dataclass(frozen=True, slots=True)
+class SkipTraceRecord:
+    """One durable ``email_selection_traces`` row: the per-email skip audit.
+
+    Built (``_skip_trace_record``) only when the email's decision trace
+    contains at least one skipped item (reason in :data:`SKIP_TRACE_REASONS`)
+    — an email with no skips writes no row, keeping the table signal-only.
+    ``decisions`` is the FULL ``SelectionDecision.as_detail()`` list (ingested
+    siblings included), the same shape as the ``email_selection`` event's
+    ``items``, so the row reads as a whole email.
+    """
+
+    message_id: str | None
+    subject: str | None
+    from_address: str | None
+    decisions: list[dict[str, object]]
+
+
+#: Synchronous bridge to persist one :class:`SkipTraceRecord` (best-effort,
+#: like the ``email_selection`` trace: a failure logs and never fails the
+#: poll). Unlike :data:`TracePersister` it is keyed on the email, not on
+#: document ids, so it covers the zero-document case — an email whose items
+#: were ALL skipped still leaves a durable, queryable audit row.
+SkipTracePersister = Callable[[SkipTraceRecord], None]
 
 
 @dataclass(frozen=True, slots=True)
@@ -456,28 +528,92 @@ def _is_image(content_type: str, mime: str | None) -> bool:
     return content_type.startswith("image/") or bool(mime and mime.startswith("image/"))
 
 
-def _image_longest_edge(content: bytes) -> int | None:
-    """The longest edge in px (header-only decode); ``None`` if undecodable.
+def _image_dimensions(content: bytes) -> tuple[int, int] | None:
+    """``(width, height)`` in px (header-only decode); ``None`` if undecodable.
 
     ``Image.open`` reads only the header, so this stays cheap. A decode failure
     returns ``None`` and the caller keeps the attachment (bias to ingest).
     """
     try:
         with Image.open(io.BytesIO(content)) as image:
-            return max(image.size)
+            return image.size
     except Exception:
         return None
 
 
+#: Filename stems that scream "decoration, not a document" — matched as
+#: case-insensitive substrings of the stem (``company-logo`` counts).
+_DECORATION_FILENAME_WORDS: tuple[str, ...] = ("logo", "signature", "banner", "footer", "icon")
+
+#: Outlook's auto-generated names for embedded images: ``image`` + 2-3 digits
+#: (``image001``). Full-stem match only — ``image1`` and ``image1234`` don't.
+_DECORATION_OUTLOOK_STEM_RE = re.compile(r"image\d{2,3}")
+
+#: Banner shape: at least this wide-to-tall, with a short edge at/under this —
+#: the header/footer strips mail clients paste above signatures.
+_BANNER_MIN_ASPECT_RATIO = 4.0
+_BANNER_MAX_SHORT_EDGE_PX = 128
+
+
+def _decoration_signals(
+    filename: str | None,
+    content: bytes,
+    dimensions: tuple[int, int] | None,
+    settings: Settings,
+) -> dict[str, bool]:
+    """Three independent "this is decoration, not a document" signals.
+
+    Pure and standalone (no I/O, no logging; later work units reuse it): the
+    caller supplies the already-decoded ``dimensions``. Each signal is weak on
+    its own — a scan can be named ``logo.png``, a receipt photo can compress
+    small — so the caller must require **at least two** before skipping.
+
+    - ``filename``: the stem contains a decoration word (logo, signature,
+      banner, footer, icon) or is an Outlook auto-embed name (``image001``).
+    - ``size``: the payload is at/under ``email_filter_decoration_max_bytes``.
+    - ``shape``: longest edge at/under ``email_filter_decoration_max_edge_px``,
+      or banner-shaped (aspect >= 4:1 with a short edge <= 128px). ``None``
+      dimensions never claim a shape.
+    """
+    stem = (filename or "").rsplit(".", 1)[0].strip().lower()
+    filename_signal = bool(stem) and (
+        any(word in stem for word in _DECORATION_FILENAME_WORDS)
+        or _DECORATION_OUTLOOK_STEM_RE.fullmatch(stem) is not None
+    )
+    size_signal = len(content) <= settings.email_filter_decoration_max_bytes
+    shape_signal = False
+    if dimensions is not None:
+        long_edge, short_edge = max(dimensions), min(dimensions)
+        shape_signal = long_edge <= settings.email_filter_decoration_max_edge_px or (
+            short_edge > 0
+            and long_edge / short_edge >= _BANNER_MIN_ASPECT_RATIO
+            and short_edge <= _BANNER_MAX_SHORT_EDGE_PX
+        )
+    return {"filename": filename_signal, "size": size_signal, "shape": shape_signal}
+
+
 def _noise_reason(
-    attachment: Any, content: bytes, mime: str | None, html: str, settings: Settings
+    attachment: Any,
+    content: bytes,
+    mime: str | None,
+    html: str,
+    settings: Settings,
+    *,
+    override: bool = False,
 ) -> tuple[str, str] | None:
     """A deterministic ``(reason, detail)`` when an attachment is unambiguous noise.
 
-    Conservative by design (bias to ingest): only a non-document protocol part, an
-    inline/CID signature image, or a sub-threshold tiny image trips a rule. A
-    normal-sized image is kept; an image we cannot decode is kept unless it is also
-    below the byte-size floor (the tiny-image fallback). Returns ``None`` to keep.
+    Conservative by design (bias to ingest): only a non-document protocol part,
+    an inline/CID signature image, a sub-threshold tiny image, or a decodable
+    image with **at least two** independent decoration signals
+    (``_decoration_signals``: filename, size, shape) trips a rule — byte size
+    alone never skips, and neither does a decoration-style filename alone. A
+    normal-sized image is kept; an image we cannot decode is kept unless it is
+    also below the byte-size floor (the tiny-image fallback). ``override`` is
+    the ingest-anyway path (``ingest_held_email_async``): a human clicked
+    "ingest anyway", so the *heuristic* ``decoration_image`` rule yields to that
+    intent while the hard gates (non-document part, signature image, tiny
+    image) still apply. Returns ``None`` to keep.
     """
     if not settings.email_filter_noise_enabled:
         return None
@@ -492,17 +628,31 @@ def _noise_reason(
         # Dimensions are the authoritative "is this an icon/pixel" signal, so
         # prefer them; a legitimate small-but-normal-sized image is kept. Byte
         # size is only the fallback for an image we cannot decode.
-        edge = _image_longest_edge(content)
-        if edge is not None:
+        dimensions = _image_dimensions(content)
+        if dimensions is not None:
+            edge = max(dimensions)
             if edge <= settings.email_filter_tiny_image_max_edge_px:
                 return "tiny_image", f"longest edge {edge}px is at/under the tiny-image threshold"
+            # Decoration gate (doc-159): a non-inline logo/banner slips past the
+            # tiny-image rule, but never past two agreeing decoration signals.
+            # Heuristic, so the ingest-anyway override bypasses it.
+            if not override:
+                signals = _decoration_signals(
+                    getattr(attachment, "filename", None) or None, content, dimensions, settings
+                )
+                fired = [name for name, hit in signals.items() if hit]
+                if len(fired) >= 2:
+                    return (
+                        "decoration_image",
+                        f"decoration image ({len(fired)}/3 signals fired: {', '.join(fired)})",
+                    )
         elif len(content) < settings.email_filter_tiny_image_max_bytes:
             return "tiny_image", f"undecodable image, {len(content)} bytes below the threshold"
     return None
 
 
 def _classify_attachments(
-    message: MailMessage, max_bytes: int, settings: Settings
+    message: MailMessage, max_bytes: int, settings: Settings, *, override: bool = False
 ) -> tuple[list[IngestCandidate], list[SkippedAttachment]]:
     """Split a message's attachments into ingestable candidates and skips.
 
@@ -510,6 +660,9 @@ def _classify_attachments(
     ingestion — the poller needs the full skip list up front to stamp the
     survivors with their dropped siblings. Every rejected attachment becomes a
     :class:`SkippedAttachment` instead of vanishing with a bare ``continue``.
+    ``override`` (the ingest-anyway path) is threaded into ``_noise_reason`` so
+    the heuristic ``decoration_image`` rule yields to the human's intent; the
+    hard gates (empty/oversize/noise/unsupported) still apply.
     """
     detail = _event_detail(message)
     # The HTML body, lowercased once, so the signature-image rule can test each
@@ -538,7 +691,7 @@ def _classify_attachments(
         # Deterministic noise gate — before the allowed-type check, so a noise
         # image is filtered with its noise reason rather than ingested, and a
         # calendar/vCard part (which sniffs as the allowed text/plain) is caught.
-        noise = _noise_reason(attachment, content, mime, html, settings)
+        noise = _noise_reason(attachment, content, mime, html, settings, override=override)
         if noise is not None:
             reason, noise_detail = noise
             skipped.append(
@@ -652,25 +805,53 @@ def _error_skip(candidate: IngestCandidate, exc: Exception) -> SkippedAttachment
     )
 
 
+def _corroborating_signals(candidate: IngestCandidate, settings: Settings) -> list[str]:
+    """Decoration-signal names corroborating an LLM ``probably_noise`` verdict.
+
+    The gate for the ``llm_noise_corroborated`` skip: only an image can be
+    decoration, and the check rides the same feature flag as the deterministic
+    noise gate. Returns the fired ``_decoration_signals`` names — empty for a
+    non-image, a disabled gate, or a signal-free image, in which case the
+    caller keeps today's ingest-and-flag disposition.
+    """
+    if not settings.email_filter_noise_enabled:
+        return []
+    declared = (candidate.mime or "").split(";", 1)[0].strip().lower()
+    if not _is_image(declared, detect_mime(candidate.content, candidate.mime)):
+        return []
+    signals = _decoration_signals(
+        candidate.filename, candidate.content, _image_dimensions(candidate.content), settings
+    )
+    return [name for name, hit in signals.items() if hit]
+
+
 def _ingest_attachments(
     message: MailMessage,
     ingest: IngestCallable,
     candidates: list[IngestCandidate],
     classify_skipped: list[SkippedAttachment],
     verdicts: dict[int, tuple[str, str | None]],
+    settings: Settings,
 ) -> _AttachmentOutcome:
     """Ingest one message's surviving attachment candidates.
 
     ``candidates``/``classify_skipped`` come from ``_classify_attachments`` and
     ``verdicts`` from the (message-level) label pass, keyed by candidate index —
     the label call itself is hoisted to ``poll_mailbox`` so the whole email is
-    judged once, body included. A ``probably_noise`` verdict flags the document
-    (``extra["email_selection"]``) but is **still ingested** — the label never
-    drops. Each survivor is stamped with the email's dropped siblings (so
-    validation can surface them). Returns an :class:`_AttachmentOutcome` with
-    counts, skips, the per-attachment decision trace, and the ingest results. A
-    per-attachment failure — a content rejection (``IngestError``) or any other
-    exception — is recorded as a skip and never aborts the message.
+    judged once, body included. A ``probably_noise`` verdict normally flags the
+    document (``extra["email_selection"]``) but **still ingests** — except when
+    the item is an image and at least one deterministic decoration signal
+    (``_corroborating_signals``) agrees: two independent judges calling it
+    decoration make it a quiet ``llm_noise_corroborated`` skip instead (the
+    doc-159 fix; noise-gate flag off, a non-image, or zero signals all keep
+    today's ingest-and-flag). Each survivor is stamped with the email's dropped
+    siblings (so validation can surface them). Returns an
+    :class:`_AttachmentOutcome` with counts, skips, the per-attachment decision
+    trace, and the ingest results. A per-attachment failure — a content
+    rejection (``IngestError``) or any other exception — is recorded as a skip
+    and never aborts the message. The ingest-anyway override never reaches the
+    corroborated skip: it passes empty ``verdicts`` (no label call is made for
+    an override).
     """
     skipped = list(classify_skipped)
     # Only the classify-pass drops can be stamped onto survivors at creation
@@ -684,6 +865,24 @@ def _ingest_attachments(
     for index, candidate in enumerate(candidates):
         verdict = verdicts.get(index)
         flagged = verdict is not None and verdict[0] == "probably_noise"
+        if flagged:
+            corroborating = _corroborating_signals(candidate, settings)
+            if corroborating:
+                # The LLM and at least one deterministic decoration signal
+                # agree: skip quietly (like the other noise reasons) instead
+                # of ingest-and-flag. The detail keeps both judges' reasoning.
+                skip = SkippedAttachment(
+                    candidate.filename,
+                    "llm_noise_corroborated",
+                    f"LLM judged probably-noise ({verdict[1] or 'no reason given'}); "
+                    f"corroborated by decoration signal(s): {', '.join(corroborating)}",
+                    size=len(candidate.content),
+                    mime=candidate.mime,
+                )
+                logger.info("email: attachment %r skipped (%s)", candidate.filename, skip.detail)
+                skipped.append(skip)
+                decisions.append(_skip_decision(skip, stage="llm_label"))
+                continue
         extra: dict[str, object] = {}
         if dropped_siblings:
             extra["email_siblings_dropped"] = dropped_siblings
@@ -884,6 +1083,23 @@ def _selection_event_detail(
     return detail
 
 
+def _skip_trace_record(
+    message: MailMessage, decisions: list[SelectionDecision]
+) -> SkipTraceRecord | None:
+    """The durable skip-audit row for this email, or ``None`` when nothing was
+    skipped (the body's bookkeeping skips — ``not_needed``/``no_body``/
+    ``below_substance`` — deliberately don't count: only reasons in
+    :data:`SKIP_TRACE_REASONS` make an email worth a row)."""
+    if not any(decision.reason in SKIP_TRACE_REASONS for decision in decisions):
+        return None
+    return SkipTraceRecord(
+        message_id=_message_id(message),
+        subject=message.subject,
+        from_address=message.from_,
+        decisions=[decision.as_detail() for decision in decisions],
+    )
+
+
 def _body_decision(
     body: IngestCandidate, verdict: str, reason: str | None = None, stage: str = "body_substance"
 ) -> SelectionDecision:
@@ -986,6 +1202,7 @@ def poll_mailbox(
     persist_trace: TracePersister | None = None,
     label: LabelCallable | None = None,
     persist_hold: HoldPersister | None = None,
+    persist_skip_trace: SkipTracePersister | None = None,
 ) -> EmailPollSummary:
     """Poll the configured mailbox once and ingest its documents.
 
@@ -1021,7 +1238,13 @@ def poll_mailbox(
     Every message also emits a one-line decision trace (``_log_selection_trace``)
     recording what happened to each item and why; when ``persist_trace`` is
     supplied, that trace is also stored as an ``email_selection`` event on each
-    new document so it shows in the document's history.
+    new document so it shows in the document's history. When
+    ``persist_skip_trace`` is supplied, a processed email whose trace contains
+    at least one skipped item (reason in :data:`SKIP_TRACE_REASONS`, however
+    quiet) additionally writes one durable ``email_selection_traces`` row —
+    covering the zero-document email the per-document event cannot (held
+    emails don't write one: their trace already lives on the ``held_emails``
+    row). Both persisters are best-effort and never fail the poll.
 
     No-op (empty summary) when ``email_host`` is unset. ``mailbox_factory``,
     ``notify``, ``persist_trace``, and ``persist_hold`` exist for wiring/tests;
@@ -1116,6 +1339,13 @@ def poll_mailbox(
                             for index, verdict in label_outcome.verdicts.items()
                             if index < len(candidates)
                         },
+                        settings,
+                    )
+                    # Corroborated LLM-noise skips arise inside the ingest pass
+                    # (they need the label verdicts), so they are counted here —
+                    # the classify-pass noise was already counted above.
+                    filtered += sum(
+                        1 for item in outcome.skipped if item.reason == "llm_noise_corroborated"
                     )
                     new, dups = outcome.new, outcome.duplicates
                     dropped_attachments = outcome.skipped
@@ -1228,8 +1458,14 @@ def poll_mailbox(
                     duplicates += dups
                     # The always-on decision trace (covers the zero-document case too),
                     # then persist it onto each new document — best-effort and keyed on
-                    # document_id, so an email that produced nothing lives only in the log.
+                    # document_id. The zero-document gap is closed by the per-email
+                    # skip-trace row below: an email with at least one skipped item
+                    # leaves a durable row even when it produced nothing.
                     _log_selection_trace(message, decisions)
+                    if persist_skip_trace is not None:
+                        skip_record = _skip_trace_record(message, decisions)
+                        if skip_record is not None:
+                            persist_skip_trace(skip_record)
                     if persist_trace is not None:
                         new_document_ids = [
                             result.document.id for result in produced if not result.duplicate
@@ -1421,6 +1657,34 @@ async def _persist_selection_trace(
         logger.exception("email: failed to persist selection trace for %s", document_ids)
 
 
+async def _persist_skip_trace(
+    session_factory: async_sessionmaker[AsyncSession], record: SkipTraceRecord
+) -> None:
+    """Insert the durable per-email skip-audit row (``email_selection_traces``).
+
+    Best-effort, exactly like ``_persist_selection_trace``: a failure logs a
+    warning and never fails the poll (or the ingest-anyway override) — the
+    always-on trace log line still covers the email.
+    """
+    try:
+        async with session_factory() as session:
+            session.add(
+                EmailSelectionTrace(
+                    message_id=record.message_id,
+                    subject=record.subject,
+                    from_address=record.from_address,
+                    decisions=list(record.decisions),
+                )
+            )
+            await session.commit()
+    except Exception:  # audit trail must never take down a poll
+        logger.warning(
+            "email: failed to persist skip trace for %r; continuing",
+            record.subject,
+            exc_info=True,
+        )
+
+
 async def _persist_held_email(
     session_factory: async_sessionmaker[AsyncSession],
     record: HoldRecord,
@@ -1597,6 +1861,21 @@ async def poll_mailbox_async(
                 exc_info=True,
             )
 
+    def persist_skip_trace_on_loop(record: SkipTraceRecord) -> None:
+        future = asyncio.run_coroutine_threadsafe(
+            _persist_skip_trace(session_factory, record),
+            loop,
+        )
+        try:
+            future.result(timeout=_LOOP_BRIDGE_TIMEOUT_SECONDS)
+        except Exception:  # best-effort audit data: never blocks the poll
+            future.cancel()
+            logger.warning(
+                "email: skip-trace persistence failed for %r; continuing",
+                record.subject,
+                exc_info=True,
+            )
+
     def persist_hold_on_loop(record: HoldRecord) -> None:
         # NOT best-effort (unlike notify/trace): a failure here must propagate
         # so the per-message handler leaves the mail in place — a hold must
@@ -1654,6 +1933,7 @@ async def poll_mailbox_async(
             persist_trace=persist_trace_on_loop,
             label=label,
             persist_hold=persist_hold_on_loop,
+            persist_skip_trace=persist_skip_trace_on_loop,
         )
 
 
@@ -1666,12 +1946,15 @@ class _OverrideOutcome:
 
     ``error`` is recorded on the row's ``last_error`` (message not found, or a
     post-ingest move failure). ``trace_detail``/``new_document_ids`` feed the
-    best-effort ``email_selection`` persistence, exactly like the poll path.
+    best-effort ``email_selection`` persistence, exactly like the poll path;
+    ``skip_trace`` (set when a hard gate still filtered something during the
+    override) feeds the best-effort per-email skip-audit row the same way.
     """
 
     error: str | None = None
     new_document_ids: list[int] = field(default_factory=list)
     trace_detail: dict[str, object] | None = None
+    skip_trace: SkipTraceRecord | None = None
 
 
 async def _mark_held_email_ingested(
@@ -1723,9 +2006,12 @@ async def ingest_held_email_async(
     Re-fetches the message from the row's ``imap_folder`` by **Message-ID
     header search** — never by ``imap_uid``, which is folder-scoped and changed
     on the Held move — and runs the per-message processing with override
-    semantics: the deterministic classify gates still apply, the LLM label pass
-    is NOT consulted (the human already overruled it), and the body-substance
-    gate is bypassed when the attachments produce nothing, so overriding a
+    semantics: the hard deterministic classify gates still apply (signature/CID
+    images, tiny images, non-document parts, oversize, unsupported types), but
+    the decoration heuristics — the ``decoration_image`` rule and the
+    ``llm_noise_corroborated`` skip — are bypassed, the LLM label pass is NOT
+    consulted (the human already overruled it), and the body-substance gate is
+    bypassed when the attachments produce nothing, so overriding a
     ``below_substance`` hold files its body. Ingestion goes through the same
     ``_ingest_candidate`` path as the poll (source ``email``, owner resolved
     from the sender), and the decision trace is persisted as ``email_selection``
@@ -1806,11 +2092,16 @@ async def ingest_held_email_async(
                     error=f"message {message_id} not found in folder {held_folder!r}"
                 )
             message = matches[0]
+            # Override semantics: the hard deterministic gates only — the
+            # decoration heuristic yields (override=True) and there is no
+            # label call (empty verdicts), so neither decoration_image nor
+            # llm_noise_corroborated can veto the human's "ingest anyway".
             candidates, classify_skipped = _classify_attachments(
-                message, settings.max_upload_bytes, settings
+                message, settings.max_upload_bytes, settings, override=True
             )
-            # Override semantics: deterministic gates only — no label call.
-            outcome = _ingest_attachments(message, ingest_on_loop, candidates, classify_skipped, {})
+            outcome = _ingest_attachments(
+                message, ingest_on_loop, candidates, classify_skipped, {}, settings
+            )
             decisions = outcome.decisions
             produced = list(outcome.produced)
             if outcome.new == 0 and outcome.duplicates == 0:
@@ -1876,7 +2167,10 @@ async def ingest_held_email_async(
                     f"{settings.email_processed_folder!r} failed: {exc}"
                 )
             return _OverrideOutcome(
-                error=error, new_document_ids=new_document_ids, trace_detail=trace_detail
+                error=error,
+                new_document_ids=new_document_ids,
+                trace_detail=trace_detail,
+                skip_trace=_skip_trace_record(message, decisions),
             )
 
     outcome = await asyncio.to_thread(run)
@@ -1884,6 +2178,11 @@ async def ingest_held_email_async(
         await _persist_selection_trace(
             session_factory, outcome.new_document_ids, outcome.trace_detail
         )
+    if outcome.skip_trace is not None:
+        # The override bypasses the decoration heuristics but the hard gates
+        # still filter (tiny/signature/non-document/oversize/unsupported), so
+        # its skips get the same durable audit row as a poll's.
+        await _persist_skip_trace(session_factory, outcome.skip_trace)
     if outcome.error is not None:
         logger.warning("email: held email %s: %s", held_email_id, outcome.error)
         await _record_held_email_error(session_factory, held_email_id, outcome.error)

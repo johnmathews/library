@@ -250,11 +250,14 @@ export interface EmailTriageAllowlist {
   count: number
 }
 
-/** The deterministic noise gate and its tiny-image thresholds. */
+/** The deterministic noise gate and its tiny-image/decoration thresholds. */
 export interface EmailTriageNoiseFilter {
   enabled: boolean
   tiny_image_max_bytes: number
   tiny_image_max_edge_px: number
+  /** Decoration-image signal ceilings (>= 2 of filename/size/shape must fire). */
+  decoration_max_bytes: number
+  decoration_max_edge_px: number
 }
 
 /** The optional per-email LLM label pass. `active` = enabled AND API key present. */
@@ -295,4 +298,40 @@ export interface EmailTriageConfig {
 /** GET /api/settings/email-triage — the live triage pipeline configuration. */
 export function getEmailTriage(): Promise<EmailTriageConfig> {
   return apiFetch<EmailTriageConfig>('/api/settings/email-triage')
+}
+
+/** One skipped item from a stored per-email selection trace (compact shape). */
+export interface EmailTriageSkipDecision {
+  /** `attachment` or `body`. */
+  kind: string
+  filename: string | null
+  /** The stable skip code (e.g. `decoration_image`, `tiny_image`). */
+  reason: string | null
+  /** The human sentence behind the reason (e.g. which signals fired). */
+  detail: string | null
+}
+
+/** One email whose selection quietly filtered or dropped at least one item. */
+export interface EmailTriageRecentSkip {
+  id: number
+  message_id: string | null
+  subject: string | null
+  from_address: string | null
+  created_at: string
+  /** Only the skipped decisions — ingested siblings are not echoed. */
+  decisions: EmailTriageSkipDecision[]
+}
+
+/** Body of GET /api/settings/email-triage/recent-skips (newest first). */
+export interface EmailTriageRecentSkips {
+  recent_skips: EmailTriageRecentSkip[]
+}
+
+/**
+ * GET /api/settings/email-triage/recent-skips — the last 20 emails with a
+ * skipped item, newest first. The durable answer to "did the pipeline just
+ * eat my attachment?" without grepping server logs.
+ */
+export function getEmailTriageRecentSkips(): Promise<EmailTriageRecentSkips> {
+  return apiFetch<EmailTriageRecentSkips>('/api/settings/email-triage/recent-skips')
 }

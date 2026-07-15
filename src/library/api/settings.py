@@ -4,6 +4,7 @@ instance-wide email-triage configuration view (docs/api.md)."""
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library import notifications
@@ -12,12 +13,15 @@ from library.auth.deps import current_user
 # Aliased: the GET /settings route handler below is itself named get_settings.
 from library.config import get_settings as get_app_settings
 from library.db import get_session
-from library.email_ingest import BODY_MIN_CHARS, BODY_MIN_WORDS
+from library.email_ingest import BODY_MIN_CHARS, BODY_MIN_WORDS, SKIP_TRACE_REASONS
 from library.email_label import PROMPT_VERSION
-from library.models import User
+from library.models import EmailSelectionTrace, User
 from library.schemas import (
     AppearancePreferences,
     DashboardPreferences,
+    EmailRecentSkipOut,
+    EmailRecentSkipsOut,
+    EmailSkipDecisionOut,
     EmailTriageAllowlistOut,
     EmailTriageBodySubstanceOut,
     EmailTriageHoldOut,
@@ -78,6 +82,8 @@ async def get_email_triage(
             enabled=settings.email_filter_noise_enabled,
             tiny_image_max_bytes=settings.email_filter_tiny_image_max_bytes,
             tiny_image_max_edge_px=settings.email_filter_tiny_image_max_edge_px,
+            decoration_max_bytes=settings.email_filter_decoration_max_bytes,
+            decoration_max_edge_px=settings.email_filter_decoration_max_edge_px,
         ),
         label=EmailTriageLabelOut(
             enabled=settings.email_label_enabled,
@@ -92,6 +98,66 @@ async def get_email_triage(
             min_chars=BODY_MIN_CHARS,
         ),
         imap_timeout_seconds=settings.email_imap_timeout_seconds,
+    )
+
+
+#: How many recent skip-trace rows the settings tab shows. Deliberately small:
+#: this is a "did the pipeline just eat my attachment?" glance, not a browser.
+RECENT_SKIPS_LIMIT: int = 20
+
+
+@router.get(
+    "/settings/email-triage/recent-skips",
+    response_model=EmailRecentSkipsOut,
+    summary="Recently skipped email items (read-only)",
+)
+async def get_email_triage_recent_skips(
+    db: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(current_user)],
+) -> EmailRecentSkipsOut:
+    """The last 20 emails whose selection skipped at least one item, newest first.
+
+    Backed by ``email_selection_traces`` (one row per email with any
+    filtered/dropped item, however quiet — see ``library.email_ingest``).
+    A sibling of the pure config snapshot above rather than a field on it:
+    these are DB rows that change per poll, not environment configuration.
+    Each row's stored decision list is filtered down to the actual skips
+    (reason in ``SKIP_TRACE_REASONS``) so the payload stays compact — the
+    ingested siblings and body bookkeeping entries stay in the row for a
+    deeper dig via the database. Secret-free: sender/subject/filenames only.
+    """
+    rows = (
+        (
+            await db.execute(
+                select(EmailSelectionTrace)
+                .order_by(EmailSelectionTrace.created_at.desc(), EmailSelectionTrace.id.desc())
+                .limit(RECENT_SKIPS_LIMIT)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return EmailRecentSkipsOut(
+        recent_skips=[
+            EmailRecentSkipOut(
+                id=row.id,
+                message_id=row.message_id,
+                subject=row.subject,
+                from_address=row.from_address,
+                created_at=row.created_at,
+                decisions=[
+                    EmailSkipDecisionOut(
+                        kind=str(item.get("kind") or ""),
+                        filename=item.get("filename"),
+                        reason=item.get("reason"),
+                        detail=item.get("detail"),
+                    )
+                    for item in row.decisions
+                    if isinstance(item, dict) and item.get("reason") in SKIP_TRACE_REASONS
+                ],
+            )
+            for row in rows
+        ]
     )
 
 

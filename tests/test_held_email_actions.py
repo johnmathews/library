@@ -43,6 +43,7 @@ from tests.test_email_ingest import (
     make_pdf,
     make_raw_mail,
     png_bytes,
+    skip_trace_rows,
 )
 
 pytestmark = pytest.mark.integration
@@ -218,6 +219,90 @@ async def test_ingest_anyway_llm_hold_ingests_attachments_without_label_call(
     assert resolved.status is HeldEmailStatus.INGESTED
     assert resolved.document_ids == [documents[0].id]
     assert mailbox.moved[-1] == ("201", PROCESSED_FOLDER)
+
+
+async def test_ingest_anyway_overrides_decoration_image_filter(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # A mail whose only attachment was quietly filtered as decoration_image
+    # (logo name + small bytes + 200px shape) and whose thin body held it as
+    # below_substance. "Ingest anyway" bypasses the decoration heuristic — the
+    # human's intent wins — so the image files as a document; hard gates
+    # (tiny_image etc.) are covered by the llm_hold override test above.
+    tag = uuid.uuid4().hex[:8]
+    logo_name = f"logo-{tag}.png"
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_raw_mail(
+        subject=f"override deco {tag}",
+        message_id=message_id,
+        attachments=[(logo_name, png_bytes((200, 200)), "image", "png")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="210")])
+    row = await _hold_body_only_email(settings, session_factory, mailbox, message_id)
+    assert row.verdict == "below_substance"
+    # The poll's trace shows the attachment WAS filtered by the decoration rule.
+    assert any(item["reason"] == "decoration_image" for item in row.trace["items"])
+    resolver_id = await _make_user(session_factory, username=f"resolver-{tag}")
+
+    await ingest_held_email_async(
+        settings, session_factory, row.id, resolver_id, mailbox_factory=lambda: mailbox
+    )
+
+    documents = await documents_named(session_factory, logo_name)
+    assert len(documents) == 1  # the decoration rule yielded to the override
+    resolved = await _reload(session_factory, row.id)
+    assert resolved.status is HeldEmailStatus.INGESTED
+    assert resolved.resolved_by_id == resolver_id
+    assert resolved.document_ids == [documents[0].id]
+    assert resolved.last_error is None
+    assert mailbox.moved[-1] == ("210", PROCESSED_FOLDER)
+    assert mailbox.folders[HELD_FOLDER] == []
+
+
+async def test_ingest_anyway_hard_gate_filter_writes_skip_trace_row(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # W4 on the override path: ingest-anyway bypasses the decoration heuristics
+    # but the HARD gates still apply — a tiny pixel is still filtered — so the
+    # override run writes its own durable skip-trace row, exactly like a poll.
+    # Shape: the poll holds the mail (pixel filtered + thin body =
+    # below_substance); the override re-fetches it, still filters the pixel,
+    # and files the body (substance gate bypassed).
+    tag = uuid.uuid4().hex[:8]
+    pixel_name = f"pixel-{tag}.png"
+    subject = f"override skiptrace {tag}"
+    message_id = f"<{uuid.uuid4().hex}@example.com>"
+    raw = make_raw_mail(
+        subject=subject,
+        message_id=message_id,
+        attachments=[(pixel_name, png_bytes((16, 16)), "image", "png")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="211")])
+    row = await _hold_body_only_email(settings, session_factory, mailbox, message_id)
+    assert row.verdict == "below_substance"
+    assert await skip_trace_rows(session_factory, subject) == []  # held: no trace row
+    resolver_id = await _make_user(session_factory, username=f"resolver-{tag}")
+
+    await ingest_held_email_async(
+        settings, session_factory, row.id, resolver_id, mailbox_factory=lambda: mailbox
+    )
+
+    resolved = await _reload(session_factory, row.id)
+    assert resolved.status is HeldEmailStatus.INGESTED
+    assert await documents_named(session_factory, pixel_name) == []  # hard gate held
+    rows = await skip_trace_rows(session_factory, subject)
+    assert len(rows) == 1
+    assert rows[0].message_id == message_id
+    assert any(
+        item["filename"] == pixel_name and item["reason"] == "tiny_image"
+        for item in rows[0].decisions
+    )
 
 
 async def test_ingest_anyway_message_missing_sets_last_error_and_stays_held(

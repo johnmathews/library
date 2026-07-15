@@ -4,6 +4,7 @@ import {
   NOTIFICATION_EVENTS,
   TILE_PREVIEWS,
   getEmailTriage,
+  getEmailTriageRecentSkips,
   getSettings,
   updateAppearance,
   updateNotifications,
@@ -127,7 +128,13 @@ describe('settings api', () => {
       processed_folder: 'Library/Processed',
       hold: { enabled: true, below_substance: true, unknown_senders: true },
       allowlist: { configured: true, count: 2 },
-      noise_filter: { enabled: true, tiny_image_max_bytes: 4096, tiny_image_max_edge_px: 64 },
+      noise_filter: {
+        enabled: true,
+        tiny_image_max_bytes: 4096,
+        tiny_image_max_edge_px: 64,
+        decoration_max_bytes: 65536,
+        decoration_max_edge_px: 384,
+      },
       label: {
         enabled: false,
         active: false,
@@ -144,6 +151,34 @@ describe('settings api', () => {
     expect(await getEmailTriage()).toEqual(config)
     const [url, init] = fetchMock.mock.calls[0]!
     expect(String(url)).toBe('/api/settings/email-triage')
+    expect(init.method).toBe('GET')
+  })
+
+  it('GET /api/settings/email-triage/recent-skips returns the skip rows', async () => {
+    const payload = {
+      recent_skips: [
+        {
+          id: 12,
+          message_id: '<m1@example.com>',
+          subject: 'Fwd: invoice 42',
+          from_address: 'alice@example.com',
+          created_at: '2026-07-14T10:00:00Z',
+          decisions: [
+            {
+              kind: 'attachment',
+              filename: 'image001.png',
+              reason: 'decoration_image',
+              detail: 'filename, size and shape signals fired',
+            },
+          ],
+        },
+      ],
+    }
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(payload))
+    vi.stubGlobal('fetch', fetchMock)
+    expect(await getEmailTriageRecentSkips()).toEqual(payload)
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('/api/settings/email-triage/recent-skips')
     expect(init.method).toBe('GET')
   })
 })

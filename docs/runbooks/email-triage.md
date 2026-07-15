@@ -1,6 +1,6 @@
 # Email triage: reading the decision trace
 
-**Status:** active. **Last updated:** 2026-07-14.
+**Status:** active. **Last updated:** 2026-07-15.
 
 "What happened to the email I forwarded?" — the answer is always in the
 **decision trace**: one greppable log line per email recording what happened to
@@ -100,8 +100,10 @@ FROM held_emails WHERE status = 'held' ORDER BY created_at DESC;
 | --- | --- | --- |
 | `ingested` | Filed as a document | none |
 | `duplicate` | Content already in the library | none |
-| `flagged_ambiguous` | Ingested, LLM thought it might be noise | check the needs-review queue; verify the doc |
+| `flagged_ambiguous` | Ingested, LLM thought it might be noise but **no** decoration signal corroborated (a corroborated verdict skips as `llm_noise_corroborated` instead) | check the needs-review queue; verify the doc |
 | `filtered(signature_image\|tiny_image\|non_document_type)` | Deterministic noise, quietly dropped | none if truly noise; if a real doc was filtered, lower the threshold or set `LIBRARY_EMAIL_FILTER_NOISE_ENABLED=false` and re-forward |
+| `filtered(decoration_image)` | Non-inline image judged decoration by ≥ 2 of the 3 deterministic signals (filename/size/shape — the detail names which fired); quiet | none if truly a logo/banner. If a real doc was skipped: find it under **Settings → Email triage → "Recently skipped items"** (or query `email_selection_traces`), then lower `LIBRARY_EMAIL_FILTER_DECORATION_MAX_BYTES`/`…_MAX_EDGE_PX` (or set `LIBRARY_EMAIL_FILTER_NOISE_ENABLED=false`) and re-forward, or upload the file manually. If the email was *held* (for another reason), *ingest anyway* recovers it directly — the override bypasses the decoration heuristic |
+| `filtered(llm_noise_corroborated)` | LLM label pass said `probably_noise` **and** ≥ 1 decoration signal agreed, so it skipped quietly (stage `llm_label`) instead of the usual ingest-and-flag; the detail keeps both judges' reasoning | same recovery as `decoration_image`: locate it via the recent-skips card / `email_selection_traces`, then re-forward with the noise gate off (or thresholds lowered), or upload manually. On a held email, *ingest anyway* can never re-trigger this skip — the override makes no label call |
 | `filtered(below_substance:<n>w\|blank\|not_needed\|oversize)` | Body not filed (thin — `<n>w` is the post-strip word count, e.g. `below_substance:8w` / empty / an attachment already won / too large). A body-only `below_substance` mail is *held* instead when `LIBRARY_EMAIL_HOLD_BELOW_SUBSTANCE` is on (the default) | none |
 | `dropped(oversize\|unsupported_type\|error)` | Surfaced attachment drop — also on the sibling's `email_siblings_dropped` + a push. (A body whose ingest is rejected renders as `dropped(rejected)`.) | investigate; re-send in a supported form if it was real |
 | `held(<LLM reason>)` — row verdict `llm_hold` | The label pass judged the *whole email* not library material (newsletter/marketing/notification); nothing ingested, message moved to the Held folder | open the held queue; *ingest anyway* or *dismiss* |
@@ -118,7 +120,7 @@ added" push (that fires only after a successful Processed move).
 
 ## 6. Where the persisted copies live
 
-The log line is ephemeral; two durable copies exist:
+The log line is ephemeral; three durable copies exist:
 
 - **Documents.** When an email produced a document, the same per-item trace is
   stored as an `email_selection` `IngestionEvent` on each *new* document, and
@@ -133,9 +135,24 @@ The log line is ephemeral; two durable copies exist:
   shape, plus `label_usage` when the LLM pass billed for the email). The
   `label_usage` cost is not audit-only: it counts toward the daily label
   budget alongside the `email_label_completed` event totals.
+- **Skip traces.** Any *processed* email whose trace contains at least one
+  skipped item — quiet noise skips (`decoration_image`,
+  `llm_noise_corroborated`, …) included — also writes one
+  `email_selection_traces` row with the full decision list. The trigger is
+  **reason-based**, not verdict-based: the body's bookkeeping skips
+  (`blank`/`not_needed`/`below_substance:<n>w`) don't count, or nearly every
+  email would write a row; and a *held* email never writes one — its trace is
+  already durable on `held_emails` (previous bullet). This covers the
+  gap the other two can't: an email whose items were **all** filtered produces
+  no document *and* no hold, yet still leaves a queryable row. The last 20
+  rows show on **Settings → Email triage → "Recently skipped items"**
+  (`GET /api/settings/email-triage/recent-skips`) — check there first when an
+  attachment seems to have vanished. The ingest-anyway override writes one
+  too when a hard gate still filtered something. Best-effort: a failed write
+  logs a warning and never fails the poll.
 
-An email that was neither held nor produced any document lives only in the log
-line — which is why the trace is the primary triage surface.
+An email with no skips that produced only duplicates lives only in the log
+line; every skip is now durably discoverable without grepping logs.
 
 **Tuning knobs**: the noise-gate, label-pass, and hold settings
 (`LIBRARY_EMAIL_FILTER_*`, `LIBRARY_EMAIL_LABEL_*`, `LIBRARY_EMAIL_HOLD_*`,

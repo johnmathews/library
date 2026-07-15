@@ -678,6 +678,7 @@ Pure, deterministic, zero API cost. `validate(document, ...)` returns a list of
 | `due_expiry_grounding` | `due_date`, `expiry_date` | A date is set but the OCR text shows **only** the opposite kind of cue word — bilingual (Dutch/English) sets in `validation.py`: due (`vervaldatum`, `te betalen voor`, `due by`, …) vs expiry (`geldig tot`, `verloopt`, `valid until`, …). Catches the model mislabeling a due date as expiry (classically a Dutch "vervaldatum") and vice-versa. |
 | `amount_currency_coupling` | `currency` | Exactly one of amount/currency is set (the rule checks both fields; the finding's `field` attribute is `currency`) |
 | `ocr_confidence_gate` | (document) | `ocr_confidence` is below `LIBRARY_EXTRACTION_VALIDATION_OCR_FLOOR` (default 50.0). **Suppressed when extraction read the page image** (`input_mode` `document`/`image`): the accepted result did not consume the OCR text, so its confidence says nothing about the extraction — same image-vs-text gate as `amount_grounding`. |
+| `decoration_image` | (document) | The document is an `image/*` whose OCR text has fewer than **20 non-whitespace characters** (`_DECORATION_IMAGE_MAX_CHARS`, mirroring the extractor's `MIN_TEXT_CHARS`) **and** whose extraction grounded nothing: no `amount_total`, no `document_date`, no sender. Thin OCR alone is deliberately not enough — below `MIN_TEXT_CHARS` the extractor reads the image itself (vision fallback), which rescues real photographed receipts; those come back with an amount/date/sender and stay quiet here. A logo grounds none of the three (titles/summaries don't count — the model happily invents "Company X logo"). Names the real cause so it doesn't hide behind the generic `empty_extraction`/`missing_*` reasons in the review queue. Same name as the email selection rule, different layer: this one runs at extraction over documents already filed. |
 | `empty_extraction` | (document) | Kind is `other` or unset **and** no sender, no `document_date`, no `amount_total`, **and** no `title` and no `summary`. A clean general document (reference/research/note) that has a real title/summary but no sender/amount/date is therefore **not** flagged. |
 | `missing_sender` | `sender_id` | `sender_id` is unset **and** either `amount_total` is set (a bill/receipt whose payee we couldn't identify) **or** the document is signed — a sign-off cue (`met vriendelijke groet`, `best regards`, …) or a stored `signer_raw` — but no sender was resolved. |
 | `missing_recipient` | `recipient_id` | `recipient_id` is unset but the document appears to name an addressee — a stored `addressee_raw`, or a salutation cue (`dear`, `beste`, `geachte`, `t.a.v.`, …) in the OCR text. Surfaces the "a personally-addressed document has a recipient" expectation. |
@@ -1261,13 +1262,16 @@ poll_email_inbox fires (every LIBRARY_EMAIL_POLL_MINUTES minutes;
        │   (both default true); with either off ─► skipped, left in place
        ├─ classify EVERY attachment (two-pass): sniff MIME, then the
        │   deterministic noise gate (inline signature images, tiny pixels/icons,
+       │   decoration images — ≥ 2 of the filename/size/shape signals —
        │   calendar/vCard/PKCS7/TNEF parts ─► a quiet `filtered` drop); in the
        │   allowed set and within LIBRARY_MAX_UPLOAD_BYTES ─► an ingestable
        │   candidate; otherwise a recorded drop (oversize / unsupported_type)
        ├─ (optional) LLM label pass: one Anthropic call per email judges the
        │   surviving attachments AND the body, each keep|probably_noise, plus
        │   the WHOLE email (email_verdict file|hold); probably_noise ─► ingest
-       │   AND flag needs_review (never dropped); email_verdict=hold ─► the
+       │   AND flag needs_review — unless the item is an image with ≥ 1
+       │   decoration signal, which skips quietly (llm_noise_corroborated);
+       │   email_verdict=hold ─► the
        │   message is HELD (verdict llm_hold) before anything is ingested.
        │   OFF by default; fail-open (any failure ⇒ file, never a hold)
        ├─ per candidate: ingest_file(source=email) — new document or
@@ -1291,8 +1295,9 @@ poll_email_inbox fires (every LIBRARY_EMAIL_POLL_MINUTES minutes;
        │   the attachments-dropped push, and fires an opt-in `email_held` push
        │   instead — see "Held for review" below
        ├─ emit the one-line decision trace (one per processed or held message)
-       │   and persist it as an `email_selection` event on each new document
-       │   (see "Email item selection" below)
+       │   and persist it as an `email_selection` event on each new document;
+       │   a processed email with ≥ 1 skipped item also writes one durable
+       │   email_selection_traces row (see "Email item selection" below)
        ├─ any dropped attachment ─► a per-message WARNING summary and a
        │   best-effort "Attachments not added" push to the resolved owner
        │   (reuses the processing_error opt-in), sent only AFTER a successful
@@ -1404,8 +1409,8 @@ IMAP folder (`Processed`, or `Held` for a held email).
 | Item | Deciding stage | Possible verdicts |
 | --- | --- | --- |
 | Whole email | `email_verdict` (the LLM label pass, Layer 3) plus the deterministic hold triggers | `file` (proceed to the per-item verdicts below — the default and every failure path), or `held` (`llm_hold` / `below_substance` / `nothing_ingested` / `sender_unknown` — nothing is ingested; see "Held for review" below) |
-| Attachment | `classify` (deterministic gate) | `ingested`, `duplicate`, `dropped` (oversize/unsupported/error — surfaced), `filtered` (signature_image / tiny_image / non_document_type — quiet) |
-| Attachment | `llm_label` (optional, if enabled) | `flagged_ambiguous` (ingested **and** flagged needs_review), or falls through to `ingested` |
+| Attachment | `classify` (deterministic gate) | `ingested`, `duplicate`, `dropped` (oversize/unsupported/error — surfaced), `filtered` (signature_image / tiny_image / decoration_image / non_document_type — quiet) |
+| Attachment | `llm_label` (optional, if enabled) | `flagged_ambiguous` (ingested **and** flagged needs_review), `filtered` (llm_noise_corroborated — quiet, when ≥ 1 decoration signal corroborates the verdict), or falls through to `ingested` |
 | Body | `body_substance` | `ingested`, `duplicate`, `dropped` (rejected), `filtered` (blank / below_substance / not_needed / oversize); a body-only mail below substance is *held* instead when the hold switches are on |
 
 **Layer 1 — deterministic noise gate** (`_noise_reason`, always on unless
@@ -1417,9 +1422,31 @@ IMAP folder (`Processed`, or `Held` for a held email).
   the shape of a signature logo or embedded banner.
 - `tiny_image` — an image whose longest edge ≤
   `LIBRARY_EMAIL_FILTER_TINY_IMAGE_MAX_EDGE_PX` (default 64), i.e. an icon or
-  tracking pixel. Dimensions are authoritative (a small-but-normal-sized image
-  is kept); byte size (`…MAX_BYTES`, default 4096) is only the fallback for an
-  image that cannot be decoded. A decode failure never drops (bias to ingest).
+  tracking pixel. Dimensions are authoritative for any image Pillow can decode:
+  a decodable image is judged on its pixels alone, however few bytes it weighs
+  (a small-but-normal-sized image is kept). The byte floor (`…MAX_BYTES`,
+  default 4096) applies **only** to an image that cannot be decoded; an
+  undecodable image at/above the floor is kept (bias to ingest).
+- `decoration_image` — the doc-159 gate: a **non-inline, decodable** image
+  (inline/CID ones were already taken by `signature_image`; an undecodable one
+  cannot claim a shape and falls to the tiny-image byte floor) that at least
+  **two of three** independent decoration signals (`_decoration_signals`)
+  agree is decoration, not a document:
+  - *filename* — the stem contains a decoration word (`logo`, `signature`,
+    `banner`, `footer`, `icon`) or is exactly an Outlook auto-embed name
+    (`image` + 2–3 digits, e.g. `image001` — full-stem match, so `image1` and
+    `image1234` don't count);
+  - *size* — payload at/under `LIBRARY_EMAIL_FILTER_DECORATION_MAX_BYTES`
+    (default 65536);
+  - *shape* — longest edge at/under `LIBRARY_EMAIL_FILTER_DECORATION_MAX_EDGE_PX`
+    (default 384), **or** banner-shaped: aspect ratio ≥ 4:1 with a short edge
+    ≤ 128 px (the header/footer strips mail clients paste above signatures).
+
+  Each signal is weak alone — a real scan can be named `logo.png`, a receipt
+  photo can compress small — so **one signal never skips**: not byte size
+  alone, not a decoration-style filename alone. Unlike its hard siblings above,
+  this rule is a *heuristic*, so the held-email "ingest anyway" override
+  bypasses it (see "Held for review").
 - `non_document_type` — a part whose **declared** `Content-Type` is
   `text/calendar`, `text/vcard`/`text/x-vcard`,
   `application/(x-)pkcs7-signature`, or `application/ms-tnef`. The declared type
@@ -1449,9 +1476,17 @@ message**: the *surviving* attachments **and the body as an item of its own**
 body excerpt (`…BODY_SNIPPET_CHARS`). It returns two things:
 
 - a per-item verdict, `keep` or `probably_noise`. A `probably_noise` verdict
-  **never drops** — the item is ingested and its document is flagged
-  `needs_review` via `extra["email_selection"]`, which fires the
-  `email_item_ambiguous` validation finding. The flag is applied **at ingest**
+  **never drops on its own** — but when the item is an image and at least
+  **one** deterministic decoration signal (`_decoration_signals` above) agrees,
+  two independent judges calling it decoration make it a quiet
+  `llm_noise_corroborated` skip (stage `llm_label`, counted in
+  `attachments_filtered` like the Layer 1 reasons; the corroboration check
+  rides the same `LIBRARY_EMAIL_FILTER_NOISE_ENABLED` flag as the
+  deterministic gate). With zero corroborating signals, a non-image item, or
+  the noise gate off, the pre-existing disposition holds: the item is ingested
+  and its document is flagged `needs_review` via `extra["email_selection"]`,
+  which fires the `email_item_ambiguous` validation finding. The flag is
+  applied **at ingest**
   (`ingest_file` runs the pure `email_findings` rules over `Document.extra` at
   document creation), so a flagged document shows `needs_review` immediately —
   even when extraction is disabled, budget-skipped, or hasn't run yet.
@@ -1514,8 +1549,13 @@ the rollback lever and restores the pre-hold behaviour exactly.
 - **Resolutions.** *Ingest anyway* (`POST /api/held-emails/{id}/ingest` →
   the `library.jobs.ingest_held_email` task) re-fetches the message from the
   Held folder by Message-ID and ingests it with **override semantics**: the
-  deterministic gates still apply, the LLM label pass is **not** consulted
-  (the human already overruled it), and the body-substance gate is bypassed
+  *hard* deterministic gates still apply (signature/CID images, tiny images,
+  non-document parts, oversize, unsupported types), but the decoration
+  heuristics are bypassed — `_classify_attachments` runs with
+  `override=True`, so the `decoration_image` rule yields to the human's
+  intent; the LLM label pass is **not** consulted (the human already overruled
+  it — and with no label call, `llm_noise_corroborated` cannot fire either);
+  and the body-substance gate is bypassed
   when the attachments produce nothing — so overriding a `below_substance`
   hold files its body. The row is resolved (`ingested` + the created
   `document_ids`) before the message moves Held → Processed. *Dismiss*
@@ -1542,10 +1582,44 @@ Every processed **and every held** message emits one `email-selection` decision
 trace log line — the primary surface for "what happened to this email and why".
 When a document was produced, the same trace is persisted as an
 `email_selection` event on each new document (with LLM billing as
-`email_label_completed`); a held email keeps it in its `held_emails` row.
+`email_label_completed`); a held email keeps it in its `held_emails` row. A
+processed email whose trace contains **any skipped item** (quiet noise skips
+included) additionally writes one durable `email_selection_traces` row — the
+audit for the zero-document case, surfaced as the last 20 on Settings → Email
+triage (`GET /api/settings/email-triage/recent-skips`).
 The line format, grep/Loki queries, the no-trace cases, and the full
 action-per-reason table live in the
 [email-triage runbook](runbooks/email-triage.md).
+
+### Sweeping junk that already got in — `library sweep-junk`
+
+The gates above stop decoration images at the door; `library sweep-junk` is
+the maintenance broom for junk that is **already filed** (the pre-gate backlog
+— doc 159 and friends — or anything that slips a heuristic). It lives beside
+the other CLI maintenance commands (`backfill`, `backfill-summaries`,
+`eval-extractions`, …).
+
+Candidates are non-deleted `image/*` documents whose OCR text is under **100**
+characters **or** whose original upload was under **20 000 bytes** (constants
+`JUNK_OCR_CHARS_MAX` / `JUNK_IMAGE_BYTES_MAX` in `cli.py`, not settings). A
+real photographed/scanned page fails both tests: dense OCR output and a file
+comfortably over 20 kB. Size is read from the first `received` ingestion
+event's `detail["size"]` (documents have no size column); some
+paperless-imported documents lack it, in which case only the OCR branch can
+match them.
+
+```sh
+library sweep-junk                       # DRY RUN: list candidates (id, filename, mime, size, OCR chars, source)
+library sweep-junk --apply --ids 12,34   # soft-delete exactly these ids
+```
+
+The default is a **dry run** that only lists (and prints the ready-to-paste
+`--apply --ids …` line). `--apply` requires an explicit `--ids` list, refuses
+any id that is not a current candidate, and is **all-or-nothing**: one
+unknown/non-candidate id aborts the whole batch before anything is touched
+(already-deleted ids are merely skipped). It never hard-deletes — it mirrors
+`DELETE /api/documents/{id}` (sets `deleted_at` and records a `deleted`
+event), so a swept document is restorable until the retention purge.
 
 ### Provider setup
 
@@ -1728,10 +1802,12 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_EMAIL_POLL_MINUTES` | `10` | Poll cadence (cron step; clamped to 1–59) |
 | `LIBRARY_EMAIL_ALLOWED_SENDERS` | empty | Comma-separated sender allowlist; empty accepts anyone |
 | `LIBRARY_EMAIL_DEFAULT_OWNER` | unset | Username owning email documents whose sender matches no user's forwarding addresses; unset leaves them unowned |
-| `LIBRARY_EMAIL_FILTER_NOISE_ENABLED` | `true` | Deterministic noise gate for email attachments (signature logos, tiny images, calendar/vCard/PKCS7/TNEF parts); `false` ingests every attachment as before |
+| `LIBRARY_EMAIL_FILTER_NOISE_ENABLED` | `true` | Deterministic noise gate for email attachments (signature logos, tiny images, decoration images, calendar/vCard/PKCS7/TNEF parts) — also gates the `llm_noise_corroborated` skip; `false` ingests every attachment as before |
 | `LIBRARY_EMAIL_FILTER_TINY_IMAGE_MAX_BYTES` | `4096` | Byte-size fallback for the tiny-image filter, used only when an image cannot be decoded |
 | `LIBRARY_EMAIL_FILTER_TINY_IMAGE_MAX_EDGE_PX` | `64` | Images whose longest edge is ≤ this are filtered as icons/tracking pixels |
-| `LIBRARY_EMAIL_LABEL_ENABLED` | `false` | Optional per-email LLM label pass; flags probable noise `needs_review` (never drops). Spends money and needs `LIBRARY_ANTHROPIC_API_KEY` |
+| `LIBRARY_EMAIL_FILTER_DECORATION_MAX_BYTES` | `65536` | Decoration **size** signal: image payload at/under this fires it (a skip needs ≥ 2 of the filename/size/shape signals) |
+| `LIBRARY_EMAIL_FILTER_DECORATION_MAX_EDGE_PX` | `384` | Decoration **shape** signal: longest edge at/under this (a ≥ 4:1 banner with a ≤ 128 px short edge also fires it) |
+| `LIBRARY_EMAIL_LABEL_ENABLED` | `false` | Optional per-email LLM label pass; flags probable noise `needs_review` (drops only when ≥ 1 decoration signal corroborates — the `llm_noise_corroborated` skip). Spends money and needs `LIBRARY_ANTHROPIC_API_KEY` |
 | `LIBRARY_EMAIL_LABEL_MODEL` | `claude-haiku-4-5` | Model used by the label pass |
 | `LIBRARY_EMAIL_LABEL_DAILY_BUDGET_USD` | `2.0` | Daily spend cap for the label pass (summed from `email_label_completed` events plus held rows' `trace["label_usage"]` costs); over budget → skip, all attachments kept |
 | `LIBRARY_EMAIL_LABEL_BODY_SNIPPET_CHARS` | `1000` | Length of the cleaned body excerpt sent to the labeller |

@@ -412,6 +412,35 @@ def test_documents_have_recipient_id_column_and_index(migrated_database_url: str
     assert "ix_documents_recipient_id" in {str(name) for name in indexes}
 
 
+def test_email_selection_traces_table_exists(migrated_database_url: str) -> None:
+    """0027 adds the durable per-email skip-audit table plus its created_at index."""
+    cols = fetch_all(
+        migrated_database_url,
+        """
+        SELECT column_name, data_type, is_nullable
+        FROM information_schema.columns
+        WHERE table_name = 'email_selection_traces'
+        ORDER BY column_name
+        """,
+    )
+    by_name = {name: (data_type, nullable) for name, data_type, nullable in cols}
+    assert by_name == {
+        "id": ("bigint", "NO"),
+        "message_id": ("text", "YES"),
+        "subject": ("text", "YES"),
+        "from_address": ("text", "YES"),
+        "decisions": ("jsonb", "NO"),
+        "created_at": ("timestamp with time zone", "NO"),
+    }
+    indexes = asyncio.run(
+        _fetch_scalars(
+            migrated_database_url,
+            "SELECT indexname FROM pg_indexes WHERE tablename = 'email_selection_traces'",
+        )
+    )
+    assert "ix_email_selection_traces_created_at" in {str(name) for name in indexes}
+
+
 def test_fx_rates_table_seeded(migrated_database_url: str) -> None:
     """0015 adds fx_rates and seeds a researched historical snapshot."""
     cols = fetch_all(
