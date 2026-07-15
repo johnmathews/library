@@ -18,6 +18,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   'close-sidebar': []
+  'open-search': []
 }>()
 
 const sidebar = ref<HTMLDivElement | null>(null)
@@ -249,6 +250,40 @@ watch(
                 </a>
               </li>
             </RouterLink>
+
+            <!-- Search: opens the shared SearchModal (owned by DefaultLayout),
+                 so it is a button, not a route link. The click also bubbles
+                 through #sidebar-nav's close-sidebar handler, dismissing the
+                 mobile drawer as the modal opens. -->
+            <li class="pl-4 pr-3 py-2 rounded-lg mb-0.5 last:mb-0 bg-linear-to-r">
+              <button
+                type="button"
+                class="block w-full text-left truncate transition text-gray-800 dark:text-gray-100 hover:text-gray-900 dark:hover:text-white"
+                data-testid="sidebar-search-button"
+                @click="emit('open-search')"
+              >
+                <div class="flex items-center">
+                  <svg
+                    class="shrink-0 fill-current text-gray-600 dark:text-gray-300"
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="16"
+                    height="16"
+                    viewBox="0 0 16 16"
+                  >
+                    <path
+                      d="M7 14c-3.86 0-7-3.14-7-7s3.14-7 7-7 7 3.14 7 7-3.14 7-7 7ZM7 2C4.243 2 2 4.243 2 7s2.243 5 5 5 5-2.243 5-5-2.243-5-5-5Z"
+                    />
+                    <path
+                      d="M15.707 14.293 13.314 11.9a8.019 8.019 0 0 1-1.414 1.414l2.393 2.393a.997.997 0 0 0 1.414 0 .999.999 0 0 0 0-1.414Z"
+                    />
+                  </svg>
+                  <span
+                    class="text-base font-medium ml-4 lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200"
+                    >Search</span
+                  >
+                </div>
+              </button>
+            </li>
 
             <!-- Upload link -->
             <RouterLink v-slot="{ href, navigate, isActive }" to="/upload" custom>

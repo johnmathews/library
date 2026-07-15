@@ -166,6 +166,48 @@ describe('AppSidebar', () => {
     ])
   })
 
+  it('renders a Search button after pinned dashboards and before Upload', async () => {
+    seedAuth(false)
+    seedViews([makeView({ id: 7, name: 'Unpaid invoices', pinned: true })])
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    const search = wrapper.find('[data-testid="sidebar-search-button"]')
+    expect(search.exists()).toBe(true)
+    expect(search.element.tagName).toBe('BUTTON')
+    expect(search.attributes('type')).toBe('button')
+    expect(search.text()).toContain('Search')
+    // Search is a modal trigger, not a route — it must stay out of the
+    // `a[data-testid]` selectors the nav-order tests use.
+    const order = wrapper
+      .findAll('#sidebar-nav [data-testid]')
+      .map((el) => el.attributes('data-testid'))
+    expect(order.slice(0, 4)).toEqual([
+      'sidebar-documents-link',
+      'sidebar-dashboard-7',
+      'sidebar-search-button',
+      'sidebar-upload-link',
+    ])
+  })
+
+  it('clicking the Search button emits open-search and closes the mobile sidebar', async () => {
+    seedAuth(false)
+    router.push('/')
+    await router.isReady()
+    const wrapper = mount(AppSidebar, {
+      props: { sidebarOpen: false },
+      global: { plugins: [router] },
+    })
+    await wrapper.find('[data-testid="sidebar-search-button"]').trigger('click')
+    expect(wrapper.emitted('open-search')).toBeTruthy()
+    // The click bubbles through #sidebar-nav, which closes the mobile drawer —
+    // same behavior as clicking any nav link.
+    expect(wrapper.emitted('close-sidebar')).toBeTruthy()
+  })
+
   it('no longer renders a standalone "Saved views" nav link (managed from the dashboard)', async () => {
     seedAuth(false)
     router.push('/')

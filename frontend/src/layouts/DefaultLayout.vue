@@ -18,7 +18,11 @@ onUnmounted(() => jobs.disconnect())
 
 <template>
   <div id="app-shell" class="flex h-[100dvh] overflow-hidden">
-    <AppSidebar :sidebar-open="sidebarOpen" @close-sidebar="sidebarOpen = false" />
+    <AppSidebar
+      :sidebar-open="sidebarOpen"
+      @close-sidebar="sidebarOpen = false"
+      @open-search="searchModal?.open()"
+    />
     <div id="app-content" class="relative flex flex-col flex-1 overflow-y-auto overflow-x-hidden">
       <AppHeader
         :sidebar-open="sidebarOpen"

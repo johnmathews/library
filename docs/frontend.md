@@ -156,12 +156,13 @@ guaranteed authenticated.
 The shell wrapper. Owns the mobile `sidebarOpen` state, renders `AppSidebar` +
 `AppHeader` + a `<main>` whose content sits in
 `px-4 sm:px-6 lg:px-8 py-8 w-full max-w-[96rem] mx-auto`, and **mounts
-`SearchModal`** — wiring `AppHeader`'s `open-search` emit to
-`searchModal?.open()`.
+`SearchModal`** — wiring the `open-search` emits from both `AppHeader` and
+`AppSidebar` to the same `searchModal?.open()`.
 
 ### `src/components/layout/AppSidebar.vue`
 
-Collapsible left sidebar. Props `{ sidebarOpen }`, emits `close-sidebar`.
+Collapsible left sidebar. Props `{ sidebarOpen }`, emits `close-sidebar` and
+`open-search`.
 
 - **Nav items** (RouterLink, gradient violet active state), in order:
   **Documents** (`/`), then the user's **pinned saved-view dashboards**
@@ -169,6 +170,10 @@ Collapsible left sidebar. Props `{ sidebarOpen }`, emits `close-sidebar`.
   with the saved query; no "Saved views" heading and no separate subsection —
   hidden when none pinned; the management page is reached from the dashboard
   "Saved views" button instead — see `SavedViewsView` below),
+  **Search** (a `<button data-testid="sidebar-search-button">`, not a link —
+  it emits `open-search` to open the shared modal, §1.5; the click also
+  bubbles through the nav list's `close-sidebar` handler so the mobile
+  drawer dismisses as the modal opens),
   **Upload** (`/upload`), **New note** (`/notes/new`,
   `data-testid="sidebar-notes-link"`), **Charts** (`/charts`), **Ask** (`/ask`),
   **Jobs** (`/jobs`), **Projects** (`/projects`,
@@ -176,10 +181,12 @@ Collapsible left sidebar. Props `{ sidebarOpen }`, emits `close-sidebar`.
   **for admins only** (`v-if="auth.isAdmin"`) — **Admin** (`/admin`,
   `data-testid="sidebar-admin-link"`), and finally **Recently Deleted**
   (`/deleted`, `data-testid="sidebar-deleted-link"`) kept at the bottom as a
-  low-traffic destination. Each has a `data-testid="sidebar-*-link"`. Pinned
+  low-traffic destination. Each route link has a `data-testid="sidebar-*-link"`
+  (the Search button deliberately uses `-button`, keeping it out of the
+  `a[data-testid]` selectors the nav-order tests use). Pinned
   dashboards load reactively (`watch(auth.isAuthenticated)`) since the sidebar
   is a persistent shell that mounts before the router's async auth guard
-  resolves. Search is **not** a sidebar item (it is a navbar-triggered modal, §1.5).
+  resolves.
 - **Collapse state** persists to `localStorage['library:sidebar-expanded']`
   (legacy bare `sidebar-expanded` key still read once as a fallback), mirrored
   onto `body.sidebar-expanded` (seeded by an inline script in `index.html` to
@@ -194,8 +201,8 @@ Collapsible left sidebar. Props `{ sidebarOpen }`, emits `close-sidebar`.
 
 Sticky top header. Props `{ sidebarOpen }`, emits `toggle-sidebar` and
 `open-search`. Contains: the mobile **hamburger** (`aria-controls="sidebar"`), a
-**search trigger** button (`data-testid="header-search-button"`, the modal entry
-point), the **`ThemeToggle`**, and a **user menu** showing
+**search trigger** button (`data-testid="header-search-button"`, one of the
+modal's entry points), the **`ThemeToggle`**, and a **user menu** showing
 `auth.user?.display_name || username` with **Settings** and **Sign Out** (calls
 `auth.logout()` then routes to `login`).
 
@@ -260,8 +267,8 @@ Two retained custom components, restyled to Mosaic:
 ## 1.5 Views and routes
 
 The app's views live in `src/views/`; routes and the auth guard are in
-`src/router/index.ts`. Search is **not** a route — it is a navbar-triggered
-modal.
+`src/router/index.ts`. Search is **not** a route — it is a modal opened from
+several entry points (see "Search modal" below).
 
 | View | Route | Notes |
 |------|-------|-------|
@@ -284,9 +291,11 @@ modal.
 
 ### Search modal (`src/components/SearchModal.vue`)
 
-A native `<dialog>` (`showModal()`) mounted once in `DefaultLayout`. Opened
-either by the header search button (`open-search` → `searchModal.open()`) or by
-pressing **`/`** anywhere outside a form field. It exposes `open()` via
+A native `<dialog>` (`showModal()`) mounted once in `DefaultLayout`. Three
+entry points, all funnelling into the same instance: the header search button,
+the sidebar **Search** nav item (both emit `open-search` →
+`searchModal.open()`), and pressing **`/`** anywhere outside a form field.
+It exposes `open()` via
 `defineExpose`, pre-fills its fields (`AppInput` query, `AppSelect`
 kind/sender/tag/language fed lazily from the cached taxonomy endpoints,
 `AppDateInput` from/to) from the current route query, and on submit pushes the
