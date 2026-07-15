@@ -1,6 +1,6 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-07-06 (authorization model §1.5.1: shared library, no per-user ownership — deliberate). Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
+**Status:** active. **Last updated:** 2026-07-15 (data model: `email_selection_traces`, the per-email skip audit, migration 0027). Earlier (2026-07-06): authorization model §1.5.1: shared library, no per-user ownership — deliberate. Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The full decision record (with research and
@@ -186,6 +186,12 @@ re-derivable artifact.
   snapshots the per-item decision trace and points at the message in the Held
   IMAP folder by Message-ID. See [ingestion.md](ingestion.md), "Held for
   review".
+- `email_selection_traces` — append-only per-email skip audit (migration 0027):
+  one row (with the full decision list) per processed email whose selection
+  filtered or dropped at least one item, so an email whose items were all
+  skipped still leaves a durable record. Read via
+  `GET /api/settings/email-triage/recent-skips`. See the
+  [email-triage runbook](runbooks/email-triage.md) §6.
 - `note_versions` — append-only; one (title, body) snapshot per edit/restore of
   an in-app note (`source = note`, migration 0013, which also adds `note` to the
   `document_source` CHECK).

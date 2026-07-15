@@ -25,6 +25,7 @@ from library.models import (
     DocumentPage,
     DocumentSource,
     DocumentStatus,
+    IngestionEvent,
     Kind,
     ReviewStatus,
 )
@@ -616,6 +617,204 @@ def test_backfill_respects_limit(cli_database_url: str) -> None:
 
     assert len(_deferred_ids(connector, "library.jobs.extract_document")) == 1
     assert len(_deferred_ids(connector, "library.jobs.markdown_document")) == 1
+
+
+def _seed_sweep_document(
+    database_url: str,
+    *,
+    mime_type: str,
+    ocr_text: str | None,
+    original_filename: str,
+    size: int | None = None,
+) -> int:
+    """Insert a document (optionally with a 'received' event carrying size) and return its id."""
+
+    async def _insert() -> int:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                document = Document(
+                    sha256=uuid.uuid4().hex * 2,
+                    mime_type=mime_type,
+                    source=DocumentSource.EMAIL,
+                    ocr_text=ocr_text,
+                    status=DocumentStatus.INDEXED,
+                    original_filename=original_filename,
+                )
+                session.add(document)
+                await session.flush()
+                if size is not None:
+                    session.add(
+                        IngestionEvent(
+                            document_id=document.id,
+                            event="received",
+                            detail={
+                                "filename": original_filename,
+                                "size": size,
+                                "mime_type": mime_type,
+                                "source": DocumentSource.EMAIL.value,
+                            },
+                        )
+                    )
+                await session.commit()
+                return document.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_insert())
+
+
+def _sweep_marker() -> str:
+    return uuid.uuid4().hex[:12]
+
+
+def test_sweep_junk_dry_run_lists_candidates_only(cli_database_url: str) -> None:
+    """Dry run lists tiny/short-OCR images but not dense documents, and deletes nothing."""
+    marker = _sweep_marker()
+    junk = _seed_sweep_document(
+        cli_database_url,
+        mime_type="image/png",
+        ocr_text="logo",
+        original_filename=f"junk-{marker}.png",
+        size=4321,
+    )
+    dense_pdf = _seed_sweep_document(
+        cli_database_url,
+        mime_type="application/pdf",
+        ocr_text="dense prose " * 50,
+        original_filename=f"real-{marker}.pdf",
+        size=250_000,
+    )
+    big_image = _seed_sweep_document(
+        cli_database_url,
+        mime_type="image/png",
+        ocr_text="scanned page text " * 20,
+        original_filename=f"scan-{marker}.png",
+        size=500_000,
+    )
+
+    result = runner.invoke(app, ["sweep-junk"])
+    assert result.exit_code == 0, result.output
+
+    assert f"junk-{marker}.png" in result.output
+    assert "4321" in result.output
+    assert f"real-{marker}.pdf" not in result.output  # not an image
+    assert f"scan-{marker}.png" not in result.output  # dense OCR and large size
+    assert "--apply --ids" in result.output  # hint on how to apply
+
+    # Nothing was deleted by the dry run.
+    for document_id in (junk, dense_pdf, big_image):
+        [(deleted_at,)] = fetch_all(
+            cli_database_url, "SELECT deleted_at FROM documents WHERE id = :id", id=document_id
+        )
+        assert deleted_at is None
+
+
+def test_sweep_junk_dry_run_shows_unknown_size(cli_database_url: str) -> None:
+    """A candidate without a 'received' size (e.g. paperless import) shows '?' for bytes."""
+    marker = _sweep_marker()
+    junk = _seed_sweep_document(
+        cli_database_url,
+        mime_type="image/gif",
+        ocr_text=None,
+        original_filename=f"nosize-{marker}.gif",
+    )
+
+    result = runner.invoke(app, ["sweep-junk"])
+    assert result.exit_code == 0, result.output
+    [line] = [line for line in result.output.splitlines() if f"nosize-{marker}.gif" in line]
+    assert line.startswith(f"{junk}\t")
+    assert "?" in line
+
+
+def test_sweep_junk_apply_soft_deletes_and_is_idempotent(cli_database_url: str) -> None:
+    marker = _sweep_marker()
+    junk = _seed_sweep_document(
+        cli_database_url,
+        mime_type="image/png",
+        ocr_text="",
+        original_filename=f"apply-{marker}.png",
+        size=1234,
+    )
+
+    result = runner.invoke(app, ["sweep-junk", "--apply", "--ids", str(junk)])
+    assert result.exit_code == 0, result.output
+
+    [(deleted_at,)] = fetch_all(
+        cli_database_url, "SELECT deleted_at FROM documents WHERE id = :id", id=junk
+    )
+    assert deleted_at is not None
+    events = fetch_all(
+        cli_database_url,
+        "SELECT detail FROM ingestion_events WHERE document_id = :id AND event = 'deleted'",
+        id=junk,
+    )
+    assert len(events) == 1
+    assert events[0][0] == {}  # same detail shape as the API delete endpoint
+
+    # Second run: reported as already deleted, skipped, no second event.
+    again = runner.invoke(app, ["sweep-junk", "--apply", "--ids", str(junk)])
+    assert again.exit_code == 0, again.output
+    assert "already deleted" in again.output
+    events = fetch_all(
+        cli_database_url,
+        "SELECT detail FROM ingestion_events WHERE document_id = :id AND event = 'deleted'",
+        id=junk,
+    )
+    assert len(events) == 1
+
+
+def test_sweep_junk_apply_refuses_non_candidate(cli_database_url: str) -> None:
+    marker = _sweep_marker()
+    dense_pdf = _seed_sweep_document(
+        cli_database_url,
+        mime_type="application/pdf",
+        ocr_text="dense prose " * 50,
+        original_filename=f"keep-{marker}.pdf",
+        size=250_000,
+    )
+
+    result = runner.invoke(app, ["sweep-junk", "--apply", "--ids", str(dense_pdf)])
+    assert result.exit_code != 0
+    assert "not" in result.output and str(dense_pdf) in result.output
+
+    [(deleted_at,)] = fetch_all(
+        cli_database_url, "SELECT deleted_at FROM documents WHERE id = :id", id=dense_pdf
+    )
+    assert deleted_at is None
+
+
+def test_sweep_junk_apply_refusal_deletes_nothing_in_the_batch(cli_database_url: str) -> None:
+    """One refused id aborts the whole batch: valid candidates in it stay undeleted."""
+    marker = _sweep_marker()
+    junk = _seed_sweep_document(
+        cli_database_url,
+        mime_type="image/png",
+        ocr_text="x",
+        original_filename=f"batch-{marker}.png",
+        size=999,
+    )
+    dense_pdf = _seed_sweep_document(
+        cli_database_url,
+        mime_type="application/pdf",
+        ocr_text="dense prose " * 50,
+        original_filename=f"batch-keep-{marker}.pdf",
+        size=250_000,
+    )
+
+    result = runner.invoke(app, ["sweep-junk", "--apply", "--ids", f"{junk},{dense_pdf}"])
+    assert result.exit_code != 0
+
+    [(deleted_at,)] = fetch_all(
+        cli_database_url, "SELECT deleted_at FROM documents WHERE id = :id", id=junk
+    )
+    assert deleted_at is None
+
+
+def test_sweep_junk_apply_without_ids_errors(cli_database_url: str) -> None:
+    result = runner.invoke(app, ["sweep-junk", "--apply"])
+    assert result.exit_code != 0
+    assert "--ids" in result.output
 
 
 def test_backfill_markdown_include_existing(cli_database_url: str) -> None:

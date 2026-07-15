@@ -25,6 +25,7 @@ import {
   SUGGESTED_COLORS,
   TILE_PREVIEWS,
   getEmailTriage,
+  getEmailTriageRecentSkips,
   updateAppearance,
   updateKindColors,
   updateNotifications,
@@ -33,9 +34,11 @@ import {
   type DashboardField,
   type DockPosition,
   type EmailTriageConfig,
+  type EmailTriageRecentSkip,
   type TilePreview,
 } from '@/api/settings'
 import { listKinds, type KindOption } from '@/api/taxonomy'
+import { formatDateTime } from '@/utils/documentFormat'
 import { isHexColor, resolveKindColor } from '@/utils/kindColor'
 import DashboardFieldsEditor from '@/components/DashboardFieldsEditor.vue'
 import { useAuthStore } from '@/stores/auth'
@@ -300,6 +303,9 @@ async function onNotificationsSubmit(): Promise<void> {
 const triage = ref<EmailTriageConfig | null>(null)
 const triageLoading = ref(false)
 const triageError = ref<string | null>(null)
+// The recent skips ride along with the config load. `null` = not loaded /
+// failed (its card shows an unavailable note instead of a false "no skips").
+const recentSkips = ref<EmailTriageRecentSkip[] | null>(null)
 
 async function loadTriage(): Promise<void> {
   triageLoading.value = true
@@ -308,6 +314,14 @@ async function loadTriage(): Promise<void> {
     triage.value = await getEmailTriage()
   } catch {
     triageError.value = 'Sorry, the email triage configuration could not be loaded. Try again.'
+    triageLoading.value = false
+    return
+  }
+  try {
+    // Best-effort decoration: a failure here must not blank the config view.
+    recentSkips.value = (await getEmailTriageRecentSkips()).recent_skips ?? []
+  } catch {
+    recentSkips.value = null
   } finally {
     triageLoading.value = false
   }
@@ -837,6 +851,13 @@ const tabClass = (active: boolean): string =>
                 {{ triage.noise_filter.tiny_image_max_bytes }} bytes or with a longest edge of
                 {{ triage.noise_filter.tiny_image_max_edge_px }} px or less.
               </p>
+              <p :class="triageStepTextClass" data-testid="triage-decoration-thresholds">
+                Decoration images (logos, banners, signature art) are dropped when at least two
+                signals agree: a decoration-style filename, a payload of
+                {{ triage.noise_filter.decoration_max_bytes }} bytes or less, or small/banner
+                dimensions with a longest edge of
+                {{ triage.noise_filter.decoration_max_edge_px }} px or less.
+              </p>
             </li>
 
             <li data-testid="triage-step-label">
@@ -904,6 +925,72 @@ const tabClass = (active: boolean): string =>
             <code>.env</code> and restart the worker — see
             <code>docs/runbooks/email-triage.md</code> for the how.
           </p>
+        </div>
+
+        <!-- Recent skips: the durable audit of quietly filtered/dropped items -->
+        <div
+          v-if="triage.email_in_configured"
+          :class="cardClass"
+          class="mt-6"
+          data-testid="triage-recent-skips"
+        >
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+            Recently skipped items
+          </h2>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            The last emails where the pipeline filtered or dropped an item — check here
+            first when an attachment seems to have vanished.
+          </p>
+          <p
+            v-if="recentSkips === null"
+            :class="triageStepTextClass"
+            data-testid="triage-recent-skips-error"
+          >
+            The recent skips could not be loaded.
+          </p>
+          <p
+            v-else-if="recentSkips.length === 0"
+            :class="triageStepTextClass"
+            data-testid="triage-recent-skips-empty"
+          >
+            No skipped items have been recorded yet.
+          </p>
+          <ul
+            v-else
+            class="mt-4 divide-y divide-gray-200 dark:divide-gray-700"
+            data-testid="triage-recent-skips-list"
+          >
+            <li
+              v-for="row in recentSkips"
+              :key="row.id"
+              class="py-3 first:pt-0 last:pb-0"
+              :data-testid="`triage-skip-row-${row.id}`"
+            >
+              <div class="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+                <span class="text-sm font-medium text-gray-800 dark:text-gray-100">
+                  {{ row.subject || '(no subject)' }}
+                </span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ row.from_address || 'unknown sender' }}
+                </span>
+                <span class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ formatDateTime(row.created_at) }}
+                </span>
+              </div>
+              <ul class="mt-1 space-y-1">
+                <li
+                  v-for="(decision, index) in row.decisions"
+                  :key="index"
+                  class="text-sm text-gray-600 dark:text-gray-300"
+                >
+                  <span class="font-medium">{{ decision.filename || `(${decision.kind})` }}</span>
+                  <span> — {{ decision.reason }}</span>
+                  <span v-if="decision.detail" class="text-gray-500 dark:text-gray-400">
+                    · {{ decision.detail }}</span>
+                </li>
+              </ul>
+            </li>
+          </ul>
         </div>
       </template>
     </section>

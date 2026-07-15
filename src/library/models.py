@@ -983,6 +983,35 @@ class HeldEmail(Base):
     )
 
 
+class EmailSelectionTrace(Base):
+    """A durable per-email audit of skipped items from the mailbox poller.
+
+    Written by ``poll_mailbox`` (and the held-email ingest-anyway override)
+    whenever an email's selection filtered or dropped at least one item —
+    quiet noise skips such as ``decoration_image`` and
+    ``llm_noise_corroborated`` included. ``decisions`` snapshots the FULL
+    decision list (``SelectionDecision.as_detail()`` dicts, the same shape as
+    the ``email_selection`` event's ``items``), so the row reads as a whole
+    email even though only the skips triggered it. This complements the
+    per-document ``email_selection`` event: an email whose items were ALL
+    skipped produces no document to hang that event on, and this row is then
+    the only durable audit of the skip. Best-effort append-only data — a
+    failed write never fails a poll.
+    """
+
+    __tablename__ = "email_selection_traces"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    message_id: Mapped[str | None] = mapped_column(Text)
+    subject: Mapped[str | None] = mapped_column(Text)
+    from_address: Mapped[str | None] = mapped_column(Text)
+    decisions: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    # Indexed: the read path is "the most recent N rows".
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+
+
 class FxRate(Base):
     """A reference foreign-exchange rate, base = USD.
 

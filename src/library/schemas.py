@@ -832,11 +832,14 @@ class EmailTriageAllowlistOut(BaseModel):
 
 
 class EmailTriageNoiseFilterOut(BaseModel):
-    """The deterministic noise gate and its tiny-image thresholds."""
+    """The deterministic noise gate and its tiny-image/decoration thresholds."""
 
     enabled: bool
     tiny_image_max_bytes: int
     tiny_image_max_edge_px: int
+    # Decoration-image signal ceilings (>= 2 of filename/size/shape must fire).
+    decoration_max_bytes: int
+    decoration_max_edge_px: int
 
 
 class EmailTriageLabelOut(BaseModel):
@@ -875,6 +878,41 @@ class EmailTriageOut(BaseModel):
     label: EmailTriageLabelOut
     body_substance: EmailTriageBodySubstanceOut
     imap_timeout_seconds: float
+
+
+class EmailSkipDecisionOut(BaseModel):
+    """One skipped item from a stored per-email selection trace.
+
+    A compact projection of the ``SelectionDecision.as_detail()`` shape: only
+    what a human needs to judge "was this skip right?" — no mime/size/stage.
+    """
+
+    kind: str  # "attachment" or "body"
+    filename: str | None
+    reason: str | None  # the stable skip code (e.g. decoration_image)
+    detail: str | None  # the human sentence behind the reason
+
+
+class EmailRecentSkipOut(BaseModel):
+    """One email whose selection skipped at least one item.
+
+    The stored row keeps the FULL decision list; this projection returns only
+    the decisions that were actual skips (reason in the skip-reason set), so
+    the payload stays compact.
+    """
+
+    id: int
+    message_id: str | None
+    subject: str | None
+    from_address: str | None
+    created_at: datetime
+    decisions: list[EmailSkipDecisionOut]
+
+
+class EmailRecentSkipsOut(BaseModel):
+    """Body of GET /api/settings/email-triage/recent-skips (newest first)."""
+
+    recent_skips: list[EmailRecentSkipOut]
 
 
 class UserOut(BaseModel):

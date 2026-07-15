@@ -18,6 +18,12 @@ from library.models import Document, ReviewStatus
 
 _MIN_PLAUSIBLE_DATE: date = date(1990, 1, 1)
 
+# Below this many non-whitespace characters an image's OCR text is considered
+# near-empty (a logo/decoration, not a document). Mirrors MIN_TEXT_CHARS in
+# library.extraction.extractor — defined locally because this module must stay
+# pure (stdlib + models only) and extractor.py pulls in the SDK/config/storage.
+_DECORATION_IMAGE_MAX_CHARS: int = 20
+
 # Bilingual (Dutch/English) cue-word sets for deterministic date cross-checks.
 # Anchored on full tokens/phrases, NOT the "verval-" stem, because Dutch
 # "vervaldatum" (a payment DUE date on an invoice) and "vervalt"/"verloopt" (an
@@ -422,6 +428,32 @@ def validate(
                 None,
                 "warn",
                 f"OCR confidence {document.ocr_confidence:.0f} below floor {ocr_floor:.0f}",
+            )
+        )
+
+    # decoration_image — an image document whose OCR yielded almost no text
+    # AND whose extraction grounded nothing. Thin OCR alone is not enough:
+    # below MIN_TEXT_CHARS the extractor reads the image itself (vision
+    # fallback), which rescues real photographed receipts — those come back
+    # with an amount, date, or sender and must stay quiet here. A logo yields
+    # none of the groundable fields (titles/summaries don't count: the model
+    # happily invents "Company X logo"), so requiring all three empty keeps
+    # the rule pointed at decorations that slipped past ingest filtering
+    # instead of hiding them behind generic empty_extraction/missing_* reasons.
+    if (
+        (document.mime_type or "").startswith("image/")
+        and len(re.sub(r"\s", "", text)) < _DECORATION_IMAGE_MAX_CHARS
+        and document.amount_total is None
+        and document.document_date is None
+        and document.sender_id is None
+    ):
+        findings.append(
+            Finding(
+                "decoration_image",
+                None,
+                "warn",
+                "this image produced almost no text and is likely a logo or "
+                "decoration rather than a real document",
             )
         )
 

@@ -167,11 +167,23 @@ class Settings(BaseSettings):
     email_filter_noise_enabled: bool = True
     email_filter_tiny_image_max_bytes: int = 4096  # images smaller than this are icons/pixels
     email_filter_tiny_image_max_edge_px: int = 64  # or whose longest edge is <= this
+    # Decoration-image gate (same noise pass, same enabled flag): a non-inline
+    # image that clears the tiny-image rule is still skipped (reason
+    # ``decoration_image``) when at least TWO independent signals agree it is
+    # decoration — a decoration-style filename (logo/signature/banner/footer/
+    # icon, or Outlook's imageNNN auto-embed names), a payload at/under the byte
+    # ceiling, or decoration-shaped dimensions (longest edge at/under the pixel
+    # ceiling, or a >=4:1 banner with a short edge <=128px). One signal alone
+    # never skips (bias to ingest). See ``_decoration_signals``.
+    email_filter_decoration_max_bytes: int = 65536  # size signal: payload at/under this
+    email_filter_decoration_max_edge_px: int = 384  # shape signal: longest edge at/under this
     # Optional per-email LLM label pass (see docs/ingestion.md, "Email item
     # selection"). One Anthropic call per email classifies each surviving
     # attachment keep|probably_noise; a probably_noise verdict flags the document
-    # needs_review (it is never dropped). Default OFF — it spends money; enabling
-    # it also requires anthropic_api_key. Spend is budget-gated like extraction.
+    # needs_review — except on an image where at least one decoration signal
+    # corroborates it, which becomes a quiet ``llm_noise_corroborated`` skip.
+    # Default OFF — it spends money; enabling it also requires
+    # anthropic_api_key. Spend is budget-gated like extraction.
     email_label_enabled: bool = False
     email_label_model: str = "claude-haiku-4-5"
     email_label_daily_budget_usd: float = 2.0

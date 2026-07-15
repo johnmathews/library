@@ -434,6 +434,43 @@ def test_generic_sender_quiet_when_sender_unset() -> None:
     assert "missing_sender" in _rules(findings)
 
 
+def test_decoration_image_fires_on_near_empty_image_ocr() -> None:
+    """An image document whose OCR yielded almost nothing is likely a logo or
+    decoration, not a real document — name the real cause instead of hiding it
+    behind generic empty_extraction/missing_* reasons."""
+    doc = _doc(mime_type="image/png", ocr_text="abc")
+    findings = validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    finding = _finding(findings, "decoration_image")
+    assert finding.severity == "warn"
+    assert "logo" in finding.message
+    assert derive_review_status(findings) is ReviewStatus.NEEDS_REVIEW
+
+
+def test_decoration_image_quiet_on_image_with_dense_text() -> None:
+    doc = _doc(mime_type="image/jpeg", ocr_text="Factuur 2026. " * 40)  # ~500 chars
+    assert "decoration_image" not in _rules(
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_decoration_image_quiet_when_vision_grounded_a_field() -> None:
+    """Thin OCR on an image triggers the vision fallback; a photographed
+    receipt the model actually read comes back with an amount/date/sender and
+    must not be branded a decoration (a logo grounds none of the three)."""
+    doc = _doc(mime_type="image/jpeg", ocr_text="abc", amount_total=Decimal("12.00"))
+    assert "decoration_image" not in _rules(
+        validate(doc, kind_slug="receipt", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_decoration_image_quiet_on_non_image_mime() -> None:
+    """A thin-text PDF is the density/vision path's territory, not this rule's."""
+    doc = _doc(mime_type="application/pdf", ocr_text="abc")
+    assert "decoration_image" not in _rules(
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    )
+
+
 def test_missing_sender_fires_on_signoff_without_amount() -> None:
     doc = _doc(
         sender_id=None,

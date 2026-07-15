@@ -427,7 +427,13 @@ describe('SettingsView', () => {
       processed_folder: 'Library/Processed',
       hold: { enabled: true, below_substance: true, unknown_senders: true },
       allowlist: { configured: false, count: 0 },
-      noise_filter: { enabled: true, tiny_image_max_bytes: 4096, tiny_image_max_edge_px: 64 },
+      noise_filter: {
+        enabled: true,
+        tiny_image_max_bytes: 4096,
+        tiny_image_max_edge_px: 64,
+        decoration_max_bytes: 65536,
+        decoration_max_edge_px: 384,
+      },
       label: {
         enabled: true,
         active: true,
@@ -440,20 +446,22 @@ describe('SettingsView', () => {
       imap_timeout_seconds: 60,
     }
 
-    /** Route the triage endpoint to `triage`; kinds and everything else as usual. */
-    function stubTriageFetch(triage: unknown): void {
+    /** Route the triage endpoints to `triage`/`skips`; kinds and everything else as usual. */
+    function stubTriageFetch(triage: unknown, skips: unknown = { recent_skips: [] }): void {
       fetchMock.mockImplementation((input: unknown) => {
         if (String(input) === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
+        if (String(input) === '/api/settings/email-triage/recent-skips')
+          return Promise.resolve(jsonResponse(skips))
         if (String(input) === '/api/settings/email-triage')
           return Promise.resolve(jsonResponse(triage))
         return Promise.resolve(jsonResponse({ dashboard_fields: ['kind'] }))
       })
     }
 
-    async function mountAndOpenTab(triage: unknown) {
+    async function mountAndOpenTab(triage: unknown, skips?: unknown) {
       const auth = useAuthStore()
       auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
-      stubTriageFetch(triage)
+      stubTriageFetch(triage, skips)
       const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
       await wrapper.find('[data-testid="tab-email-triage-btn"]').trigger('click')
       await flushPromises()
@@ -489,10 +497,19 @@ describe('SettingsView', () => {
       // Step 1: accept-all variant (no allowlist configured), hold badge ON.
       expect(wrapper.find('[data-testid="triage-allowlist-mode"]').text()).toContain('Accept all senders')
       expect(wrapper.find('[data-testid="triage-allowlist-hold-badge"]').text()).toBe('Unknown-sender hold ON')
-      // Step 2: noise gate ON with its thresholds.
+      // Step 2: noise gate ON with its tiny-image and decoration thresholds.
       expect(wrapper.find('[data-testid="triage-noise-badge"]').text()).toBe('ON')
       expect(wrapper.find('[data-testid="triage-noise-thresholds"]').text()).toContain('4096 bytes')
       expect(wrapper.find('[data-testid="triage-noise-thresholds"]').text()).toContain('64 px')
+      expect(wrapper.find('[data-testid="triage-decoration-thresholds"]').text()).toContain(
+        '65536 bytes',
+      )
+      expect(wrapper.find('[data-testid="triage-decoration-thresholds"]').text()).toContain(
+        '384 px',
+      )
+      expect(wrapper.find('[data-testid="triage-decoration-thresholds"]').text()).toContain(
+        'at least two signals',
+      )
       // Step 3: label pass active, with model / budget / prompt version + fail-open.
       expect(wrapper.find('[data-testid="triage-label-badge"]').text()).toBe('Active')
       expect(wrapper.find('[data-testid="triage-label-state"]').text()).toBe('Active')
@@ -545,6 +562,85 @@ describe('SettingsView', () => {
       expect(empty.exists()).toBe(true)
       expect(empty.text()).toContain('Email-in is not configured on this server')
       expect(wrapper.find('[data-testid="email-triage-config"]').exists()).toBe(false)
+      // No email-in, no skip audit either.
+      expect(wrapper.find('[data-testid="triage-recent-skips"]').exists()).toBe(false)
+    })
+
+    it('renders the recent skips with filename, reason, detail, and date', async () => {
+      const wrapper = await mountAndOpenTab(baseTriage, {
+        recent_skips: [
+          {
+            id: 7,
+            message_id: '<m1@example.com>',
+            subject: 'Fwd: invoice 42',
+            from_address: 'alice@example.com',
+            created_at: '2026-07-14T10:00:00Z',
+            decisions: [
+              {
+                kind: 'attachment',
+                filename: 'image001.png',
+                reason: 'decoration_image',
+                detail: 'filename, size and shape signals fired',
+              },
+            ],
+          },
+          {
+            id: 6,
+            message_id: null,
+            subject: null,
+            from_address: null,
+            created_at: '2026-07-13T09:00:00Z',
+            decisions: [
+              { kind: 'attachment', filename: null, reason: 'tiny_image', detail: null },
+            ],
+          },
+        ],
+      })
+
+      const card = wrapper.find('[data-testid="triage-recent-skips"]')
+      expect(card.exists()).toBe(true)
+      expect(wrapper.find('[data-testid="triage-recent-skips-empty"]').exists()).toBe(false)
+      const row = wrapper.find('[data-testid="triage-skip-row-7"]')
+      expect(row.text()).toContain('Fwd: invoice 42')
+      expect(row.text()).toContain('alice@example.com')
+      expect(row.text()).toContain('image001.png')
+      expect(row.text()).toContain('decoration_image')
+      expect(row.text()).toContain('filename, size and shape signals fired')
+      expect(row.text()).toContain('2026') // the date renders
+      // Null-safe fallbacks for a subject-less body skip.
+      const fallback = wrapper.find('[data-testid="triage-skip-row-6"]')
+      expect(fallback.text()).toContain('(no subject)')
+      expect(fallback.text()).toContain('unknown sender')
+      expect(fallback.text()).toContain('(attachment)') // unnamed part falls back to its kind
+    })
+
+    it('shows the recent-skips empty state when none are recorded', async () => {
+      const wrapper = await mountAndOpenTab(baseTriage) // default stub: no skips
+      const empty = wrapper.find('[data-testid="triage-recent-skips-empty"]')
+      expect(empty.exists()).toBe(true)
+      expect(empty.text()).toContain('No skipped items have been recorded yet')
+      expect(wrapper.find('[data-testid="triage-recent-skips-list"]').exists()).toBe(false)
+    })
+
+    it('keeps the config visible when the recent skips fail to load', async () => {
+      const auth = useAuthStore()
+      auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
+      fetchMock.mockImplementation((input: unknown) => {
+        if (String(input) === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
+        if (String(input) === '/api/settings/email-triage/recent-skips')
+          return Promise.resolve(jsonResponse({ detail: 'boom' }, 500))
+        if (String(input) === '/api/settings/email-triage')
+          return Promise.resolve(jsonResponse(baseTriage))
+        return Promise.resolve(jsonResponse({ dashboard_fields: ['kind'] }))
+      })
+      const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+      await wrapper.find('[data-testid="tab-email-triage-btn"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="email-triage-config"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="triage-recent-skips-error"]').text()).toContain(
+        'could not be loaded',
+      )
     })
 
     it('shows an error when the config cannot be loaded', async () => {

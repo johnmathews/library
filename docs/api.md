@@ -1,6 +1,6 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-07-08 (Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Status:** active. **Last updated:** 2026-07-15 (email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -92,6 +92,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | PUT    | `/api/settings/kind-colors` | Update your per-kind tile border colours |
 | PUT    | `/api/settings/notifications` | Update your Pushover notifications + email forwarding addresses |
 | GET    | `/api/settings/email-triage` | Effective email-in triage configuration (instance-wide, read-only, secret-free) |
+| GET    | `/api/settings/email-triage/recent-skips` | Last 20 emails with a skipped item (read-only skip audit) |
 | GET    | `/api/admin/system` | System & infra context: version, config, deployment, DB stats (admin only) |
 | GET    | `/api/admin/architecture` | Architecture docs as markdown (admin only) |
 | GET    | `/api/admin/coverage` | Latest CI-generated test coverage (admin only) |
@@ -667,7 +668,7 @@ curl -H "Authorization: Bearer library_3q2…" \
 Bearer requests are CSRF-exempt (the header cannot be set cross-site).
 Revoked or unknown tokens, and tokens of disabled users, get `401`.
 
-## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`, `PUT /api/settings/kind-colors`, `PUT /api/settings/notifications`, `GET /api/settings/email-triage`
+## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`, `PUT /api/settings/kind-colors`, `PUT /api/settings/notifications`, `GET /api/settings/email-triage`, `GET /api/settings/email-triage/recent-skips`
 
 Per-user preferences: which metadata fields appear on the dashboard tiles, the
 page-canvas tone behind them, how each tile previews the document's first page,
@@ -860,7 +861,7 @@ changing any value is environment-only (server `.env` + worker restart — see
   "processed_folder": "Library/Processed",
   "hold": {"enabled": true, "below_substance": true, "unknown_senders": true},
   "allowlist": {"configured": true, "count": 2},
-  "noise_filter": {"enabled": true, "tiny_image_max_bytes": 4096, "tiny_image_max_edge_px": 64},
+  "noise_filter": {"enabled": true, "tiny_image_max_bytes": 4096, "tiny_image_max_edge_px": 64, "decoration_max_bytes": 65536, "decoration_max_edge_px": 384},
   "label": {"enabled": true, "active": true, "model": "claude-haiku-4-5", "daily_budget_usd": 2.0, "body_snippet_chars": 1000, "prompt_version": "email-label-v2"},
   "body_substance": {"min_words": 40, "min_chars": 240},
   "imap_timeout_seconds": 60.0
@@ -874,7 +875,45 @@ from "no API key"), and never the allowlisted addresses (only
 `allowlist.count` — any authenticated user can read this endpoint).
 `body_substance` reports the module constants in `email_ingest`
 (`BODY_MIN_WORDS` / `BODY_MIN_CHARS`) — fixed in code, not configuration.
-`prompt_version` is `email_label.PROMPT_VERSION`.
+`prompt_version` is `email_label.PROMPT_VERSION`. The `noise_filter` object
+carries both threshold families: the tiny-image ones
+(`LIBRARY_EMAIL_FILTER_TINY_IMAGE_*`) and the decoration-signal ceilings
+(`decoration_max_bytes` / `decoration_max_edge_px` ←
+`LIBRARY_EMAIL_FILTER_DECORATION_*`; a decoration skip needs ≥ 2 of the
+filename/size/shape signals — see [ingestion.md](ingestion.md), "Email item
+selection").
+
+### 1.10.7 `GET /api/settings/email-triage/recent-skips`
+
+The last **20** emails whose selection **skipped at least one item** (quiet
+noise skips such as `decoration_image` included), newest first — the durable
+answer to "did the pipeline just eat my attachment?" without grepping server
+logs. Backed by the `email_selection_traces` table (one row per email with any
+filtered/dropped item; see [runbooks/email-triage.md](runbooks/email-triage.md)
+§6). A sibling of the config snapshot above — these are DB rows that change per
+poll, not configuration. Backs the "Recently skipped items" card on the same
+Settings tab. Read-only; any authenticated user.
+
+```json
+{
+  "recent_skips": [
+    {
+      "id": 12,
+      "message_id": "<abc@example.com>",
+      "subject": "Fwd: invoice 42",
+      "from_address": "alice@example.com",
+      "created_at": "2026-07-14T10:00:00Z",
+      "decisions": [
+        {"kind": "attachment", "filename": "image001.png", "reason": "decoration_image", "detail": "decoration image (3/3 signals fired: filename, size, shape)"}
+      ]
+    }
+  ]
+}
+```
+
+`decisions` is filtered to the **actual skips** (the stored row keeps the full
+per-item trace, ingested siblings included) and projected to a compact shape —
+`kind`/`filename`/`reason`/`detail`, no mime/size/stage.
 
 ## 1.11 Ask — `POST /api/ask`
 

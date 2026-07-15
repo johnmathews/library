@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import io
 import logging
+import os
 import re
 import uuid
 from collections.abc import AsyncIterator, Iterator
@@ -43,6 +44,7 @@ from library.email_ingest import (
     SkippedAttachment,
     _body_substance,
     _connect,
+    _decoration_signals,
     _forwarded_to_addresses,
     poll_mailbox,
     poll_mailbox_async,
@@ -53,6 +55,7 @@ from library.ingest import IngestResult, ingest_file
 from library.models import (
     Document,
     DocumentSource,
+    EmailSelectionTrace,
     HeldEmail,
     HeldEmailStatus,
     IngestionEvent,
@@ -135,6 +138,19 @@ def png_bytes(size: tuple[int, int]) -> bytes:
     """A valid PNG of the given dimensions (for the noise-gate image rules)."""
     buffer = io.BytesIO()
     Image.new("RGB", size).save(buffer, format="PNG")
+    return buffer.getvalue()
+
+
+def noisy_png_bytes(size: tuple[int, int]) -> bytes:
+    """A PNG of the given dimensions that stays LARGE (incompressible noise).
+
+    Random pixels defeat PNG's compression, so an 800x600 image lands well
+    above the decoration byte ceiling — for negatives where the size signal
+    must genuinely be off.
+    """
+    buffer = io.BytesIO()
+    image = Image.frombytes("RGB", size, os.urandom(size[0] * size[1] * 3))
+    image.save(buffer, format="PNG")
     return buffer.getvalue()
 
 
@@ -333,6 +349,17 @@ async def held_rows(
     """Every ``held_emails`` row for one Message-ID (the DB is shared; scope by id)."""
     async with session_factory() as session:
         result = await session.execute(select(HeldEmail).where(HeldEmail.message_id == message_id))
+        return list(result.scalars().all())
+
+
+async def skip_trace_rows(
+    session_factory: async_sessionmaker[AsyncSession], subject: str
+) -> list[EmailSelectionTrace]:
+    """Every ``email_selection_traces`` row for one subject (shared DB; scope by tag)."""
+    async with session_factory() as session:
+        result = await session.execute(
+            select(EmailSelectionTrace).where(EmailSelectionTrace.subject == subject)
+        )
         return list(result.scalars().all())
 
 
@@ -1446,6 +1473,106 @@ async def test_selection_trace_persisted_as_event(
     )
 
 
+async def test_skip_trace_row_written_when_everything_filtered(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # W4: an email whose ONLY attachment is a quiet noise skip (inline signature
+    # logo) and whose body is below substance produces ZERO documents — the
+    # durable email_selection_traces row is then the only discoverable audit of
+    # the skip. Hold disabled so the message actually processes (a HELD email's
+    # audit lives on its held_emails row instead).
+    poll_settings = Settings(email_host="imap.example.test", email_hold_enabled=False)
+    tag = uuid.uuid4().hex[:8]
+    subject = f"skiptrace-all {tag}"
+    raw = make_inline_image_mail(subject=subject, image=png_bytes((200, 200)))
+    mailbox = FakeMailBox([mail_message(raw, uid="70")])
+
+    summary = await poll_mailbox_async(
+        poll_settings, session_factory, mailbox_factory=lambda: mailbox
+    )
+
+    assert summary.messages_processed == 1
+    assert summary.attachments_ingested == 0
+    assert summary.attachments_filtered == 1
+    rows = await skip_trace_rows(session_factory, subject)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row.message_id  # provenance: the row is findable without the logs
+    assert row.from_address == "john@example.com"
+    assert row.created_at is not None
+    assert any(
+        item["filename"] == "logo.png"
+        and item["verdict"] == "filtered"
+        and item["reason"] == "signature_image"
+        for item in row.decisions
+    )
+
+
+async def test_skip_trace_row_and_selection_event_for_partial_skip(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # W4, doc-159 shape: one decoration logo filtered + one real PDF ingested.
+    # BOTH audit surfaces exist — the per-document email_selection event
+    # (unchanged) and the per-email skip-trace row carrying the FULL decision
+    # list (the ingested sibling included, so the row reads as a whole email).
+    tag = uuid.uuid4().hex[:8]
+    pdf_name = f"skiptrace-{tag}.pdf"
+    subject = f"skiptrace-partial {tag}"
+    raw = make_raw_mail(
+        subject=subject,
+        attachments=[
+            ("image001.png", png_bytes((200, 200)), "image", "png"),
+            (pdf_name, make_pdf(tag), "application", "pdf"),
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="71")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert summary.attachments_ingested == 1
+    assert summary.attachments_filtered == 1
+    documents = await documents_named(session_factory, pdf_name)
+    assert len(documents) == 1
+    events = await events_for(session_factory, documents[0].id, "email_selection")
+    assert len(events) == 1  # the existing per-document event is unchanged
+    rows = await skip_trace_rows(session_factory, subject)
+    assert len(rows) == 1
+    decisions = rows[0].decisions
+    (logo_item,) = [item for item in decisions if item["filename"] == "image001.png"]
+    assert logo_item["verdict"] == "filtered"
+    assert logo_item["reason"] == "decoration_image"
+    assert logo_item["detail"]  # the human sentence rides along
+    assert any(item["filename"] == pdf_name and item["verdict"] == "ingested" for item in decisions)
+
+
+async def test_no_skip_trace_row_when_nothing_skipped(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+) -> None:
+    # W4 negative: an email with no filtered/dropped item writes NO trace row —
+    # the body's bookkeeping "not_needed" decision must not count as a skip.
+    tag = uuid.uuid4().hex[:8]
+    pdf_name = f"clean-{tag}.pdf"
+    subject = f"skiptrace-clean {tag}"
+    raw = make_raw_mail(
+        subject=subject, attachments=[(pdf_name, make_pdf(tag), "application", "pdf")]
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="72")])
+
+    summary = await poll_mailbox_async(settings, session_factory, mailbox_factory=lambda: mailbox)
+
+    assert summary.attachments_ingested == 1
+    assert summary.attachments_filtered == 0
+    assert await skip_trace_rows(session_factory, subject) == []
+
+
 def test_inline_signature_image_filtered(settings: Settings) -> None:
     # A real PDF plus an inline signature logo: the logo is filtered (recorded,
     # not surfaced), only the PDF is ingested. Drives poll_mailbox directly.
@@ -1514,12 +1641,13 @@ def test_tiny_image_filtered(settings: Settings) -> None:
 
 
 def test_normal_image_kept_despite_small_byte_size(settings: Settings) -> None:
-    # Bias to ingest: a 200x200 image is a real document even though it compresses
-    # below the byte threshold — dimensions decide, so it is kept, not filtered.
+    # Bias to ingest: byte size ALONE never drops a decodable image. An 800x600
+    # scan with a non-decoration filename compresses below the decoration byte
+    # ceiling, but that is its only decoration signal — so it is kept.
     tag = uuid.uuid4().hex[:8]
     img_name = f"scan-{tag}.png"
     raw = make_raw_mail(
-        subject=f"scan {tag}", attachments=[(img_name, png_bytes((200, 200)), "image", "png")]
+        subject=f"scan {tag}", attachments=[(img_name, png_bytes((800, 600)), "image", "png")]
     )
     mailbox = FakeMailBox([mail_message(raw, uid="53")])
     calls: list[IngestCandidate] = []
@@ -1531,15 +1659,151 @@ def test_normal_image_kept_despite_small_byte_size(settings: Settings) -> None:
     assert summary.attachments_ingested == 1
 
 
+async def test_decoration_logo_attachment_filtered_pdf_ingested(
+    settings: Settings,
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Doc-159 repro: a forwarded mail carries a company logo as a REGULAR (not
+    # inline) attachment — Outlook's image001.png, 200x200, a few KB — plus the
+    # real PDF. The logo trips >= 2 decoration signals (filename + size + shape)
+    # and is quietly filtered; the PDF ingests; the trace names the signals.
+    tag = uuid.uuid4().hex[:8]
+    pdf_name = f"forwarded-{tag}.pdf"
+    logo = png_bytes((200, 200))  # ~doc-159's 6KB logo: small bytes, 200px, decodable
+    raw = make_raw_mail(
+        subject=f"deco {tag}",
+        attachments=[
+            ("image001.png", logo, "image", "png"),
+            (pdf_name, make_pdf(tag), "application", "pdf"),
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="55")])
+
+    with caplog.at_level(logging.INFO, logger="library.email_ingest"):
+        summary = await poll_mailbox_async(
+            settings, session_factory, mailbox_factory=lambda: mailbox
+        )
+
+    assert summary.attachments_ingested == 1
+    assert summary.attachments_filtered == 1
+    assert summary.attachments_dropped == 0  # quiet noise, never a user-facing drop
+    documents = await documents_named(session_factory, pdf_name)
+    assert len(documents) == 1
+    assert await documents_named(session_factory, "image001.png") == []
+    # The log trace records the quiet filter; the persisted trace names the
+    # fired signals so the audit trail is self-explanatory.
+    trace = _selection_trace_lines(caplog)[0]
+    assert "image001.png:classify:filtered(decoration_image)" in trace
+    events = await events_for(session_factory, documents[0].id, "email_selection")
+    assert len(events) == 1
+    (logo_item,) = [i for i in events[0].detail["items"] if i["filename"] == "image001.png"]
+    assert logo_item["verdict"] == "filtered"
+    assert logo_item["reason"] == "decoration_image"
+    for signal in ("filename", "size", "shape"):
+        assert signal in logo_item["detail"]
+
+
+def test_decoration_size_signal_alone_ingests(settings: Settings) -> None:
+    # Single-signal negative: an 800x600 photo with a plain filename compresses
+    # below the decoration byte ceiling — size is its ONLY signal, so it ingests.
+    tag = uuid.uuid4().hex[:8]
+    img_name = f"photo-{tag}.png"
+    raw = make_raw_mail(
+        subject=f"photo {tag}", attachments=[(img_name, png_bytes((800, 600)), "image", "png")]
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="56")])
+    calls: list[IngestCandidate] = []
+
+    summary = poll_mailbox(settings, _recording_ingest(calls), mailbox_factory=lambda: mailbox)
+
+    assert [candidate.filename for candidate in calls] == [img_name]
+    assert summary.attachments_filtered == 0
+
+
+def test_decoration_filename_signal_alone_ingests(settings: Settings) -> None:
+    # Single-signal negative: a large high-res "logo" — 800x600 and above the
+    # byte ceiling — has ONLY the filename signal, so it ingests (a real scan
+    # someone happened to name logo.png must never be lost).
+    tag = uuid.uuid4().hex[:8]
+    img_name = f"logo-{tag}.png"
+    content = noisy_png_bytes((800, 600))
+    assert len(content) > 65536  # the size signal is genuinely off
+    raw = make_raw_mail(subject=f"biglogo {tag}", attachments=[(img_name, content, "image", "png")])
+    mailbox = FakeMailBox([mail_message(raw, uid="57")])
+    calls: list[IngestCandidate] = []
+
+    summary = poll_mailbox(settings, _recording_ingest(calls), mailbox_factory=lambda: mailbox)
+
+    assert [candidate.filename for candidate in calls] == [img_name]
+    assert summary.attachments_filtered == 0
+
+
+def test_decoration_banner_shape_filtered(settings: Settings) -> None:
+    # A 600x80 header strip: banner shape (>= 4:1, short edge <= 128px) plus
+    # small bytes = two signals, so it is filtered; the sibling PDF ingests.
+    # "header" is deliberately NOT a decoration word — the filename signal is off.
+    tag = uuid.uuid4().hex[:8]
+    pdf_name = f"real-{tag}.pdf"
+    raw = make_raw_mail(
+        subject=f"banner {tag}",
+        attachments=[
+            ("header.png", png_bytes((600, 80)), "image", "png"),
+            (pdf_name, make_pdf(tag), "application", "pdf"),
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="58")])
+    calls: list[IngestCandidate] = []
+
+    summary = poll_mailbox(settings, _recording_ingest(calls), mailbox_factory=lambda: mailbox)
+
+    assert [candidate.filename for candidate in calls] == [pdf_name]
+    assert summary.attachments_filtered == 1
+
+
+def test_decoration_signals_semantics() -> None:
+    # The three signals, unit-tested pure: filename (decoration words + Outlook
+    # imageNNN stems), size (<= byte ceiling), shape (small edge or banner).
+    settings = Settings(email_host="imap.example.test")
+    dims = (800, 600)  # shape signal off: long edge > 384, aspect < 4
+    big = b"x" * 65537  # size signal off: one byte over the ceiling
+
+    def signals(
+        filename: str | None, content: bytes, dimensions: tuple[int, int] | None
+    ) -> dict[str, bool]:
+        return _decoration_signals(filename, content, dimensions, settings)
+
+    # Filename signal: decoration words and Outlook auto-embed stems only.
+    for name in ("image001.png", "image07.png", "Company-Logo.PNG", "email-signature.jpg"):
+        assert signals(name, big, dims) == {"filename": True, "size": False, "shape": False}
+    for name in ("image1.png", "image1234.png", "photo.png", "imagery.png", None):
+        assert signals(name, big, dims) == {"filename": False, "size": False, "shape": False}
+    # Size signal: at the ceiling fires, one byte over does not.
+    assert signals("a.png", b"x" * 65536, dims)["size"] is True
+    assert signals("a.png", big, dims)["size"] is False
+    # Shape signal: small longest edge, or banner (>= 4:1 with short edge <= 128).
+    assert signals("a.png", big, (384, 384))["shape"] is True
+    assert signals("a.png", big, (385, 300))["shape"] is False
+    assert signals("a.png", big, (600, 80))["shape"] is True  # banner
+    assert signals("a.png", big, (600, 129))["shape"] is False  # too tall for a banner
+    assert signals("a.png", big, (512, 128))["shape"] is True  # 4:1 exactly, short edge 128
+    assert signals("a.png", big, None)["shape"] is False  # no dimensions, no shape claim
+
+
 def test_noise_gate_disabled_ingests_everything() -> None:
-    # The escape hatch: with the gate off, the inline pixel and the .ics both
-    # reach ingest exactly as before the feature.
+    # The escape hatch: with the gate off, the inline pixel, the .ics, and the
+    # decoration-shaped logo all reach ingest exactly as before the feature.
     settings = Settings(email_host="imap.example.test", email_filter_noise_enabled=False)
     tag = uuid.uuid4().hex[:8]
     raw = make_inline_image_mail(
         subject=f"off {tag}",
         image=png_bytes((1, 1)),
-        extra=[("invite.ics", b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", "text", "calendar")],
+        extra=[
+            ("invite.ics", b"BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n", "text", "calendar"),
+            ("image002.png", png_bytes((200, 200)), "image", "png"),  # decoration-shaped
+        ],
     )
     mailbox = FakeMailBox([mail_message(raw, uid="54")])
     calls: list[IngestCandidate] = []
@@ -1549,6 +1813,7 @@ def test_noise_gate_disabled_ingests_everything() -> None:
     names = {candidate.filename for candidate in calls}
     assert "logo.png" in names  # the inline pixel is ingested when the gate is off
     assert "invite.ics" in names  # the calendar (text/plain) is ingested too
+    assert "image002.png" in names  # the decoration image is ingested too
     assert summary.attachments_filtered == 0
 
 
@@ -1596,6 +1861,166 @@ def test_label_flags_probably_noise_but_still_ingests(
     # The trace records the flagged item at the llm_label stage.
     trace = _selection_trace_lines(caplog)[0]
     assert f"{flag_name}:llm_label:flagged_ambiguous" in trace
+
+
+async def test_llm_noise_corroborated_by_one_signal_skips_image(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # Doc-159 fix: the LLM says probably-noise about an image AND one
+    # deterministic decoration signal agrees (an 800x600 solid PNG compresses
+    # under the byte ceiling — size is its ONLY signal, so the deterministic
+    # >=2-signal gate alone kept it). Corroborated verdicts SKIP instead of
+    # ingest-and-flag; the sibling PDF is untouched.
+    tag = uuid.uuid4().hex[:8]
+    img_name = f"photo-{tag}.png"  # no decoration word; shape off (800 > 384, aspect < 4)
+    pdf_name = f"invoice-{tag}.pdf"
+    patched_anthropic.noise_markers.append("photo-")
+    image = png_bytes((800, 600))
+    assert len(image) <= 65536  # the size signal genuinely fires…
+    raw = make_raw_mail(
+        subject=f"corroborate {tag}",
+        attachments=[
+            (img_name, image, "image", "png"),
+            (pdf_name, make_pdf(tag), "application", "pdf"),
+        ],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="140")])
+
+    with caplog.at_level(logging.INFO, logger="library.email_ingest"):
+        summary = await poll_mailbox_async(
+            label_settings(), session_factory, mailbox_factory=lambda: mailbox
+        )
+
+    assert summary.attachments_ingested == 1  # only the PDF
+    assert summary.attachments_filtered == 1  # the corroborated skip is counted
+    assert summary.attachments_dropped == 0  # quiet, never a user-facing drop
+    assert await documents_named(session_factory, img_name) == []  # no document created
+    documents = await documents_named(session_factory, pdf_name)
+    assert len(documents) == 1
+    assert documents[0].review_status is not ReviewStatus.NEEDS_REVIEW  # sibling unaffected
+    trace = _selection_trace_lines(caplog)[0]
+    assert f"{img_name}:llm_label:filtered(llm_noise_corroborated)" in trace
+    events = await events_for(session_factory, documents[0].id, "email_selection")
+    assert len(events) == 1
+    (img_item,) = [i for i in events[0].detail["items"] if i["filename"] == img_name]
+    assert img_item["verdict"] == "filtered"
+    assert img_item["reason"] == "llm_noise_corroborated"
+    assert "looks decorative" in img_item["detail"]  # the LLM's reasoning snippet…
+    assert "size" in img_item["detail"]  # …plus the fired signal name
+
+
+async def test_llm_noise_zero_signals_ingests_and_flags(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    job_connector: InMemoryConnector,
+    patched_anthropic: FakeAnthropic,
+) -> None:
+    # The LLM says probably-noise but NO deterministic decoration signal agrees
+    # (large noisy 800x600, non-decoration name): today's disposition is
+    # unchanged — ingest-and-flag (email_item_ambiguous), never a skip.
+    tag = uuid.uuid4().hex[:8]
+    img_name = f"zerosig-{tag}.png"
+    patched_anthropic.noise_markers.append("zerosig-")
+    content = noisy_png_bytes((800, 600))
+    assert len(content) > 65536  # the size signal is genuinely off
+    raw = make_raw_mail(
+        subject=f"zero signals {tag}", attachments=[(img_name, content, "image", "png")]
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="141")])
+
+    summary = await poll_mailbox_async(
+        label_settings(), session_factory, mailbox_factory=lambda: mailbox
+    )
+
+    assert summary.attachments_ingested == 1
+    assert summary.attachments_filtered == 0
+    documents = await documents_named(session_factory, img_name)
+    assert len(documents) == 1
+    document = documents[0]
+    assert document.extra["email_selection"]["verdict"] == "probably_noise"
+    assert document.review_status is ReviewStatus.NEEDS_REVIEW
+    rules = [finding["rule"] for finding in document.extra["validation"]["findings"]]
+    assert "email_item_ambiguous" in rules
+
+
+def test_llm_noise_non_image_still_ingests_and_flags(
+    settings: Settings, caplog: pytest.LogCaptureFixture
+) -> None:
+    # A probably-noise NON-image is never corroborated (only images can be
+    # decoration) even when its byte size would trip the size signal:
+    # unchanged ingest-and-flag.
+    tag = uuid.uuid4().hex[:8]
+    pdf_name = f"smallpdf-{tag}.pdf"
+    content = make_pdf(tag)
+    assert len(content) <= 65536  # would fire the size signal, were it an image
+    raw = make_raw_mail(
+        subject=f"non-image {tag}", attachments=[(pdf_name, content, "application", "pdf")]
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="142")])
+    calls: list[IngestCandidate] = []
+
+    def fake_label(request: object) -> LabelOutcome:
+        verdicts = {
+            item.index: ("probably_noise", "looks like marketing")  # type: ignore[attr-defined]
+            for item in request.items  # type: ignore[attr-defined]
+            if item.kind == "attachment"  # type: ignore[attr-defined]
+        }
+        return LabelOutcome(verdicts=verdicts, usage=None, skip_reason=None)
+
+    with caplog.at_level(logging.INFO, logger="library.email_ingest"):
+        summary = poll_mailbox(
+            settings, _recording_ingest(calls), mailbox_factory=lambda: mailbox, label=fake_label
+        )
+
+    assert [candidate.filename for candidate in calls] == [pdf_name]
+    selection = calls[0].extra_document["email_selection"]  # type: ignore[index]
+    assert selection["verdict"] == "probably_noise"
+    assert summary.attachments_ingested == 1
+    assert summary.attachments_filtered == 0
+    trace = _selection_trace_lines(caplog)[0]
+    assert f"{pdf_name}:llm_label:flagged_ambiguous" in trace
+
+
+def test_llm_noise_corroboration_off_with_noise_gate_disabled(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    # email_filter_noise_enabled=False disables the corroborated skip along with
+    # the deterministic gate: a decoration-shaped probably-noise image still
+    # lands as ingest-and-flag, exactly the pre-gate behavior.
+    settings = Settings(email_host="imap.example.test", email_filter_noise_enabled=False)
+    tag = uuid.uuid4().hex[:8]
+    img_name = f"logo-{tag}.png"  # filename + size + shape would all fire
+    raw = make_raw_mail(
+        subject=f"gate off {tag}",
+        attachments=[(img_name, png_bytes((200, 200)), "image", "png")],
+    )
+    mailbox = FakeMailBox([mail_message(raw, uid="143")])
+    calls: list[IngestCandidate] = []
+
+    def fake_label(request: object) -> LabelOutcome:
+        verdicts = {
+            item.index: ("probably_noise", "looks decorative")  # type: ignore[attr-defined]
+            for item in request.items  # type: ignore[attr-defined]
+            if item.kind == "attachment"  # type: ignore[attr-defined]
+        }
+        return LabelOutcome(verdicts=verdicts, usage=None, skip_reason=None)
+
+    with caplog.at_level(logging.INFO, logger="library.email_ingest"):
+        summary = poll_mailbox(
+            settings, _recording_ingest(calls), mailbox_factory=lambda: mailbox, label=fake_label
+        )
+
+    assert [candidate.filename for candidate in calls] == [img_name]
+    selection = calls[0].extra_document["email_selection"]  # type: ignore[index]
+    assert selection["verdict"] == "probably_noise"
+    assert summary.attachments_ingested == 1
+    assert summary.attachments_filtered == 0
+    trace = _selection_trace_lines(caplog)[0]
+    assert f"{img_name}:llm_label:flagged_ambiguous" in trace
 
 
 async def test_flagged_document_needs_review_at_ingest_without_extraction(
