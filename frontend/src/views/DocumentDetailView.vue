@@ -55,6 +55,7 @@ import DocumentComments from '@/components/DocumentComments.vue'
 import ActionDock from '@/components/ActionDock.vue'
 import { useDocumentLayout, HERO_FIELD_LABELS } from '@/composables/useDocumentLayout'
 import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
+import { useDocumentNeighbors } from '@/composables/useDocumentNeighbors'
 
 const props = withDefaults(
   defineProps<{
@@ -90,6 +91,15 @@ onBeforeUnmount(() => {
 
 const flash = useFlashStore()
 const isDeleted = computed(() => Boolean(doc.value?.deleted_at))
+
+// Previous/next document links (below the back link, above the hero). Computed
+// from the current route id against the user's remembered list order — see
+// useDocumentNeighbors. Derives straight from the URL so it survives deep-links.
+const currentDocId = computed<number | null>(() => {
+  const n = Number(route.params.id)
+  return Number.isInteger(n) && n > 0 ? n : null
+})
+const { prevId: prevDocId, nextId: nextDocId } = useDocumentNeighbors(currentDocId)
 const restoringFromTrash = ref(false)
 const pendingPurge = ref(false)
 const purging = ref(false)
@@ -830,6 +840,35 @@ watch(
   <AppBackLink to="/" text="Back to documents" class="mb-4" />
 
   <template v-if="doc">
+    <!-- Previous/next document links: below the back link, above the hero.
+         Walks the user's remembered list order (unfiltered). Hidden while
+         reviewing a queue (that bar owns navigation) and for trashed docs
+         (which are excluded from the list, so they have no neighbours). -->
+    <nav
+      v-if="!inQueue && !isDeleted && (prevDocId || nextDocId)"
+      data-testid="doc-neighbors"
+      class="mb-4 flex items-center justify-between gap-3 text-sm"
+    >
+      <RouterLink
+        v-if="prevDocId"
+        :to="{ name: 'document-detail', params: { id: prevDocId } }"
+        data-testid="doc-prev"
+        class="text-violet-600 hover:underline dark:text-violet-300"
+      >
+        ← Previous document
+      </RouterLink>
+      <span v-else></span>
+      <RouterLink
+        v-if="nextDocId"
+        :to="{ name: 'document-detail', params: { id: nextDocId } }"
+        data-testid="doc-next"
+        class="text-violet-600 hover:underline dark:text-violet-300"
+      >
+        Next document →
+      </RouterLink>
+      <span v-else></span>
+    </nav>
+
     <!-- Trash banner: shown when this document is soft-deleted (reached from
          Recently Deleted). Offers the two exits — restore, or permanent
          (confirmed) deletion. -->

@@ -199,6 +199,9 @@ describe('DocumentDetailView', () => {
   let createKindResponse: (init?: RequestInit) => Response
   /** What GET /api/documents/12/markdown returns; tests may override. */
   let markdownResponse: () => Response
+  /** Ordered ids the documents-list endpoint returns for prev/next; tests
+   * mutate this. Default puts the current doc (12) between 8 and 20. */
+  let neighborsList: { id: number }[]
 
   beforeEach(async () => {
     // useDocumentLayout is a module singleton — reset its persisted state and
@@ -218,6 +221,7 @@ describe('DocumentDetailView', () => {
     }
     markdownResponse = () =>
       jsonResponse({ page_count: 1, pages: [{ page_number: 1, markdown: '# Invoice\n\nTotal: €123.45' }] } satisfies DocumentMarkdownResponse)
+    neighborsList = [{ id: 8 }, { id: 12 }, { id: 20 }]
     capturedSortables.length = 0
     FakeIntersectionObserver.instances = []
     vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
@@ -241,6 +245,12 @@ describe('DocumentDetailView', () => {
       // The detail fetch carries ?include_deleted=true (so trashed docs open
       // read-only), so match on the path, not the exact query string.
       const path = url.split('?')[0]
+      // Documents list — used by useDocumentNeighbors to compute prev/next.
+      if (path === '/api/documents' && method === 'GET') {
+        return Promise.resolve(
+          jsonResponse({ items: neighborsList, total: neighborsList.length, limit: 100, offset: 0 }),
+        )
+      }
       if (url === '/api/documents/12/permanent' && method === 'DELETE') {
         return Promise.resolve(new Response(null, { status: 204 }))
       }
@@ -1224,6 +1234,63 @@ describe('DocumentDetailView', () => {
 
     expect(q.isActive).toBe(false)
     expect(push).toHaveBeenCalledWith('/')
+  })
+
+  describe('previous/next document links', () => {
+    it('renders prev and next links targeting the neighbouring documents', async () => {
+      neighborsList = [{ id: 8 }, { id: 12 }, { id: 20 }]
+      const w = await mountView('/documents/12')
+      await flushPromises()
+      const bar = w.find('[data-testid="doc-neighbors"]')
+      expect(bar.exists()).toBe(true)
+      const prev = w.get('[data-testid="doc-prev"]')
+      const next = w.get('[data-testid="doc-next"]')
+      expect(prev.text()).toContain('Previous document')
+      expect(next.text()).toContain('Next document')
+      // router-link resolves the target route to /documents/<id>.
+      expect(prev.attributes('href')).toBe('/documents/8')
+      expect(next.attributes('href')).toBe('/documents/20')
+    })
+
+    it('omits the previous link for the first document', async () => {
+      neighborsList = [{ id: 12 }, { id: 20 }]
+      const w = await mountView('/documents/12')
+      await flushPromises()
+      expect(w.find('[data-testid="doc-prev"]').exists()).toBe(false)
+      expect(w.get('[data-testid="doc-next"]').attributes('href')).toBe('/documents/20')
+    })
+
+    it('omits the next link for the last document', async () => {
+      neighborsList = [{ id: 8 }, { id: 12 }]
+      const w = await mountView('/documents/12')
+      await flushPromises()
+      expect(w.get('[data-testid="doc-prev"]').attributes('href')).toBe('/documents/8')
+      expect(w.find('[data-testid="doc-next"]').exists()).toBe(false)
+    })
+
+    it('hides the bar entirely when the document has no neighbours', async () => {
+      neighborsList = [{ id: 12 }]
+      const w = await mountView('/documents/12')
+      await flushPromises()
+      expect(w.find('[data-testid="doc-neighbors"]').exists()).toBe(false)
+    })
+
+    it('hides the bar in review-queue mode (the queue bar owns navigation)', async () => {
+      seedQueue([12, 13])
+      neighborsList = [{ id: 8 }, { id: 12 }, { id: 20 }]
+      detail = makeDetail({ review_status: 'needs_review' })
+      const w = await mountView('/documents/12?queue=1')
+      await flushPromises()
+      expect(w.find('[data-testid="doc-neighbors"]').exists()).toBe(false)
+    })
+
+    it('hides the bar for a trashed document', async () => {
+      neighborsList = [{ id: 8 }, { id: 12 }, { id: 20 }]
+      detail = makeDetail({ deleted_at: '2026-07-01T00:00:00Z' })
+      const w = await mountView('/documents/12')
+      await flushPromises()
+      expect(w.find('[data-testid="doc-neighbors"]').exists()).toBe(false)
+    })
   })
 
   it('passes the page query param as initialPage to DocumentPdfPreview', async () => {

@@ -33,7 +33,12 @@ function jsonResponse(body: unknown, status = 200): Response {
   })
 }
 
-const KINDS = [{ slug: 'invoice', name: 'Invoice', document_count: 3 }]
+const KINDS = [
+  { slug: 'invoice', name: 'Invoice', document_count: 3 },
+  { slug: 'receipt', name: 'Receipt', document_count: 8 },
+  { slug: 'contract', name: 'Contract', document_count: 5 },
+  { slug: 'certificate', name: 'Certificate', document_count: 0 },
+]
 const SENDERS = [{ id: 3, name: 'Eneco', document_count: 3 }]
 const RECIPIENTS = [{ id: 5, name: 'John', document_count: 7 }]
 const TAGS = [
@@ -204,6 +209,38 @@ describe('DocumentFilterBar', () => {
     const query = w.emitted('apply')!.at(-1)![0] as Record<string, unknown>
     expect(query.page).toBeUndefined()
     expect(query).toEqual({ kind: 'invoice', sender_id: '3' })
+  })
+
+  it('renders type-filter pills ordered by count desc, dropping zero-count kinds', async () => {
+    const w = mountBar()
+    await flushPromises() // taxonomy load
+    const pills = w.findAll('[data-testid^="type-filter-"]')
+    // certificate has document_count 0 → omitted; the rest ordered 8, 5, 3.
+    expect(pills.map((p) => p.attributes('data-testid'))).toEqual([
+      'type-filter-receipt',
+      'type-filter-contract',
+      'type-filter-invoice',
+    ])
+    // The count is shown on each pill.
+    expect(pills[0]!.text()).toContain('Receipt')
+    expect(pills[0]!.text()).toContain('8')
+    expect(w.find('[data-testid="type-filter-certificate"]').exists()).toBe(false)
+  })
+
+  it('clicking a type-filter pill emits apply with that kind', async () => {
+    const w = mountBar()
+    await flushPromises()
+    await w.get('[data-testid="type-filter-contract"]').trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ kind: 'contract' })
+  })
+
+  it('clicking the active type-filter pill clears the kind filter', async () => {
+    const w = mountBar({ ...EMPTY, kind: 'contract' })
+    await flushPromises()
+    const active = w.get('[data-testid="type-filter-contract"]')
+    expect(active.attributes('aria-pressed')).toBe('true')
+    await active.trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({})
   })
 
   it('always shows the pill row (no collapse toggle) and lets it wrap', () => {
