@@ -254,6 +254,66 @@ async def test_project_slug_unique_enforced(session: AsyncSession) -> None:
     await session.rollback()
 
 
+async def test_matter_round_trip(session: AsyncSession) -> None:
+    """A Matter persists and reloads; hint and archived_at default NULL."""
+    from library.models import Matter
+
+    matter = Matter(slug="car-insurance", name="Car insurance", hint="Vehicle policies")
+    session.add(matter)
+    await session.commit()
+    session.expunge_all()
+
+    loaded = (
+        await session.execute(select(Matter).where(Matter.slug == "car-insurance"))
+    ).scalar_one()
+    assert loaded.name == "Car insurance"
+    assert loaded.hint == "Vehicle policies"
+    assert loaded.archived_at is None
+    assert loaded.created_at is not None
+
+
+async def test_document_matters_attach_detach(session: AsyncSession) -> None:
+    """A document belongs to several matters and can be detached via Document.matters."""
+    from library.models import Matter
+
+    health = Matter(slug="health-insurance", name="Health insurance")
+    subs = Matter(slug="subscriptions", name="Subscriptions")
+    document = Document(
+        sha256="a1" * 32,
+        mime_type="application/pdf",
+        source=DocumentSource.UPLOAD,
+        matters=[health, subs],
+    )
+    session.add(document)
+    await session.commit()
+    session.expunge_all()
+
+    loaded = (
+        await session.execute(select(Document).where(Document.sha256 == "a1" * 32))
+    ).scalar_one()
+    assert {matter.slug for matter in loaded.matters} == {"health-insurance", "subscriptions"}
+
+    loaded.matters = [matter for matter in loaded.matters if matter.slug == "health-insurance"]
+    await session.commit()
+    session.expunge_all()
+
+    reloaded = (
+        await session.execute(select(Document).where(Document.sha256 == "a1" * 32))
+    ).scalar_one()
+    assert {matter.slug for matter in reloaded.matters} == {"health-insurance"}
+
+
+async def test_matter_slug_unique_enforced(session: AsyncSession) -> None:
+    from library.models import Matter
+
+    session.add(Matter(slug="dup-matter", name="First"))
+    await session.commit()
+    session.add(Matter(slug="dup-matter", name="Second"))
+    with pytest.raises(IntegrityError):
+        await session.commit()
+    await session.rollback()
+
+
 async def test_ask_thread_cascades_to_turns(session: AsyncSession) -> None:
     from library.models import AskThread, AskTurn
 

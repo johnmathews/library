@@ -323,6 +323,51 @@ document_projects: Table = Table(
 Index("ix_document_projects_project_id", document_projects.c.project_id)
 
 
+class Matter(Base):
+    """A first-class "business matter" grouping documents by subject (M2M).
+
+    Unlike :class:`Project` (a time-bound endeavor that is archived when it
+    concludes), a matter is an evergreen life/business category — "car
+    insurance", "health insurance", "subscriptions" — that a document can
+    belong to any number of. Matters are user-curated (name + a short ``hint``
+    that guides the LLM classifier) and auto-assigned at ingest, but stay
+    hand-correctable. ``archived_at`` soft-disables a matter without deleting
+    its history.
+    """
+
+    __tablename__ = "matters"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    slug: Mapped[str] = mapped_column(String(64), unique=True)
+    name: Mapped[str] = mapped_column(String(255))
+    # Short human-written description of what belongs in this matter; fed to the
+    # LLM classifier as the disambiguation hint. NULL = no hint provided.
+    hint: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+document_matters: Table = Table(
+    "document_matters",
+    Base.metadata,
+    Column(
+        "document_id",
+        ForeignKey("documents.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "matter_id",
+        ForeignKey("matters.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+Index("ix_document_matters_matter_id", document_matters.c.matter_id)
+
+
 class Document(Base):
     __tablename__ = "documents"
 
@@ -435,6 +480,7 @@ class Document(Base):
     kind: Mapped[Kind | None] = relationship(lazy="selectin")
     tags: Mapped[list[Tag]] = relationship(secondary=document_tags, lazy="selectin")
     projects: Mapped[list[Project]] = relationship(secondary=document_projects, lazy="selectin")
+    matters: Mapped[list[Matter]] = relationship(secondary=document_matters, lazy="selectin")
     events: Mapped[list["IngestionEvent"]] = relationship(
         back_populates="document", cascade="all, delete-orphan", lazy="selectin"
     )
