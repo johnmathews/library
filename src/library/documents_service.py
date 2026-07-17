@@ -200,10 +200,14 @@ async def apply_document_update(
                 status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
                 detail="matters cannot be null; send [] to clear them",
             )
-        document.matters = [
+        # Resolve then dedup by the *matter*, not the raw string: distinct
+        # inputs ("Car insurance" and "car-insurance") can resolve to the same
+        # row, and appending it twice would violate the document_matters PK.
+        resolved = [
             await get_or_create_matter(session, identifier)
             for identifier in dict.fromkeys(identifiers)
         ]
+        document.matters = list({matter.id: matter for matter in resolved}.values())
         edited.append("matters")
     if provided.get("language", "") is None:
         raise HTTPException(

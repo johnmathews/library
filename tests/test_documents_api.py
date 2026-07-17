@@ -1592,6 +1592,18 @@ def test_patch_null_matters_rejected(api_client: TestClient, api_database_url: s
     assert response.status_code == 422
 
 
+def test_patch_matters_dedups_name_and_slug(api_client: TestClient, api_database_url: str) -> None:
+    """A name and its slug refer to the same matter; sending both must not 500
+    on a duplicate document_matters row — they collapse to one membership."""
+    document_id = seed_document(api_database_url, "w5-matter-dedup")
+    response = api_client.patch(
+        f"/api/documents/{document_id}",
+        json={"matters": ["Car insurance", "car-insurance"]},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["matters"] == [{"slug": "car-insurance", "name": "Car insurance"}]
+
+
 # --- Timestamps: ingestion date / last edited --------------------------------
 
 
