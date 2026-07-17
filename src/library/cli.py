@@ -37,6 +37,7 @@ from library.importer.client import PaperlessClient
 from library.importer.runner import ImportReport, format_report, run_import
 from library.ingest import resolve_owner_id
 from library.jobs import (
+    classify_document_matters,
     embed_document,
     extract_document,
     job_app,
@@ -521,6 +522,55 @@ def backfill_summaries(
 
     count = _run(operation)
     typer.echo(f"queued extraction for {count} document(s)")
+
+
+@app.command("sweep-matters")
+def sweep_matters(
+    limit: int | None = typer.Option(
+        None, "--limit", min=1, help="Only enqueue the first N documents."
+    ),
+    all_documents: bool = typer.Option(
+        False,
+        "--all",
+        help="Re-classify every non-deleted document, not just unclassified ones.",
+    ),
+    dry_run: bool = typer.Option(
+        False, "--dry-run", help="Report the candidate count without enqueuing anything."
+    ),
+) -> None:
+    """Queue business-matter classification for documents.
+
+    Run after the matter vocabulary changes (a matter added, renamed, or its
+    hint edited) so existing documents are re-filed against the new list. By
+    default only documents that have never been classified are queued (those
+    with no ``extra['matter_classification']`` provenance); pass ``--all`` to
+    re-classify everything. Classification is merge-only and honours
+    ``extra['user_edited_fields']``, so hand-curated matters are never
+    overwritten. The worker must be running to do the work; this command only
+    enqueues the jobs.
+    """
+
+    async def operation(session: AsyncSession) -> int:
+        statement = select(Document.id).where(Document.deleted_at.is_(None))
+        if not all_documents:
+            # Not yet classified: no provenance stamp from a prior pass.
+            statement = statement.where(Document.extra["matter_classification"].is_(None))
+        statement = statement.order_by(Document.id)
+        if limit is not None:
+            statement = statement.limit(limit)
+        document_ids = list((await session.execute(statement)).scalars().all())
+        if dry_run:
+            return len(document_ids)
+        async with job_app.open_async():
+            for document_id in document_ids:
+                await classify_document_matters.defer_async(document_id=document_id)
+        return len(document_ids)
+
+    count = _run(operation)
+    if dry_run:
+        typer.echo(f"{count} document(s) would be queued for matter classification")
+    else:
+        typer.echo(f"queued matter classification for {count} document(s)")
 
 
 # Junk image documents (email logo/tracker PNGs) carry almost no OCR text and

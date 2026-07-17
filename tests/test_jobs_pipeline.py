@@ -188,6 +188,23 @@ async def test_pipeline_defers_thumbnail_job_after_ocr(
     assert [job["args"] for job in thumbnail_jobs] == [{"document_id": document_id}]
 
 
+async def test_pipeline_defers_matter_classification_after_extract(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+) -> None:
+    document_id = await make_document(session_factory, "pipeline-matter-defer")
+
+    await advance_pipeline(session_factory, document_id)
+
+    matter_jobs = [
+        job
+        for job in job_connector.jobs.values()
+        if job["task_name"] == "library.jobs.classify_document_matters"
+    ]
+    assert [job["args"] for job in matter_jobs] == [{"document_id": document_id}]
+
+
 async def test_pipeline_defers_series_insight_when_sender_and_kind_present(
     session_factory: async_sessionmaker[AsyncSession],
     fake_router: OcrResult,

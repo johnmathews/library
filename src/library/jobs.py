@@ -26,6 +26,7 @@ from library.embedding.chunker import chunker_for_mime
 from library.extraction.apply import apply_extraction
 from library.extraction.repair import maybe_repair_extraction
 from library.markdown.apply import apply_markdown
+from library.matter_classifier import apply_matter_classification
 from library.models import (
     Document,
     DocumentChunk,
@@ -342,6 +343,19 @@ async def _run_stage_hook(
             )
     elif status is DocumentStatus.EXTRACT:
         await run_extraction(session, document)
+        # Matter classification reads the title/summary/sender extraction just
+        # set, but needs nothing else, so it runs as its own best-effort job in
+        # parallel with the later stages (it sees the committed extraction once
+        # this pipeline transaction lands). A transient queue error here must
+        # not strand the document in ``failed``.
+        try:
+            await classify_document_matters.defer_async(document_id=document.id)
+        except Exception:
+            logger.warning(
+                "could not queue matter classification for document %s; continuing",
+                document.id,
+                exc_info=True,
+            )
     elif status is DocumentStatus.MARKDOWN:
         await run_markdown(session, document)
     elif status is DocumentStatus.EMBED:
@@ -503,6 +517,24 @@ async def extract_document(document_id: int) -> None:
         if document is None:
             raise ValueError(f"document {document_id} not found")
         await apply_extraction(session, document, get_settings())
+
+
+@job_app.task(name="library.jobs.classify_document_matters")
+async def classify_document_matters(document_id: int) -> None:
+    """Background task: auto-file one document into business matters.
+
+    Deferred at ingest (right after extraction) and by the ``sweep-matters``
+    CLI after the matter vocabulary changes. Best-effort, idempotent, and
+    merge-only: it only adds matters the classifier is confident about and
+    honours ``extra["user_edited_fields"]``. Independent of pipeline status, so
+    it also works on already-indexed documents.
+    """
+    async with get_sessionmaker()() as session:
+        document = await session.get(Document, document_id)
+        if document is None:
+            raise ValueError(f"document {document_id} not found")
+        await apply_matter_classification(session, document, get_settings())
+        await session.commit()
 
 
 @job_app.task(name="library.jobs.embed_document")
