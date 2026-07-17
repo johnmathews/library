@@ -70,13 +70,19 @@ const kinds = ref<KindOption[]>([])
 const senders = ref<SenderOption[]>([])
 const recipients = ref<RecipientOption[]>([])
 
-// Existing projects feed the projects multiselect (picking an existing name or
-// typing a new one, which the backend upserts on save).
-const { projects: projectOptions, ensureLoaded: ensureProjectsLoaded } = useTaxonomyOptions()
-// Only the Content tile renders the projects multiselect; the composable caches
-// its fetch, so this is at most one request across the whole page regardless.
+// Existing projects & matters feed their respective multiselects (picking an
+// existing name or typing a new one, which the backend upserts on save).
+const {
+  projects: projectOptions,
+  matters: matterOptions,
+  ensureLoaded: ensureProjectsLoaded,
+} = useTaxonomyOptions()
+// Only the Content tile renders the projects/matters multiselects; the
+// composable caches its fetch, so this is at most one request across the whole
+// page regardless.
 if (props.section === 'content') void ensureProjectsLoaded()
 const projectOptionNames = computed(() => projectOptions.value.map((project) => project.name))
+const matterOptionNames = computed(() => matterOptions.value.map((matter) => matter.name))
 
 onMounted(async () => {
   // Only the tile that renders a given controlled-list editor fetches its
@@ -174,6 +180,7 @@ type EditableField =
   | 'language'
   | 'tags'
   | 'projects'
+  | 'matters'
   | 'amount'
   | 'due_date'
   | 'expiry_date'
@@ -204,6 +211,11 @@ const rowConfigs: RowConfig[] = [
     label: 'Projects',
     display: (d) =>
       d.projects.length ? d.projects.map((project) => project.name).join(', ') : null,
+  },
+  {
+    field: 'matters',
+    label: 'Matters',
+    display: (d) => (d.matters.length ? d.matters.map((matter) => matter.name).join(', ') : null),
   },
   {
     field: 'amount',
@@ -238,7 +250,7 @@ interface FieldGroup {
 }
 
 const fieldGroups: FieldGroup[] = [
-  { key: 'content', label: 'Content', accent: 'violet', fields: ['title', 'summary', 'tags', 'projects'] },
+  { key: 'content', label: 'Content', accent: 'violet', fields: ['title', 'summary', 'tags', 'projects', 'matters'] },
   { key: 'classification', label: 'Classification', accent: 'yellow', fields: ['kind', 'language'] },
   {
     key: 'parties',
@@ -258,7 +270,14 @@ const activeGroups = computed<FieldGroup[]>(() =>
 )
 
 /** Fields that read better spanning the full width of the two-column grid. */
-const WIDE_FIELDS = new Set<EditableField>(['title', 'summary', 'tags', 'projects', 'amount'])
+const WIDE_FIELDS = new Set<EditableField>([
+  'title',
+  'summary',
+  'tags',
+  'projects',
+  'matters',
+  'amount',
+])
 
 /** Static Tailwind class strings per accent (kept literal so the build's content
  * scan keeps them). `border` is left-only so it never fights a shorthand. */
@@ -352,6 +371,10 @@ const drafts = reactive<Record<StringDraftField, string>>({
  * are free text and may contain commas, so the multiselect binds this array
  * directly — no encode/decode round-trip that a comma would corrupt. */
 const projectsDraft = ref<string[]>([])
+/** Matters draft as a discrete list (mirrors {@link projectsDraft}): matter
+ * names are free text and may contain commas, so the multiselect binds this
+ * array directly rather than a comma-joined string. */
+const mattersDraft = ref<string[]>([])
 /** Draft ISO date strings for the date fields. */
 const dateDrafts = reactive<{
   document_date: string | null
@@ -374,6 +397,7 @@ function hydrateDrafts(): void {
   drafts.recipient = d.recipient?.name ?? ''
   drafts.tags = d.tags.map((tag) => tag.slug).join(', ')
   projectsDraft.value = d.projects.map((project) => project.name)
+  mattersDraft.value = d.matters.map((matter) => matter.name)
   drafts.kind = d.kind?.slug ?? ''
   drafts.language = d.language
   drafts.amount = d.amount_total ?? ''
@@ -395,6 +419,7 @@ function hydrateField(field: EditableField, d: DocumentDetail): void {
     case 'recipient': drafts.recipient = d.recipient?.name ?? ''; break
     case 'tags': drafts.tags = d.tags.map((tag) => tag.slug).join(', '); break
     case 'projects': projectsDraft.value = d.projects.map((project) => project.name); break
+    case 'matters': mattersDraft.value = d.matters.map((matter) => matter.name); break
     case 'kind': drafts.kind = d.kind?.slug ?? ''; break
     case 'language': drafts.language = d.language; break
     case 'amount':
@@ -461,6 +486,14 @@ function fieldDirty(field: EditableField): boolean {
       const current = d.projects.map((p) => p.name).sort()
       return next.length !== current.length || next.some((name, i) => name !== current[i])
     }
+    case 'matters': {
+      // Matters are an unordered set, full-replaced by name; compare sorted
+      // names element-wise (mirrors projects) so a reorder-only edit isn't seen
+      // as a change.
+      const next = [...mattersDraft.value].sort()
+      const current = d.matters.map((m) => m.name).sort()
+      return next.length !== current.length || next.some((name, i) => name !== current[i])
+    }
     case 'document_date': return (dateDrafts.document_date ?? null) !== (d.document_date ?? null)
     case 'due_date': return (dateDrafts.due_date ?? null) !== (d.due_date ?? null)
     case 'expiry_date': return (dateDrafts.expiry_date ?? null) !== (d.expiry_date ?? null)
@@ -493,6 +526,8 @@ function buildPatch(field: EditableField): DocumentUpdate | null {
       return { tags: drafts.tags.split(',').map((tag) => tag.trim()).filter(Boolean) }
     case 'projects':
       return { projects: [...projectsDraft.value] }
+    case 'matters':
+      return { matters: [...mattersDraft.value] }
     case 'document_date':
       return { document_date: dateDrafts.document_date }
     case 'due_date':
@@ -529,9 +564,9 @@ async function saveField(field: EditableField): Promise<void> {
     const updated = await updateDocument(props.doc.id, patch)
     emit('update:doc', updated)
     hydrateField(field, updated)
-    // A projects edit may have created a new project inline; refresh the shared
-    // taxonomy cache so it's offered in the multiselect and elsewhere.
-    if (field === 'projects') void refreshTaxonomyOptions()
+    // A projects/matters edit may have created a new entry inline; refresh the
+    // shared taxonomy cache so it's offered in the multiselect and elsewhere.
+    if (field === 'projects' || field === 'matters') void refreshTaxonomyOptions()
     savedField[field] = true
     window.setTimeout(() => {
       savedField[field] = false
@@ -765,6 +800,23 @@ const latestExtractionEvent = computed(() => {
                 <AppBadge :colour="tagColour(project.name)">{{ project.name }}</AppBadge>
               </RouterLink>
             </dd>
+            <!-- Matters render as badges linking to the matter-filtered
+                 dashboard, mirroring the project badges above. -->
+            <dd
+              v-else-if="!editMode && field === 'matters' && doc.matters.length"
+              class="mt-2 flex flex-wrap gap-2"
+              data-testid="row-value"
+            >
+              <RouterLink
+                v-for="matter in doc.matters"
+                :key="matter.slug"
+                :to="{ path: '/', query: { matter: matter.slug } }"
+                data-testid="matter-badge"
+                class="rounded-full"
+              >
+                <AppBadge :colour="tagColour(matter.name)">{{ matter.name }}</AppBadge>
+              </RouterLink>
+            </dd>
             <dd
               v-else-if="!editMode"
               class="mt-2 min-w-0 break-words leading-snug text-gray-800 dark:text-gray-100"
@@ -935,6 +987,21 @@ const latestExtractionEvent = computed(() => {
                 :error-message="fieldError.projects ?? undefined"
                 @change="saveField('projects')"
               />
+              <template v-else-if="field === 'matters'">
+                <AppMultiSelect
+                  id="edit-matters"
+                  v-model="mattersDraft"
+                  label="Matters"
+                  :options="matterOptionNames"
+                  placeholder="Select or add a matter…"
+                  :error-message="fieldError.matters ?? undefined"
+                  @change="saveField('matters')"
+                />
+                <p class="mt-1 text-xs text-gray-400 dark:text-gray-500">
+                  Editing here pins the matters for this document — auto-classification
+                  no longer touches it.
+                </p>
+              </template>
               <div
                 v-else-if="field === 'amount'"
                 class="flex flex-wrap gap-3"

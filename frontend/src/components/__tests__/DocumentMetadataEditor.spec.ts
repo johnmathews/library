@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils'
 
 // Keep DOCUMENT_LANGUAGES (and the rest) real; stub only the write endpoint.
 vi.mock('@/api/documents', async () => {
@@ -20,6 +20,7 @@ vi.mock('@/composables/taxonomyOptions', () => ({
   refreshTaxonomyOptions: vi.fn().mockResolvedValue(undefined),
   useTaxonomyOptions: () => ({
     projects: ref([]),
+    matters: ref([]),
     ensureLoaded: vi.fn().mockResolvedValue(undefined),
   }),
 }))
@@ -194,6 +195,51 @@ describe('DocumentMetadataEditor', () => {
     )
     // Entering edit mode alone (no field committed) must never autosave.
     expect(updateDocument).not.toHaveBeenCalled()
+  })
+
+  it('assigns a matter and PATCHes matters as a full-replacement name list', async () => {
+    const fresh = makeDetail({ matters: [{ slug: 'acme-merger', name: 'Acme merger' }] })
+    vi.mocked(updateDocument).mockResolvedValue(fresh)
+    const { wrapper, doc } = mountEditor('content')
+    await flushPromises()
+
+    await enterEditMode()
+    // Type a new matter name and commit it with Enter (AppMultiSelect emits change).
+    await wrapper.find('#edit-matters').setValue('Acme merger')
+    await wrapper.find('#edit-matters').trigger('keydown.enter')
+    await flushPromises()
+
+    expect(updateDocument).toHaveBeenCalledWith(doc.id, { matters: ['Acme merger'] })
+  })
+
+  it('replaces an existing matter set when removing all pins (clears with [])', async () => {
+    const doc = makeDetail({ matters: [{ slug: 'acme-merger', name: 'Acme merger' }] })
+    vi.mocked(updateDocument).mockResolvedValue(makeDetail({ matters: [] }))
+    const { wrapper } = mountEditor('content', doc)
+    await flushPromises()
+
+    await enterEditMode()
+    await wrapper.find('[data-testid="edit-matters-remove"]').trigger('click')
+    await flushPromises()
+
+    expect(updateDocument).toHaveBeenCalledWith(doc.id, { matters: [] })
+  })
+
+  it('renders matter badges linking to the matter-filtered dashboard in read mode', async () => {
+    const doc = makeDetail({ matters: [{ slug: 'acme-merger', name: 'Acme merger' }] })
+    const wrapper = mount(DocumentMetadataEditor, {
+      props: { doc, section: 'content' as const },
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    })
+    await flushPromises()
+
+    const badge = wrapper.find('[data-testid="matter-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(wrapper.findComponent(RouterLinkStub).props('to')).toEqual({
+      path: '/',
+      query: { matter: 'acme-merger' },
+    })
+    expect(badge.text()).toContain('Acme merger')
   })
 
   it('renders the sender datalist adjacent to the sender input', async () => {
