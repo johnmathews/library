@@ -64,5 +64,13 @@ def unlock_pdf(content: bytes, passwords: Sequence[str]) -> bytes:
                 return out.getvalue()
         except pikepdf.PasswordError:
             continue
+        except Exception:
+            # Encrypted but unreadable once opened/re-saved (a corrupt-and-
+            # encrypted PDF, e.g. a mangled email attachment). Best-effort, same
+            # guarantee as the initial open above: never fail the upload here —
+            # return the original and let the pipeline surface it (the OCR router
+            # re-checks encryption and fails the document with a clear reason).
+            logger.warning("pdf_unlock: encrypted PDF unreadable during unlock", exc_info=True)
+            return content
 
     raise PdfLockedError(len(passwords))

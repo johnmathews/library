@@ -50,3 +50,22 @@ a non-unlockable id, and collision skip. Full backend suite green.
 Run inside the deployed container against the live DB + `/data`; **dry run
 first**, review the numbers, then `--apply` the reviewed ids with the worker
 running.
+
+## 6. First prod run (2026-07-17)
+
+Ran on the `paperless` host via
+`docker compose exec -T library-webserver library sweep-encrypted`:
+
+- Dry run: **3 failed PDFs scanned, 3 encrypted, 3 unlockable** — ids 11
+  (`Certificaat.pdf`), 30 (`Polis.pdf`), 182 (`Certificaat.pdf`), all opened by
+  the default `2064`.
+- `--apply --ids 11,30,182`: all three unlocked in place and re-queued; the
+  worker reprocessed them `failed → received → … → indexed`. Final OCR text
+  3162 / 1788 / 3162 chars; each carries a `pdf_unlocked_backfill` event with
+  its old→new sha256. Three previously-dead documents are now searchable.
+
+## 7. Wrap-up doc addition
+
+Added a "password-protected PDF failed" entry to `docs/deployment.md`'s
+troubleshooting list pointing operators at `LIBRARY_PDF_UNLOCK_PASSWORDS` and
+`library sweep-encrypted`.

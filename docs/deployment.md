@@ -366,6 +366,11 @@ image; proxmox-setup owns how it is run. Concrete details:
   `LIBRARY_TEXT_LAYER_MIN_CHARS_PER_PAGE`; behaviour and the measured
   benchmark are in [ingestion.md](ingestion.md) and
   [benchmarks/260610-ocr-benchmark.md](benchmarks/260610-ocr-benchmark.md).
+- **Password-protected PDF failed** — an encrypted PDF whose password is
+  not in `LIBRARY_PDF_UNLOCK_PASSWORDS` (default `2064`) fails at OCR. Add
+  the password to that setting; new uploads unlock at ingest, and existing
+  failures are unlocked in place by `library sweep-encrypted` (dry-run
+  first — [ingestion.md](ingestion.md), "Unlocking encrypted PDFs").
 - **Extraction skipped** — the document's audit trail says why:
   `missing_api_key` (set `LIBRARY_ANTHROPIC_API_KEY`), `disabled`
   (`LIBRARY_EXTRACTION_ENABLED`), `budget` (raise

@@ -63,3 +63,23 @@ def test_corrupt_bytes_pass_through_unchanged(tmp_path) -> None:
     # unreadable PDFs downstream. Mirrors the best-effort docx branch.
     garbage = b"%PDF-1.4 not really a pdf"
     assert unlock_pdf(garbage, ["2064"]) is garbage
+
+
+def test_corrupt_and_encrypted_pdf_does_not_raise(tmp_path, monkeypatch) -> None:
+    # A user-encrypted PDF that is ALSO corrupt: the first (no-password) open
+    # raises PasswordError, then opening with a candidate password raises a
+    # non-PasswordError (PdfError). unlock_pdf must honour "never fail the
+    # upload" and return the original bytes, not propagate — otherwise a direct
+    # upload of such a file 500s (ingest only catches PdfLockedError).
+    encrypted = encrypt_pdf(_plain_pdf(tmp_path), user_password="2064")
+    calls = {"n": 0}
+    real_open = pikepdf.open
+
+    def flaky_open(*args, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 1:
+            return real_open(*args, **kwargs)  # no-password probe → PasswordError
+        raise pikepdf.PdfError("corrupt after decryption")
+
+    monkeypatch.setattr(pikepdf, "open", flaky_open)
+    assert unlock_pdf(encrypted, ["2064"]) is encrypted
