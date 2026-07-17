@@ -6,6 +6,7 @@ import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 
+import pikepdf
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
@@ -13,6 +14,7 @@ from PIL import Image
 from library.docx import DOCX_MIME
 from tests.conftest import fetch_all
 from tests.docx_fixtures import make_docx
+from tests.ocr_fixtures import encrypt_pdf, make_text_pdf
 from tests.test_images import make_heic
 
 pytestmark = pytest.mark.integration
@@ -575,3 +577,64 @@ def test_duplicate_upload_notifies_owner(
     # post-commit uploader access works on the real async session.
     assert len(sends) == 1
     assert sends[0]["title"] == "Duplicate document"
+
+
+def _pdf_unlocked_flag(database_url: str, document_id: int) -> bool:
+    rows = fetch_all(
+        database_url,
+        "SELECT (detail->>'pdf_unlocked')::bool FROM ingestion_events "
+        "WHERE document_id = :id AND event = 'received'",
+        id=document_id,
+    )
+    return rows == [(True,)]
+
+
+def test_encrypted_pdf_is_unlocked_and_stored_decrypted(
+    api_client: TestClient, api_database_url: str, tmp_path: Path
+) -> None:
+    # A PDF locked with the default password 2064 is decrypted at ingest; the
+    # stored source-of-truth reopens without a password and the received event
+    # records that an unlock happened.
+    plain = make_text_pdf(tmp_path / "plain.pdf", lines=["Geheime factuur"]).read_bytes()
+    encrypted = encrypt_pdf(plain, user_password="2064")
+
+    status_code, body = upload(api_client, encrypted, filename="locked.pdf")
+    assert status_code == 201
+    document_id = body["id"]
+
+    # The stored bytes are the decrypted PDF: sha256 is of the decrypted content
+    # (not the uploaded ciphertext) and the file reopens without a password.
+    sha = body["sha256"]
+    assert sha != hashlib.sha256(encrypted).hexdigest()
+    stored = (tmp_path / "originals" / sha[0:2] / sha[2:4] / sha).read_bytes()
+    with pikepdf.open(io.BytesIO(stored)):
+        pass  # opens with no password → truly unlocked
+    assert _pdf_unlocked_flag(api_database_url, document_id) is True
+
+
+def test_unencrypted_pdf_records_not_unlocked(
+    api_client: TestClient, api_database_url: str, tmp_path: Path
+) -> None:
+    plain = make_text_pdf(tmp_path / "plain2.pdf", lines=["Gewone factuur"]).read_bytes()
+    status_code, body = upload(api_client, plain, filename="plain.pdf")
+    assert status_code == 201
+    assert _pdf_unlocked_flag(api_database_url, body["id"]) is False
+
+
+def test_encrypted_pdf_with_unknown_password_is_stored_as_is(
+    api_client: TestClient, tmp_path: Path
+) -> None:
+    # No configured password matches: ingest must not crash. The original
+    # (still-encrypted) bytes are stored and the document is created; the OCR
+    # worker later fails it with a clear reason (covered in test_ocr_router).
+    plain = make_text_pdf(tmp_path / "plain3.pdf", lines=["Onbekend wachtwoord"]).read_bytes()
+    encrypted = encrypt_pdf(plain, user_password="totally-unknown")
+
+    status_code, body = upload(api_client, encrypted, filename="stuck.pdf")
+    assert status_code == 201
+
+    sha = body["sha256"]
+    assert sha == hashlib.sha256(encrypted).hexdigest()  # stored unchanged
+    stored = (tmp_path / "originals" / sha[0:2] / sha[2:4] / sha).read_bytes()
+    with pytest.raises(pikepdf.PasswordError):
+        pikepdf.open(io.BytesIO(stored))

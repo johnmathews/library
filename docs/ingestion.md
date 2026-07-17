@@ -21,13 +21,14 @@ The request handler runs these steps in order:
 
 1. **Size check** — reject over `LIBRARY_MAX_UPLOAD_BYTES` (default 100 MB) with `413`.
 2. **MIME detection** — sniff content, fall back to the client-declared type; `415` if unsupported.
-3. **Hash** — compute `sha256(content)`.
-4. **Duplicate check** — a non-deleted document with the same `sha256`? If so, log a `duplicate_upload` event and return `200 {duplicate: true}`.
-5. **Store original** — atomic, idempotent write to `/data/originals/ab/cd/<sha256>`.
-6. **HEIC/HEIF** — if needed, convert to JPEG at `/data/derived/ab/cd/<sha256>/converted.jpg`.
-7. **Insert row** — `documents` row with `status=received` + a `received` ingestion event.
-8. **Commit & defer** — commit, then defer `process_document(document_id)`.
-9. **Respond** — `201 {id, sha256, status, duplicate: false}`.
+3. **PDF unlock** — if the content is an encrypted PDF, try to decrypt it (see [PDF unlock](#pdf-unlock-librarypdf_unlock)); a success replaces `content` with the decrypted bytes before hashing.
+4. **Hash** — compute `sha256(content)`.
+5. **Duplicate check** — a non-deleted document with the same `sha256`? If so, log a `duplicate_upload` event and return `200 {duplicate: true}`.
+6. **Store original** — atomic, idempotent write to `/data/originals/ab/cd/<sha256>`.
+7. **HEIC/HEIF** — if needed, convert to JPEG at `/data/derived/ab/cd/<sha256>/converted.jpg`.
+8. **Insert row** — `documents` row with `status=received` + a `received` ingestion event (whose detail records `pdf_unlocked`).
+9. **Commit & defer** — commit, then defer `process_document(document_id)`.
+10. **Respond** — `201 {id, sha256, status, duplicate: false}`.
 
 ### Worker pipeline — `process_document(document_id)`
 
@@ -164,6 +165,39 @@ The viewer has no inline preview for a `.docx` (it is neither image nor PDF);
 the detail page shows the converted Markdown in the reader and offers a
 **Download original** link for the stored `.docx`
 (`GET /api/documents/{id}/original` serves it with its real MIME/filename).
+
+## PDF unlock (`library.pdf_unlock`)
+
+`unlock_pdf(content: bytes, passwords: Sequence[str]) -> bytes`
+
+A password-protected PDF is decrypted **at ingest**, before hashing and storing,
+so the **decrypted PDF becomes the source of truth** — dedup, OCR, thumbnails,
+the viewer, and the *Download original* link all see a normal unlocked file.
+This is safe because the library app is itself behind authentication.
+
+The passwords tried come from `LIBRARY_PDF_UNLOCK_PASSWORDS`
+(`Settings.pdf_unlock_passwords`, comma-separated, **case-sensitive**, default
+`["2064"]`). The **empty password is always tried first**, covering PDFs with
+only an owner password or an empty user password. `unlock_pdf` uses `pikepdf`
+(already in the tree via OCRmyPDF) and:
+
+- returns `content` unchanged when the PDF opens without a password (nothing to
+  unlock) or when it is corrupt / not a real PDF (best-effort — never fail the
+  upload here; the OCR pipeline surfaces unreadable PDFs, mirroring the docx
+  branch);
+- returns the decrypted bytes on the first password that opens it;
+- raises `PdfLockedError` when none work. The message reports only the *count*
+  of passwords tried — never their values.
+
+The `received` ingestion event records `pdf_unlocked: true|false`. Passwords are
+never logged.
+
+When no password unlocks the file, ingest stores the **encrypted original** as
+usual and the pipeline runs; the OCR router (`library.ocr.router._route_pdf`)
+detects the still-encrypted PDF and raises `EncryptedPdfError`, which the worker
+turns into a `failed` document with a clear reason — **visible and retryable**
+in the app. Adding the right password to `LIBRARY_PDF_UNLOCK_PASSWORDS` and
+re-processing then unlocks it on retry.
 
 ## Ingestion service (`library.ingest`)
 

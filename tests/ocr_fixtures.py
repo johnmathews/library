@@ -12,8 +12,20 @@ import io
 from pathlib import Path
 
 import img2pdf
+import pikepdf
 from fpdf import FPDF
 from PIL import Image, ImageDraw, ImageFont
+
+
+def encrypt_pdf(content: bytes, *, user_password: str) -> bytes:
+    """Return ``content`` re-saved with a user password (blocks opening without it)."""
+    out = io.BytesIO()
+    with pikepdf.open(io.BytesIO(content)) as pdf:
+        pdf.save(
+            out,
+            encryption=pikepdf.Encryption(user=user_password, owner=user_password),
+        )
+    return out.getvalue()
 
 
 def make_text_pdf(path: Path, *, lines: list[str], pages: int = 1) -> Path:

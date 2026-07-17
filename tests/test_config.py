@@ -90,3 +90,16 @@ def test_deleted_retention_days_rejects_negative() -> None:
     # soft-deleted document on the next run — the ge=0 bound forbids it.
     with pytest.raises(ValidationError):
         Settings(_env_file=None, deleted_retention_days=-1)
+
+
+def test_pdf_unlock_passwords_default() -> None:
+    assert Settings(_env_file=None).pdf_unlock_passwords == ["2064"]
+
+
+def test_pdf_unlock_passwords_env_split_is_case_sensitive(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Comma-separated, whitespace-trimmed, blanks dropped, case preserved
+    # (unlike email senders, passwords must not be lowercased).
+    monkeypatch.setenv("LIBRARY_PDF_UNLOCK_PASSWORDS", "2064, Hunter2 ,, letmeIN")
+    assert Settings(_env_file=None).pdf_unlock_passwords == ["2064", "Hunter2", "letmeIN"]

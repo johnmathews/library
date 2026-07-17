@@ -539,3 +539,30 @@ class TestConfidenceGate:
         assert result.confidence == 55.0
         assert result.gate is not None
         assert result.gate.tesseract_confidence is None
+
+
+def test_encrypted_pdf_raises_a_clear_error(
+    settings: Settings, derived: Path, tmp_path: Path
+) -> None:
+    # A still-encrypted PDF reaching OCR (unknown password at ingest) fails with
+    # EncryptedPdfError, whose message never contains a password, rather than a
+    # cryptic engine crash. The worker turns this into the document's failure.
+    from tests.ocr_fixtures import encrypt_pdf
+
+    plain = make_text_pdf(tmp_path / "plain.pdf", lines=["Vertrouwelijk"]).read_bytes()
+    locked = tmp_path / "locked.pdf"
+    locked.write_bytes(encrypt_pdf(plain, user_password="unknown"))
+
+    with pytest.raises(router.EncryptedPdfError) as excinfo:
+        router.run_ocr(make_document("application/pdf"), locked, derived, settings=settings)
+    assert "encrypted" in str(excinfo.value).lower()
+
+
+def test_unencrypted_pdf_passes_the_encryption_guard(
+    settings: Settings, derived: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The guard must not misfire on a normal born-digital PDF.
+    pdf = make_text_pdf(tmp_path / "born.pdf", lines=["Regel een"] * 20)
+    forbid(monkeypatch, tesseract, "ocr_pdf")  # born-digital → text-layer, no OCR
+    result = router.run_ocr(make_document("application/pdf"), pdf, derived, settings=settings)
+    assert result.engine == "text-layer"

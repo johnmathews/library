@@ -28,6 +28,7 @@ from library.images import CONVERTED_JPEG_NAME, HEIC_MIME_TYPES, normalize_image
 from library.jobs import process_document
 from library.models import Document, DocumentSource, IngestionEvent, User
 from library.notifications import dispatch_loaded_document_notification
+from library.pdf_unlock import PdfLockedError, unlock_pdf
 from library.schemas import NotificationEvent
 from library.storage import derived_dir, store
 
@@ -211,6 +212,23 @@ async def ingest_file(
     if detected not in ALLOWED_MIME_TYPES:
         raise UnsupportedMimeTypeError(detected)
 
+    # Unlock a password-protected PDF before hashing/storing so the decrypted
+    # file becomes the source of truth (dedup, OCR, thumbnails, viewer, and
+    # download all see a normal unlocked PDF). Safe: the app is behind auth. A
+    # locked PDF whose password is unknown is stored as-is and fails OCR with a
+    # clear reason (library.ocr.router raises EncryptedPdfError) — visible and
+    # retryable. See docs/ingestion.md.
+    pdf_unlocked = False
+    if detected == "application/pdf":
+        try:
+            unlocked = unlock_pdf(content, get_settings().pdf_unlock_passwords)
+        except PdfLockedError as exc:
+            logger.info("%s; storing the encrypted original for sha check", exc)
+        else:
+            if unlocked is not content:
+                content = unlocked
+                pdf_unlocked = True
+
     sha256 = hashlib.sha256(content).hexdigest()
 
     existing = (
@@ -302,6 +320,7 @@ async def ingest_file(
                     "size": len(content),
                     "mime_type": detected,
                     "source": source.value,
+                    "pdf_unlocked": pdf_unlocked,
                     **(extra_event_detail or {}),
                 },
             )

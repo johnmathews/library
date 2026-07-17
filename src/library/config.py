@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     ocr_languages: str = "nld+eng"
     ocr_confidence_threshold: float = 65.0
     text_layer_min_chars_per_page: int = 50
+    # Passwords tried (in order) to unlock an encrypted PDF at ingest; the empty
+    # password is always tried too (library.pdf_unlock). A success stores the
+    # decrypted PDF as the source of truth — safe because the app is behind auth.
+    # Comma-separated in the env (LIBRARY_PDF_UNLOCK_PASSWORDS); case-sensitive.
+    pdf_unlock_passwords: Annotated[list[str], NoDecode] = ["2064"]
     # Claude metadata extraction (see docs/ingestion.md, "Extraction" section).
     anthropic_api_key: SecretStr | None = None
     extraction_enabled: bool = True
@@ -251,6 +256,16 @@ class Settings(BaseSettings):
             value = value.split(",")
         if isinstance(value, list):
             return [str(item).strip().lower() for item in value if str(item).strip()]
+        return value
+
+    @field_validator("pdf_unlock_passwords", mode="before")
+    @classmethod
+    def _split_pdf_passwords(cls, value: object) -> object:
+        """Parse the comma-separated env value; passwords are case-sensitive."""
+        if isinstance(value, str):
+            value = value.split(",")
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
         return value
 
     @model_validator(mode="after")

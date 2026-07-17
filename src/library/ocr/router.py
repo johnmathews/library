@@ -35,6 +35,8 @@ both confidences are recorded in ``OcrResult.gate``.
 from dataclasses import replace
 from pathlib import Path
 
+import pikepdf
+
 from library.config import Settings, get_settings
 from library.docx import CONVERTED_MARKDOWN_NAME, DOCX_MIME
 from library.images import CONVERTED_JPEG_NAME, HEIC_MIME_TYPES
@@ -55,6 +57,19 @@ class UnsupportedOcrInputError(ValueError):
     def __init__(self, mime_type: str) -> None:
         self.mime_type = mime_type
         super().__init__(f"no OCR route for mime type: {mime_type!r}")
+
+
+class EncryptedPdfError(ValueError):
+    """A PDF that is still password-protected when it reaches OCR.
+
+    Uploads are unlocked at ingest (``library.pdf_unlock``); a PDF that reaches
+    here still encrypted is one whose password is unknown. Raised with a clear,
+    password-free message so the worker records it as the document's failure
+    reason (visible and retryable in the app) instead of a cryptic engine crash.
+    """
+
+    def __init__(self) -> None:
+        super().__init__("encrypted PDF — none of the configured passwords unlocked it")
 
 
 def run_ocr(
@@ -103,6 +118,7 @@ def run_ocr(
 
 def _route_pdf(pdf_path: Path, derived: Path, settings: Settings) -> OcrResult:
     """Scan-aware PDF routing (see module docstring)."""
+    _require_unencrypted(pdf_path)
     analysis = analyze_pdf(pdf_path)
     has_text_layer = (
         analysis.pages > 0 and analysis.chars_per_page >= settings.text_layer_min_chars_per_page
@@ -126,6 +142,22 @@ def _route_pdf(pdf_path: Path, derived: Path, settings: Settings) -> OcrResult:
             # Mediocre embedded OCR beats failing the whole document.
             return _text_layer_fallback(analysis)
         raise
+
+
+def _require_unencrypted(pdf_path: Path) -> None:
+    """Raise :class:`EncryptedPdfError` if the PDF is still password-protected.
+
+    Best-effort and cheap (pikepdf opens lazily): a corrupt or non-PDF file that
+    pikepdf cannot open for a reason *other* than a password is left to
+    ``analyze_pdf``/Tesseract to surface as their own error.
+    """
+    try:
+        with pikepdf.open(pdf_path):
+            return
+    except pikepdf.PasswordError:
+        raise EncryptedPdfError() from None
+    except Exception:
+        return
 
 
 def _text_layer_fallback(analysis: PdfAnalysis) -> OcrResult:
