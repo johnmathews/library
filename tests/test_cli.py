@@ -2,9 +2,12 @@
 
 import asyncio
 import datetime
+import hashlib
+import io
 import uuid
 from collections.abc import Iterator
 
+import pikepdf
 import pytest
 from procrastinate.testing import InMemoryConnector
 from sqlalchemy import select
@@ -29,7 +32,10 @@ from library.models import (
     Kind,
     ReviewStatus,
 )
+from library.pdf_unlock import unlock_pdf
+from library.storage import path_for, store
 from tests.conftest import create_user, fetch_all
+from tests.ocr_fixtures import encrypt_pdf, make_text_pdf
 from tests.test_auth import execute_sql
 
 pytestmark = pytest.mark.integration
@@ -831,3 +837,160 @@ def test_backfill_markdown_include_existing(cli_database_url: str) -> None:
         if job["task_name"] == "library.jobs.markdown_document"
     }
     assert already in enqueued
+
+
+@pytest.fixture
+def cli_data_dir(cli_database_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
+    """Point storage at a temp data dir (originals live on disk for the sweep)."""
+    monkeypatch.setenv("LIBRARY_DATA_DIR", str(tmp_path))
+    get_settings.cache_clear()
+    yield cli_database_url
+    get_settings.cache_clear()
+
+
+def _seed_stored_pdf(
+    database_url: str,
+    content: bytes,
+    *,
+    filename: str,
+    status: DocumentStatus = DocumentStatus.FAILED,
+    store_file: bool = True,
+) -> int:
+    """Insert a PDF document (with its bytes on disk) and return its id."""
+    sha = hashlib.sha256(content).hexdigest()
+
+    async def _insert() -> int:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                document = Document(
+                    sha256=sha,
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    status=status,
+                    original_filename=filename,
+                    ocr_text=None,
+                )
+                session.add(document)
+                await session.commit()
+                return document.id
+        finally:
+            await engine.dispose()
+
+    document_id = asyncio.run(_insert())
+    if store_file:
+        store(content)  # writes under get_settings().data_dir (the temp dir)
+    return document_id
+
+
+def _make_pdf(tmp_path, text: str) -> bytes:
+    return make_text_pdf(tmp_path / f"{uuid.uuid4().hex}.pdf", lines=[text]).read_bytes()
+
+
+def test_sweep_encrypted_dry_run_classifies(cli_data_dir: str, tmp_path) -> None:
+    plain = _make_pdf(tmp_path, "Onbeveiligd")
+    unlockable_id = _seed_stored_pdf(
+        cli_data_dir, encrypt_pdf(plain, user_password="2064"), filename="known.pdf"
+    )
+    locked_id = _seed_stored_pdf(
+        cli_data_dir, encrypt_pdf(plain, user_password="not-configured"), filename="locked.pdf"
+    )
+    plain_failed_id = _seed_stored_pdf(cli_data_dir, plain, filename="plain.pdf")
+
+    result = runner.invoke(app, ["sweep-encrypted"])
+    assert result.exit_code == 0, result.output
+    assert f"{unlockable_id}\tknown.pdf\tunlockable" in result.output
+    assert f"{locked_id}\tlocked.pdf\tlocked" in result.output
+    assert f"{plain_failed_id}\t" not in result.output  # not encrypted → not listed
+    assert "3 failed PDF(s) scanned, 2 encrypted, 1 unlockable" in result.output
+    assert f"--apply --ids {unlockable_id}" in result.output
+
+
+def test_sweep_encrypted_apply_unlocks_in_place(cli_data_dir: str, tmp_path) -> None:
+    plain = _make_pdf(tmp_path, "Vertrouwelijk")
+    encrypted = encrypt_pdf(plain, user_password="2064")
+    old_sha = hashlib.sha256(encrypted).hexdigest()
+    new_sha = hashlib.sha256(unlock_pdf(encrypted, ["2064"])).hexdigest()
+    document_id = _seed_stored_pdf(cli_data_dir, encrypted, filename="known.pdf")
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["sweep-encrypted", "--apply", "--ids", str(document_id)])
+    assert result.exit_code == 0, result.output
+    assert f"unlocked {document_id}" in result.output
+
+    # Row now points at the decrypted content and is reset for reprocessing.
+    rows = fetch_all(
+        cli_data_dir,
+        "SELECT sha256, status, ocr_text FROM documents WHERE id = :id",
+        id=document_id,
+    )
+    assert rows == [(new_sha, "received", None)]
+
+    # The stored original reopens without a password; the old file is gone.
+    with pikepdf.open(io.BytesIO(path_for(new_sha).read_bytes())):
+        pass
+    assert not path_for(old_sha).exists()
+
+    # Provenance event and a re-queued process_document job.
+    events = fetch_all(
+        cli_data_dir,
+        "SELECT detail->>'old_sha256', detail->>'new_sha256' FROM ingestion_events "
+        "WHERE document_id = :id AND event = 'pdf_unlocked_backfill'",
+        id=document_id,
+    )
+    assert events == [(old_sha, new_sha)]
+    queued = [
+        j for j in connector.jobs.values() if j["task_name"] == "library.jobs.process_document"
+    ]
+    assert [j["args"]["document_id"] for j in queued] == [document_id]
+
+
+def test_sweep_encrypted_apply_refuses_non_candidate(cli_data_dir: str, tmp_path) -> None:
+    plain = _make_pdf(tmp_path, "Geheim")
+    locked_id = _seed_stored_pdf(
+        cli_data_dir, encrypt_pdf(plain, user_password="not-configured"), filename="locked.pdf"
+    )
+    before = fetch_all(cli_data_dir, "SELECT sha256 FROM documents WHERE id = :id", id=locked_id)
+
+    result = runner.invoke(app, ["sweep-encrypted", "--apply", "--ids", str(locked_id)])
+    assert result.exit_code == 1
+    assert "refusing" in result.output
+    assert "nothing changed" in result.output
+    # Untouched.
+    after = fetch_all(cli_data_dir, "SELECT sha256 FROM documents WHERE id = :id", id=locked_id)
+    assert after == before
+
+
+def test_sweep_encrypted_apply_skips_collision(cli_data_dir: str, tmp_path) -> None:
+    plain = _make_pdf(tmp_path, "Dubbel")
+    encrypted = encrypt_pdf(plain, user_password="2064")
+    old_sha = hashlib.sha256(encrypted).hexdigest()
+    decrypted_sha = hashlib.sha256(unlock_pdf(encrypted, ["2064"])).hexdigest()
+    document_id = _seed_stored_pdf(cli_data_dir, encrypted, filename="known.pdf")
+    # Another document already holds the decrypted content (sha collision).
+    existing_id = _seed_stored_pdf(
+        cli_data_dir,
+        b"placeholder",
+        filename="already.pdf",
+        status=DocumentStatus.INDEXED,
+        store_file=False,
+    )
+    execute_sql(
+        cli_data_dir,
+        "UPDATE documents SET sha256 = :sha WHERE id = :id",
+        sha=decrypted_sha,
+        id=existing_id,
+    )
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["sweep-encrypted", "--apply", "--ids", str(document_id)])
+    assert result.exit_code == 0, result.output
+    assert (
+        f"{document_id} skipped — decrypted content already exists as document {existing_id}"
+        in (result.output)
+    )
+    # The locked document is untouched (still the encrypted sha).
+    rows = fetch_all(cli_data_dir, "SELECT sha256 FROM documents WHERE id = :id", id=document_id)
+    assert rows == [(old_sha,)]

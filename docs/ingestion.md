@@ -1655,6 +1655,35 @@ unknown/non-candidate id aborts the whole batch before anything is touched
 `DELETE /api/documents/{id}` (sets `deleted_at` and records a `deleted`
 event), so a swept document is restorable until the retention purge.
 
+### Unlocking encrypted PDFs that failed before — `library sweep-encrypted`
+
+Ingest-time [PDF unlock](#pdf-unlock-librarypdf_unlock) only helps documents
+uploaded *after* the feature shipped. `library sweep-encrypted` is the backfill
+for encrypted PDFs already filed: an encrypted PDF cannot be OCR'd (pypdfium2
+cannot read it without the password), so it always landed in `failed`. The
+command re-examines those with the configured `LIBRARY_PDF_UNLOCK_PASSWORDS`.
+
+Candidates are non-deleted `application/pdf` documents in `failed` whose stored
+original is encrypted; each is classified `unlockable` (a configured password
+opens it) or `locked` (none do). Passwords are never printed.
+
+```sh
+library sweep-encrypted                     # DRY RUN: list encrypted candidates + totals
+library sweep-encrypted --apply --ids 12,34 # unlock exactly these ids in place
+```
+
+The default is a **dry run** (nothing written; prints the ready-to-paste
+`--apply --ids …` line for the unlockable set). `--apply` requires an explicit
+`--ids` list and refuses any id that is not a current *unlockable* candidate
+(whole batch, before any write). For each accepted id it unlocks **in place**:
+stores the decrypted PDF as the new content-addressed original, points the row
+at the new `sha256`, resets it to `received` (clearing the stale OCR fields),
+records a `pdf_unlocked_backfill` event `{old_sha256, new_sha256}`, removes the
+old encrypted original, and re-queues `process_document`. The **worker must be
+running** for the re-queued documents to actually reprocess. A document whose
+decrypted content already exists elsewhere (a `sha256` collision) is skipped and
+reported rather than merged.
+
 ### Provider setup
 
 | Provider | Host | Notes |

@@ -7,6 +7,7 @@ loop-bound connection.
 """
 
 import asyncio
+import hashlib
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
@@ -35,7 +36,13 @@ from library.extraction.validation import derive_review_status, findings_to_payl
 from library.importer.client import PaperlessClient
 from library.importer.runner import ImportReport, format_report, run_import
 from library.ingest import resolve_owner_id
-from library.jobs import embed_document, extract_document, job_app, markdown_document
+from library.jobs import (
+    embed_document,
+    extract_document,
+    job_app,
+    markdown_document,
+    process_document,
+)
 from library.models import (
     Document,
     DocumentChunk,
@@ -47,6 +54,8 @@ from library.models import (
     Sender,
     User,
 )
+from library.pdf_unlock import PdfLockedError, unlock_pdf
+from library.storage import path_for, remove, store
 
 app: typer.Typer = typer.Typer(
     no_args_is_help=True, help="Library administration (accounts, imports)."
@@ -659,6 +668,224 @@ def sweep_junk(
     for document_id in deleted:
         typer.echo(f"soft-deleted {document_id}")
     typer.echo(f"soft-deleted {len(deleted)} document(s), skipped {len(already)} already deleted")
+
+
+# Encrypted PDFs cannot be OCR'd (pypdfium2 cannot read them without the
+# password), so a password-protected upload made before ingest-time unlocking
+# existed always landed in `failed`. That is the candidate set this backfill
+# re-examines with the configured `pdf_unlock_passwords`.
+def _encrypted_candidates_statement() -> Select[Any]:
+    return (
+        select(Document)
+        .where(
+            Document.deleted_at.is_(None),
+            Document.mime_type == "application/pdf",
+            Document.status == DocumentStatus.FAILED,
+        )
+        .order_by(Document.id)
+    )
+
+
+def _classify_pdf(content: bytes, passwords: list[str]) -> tuple[str, bytes | None]:
+    """Classify a stored PDF against the passwords via ``unlock_pdf``'s contract.
+
+    - ``("skip", None)`` — not encrypted / unreadable (not a candidate).
+    - ``("locked", None)`` — encrypted, no configured password unlocks it.
+    - ``("unlockable", <bytes>)`` — encrypted; the bytes are the decrypted PDF.
+    """
+    try:
+        unlocked = unlock_pdf(content, passwords)
+    except PdfLockedError:
+        return "locked", None
+    if unlocked is content:
+        return "skip", None
+    return "unlockable", unlocked
+
+
+@app.command("sweep-encrypted")
+def sweep_encrypted(
+    apply: bool = typer.Option(
+        False,
+        "--apply",
+        help="Unlock the documents named via --ids in place (default: dry run, list only).",
+    ),
+    ids: str | None = typer.Option(
+        None,
+        "--ids",
+        help="Comma-separated document ids to unlock (required with --apply).",
+    ),
+) -> None:
+    """Find (and with --apply, unlock in place) encrypted PDF documents.
+
+    Candidates are non-deleted ``application/pdf`` documents stuck in ``failed``
+    whose stored original is encrypted. Each is tested against the configured
+    ``LIBRARY_PDF_UNLOCK_PASSWORDS`` (the empty password is always tried). The
+    default is a DRY RUN that only lists the encrypted candidates and whether
+    each is ``unlockable`` or ``locked`` — nothing is written, and passwords are
+    never printed.
+
+    ``--apply`` requires an explicit ``--ids`` list and refuses any id that is
+    not a current *unlockable* candidate. For each accepted id it stores the
+    decrypted PDF (the new source of truth), points the row at the new sha256,
+    resets it to ``received`` (clearing the stale OCR fields), records a
+    ``pdf_unlocked_backfill`` event, removes the old encrypted original, and
+    re-queues ``process_document`` so the worker OCRs/extracts/embeds it. A
+    document whose decrypted content already exists (sha256 collision) is skipped
+    and reported. The worker must be running for the re-queued jobs to run.
+    """
+    settings = get_settings()
+    passwords = settings.pdf_unlock_passwords
+
+    if apply and not ids:
+        typer.echo(
+            "error: --apply requires --ids with an explicit comma-separated list of "
+            "document ids (run without --apply first to list candidates)"
+        )
+        raise typer.Exit(code=1)
+    if ids and not apply:
+        typer.echo("error: --ids only makes sense with --apply")
+        raise typer.Exit(code=1)
+
+    if not apply:
+
+        async def list_operation(session: AsyncSession) -> tuple[int, list[tuple[Document, str]]]:
+            documents = (await session.execute(_encrypted_candidates_statement())).scalars().all()
+            candidates: list[tuple[Document, str]] = []
+            for document in documents:
+                try:
+                    content = path_for(document.sha256).read_bytes()
+                except FileNotFoundError:
+                    candidates.append((document, "missing-file"))
+                    continue
+                label, _ = _classify_pdf(content, passwords)
+                if label != "skip":
+                    candidates.append((document, label))
+            return len(documents), candidates
+
+        scanned, candidates = _run(list_operation)
+        unlockable = [document for document, label in candidates if label == "unlockable"]
+        for document, label in candidates:
+            typer.echo(f"{document.id}\t{document.original_filename or '-'}\t{label}")
+        typer.echo(
+            f"{scanned} failed PDF(s) scanned, {len(candidates)} encrypted, "
+            f"{len(unlockable)} unlockable with the known passwords — dry run, nothing changed"
+        )
+        if unlockable:
+            id_list = ",".join(str(document.id) for document in unlockable)
+            typer.echo(f"apply with: library sweep-encrypted --apply --ids {id_list}")
+        return
+
+    try:
+        target_ids = sorted({int(part) for part in (ids or "").split(",") if part.strip()})
+    except ValueError:
+        typer.echo(f"error: --ids must be a comma-separated list of integers, got: {ids}")
+        raise typer.Exit(code=1) from None
+    if not target_ids:
+        typer.echo("error: --ids is empty")
+        raise typer.Exit(code=1)
+
+    async def apply_operation(
+        session: AsyncSession,
+    ) -> tuple[list[int], list[tuple[int, int]]]:
+        documents = {
+            document.id: document
+            for document in (
+                await session.execute(select(Document).where(Document.id.in_(target_ids)))
+            ).scalars()
+        }
+        # Recompute the unlockable decrypted bytes per target; refuse any id that
+        # is not a current unlockable candidate (whole batch, before any write).
+        decrypted: dict[int, bytes] = {}
+        missing = [i for i in target_ids if i not in documents]
+        refused: list[int] = []
+        for document_id in target_ids:
+            document = documents.get(document_id)
+            if document is None:
+                continue
+            if (
+                document.deleted_at is not None
+                or document.mime_type != "application/pdf"
+                or document.status is not DocumentStatus.FAILED
+            ):
+                refused.append(document_id)
+                continue
+            try:
+                content = path_for(document.sha256).read_bytes()
+            except FileNotFoundError:
+                refused.append(document_id)
+                continue
+            label, unlocked = _classify_pdf(content, passwords)
+            if label != "unlockable" or unlocked is None:
+                refused.append(document_id)
+                continue
+            decrypted[document_id] = unlocked
+        if missing or refused:
+            for document_id in missing:
+                typer.echo(f"error: {document_id} does not exist")
+            for document_id in refused:
+                typer.echo(
+                    f"error: {document_id} is not an unlockable encrypted PDF candidate — "
+                    "refusing to touch it"
+                )
+            typer.echo("nothing changed")
+            raise typer.Exit(code=1)
+
+        unlocked_ids: list[int] = []
+        collisions: list[tuple[int, int]] = []
+        removed_shas: list[str] = []
+        for document_id in target_ids:
+            document = documents[document_id]
+            new_content = decrypted[document_id]
+            new_sha = hashlib.sha256(new_content).hexdigest()
+            old_sha = document.sha256
+            # sha256 is globally unique: if the decrypted content already exists
+            # (as any document, including soft-deleted), skip rather than raise.
+            existing_id = (
+                await session.execute(
+                    select(Document.id).where(
+                        Document.sha256 == new_sha, Document.id != document.id
+                    )
+                )
+            ).scalar_one_or_none()
+            if existing_id is not None:
+                collisions.append((document_id, existing_id))
+                continue
+            store(new_content)  # write the decrypted original before pointing the row at it
+            document.sha256 = new_sha
+            document.status = DocumentStatus.RECEIVED
+            document.ocr_text = None
+            document.ocr_confidence = None
+            document.page_count = None
+            document.searchable_pdf = False
+            session.add(
+                IngestionEvent(
+                    document_id=document.id,
+                    event="pdf_unlocked_backfill",
+                    detail={"old_sha256": old_sha, "new_sha256": new_sha, "pdf_unlocked": True},
+                )
+            )
+            removed_shas.append(old_sha)
+            unlocked_ids.append(document_id)
+        await session.commit()
+        # Post-commit (the row already points at the new file): drop the old
+        # encrypted originals and re-queue the pipeline. A crash here only
+        # orphans a harmless old file — never a row pointing at a missing file.
+        for old_sha in removed_shas:
+            remove(old_sha)
+        if unlocked_ids:
+            async with job_app.open_async():
+                for document_id in unlocked_ids:
+                    await process_document.defer_async(document_id=document_id)
+        return unlocked_ids, collisions
+
+    unlocked_ids, collisions = _run(apply_operation)
+    for document_id, existing_id in collisions:
+        typer.echo(
+            f"{document_id} skipped — decrypted content already exists as document {existing_id}"
+        )
+    for document_id in unlocked_ids:
+        typer.echo(f"unlocked {document_id} (re-queued for processing)")
+    typer.echo(f"unlocked {len(unlocked_ids)} document(s), skipped {len(collisions)} collision(s)")
 
 
 @app.command("eval-extractions")
