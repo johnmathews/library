@@ -34,6 +34,7 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     Kind,
+    Matter,
     Project,
     Recipient,
     ReviewStatus,
@@ -97,6 +98,10 @@ class DocumentFilters:
     # tags which AND-compose — see docs/api.md. A document rarely belongs to
     # several projects, so intersection would usually return nothing.
     project_slugs: Sequence[str] = field(default_factory=tuple)
+    # Matters OR-compose too (a document in ANY of these matters matches); a
+    # document commonly belongs to several matters, so union is what the
+    # homepage matter buttons want.
+    matter_slugs: Sequence[str] = field(default_factory=tuple)
     language: DocumentLanguage | None = None
     status: DocumentStatus | None = None
     source: DocumentSource | None = None
@@ -150,6 +155,9 @@ def filter_conditions(filters: DocumentFilters) -> list[Any]:
     if filters.project_slugs:
         # OR/union: a document in any of the selected projects matches.
         conditions.append(Document.projects.any(Project.slug.in_(tuple(filters.project_slugs))))
+    if filters.matter_slugs:
+        # OR/union: a document in any of the selected matters matches.
+        conditions.append(Document.matters.any(Matter.slug.in_(tuple(filters.matter_slugs))))
     if filters.language is not None:
         conditions.append(Document.language == filters.language)
     if filters.status is not None:

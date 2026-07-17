@@ -27,6 +27,7 @@ from library.extraction.apply import (
     upsert_recipient,
     upsert_sender,
 )
+from library.matters import get_or_create_matter
 from library.models import Document, IngestionEvent, Kind, ReviewStatus
 from library.projects import get_or_create_project
 from library.schemas import DocumentUpdate
@@ -52,6 +53,8 @@ def current_value(document: Document, name: str) -> Any:
         return sorted(tag.slug for tag in document.tags)
     if name == "projects":
         return sorted(project.slug for project in document.projects)
+    if name == "matters":
+        return sorted(matter.slug for matter in document.matters)
     return getattr(document, name, None)
 
 
@@ -130,6 +133,8 @@ async def apply_document_update(
         originals["tags"] = current_value(document, "tags")
     if "projects" in provided:
         originals["projects"] = current_value(document, "projects")
+    if "matters" in provided:
+        originals["matters"] = current_value(document, "matters")
     for body_field in (
         "title",
         "summary",
@@ -188,6 +193,18 @@ async def apply_document_update(
             for identifier in dict.fromkeys(identifiers)
         ]
         edited.append("projects")
+    if "matters" in provided:
+        identifiers = provided.pop("matters")
+        if identifiers is None:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail="matters cannot be null; send [] to clear them",
+            )
+        document.matters = [
+            await get_or_create_matter(session, identifier)
+            for identifier in dict.fromkeys(identifiers)
+        ]
+        edited.append("matters")
     if provided.get("language", "") is None:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -219,6 +236,14 @@ async def apply_document_update(
                 document_id=document.id,
                 event="project_changed",
                 detail={"projects": current_value(document, "projects")},
+            )
+        )
+    if "matters" in edited:
+        session.add(
+            IngestionEvent(
+                document_id=document.id,
+                event="matter_changed",
+                detail={"matters": current_value(document, "matters")},
             )
         )
     return edited

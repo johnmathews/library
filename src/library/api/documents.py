@@ -48,6 +48,7 @@ from library.schemas import (
     KindOut,
     MarkdownPage,
     MarkdownResponse,
+    MatterRef,
     ProjectRef,
     RecipientOut,
     SenderOut,
@@ -204,6 +205,10 @@ async def list_documents(
         list[str] | None,
         Query(description="Project slug; repeat the parameter for OR (documents in any of them)."),
     ] = None,
+    matter: Annotated[
+        list[str] | None,
+        Query(description="Matter slug; repeat the parameter for OR (documents in any of them)."),
+    ] = None,
     language: Annotated[DocumentLanguage | None, Query()] = None,
     status_filter: Annotated[DocumentStatus | None, Query(alias="status")] = None,
     review_status: Annotated[ReviewStatus | None, Query()] = None,
@@ -239,6 +244,7 @@ async def list_documents(
             recipient_id=recipient_id,
             tag_slugs=tuple(tag or []),
             project_slugs=tuple(project or []),
+            matter_slugs=tuple(matter or []),
             language=language,
             status=status_filter,
             review_status=review_status,
@@ -426,7 +432,8 @@ async def update_document(
     # UPDATE since it can't know the server-computed value — refresh it eagerly
     # here so _detail() doesn't trigger a lazy load of an already-expired attribute.
     await session.refresh(
-        document, ["kind", "sender", "recipient", "tags", "projects", "events", "updated_at"]
+        document,
+        ["kind", "sender", "recipient", "tags", "projects", "matters", "events", "updated_at"],
     )
     return await _detail(session, document)
 
@@ -717,6 +724,10 @@ def _list_item_fields(document: Document) -> dict[str, Any]:
         "projects": [
             ProjectRef(slug=project.slug, name=project.name)
             for project in sorted(document.projects, key=lambda project: project.slug)
+        ],
+        "matters": [
+            MatterRef(slug=matter.slug, name=matter.name)
+            for matter in sorted(document.matters, key=lambda matter: matter.slug)
         ],
         "document_date": document.document_date,
         "due_date": document.due_date,

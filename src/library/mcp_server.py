@@ -42,7 +42,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 import library
-from library import projects, taxonomy
+from library import matters, projects, taxonomy
 from library.auth.service import validate_api_token
 from library.config import get_settings
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
@@ -164,6 +164,10 @@ def _document_summary(document: Document) -> dict[str, Any]:
             {"slug": project.slug, "name": project.name}
             for project in sorted(document.projects, key=lambda project: project.slug)
         ],
+        "matters": [
+            {"slug": matter.slug, "name": matter.name}
+            for matter in sorted(document.matters, key=lambda matter: matter.slug)
+        ],
         "document_date": document.document_date.isoformat() if document.document_date else None,
         "language": document.language.value,
         "status": document.status.value,
@@ -220,6 +224,10 @@ async def search_documents(
         str | None,
         Field(description="Filter by project slug (see list_projects)."),
     ] = None,
+    matter: Annotated[
+        str | None,
+        Field(description="Filter by matter slug (see list_matters)."),
+    ] = None,
     language: Annotated[
         DocumentLanguage | None,
         Field(description="Filter by detected document language."),
@@ -254,6 +262,7 @@ async def search_documents(
             recipient_contains=recipient,
             tag_slugs=(tag,) if tag else (),
             project_slugs=(project,) if project else (),
+            matter_slugs=(matter,) if matter else (),
             language=language,
             date_from=date_from,
             date_to=date_to,
@@ -501,6 +510,18 @@ async def list_projects() -> dict[str, Any]:
     async with _session() as session:
         items = await projects.list_projects(session)
     return {"projects": [asdict(item) for item in items]}
+
+
+@mcp.tool
+async def list_matters() -> dict[str, Any]:
+    """List all business matters (subject categories) with per-matter document counts.
+
+    Use the returned slugs as the `matter` filter of search_documents.
+    Archived matters are omitted.
+    """
+    async with _session() as session:
+        items = await matters.list_matters(session)
+    return {"matters": [asdict(item) for item in items]}
 
 
 @mcp.tool
