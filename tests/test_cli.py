@@ -32,7 +32,6 @@ from library.models import (
     Kind,
     ReviewStatus,
 )
-from library.pdf_unlock import unlock_pdf
 from library.storage import path_for, store
 from tests.conftest import create_user, fetch_all
 from tests.ocr_fixtures import encrypt_pdf, make_text_pdf
@@ -910,7 +909,6 @@ def test_sweep_encrypted_apply_unlocks_in_place(cli_data_dir: str, tmp_path) -> 
     plain = _make_pdf(tmp_path, "Vertrouwelijk")
     encrypted = encrypt_pdf(plain, user_password="2064")
     old_sha = hashlib.sha256(encrypted).hexdigest()
-    new_sha = hashlib.sha256(unlock_pdf(encrypted, ["2064"])).hexdigest()
     document_id = _seed_stored_pdf(cli_data_dir, encrypted, filename="known.pdf")
 
     connector = InMemoryConnector()
@@ -919,20 +917,25 @@ def test_sweep_encrypted_apply_unlocks_in_place(cli_data_dir: str, tmp_path) -> 
     assert result.exit_code == 0, result.output
     assert f"unlocked {document_id}" in result.output
 
-    # Row now points at the decrypted content and is reset for reprocessing.
-    rows = fetch_all(
+    # Row now points at the decrypted content and is reset for reprocessing. The
+    # new sha is read from the DB, not recomputed: pikepdf.save is not guaranteed
+    # to be byte-stable across calls on every libqpdf build, so the assertion is
+    # "the row changed to a decrypted, password-free file", not a fixed hash.
+    [(new_sha, status, ocr_text)] = fetch_all(
         cli_data_dir,
         "SELECT sha256, status, ocr_text FROM documents WHERE id = :id",
         id=document_id,
     )
-    assert rows == [(new_sha, "received", None)]
+    assert new_sha != old_sha
+    assert (status, ocr_text) == ("received", None)
 
     # The stored original reopens without a password; the old file is gone.
     with pikepdf.open(io.BytesIO(path_for(new_sha).read_bytes())):
         pass
     assert not path_for(old_sha).exists()
 
-    # Provenance event and a re-queued process_document job.
+    # Provenance event records the exact old→new transition, and a
+    # process_document job was re-queued.
     events = fetch_all(
         cli_data_dir,
         "SELECT detail->>'old_sha256', detail->>'new_sha256' FROM ingestion_events "
@@ -962,11 +965,17 @@ def test_sweep_encrypted_apply_refuses_non_candidate(cli_data_dir: str, tmp_path
     assert after == before
 
 
-def test_sweep_encrypted_apply_skips_collision(cli_data_dir: str, tmp_path) -> None:
+def test_sweep_encrypted_apply_skips_collision(
+    cli_data_dir: str, tmp_path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     plain = _make_pdf(tmp_path, "Dubbel")
     encrypted = encrypt_pdf(plain, user_password="2064")
     old_sha = hashlib.sha256(encrypted).hexdigest()
-    decrypted_sha = hashlib.sha256(unlock_pdf(encrypted, ["2064"])).hexdigest()
+    # Force a deterministic decrypted payload so the collision is exact
+    # regardless of pikepdf.save byte-stability across libqpdf builds.
+    decrypted = b"%PDF-1.7 fake-decrypted-collision\n"
+    decrypted_sha = hashlib.sha256(decrypted).hexdigest()
+    monkeypatch.setattr(cli_module, "unlock_pdf", lambda content, passwords: decrypted)
     document_id = _seed_stored_pdf(cli_data_dir, encrypted, filename="known.pdf")
     # Another document already holds the decrypted content (sha collision).
     existing_id = _seed_stored_pdf(
