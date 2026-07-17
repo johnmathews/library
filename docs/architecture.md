@@ -1,6 +1,6 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-07-15 (data model: `email_selection_traces`, the per-email skip audit, migration 0027). Earlier (2026-07-06): authorization model §1.5.1: shared library, no per-user ownership — deliberate. Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
+**Status:** active. **Last updated:** 2026-07-17 (business matters: the `matters`/`document_matters` collection (migration 0028) and the separate best-effort matter-classification pass after extract; §1.2 step 3, §1.3). Earlier (2026-07-15, data model: `email_selection_traces`, the per-email skip audit, migration 0027). Earlier (2026-07-06): authorization model §1.5.1: shared library, no per-user ownership — deliberate. Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The full decision record (with research and
@@ -96,7 +96,14 @@ at any stage, with the reason in `ingestion_events`).
    on the document row and write findings to `extra["validation"]`. A batch
    eval harness (`library eval-extractions`) combines the corrections
    flywheel with an LLM-as-judge to produce per-field accuracy numbers;
-   see [ingestion.md](ingestion.md) "Extraction quality".
+   see [ingestion.md](ingestion.md) "Extraction quality". Once extraction
+   lands, a **separate best-effort matter-classification pass** is deferred as
+   its own job (never blocking the pipeline): a second, cheap Anthropic call
+   auto-files the document into 0..n existing **business matters** (evergreen
+   subject categories) — kept out of the main extraction call so the vocabulary
+   can change and the corpus be re-filed cheaply without re-running full
+   extraction. Merge-only, budget-gated, and skipped for user-curated matters;
+   see [ingestion.md](ingestion.md) "Matter classification".
 4. **Markdown** — Claude vision (Haiku 4.5 by default) rasterizes each
    page and renders a clean GitHub-flavored markdown representation,
    grounded on the OCR text. One `messages.parse()` call per page-image
@@ -173,6 +180,10 @@ re-derivable artifact.
 - `projects` — first-class collections (`projects` + `document_projects`,
   migration 0011). Soft-archived via `archived_at`; documents survive a
   project delete.
+- `matters` — evergreen business-subject categories (`matters` +
+  `document_matters`, migration 0028), each with a `hint` the LLM matter
+  classifier reads. Also soft-archivable via `archived_at`; documents survive a
+  matter delete. Populated automatically (see §1.2 step 3) but hand-editable.
 
 **Derived artifacts** (rebuildable from the original):
 

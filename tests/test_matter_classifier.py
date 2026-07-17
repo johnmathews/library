@@ -250,6 +250,58 @@ async def test_unparseable_response_fails_open(session: AsyncSession) -> None:
     assert "matter_classification" not in document.extra
 
 
+@pytest.mark.integration
+async def test_records_spend_event_and_real_budget_accrues(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A successful pass records a matter_classification_completed event carrying
+    cost_usd, so the REAL todays_spend_usd accrues and the daily budget gates a
+    later call. Guards the no-op-budget regression: the gate reads these events,
+    so the classifier must emit one."""
+    from sqlalchemy import select
+
+    from library.extraction.apply import todays_spend_usd
+    from library.matter_classifier import CLASSIFICATION_EVENT
+    from library.models import IngestionEvent
+
+    # Use the REAL spend function, not the autouse stub, so accrual is exercised.
+    monkeypatch.setattr(matter_classifier, "todays_spend_usd", todays_spend_usd)
+
+    await _vocab(session)
+    first = await _document(session, "budget-doc-1")
+    # A budget so small any real spend exceeds it after one call.
+    settings = Settings(
+        _env_file=None,
+        matter_classifier_model="claude-haiku-4-5",
+        matter_classification_daily_budget_usd=0.0000001,
+    )
+
+    await apply_matter_classification(session, first, settings, client=_FakeClient(slugs=[]))
+    await session.commit()
+
+    events = (
+        (
+            await session.execute(
+                select(IngestionEvent).where(
+                    IngestionEvent.document_id == first.id,
+                    IngestionEvent.event == CLASSIFICATION_EVENT,
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(events) == 1
+    assert float(events[0].detail["cost_usd"]) > 0
+
+    # Second document: the real gate now sees today's spend over the tiny budget.
+    second = await _document(session, "budget-doc-2")
+    client = _FakeClient(slugs=["car-insurance"])
+    await apply_matter_classification(session, second, settings, client=client)
+    assert client.messages.calls == []  # gated by accrued spend
+    assert "matter_classification" not in second.extra
+
+
 def test_schema_forbids_unknown_fields() -> None:
     with pytest.raises(ValueError):
         MatterClassificationResult(matched_slugs=[], bogus="x")  # type: ignore[call-arg]

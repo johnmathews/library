@@ -34,7 +34,7 @@ from library.config import Settings
 from library.extraction.apply import todays_spend_usd
 from library.extraction.extractor import estimate_cost_usd
 from library.matters import MatterCount, list_matters
-from library.models import Document, Matter, Sender
+from library.models import Document, IngestionEvent, Matter, Sender
 
 logger = logging.getLogger(__name__)
 
@@ -174,19 +174,28 @@ async def apply_matter_classification(
         attached_slugs.add(slug)
         added.append(slug)
 
-    document.extra = {
-        **document.extra,
-        "matter_classification": {
-            "model": settings.matter_classifier_model,
-            "prompt_version": PROMPT_VERSION,
-            "cost_usd": estimate_cost_usd(
-                settings.matter_classifier_model,
-                response.usage.input_tokens,
-                response.usage.output_tokens,
-            ),
-            "matched_slugs": list(parsed.matched_slugs),
-            "attached_slugs": added,
-            "input_tokens": response.usage.input_tokens,
-            "output_tokens": response.usage.output_tokens,
-        },
+    cost_usd = estimate_cost_usd(
+        settings.matter_classifier_model,
+        response.usage.input_tokens,
+        response.usage.output_tokens,
+    )
+    provenance = {
+        "model": settings.matter_classifier_model,
+        "prompt_version": PROMPT_VERSION,
+        "cost_usd": cost_usd,
+        "matched_slugs": list(parsed.matched_slugs),
+        "attached_slugs": added,
+        "input_tokens": response.usage.input_tokens,
+        "output_tokens": response.usage.output_tokens,
     }
+    document.extra = {**document.extra, "matter_classification": provenance}
+    # Record the spend event so ``todays_spend_usd(CLASSIFICATION_EVENT)`` can
+    # accrue the daily budget — the gate above reads these events, so without
+    # this the budget would never accumulate.
+    session.add(
+        IngestionEvent(
+            document_id=document.id,
+            event=CLASSIFICATION_EVENT,
+            detail=provenance,
+        )
+    )

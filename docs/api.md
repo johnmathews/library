@@ -1,6 +1,6 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-07-15 (email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Status:** active. **Last updated:** 2026-07-17 (business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -79,6 +79,11 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/projects/{slug}` | Project detail |
 | PATCH  | `/api/projects/{slug}` | Edit a project (name/description/archived) (admin only) |
 | DELETE | `/api/projects/{slug}` | Delete a project (memberships cascade) (admin only) |
+| GET    | `/api/matters` | List business matters with counts |
+| POST   | `/api/matters` | Create a matter (admin only) |
+| GET    | `/api/matters/{slug}` | Matter detail |
+| PATCH  | `/api/matters/{slug}` | Edit a matter (name/hint/archived) (admin only) |
+| DELETE | `/api/matters/{slug}` | Delete a matter (memberships cascade) (admin only) |
 | GET    | `/api/jobs` | Recent background jobs (enriched with document state); filter by `task_name`/`document_id` |
 | GET    | `/api/jobs/task-names` | Distinct task names (for the task-type filter) |
 | GET    | `/api/events` | Live document-pipeline events (Server-Sent Events) |
@@ -145,6 +150,7 @@ ingestion semantics are documented in [ingestion.md](ingestion.md).
 | `recipient_id` | int | Recipient id |
 | `tag` | string, repeatable | Tag slug; repeating the parameter ANDs them (`?tag=energie&tag=wonen` requires both) |
 | `project` | string, repeatable | Project slug; repeating the parameter **ORs** them (`?project=a&project=b` returns documents in *either*) — unlike `tag`, which ANDs. A document rarely belongs to several projects, so intersection would usually return nothing |
+| `matter` | string, repeatable | Business-matter slug; repeating the parameter **ORs** them (`?matter=a&matter=b` returns documents in *either*) — like `project`, and unlike `tag` which ANDs. A document belongs to any number of matters, so OR is the useful default |
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown` |
 | `status` | enum | `received` / `ocr` / `extract` / `embed` / `indexed` / `failed` |
 | `date_from`, `date_to` | date | Inclusive bounds on `document_date` |
@@ -173,6 +179,7 @@ row's `created_at`. With `q` present, relevance rank always wins and
       "recipient": {"id": 1, "name": "John"},
       "tags": [{"slug": "energie", "name": "Energie"}],
       "projects": [{"slug": "house-purchase", "name": "House purchase"}],
+      "matters": [{"slug": "car-insurance", "name": "Car insurance"}],
       "document_date": "2026-05-15", "due_date": null, "expiry_date": null,
       "language": "nld",
       "status": "indexed", "review_status": "unreviewed",
@@ -190,8 +197,9 @@ row's `created_at`. With `q` present, relevance rank always wins and
 ```
 
 `total` is the filtered count before pagination. `snippet` and `rank` are
-only present (non-null) when `q` is given. Tags and `projects` are each
-sorted by slug; `projects` is `[]` when the document is in no project.
+only present (non-null) when `q` is given. Tags, `projects`, and `matters` are
+each sorted by slug; `projects`/`matters` are `[]` when the document is in no
+project/matter.
 `review_status` reflects extraction-quality validation: `unreviewed` (no
 issues found), `needs_review` (one or more validation findings), or
 `verified` (user confirmed the metadata is correct). `review_findings` is a
@@ -309,6 +317,7 @@ JSON body; only the fields present in the body change. Editable fields:
 | `recipient` | Recipient **name**; upserted case-insensitively — a manual edit always creates the recipient if new (extraction only creates from a **high-confidence** document-stated name, see ingestion.md); `null` clears |
 | `tags` | **Full replacement** list of slugs; unknown slugs are created; `[]` clears; `null` is rejected |
 | `projects` | **Full replacement** list of project slugs *or names*; unknown identifiers are upserted (a name becomes a new project, slugified); `[]` clears membership; `null` is rejected. Also appends a `project_changed` ingestion event |
+| `matters` | **Full replacement** list of matter slugs *or names*; unknown identifiers are upserted (a name becomes a new matter, slugified); `[]` clears membership; `null` is rejected. Also appends a `matter_changed` ingestion event; the edit locks `matters` in `extra["user_edited_fields"]`, so the auto-classifier ([ingestion.md](ingestion.md), "Matter classification") never overwrites a hand-curated matter set |
 | `language` | `nld` / `eng` / `mixed` / `unknown`; `null` rejected |
 | `amount_total` | Decimal as string or number; `null` clears |
 | `currency` | 3-letter code, normalized to upper case; `null` clears |
@@ -1673,3 +1682,50 @@ the HTTP surface (`library.api.held_emails`). Auth + CSRF apply as elsewhere
 resolved from the sender like a document's would be), `resolved_at`,
 `document_ids` (populated by a successful ingest-anyway), `last_error` (the
 most recent failed-resolution error, e.g. the message could not be re-fetched).
+
+## 1.22 Matters — `/api/matters`
+
+Evergreen **business matters**: subject categories (car insurance, health
+insurance, subscriptions) a document may belong to any number of, a many-to-many
+grouping (`matters` + `document_matters` tables, migration 0028) mirroring the
+projects surface. Each matter carries a `hint` — free text that guides the LLM
+matter classifier ([ingestion.md](ingestion.md), "Matter classification"),
+which auto-files documents into existing matters. A document's matter membership
+is edited through `PATCH /api/documents/{id}` (the `matters` field, §1.5) and
+surfaced as the `matters` array on every document list/detail item; documents
+are also filterable by `?matter=<slug>`, which **ORs** repeated values (§1.3.1).
+
+**Slugs are stable.** `POST` derives a slug from the name (or accepts an
+explicit, normalised `slug` override); `PATCH` never changes it, so inbound
+links and the `?matter=` filter survive renames. Counts exclude soft-deleted
+documents and include zero-count matters.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/matters` | All matters ordered by name, each with its document count. `?include_archived=true` to include archived ones (hidden by default). Open to all authenticated users. |
+| POST | `/api/matters` | **Admin only** (`403` otherwise). Body `{name, slug?, hint?}`. `201`; `409` if the slug already exists. |
+| GET | `/api/matters/{slug}` | One matter with its document count; `404` if unknown. Open to all authenticated users. |
+| PATCH | `/api/matters/{slug}` | **Admin only** (`403` otherwise). Body `{name?, hint?, archived?}`; only present fields change. The slug is **immutable**. `archived: true/false` toggles `archived_at`. `404` if unknown. |
+| DELETE | `/api/matters/{slug}` | **Admin only** (`403` otherwise). Hard-delete; `204`. Memberships cascade away (`document_matters`), the **documents themselves are kept**. `404` if unknown. |
+
+Matters are a global, shared taxonomy, so mutating them is restricted to admins
+(reads stay open). Editing a hint changes what the classifier sees, so re-file
+existing documents afterwards with `library sweep-matters` (see
+[admin.md](admin.md) and [ingestion.md](ingestion.md), "Matter classification").
+
+**Matter object** (every endpoint returns this shape; `GET /api/matters`
+returns an array of them):
+
+```json
+{
+  "id": 4,
+  "slug": "car-insurance",
+  "name": "Car insurance",
+  "hint": "Motor insurance policies, renewals, claims, and green cards",
+  "archived": false,
+  "document_count": 7
+}
+```
+
+`document_count` is the number of non-deleted documents in the matter. Auth +
+CSRF apply exactly as elsewhere (§1.9).

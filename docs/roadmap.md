@@ -1,6 +1,6 @@
 # Roadmap & deferred work
 
-**Status:** active. **Last updated:** 2026-07-04. **Supersedes:** none.
+**Status:** active. **Last updated:** 2026-07-17. **Supersedes:** none.
 
 Living list of agreed-but-not-yet-built work and explicitly-deferred ideas, so
 they don't get lost between sessions. Most recent context lives in
@@ -55,6 +55,17 @@ refinement cycle:
    — they are edited in place with their own `note_versions` history and bypass
    the content dedup (salted sha) — but still relevant for externally-edited
    files re-synced via the consume folder.
+4. **Analytics / charts over business matters.** The matters dimension
+   (§1.4) ships as a filter/grouping facet only; aggregate views (spend or
+   document-count breakdowns *by matter*, over time) were explicitly out of
+   scope for the initial cut. **Trigger to revisit:** a concrete need to see
+   totals rolled up per matter rather than just filtering the document list.
+5. **Embedding-based (non-LLM) matter classifier.** The classifier is one
+   Anthropic call per document today. A cheaper future optimisation is to file
+   documents by nearest-neighbour over the existing bge-m3 embeddings against
+   per-matter centroids (built from each matter's `hint` and its member docs),
+   reserving the LLM for ambiguous cases. **Not needed today** — per-document
+   Haiku cost is negligible at personal scale and the vocabulary is small.
 
 ## 1.3 Decided — `topics` vs `tags`
 
@@ -77,6 +88,18 @@ editable taxonomy.
 
 Recorded here so they read as **done**, not queued:
 
+- **Business matters (auto-filed subject categories).** An evergreen
+  many-to-many dimension (`matters` + `document_matters`, migration 0028): a
+  document belongs to any number of admin-curated matters (car insurance, health
+  insurance, subscriptions). Filled automatically by a **separate LLM classifier
+  pass** (its own cheap Anthropic call, deferred best-effort after extraction,
+  merge-only, budget-gated, user-edit-respecting) so the vocabulary can change
+  and the corpus be re-filed cheaply — `library sweep-matters` backfills after a
+  vocabulary edit. Full REST surface (`/api/matters` CRUD + counts, repeatable
+  OR-composing `?matter=` filter, `matters` on document responses + PATCH body), a
+  `/matters` admin page, and homepage/editor matter controls. See
+  [api.md §1.22](api.md), [admin.md §1.2.7](admin.md), and
+  [ingestion.md](ingestion.md) "Matter classification".
 - **`/charts` view (series/charts).** An aggregate charts dashboard: a responsive
   grid of per-`(sender, kind)` series bar-chart tiles with cached LLM
   descriptions, a shared control bar (time range + custom datepickers +
