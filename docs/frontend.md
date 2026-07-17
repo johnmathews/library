@@ -334,8 +334,12 @@ in sync automatically.
   pills (`[data-testid="type-filters"]`), one pill per document **kind** that has
   documents (`[data-testid="type-filter-<slug>"]`), ordered **most-numerous
   first** (by `document_count` from the shared taxonomy cache / `GET /api/kinds`,
-  ties broken by name) with the count shown on each pill. Zero-count kinds are
-  omitted — a quick-filter to an empty set is noise. Each pill is a shortcut to
+  ties broken by name) — except **`other` is always pinned last** (it's the
+  catch-all bucket, so leading with it is unhelpful) — with the count shown on
+  each pill. Zero-count kinds are omitted — a quick-filter to an empty set is
+  noise. The row is a **single line that scrolls sideways** rather than wrapping
+  (`overflow-x-auto whitespace-nowrap`, pills `shrink-0`), so on a narrow screen
+  it stays one row and the user swipes to reach the rest. Each pill is a shortcut to
   the single-value **Kind** filter: clicking applies `?kind=<slug>`, clicking the
   **active** pill (violet, `aria-pressed="true"`) clears it — it reuses the same
   `selectKind()` path as the Kind dropdown, so it round-trips through the URL and

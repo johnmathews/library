@@ -17,6 +17,10 @@ ordered most-numerous first.
   `GET /api/kinds` `document_count` (global, excludes deleted) — **no backend
   work**. Ties break by name for a stable order.
 - Zero-count kinds are dropped (a quick-filter to an empty result set is noise).
+- **Follow-up (2026-07-17):** on mobile the pills wrapped to ~4 rows and the
+  catch-all "Other" led the list. Changed the row to a **single sideways-scrolling
+  line** (`overflow-x-auto whitespace-nowrap`, pills `shrink-0`) and **pinned
+  `other` last** regardless of count.
 - Each pill is a shortcut to the single-value **Kind** filter: click applies
   `?kind=<slug>` via the existing `selectKind()`; clicking the active pill
   clears it (`toggleKind`). Active state is violet + `aria-pressed`.

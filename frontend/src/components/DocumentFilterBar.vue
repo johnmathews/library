@@ -90,11 +90,17 @@ function selectKind(slug: string): void {
 }
 // Predefined document-type quick filters shown as a pill row: every kind that
 // has documents, most numerous first (ties broken by name for a stable order).
+// "Other" is always pinned last regardless of count — it's the catch-all bucket,
+// so leading with it is unhelpful.
 const typeFilters = computed<KindOption[]>(() =>
   kinds.value
     .filter((k) => k.document_count > 0)
     .slice()
-    .sort((a, b) => b.document_count - a.document_count || a.name.localeCompare(b.name)),
+    .sort((a, b) => {
+      if (a.slug === 'other') return 1
+      if (b.slug === 'other') return -1
+      return b.document_count - a.document_count || a.name.localeCompare(b.name)
+    }),
 )
 // Clicking a type pill applies its kind; clicking the active one clears it.
 function toggleKind(slug: string): void {
@@ -535,10 +541,12 @@ const statusOptions = DOCUMENT_STATUSES
     <!-- Predefined document-type quick filters: one pill per kind that has
          documents, ordered most-numerous first. Each toggles the Kind filter —
          clicking the active pill clears it. -->
+    <!-- Single row that scrolls sideways rather than wrapping — keeps the bar
+         compact on narrow screens; the user swipes to reach the rest. -->
     <div
       v-if="typeFilters.length"
       data-testid="type-filters"
-      class="mt-2 flex flex-wrap items-center gap-2"
+      class="mt-2 flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1"
     >
       <button
         v-for="k in typeFilters"
@@ -546,7 +554,7 @@ const statusOptions = DOCUMENT_STATUSES
         type="button"
         :data-testid="`type-filter-${k.slug}`"
         :aria-pressed="applied.kind === k.slug"
-        class="inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors"
+        class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors"
         :class="
           applied.kind === k.slug
             ? 'border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-500/15 dark:text-violet-200'

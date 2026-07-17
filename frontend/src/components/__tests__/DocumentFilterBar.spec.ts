@@ -37,6 +37,8 @@ const KINDS = [
   { slug: 'invoice', name: 'Invoice', document_count: 3 },
   { slug: 'receipt', name: 'Receipt', document_count: 8 },
   { slug: 'contract', name: 'Contract', document_count: 5 },
+  // 'other' has the highest count but must still be pinned last (catch-all).
+  { slug: 'other', name: 'Other', document_count: 20 },
   { slug: 'certificate', name: 'Certificate', document_count: 0 },
 ]
 const SENDERS = [{ id: 3, name: 'Eneco', document_count: 3 }]
@@ -211,20 +213,32 @@ describe('DocumentFilterBar', () => {
     expect(query).toEqual({ kind: 'invoice', sender_id: '3' })
   })
 
-  it('renders type-filter pills ordered by count desc, dropping zero-count kinds', async () => {
+  it('renders type-filter pills ordered by count desc, other pinned last, dropping zero-count kinds', async () => {
     const w = mountBar()
     await flushPromises() // taxonomy load
     const pills = w.findAll('[data-testid^="type-filter-"]')
-    // certificate has document_count 0 → omitted; the rest ordered 8, 5, 3.
+    // certificate (count 0) omitted; the rest ordered 8, 5, 3 with 'other'
+    // (count 20) forced to the end despite being most numerous.
     expect(pills.map((p) => p.attributes('data-testid'))).toEqual([
       'type-filter-receipt',
       'type-filter-contract',
       'type-filter-invoice',
+      'type-filter-other',
     ])
     // The count is shown on each pill.
     expect(pills[0]!.text()).toContain('Receipt')
     expect(pills[0]!.text()).toContain('8')
     expect(w.find('[data-testid="type-filter-certificate"]').exists()).toBe(false)
+  })
+
+  it('lays the type-filter pills out in a single scrollable row (no wrap)', async () => {
+    const w = mountBar()
+    await flushPromises()
+    const row = w.get('[data-testid="type-filters"]')
+    expect(row.classes()).toContain('overflow-x-auto')
+    expect(row.classes()).not.toContain('flex-wrap')
+    // Pills don't shrink, so they keep their size and scroll off the edge.
+    expect(w.get('[data-testid="type-filter-receipt"]').classes()).toContain('shrink-0')
   })
 
   it('clicking a type-filter pill emits apply with that kind', async () => {
