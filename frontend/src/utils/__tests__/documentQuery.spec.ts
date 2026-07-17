@@ -16,6 +16,7 @@ const EMPTY: AppliedFilters = {
   senderId: '',
   recipientId: '',
   projects: [],
+  matters: [],
   tags: [],
   language: '',
   status: '',
@@ -49,6 +50,7 @@ describe('parseDocumentQuery', () => {
       senderId: '3',
       recipientId: '',
       projects: [],
+      matters: [],
       tags: [],
       language: 'nld',
       status: 'indexed',
@@ -97,6 +99,14 @@ describe('parseDocumentQuery', () => {
     ])
   })
 
+  it('parses repeated matter URL params into the matters field', () => {
+    expect(parseDocumentQuery({ matter: 'acme-merger' }).matters).toEqual(['acme-merger'])
+    expect(parseDocumentQuery({ matter: ['acme-merger', 'estate'] }).matters).toEqual([
+      'acme-merger',
+      'estate',
+    ])
+  })
+
   it('parses review URL param into the review field', () => {
     expect(parseDocumentQuery({ review: 'needs_review' }).review).toBe('needs_review')
   })
@@ -131,6 +141,7 @@ describe('buildDocumentQuery', () => {
       senderId: '3',
       recipientId: '5',
       projects: ['house-purchase', 'taxes'],
+      matters: ['acme-merger', 'estate'],
       tags: ['energie', 'wonen'],
       language: 'nld',
       status: 'indexed',
@@ -147,6 +158,7 @@ describe('buildDocumentQuery', () => {
       sender_id: '3',
       recipient_id: '5',
       project: ['house-purchase', 'taxes'],
+      matter: ['acme-merger', 'estate'],
       tag: ['energie', 'wonen'],
       language: 'nld',
       status: 'indexed',
@@ -181,6 +193,7 @@ describe('hasActiveFilters', () => {
     expect(hasActiveFilters({ ...EMPTY, tags: ['energie'] })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, recipientId: '5' })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, projects: ['house-purchase'] })).toBe(true)
+    expect(hasActiveFilters({ ...EMPTY, matters: ['acme-merger'] })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, status: 'failed' })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, page: 5 })).toBe(false)
     expect(hasActiveFilters({ ...EMPTY, review: 'verified' })).toBe(true)

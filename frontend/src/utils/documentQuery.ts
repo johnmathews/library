@@ -8,7 +8,7 @@
  *
  * `tag` repeats in the URL (?tag=a&tag=b) and ANDs — hence `tags: string[]`.
  * `project` also repeats (?project=a&project=b) but ORs (documents in any) —
- * hence `projects: string[]`.
+ * hence `projects: string[]`. `matter` repeats and ORs the same way.
  */
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
 
@@ -32,6 +32,7 @@ export interface AppliedFilters {
   senderId: string
   recipientId: string
   projects: string[]
+  matters: string[]
   tags: string[]
   language: string
   status: string
@@ -87,6 +88,7 @@ export function parseDocumentQuery(
     senderId: asString(query.sender_id),
     recipientId: asString(query.recipient_id),
     projects: asStringArray(query.project),
+    matters: asStringArray(query.matter),
     tags: asStringArray(query.tag),
     language: asString(query.language),
     status: asString(query.status),
@@ -113,6 +115,7 @@ export function buildDocumentQuery(
   if (applied.senderId) query.sender_id = applied.senderId
   if (applied.recipientId) query.recipient_id = applied.recipientId
   if (applied.projects.length) query.project = [...applied.projects]
+  if (applied.matters.length) query.matter = [...applied.matters]
   if (applied.tags.length) query.tag = [...applied.tags]
   if (applied.language) query.language = applied.language
   if (applied.status) query.status = applied.status
@@ -134,6 +137,7 @@ export function hasActiveFilters(applied: AppliedFilters): boolean {
       applied.senderId ||
       applied.recipientId ||
       applied.projects.length ||
+      applied.matters.length ||
       applied.tags.length ||
       applied.language ||
       applied.status ||

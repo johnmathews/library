@@ -120,6 +120,7 @@ function onSubmit(): void {
     senderId: draft.senderId,
     recipientId: current.recipientId, // preserved — modal doesn't manage it
     projects: current.projects, // preserved — modal doesn't manage it
+    matters: current.matters, // preserved — modal doesn't manage it
     tags: resolvedTags,
     language: draft.language,
     status: current.status, // preserved — modal doesn't manage it

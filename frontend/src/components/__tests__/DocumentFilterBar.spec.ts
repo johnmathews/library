@@ -14,6 +14,7 @@ const EMPTY: AppliedFilters = {
   senderId: '',
   recipientId: '',
   projects: [],
+  matters: [],
   tags: [],
   language: '',
   status: '',
@@ -51,6 +52,11 @@ const PROJECTS = [
   { slug: 'house-purchase', name: 'House purchase', document_count: 4 },
   { slug: 'taxes', name: 'Taxes', document_count: 2 },
 ]
+const MATTERS = [
+  { slug: 'acme-merger', name: 'Acme merger', document_count: 6 },
+  { slug: 'estate', name: 'Estate', document_count: 9 },
+  { slug: 'dormant', name: 'Dormant', document_count: 0 },
+]
 
 function mountBar(applied: AppliedFilters = EMPTY): VueWrapper {
   return mount(DocumentFilterBar, {
@@ -74,6 +80,7 @@ describe('DocumentFilterBar', () => {
       if (url === '/api/recipients') return Promise.resolve(jsonResponse(RECIPIENTS))
       if (url === '/api/tags') return Promise.resolve(jsonResponse(TAGS))
       if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
+      if (url === '/api/matters') return Promise.resolve(jsonResponse(MATTERS))
       return Promise.resolve(jsonResponse({ detail: `unexpected ${url}` }, 500))
     })
   })
@@ -158,6 +165,75 @@ describe('DocumentFilterBar', () => {
     expect(chip.text()).toContain('House purchase')
     await w.get('[data-testid="chip-remove-project-house-purchase"]').trigger('click')
     expect(w.emitted('apply')!.at(-1)![0]).toEqual({})
+  })
+
+  it('selecting matters via the pill emits repeated matter (OR)', async () => {
+    const w = mountBar()
+    await flushPromises() // taxonomy load
+    await w.get('[data-testid="pill-matter"] [data-testid="filter-pill-button"]').trigger('click')
+    await w.get('[data-testid="pill-matter"]').get('input[value="acme-merger"]').setValue(true)
+    await w.get('[data-testid="pill-matter"]').get('input[value="estate"]').setValue(true)
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ matter: ['acme-merger', 'estate'] })
+  })
+
+  it('renders a removable matter chip per matter and drops it on remove', async () => {
+    const w = mountBar({ ...EMPTY, matters: ['acme-merger'] })
+    await flushPromises()
+    const chip = w.get('[data-testid="chip-matter-acme-merger"]')
+    expect(chip.text()).toContain('Acme merger')
+    await w.get('[data-testid="chip-remove-matter-acme-merger"]').trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({})
+  })
+
+  it('renders matter-filter pills ordered by count desc, dropping zero-count matters', async () => {
+    const w = mountBar()
+    await flushPromises() // taxonomy load
+    const pills = w.findAll('[data-testid^="matter-filter-"]')
+    // estate (9) before acme-merger (6); dormant (0) omitted.
+    expect(pills.map((p) => p.attributes('data-testid'))).toEqual([
+      'matter-filter-estate',
+      'matter-filter-acme-merger',
+    ])
+    // The count is shown on each pill.
+    expect(pills[0]!.text()).toContain('Estate')
+    expect(pills[0]!.text()).toContain('9')
+    expect(w.find('[data-testid="matter-filter-dormant"]').exists()).toBe(false)
+  })
+
+  it('lays the matter-filter pills out in a single scrollable row (no wrap)', async () => {
+    const w = mountBar()
+    await flushPromises()
+    const row = w.get('[data-testid="matter-filters"]')
+    expect(row.classes()).toContain('overflow-x-auto')
+    expect(row.classes()).not.toContain('flex-wrap')
+    expect(w.get('[data-testid="matter-filter-estate"]').classes()).toContain('shrink-0')
+  })
+
+  it('clicking a matter-filter pill toggles its slug into the matters filter', async () => {
+    const w = mountBar()
+    await flushPromises()
+    await w.get('[data-testid="matter-filter-estate"]').trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ matter: ['estate'] })
+  })
+
+  it('matter-filter pills multi-select: a second click keeps the first (unlike kind)', async () => {
+    // Clicking a second matter must ADD to the set, not replace it — a document
+    // can belong to several matters.
+    const w = mountBar({ ...EMPTY, matters: ['estate'] })
+    await flushPromises()
+    const acme = w.get('[data-testid="matter-filter-acme-merger"]')
+    expect(acme.attributes('aria-pressed')).toBe('false')
+    await acme.trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ matter: ['estate', 'acme-merger'] })
+  })
+
+  it('clicking an active matter-filter pill removes just that matter', async () => {
+    const w = mountBar({ ...EMPTY, matters: ['estate', 'acme-merger'] })
+    await flushPromises()
+    const estate = w.get('[data-testid="matter-filter-estate"]')
+    expect(estate.attributes('aria-pressed')).toBe('true')
+    await estate.trigger('click')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ matter: ['acme-merger'] })
   })
 
   it('selecting multiple tags emits repeated tag', async () => {

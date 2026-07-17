@@ -24,6 +24,7 @@ function makeNote(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     recipient: null,
     tags: [],
     projects: [],
+    matters: [],
     topics: [],
     document_date: null,
     language: 'eng',

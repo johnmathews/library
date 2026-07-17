@@ -27,6 +27,7 @@ function makeItem(overrides: Partial<DocumentListItem> = {}): DocumentListItem {
     recipient: { id: 5, name: 'John' },
     tags: [],
     projects: [],
+    matters: [],
     document_date: '2026-05-15',
     due_date: null,
     expiry_date: null,
@@ -72,6 +73,7 @@ const SENDERS = [{ id: 3, name: 'Eneco', document_count: 3 }]
 const RECIPIENTS = [{ id: 5, name: 'John', document_count: 7 }]
 const TAGS = [{ slug: 'energie', name: 'Energie', document_count: 2 }]
 const PROJECTS = [{ slug: 'house-purchase', name: 'House purchase', document_count: 4 }]
+const MATTERS = [{ slug: 'acme-merger', name: 'Acme merger', document_count: 6 }]
 
 const Stub = { template: '<div />' }
 
@@ -107,6 +109,7 @@ describe('DocumentListView', () => {
       if (url === '/api/recipients') return Promise.resolve(jsonResponse(RECIPIENTS))
       if (url === '/api/tags') return Promise.resolve(jsonResponse(TAGS))
       if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
+      if (url === '/api/matters') return Promise.resolve(jsonResponse(MATTERS))
       if (url.startsWith('/api/settings')) {
         // Echo the persisted field list back (server-cleaned shape).
         const body = init?.body ? JSON.parse(String(init.body)) : {}
@@ -792,6 +795,19 @@ describe('DocumentListView', () => {
     expect(listCall).toBeDefined()
     const params = new URLSearchParams(listCall!.split('?')[1])
     expect(params.get('project')).toBe('house-purchase')
+  })
+
+  it('sends repeated matter filters from the URL to the API (OR)', async () => {
+    await router.push('/?matter=acme-merger&matter=estate')
+    await mountView()
+    await flushPromises()
+
+    const listCall = fetchMock.mock.calls
+      .map((c) => String(c[0]))
+      .find((url) => url.startsWith('/api/documents'))
+    expect(listCall).toBeDefined()
+    const params = new URLSearchParams(listCall!.split('?')[1])
+    expect(params.getAll('matter')).toEqual(['acme-merger', 'estate'])
   })
 
   it('renders snippets via renderSnippet: <b> kept, script neutralised', async () => {

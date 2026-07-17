@@ -50,6 +50,7 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
     recipient: { id: 5, name: 'John' },
     tags: [{ slug: 'energie', name: 'Energie' }],
     projects: [],
+    matters: [],
     topics: [],
     document_date: '2026-05-15',
     language: 'nld',

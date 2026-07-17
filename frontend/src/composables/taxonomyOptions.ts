@@ -1,5 +1,6 @@
 /**
- * Shared, lazily-fetched taxonomy options (kinds / senders / tags / projects).
+ * Shared, lazily-fetched taxonomy options (kinds / senders / tags / projects /
+ * matters).
  *
  * The search modal and the list view's filter summary both need the
  * taxonomy lists; this store fetches each endpoint once per page load
@@ -27,6 +28,7 @@ import {
   type TagOption,
 } from '@/api/taxonomy'
 import { listProjects, type ProjectOption } from '@/api/projects'
+import { listMatters, type MatterOption } from '@/api/matters'
 
 export const useTaxonomyOptionsStore = defineStore('taxonomyOptions', () => {
   const kinds = ref<KindOption[]>([])
@@ -34,6 +36,7 @@ export const useTaxonomyOptionsStore = defineStore('taxonomyOptions', () => {
   const recipients = ref<RecipientOption[]>([])
   const tags = ref<TagOption[]>([])
   const projects = ref<ProjectOption[]>([])
+  const matters = ref<MatterOption[]>([])
   // Private (not returned): the in-flight/completed fetch, so `ensureLoaded`
   // fetches each endpoint at most once until `refresh()` invalidates it.
   let loadPromise: Promise<void> | null = null
@@ -46,13 +49,17 @@ export const useTaxonomyOptionsStore = defineStore('taxonomyOptions', () => {
       listRecipients(),
       listTags(),
       listProjects(),
-    ]).then(([kindResult, senderResult, recipientResult, tagResult, projectResult]) => {
-      if (kindResult.status === 'fulfilled') kinds.value = kindResult.value
-      if (senderResult.status === 'fulfilled') senders.value = senderResult.value
-      if (recipientResult.status === 'fulfilled') recipients.value = recipientResult.value
-      if (tagResult.status === 'fulfilled') tags.value = tagResult.value
-      if (projectResult.status === 'fulfilled') projects.value = projectResult.value
-    })
+      listMatters(),
+    ]).then(
+      ([kindResult, senderResult, recipientResult, tagResult, projectResult, matterResult]) => {
+        if (kindResult.status === 'fulfilled') kinds.value = kindResult.value
+        if (senderResult.status === 'fulfilled') senders.value = senderResult.value
+        if (recipientResult.status === 'fulfilled') recipients.value = recipientResult.value
+        if (tagResult.status === 'fulfilled') tags.value = tagResult.value
+        if (projectResult.status === 'fulfilled') projects.value = projectResult.value
+        if (matterResult.status === 'fulfilled') matters.value = matterResult.value
+      },
+    )
     return loadPromise
   }
 
@@ -62,7 +69,7 @@ export const useTaxonomyOptionsStore = defineStore('taxonomyOptions', () => {
     return ensureLoaded()
   }
 
-  return { kinds, senders, recipients, tags, projects, ensureLoaded, refresh }
+  return { kinds, senders, recipients, tags, projects, matters, ensureLoaded, refresh }
 })
 
 export interface TaxonomyOptions {
@@ -71,6 +78,7 @@ export interface TaxonomyOptions {
   recipients: Ref<RecipientOption[]>
   tags: Ref<TagOption[]>
   projects: Ref<ProjectOption[]>
+  matters: Ref<MatterOption[]>
   /** Fetch the lists on first call; later calls reuse the cache. */
   ensureLoaded: () => Promise<void>
 }
@@ -81,8 +89,8 @@ export interface TaxonomyOptions {
  */
 export function useTaxonomyOptions(): TaxonomyOptions {
   const store = useTaxonomyOptionsStore()
-  const { kinds, senders, recipients, tags, projects } = storeToRefs(store)
-  return { kinds, senders, recipients, tags, projects, ensureLoaded: store.ensureLoaded }
+  const { kinds, senders, recipients, tags, projects, matters } = storeToRefs(store)
+  return { kinds, senders, recipients, tags, projects, matters, ensureLoaded: store.ensureLoaded }
 }
 
 /**
