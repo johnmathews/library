@@ -29,6 +29,7 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     Kind,
+    Matter,
     Project,
     Recipient,
     ReviewStatus,
@@ -52,6 +53,7 @@ async def _seed_document(
     recipient_name: str | None = None,
     tag_slugs: Iterable[str] = (),
     project_slugs: Iterable[str] = (),
+    matter_slugs: Iterable[str] = (),
     **fields: Any,
 ) -> int:
     engine = create_async_engine(database_url, poolclass=NullPool)
@@ -105,6 +107,15 @@ async def _seed_document(
                     session.add(project)
                     await session.flush()
                 document.projects.append(project)
+            for slug in matter_slugs:
+                matter = (
+                    await session.execute(select(Matter).where(Matter.slug == slug))
+                ).scalar_one_or_none()
+                if matter is None:
+                    matter = Matter(slug=slug, name=slug)
+                    session.add(matter)
+                    await session.flush()
+                document.matters.append(matter)
             session.add(document)
             await session.commit()
             return document.id

@@ -66,6 +66,13 @@ class ProjectRef(BaseModel):
     name: str
 
 
+class MatterRef(BaseModel):
+    """A business-matter category, expanded inline on a document."""
+
+    slug: str
+    name: str
+
+
 class ValidationFindingSummary(BaseModel):
     """A single validation concern, in the compact shape list rows carry so the
     dashboard and review queue can show *why* a document needs review without
