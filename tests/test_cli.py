@@ -546,6 +546,41 @@ def test_sweep_matters_dry_run_enqueues_nothing(cli_database_url: str) -> None:
     assert _sweep_enqueued(connector) == set()
 
 
+def test_sweep_matters_reclassify_targets_all_in_replace_mode(cli_database_url: str) -> None:
+    fresh = _seed_matter_document(cli_database_url, "matter-recl-fresh", classified=False)
+    done = _seed_matter_document(cli_database_url, "matter-recl-done", classified=True)
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["sweep-matters", "--reclassify"])
+    assert result.exit_code == 0, result.output
+
+    jobs = [
+        job
+        for job in connector.jobs.values()
+        if job["task_name"] == "library.jobs.classify_document_matters"
+    ]
+    ids = {job["args"]["document_id"] for job in jobs}
+    assert {fresh, done} <= ids  # reclassify includes already-classified docs
+    assert jobs and all(job["args"]["replace"] is True for job in jobs)  # replace mode
+
+
+def test_sweep_matters_default_enqueues_in_merge_mode(cli_database_url: str) -> None:
+    _seed_matter_document(cli_database_url, "matter-merge-default", classified=False)
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["sweep-matters"])
+    assert result.exit_code == 0, result.output
+
+    jobs = [
+        job
+        for job in connector.jobs.values()
+        if job["task_name"] == "library.jobs.classify_document_matters"
+    ]
+    assert jobs and all(job["args"]["replace"] is False for job in jobs)  # merge mode
+
+
 def _seed_extraction_document(
     database_url: str,
     *,

@@ -234,26 +234,46 @@ is fed verbatim to the classifier (as `slug: name — hint`) to decide membershi
 A precise hint ("Motor insurance policies, renewals, claims") files documents
 more accurately than a bare name.
 
+**Writing good hints.** The `hint` is the classifier's primary instruction, so
+the fastest way to improve accuracy is to make each hint state what belongs *and*
+what does not. Precision problems ("car purchases and fines landing in Car
+insurance") are usually fixed two ways: give the hint explicit **exclusions**
+("motor insurance policies, premiums, renewals, claims — NOT purchases,
+servicing, fines, or road tax"), and add the **sibling category** those documents
+actually belong to (a "Car / Vehicle" matter) so the model has a correct home for
+them instead of the nearest bucket.
+
 **Operational workflow — re-file after a vocabulary change.** The classifier only
 runs automatically at ingest, so an existing corpus does not react to a
-newly-added matter or an edited hint on its own. After adding/renaming a matter
-or changing a hint, re-file existing documents with the CLI:
+newly-added matter or an edited hint on its own. After adding/renaming a matter or
+changing a hint, re-file existing documents with the CLI:
 
 ```bash
 # report how many documents would be queued, without enqueuing
 library sweep-matters --dry-run
-# queue every not-yet-classified document (the default)
+# queue every not-yet-classified document (the default, merge/add-only)
 library sweep-matters
-# re-classify EVERY non-deleted document against the current vocabulary
+# re-classify EVERY non-deleted document, ADD-only (won't undo a wrong membership)
 library sweep-matters --all
+# re-file from scratch: REPLACE auto-assigned matters with a fresh prediction
+library sweep-matters --reclassify
 ```
 
-By default `sweep-matters` enqueues only documents that have never been
-classified; `--all` re-runs the whole corpus (use it after editing a hint, since
-already-classified documents would otherwise be skipped). Classification is
-**merge-only** and honours `extra["user_edited_fields"]`, so it never removes a
-matter and never overwrites a document whose matters an editor set by hand. The
-worker must be running to do the work — the command only enqueues the jobs.
+Which flag to use:
+
+- **default** — only never-classified documents, merge mode (add-only). For a
+  first run or picking up stragglers.
+- **`--all`** — the whole corpus, still merge mode. Adds newly-applicable matters
+  but **cannot remove** an earlier wrong one.
+- **`--reclassify`** — the whole corpus in **replace** mode: each document's
+  auto-assigned matters are cleared and re-predicted. **This is the flag for
+  correcting mistakes** — the tuning loop is *sharpen a hint → `sweep-matters
+  --reclassify` → inspect the homepage buttons → repeat*.
+
+In every mode, a document whose matters were set by hand (via the document
+editor) is skipped, so `--reclassify` only ever re-files auto-assigned
+memberships and never overwrites your manual curation. The worker must be running
+to do the work — the command only enqueues the jobs.
 
 ## 1.3 The admin views (frontend)
 

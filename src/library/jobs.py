@@ -520,20 +520,20 @@ async def extract_document(document_id: int) -> None:
 
 
 @job_app.task(name="library.jobs.classify_document_matters")
-async def classify_document_matters(document_id: int) -> None:
+async def classify_document_matters(document_id: int, replace: bool = False) -> None:
     """Background task: auto-file one document into business matters.
 
-    Deferred at ingest (right after extraction) and by the ``sweep-matters``
-    CLI after the matter vocabulary changes. Best-effort, idempotent, and
-    merge-only: it only adds matters the classifier is confident about and
-    honours ``extra["user_edited_fields"]``. Independent of pipeline status, so
-    it also works on already-indexed documents.
+    Deferred at ingest (right after extraction, ``replace=False`` so it can only
+    add) and by the ``sweep-matters`` CLI. With ``replace=True`` (the
+    ``--reclassify`` sweep) it re-files from scratch, replacing auto-assigned
+    matters. Either way it honours ``extra["user_edited_fields"]`` and works on
+    already-indexed documents.
     """
     async with get_sessionmaker()() as session:
         document = await session.get(Document, document_id)
         if document is None:
             raise ValueError(f"document {document_id} not found")
-        await apply_matter_classification(session, document, get_settings())
+        await apply_matter_classification(session, document, get_settings(), replace=replace)
         await session.commit()
 
 

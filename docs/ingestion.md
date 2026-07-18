@@ -906,8 +906,8 @@ the main extraction call.
 
 **Why a separate pass.** Keeping classification out of extraction lets the matter
 vocabulary evolve — a matter added, renamed, or its `hint` reworded — and the
-existing corpus be re-filed cheaply with one small Haiku call per document,
-without re-running the expensive full extraction. It reads only the document's
+existing corpus be re-filed cheaply with one small call per document, without
+re-running the expensive full extraction. It reads only the document's
 already-extracted title, summary, and sender.
 
 **Where it runs.** Deferred as its own best-effort job at the tail of the
@@ -917,33 +917,48 @@ pipeline stages. A queue error is swallowed — matter classification can **neve
 block, fail, or stall a document's ingest.
 
 **Contract** (`apply_matter_classification`): one Anthropic structured-output
-call (`matter_classifier_model`, default `claude-haiku-4-5`) is given the
-document's title/summary/sender plus the current matter vocabulary (each shown as
-`slug: name — hint`) and returns the subset of **existing** slugs that clearly
-apply. Two disciplines, mirroring the extraction/email-label passes:
+call (`matter_classifier_model`, default `claude-sonnet-4-6` — the
+"car-related-but-not-car-*insurance*" judgement rewards nuance, and the call is
+infrequent) is given the document's title/summary/sender plus the current matter
+vocabulary (each shown as `slug: name — hint`) and returns the subset of
+**existing** slugs that clearly apply. The prompt biases toward **precision**:
+match the document's *primary subject*, honour a hint's exclusions, and leave a
+document unfiled rather than force a weak match. Disciplines mirror the
+extraction/email-label passes:
 
-- **Merge-only, never destructive.** Only slugs that are in the offered
-  vocabulary **and** not already attached are added; existing matters are never
-  removed, and hallucinated/unknown slugs are ignored. The pass never invents a
-  matter. A document with `matters` in `extra["user_edited_fields"]` (a manual
-  edit via `PATCH /api/documents/{id}`) is **skipped entirely**, so hand-curation
-  is never overwritten.
+- **Two write modes.** *Merge* (the ingest default) only adds slugs that are in
+  the vocabulary and not already attached — it never removes, so a re-run can
+  only add. *Replace* (the `--reclassify` sweep) sets the document's matters to
+  exactly the fresh prediction, correcting earlier mis-filing. In **both** modes
+  a document with `matters` in `extra["user_edited_fields"]` (a manual edit via
+  `PATCH /api/documents/{id}`) is **skipped entirely** before any write, so
+  replace only ever touches auto-assigned memberships and hand-curation is never
+  overwritten. Hallucinated/unknown slugs are ignored; the pass never invents a
+  matter.
 - **Fail-open + budget-gated.** A disabled/blown budget, an empty vocabulary, a
   missing API key, an API error, or an unparseable response all return with no
   write. Spend is capped by `matter_classification_daily_budget_usd` (default
-  \$1), summed from today's `matter_classification_completed` events exactly like
+  \$3), summed from today's `matter_classification_completed` events exactly like
   extraction.
 
 Provenance is stamped onto `extra["matter_classification"]` (model,
-`prompt_version`, `cost_usd`, the matched vs. newly-attached slugs, token counts).
+`prompt_version`, `mode`, `cost_usd`, the matched / newly-attached / removed
+slugs, token counts).
 
 **Backfill — `library sweep-matters`.** Because the pass only runs at ingest,
-re-file an existing corpus after a vocabulary change with the CLI. By default it
-enqueues only documents that have never been classified (no
-`extra["matter_classification"]` provenance); `--all` re-runs every non-deleted
-document (needed after editing a hint), `--dry-run` reports the candidate count
-without enqueuing, and `--limit N` caps the batch. The worker must be running to
-do the work. See [admin.md](admin.md) §1.2.7 for the operator workflow.
+re-file an existing corpus after a vocabulary change with the CLI:
+
+- default: enqueues only never-classified documents (no
+  `extra["matter_classification"]` provenance), in merge mode.
+- `--all`: every non-deleted document, still merge mode (add-only).
+- `--reclassify`: every non-deleted document in **replace** mode — clears each
+  document's auto-assigned matters and re-predicts. This is the flag to use after
+  sharpening a hint or adding a category, because merge mode alone cannot undo an
+  earlier wrong membership.
+
+`--dry-run` reports the candidate count without enqueuing and `--limit N` caps the
+batch. The worker must be running to do the work. See [admin.md](admin.md) §1.2.7
+for the operator workflow.
 
 ## Markdown layer (`library.markdown`)
 
@@ -1892,8 +1907,8 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_MARKDOWN_MAX_PAGES` | `20` | Max pages rendered/sent per document |
 | `LIBRARY_MARKDOWN_PAGE_BATCH` | `10` | Pages per vision call (batched with page-number offset) |
 | `LIBRARY_MARKDOWN_IMAGE_LONG_SIDE_PX` | `1600` | Long-side cap for rendered page images sent to the model |
-| `LIBRARY_MATTER_CLASSIFIER_MODEL` | `claude-haiku-4-5` | Model for the standalone matter-classification pass (see "Matter classification") |
-| `LIBRARY_MATTER_CLASSIFICATION_DAILY_BUDGET_USD` | `1.0` | Daily spend cap for the matter classifier (summed from `matter_classification_completed` events); over budget → skip, matters unchanged. The pass also self-skips when no matters are defined or no `LIBRARY_ANTHROPIC_API_KEY` is set |
+| `LIBRARY_MATTER_CLASSIFIER_MODEL` | `claude-sonnet-4-6` | Model for the standalone matter-classification pass (see "Matter classification"); sonnet for classification nuance |
+| `LIBRARY_MATTER_CLASSIFICATION_DAILY_BUDGET_USD` | `3.0` | Daily spend cap for the matter classifier (summed from `matter_classification_completed` events); over budget → skip, matters unchanged. Headroom for iterative `--reclassify` tuning sweeps. The pass also self-skips when no matters are defined or no `LIBRARY_ANTHROPIC_API_KEY` is set |
 | `LIBRARY_WORKER_CONCURRENCY` | `1` | Documents the worker processes at once; raise only with RAM headroom |
 | `LIBRARY_STALLED_JOB_SWEEP_MINUTES` | `5` | Cadence of the crash-recovery sweep; `0` disables it |
 | `LIBRARY_STALLED_JOB_HEARTBEAT_SECONDS` | `60.0` | Worker-heartbeat age before an in-flight job is deemed stalled and re-enqueued |

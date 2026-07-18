@@ -534,6 +534,16 @@ def sweep_matters(
         "--all",
         help="Re-classify every non-deleted document, not just unclassified ones.",
     ),
+    reclassify: bool = typer.Option(
+        False,
+        "--reclassify",
+        help=(
+            "Re-file from scratch: REPLACE each document's auto-assigned matters "
+            "with a fresh prediction (implies --all). Use after improving hints "
+            "or categories to correct earlier mis-filing. Hand-edited documents "
+            "are still skipped."
+        ),
+    ),
     dry_run: bool = typer.Option(
         False, "--dry-run", help="Report the candidate count without enqueuing anything."
     ),
@@ -541,18 +551,28 @@ def sweep_matters(
     """Queue business-matter classification for documents.
 
     Run after the matter vocabulary changes (a matter added, renamed, or its
-    hint edited) so existing documents are re-filed against the new list. By
-    default only documents that have never been classified are queued (those
-    with no ``extra['matter_classification']`` provenance); pass ``--all`` to
-    re-classify everything. Classification is merge-only and honours
-    ``extra['user_edited_fields']``, so hand-curated matters are never
-    overwritten. The worker must be running to do the work; this command only
-    enqueues the jobs.
+    hint edited) so existing documents are re-filed against the new list.
+
+    Modes:
+
+    - default: only never-classified documents (no ``extra['matter_classification']``
+      provenance) are queued, in **merge** mode (add-only).
+    - ``--all``: every non-deleted document, still merge mode.
+    - ``--reclassify``: every non-deleted document in **replace** mode — each
+      document's auto-assigned matters are cleared and re-predicted, correcting
+      earlier mis-filing. This is the flag to use after sharpening hints.
+
+    In every mode, documents whose matters were hand-edited
+    (``extra['user_edited_fields']`` contains ``matters``) are skipped by the
+    classifier, so manual curation is never overwritten. The worker must be
+    running to do the work; this command only enqueues the jobs.
     """
 
     async def operation(session: AsyncSession) -> int:
         statement = select(Document.id).where(Document.deleted_at.is_(None))
-        if not all_documents:
+        # --reclassify and --all both target the whole corpus; only the plain
+        # default narrows to never-classified documents.
+        if not all_documents and not reclassify:
             # Not yet classified: no provenance stamp from a prior pass.
             statement = statement.where(Document.extra["matter_classification"].is_(None))
         statement = statement.order_by(Document.id)
@@ -563,14 +583,17 @@ def sweep_matters(
             return len(document_ids)
         async with job_app.open_async():
             for document_id in document_ids:
-                await classify_document_matters.defer_async(document_id=document_id)
+                await classify_document_matters.defer_async(
+                    document_id=document_id, replace=reclassify
+                )
         return len(document_ids)
 
     count = _run(operation)
+    verb = "re-classify (replace)" if reclassify else "matter classification"
     if dry_run:
-        typer.echo(f"{count} document(s) would be queued for matter classification")
+        typer.echo(f"{count} document(s) would be queued for {verb}")
     else:
-        typer.echo(f"queued matter classification for {count} document(s)")
+        typer.echo(f"queued {verb} for {count} document(s)")
 
 
 # Junk image documents (email logo/tracker PNGs) carry almost no OCR text and
