@@ -43,6 +43,7 @@ function makeItem(overrides: Partial<DeletedDocumentItem> = {}): DeletedDocument
     recipient: null,
     tags: [],
     projects: [],
+    matters: [],
     document_date: '2026-05-15',
     due_date: null,
     expiry_date: null,

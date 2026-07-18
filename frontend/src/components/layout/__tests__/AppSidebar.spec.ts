@@ -160,6 +160,7 @@ describe('AppSidebar', () => {
       'sidebar-ask-link',
       'sidebar-jobs-link',
       'sidebar-projects-link',
+      'sidebar-matters-link',
       'sidebar-settings-link',
       'sidebar-admin-link',
       'sidebar-deleted-link',

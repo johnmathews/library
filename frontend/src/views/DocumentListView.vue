@@ -177,6 +177,7 @@ function buildFilters(
     sender_id: Number.isInteger(senderId) ? senderId : undefined,
     recipient_id: Number.isInteger(recipientId) ? recipientId : undefined,
     project: state.projects.length ? state.projects : undefined,
+    matter: state.matters.length ? state.matters : undefined,
     tag: state.tags.length ? state.tags : undefined,
     language: (state.language || undefined) as DocumentLanguage | undefined,
     status: (state.status || undefined) as DocumentListItem['status'] | undefined,

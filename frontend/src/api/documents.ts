@@ -38,6 +38,11 @@ export interface ProjectRef {
   name: string
 }
 
+export interface MatterRef {
+  slug: string
+  name: string
+}
+
 export interface IngestionEvent {
   event: string
   detail: Record<string, unknown>
@@ -68,6 +73,7 @@ export interface DocumentListItem {
   recipient: RecipientRef | null
   tags: TagRef[]
   projects: ProjectRef[]
+  matters: MatterRef[]
   document_date: string | null
   due_date: string | null
   expiry_date: string | null
@@ -178,6 +184,8 @@ export interface DocumentFilters {
   recipient_id?: number
   /** Repeatable: a document in any of these project slugs matches (OR). */
   project?: string[]
+  /** Repeatable: a document in any of these matter slugs matches (OR). */
+  matter?: string[]
   /** Repeatable: every slug must match (AND). */
   tag?: string[]
   language?: DocumentLanguage
@@ -215,6 +223,12 @@ export interface DocumentUpdate {
    * names are upserted by the backend, so free text creates a new project.
    */
   projects?: string[]
+  /**
+   * Full-replacement list of matter names-or-slugs (`[]` clears). Unknown
+   * names are upserted by the backend, so free text creates a new matter.
+   * Editing here flags the field user-edited (stops auto-classification).
+   */
+  matters?: string[]
   language?: DocumentLanguage
   /** Decimal as string to preserve precision. */
   amount_total?: string | null
@@ -277,17 +291,18 @@ export const DOCUMENT_STATUSES: readonly { value: DocumentStatus; text: string }
 
 /**
  * Serialise filters to a query string. Built by hand (not apiFetch's
- * `query` option) because `tag` and `project` repeat: ?tag=a&tag=b ANDs
- * both; ?project=a&project=b ORs both.
+ * `query` option) because `tag`, `project` and `matter` repeat: ?tag=a&tag=b
+ * ANDs both; ?project=a&project=b and ?matter=a&matter=b OR both.
  */
 export function documentQueryString(filters: DocumentFilters): string {
   const params = new URLSearchParams()
-  const { tag, project, ...scalars } = filters
+  const { tag, project, matter, ...scalars } = filters
   for (const [key, value] of Object.entries(scalars)) {
     if (value !== undefined && value !== '') params.set(key, String(value))
   }
   for (const slug of tag ?? []) params.append('tag', slug)
   for (const slug of project ?? []) params.append('project', slug)
+  for (const slug of matter ?? []) params.append('matter', slug)
   return params.toString()
 }
 

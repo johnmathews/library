@@ -54,6 +54,7 @@ _DETAIL_REFRESH_ATTRS: list[str] = [
     "recipient",
     "tags",
     "projects",
+    "matters",
     "events",
     "updated_at",
 ]

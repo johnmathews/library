@@ -20,6 +20,7 @@ from library.api import (
     events,
     held_emails,
     jobs,
+    matters,
     notes,
     projects,
     saved_views,
@@ -92,6 +93,14 @@ OPENAPI_TAGS: list[dict[str, str]] = [
             "Projects/collections grouping documents (many-to-many, "
             "soft-archive) with document counts — the values for the "
             "document `?project=` filter and membership edits."
+        ),
+    },
+    {
+        "name": "matters",
+        "description": (
+            "Business-matter categories grouping documents by subject "
+            "(many-to-many, soft-archive) with document counts — the values "
+            "for the document `?matter=` filter and membership edits."
         ),
     },
     {
@@ -225,6 +234,7 @@ def create_app() -> FastAPI:
     api_router.include_router(series.router)
     api_router.include_router(taxonomy.router)
     api_router.include_router(projects.router)
+    api_router.include_router(matters.router)
     api_router.include_router(saved_views.router)
     api_router.include_router(jobs.router)
     api_router.include_router(held_emails.router)

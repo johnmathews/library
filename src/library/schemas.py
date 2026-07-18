@@ -66,6 +66,13 @@ class ProjectRef(BaseModel):
     name: str
 
 
+class MatterRef(BaseModel):
+    """A business-matter category, expanded inline on a document."""
+
+    slug: str
+    name: str
+
+
 class ValidationFindingSummary(BaseModel):
     """A single validation concern, in the compact shape list rows carry so the
     dashboard and review queue can show *why* a document needs review without
@@ -123,6 +130,7 @@ class DocumentListItem(BaseModel):
     tags: list[TagOut] = Field(description="Sorted by slug.")
     topics: list[str] = Field(default_factory=list, description="Extracted free-text topics.")
     projects: list[ProjectRef] = Field(default_factory=list, description="Sorted by slug.")
+    matters: list[MatterRef] = Field(default_factory=list, description="Sorted by slug.")
     document_date: date | None
     due_date: date | None = None
     expiry_date: date | None = None
@@ -312,6 +320,14 @@ class DocumentUpdate(BaseModel):
         description=(
             "Full replacement list of project slugs or names; created if unknown. "
             "`[]` clears membership, `null` is rejected."
+        ),
+    )
+    matters: list[str] | None = Field(
+        default=None,
+        description=(
+            "Full replacement list of matter slugs or names; created if unknown. "
+            "`[]` clears membership, `null` is rejected. Flags the field user-edited "
+            "so the LLM classifier stops auto-assigning matters to this document."
         ),
     )
     language: DocumentLanguage | None = None

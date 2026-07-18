@@ -896,6 +896,55 @@ ask) must have a row in `MODEL_PRICING_USD_PER_MTOK`
 (`library.extraction.pricing`); a `Settings` with an unpriced model fails
 at startup rather than silently recording cost 0 and defeating the budget gate.
 
+## Matter classification (`library.matter_classifier`)
+
+A **business matter** is an evergreen subject category (car insurance, health
+insurance, subscriptions) a document may belong to any number of — the vocabulary
+is admin-curated (see [admin.md](admin.md) §1.2.7 and [api.md](api.md) §1.22).
+Documents are filed into matters by a **separate, standalone LLM pass**, not by
+the main extraction call.
+
+**Why a separate pass.** Keeping classification out of extraction lets the matter
+vocabulary evolve — a matter added, renamed, or its `hint` reworded — and the
+existing corpus be re-filed cheaply with one small Haiku call per document,
+without re-running the expensive full extraction. It reads only the document's
+already-extracted title, summary, and sender.
+
+**Where it runs.** Deferred as its own best-effort job at the tail of the
+`extract` stage (`classify_document_matters`, wired in `library.jobs`): the job
+is queued right after extraction commits and runs in parallel with the later
+pipeline stages. A queue error is swallowed — matter classification can **never**
+block, fail, or stall a document's ingest.
+
+**Contract** (`apply_matter_classification`): one Anthropic structured-output
+call (`matter_classifier_model`, default `claude-haiku-4-5`) is given the
+document's title/summary/sender plus the current matter vocabulary (each shown as
+`slug: name — hint`) and returns the subset of **existing** slugs that clearly
+apply. Two disciplines, mirroring the extraction/email-label passes:
+
+- **Merge-only, never destructive.** Only slugs that are in the offered
+  vocabulary **and** not already attached are added; existing matters are never
+  removed, and hallucinated/unknown slugs are ignored. The pass never invents a
+  matter. A document with `matters` in `extra["user_edited_fields"]` (a manual
+  edit via `PATCH /api/documents/{id}`) is **skipped entirely**, so hand-curation
+  is never overwritten.
+- **Fail-open + budget-gated.** A disabled/blown budget, an empty vocabulary, a
+  missing API key, an API error, or an unparseable response all return with no
+  write. Spend is capped by `matter_classification_daily_budget_usd` (default
+  \$1), summed from today's `matter_classification_completed` events exactly like
+  extraction.
+
+Provenance is stamped onto `extra["matter_classification"]` (model,
+`prompt_version`, `cost_usd`, the matched vs. newly-attached slugs, token counts).
+
+**Backfill — `library sweep-matters`.** Because the pass only runs at ingest,
+re-file an existing corpus after a vocabulary change with the CLI. By default it
+enqueues only documents that have never been classified (no
+`extra["matter_classification"]` provenance); `--all` re-runs every non-deleted
+document (needed after editing a hint), `--dry-run` reports the candidate count
+without enqueuing, and `--limit N` caps the batch. The worker must be running to
+do the work. See [admin.md](admin.md) §1.2.7 for the operator workflow.
+
 ## Markdown layer (`library.markdown`)
 
 The `markdown` pipeline stage renders each document page as clean
@@ -1812,6 +1861,7 @@ Append-only audit trail in `ingestion_events`:
 | `markdown_failed` | markdown stage | `{error, prompt_version}` |
 | `extraction_repair_completed` | markdown stage (repair pass) | `{model, prompt_version, input: "markdown", confidence, input_tokens, output_tokens, cost_usd, fields_filled, gaps}` — counts toward the **extraction** daily budget (see "Fill-only extraction repair") |
 | `extraction_repair_skipped` | markdown stage (repair pass) | `{reason, ...}` — `disabled`, `missing_api_key`, `no_markdown`, `no_extraction`, `already_repaired`, `no_gaps`, `budget`, `error` |
+| `matter_changed` | documents service | `{matters}` — the new full matter-slug list after a manual `PATCH /api/documents/{id}` edit of `matters` (also locks the field in `user_edited_fields`) |
 | `failed` | pipeline | `{error, status}` |
 
 ## Configuration
@@ -1842,6 +1892,8 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | `LIBRARY_MARKDOWN_MAX_PAGES` | `20` | Max pages rendered/sent per document |
 | `LIBRARY_MARKDOWN_PAGE_BATCH` | `10` | Pages per vision call (batched with page-number offset) |
 | `LIBRARY_MARKDOWN_IMAGE_LONG_SIDE_PX` | `1600` | Long-side cap for rendered page images sent to the model |
+| `LIBRARY_MATTER_CLASSIFIER_MODEL` | `claude-haiku-4-5` | Model for the standalone matter-classification pass (see "Matter classification") |
+| `LIBRARY_MATTER_CLASSIFICATION_DAILY_BUDGET_USD` | `1.0` | Daily spend cap for the matter classifier (summed from `matter_classification_completed` events); over budget → skip, matters unchanged. The pass also self-skips when no matters are defined or no `LIBRARY_ANTHROPIC_API_KEY` is set |
 | `LIBRARY_WORKER_CONCURRENCY` | `1` | Documents the worker processes at once; raise only with RAM headroom |
 | `LIBRARY_STALLED_JOB_SWEEP_MINUTES` | `5` | Cadence of the crash-recovery sweep; `0` disables it |
 | `LIBRARY_STALLED_JOB_HEARTBEAT_SECONDS` | `60.0` | Worker-heartbeat age before an in-flight job is deemed stalled and re-enqueued |

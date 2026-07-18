@@ -46,6 +46,13 @@ describe('documentQueryString', () => {
     )
     expect(params.getAll('project')).toEqual(['house-purchase', 'taxes'])
   })
+
+  it('serialises repeated matter filters (OR)', () => {
+    const params = new URLSearchParams(
+      documentQueryString({ matter: ['acme-merger', 'estate'] }),
+    )
+    expect(params.getAll('matter')).toEqual(['acme-merger', 'estate'])
+  })
 })
 
 describe('file URL helpers', () => {

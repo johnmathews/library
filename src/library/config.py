@@ -20,6 +20,7 @@ _PRICED_MODEL_FIELDS: tuple[str, ...] = (
     "ask_model",
     "ask_title_model",
     "email_label_model",
+    "matter_classifier_model",
 )
 
 
@@ -193,6 +194,13 @@ class Settings(BaseSettings):
     email_label_model: str = "claude-haiku-4-5"
     email_label_daily_budget_usd: float = 2.0
     email_label_body_snippet_chars: int = 1000  # body context sent to the labeller
+    # Business-matter LLM classifier (see docs/ingestion.md, "Matter
+    # classification"). One Anthropic call per document auto-files it into 0..n
+    # existing, user-curated matters (never inventing new ones). Merge-only and
+    # fail-open: it can only add matters, never remove them or fail a document.
+    # Spend is budget-gated like extraction on its own daily total.
+    matter_classifier_model: str = "claude-haiku-4-5"
+    matter_classification_daily_budget_usd: float = 1.0
     # Hold-for-review (see docs/ingestion.md, "Email item selection"). An email
     # the pipeline judges not library-worthy is HELD — a durable ``held_emails``
     # row plus a move to ``email_held_folder`` — instead of silently processed,

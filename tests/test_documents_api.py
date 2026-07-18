@@ -29,6 +29,7 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     Kind,
+    Matter,
     Project,
     Recipient,
     ReviewStatus,
@@ -52,6 +53,7 @@ async def _seed_document(
     recipient_name: str | None = None,
     tag_slugs: Iterable[str] = (),
     project_slugs: Iterable[str] = (),
+    matter_slugs: Iterable[str] = (),
     **fields: Any,
 ) -> int:
     engine = create_async_engine(database_url, poolclass=NullPool)
@@ -105,6 +107,15 @@ async def _seed_document(
                     session.add(project)
                     await session.flush()
                 document.projects.append(project)
+            for slug in matter_slugs:
+                matter = (
+                    await session.execute(select(Matter).where(Matter.slug == slug))
+                ).scalar_one_or_none()
+                if matter is None:
+                    matter = Matter(slug=slug, name=slug)
+                    session.add(matter)
+                    await session.flush()
+                document.matters.append(matter)
             session.add(document)
             await session.commit()
             return document.id
@@ -1496,6 +1507,101 @@ def test_patch_null_projects_rejected(api_client: TestClient, api_database_url: 
     document_id = seed_document(api_database_url, "w6-proj-null")
     response = api_client.patch(f"/api/documents/{document_id}", json={"projects": None})
     assert response.status_code == 422
+
+
+# --- Matters (W5) ------------------------------------------------------------
+
+
+def test_list_item_includes_matters_and_matter_filter(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """List items expose `matters` (sorted by slug) and ?matter= filters."""
+    in_matter = seed_document(
+        api_database_url,
+        "w5-matter-in",
+        tag_slugs=["w5-matter"],
+        matter_slugs=["w5-matter-beta", "w5-matter-alpha"],
+    )
+    seed_document(api_database_url, "w5-matter-out", tag_slugs=["w5-matter"])
+
+    body = list_docs(api_client, tag="w5-matter")
+    by_id = {item["id"]: item for item in body["items"]}
+    # Matters expanded and sorted by slug.
+    assert [m["slug"] for m in by_id[in_matter]["matters"]] == ["w5-matter-alpha", "w5-matter-beta"]
+    assert by_id[in_matter]["matters"][0] == {"slug": "w5-matter-alpha", "name": "w5-matter-alpha"}
+
+    # ?matter= narrows to members of that matter only.
+    filtered = list_docs(api_client, tag="w5-matter", matter="w5-matter-alpha")
+    assert [item["id"] for item in filtered["items"]] == [in_matter]
+
+
+def test_matter_filter_or_composes(api_client: TestClient, api_database_url: str) -> None:
+    """Repeating ?matter= returns the UNION (documents in any of the matters)."""
+    in_alpha = seed_document(
+        api_database_url,
+        "w5-multimatter-a",
+        tag_slugs=["w5-multimatter"],
+        matter_slugs=["w5-multimatter-alpha"],
+    )
+    in_beta = seed_document(
+        api_database_url,
+        "w5-multimatter-b",
+        tag_slugs=["w5-multimatter"],
+        matter_slugs=["w5-multimatter-beta"],
+    )
+    seed_document(api_database_url, "w5-multimatter-c", tag_slugs=["w5-multimatter"])  # in neither
+
+    body = list_docs(
+        api_client, tag="w5-multimatter", matter=["w5-multimatter-alpha", "w5-multimatter-beta"]
+    )
+    # Union: both members appear, the non-member does not.
+    assert sorted(item["id"] for item in body["items"]) == sorted([in_alpha, in_beta])
+
+
+def test_patch_sets_and_clears_matters(api_client: TestClient, api_database_url: str) -> None:
+    """PATCH matters upserts unknown matters by name, then [] clears them."""
+    document_id = seed_document(api_database_url, "w5-matter-patch", tag_slugs=["w5-matter-patch"])
+
+    # Setting a name that does not exist yet creates the matter (slugified).
+    response = api_client.patch(
+        f"/api/documents/{document_id}", json={"matters": ["Car insurance"]}
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["matters"] == [{"slug": "car-insurance", "name": "Car insurance"}]
+    assert "matters" in body["user_edited_fields"]
+    matter_events = [e for e in body["events"] if e["event"] == "matter_changed"]
+    assert len(matter_events) == 1
+    assert matter_events[0]["detail"]["matters"] == ["car-insurance"]
+
+    # The matter is now discoverable and filters the document.
+    assert list_docs(api_client, matter="car-insurance")["total"] == 1
+    listing = api_client.get("/api/matters").json()
+    assert any(m["slug"] == "car-insurance" for m in listing)
+
+    # Re-PATCH with [] clears membership; the matter row survives (count 0).
+    cleared = api_client.patch(f"/api/documents/{document_id}", json={"matters": []})
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["matters"] == []
+    assert list_docs(api_client, matter="car-insurance")["total"] == 0
+
+
+def test_patch_null_matters_rejected(api_client: TestClient, api_database_url: str) -> None:
+    document_id = seed_document(api_database_url, "w5-matter-null")
+    response = api_client.patch(f"/api/documents/{document_id}", json={"matters": None})
+    assert response.status_code == 422
+
+
+def test_patch_matters_dedups_name_and_slug(api_client: TestClient, api_database_url: str) -> None:
+    """A name and its slug refer to the same matter; sending both must not 500
+    on a duplicate document_matters row — they collapse to one membership."""
+    document_id = seed_document(api_database_url, "w5-matter-dedup")
+    response = api_client.patch(
+        f"/api/documents/{document_id}",
+        json={"matters": ["Car insurance", "car-insurance"]},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["matters"] == [{"slug": "car-insurance", "name": "Car insurance"}]
 
 
 # --- Timestamps: ingestion date / last edited --------------------------------

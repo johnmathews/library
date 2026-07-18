@@ -36,11 +36,13 @@ library user add alice --admin
 
 ## 1.2 What admin gates
 
-### 1.2.1 Project mutations
+### 1.2.1 Project and matter mutations
 
-Projects are a **global, shared** taxonomy, so changing them affects everyone.
-`POST`/`PATCH`/`DELETE /api/projects*` require admin; `GET /api/projects*`
-stays open to all authenticated users (they still filter and assign documents).
+Projects and business **matters** (§1.2.7) are **global, shared** taxonomies, so
+changing them affects everyone.
+`POST`/`PATCH`/`DELETE /api/projects*` and `/api/matters*` require admin;
+`GET /api/projects*` and `GET /api/matters*`
+stay open to all authenticated users (they still filter and assign documents).
 Ordinary per-user or recoverable actions (document soft-delete, notes, uploads,
 settings, ask threads) remain open to all authenticated users — only globally
 shared, destructive, or administrative operations are gated.
@@ -206,6 +208,52 @@ one (`POST /api/admin/fx-rates`, upsert on `(currency, as_of)`, today by default
   list the code (a `502`), the manual form opens with the error.
 
 USD is refused (it is the implicit base). See docs/api.md §1.18.7 for shapes.
+
+### 1.2.7 Business matters (curating the vocabulary)
+
+A **matter** is an evergreen subject category — car insurance, health insurance,
+subscriptions — a document may belong to any number of. Unlike tags or projects,
+matters are filled **automatically**: a per-document LLM classifier auto-files
+each document into the matters it clearly belongs to (see docs/ingestion.md,
+"Matter classification"). Admins own the vocabulary the classifier chooses from.
+
+Matters are managed from the dedicated **`/matters`** page (a separate admin-only
+route, not one of the `/admin` tabs), backed by `POST/PATCH/DELETE /api/matters`
+(docs/api.md §1.22). You can:
+
+- **Create** a matter (name + optional `hint`).
+- **Rename** it — the slug is immutable, so the `?matter=` filter and any saved
+  links survive the rename.
+- **Edit its `hint`.**
+- **Archive** it (hidden from the pickers and the classifier's vocabulary, but
+  membership and links are preserved) or **delete** it (memberships cascade away;
+  the documents themselves are untouched).
+
+**The `hint` field** is free text describing what belongs in the matter, and it
+is fed verbatim to the classifier (as `slug: name — hint`) to decide membership.
+A precise hint ("Motor insurance policies, renewals, claims") files documents
+more accurately than a bare name.
+
+**Operational workflow — re-file after a vocabulary change.** The classifier only
+runs automatically at ingest, so an existing corpus does not react to a
+newly-added matter or an edited hint on its own. After adding/renaming a matter
+or changing a hint, re-file existing documents with the CLI:
+
+```bash
+# report how many documents would be queued, without enqueuing
+library sweep-matters --dry-run
+# queue every not-yet-classified document (the default)
+library sweep-matters
+# re-classify EVERY non-deleted document against the current vocabulary
+library sweep-matters --all
+```
+
+By default `sweep-matters` enqueues only documents that have never been
+classified; `--all` re-runs the whole corpus (use it after editing a hint, since
+already-classified documents would otherwise be skipped). Classification is
+**merge-only** and honours `extra["user_edited_fields"]`, so it never removes a
+matter and never overwrites a document whose matters an editor set by hand. The
+worker must be running to do the work — the command only enqueues the jobs.
 
 ## 1.3 The admin views (frontend)
 

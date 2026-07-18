@@ -12,6 +12,7 @@
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
 import type { KindOption } from '@/api/taxonomy'
+import type { MatterOption } from '@/api/matters'
 import type { LocationQueryRaw } from 'vue-router'
 import { AppCheckboxes, AppDateInput, FilterPill } from '@/components/app'
 import type { ChoiceItem } from '@/components/app'
@@ -32,7 +33,7 @@ const emit = defineEmits<{
   clear: []
 }>()
 
-const { kinds, senders, recipients, tags, projects, ensureLoaded } = useTaxonomyOptions()
+const { kinds, senders, recipients, tags, projects, matters, ensureLoaded } = useTaxonomyOptions()
 void ensureLoaded()
 
 // Which pill popover is open (only one at a time); null = all closed.
@@ -106,6 +107,24 @@ const typeFilters = computed<KindOption[]>(() =>
 function toggleKind(slug: string): void {
   selectKind(props.applied.kind === slug ? '' : slug)
 }
+// Predefined business-matter quick filters shown as a pill row: every matter
+// that has documents, most numerous first (ties broken by name). Unlike the
+// kind row there is no pinned catch-all bucket, so the sort is uniform.
+const matterFilters = computed<MatterOption[]>(() =>
+  matters.value
+    .filter((m) => m.document_count > 0)
+    .slice()
+    .sort((a, b) => b.document_count - a.document_count || a.name.localeCompare(b.name)),
+)
+// A document can belong to several matters, so — unlike the single-select kind
+// row — a matter pill toggles its slug in/out of the multi-select set (mirroring
+// the project pill's OR-compose), leaving any other selected matters intact.
+function toggleMatter(slug: string): void {
+  const next = props.applied.matters.includes(slug)
+    ? props.applied.matters.filter((s) => s !== slug)
+    : [...props.applied.matters, slug]
+  emitWith({ matters: next })
+}
 function selectSender(id: string): void {
   emitWith({ senderId: id })
   openPill.value = null
@@ -166,6 +185,26 @@ const projectItems = computed<ChoiceItem[]>(() =>
   projects.value.map((p) => ({ value: p.slug, text: p.name })),
 )
 
+// Matter multi-select via AppCheckboxes, mirroring the project pill. Matters
+// OR-compose (a document in any selected matter matches) — see docs/api.md.
+const localMatters = ref<string[]>([...props.applied.matters])
+watch(
+  () => props.applied.matters,
+  (next) => {
+    localMatters.value = [...next]
+  },
+)
+const matterModel = computed<string[]>({
+  get: () => localMatters.value,
+  set: (next) => {
+    localMatters.value = next
+    emitWith({ matters: next })
+  },
+})
+const matterItems = computed<ChoiceItem[]>(() =>
+  matters.value.map((m) => ({ value: m.slug, text: m.name })),
+)
+
 // Date range via two AppDateInputs.
 const dateFromModel = computed<string | null>({
   get: () => props.applied.dateFrom || null,
@@ -203,6 +242,14 @@ const projectPillLabel = computed(() => {
   const first =
     projects.value.find((p) => p.slug === props.applied.projects[0])?.name ??
     props.applied.projects[0]
+  return n > 1 ? `${first} +${n - 1}` : first
+})
+const matterPillLabel = computed(() => {
+  const n = props.applied.matters.length
+  if (!n) return ''
+  const first =
+    matters.value.find((m) => m.slug === props.applied.matters[0])?.name ??
+    props.applied.matters[0]
   return n > 1 ? `${first} +${n - 1}` : first
 })
 const dateActive = computed(() => Boolean(props.applied.dateFrom || props.applied.dateTo))
@@ -244,6 +291,14 @@ const chips = computed<Chip[]>(() => {
       key: `project-${slug}`,
       label: `Project: ${name}`,
       remove: () => emitWith({ projects: a.projects.filter((s) => s !== slug) }),
+    })
+  }
+  for (const slug of a.matters) {
+    const name = matters.value.find((m) => m.slug === slug)?.name ?? slug
+    out.push({
+      key: `matter-${slug}`,
+      label: `Matter: ${name}`,
+      remove: () => emitWith({ matters: a.matters.filter((s) => s !== slug) }),
     })
   }
   for (const slug of a.tags) {
@@ -475,6 +530,23 @@ const statusOptions = DOCUMENT_STATUSES
       </FilterPill>
 
       <FilterPill
+        data-testid="pill-matter"
+        label="Matter"
+        :active="Boolean(applied.matters.length)"
+        :value-label="matterPillLabel"
+        :open="pillOpen('matter')"
+        @update:open="setPillOpen('matter', $event)"
+      >
+        <AppCheckboxes
+          id="filter-matters"
+          legend="Matters"
+          legend-size="s"
+          :items="matterItems"
+          v-model="matterModel"
+        />
+      </FilterPill>
+
+      <FilterPill
         data-testid="pill-more"
         label="More"
         :active="moreActive"
@@ -564,6 +636,34 @@ const statusOptions = DOCUMENT_STATUSES
       >
         {{ k.name }}
         <span class="text-xs opacity-70">{{ k.document_count }}</span>
+      </button>
+    </div>
+
+    <!-- Business-matter quick filters: one pill per matter that has documents,
+         ordered most-numerous first. Each toggles its matter in the multi-select
+         set — a document can be in several matters, so clicking a second pill
+         keeps the first active; clicking an active pill removes just that one. -->
+    <div
+      v-if="matterFilters.length"
+      data-testid="matter-filters"
+      class="mt-2 flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1"
+    >
+      <button
+        v-for="m in matterFilters"
+        :key="m.slug"
+        type="button"
+        :data-testid="`matter-filter-${m.slug}`"
+        :aria-pressed="applied.matters.includes(m.slug)"
+        class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors"
+        :class="
+          applied.matters.includes(m.slug)
+            ? 'border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-500/15 dark:text-violet-200'
+            : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700/60'
+        "
+        @click="toggleMatter(m.slug)"
+      >
+        {{ m.name }}
+        <span class="text-xs opacity-70">{{ m.document_count }}</span>
       </button>
     </div>
 

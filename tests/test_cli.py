@@ -477,6 +477,75 @@ def test_backfill_summaries_respects_limit(cli_database_url: str) -> None:
     assert len(enqueued) == 1
 
 
+def _seed_matter_document(database_url: str, marker: str, *, classified: bool) -> int:
+    """Insert a non-deleted document, optionally already matter-classified."""
+
+    async def _insert() -> int:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                document = Document(
+                    sha256=uuid.uuid4().hex * 2,
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    status=DocumentStatus.INDEXED,
+                    extra={"matter_classification": {"model": "x"}} if classified else {},
+                )
+                session.add(document)
+                await session.commit()
+                return document.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_insert())
+
+
+def _sweep_enqueued(connector: InMemoryConnector) -> set[int]:
+    return {
+        job["args"]["document_id"]
+        for job in connector.jobs.values()
+        if job["task_name"] == "library.jobs.classify_document_matters"
+    }
+
+
+def test_sweep_matters_enqueues_only_unclassified_by_default(cli_database_url: str) -> None:
+    fresh = _seed_matter_document(cli_database_url, "matter-fresh", classified=False)
+    done = _seed_matter_document(cli_database_url, "matter-done", classified=True)
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["sweep-matters"])
+    assert result.exit_code == 0, result.output
+
+    enqueued = _sweep_enqueued(connector)
+    assert fresh in enqueued
+    assert done not in enqueued  # already classified
+
+
+def test_sweep_matters_all_reclassifies_everything(cli_database_url: str) -> None:
+    fresh = _seed_matter_document(cli_database_url, "matter-all-fresh", classified=False)
+    done = _seed_matter_document(cli_database_url, "matter-all-done", classified=True)
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["sweep-matters", "--all"])
+    assert result.exit_code == 0, result.output
+
+    enqueued = _sweep_enqueued(connector)
+    assert {fresh, done} <= enqueued  # --all includes the already-classified doc
+
+
+def test_sweep_matters_dry_run_enqueues_nothing(cli_database_url: str) -> None:
+    _seed_matter_document(cli_database_url, "matter-dry", classified=False)
+
+    connector = InMemoryConnector()
+    with job_app.replace_connector(connector):
+        result = runner.invoke(app, ["sweep-matters", "--dry-run"])
+    assert result.exit_code == 0, result.output
+    assert "would be queued" in result.output
+    assert _sweep_enqueued(connector) == set()
+
+
 def _seed_extraction_document(
     database_url: str,
     *,
