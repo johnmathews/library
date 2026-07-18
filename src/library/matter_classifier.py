@@ -39,7 +39,7 @@ from library.models import Document, IngestionEvent, Matter, Sender
 logger = logging.getLogger(__name__)
 
 #: Bump when the prompt or schema changes so stored provenance stays interpretable.
-PROMPT_VERSION = "matter-classifier-v1"
+PROMPT_VERSION = "matter-classifier-v2"
 
 #: The completion event whose daily total gates this pass.
 CLASSIFICATION_EVENT = "matter_classification_completed"
@@ -55,13 +55,24 @@ sender, plus a numbered list of the matters that exist, each shown as \
 Return the slugs of the matters that CLEARLY apply to this document.
 
 Rules:
+- Match on the document's PRIMARY subject — what the document actually IS — not \
+on topics it merely mentions in passing. A parking fine, a repair invoice, or a \
+purchase receipt that happens to mention a car is NOT "car insurance"; it is a \
+fine, a service record, or a purchase. Incidental mentions never justify a match.
+- The hint is authoritative. Respect its inclusions AND its exclusions: if a \
+hint says a matter excludes something, never file that something there even when \
+the topic is related.
+- Prefer PRECISION over recall. When you are unsure whether a matter truly \
+applies, LEAVE IT OUT. Return an empty list when none of the offered matters \
+clearly apply — a wrong match is worse than none, and an unfiled document is \
+easily found later.
 - Return ONLY slugs that appear verbatim in the offered list. Never invent a \
 slug or return one that is not listed.
-- Return an empty list when none of the offered matters clearly apply. Do not \
-force a match — a wrong match is worse than none.
-- A document may belong to SEVERAL matters; return every one that clearly \
-applies.
-- Judge by the title, summary, and sender against each matter's name and hint."""
+- A document may genuinely belong to SEVERAL matters; return every one that \
+clearly and primarily applies — but do not pad the list to be safe.
+- Judge by the title, summary, and sender against each matter's name and hint. \
+The sender is a strong signal: an insurer implies insurance, a garage implies \
+servicing, a retailer implies a purchase."""
 
 
 class MatterClassificationResult(BaseModel):
@@ -85,13 +96,25 @@ async def apply_matter_classification(
     document: Document,
     settings: Settings,
     client: AsyncAnthropic | None = None,
+    *,
+    replace: bool = False,
 ) -> None:
     """Auto-file ``document`` into 0..n existing matters via one LLM call.
 
-    Fail-open and merge-only: any skip or error returns without writing, and a
-    successful pass only appends matters that are in the offered vocabulary and
-    not already attached. Does NOT commit — the caller owns the transaction.
-    Provenance is stamped onto ``document.extra["matter_classification"]``.
+    Fail-open: any skip or error returns without writing. Does NOT commit — the
+    caller owns the transaction. Provenance is stamped onto
+    ``document.extra["matter_classification"]``.
+
+    Two modes:
+
+    - **merge** (default): append predicted matters not already attached; never
+      remove. This is the ingest default so a re-run can only add, never undo.
+    - **replace** (``replace=True``): re-file from scratch — set the document's
+      matters to exactly the prediction. Used by ``sweep-matters --reclassify``
+      after the vocabulary/hints improve, to correct earlier auto-filing. Safe
+      because a user-edited document is skipped *before* either mode runs, so
+      replace only ever touches auto-assigned memberships, never hand-curated
+      ones.
 
     ``client`` may be injected (tests); when None a client is constructed from
     ``settings.anthropic_api_key``.
@@ -164,15 +187,31 @@ async def apply_matter_classification(
     for matter_count in vocabulary:
         by_slug[matter_count.slug] = await session.get(Matter, matter_count.id)  # type: ignore[assignment]
 
-    attached_slugs = {matter.slug for matter in document.matters}
-    added: list[str] = []
+    # Predicted matters: dedup, keep only ones in the offered vocabulary.
+    predicted: list[Matter] = []
+    seen: set[str] = set()
     for slug in parsed.matched_slugs:
         matter = by_slug.get(slug)
-        if matter is None or slug in attached_slugs:
-            continue  # unknown/hallucinated slug, or already attached — ignore
-        document.matters.append(matter)
-        attached_slugs.add(slug)
-        added.append(slug)
+        if matter is None or slug in seen:
+            continue  # unknown/hallucinated or duplicate slug — ignore
+        predicted.append(matter)
+        seen.add(slug)
+
+    before = {matter.slug for matter in document.matters}
+    if replace:
+        # Re-file from scratch. The whole current set is auto-assigned (a
+        # user-edited document returned early above), so replace it wholesale.
+        document.matters = predicted
+        added = [slug for slug in seen if slug not in before]
+        removed = sorted(before - seen)
+    else:
+        added = []
+        for matter in predicted:
+            if matter.slug in before:
+                continue  # already attached — merge leaves it be
+            document.matters.append(matter)
+            added.append(matter.slug)
+        removed = []
 
     cost_usd = estimate_cost_usd(
         settings.matter_classifier_model,
@@ -182,9 +221,11 @@ async def apply_matter_classification(
     provenance = {
         "model": settings.matter_classifier_model,
         "prompt_version": PROMPT_VERSION,
+        "mode": "replace" if replace else "merge",
         "cost_usd": cost_usd,
         "matched_slugs": list(parsed.matched_slugs),
         "attached_slugs": added,
+        "removed_slugs": removed,
         "input_tokens": response.usage.input_tokens,
         "output_tokens": response.usage.output_tokens,
     }

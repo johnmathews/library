@@ -135,6 +135,56 @@ async def test_known_slugs_attached_merge_only(session: AsyncSession) -> None:
     assert stamp["cost_usd"] > 0
     assert stamp["input_tokens"] == 200
     assert stamp["output_tokens"] == 20
+    assert stamp["mode"] == "merge"
+    assert stamp["removed_slugs"] == []
+
+
+@pytest.mark.integration
+async def test_replace_mode_refiles_from_scratch(session: AsyncSession) -> None:
+    vocab = await _vocab(session)
+    # Wrongly filed under car-insurance; the sharpened classifier now says subscriptions.
+    document = await _document(session, "reclassify1", matters=[vocab["car-insurance"]])
+
+    client = _FakeClient(slugs=["subscriptions"])
+    await apply_matter_classification(session, document, _settings(), client=client, replace=True)
+
+    # Replace mode swaps the whole set: the wrong matter is gone, the right one is in.
+    assert {m.slug for m in document.matters} == {"subscriptions"}
+    stamp = document.extra["matter_classification"]
+    assert stamp["mode"] == "replace"
+    assert stamp["attached_slugs"] == ["subscriptions"]
+    assert stamp["removed_slugs"] == ["car-insurance"]
+
+
+@pytest.mark.integration
+async def test_replace_mode_empty_prediction_clears_all(session: AsyncSession) -> None:
+    vocab = await _vocab(session)
+    document = await _document(session, "reclassify2", matters=[vocab["car-insurance"]])
+
+    client = _FakeClient(slugs=[])  # nothing applies under the new hints
+    await apply_matter_classification(session, document, _settings(), client=client, replace=True)
+
+    assert document.matters == []  # the wrong membership is removed, none added
+    assert document.extra["matter_classification"]["removed_slugs"] == ["car-insurance"]
+
+
+@pytest.mark.integration
+async def test_replace_mode_still_skips_user_edited(session: AsyncSession) -> None:
+    vocab = await _vocab(session)
+    document = await _document(
+        session,
+        "reclassify3",
+        matters=[vocab["car-insurance"]],
+        extra={"user_edited_fields": ["matters"]},
+    )
+
+    client = _FakeClient(slugs=["subscriptions"])
+    await apply_matter_classification(session, document, _settings(), client=client, replace=True)
+
+    # A hand-curated document is never touched, even in replace mode.
+    assert {m.slug for m in document.matters} == {"car-insurance"}
+    assert client.messages.calls == []
+    assert "matter_classification" not in document.extra
 
 
 @pytest.mark.integration

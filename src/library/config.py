@@ -196,11 +196,17 @@ class Settings(BaseSettings):
     email_label_body_snippet_chars: int = 1000  # body context sent to the labeller
     # Business-matter LLM classifier (see docs/ingestion.md, "Matter
     # classification"). One Anthropic call per document auto-files it into 0..n
-    # existing, user-curated matters (never inventing new ones). Merge-only and
-    # fail-open: it can only add matters, never remove them or fail a document.
-    # Spend is budget-gated like extraction on its own daily total.
-    matter_classifier_model: str = "claude-haiku-4-5"
-    matter_classification_daily_budget_usd: float = 1.0
+    # existing, user-curated matters (never inventing new ones); fail-open, so a
+    # bad call can never fail a document. Ingest merges (add-only); the
+    # ``sweep-matters --reclassify`` sweep replaces auto-assigned matters. Sonnet
+    # (not haiku) because the judgement — "car-related but not car *insurance*" —
+    # rewards nuance and the call is infrequent. Spend is budget-gated like
+    # extraction on its own daily total.
+    matter_classifier_model: str = "claude-sonnet-4-6"
+    # Headroom for iterative ``--reclassify`` tuning sessions on sonnet: a full
+    # corpus reclassify is well under a dollar, so this allows several a day
+    # before the safety cap trips.
+    matter_classification_daily_budget_usd: float = 3.0
     # Hold-for-review (see docs/ingestion.md, "Email item selection"). An email
     # the pipeline judges not library-worthy is HELD — a durable ``held_emails``
     # row plus a move to ``email_held_folder`` — instead of silently processed,
