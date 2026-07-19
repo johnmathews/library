@@ -11,7 +11,6 @@
  * emitted query never carries a page. Taxonomy names come from the shared cache.
  */
 import { computed, onBeforeUnmount, ref, watch } from 'vue'
-import type { KindOption } from '@/api/taxonomy'
 import type { MatterOption } from '@/api/matters'
 import type { LocationQueryRaw } from 'vue-router'
 import { AppCheckboxes, AppDateInput, FilterPill } from '@/components/app'
@@ -88,24 +87,6 @@ onBeforeUnmount(() => {
 function selectKind(slug: string): void {
   emitWith({ kind: slug })
   openPill.value = null
-}
-// Predefined document-type quick filters shown as a pill row: every kind that
-// has documents, most numerous first (ties broken by name for a stable order).
-// "Other" is always pinned last regardless of count — it's the catch-all bucket,
-// so leading with it is unhelpful.
-const typeFilters = computed<KindOption[]>(() =>
-  kinds.value
-    .filter((k) => k.document_count > 0)
-    .slice()
-    .sort((a, b) => {
-      if (a.slug === 'other') return 1
-      if (b.slug === 'other') return -1
-      return b.document_count - a.document_count || a.name.localeCompare(b.name)
-    }),
-)
-// Clicking a type pill applies its kind; clicking the active one clears it.
-function toggleKind(slug: string): void {
-  selectKind(props.applied.kind === slug ? '' : slug)
 }
 // Predefined business-matter quick filters shown as a pill row: every matter
 // that has documents, most numerous first (ties broken by name). Unlike the
@@ -608,35 +589,6 @@ const statusOptions = DOCUMENT_STATUSES
           </div>
         </div>
       </FilterPill>
-    </div>
-
-    <!-- Predefined document-type quick filters: one pill per kind that has
-         documents, ordered most-numerous first. Each toggles the Kind filter —
-         clicking the active pill clears it. -->
-    <!-- Single row that scrolls sideways rather than wrapping — keeps the bar
-         compact on narrow screens; the user swipes to reach the rest. -->
-    <div
-      v-if="typeFilters.length"
-      data-testid="type-filters"
-      class="mt-2 flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1"
-    >
-      <button
-        v-for="k in typeFilters"
-        :key="k.slug"
-        type="button"
-        :data-testid="`type-filter-${k.slug}`"
-        :aria-pressed="applied.kind === k.slug"
-        class="inline-flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-sm transition-colors"
-        :class="
-          applied.kind === k.slug
-            ? 'border-violet-500 bg-violet-50 text-violet-700 dark:border-violet-400 dark:bg-violet-500/15 dark:text-violet-200'
-            : 'border-gray-300 bg-white text-gray-700 hover:bg-gray-50 dark:border-gray-600 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700/60'
-        "
-        @click="toggleKind(k.slug)"
-      >
-        {{ k.name }}
-        <span class="text-xs opacity-70">{{ k.document_count }}</span>
-      </button>
     </div>
 
     <!-- Business-matter quick filters: one pill per matter that has documents,
