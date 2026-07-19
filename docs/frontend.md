@@ -330,20 +330,18 @@ in sync automatically.
   Tag pill — `?project=a&project=b`, which **OR**-compose, unlike Tag's AND;
   options from the shared taxonomy cache), and a **More** pill covering Language +
   Status.
-- **Document-type quick filters:** a second pill row directly below the main
-  pills (`[data-testid="type-filters"]`), one pill per document **kind** that has
-  documents (`[data-testid="type-filter-<slug>"]`), ordered **most-numerous
-  first** (by `document_count` from the shared taxonomy cache / `GET /api/kinds`,
-  ties broken by name) — except **`other` is always pinned last** (it's the
-  catch-all bucket, so leading with it is unhelpful) — with the count shown on
-  each pill. Zero-count kinds are omitted — a quick-filter to an empty set is
-  noise. The row is a **single line that scrolls sideways** rather than wrapping
-  (`overflow-x-auto whitespace-nowrap`, pills `shrink-0`), so on a narrow screen
-  it stays one row and the user swipes to reach the rest. Each pill is a shortcut to
-  the single-value **Kind** filter: clicking applies `?kind=<slug>`, clicking the
-  **active** pill (violet, `aria-pressed="true"`) clears it — it reuses the same
-  `selectKind()` path as the Kind dropdown, so it round-trips through the URL and
-  resets to page 1 like any other filter change.
+- **Business-matter quick filters:** a pill row directly below the main pills
+  (`[data-testid="matter-filters"]`), one pill per **matter** that has documents
+  (`[data-testid="matter-filter-<slug>"]`), ordered **most-numerous first** (by
+  `document_count` from the shared taxonomy cache / `GET /api/matters`, ties
+  broken by name); zero-count matters are omitted. The row is a **single line
+  that scrolls sideways** rather than wrapping (`overflow-x-auto whitespace-nowrap`,
+  pills `shrink-0`). Unlike the single-select Kind pill, matters **multi-select**
+  (OR-compose): clicking toggles a matter in/out of `?matter=a&matter=b`, so a
+  second pill keeps the first active; clicking an **active** pill (violet,
+  `aria-pressed="true"`) removes just that one. Resets to page 1 like any other
+  filter change. (A document-type quick-filter row was removed 2026-07-20 to
+  declutter the bar — kind filtering remains via the **Kind** dropdown pill.)
 - **Active-filter chips:** each applied filter renders as a removable chip
   below the pill row; a **Clear all** button removes every active filter at
   once.
