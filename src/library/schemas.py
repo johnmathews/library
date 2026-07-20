@@ -511,6 +511,28 @@ def _resolve_tile_preview(blob: dict[str, Any]) -> TilePreview:
     return DEFAULT_TILE_PREVIEW
 
 
+DEFAULT_PHONE_COLUMNS: Final[int] = 2
+_ALLOWED_PHONE_COLUMNS: Final[frozenset[int]] = frozenset({1, 2, 3})
+
+
+def _coerce_phone_columns(value: object) -> int:
+    """Coerce any stored/submitted value to an allowed column count.
+
+    Tolerant like :func:`_resolve_tile_preview`: a non-int, an out-of-range
+    number, or a hand-edited string resolves to the default rather than raising.
+    """
+    if isinstance(value, bool):  # bool is an int subclass — reject it explicitly
+        return DEFAULT_PHONE_COLUMNS
+    if isinstance(value, int) and value in _ALLOWED_PHONE_COLUMNS:
+        return value
+    return DEFAULT_PHONE_COLUMNS
+
+
+def _resolve_phone_columns(blob: dict[str, Any]) -> int:
+    """Pick the stored phone column count, falling back for absent/garbage values."""
+    return _coerce_phone_columns(blob.get("phone_columns"))
+
+
 class DockPosition(StrEnum):
     """Where the freeform-card action dock docks on the dashboard.
 
@@ -547,6 +569,7 @@ class AppearancePreferences(BaseModel):
     background_tone: BackgroundTone
     tile_preview: TilePreview = DEFAULT_TILE_PREVIEW
     dock_position: DockPosition = DEFAULT_DOCK_POSITION
+    phone_columns: int = DEFAULT_PHONE_COLUMNS
 
     @field_validator("background_tone", mode="before")
     @classmethod
@@ -571,6 +594,12 @@ class AppearancePreferences(BaseModel):
         if isinstance(value, str) and value in {position.value for position in DockPosition}:
             return DockPosition(value)
         return DEFAULT_DOCK_POSITION
+
+    @field_validator("phone_columns", mode="before")
+    @classmethod
+    def _default_out_of_range_phone_columns(cls, value: object) -> int:
+        """Coerce an unknown/out-of-range column count to the default (never a 422)."""
+        return _coerce_phone_columns(value)
 
 
 # Per-kind tile border colours are stored as raw ``#rrggbb`` hex — unlike the
@@ -807,6 +836,7 @@ class UserPreferences(BaseModel):
     background_tone: BackgroundTone
     tile_preview: TilePreview
     dock_position: DockPosition
+    phone_columns: int
     kind_colors: dict[str, str]
     notifications: NotificationSettingsOut
 
@@ -823,6 +853,7 @@ def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
         background_tone=_resolve_background_tone(blob),
         tile_preview=_resolve_tile_preview(blob),
         dock_position=_resolve_dock_position(blob),
+        phone_columns=_resolve_phone_columns(blob),
         kind_colors=_resolve_kind_colors(blob),
         notifications=resolve_notification_settings(blob),
     )

@@ -743,3 +743,35 @@ def test_put_settings_isolated_per_user(
         login(other_client, other)
         body = other_client.get("/api/settings").json()
     assert body["dashboard_fields"] == ["kind", "sender", "tags", "date", "language", "status"]
+
+
+def test_get_settings_includes_default_phone_columns(api_client: TestClient) -> None:
+    assert api_client.get("/api/settings").json()["phone_columns"] == 2
+
+
+def test_put_appearance_round_trips_phone_columns(api_client: TestClient) -> None:
+    put = api_client.put(
+        "/api/settings/appearance",
+        json={"background_tone": "neutral", "phone_columns": 3},
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["phone_columns"] == 3
+    assert api_client.get("/api/settings").json()["phone_columns"] == 3
+
+
+def test_put_appearance_out_of_range_phone_columns_falls_back_to_default(
+    api_client: TestClient,
+) -> None:
+    put = api_client.put(
+        "/api/settings/appearance",
+        json={"background_tone": "neutral", "phone_columns": 9},
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["phone_columns"] == 2
+
+
+def test_get_settings_resolves_garbage_phone_columns_to_default(
+    api_client: TestClient, auth_user: AuthUser, api_database_url: str
+) -> None:
+    _seed_raw_preferences(api_database_url, auth_user.id, {"phone_columns": "lots"})
+    assert api_client.get("/api/settings").json()["phone_columns"] == 2
