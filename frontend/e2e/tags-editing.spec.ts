@@ -55,10 +55,12 @@ test('add, then remove a tag on a document in edit mode', async ({ page }, testI
   await page.getByTestId('edit-toggle').click()
   await expect(page.locator('#edit-tags')).toBeVisible()
 
-  // Add a brand-new tag: type its slug and commit with Enter. Autosave PATCHes.
+  // Add a brand-new tag: type its slug and commit with Enter. Autosave PATCHes;
+  // wait for the per-field "Saved" flash so the reload can't race the PATCH.
   await page.locator('#edit-tags').fill(tag)
   await page.locator('#edit-tags').press('Enter')
   await expect(page.getByTestId('edit-tags-chip').filter({ hasText: tag })).toBeVisible()
+  await expect(page.getByTestId('saved-tags')).toBeVisible()
 
   // Persisted: reload and confirm the tag survives as a read-mode badge that
   // links to the tag-filtered dashboard.
@@ -72,6 +74,7 @@ test('add, then remove a tag on a document in edit mode', async ({ page }, testI
   await page.getByTestId('edit-toggle').click()
   await page.getByTestId('edit-tags-remove').first().click()
   await expect(page.getByTestId('edit-tags-chip')).toHaveCount(0)
+  await expect(page.getByTestId('saved-tags')).toBeVisible()
   await page.reload()
   await expect(page.getByTestId('tag-badge')).toHaveCount(0)
 
