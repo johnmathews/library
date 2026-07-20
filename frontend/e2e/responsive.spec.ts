@@ -12,7 +12,7 @@
  *     wider than 1100px without overflow, and that the dashboard grid
  *     reaches its 4-column wide layout;
  *   - the dashboard document grid (app-doc-grid, docs/frontend.md §1.2.6)
- *     renders the expected DEFAULT (Auto) column count per viewport: 1 at
+ *     renders the expected DEFAULT (Auto) column count per viewport: 2 at
  *     375px, 2 on iPad portrait (656px, tablet band) and 3 on the 1280px
  *     desktop — and, on chromium, that the per-machine "tiles per row"
  *     preference (localStorage `library:doc-grid-cols`, W6) overrides the
@@ -126,7 +126,7 @@ test('the dashboard grid has the expected column count per viewport', async ({
   // at least the uploaded PDF fixture and the grid is present.
   const expected = {
     chromium: 3, // 1280px default viewport: desktop, below the 1400px wide breakpoint
-    'mobile-webkit': 1, // 375px: single column
+    'mobile-webkit': 2, // 375px: phone band defaults to 2 columns (--doc-grid-cols-phone)
     'tablet-webkit': 2, // iPad (gen 11) portrait is 656px: tablet band (641–768px)
   }[testInfo.project.name]
   expect(expected, `unknown project ${testInfo.project.name}`).toBeDefined()

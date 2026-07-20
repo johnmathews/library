@@ -326,6 +326,33 @@ describe('SettingsView', () => {
     expect(auth.phoneColumns).toBe(3)
   })
 
+  it('reverts the phone-columns choice and shows an error when the appearance save fails', async () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'a',
+      display_name: 'A',
+      is_admin: false,
+      preferences: {
+        dashboard_fields: ['kind'],
+        background_tone: 'neutral',
+        tile_preview: 'full_width',
+        dock_position: 'top-right',
+        phone_columns: 2,
+      },
+    }
+    stubFetch({ detail: 'boom' }, 500)
+
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+    await wrapper.find('[data-testid="tab-appearance-btn"]').trigger('click')
+    await wrapper.find('[data-testid="phone-columns-3"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="appearance-error"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="phone-columns-2"]').attributes('aria-checked')).toBe('true')
+    expect(auth.phoneColumns).toBe(2)
+  })
+
   describe('Notifications tab', () => {
     const emptyNotifications = {
       enabled: false,

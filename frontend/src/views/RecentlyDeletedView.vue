@@ -16,8 +16,17 @@ import {
   type DeletedDocumentItem,
 } from '@/api/documents'
 import { useFlashStore } from '@/stores/flash'
+import { useAuthStore } from '@/stores/auth'
 
 const flash = useFlashStore()
+const auth = useAuthStore()
+
+// Honours the account's phone_columns Appearance preference, matching the
+// dashboard grid (DocumentListView) so the two views agree on phone-band
+// column count.
+const phoneGridStyle = computed<Record<string, string>>(() => ({
+  '--doc-grid-cols-phone': String(auth.phoneColumns),
+}))
 
 const loading = ref(true)
 const loadError = ref<string | null>(null)
@@ -136,7 +145,7 @@ async function confirmPermanentDelete(): Promise<void> {
       {{ retentionDays }} {{ retentionDays === 1 ? 'day' : 'days' }}, then permanently removed.
     </div>
 
-    <ul v-else class="app-doc-grid" data-testid="deleted-grid">
+    <ul v-else class="app-doc-grid" :style="phoneGridStyle" data-testid="deleted-grid">
       <li
         v-for="item in items"
         :key="item.id"

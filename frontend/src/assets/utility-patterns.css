@@ -193,7 +193,7 @@ input[type='search']::-webkit-search-results-decoration {
 
 /*
  * Dashboard document grid. The DEFAULT column count per viewport is a product
- * acceptance contract (W16, covered by e2e/responsive.spec.ts): 1 column on
+ * acceptance contract (W16, covered by e2e/responsive.spec.ts): 2 columns on
  * mobile, 2 from the tablet breakpoint (641px), 3 from desktop (769px), and 4
  * on wide displays (1400px). These are the original app breakpoints — they do
  * not line up with Tailwind's defaults, so the grid is hand-rolled here rather
