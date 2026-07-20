@@ -100,7 +100,12 @@ vocabulary that the `App*` components and views compose:
   account preference (`phone_columns` in the `user.preferences` JSON blob, no DB
   migration) configured via **Settings → Appearance → Phone columns**; the
   tablet band stays fixed at 2 columns and the desktop `--doc-grid-cols` control
-  is unaffected)
+  is unaffected. On phones (`<= 640px`) the dashboard is also visually
+  densified — reduced tile padding (`px-2 py-3` vs `sm:p-5`), a tighter
+  inter-tile gap (`#dashboard-grid` gap `0.75rem` vs `1.5rem`), snug leading,
+  and **abbreviated month names** in tile dates ("17 Sep 2019" rather than
+  "17 September 2019", via a reactive `useMediaQuery('(max-width: 640px)')`);
+  all of this reverts to the roomier desktop styling at `>= 640px`)
   and
   `.app-doc-card` (the elevated tile surface: rounded corners, a layered drop
   shadow that lifts the white tile off the gray page, and a hover state that

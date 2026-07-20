@@ -63,3 +63,24 @@ Two small dashboard polish items:
 - Full backend + frontend suites, `ruff format --check`, `ruff check`, and
   `vue-tsc --noEmit` were run clean as part of closing out this change (see
   the accompanying task report for exact output).
+
+## Follow-up: mobile tile density (same day)
+
+After seeing the 2-column phone layout live, the tiles read too tall/roomy.
+Phone-only (`<= 640px`), dashboard-only refinements:
+
+- Tile body padding `p-5` → `px-2 py-3` (text sits closer to the tile edges).
+- Inter-tile gap reduced via `#dashboard-grid.app-doc-grid { gap: 0.75rem }`
+  in a `max-width: 640px` block (id+class outranks the base `.app-doc-grid`
+  `gap: 1.5rem`; reverts at the tablet breakpoint and leaves Recently Deleted
+  and desktop untouched).
+- Tighter row gaps (`gap-y-1`), margins (`mb-1`/`mt-1`), and leading
+  (`leading-tight`/`leading-snug`) on the title and summary.
+- **Abbreviated month names** in tile dates ("17 Sep 2019" instead of
+  "17 September 2019"), driven by a reactive `useMediaQuery('(max-width: 640px)')`
+  so crossing 640px re-renders the dates. en-GB abbreviates September as
+  "Sept", so each month token is clamped to 3 letters for a uniform short form.
+
+All `sm:`-prefixed / restored at `>= 640px`, so tablet and desktop are
+unchanged. Covered by two new `DocumentListView.spec.ts` tests (compact vs
+full month, matchMedia stubbed).

@@ -13,7 +13,7 @@
  * docs/api.md §1.3.3 for why they must never hit v-html unescaped.
  */
 import { computed, reactive, ref, watch } from 'vue'
-import { useIntersectionObserver, useStorage } from '@vueuse/core'
+import { useIntersectionObserver, useMediaQuery, useStorage } from '@vueuse/core'
 import { useRoute, useRouter, type LocationQueryRaw } from 'vue-router'
 import { AppBadge, AppBanner, PageHeader } from '@/components/app'
 import DocumentFilterBar from '@/components/DocumentFilterBar.vue'
@@ -284,10 +284,30 @@ const dateFormat = new Intl.DateTimeFormat('en-GB', {
   year: 'numeric',
 })
 
+// Phones (<=640px) get a compact date — "17 Sep 2019" instead of "17 September
+// 2019" — so tile metadata sits on fewer lines. `useMediaQuery` is reactive, so
+// crossing the 640px boundary re-renders every date. en-GB abbreviates
+// September as "Sept", so each month token is clamped to 3 letters for a
+// uniform short form (Jan…Dec).
+const dateFormatShort = new Intl.DateTimeFormat('en-GB', {
+  day: 'numeric',
+  month: 'short',
+  year: 'numeric',
+})
+const isCompactDate = useMediaQuery('(max-width: 640px)')
+
+function formatDateShort(parsed: Date): string {
+  return dateFormatShort
+    .formatToParts(parsed)
+    .map((part) => (part.type === 'month' ? part.value.slice(0, 3) : part.value))
+    .join('')
+}
+
 function formatDate(iso: string | null): string {
   if (!iso) return ''
   const parsed = new Date(`${iso}T00:00:00Z`)
-  return Number.isNaN(parsed.getTime()) ? iso : dateFormat.format(parsed)
+  if (Number.isNaN(parsed.getTime())) return iso
+  return isCompactDate.value ? formatDateShort(parsed) : dateFormat.format(parsed)
 }
 
 function languageName(language: DocumentLanguage): string {
@@ -672,8 +692,11 @@ function toggleSortDirection(): void {
             data-testid="thumbnail-fade"
           ></div>
         </div>
-        <div class="p-5 app-doc-card__body">
-          <h2 class="app-doc-card__title mb-2">
+        <!-- Phone tiles are tightened (less padding, closer rows) via base
+             utilities; the `sm:` prefixes restore the original desktop spacing
+             at >=640px. Scoped to the dashboard by living in this view's markup. -->
+        <div class="px-2 py-3 sm:p-5 app-doc-card__body">
+          <h2 class="app-doc-card__title mb-1 sm:mb-2 leading-tight sm:leading-normal">
             <!-- Stretched link: the `after:absolute after:inset-0` pseudo-element
                  makes the whole `relative` card a click target for this single
                  anchor (better on touch), without nesting extra links. -->
@@ -687,7 +710,7 @@ function toggleSortDirection(): void {
           <!-- Card metadata rendered in the user's chosen field order (stored per
                user in dashboard_fields). The "Needs review" badge is pinned first
                and is NOT part of the toggleable/orderable field set. -->
-          <p class="flex flex-wrap items-center gap-2 app-doc-card__meta">
+          <p class="flex flex-wrap items-center gap-x-2 gap-y-1 sm:gap-2 app-doc-card__meta">
             <template v-if="item.review_status === 'needs_review'">
               <AppBadge colour="yellow" data-testid="review-badge">Needs review</AppBadge>
               <span
@@ -756,13 +779,13 @@ function toggleSortDirection(): void {
           </p>
           <p
             v-if="item.summary && !(applied.q && item.snippet)"
-            class="text-sm text-gray-600 dark:text-gray-400 mt-2 app-doc-card__summary line-clamp-3"
+            class="text-sm text-gray-600 dark:text-gray-400 mt-1 sm:mt-2 leading-snug sm:leading-normal app-doc-card__summary line-clamp-3"
             data-testid="doc-summary"
           >{{ item.summary }}</p>
           <!-- eslint-disable-next-line vue/no-v-html -- renderSnippet escapes everything except the ts_headline <b> markers (docs/api.md §1.3.3) -->
           <p
             v-if="applied.q && item.snippet"
-            class="text-sm text-gray-500 dark:text-gray-400 mt-2 app-doc-card__snippet"
+            class="text-sm text-gray-500 dark:text-gray-400 mt-1 sm:mt-2 leading-snug sm:leading-normal app-doc-card__snippet"
             v-html="renderSnippet(item.snippet)"
           ></p>
         </div>

@@ -232,6 +232,19 @@ input[type='search']::-webkit-search-results-decoration {
 }
 
 /*
+ * Phones only (< 641px), dashboard only: tighten the space between tiles.
+ * The id+class selector outranks the base `.app-doc-grid { gap: 1.5rem }`;
+ * the 1.5rem default is restored at the tablet breakpoint (this rule stops
+ * applying at 641px) and on every other `.app-doc-grid` (e.g. Recently
+ * Deleted), which keeps the desktop/other-view spacing unchanged.
+ */
+@media (max-width: 640px) {
+  #dashboard-grid.app-doc-grid {
+    gap: 0.75rem;
+  }
+}
+
+/*
  * Dashboard document tile. The tile sits on the gray-100 (light) / gray-900
  * (dark) page, so it needs to read as an elevated surface rather than a flat
  * panel that blends into the background. In light mode a layered drop shadow

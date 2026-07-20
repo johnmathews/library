@@ -294,6 +294,38 @@ describe('DocumentListView', () => {
     expect(dateEl.text()).toBe('Date 15 May 2026')
   })
 
+  /** Stub window.matchMedia so useMediaQuery reports whether we're on a phone. */
+  function stubMatchMedia(isPhone: boolean): void {
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn((query: string) => ({
+        matches: isPhone && query.includes('max-width: 640px'),
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    )
+  }
+
+  it('abbreviates the month in the date on small screens', async () => {
+    stubMatchMedia(true)
+    listResponse = () => jsonResponse(listBody([makeItem({ document_date: '2019-09-17' })]))
+    const w = await mountView()
+    // en-GB would give "Sept"; the compact form is clamped to 3 letters.
+    expect(w.find('[data-testid="doc-date"]').text()).toBe('Date 17 Sep 2019')
+  })
+
+  it('uses the full month name in the date on larger screens', async () => {
+    stubMatchMedia(false)
+    listResponse = () => jsonResponse(listBody([makeItem({ document_date: '2019-09-17' })]))
+    const w = await mountView()
+    expect(w.find('[data-testid="doc-date"]').text()).toBe('Date 17 September 2019')
+  })
+
   it('applies the phone-column count as the --doc-grid-cols-phone var', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()
