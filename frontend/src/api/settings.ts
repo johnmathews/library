@@ -206,15 +206,21 @@ export function updateSettings(prefs: { dashboard_fields: DashboardField[] }): P
   return apiFetch<UserPreferences>('/api/settings', { method: 'PUT', body: prefs })
 }
 
-/** PUT /api/settings/appearance — persist the page-canvas tone, tile preview, and dock position. */
+/** PUT /api/settings/appearance — persist tone, tile preview, dock position, and phone columns. */
 export function updateAppearance(
   tone: BackgroundTone,
   tilePreview: TilePreview,
   dockPosition: DockPosition,
+  phoneColumns: number,
 ): Promise<UserPreferences> {
   return apiFetch<UserPreferences>('/api/settings/appearance', {
     method: 'PUT',
-    body: { background_tone: tone, tile_preview: tilePreview, dock_position: dockPosition },
+    body: {
+      background_tone: tone,
+      tile_preview: tilePreview,
+      dock_position: dockPosition,
+      phone_columns: phoneColumns,
+    },
   })
 }
 

@@ -155,6 +155,7 @@ describe('SettingsView', () => {
       background_tone: 'slate',
       tile_preview: 'full_width',
       dock_position: 'top-right',
+      phone_columns: 2,
     })
     expect(wrapper.find('[data-testid="tone-slate"]').attributes('aria-checked')).toBe('true')
     expect(auth.backgroundTone).toBe('slate')
@@ -184,6 +185,7 @@ describe('SettingsView', () => {
       background_tone: 'neutral',
       tile_preview: 'whole_page',
       dock_position: 'top-right',
+      phone_columns: 2,
     })
     expect(wrapper.find('[data-testid="tile-whole_page"]').attributes('aria-checked')).toBe('true')
     expect(auth.tilePreview).toBe('whole_page')
@@ -247,6 +249,7 @@ describe('SettingsView', () => {
       background_tone: 'neutral',
       tile_preview: 'full_width',
       dock_position: 'bottom-left',
+      phone_columns: 2,
     })
     expect(wrapper.find('[data-testid="dock-position-bottom-left"]').attributes('aria-checked')).toBe('true')
     expect(auth.dockPosition).toBe('bottom-left')
@@ -276,6 +279,51 @@ describe('SettingsView', () => {
     expect(wrapper.find('[data-testid="appearance-error"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="dock-position-top-right"]').attributes('aria-checked')).toBe('true')
     expect(auth.dockPosition).toBe('top-right')
+  })
+
+  it('persists a phone-columns choice via the appearance endpoint', async () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'a',
+      display_name: 'A',
+      is_admin: false,
+      preferences: {
+        dashboard_fields: ['kind'],
+        background_tone: 'neutral',
+        tile_preview: 'full_width',
+        dock_position: 'top-right',
+        phone_columns: 2,
+      },
+    }
+    stubFetch({
+      dashboard_fields: ['kind'],
+      background_tone: 'neutral',
+      tile_preview: 'full_width',
+      dock_position: 'top-right',
+      phone_columns: 3,
+    })
+
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+    await wrapper.find('[data-testid="tab-appearance-btn"]').trigger('click')
+    expect(wrapper.find('[data-testid="phone-columns-2"]').attributes('aria-checked')).toBe('true')
+
+    await wrapper.find('[data-testid="phone-columns-3"]').trigger('click')
+    // Optimistic: the store updates before the round-trip resolves.
+    expect(auth.phoneColumns).toBe(3)
+    await flushPromises()
+
+    const [url, init] = fetchMock.mock.calls.at(-1)!
+    expect(String(url)).toBe('/api/settings/appearance')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({
+      background_tone: 'neutral',
+      tile_preview: 'full_width',
+      dock_position: 'top-right',
+      phone_columns: 3,
+    })
+    expect(wrapper.find('[data-testid="phone-columns-3"]').attributes('aria-checked')).toBe('true')
+    expect(auth.phoneColumns).toBe(3)
   })
 
   describe('Notifications tab', () => {

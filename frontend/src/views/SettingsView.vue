@@ -22,6 +22,7 @@ import {
   DOCK_POSITIONS,
   NEUTRAL_KIND_COLOR,
   NOTIFICATION_EVENTS,
+  PHONE_COLUMNS_OPTIONS,
   SUGGESTED_COLORS,
   TILE_PREVIEWS,
   getEmailTriage,
@@ -89,7 +90,7 @@ async function selectTone(tone: BackgroundTone): Promise<void> {
   // instantly, before the round-trip resolves.
   if (auth.user) auth.applyPreferences({ ...auth.user.preferences, background_tone: tone })
   try {
-    const result = await updateAppearance(tone, selectedTilePreview.value, auth.dockPosition)
+    const result = await updateAppearance(tone, selectedTilePreview.value, auth.dockPosition, auth.phoneColumns)
     auth.applyPreferences(result)
     selectedTone.value = result.background_tone ?? DEFAULT_BACKGROUND_TONE
   } catch {
@@ -111,7 +112,7 @@ async function selectTilePreview(mode: TilePreview): Promise<void> {
   // Optimistic: update the store now so the dashboard reflects it immediately.
   if (auth.user) auth.applyPreferences({ ...auth.user.preferences, tile_preview: mode })
   try {
-    const result = await updateAppearance(selectedTone.value, mode, auth.dockPosition)
+    const result = await updateAppearance(selectedTone.value, mode, auth.dockPosition, auth.phoneColumns)
     auth.applyPreferences(result)
     selectedTilePreview.value = result.tile_preview ?? DEFAULT_TILE_PREVIEW
   } catch {
@@ -139,10 +140,37 @@ async function selectDockPosition(position: DockPosition): Promise<void> {
   // Optimistic: update the store now so the floating dock moves immediately.
   if (auth.user) auth.applyPreferences({ ...auth.user.preferences, dock_position: position })
   try {
-    const result = await updateAppearance(selectedTone.value, selectedTilePreview.value, position)
+    const result = await updateAppearance(
+      selectedTone.value,
+      selectedTilePreview.value,
+      position,
+      auth.phoneColumns,
+    )
     auth.applyPreferences(result)
   } catch {
     if (auth.user) auth.applyPreferences({ ...auth.user.preferences, dock_position: previous })
+    toneError.value = 'Sorry, your appearance preference could not be saved. Try again.'
+  }
+}
+
+// --- Appearance (phone columns) ---------------------------------------------
+
+async function selectPhoneColumns(count: number): Promise<void> {
+  if (count === auth.phoneColumns) return
+  const previous = auth.phoneColumns
+  toneError.value = null
+  // Optimistic: update the store now so the dashboard grid reflows immediately.
+  if (auth.user) auth.applyPreferences({ ...auth.user.preferences, phone_columns: count })
+  try {
+    const result = await updateAppearance(
+      selectedTone.value,
+      selectedTilePreview.value,
+      auth.dockPosition,
+      count,
+    )
+    auth.applyPreferences(result)
+  } catch {
+    if (auth.user) auth.applyPreferences({ ...auth.user.preferences, phone_columns: previous })
     toneError.value = 'Sorry, your appearance preference could not be saved. Try again.'
   }
 }
@@ -548,6 +576,42 @@ const tabClass = (active: boolean): string =>
               @click="selectDockPosition(position)"
             >
               {{ DOCK_POSITION_LABELS[position] }}
+            </button>
+          </div>
+        </fieldset>
+      </div>
+
+      <div id="settings-card-phone-columns" :class="cardClass" class="mt-6">
+        <fieldset>
+          <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+            Phone columns
+          </legend>
+          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            How many dashboard tile columns to show on a phone-sized screen. Saves
+            to your account automatically.
+          </p>
+          <div
+            role="radiogroup"
+            aria-label="Phone columns"
+            data-testid="settings-phone-columns"
+            class="grid grid-cols-3 gap-3 mt-5 max-w-xs"
+          >
+            <button
+              v-for="count in PHONE_COLUMNS_OPTIONS"
+              :key="count"
+              type="button"
+              role="radio"
+              :aria-checked="auth.phoneColumns === count"
+              :data-testid="`phone-columns-${count}`"
+              :class="[
+                'flex items-center justify-center rounded-lg border p-3 text-sm font-medium transition cursor-pointer',
+                auth.phoneColumns === count
+                  ? 'border-violet-500 ring-2 ring-violet-500/30 text-violet-600'
+                  : 'border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-200 hover:border-gray-300 dark:hover:border-gray-600',
+              ]"
+              @click="selectPhoneColumns(count)"
+            >
+              {{ count }}
             </button>
           </div>
         </fieldset>
