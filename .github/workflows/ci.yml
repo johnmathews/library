@@ -91,7 +91,7 @@ jobs:
         working-directory: frontend
     steps:
       - uses: actions/checkout@v7
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
@@ -170,7 +170,7 @@ jobs:
         run: |
           echo 'e2e-admin-password-123' | docker compose exec -T api \
             library user add e2e-admin --display-name "E2E Admin" --admin --password-stdin
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
           cache: npm
