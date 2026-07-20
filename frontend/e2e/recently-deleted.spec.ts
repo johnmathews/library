@@ -118,7 +118,10 @@ test('clicking a deleted document title opens it read-only (regression: no 404)'
   await expect(page.getByTestId(`restore-${id}`)).toBeVisible()
 
   // Click the title link on the card and confirm the detail page actually loads.
-  await page.locator(`a[href="/documents/${id}"]`).click()
+  // Scope to the deleted grid: a lingering toast (ToastContainer) can render its
+  // own "View" deep-link to the same document, so a page-wide href locator would
+  // match two elements and trip strict mode.
+  await page.getByTestId('deleted-grid').locator(`a[href="/documents/${id}"]`).click()
   await expect(page).toHaveURL(new RegExp(`/documents/${id}$`))
   await expect(page.getByText('Document not found')).toHaveCount(0)
   await expect(page.getByTestId('trash-banner')).toBeVisible()
