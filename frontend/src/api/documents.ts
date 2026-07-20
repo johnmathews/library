@@ -81,7 +81,7 @@ export interface DocumentListItem {
   status: DocumentStatus
   mime_type: string
   page_count: number | null
-  /** Library ingest time ("Added date"). Always present. */
+  /** Library ingest time ("Date added to library"). Always present. */
   created_at: string
   /** Last metadata edit ("Last edited"). Always present. */
   updated_at: string

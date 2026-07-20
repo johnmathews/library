@@ -6,19 +6,18 @@
  * freshly-uploaded documents always land in `review_status = "unreviewed"`
  * with no validation findings).
  *
- * 1. Mark-verified flow: open any indexed document's detail page (which
- *    will be `unreviewed`, not `verified`) → the "Mark verified" button is
- *    visible → click it → the success banner appears and the button is gone.
+ * 1. Mark-verified flow: the "Mark verified" button appears ONLY when a
+ *    document is `needs_review` (it has something to verify) — never on an
+ *    `unreviewed` doc, where there is nothing flagged. So we assert the button
+ *    is hidden on a fresh (unreviewed) doc, then seed a flagged one (currency
+ *    without an amount trips `amount_currency_coupling` on save — no Claude
+ *    extraction needed), open it → the button is visible → click it → the
+ *    success banner appears and the button is gone.
  *
  * 2. Needs-review filter navigation: navigate to the dashboard with the
  *    `?review=needs_review` query (or via the "Needs review" preset pill) →
  *    the page loads without error, the URL retains the filter param, and
  *    the list renders its empty/loaded state cleanly.
- *
- * NOTE: The "triage a flagged doc" flow (open a needs-review doc with field
- * warning badges → correct a field → doc leaves the queue) is intentionally
- * omitted.  Producing a `needs_review` document requires Claude extraction,
- * which is not available in the e2e stack.
  *
  * Same contract as library.spec.ts: requires the real stack and the `e2e`
  * user; skips itself entirely when E2E_BASE_URL is unset.
@@ -66,23 +65,46 @@ async function seedDocument(page: Page, marker: string): Promise<number> {
   return id
 }
 
+/**
+ * Seed a document and flag it `needs_review` by PATCHing a currency with no
+ * amount, which trips `amount_currency_coupling` on save (revalidation-on-save;
+ * no Claude extraction required). Mirrors review-queue.spec's helper.
+ */
+async function seedFlaggedDocument(page: Page, marker: string): Promise<number> {
+  const csrf = (await page.context().cookies()).find((c) => c.name === 'library_csrftoken')
+  expect(csrf, 'library_csrftoken cookie must exist after sign-in').toBeDefined()
+  const id = await seedDocument(page, marker)
+  const patch = await page.request.patch(`/api/documents/${id}`, {
+    headers: { 'X-CSRF-Token': csrf!.value },
+    data: { currency: 'EUR' },
+  })
+  expect(patch.ok(), await patch.text()).toBeTruthy()
+  expect((await patch.json()).review_status).toBe('needs_review')
+  return id
+}
+
 // ---------------------------------------------------------------------------
 // Test 1: Mark-verified flow
 // ---------------------------------------------------------------------------
 
-test('mark-verified: button visible on unreviewed doc, click marks it verified', async ({
+test('mark-verified: hidden on unreviewed, visible on needs_review, click marks verified', async ({
   page,
 }, testInfo) => {
   await signIn(page)
+  const suffix = `${testInfo.project.name}-${Date.now()}`
 
-  // Seed a fresh document so we control its id and know it is `unreviewed`.
-  const marker = `t13-verified-${testInfo.project.name}-${Date.now()}`
-  const id = await seedDocument(page, marker)
+  // A fresh document is `unreviewed` — nothing is flagged, so the "Mark
+  // verified" button must NOT be shown (regression: it used to show for any
+  // non-verified doc, which confused users on clean documents).
+  const cleanId = await seedDocument(page, `t13-clean-${suffix}`)
+  await page.goto(`/documents/${cleanId}`)
+  await expect(page.getByRole('heading', { level: 1 })).toBeVisible()
+  await expect(page.getByTestId('mark-verified')).toHaveCount(0)
 
-  // Navigate directly to the detail page by id.
-  await page.goto(`/documents/${id}`)
+  // A flagged (`needs_review`) document DOES have something to verify.
+  const flaggedId = await seedFlaggedDocument(page, `t13-flagged-${suffix}`)
+  await page.goto(`/documents/${flaggedId}`)
 
-  // The document is `unreviewed`, so the "Mark verified" button must be present.
   const markVerifiedBtn = page.getByTestId('mark-verified')
   await expect(markVerifiedBtn).toBeVisible()
   await expect(markVerifiedBtn).toHaveText('Mark verified')

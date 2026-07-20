@@ -211,7 +211,7 @@ dashboard and review queue show a short reason without a second request.
 (3-letter code) are `null` when not set on the document. The list item carries
 all five document dates so the dashboard tiles can show any of them: the
 nullable `document_date`, `due_date` and `expiry_date`, plus the always-present
-`created_at` ("Added date") and `updated_at` ("Last edited") — see the
+`created_at` ("Date added to library") and `updated_at` ("Last edited") — see the
 dashboard-field catalog in §1.10.2.
 
 ### 1.3.3 Search semantics
@@ -712,10 +712,10 @@ Auth + CSRF apply.
 | `kind` | Document type tag (blue) |
 | `sender` | Correspondent name |
 | `tags` | Document tags row (capped at 4 + "+N" overflow) |
-| `date` | Document date (the document's own date; value kept as `date` for back-compat) |
+| `date` | Date on document (the document's own date; value kept as `date` for back-compat) |
 | `due_date` | Due date, prefixed "Due" (invoice/payment due) |
 | `expiry_date` | Expiry date, prefixed "Expires" (validity end) |
-| `added_date` | Added date (`created_at`), prefixed "Added" |
+| `added_date` | Date added to library (`created_at`), prefixed "Added" |
 | `last_edited` | Last edited (`updated_at`), prefixed "Edited" |
 | `language` | Language tag (grey) |
 | `status` | Status tag (red/yellow; only shown when non-indexed) |

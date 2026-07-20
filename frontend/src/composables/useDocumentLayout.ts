@@ -40,16 +40,18 @@ export const CARD_COLUMNS_STORAGE_KEY = 'library:doc-layout-card-columns-v1'
 /**
  * Human labels for every hero-eligible field key. Kept separate from the
  * ordered list so a component can render a label for a key regardless of its
- * current position/visibility. `created_at`/`updated_at` read as "Added date" /
- * "Last edited" rather than their raw column names (matching the dashboard sort
- * control and the tile field picker).
+ * current position/visibility. The two dates are named to disambiguate them:
+ * `document_date` is the date printed on the document ("Date on document"),
+ * `created_at` is when it entered the library ("Date added to library").
+ * `updated_at` reads as "Last edited". These match the dashboard sort control
+ * and the tile field picker.
  */
 export const HERO_FIELD_LABELS: Record<string, string> = {
   kind: 'Kind',
   sender: 'Sender',
   recipient: 'Recipient',
-  document_date: 'Document date',
-  created_at: 'Added date',
+  document_date: 'Date on document',
+  created_at: 'Date added to library',
   updated_at: 'Last edited',
   amount: 'Amount',
   language: 'Language',
@@ -87,11 +89,13 @@ export interface CardColumns {
 export const LEGACY_METADATA_CARD_ID = 'metadata'
 
 /** The Details card was split into one tile per metadata section; these are the
- * resulting card ids, in their default top-to-bottom order. Content leads
- * (it also carries Topics), System (read-only provenance) trails. */
+ * resulting card ids, in their default top-to-bottom order. Content leads (it
+ * also carries Topics, and kind + language — the former "Classification" tile,
+ * since removed), System (read-only provenance) trails. A saved layout still
+ * holding the retired `metadata-classification` id has it dropped on read by
+ * `reconcileCardColumns` (it is no longer a known card). */
 export const METADATA_CARD_IDS = [
   'metadata-content',
-  'metadata-classification',
   'metadata-parties',
   'metadata-financial',
   'metadata-system',

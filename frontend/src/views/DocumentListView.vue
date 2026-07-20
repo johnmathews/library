@@ -429,8 +429,8 @@ function tileDate(iso: string | null): string | null {
 // present — the backend orders by relevance rank — so the control is disabled
 // then. Changing sort preserves the other filters and resets to page 1.
 const SORT_OPTIONS: { value: SortField; label: string }[] = [
-  { value: 'document_date', label: 'Document date' },
-  { value: 'added_date', label: 'Added date' },
+  { value: 'document_date', label: 'Date on document' },
+  { value: 'added_date', label: 'Date added to library' },
 ]
 const sortDisabled = computed(() => Boolean(applied.value.q))
 

@@ -1,22 +1,30 @@
 /**
  * Previous/next document neighbours for the detail view (`/documents/:id`).
  *
- * There is no server neighbour endpoint and the list view keeps its results in
- * component-local state, so neighbours are computed client-side: we replay the
- * user's *remembered* sort order (localStorage `library:doc-sort-v1`, the same
- * key the list view writes) against `GET /api/documents`, **unfiltered**, and
- * read off the ids either side of the current one. This is self-contained — it
+ * Navigation is **by document id**: "Next document" goes to the next-higher id
+ * (N+1), "Previous document" to the next-lower id (N-1). This is independent of
+ * whatever sort the list view is currently using — stepping through documents in
+ * id order is what reads as intuitive (a document's number is its position in
+ * the sequence you added things), which the list-sort-following behaviour was
+ * not (in the default newest-first view it sent "Next" to an *older*, lower id).
+ *
+ * There is no server neighbour endpoint and no `id` sort on `GET /api/documents`,
+ * so neighbours are computed client-side. We scan the list **unfiltered** sorted
+ * by `added_date desc` — which returns documents in effectively id-descending
+ * order, since `created_at` and the autoincrement id are both assigned at insert
+ * — and read off the nearest ids either side of the current one **numerically**
+ * (not by list position), so the result is correct even if two documents share
+ * an `added_date` and tie out of strict id order. This is self-contained: it
  * works on a cold deep-link or refresh, independent of how the user arrived.
  *
  * The scan paginates (the list endpoint caps `limit` at 100) and stops as soon
- * as the current id is located with a following id, or the list is exhausted.
- * A hard page cap bounds the cost for a pathological library; beyond it the
- * neighbours degrade to `null` rather than looping unbounded.
+ * as it crosses below the current id: in a descending scan every later page
+ * holds only smaller ids, so once any id below the current one appears both
+ * neighbours are settled. A hard page cap bounds the cost for a pathological
+ * library; beyond it the neighbours degrade to `null` rather than looping.
  */
 import { ref, watch, type Ref } from 'vue'
-import { useStorage } from '@vueuse/core'
 import { listDocuments } from '@/api/documents'
-import { DEFAULT_SORT, DEFAULT_SORT_DIRECTION, type SortPreference } from '@/utils/documentQuery'
 
 /** Page size for the neighbour scan (the list endpoint's max `limit`). */
 const PAGE_SIZE = 100
@@ -24,19 +32,15 @@ const PAGE_SIZE = 100
 const MAX_PAGES = 20
 
 export interface DocumentNeighbors {
-  /** Id of the document before the current one, or null at the start / unknown. */
+  /** Id of the next-lower document (N-1), or null when this is the lowest id. */
   prevId: Ref<number | null>
-  /** Id of the document after the current one, or null at the end / unknown. */
+  /** Id of the next-higher document (N+1), or null when this is the highest id. */
   nextId: Ref<number | null>
   /** True while a scan is in flight. */
   loading: Ref<boolean>
 }
 
 export function useDocumentNeighbors(currentId: Ref<number | null>): DocumentNeighbors {
-  const sortPref = useStorage<SortPreference>('library:doc-sort-v1', {
-    sort: DEFAULT_SORT,
-    dir: DEFAULT_SORT_DIRECTION,
-  })
   const prevId = ref<number | null>(null)
   const nextId = ref<number | null>(null)
   const loading = ref(false)
@@ -45,26 +49,34 @@ export function useDocumentNeighbors(currentId: Ref<number | null>): DocumentNei
   let generation = 0
 
   async function compute(id: number, gen: number): Promise<void> {
-    const ids: number[] = []
+    // Nearest ids either side of `id`, tracked numerically as pages stream in.
+    let prev: number | null = null // largest id strictly below `id`
+    let next: number | null = null // smallest id strictly above `id`
     let offset = 0
-    let cappedOut = false
     try {
       for (let pageIdx = 0; pageIdx < MAX_PAGES; pageIdx++) {
         const resp = await listDocuments({
-          sort: sortPref.value.sort,
-          direction: sortPref.value.dir,
+          sort: 'added_date',
+          direction: 'desc',
           limit: PAGE_SIZE,
           offset,
         })
         if (gen !== generation) return // a newer id superseded this scan
-        for (const item of resp.items) ids.push(item.id)
-        const idx = ids.indexOf(id)
-        // Done once the current id is located AND has a following id...
-        if (idx !== -1 && idx < ids.length - 1) break
+        let sawBelow = false
+        for (const item of resp.items) {
+          if (item.id < id) {
+            sawBelow = true
+            if (prev === null || item.id > prev) prev = item.id
+          } else if (item.id > id) {
+            if (next === null || item.id < next) next = item.id
+          }
+        }
+        // Descending scan: everything on later pages is smaller, so once any id
+        // below the current one appears, `next` is final and `prev` cannot grow.
+        if (sawBelow) break
         // ...or the list is exhausted (a short page means no more documents).
         if (resp.items.length < PAGE_SIZE) break
         offset += PAGE_SIZE
-        if (pageIdx === MAX_PAGES - 1) cappedOut = true
       }
     } catch {
       // A failed list fetch just means no neighbours — degrade quietly rather
@@ -75,14 +87,8 @@ export function useDocumentNeighbors(currentId: Ref<number | null>): DocumentNei
       }
       return
     }
-    const idx = ids.indexOf(id)
-    if (cappedOut && idx === -1) {
-      console.warn(
-        'useDocumentNeighbors: document list exceeds the neighbour scan cap; prev/next unavailable',
-      )
-    }
-    prevId.value = idx > 0 ? (ids[idx - 1] ?? null) : null
-    nextId.value = idx !== -1 && idx < ids.length - 1 ? (ids[idx + 1] ?? null) : null
+    prevId.value = prev
+    nextId.value = next
   }
 
   watch(

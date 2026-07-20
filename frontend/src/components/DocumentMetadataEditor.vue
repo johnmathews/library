@@ -50,7 +50,7 @@ import { formatDate, tagColour, formatDateTime } from '@/utils/documentFormat'
 /** Which metadata section this tile renders. What used to be a single "Details"
  * card is now one instance per section (the detail view mounts five of them);
  * `system` is the read-only provenance tile and has no editable field group. */
-type MetadataSection = 'content' | 'classification' | 'parties' | 'financial' | 'system'
+type MetadataSection = 'content' | 'parties' | 'financial' | 'system'
 
 const props = defineProps<{
   /** The document being edited (always non-null; the parent gates on `doc`). */
@@ -87,11 +87,11 @@ const matterOptionNames = computed(() => matterOptions.value.map((matter) => mat
 onMounted(async () => {
   // Only the tile that renders a given controlled-list editor fetches its
   // options: the page mounts one instance per section, so loading kinds in the
-  // Classification tile and senders/recipients in the Sender-&-dates tile keeps
-  // this to one request each instead of five. Best-effort — without options the
-  // kind/recipient selects still offer the current value and "Not set", and the
-  // sender input just loses its suggestions.
-  if (props.section === 'classification') {
+  // Content tile (which now carries kind + language) and senders/recipients in
+  // the Sender-&-dates tile keeps this to one request each. Best-effort —
+  // without options the kind/recipient selects still offer the current value and
+  // "Not set", and the sender input just loses its suggestions.
+  if (props.section === 'content') {
     const [kindResult] = await Promise.allSettled([listKinds()])
     if (kindResult.status === 'fulfilled') kinds.value = kindResult.value
   }
@@ -199,7 +199,7 @@ const rowConfigs: RowConfig[] = [
   { field: 'kind', label: 'Kind', display: (d) => d.kind?.name ?? null },
   { field: 'sender', label: 'Sender', display: (d) => d.sender?.name ?? null },
   { field: 'recipient', label: 'Recipient', display: (d) => d.recipient?.name ?? null },
-  { field: 'document_date', label: 'Document date', display: (d) => formatDate(d.document_date) },
+  { field: 'document_date', label: 'Date on document', display: (d) => formatDate(d.document_date) },
   { field: 'language', label: 'Language', display: (d) => languageName(d.language) },
   {
     field: 'tags',
@@ -250,8 +250,15 @@ interface FieldGroup {
 }
 
 const fieldGroups: FieldGroup[] = [
-  { key: 'content', label: 'Content', accent: 'violet', fields: ['title', 'summary', 'tags', 'projects', 'matters'] },
-  { key: 'classification', label: 'Classification', accent: 'yellow', fields: ['kind', 'language'] },
+  // Kind + language (the former standalone "Classification" tile) live here now:
+  // a two-field panel read as over-fragmented, and both are metadata about the
+  // content. Kind sits high (right after the summary) as the primary attribute.
+  {
+    key: 'content',
+    label: 'Content',
+    accent: 'violet',
+    fields: ['title', 'summary', 'kind', 'language', 'tags', 'projects', 'matters'],
+  },
   {
     key: 'parties',
     label: 'Sender, recipient & dates',
@@ -739,10 +746,10 @@ const latestExtractionEvent = computed(() => {
 <template>
   <!-- Each metadata section is its own reorderable tile (card). The detail view
        renders one instance per section via the `section` prop, so what used to
-       be a single "Details" card is now a Content / Classification / Sender-&-
-       dates / Financial / System tile that can be dragged and reordered
-       independently. There is no per-tile Edit toggle: the single page-wide
-       toggle lives in the hero and flips the shared `useMetadataEditMode` flag
+       be a single "Details" card is now a Content (which also holds kind +
+       language) / Sender-&-dates / Financial / System tile that can be dragged
+       and reordered independently. There is no per-tile Edit toggle: the single
+       page-wide toggle lives in the hero and flips the shared `useMetadataEditMode` flag
        every instance reads. `activeGroups` holds this tile's one field group
        (empty for the read-only System tile, rendered separately below). -->
   <div

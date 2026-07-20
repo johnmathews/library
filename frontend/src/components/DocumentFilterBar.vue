@@ -598,7 +598,7 @@ const statusOptions = DOCUMENT_STATUSES
     <div
       v-if="matterFilters.length"
       data-testid="matter-filters"
-      class="mt-2 flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1"
+      class="no-scrollbar mt-2 flex items-center gap-2 overflow-x-auto whitespace-nowrap pb-1"
     >
       <button
         v-for="m in matterFilters"

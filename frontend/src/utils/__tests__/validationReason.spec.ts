@@ -22,6 +22,22 @@ describe('resolveReviewReason', () => {
     expect(resolveReviewReason(finding('brand_new_rule')).title).toBe('Needs a quick check')
   })
 
+  it('maps the storage field to a friendly attribute label', () => {
+    expect(resolveReviewReason(finding('date_plausibility', 'x', 'document_date')).fieldLabel).toBe(
+      'Date on document',
+    )
+    // FK-id and resolved-name variants both label as the human attribute.
+    expect(resolveReviewReason(finding('missing_sender', 'x', 'sender_id')).fieldLabel).toBe('Sender')
+    expect(resolveReviewReason(finding('amount_currency_coupling', 'x', 'currency')).fieldLabel).toBe(
+      'Currency',
+    )
+  })
+
+  it('has no attribute label for document-level or unmapped findings', () => {
+    expect(resolveReviewReason(finding('empty_extraction', 'x', null)).fieldLabel).toBeNull()
+    expect(resolveReviewReason(finding('date_plausibility', 'x', 'mystery_field')).fieldLabel).toBeNull()
+  })
+
   it('titles the new rules and keeps their specific message as detail', () => {
     const dropped = resolveReviewReason(
       finding('email_attachments_dropped', 'the email included 3 other attachments that could not be added: a.pdf, b.pdf, c.pdf'),

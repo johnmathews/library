@@ -812,7 +812,7 @@ describe('DocumentDetailView', () => {
     expect(stats).toContain('Eneco') // sender
     expect(stats).toContain('15 May 2026') // document date
     // The read-only added date and last-edited timestamp round out the trio.
-    expect(stats).toContain('Added date')
+    expect(stats).toContain('Date added to library')
     expect(stats).toContain('10 June 2026') // created_at, formatted
     expect(stats).toContain('Last edited')
     expect(stats).toContain('11 June 2026') // updated_at, formatted
@@ -861,27 +861,30 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="row-sender"]').exists()).toBe(true)
   })
 
-  it('renders the split Details card as five separate metadata tiles, folding Topics into Content', async () => {
+  it('renders the split Details card as four metadata tiles, folding Topics + classification into Content', async () => {
     detail = makeDetail({ topics: ['energy', 'utilities'] })
     const w = await mountView()
 
     // Each metadata section is now its own reorderable tile (wrapper testid).
     for (const id of [
       'section-card-metadata-content',
-      'section-card-metadata-classification',
       'section-card-metadata-parties',
       'section-card-metadata-financial',
       'section-card-metadata-system',
     ]) {
       expect(w.find(`[data-testid="${id}"]`).exists()).toBe(true)
     }
-    // The old monolithic Details card is gone.
+    // The old monolithic Details card is gone, and so is the former standalone
+    // Classification tile — kind + language now live in Content.
     expect(w.find('#document-details-card').exists()).toBe(false)
+    expect(w.find('[data-testid="section-card-metadata-classification"]').exists()).toBe(false)
 
-    // Topics fold into the Content tile (its "aboutness"), not a tile of their own.
+    // Topics AND classification (kind + language) fold into the Content tile.
     const content = w.find('[data-testid="metadata-section-content"]')
     expect(content.find('[data-testid="row-topics"]').exists()).toBe(true)
     expect(content.text()).toContain('energy')
+    expect(content.find('[data-testid="row-kind"]').exists()).toBe(true)
+    expect(content.find('[data-testid="row-language"]').exists()).toBe(true)
   })
 
   it('hero header renders each tag as a coloured badge', async () => {
@@ -1132,6 +1135,11 @@ describe('DocumentDetailView', () => {
     // longer hidden behind only a per-field ⚠ badge.
     expect(banner.text()).toContain('Unlikely date')
     expect(banner.text()).toContain('document_date is in the future')
+    // The affected attribute is named explicitly with a friendly label chip, so
+    // the reader knows *which* field to check — not just the raw storage name.
+    const fieldChip = banner.find('[data-testid="reason-field"]')
+    expect(fieldChip.exists()).toBe(true)
+    expect(fieldChip.text()).toBe('Date on document')
     // The per-field badge still appears beside the date row (secondary signal).
     expect(w.findAll('[data-testid="validation-badge"]').length).toBeGreaterThan(0)
   })
@@ -1311,6 +1319,10 @@ describe('DocumentDetailView', () => {
   })
 
   it('marks the document verified', async () => {
+    // Only a flagged (needs_review) document offers "Mark verified" — there is
+    // nothing to verify on an unreviewed doc (see the hidden-when-unreviewed
+    // test below).
+    detail = makeDetail({ review_status: 'needs_review' })
     const verifiedDetail = makeDetail({ review_status: 'verified' })
     // Stub verifyDocument via fetch: POST /api/documents/12/verify
     fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
@@ -1325,7 +1337,7 @@ describe('DocumentDetailView', () => {
       return Promise.resolve(jsonResponse({ detail: `unexpected ${method} ${url}` }, 500))
     })
     const w = await mountView()
-    // "Mark verified" button should be visible when review_status !== 'verified'
+    // "Mark verified" button is visible while the document needs review.
     const btn = w.find('[data-testid="mark-verified"]')
     expect(btn.exists()).toBe(true)
     await btn.trigger('click')
@@ -1334,6 +1346,15 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="mark-verified"]').exists()).toBe(false)
     // Status text should reflect verified
     expect(w.text()).toContain('verified')
+  })
+
+  it('hides "Mark verified" when the document is unreviewed (nothing to verify)', async () => {
+    // An unreviewed document has no validation findings, so there is nothing to
+    // confirm — the verify affordance must stay hidden (regression: it used to
+    // show for any non-verified status). See DocumentDetailView §"Mark verified".
+    detail = makeDetail({ review_status: 'unreviewed' })
+    const w = await mountView()
+    expect(w.find('[data-testid="mark-verified"]').exists()).toBe(false)
   })
 
   it('fetches markdown eagerly on load and renders the document-text reader', async () => {
@@ -1794,14 +1815,13 @@ describe('DocumentDetailView', () => {
       const onEnd = cardColumnOnEnd()
       // Simulate SortableJS dropping "comments" into the right column at index 0.
       // For this (note) document every metadata tile is present, so the rendered
-      // left column is: notes, metadata-content, metadata-classification,
-      // metadata-parties, metadata-financial, metadata-system, comments (index 6),
-      // actions, history.
+      // left column is: notes, metadata-content, metadata-parties,
+      // metadata-financial, metadata-system, comments (index 5), actions, history.
       const evt = {
         from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
         to: { dataset: { col: 'right' } },
         item: {},
-        oldIndex: 6,
+        oldIndex: 5,
         newIndex: 0,
       } as unknown as Sortable.SortableEvent
       onEnd(evt)

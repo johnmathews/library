@@ -17,10 +17,10 @@ export const DASHBOARD_FIELDS = [
   // keeps its legacy value (= the document's own date) for back-compat with
   // saved preferences; the others map to due_date / expiry_date / created_at
   // (added) / updated_at (last edited).
-  { value: 'date', text: 'Document date' },
+  { value: 'date', text: 'Date on document' },
   { value: 'due_date', text: 'Due date' },
   { value: 'expiry_date', text: 'Expiry date' },
-  { value: 'added_date', text: 'Added date' },
+  { value: 'added_date', text: 'Date added to library' },
   { value: 'last_edited', text: 'Last edited' },
   { value: 'language', text: 'Language' },
   { value: 'status', text: 'Status' },

@@ -85,7 +85,7 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
   }
 }
 
-type Section = 'content' | 'classification' | 'parties' | 'financial' | 'system'
+type Section = 'content' | 'parties' | 'financial' | 'system'
 
 function mountEditor(section: Section = 'content', doc: DocumentDetail = makeDetail()) {
   const wrapper = mount(DocumentMetadataEditor, {

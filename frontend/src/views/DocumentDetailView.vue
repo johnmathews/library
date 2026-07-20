@@ -626,9 +626,6 @@ function cardPresent(id: string): boolean {
   // stays hidden in read mode but reappears to be filled in while editing.
   const d = doc.value
   if (id === 'metadata-content' || id === 'metadata-system') return true
-  if (id === 'metadata-classification') {
-    return metadataEditMode.value || !!d?.kind || !!d?.language
-  }
   if (id === 'metadata-parties') {
     return (
       metadataEditMode.value ||
@@ -927,7 +924,7 @@ watch(
           ← Prev
         </AppButton>
         <AppButton
-          v-if="doc.review_status !== 'verified'"
+          v-if="doc.review_status === 'needs_review'"
           type="button"
           variant="secondary"
           :disabled="verifying"
@@ -959,7 +956,12 @@ watch(
       <p class="font-semibold">Why this needs review</p>
       <ul class="mt-1 list-disc list-inside space-y-1">
         <li v-for="reason in reviewReasons" :key="`${reason.rule}:${reason.field ?? 'doc'}`">
-          <span class="font-medium">{{ reason.title }}</span
+          <span
+            v-if="reason.fieldLabel"
+            class="mr-1.5 inline-block rounded bg-violet-100 px-1.5 py-0.5 text-xs font-semibold text-violet-700 dark:bg-violet-500/20 dark:text-violet-200"
+            data-testid="reason-field"
+            >{{ reason.fieldLabel }}</span
+          ><span class="font-medium">{{ reason.title }}</span
           ><template v-if="reason.detail"> — {{ reason.detail }}</template>
         </li>
       </ul>
@@ -1363,11 +1365,6 @@ watch(
           v-model:doc="doc"
         />
         <DocumentMetadataEditor
-          v-else-if="cardId === 'metadata-classification'"
-          section="classification"
-          v-model:doc="doc"
-        />
-        <DocumentMetadataEditor
           v-else-if="cardId === 'metadata-parties'"
           section="parties"
           v-model:doc="doc"
@@ -1425,7 +1422,7 @@ watch(
           </p>
           <div class="flex flex-wrap gap-3">
             <AppButton
-              v-if="doc.review_status !== 'verified'"
+              v-if="doc.review_status === 'needs_review'"
               type="button"
               :disabled="verifying"
               data-testid="mark-verified"
