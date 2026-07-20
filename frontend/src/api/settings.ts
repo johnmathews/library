@@ -96,6 +96,10 @@ export type DockPosition = (typeof DOCK_POSITIONS)[number]
 
 export const DEFAULT_DOCK_POSITION: DockPosition = 'top-right'
 
+/** Allowed dashboard column counts on phones (< 641px). Default is 2. */
+export const PHONE_COLUMNS_OPTIONS = [1, 2, 3] as const
+export const DEFAULT_PHONE_COLUMNS = 2
+
 /**
  * The built-in default tile-border colour for each document kind, by slug. Only
  * the kinds that meaningfully occur are coloured; every other kind (incl.
@@ -189,6 +193,7 @@ export interface UserPreferences {
   // fall back to DEFAULT_KIND_COLORS; an empty map means "all defaults".
   kind_colors?: Record<string, string>
   notifications?: NotificationPreferences
+  phone_columns?: number
 }
 
 /** GET /api/settings — resolved display preferences. */

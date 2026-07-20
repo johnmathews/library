@@ -4,6 +4,7 @@ import { ApiError, apiFetch } from '@/api/client'
 import {
   DEFAULT_BACKGROUND_TONE,
   DEFAULT_DOCK_POSITION,
+  DEFAULT_PHONE_COLUMNS,
   DEFAULT_TILE_PREVIEW,
   type BackgroundTone,
   type DashboardField,
@@ -59,6 +60,12 @@ export const useAuthStore = defineStore('auth', () => {
   // absent or a payload predates the preference.
   const dockPosition = computed<DockPosition>(
     () => user.value?.preferences?.dock_position ?? DEFAULT_DOCK_POSITION,
+  )
+
+  // Dashboard columns on phones (< 641px). Server-synced; defaults when the
+  // user is absent or a payload predates the preference.
+  const phoneColumns = computed<number>(
+    () => user.value?.preferences?.phone_columns ?? DEFAULT_PHONE_COLUMNS,
   )
 
   // The Pushover/forwarding notification settings, defaulting to an empty,
@@ -124,6 +131,7 @@ export const useAuthStore = defineStore('auth', () => {
     backgroundTone,
     tilePreview,
     dockPosition,
+    phoneColumns,
     notificationSettings,
     kindColors,
     applyPreferences,

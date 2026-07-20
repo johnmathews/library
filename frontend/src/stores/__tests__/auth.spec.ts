@@ -153,4 +153,28 @@ describe('useAuthStore', () => {
 
     expect(store.dockPosition).toBe('bottom-left')
   })
+
+  it('phoneColumns defaults to 2 when the preference is absent', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'u',
+      display_name: 'U',
+      is_admin: false,
+      preferences: { dashboard_fields: [] },
+    }
+    expect(auth.phoneColumns).toBe(2)
+  })
+
+  it('phoneColumns reflects the stored preference', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'u',
+      display_name: 'U',
+      is_admin: false,
+      preferences: { dashboard_fields: [], phone_columns: 3 },
+    }
+    expect(auth.phoneColumns).toBe(3)
+  })
 })
