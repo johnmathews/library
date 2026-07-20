@@ -63,11 +63,12 @@ test('add, then remove a tag on a document in edit mode', async ({ page }, testI
   await expect(page.getByTestId('saved-tags')).toBeVisible()
 
   // Persisted: reload and confirm the tag survives as a read-mode badge that
-  // links to the tag-filtered dashboard.
+  // links to the tag-filtered dashboard. The badge shows the tag's *derived
+  // name* (slug → "Tags chromium …"), so locate it by its slug-bearing href,
+  // not by the slug text.
   await page.reload()
-  const badge = page.getByTestId('tag-badge').filter({ hasText: tag })
+  const badge = page.locator(`[data-testid="tag-badge"][href*="tag=${tag}"]`)
   await expect(badge).toBeVisible()
-  await expect(badge).toHaveAttribute('href', new RegExp(`tag=${tag}`))
 
   // Remove the tag: back in edit mode, click the chip's remove control. Autosave
   // PATCHes the reduced list; after reload the badge is gone.
