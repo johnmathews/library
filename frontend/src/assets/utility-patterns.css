@@ -202,13 +202,14 @@ input[type='search']::-webkit-search-results-decoration {
  * The desktop/wide column counts read from the --doc-grid-cols CSS var, which
  * DocumentListView sets from a per-machine "tiles per row" preference
  * (localStorage `library:doc-grid-cols`, W6). When unset (the "Auto" choice)
- * the var falls back to 3/4 — i.e. the original contract is preserved exactly.
- * The phone/tablet bands deliberately ignore the override so tiles never get
- * crushed on small screens regardless of the chosen count.
+ * the var falls back to 3/4 — i.e. the original desktop contract is preserved.
+ * The phone band (< 641px) honours a separate --doc-grid-cols-phone var
+ * (default 2, set from the account's phone_columns preference); the tablet
+ * band (641–768px) stays fixed at 2 so tiles never get crushed.
  */
 .app-doc-grid {
   display: grid;
-  grid-template-columns: 1fr;
+  grid-template-columns: repeat(var(--doc-grid-cols-phone, 2), minmax(0, 1fr));
   gap: 1.5rem;
 }
 

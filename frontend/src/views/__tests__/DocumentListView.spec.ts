@@ -228,7 +228,7 @@ describe('DocumentListView', () => {
     expect(tile.find('.app-doc-card__meta').text()).toContain('Invoice')
     expect(tile.find('.app-doc-card__meta').text()).toContain('Dutch')
     expect(tile.find('.app-doc-card__sender').text()).toBe('Eneco')
-    expect(tile.find('.app-doc-card__date').text()).toBe('15 May 2026')
+    expect(tile.find('.app-doc-card__date').text()).toBe('Date 15 May 2026')
     expect(tile.find('.app-doc-card__thumbnail img').attributes('src')).toBe(
       '/api/documents/12/thumbnail',
     )
@@ -276,13 +276,29 @@ describe('DocumentListView', () => {
 
     const select = w.find('[data-testid="grid-cols-select"]')
     expect(select.exists()).toBe(true)
-    // Default is Auto: no override var on the grid (responsive breakpoints win).
-    expect(w.find('#dashboard-grid').attributes('style') ?? '').not.toContain('--doc-grid-cols')
+    // Default is Auto: no desktop override var on the grid (responsive
+    // breakpoints win), though the phone var is always present.
+    expect(w.find('#dashboard-grid').attributes('style') ?? '').not.toContain('--doc-grid-cols:')
 
     await select.setValue('5')
     await flushPromises()
     expect(w.find('#dashboard-grid').attributes('style')).toContain('--doc-grid-cols: 5')
     expect(localStorage.getItem('library:doc-grid-cols')).toContain('5')
+  })
+
+  it('labels the document date with a muted "Date" prefix', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    const dateEl = w.find('[data-testid="doc-date"]')
+    expect(dateEl.exists()).toBe(true)
+    expect(dateEl.text()).toBe('Date 15 May 2026')
+  })
+
+  it('applies the phone-column count as the --doc-grid-cols-phone var', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    // auth.phoneColumns defaults to 2 with no stored preference.
+    expect(w.find('#dashboard-grid').attributes('style')).toContain('--doc-grid-cols-phone: 2')
   })
 
   it('sort control round-trips field + direction through the URL and the request', async () => {

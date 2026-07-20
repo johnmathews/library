@@ -379,9 +379,10 @@ function tileAccentStyle(id: number): { '--card-accent': string } | undefined {
 // localStorage and surfaced to .app-doc-grid as the --doc-grid-cols CSS var.
 const GRID_COLS_OPTIONS = ['auto', '3', '4', '5', '6'] as const
 const gridCols = useStorage<string>('library:doc-grid-cols', 'auto')
-const gridColsStyle = computed(() =>
-  gridCols.value === 'auto' ? {} : { '--doc-grid-cols': gridCols.value },
-)
+const gridColsStyle = computed<Record<string, string>>(() => ({
+  '--doc-grid-cols-phone': String(auth.phoneColumns),
+  ...(gridCols.value === 'auto' ? {} : { '--doc-grid-cols': gridCols.value }),
+}))
 
 // Dashboard tile date fields beyond the plain document date. Each configurable
 // date carries a short muted prefix so several dates on one tile stay
@@ -717,7 +718,9 @@ function toggleSortDirection(): void {
               <span
                 v-else-if="field === 'date' && item.document_date"
                 class="app-doc-card__date text-sm text-gray-500 dark:text-gray-400"
+                data-testid="doc-date"
               >
+                <span class="text-gray-400 dark:text-gray-500">Date</span>
                 {{ formatDate(item.document_date) }}
               </span>
               <span
