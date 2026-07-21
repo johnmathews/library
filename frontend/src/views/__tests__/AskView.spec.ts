@@ -487,7 +487,10 @@ describe('AskView', () => {
     const w = mountView()
     await flushPromises()
     const root = w.find('#ask-page').element.parentElement as HTMLElement
-    expect(root.className).toContain('max-lg:h-[calc(100dvh-4rem)]')
+    // Underscores → spaces: `calc(100dvh - 4rem)` is valid CSS; the no-space
+    // form is rejected by strict engines (iOS Safari), which left the column
+    // with no height so the composer floated.
+    expect(root.className).toContain('max-lg:h-[calc(100dvh_-_4rem)]')
     expect(root.className).toContain('max-lg:flex-col')
     // The chat pane and transcript participate in the flex-height chain.
     expect(w.find('[data-testid="ask-thread-pane"]').classes()).toContain('min-h-0')
