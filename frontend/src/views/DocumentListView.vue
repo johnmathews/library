@@ -296,6 +296,14 @@ const dateFormatShort = new Intl.DateTimeFormat('en-GB', {
 })
 const isCompactDate = useMediaQuery('(max-width: 640px)')
 
+// On phones (<= 640px), the "hide tile description on mobile" account preference
+// drops each tile's description entirely. Removing the node (rather than a CSS
+// `display: none`) is deliberate: the summary carries `line-clamp-3`, whose
+// `display: -webkit-box` lives in Tailwind's `utilities` cascade layer and would
+// out-rank any hide rule we could write in the `components` layer regardless of
+// specificity. A reactive `v-if` sidesteps the cascade and also shortens the tile.
+const hideSummaryOnMobile = computed<boolean>(() => auth.hideSummaryMobile && isCompactDate.value)
+
 function formatDateShort(parsed: Date): string {
   return dateFormatShort
     .formatToParts(parsed)
@@ -611,7 +619,6 @@ function toggleSortDirection(): void {
       v-if="items.length"
       id="dashboard-grid"
       class="app-doc-grid"
-      :class="{ 'app-doc-grid--hide-summary-mobile': auth.hideSummaryMobile }"
       :style="gridColsStyle"
     >
       <li
@@ -779,7 +786,7 @@ function toggleSortDirection(): void {
             </template>
           </p>
           <p
-            v-if="item.summary && !(applied.q && item.snippet)"
+            v-if="item.summary && !(applied.q && item.snippet) && !hideSummaryOnMobile"
             class="text-sm text-gray-600 dark:text-gray-400 mt-1 sm:mt-2 leading-snug sm:leading-normal app-doc-card__summary line-clamp-3"
             data-testid="doc-summary"
           >{{ item.summary }}</p>

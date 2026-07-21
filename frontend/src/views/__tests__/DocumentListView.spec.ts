@@ -211,18 +211,22 @@ describe('DocumentListView', () => {
     expect(tile.attributes('style') ?? '').toContain('--card-accent: #112233')
   })
 
-  it('adds the hide-summary-mobile grid class only when the preference is on', async () => {
+  it('hides the tile description only when the preference is on AND on a phone', async () => {
     listResponse = () => jsonResponse(listBody([makeItem({ summary: 'A description.' })]))
-    // Off by default: the grid carries no hide-summary class and the summary renders.
+
+    // Phone + preference OFF (default): the description renders.
+    stubMatchMedia(true)
     let w = await mountView()
-    expect(w.find('ul.app-doc-grid').classes()).not.toContain('app-doc-grid--hide-summary-mobile')
     expect(w.find('[data-testid="doc-summary"]').exists()).toBe(true)
 
-    // On: the grid gains the class (CSS hides the summary on phones; the element
-    // still renders in the DOM, so behaviour above the phone breakpoint is intact).
+    // Phone + preference ON: the description is removed from the DOM.
     useAuthStore().user!.preferences.hide_summary_mobile = true
     w = await mountView()
-    expect(w.find('ul.app-doc-grid').classes()).toContain('app-doc-grid--hide-summary-mobile')
+    expect(w.find('[data-testid="doc-summary"]').exists()).toBe(false)
+
+    // Larger screen + preference ON: the description still renders (phones only).
+    stubMatchMedia(false)
+    w = await mountView()
     expect(w.find('[data-testid="doc-summary"]').exists()).toBe(true)
   })
 

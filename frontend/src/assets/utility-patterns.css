@@ -256,17 +256,13 @@ input[type='search']::-webkit-search-results-decoration {
 }
 
 /*
- * Optional per-user density control (Settings → Appearance → "Tile description
- * on mobile"): when enabled, hide each tile's description on phones so the
- * long/skinny tiles get shorter. Phones only — the description always shows
- * from the tablet breakpoint up. The snippet shown during an active search is
- * left in place (it is query context, not the always-on description).
+ * The optional per-user "hide tile description on mobile" density control
+ * (Settings → Appearance) is applied in DocumentListView.vue via a reactive
+ * `v-if`, not CSS: the summary carries `line-clamp-3`, whose `display` lives in
+ * Tailwind's `utilities` layer and would out-rank any hide rule in this
+ * `components`-layer file regardless of specificity. See `hideSummaryOnMobile`
+ * there.
  */
-@media (max-width: 640px) {
-  .app-doc-grid--hide-summary-mobile .app-doc-card__summary {
-    display: none;
-  }
-}
 
 /*
  * Dashboard document tile. The tile sits on the gray-100 (light) / gray-900
