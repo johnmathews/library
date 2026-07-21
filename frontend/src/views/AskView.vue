@@ -138,9 +138,15 @@ const hasChatContext = computed<boolean>(
 // pins when content overflows. The `-my-8` cancels `#app-page`'s `py-8`. At `lg+`
 // (and on the list screen) this is empty; the desktop fill lives in the static
 // `lg:` classes on the same root instead.
+//
+// NB: no `overflow-hidden` here. `#ask-page` breaks out of the page's side
+// padding with `-mx-4` to run edge-to-edge, so it is wider than this wrapper;
+// clipping overflow on the wrapper would chop those 16px off each side (grey
+// gutters + the first character of each line cut off). The panel does its own
+// overflow containment instead.
 const chatFillClass = computed<string>(() =>
   mobileScreen.value === 'chat'
-    ? 'max-lg:flex max-lg:flex-col max-lg:h-[calc(100dvh_-_4rem)] max-lg:-my-8 max-lg:overflow-hidden'
+    ? 'max-lg:flex max-lg:flex-col max-lg:h-[calc(100dvh_-_4rem)] max-lg:-my-8'
     : '',
 )
 
@@ -575,7 +581,7 @@ defineExpose({ resetConversation })
          bordered two-pane card again. -->
     <div
       id="ask-page"
-      class="flex flex-col lg:flex-row bg-white dark:bg-gray-800 -mx-4 sm:-mx-6 lg:mx-0 max-lg:flex-1 max-lg:min-h-0 lg:flex-1 lg:min-h-0 lg:overflow-hidden border-0 rounded-none shadow-none lg:rounded-xl lg:border lg:border-gray-200 dark:lg:border-gray-700/60 lg:shadow-xs"
+      class="flex flex-col lg:flex-row bg-white dark:bg-gray-800 -mx-4 sm:-mx-6 lg:mx-0 max-lg:flex-1 max-lg:min-h-0 lg:flex-1 lg:min-h-0 overflow-hidden border-0 rounded-none shadow-none lg:rounded-xl lg:border lg:border-gray-200 dark:lg:border-gray-700/60 lg:shadow-xs"
     >
       <ConversationSidebar
         ref="sidebarRef"

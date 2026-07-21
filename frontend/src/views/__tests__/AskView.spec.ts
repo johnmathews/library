@@ -494,7 +494,9 @@ describe('AskView', () => {
     const page = w.find('#ask-page')
     expect(page.classes()).toContain('lg:flex-1')
     expect(page.classes()).toContain('lg:min-h-0')
-    expect(page.classes()).toContain('lg:overflow-hidden')
+    // Overflow containment lives on the panel (not the fill wrapper) so the
+    // panel's `-mx` full-bleed reaches the screen edges on mobile.
+    expect(page.classes()).toContain('overflow-hidden')
   })
 
   it('fills the viewport as a fixed-height column on the mobile chat screen (K1)', async () => {
