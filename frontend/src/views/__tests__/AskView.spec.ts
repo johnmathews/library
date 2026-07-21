@@ -459,19 +459,39 @@ describe('AskView', () => {
     expect(html.indexOf('data-testid="page-header"')).toBeLessThan(html.indexOf('id="ask-page"'))
   })
 
-  it('pins the composer to the bottom of the chat with a Send button (W4)', () => {
+  it('docks the composer at the bottom: footer on mobile, sticky at lg+ (W4/K1)', () => {
     const w = mountView()
-    // The composer is docked to the bottom of the chat area (sticky), always
-    // present on the chat screen. The transcript's bottom padding keeps the last
-    // turn's citations clear of it (the historical citation-overlap bug).
     const form = w.find('[data-testid="ask-form"]')
     expect(form.exists()).toBe(true)
-    expect(form.classes()).toContain('sticky')
+    // On mobile it is a shrink-0 FOOTER of the fixed-height chat column (not
+    // sticky — sticky only pins on overflow, which floated it mid-page on short
+    // chats). At lg+ it is a sticky bottom bar over the page-scrolling transcript.
     expect(form.classes()).toContain('shrink-0')
-    // It is never hidden behind a reveal step any more.
+    expect(form.classes()).toContain('lg:sticky')
+    expect(form.classes()).not.toContain('sticky') // base (mobile) is not sticky
+    // Never hidden behind a reveal step.
     expect(form.classes()).not.toContain('max-lg:hidden')
-    expect(w.find('[data-testid="ask-transcript"]').classes()).toContain('pb-28')
+    // The transcript is the internal scroll area on mobile; at lg+ it keeps the
+    // sticky-composer clearance.
+    const transcript = w.find('[data-testid="ask-transcript"]')
+    expect(transcript.classes()).toContain('max-lg:overflow-y-auto')
+    expect(transcript.classes()).toContain('max-lg:flex-1')
+    expect(transcript.classes()).toContain('lg:pb-28')
     expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
+  })
+
+  it('fills the viewport as a fixed-height column on the mobile chat screen (K1)', async () => {
+    // On /ask/new (a chat screen) the view is a fixed-height flex column so the
+    // composer footer docks at the bottom; on /ask (the list) it is not.
+    await router.push('/ask/new')
+    const w = mountView()
+    await flushPromises()
+    const root = w.find('#ask-page').element.parentElement as HTMLElement
+    expect(root.className).toContain('max-lg:h-[calc(100dvh-4rem)]')
+    expect(root.className).toContain('max-lg:flex-col')
+    // The chat pane and transcript participate in the flex-height chain.
+    expect(w.find('[data-testid="ask-thread-pane"]').classes()).toContain('min-h-0')
+    expect(w.find('#ask-page').classes()).toContain('max-lg:flex-1')
   })
 
   it('is full-bleed on mobile and carded at lg+ (P1)', () => {

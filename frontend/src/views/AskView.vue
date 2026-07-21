@@ -130,6 +130,19 @@ const hasChatContext = computed<boolean>(
   () => threadId.value !== null || isNewChat.value || turns.value.length > 0,
 )
 
+// On the MOBILE chat screen the view is a fixed-height flex column that fills the
+// viewport below the 64px (`h-16`) app header: `100dvh` tracks the on-screen
+// keyboard (see the viewport meta), so the transcript scrolls internally and the
+// composer footer sits right at the bottom (short chat or long, above the
+// keyboard when it's open) instead of floating mid-page on a sticky that only
+// pins when content overflows. The `-my-8` cancels `#app-page`'s `py-8`. At `lg+`
+// (and on the list screen) this is empty and the layout is unchanged.
+const chatFillClass = computed<string>(() =>
+  mobileScreen.value === 'chat'
+    ? 'max-lg:flex max-lg:flex-col max-lg:h-[calc(100dvh-4rem)] max-lg:-my-8 max-lg:overflow-hidden'
+    : '',
+)
+
 /** Focus the composer's question box (used when starting or opening a chat). */
 function focusComposer(): void {
   void nextTick(() => {
@@ -509,9 +522,10 @@ defineExpose({ resetConversation })
 </script>
 
 <template>
-  <!-- The Ask view grows with its content and the whole page scrolls. On mobile
-       it is two full screens (list ⇄ chat); at lg+ it is one two-pane panel. -->
-  <div>
+  <!-- At lg+ the Ask view grows with its content and the page scrolls (two-pane
+       panel). On the mobile chat screen `chatFillClass` makes it a fixed-height
+       column that fills the viewport so the composer docks at the bottom. -->
+  <div :class="chatFillClass">
     <!-- Desktop page header. Hidden on mobile, where the list screen has its own
          compact title bar and the chat screen has none (F6: no big blurb). -->
     <PageHeader
@@ -556,7 +570,7 @@ defineExpose({ resetConversation })
          bordered two-pane card again. -->
     <div
       id="ask-page"
-      class="flex flex-col lg:flex-row bg-white dark:bg-gray-800 -mx-4 sm:-mx-6 lg:mx-0 -mt-4 lg:mt-0 border-0 rounded-none shadow-none lg:rounded-xl lg:border lg:border-gray-200 dark:lg:border-gray-700/60 lg:shadow-xs"
+      class="flex flex-col lg:flex-row bg-white dark:bg-gray-800 -mx-4 sm:-mx-6 lg:mx-0 max-lg:flex-1 max-lg:min-h-0 border-0 rounded-none shadow-none lg:rounded-xl lg:border lg:border-gray-200 dark:lg:border-gray-700/60 lg:shadow-xs"
     >
       <ConversationSidebar
         ref="sidebarRef"
@@ -571,7 +585,7 @@ defineExpose({ resetConversation })
       <!-- Thread + composer column (the chat screen on mobile). -->
       <div
         data-testid="ask-thread-pane"
-        class="flex flex-col flex-1 min-w-0"
+        class="flex flex-col flex-1 min-w-0 min-h-0"
         :class="{ 'max-lg:hidden': mobileScreen !== 'chat' }"
       >
         <!-- Chat title bar: back arrow (mobile), the thread title (or inline
@@ -661,10 +675,14 @@ defineExpose({ resetConversation })
              conversation; the page (not this box) scrolls. Bottom padding leaves
              room for the pinned composer so the last turn's citations are never
              hidden behind it. -->
+        <!-- On mobile the transcript is the internal scroll area of the
+             fixed-height chat column (flex-1 + overflow-y-auto), so the composer
+             below it is a real footer. At lg+ it flows with the page and leaves
+             pb-28 clearance for the sticky composer. -->
         <div
           ref="transcriptRef"
           data-testid="ask-transcript"
-          class="px-3 pt-4 pb-28 sm:px-6 sm:pt-6"
+          class="px-3 pt-4 sm:px-6 sm:pt-6 max-lg:flex-1 max-lg:min-h-0 max-lg:overflow-y-auto max-lg:pb-4 lg:pb-28"
         >
           <div v-if="turns.length" class="space-y-8">
             <section
@@ -810,17 +828,18 @@ defineExpose({ resetConversation })
           </div>
         </div>
 
-        <!-- Composer. Pinned to the bottom of the chat area (sticky), always
-             present on the chat screen — no reveal step. A solid background masks
-             the transcript scrolling beneath it; the transcript's bottom padding
-             keeps the last turn's citations clear of it (the historical
-             citation-overlap bug). Hidden on the mobile list screen because the
-             whole thread column is. -->
+        <!-- Composer. On mobile it is the bottom **footer** of the fixed-height
+             chat column (shrink-0) — so it always sits at the bottom, above the
+             on-screen keyboard, whatever the conversation length. At lg+ it is a
+             `sticky` bottom bar over the page-scrolling transcript. The bottom
+             padding includes the safe-area inset so it clears the home indicator
+             (viewport-fit=cover). Hidden on the mobile list screen with the pane. -->
         <form
           id="ask-form"
           ref="composerRef"
           novalidate
-          class="sticky bottom-0 z-10 shrink-0 border-t border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-2 py-2 sm:px-4 sm:py-3 lg:rounded-b-xl"
+          class="shrink-0 border-t border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-2 pt-2 sm:px-4 sm:pt-3 lg:sticky lg:bottom-0 lg:z-10 lg:rounded-b-xl"
+          style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem)"
           data-testid="ask-form"
           @submit.prevent="onSubmit"
         >

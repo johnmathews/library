@@ -1,6 +1,6 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-07-21 (two-screen, route-driven Ask — Option B — plus a mobile density pass: the chat is full-bleed on a phone, the composer is one full-width pill with attach/send on their own row, turns are flat on mobile, and plain Enter inserts a newline on a phone / sends on desktop; §1.6). Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9); (2026-07-02) metadata write tool, recipient in answer context, citations collapsed by default.
+**Status:** active. **Last updated:** 2026-07-21 (two-screen, route-driven Ask — Option B — plus a mobile pass: full-bleed chat, one full-width pill composer, flat turns, phone Enter = newline; and the mobile chat is now a fixed-height `100dvh` flex column with an internal-scroll transcript and a footer composer that docks at the bottom / above the on-screen keyboard via `interactive-widget=resizes-content` + safe-area inset; §1.6). Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9); (2026-07-02) metadata write tool, recipient in answer context, citations collapsed by default.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -262,16 +262,22 @@ The `:threadId` param is constrained to digits (`:threadId(\d+)`) and the
 **Mobile** is two full screens. The **list screen** has a compact "Ask" title
 bar with a ＋ that starts a new chat, a search box, and the thread list (each row
 carries a **⋯ overflow menu** with Rename and Delete — no always-on links). The
-**chat screen** has a back arrow (→ the list), the thread title with its own ⋯
-menu, the transcript, and a **composer pinned to the bottom** (sticky) that is
-always present — there is no "reveal the composer" step. The transcript grows with
-the page and leaves bottom padding so its last citations are never hidden behind
-the pinned composer. On mobile the chat is **full-bleed** — no bordered card and
-no page side-padding, so the conversation and composer run edge-to-edge — and
+**chat screen** is a **fixed-height flex column** that fills the viewport below
+the app header (`height: calc(100dvh - 4rem)`): a back arrow (→ the list) + the
+thread title with its own ⋯ menu, then the **transcript as the internal scroll
+area** (`flex-1; overflow-y-auto`), then the composer as a **bottom footer**
+(`shrink-0`) — so the composer always docks at the bottom, short chat or long,
+rather than a `sticky` that only pins on overflow (which floated it mid-page).
+Because `#app-shell` and the column use `100dvh` and the viewport meta carries
+`interactive-widget=resizes-content`, the on-screen keyboard shrinks the viewport
+and the composer sits directly **above the keyboard**; its bottom padding
+includes `env(safe-area-inset-bottom)` to clear the home indicator. The chat is
+**full-bleed** — no bordered card and no page side-padding, edge-to-edge — and
 each turn is **flat** (a violet question bubble over plain answer text, no nested
-card). **Desktop** keeps the familiar two-pane layout (rail |
-thread): the page header sits on top, the rail lists threads with the same ⋯
-menu, and the thread pane carries a title bar and the sticky composer.
+card). **Desktop** keeps the familiar two-pane layout (rail | thread): the page
+header sits on top, the rail lists threads with the same ⋯ menu, and the thread
+pane carries a title bar and a **`sticky` composer** over the page-scrolling
+transcript.
 
 **New conversation.** The mobile ＋ and the desktop "New conversation" button both
 go to `/ask/new`; the desktop button is greyed out when the view is already an
