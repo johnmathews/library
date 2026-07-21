@@ -2,7 +2,11 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <!-- interactive-widget=resizes-content makes the on-screen keyboard shrink the
+         layout/`dvh` viewport (Chromium/modern iOS), so a `100dvh` chat column and
+         its bottom-docked composer sit directly above the keyboard rather than
+         behind it. See docs/ask.md §1.6 and the Ask keyboard-viewport journal. -->
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
     <meta name="description" content="Self-hosted personal document archive: scan, search and file the family paperwork.">
     <meta name="theme-color" content="#f3f4f6">
     <link rel="icon" href="/favicon.ico" sizes="48x48">
