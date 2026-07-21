@@ -139,7 +139,7 @@ const hasChatContext = computed<boolean>(
 // (and on the list screen) this is empty and the layout is unchanged.
 const chatFillClass = computed<string>(() =>
   mobileScreen.value === 'chat'
-    ? 'max-lg:flex max-lg:flex-col max-lg:h-[calc(100dvh-4rem)] max-lg:-my-8 max-lg:overflow-hidden'
+    ? 'max-lg:flex max-lg:flex-col max-lg:h-[calc(100dvh_-_4rem)] max-lg:-my-8 max-lg:overflow-hidden'
     : '',
 )
 
@@ -838,8 +838,8 @@ defineExpose({ resetConversation })
           id="ask-form"
           ref="composerRef"
           novalidate
-          class="shrink-0 border-t border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-2 pt-2 sm:px-4 sm:pt-3 lg:sticky lg:bottom-0 lg:z-10 lg:rounded-b-xl"
-          style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.5rem)"
+          class="shrink-0 border-t border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-3 pt-2 sm:px-4 sm:pt-3 lg:sticky lg:bottom-0 lg:z-10 lg:rounded-b-xl"
+          style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.625rem)"
           data-testid="ask-form"
           @submit.prevent="onSubmit"
         >
