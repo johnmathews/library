@@ -90,7 +90,13 @@ async function selectTone(tone: BackgroundTone): Promise<void> {
   // instantly, before the round-trip resolves.
   if (auth.user) auth.applyPreferences({ ...auth.user.preferences, background_tone: tone })
   try {
-    const result = await updateAppearance(tone, selectedTilePreview.value, auth.dockPosition, auth.phoneColumns)
+    const result = await updateAppearance(
+      tone,
+      selectedTilePreview.value,
+      auth.dockPosition,
+      auth.phoneColumns,
+      auth.hideSummaryMobile,
+    )
     auth.applyPreferences(result)
     selectedTone.value = result.background_tone ?? DEFAULT_BACKGROUND_TONE
   } catch {
@@ -112,7 +118,13 @@ async function selectTilePreview(mode: TilePreview): Promise<void> {
   // Optimistic: update the store now so the dashboard reflects it immediately.
   if (auth.user) auth.applyPreferences({ ...auth.user.preferences, tile_preview: mode })
   try {
-    const result = await updateAppearance(selectedTone.value, mode, auth.dockPosition, auth.phoneColumns)
+    const result = await updateAppearance(
+      selectedTone.value,
+      mode,
+      auth.dockPosition,
+      auth.phoneColumns,
+      auth.hideSummaryMobile,
+    )
     auth.applyPreferences(result)
     selectedTilePreview.value = result.tile_preview ?? DEFAULT_TILE_PREVIEW
   } catch {
@@ -145,6 +157,7 @@ async function selectDockPosition(position: DockPosition): Promise<void> {
       selectedTilePreview.value,
       position,
       auth.phoneColumns,
+      auth.hideSummaryMobile,
     )
     auth.applyPreferences(result)
   } catch {
@@ -167,10 +180,34 @@ async function selectPhoneColumns(count: number): Promise<void> {
       selectedTilePreview.value,
       auth.dockPosition,
       count,
+      auth.hideSummaryMobile,
     )
     auth.applyPreferences(result)
   } catch {
     if (auth.user) auth.applyPreferences({ ...auth.user.preferences, phone_columns: previous })
+    toneError.value = 'Sorry, your appearance preference could not be saved. Try again.'
+  }
+}
+
+// --- Appearance (hide tile description on mobile) ---------------------------
+
+async function toggleHideSummaryMobile(next: boolean): Promise<void> {
+  if (next === auth.hideSummaryMobile) return
+  const previous = auth.hideSummaryMobile
+  toneError.value = null
+  // Optimistic: update the store now so the dashboard tiles reflow immediately.
+  if (auth.user) auth.applyPreferences({ ...auth.user.preferences, hide_summary_mobile: next })
+  try {
+    const result = await updateAppearance(
+      selectedTone.value,
+      selectedTilePreview.value,
+      auth.dockPosition,
+      auth.phoneColumns,
+      next,
+    )
+    auth.applyPreferences(result)
+  } catch {
+    if (auth.user) auth.applyPreferences({ ...auth.user.preferences, hide_summary_mobile: previous })
     toneError.value = 'Sorry, your appearance preference could not be saved. Try again.'
   }
 }
@@ -614,6 +651,33 @@ const tabClass = (active: boolean): string =>
               {{ count }}
             </button>
           </div>
+        </fieldset>
+      </div>
+
+      <div id="settings-card-hide-summary-mobile" :class="cardClass" class="mt-6">
+        <fieldset>
+          <legend class="text-lg font-semibold text-gray-800 dark:text-gray-100">
+            Tile description on mobile
+          </legend>
+          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            On a phone-sized screen, dashboard tiles can get long and skinny.
+            Hide the description at the bottom of each tile to keep them compact.
+            Only affects phones; larger screens always show it. Saves to your
+            account automatically.
+          </p>
+          <label class="flex items-center gap-2 py-1 mt-5">
+            <input
+              :checked="auth.hideSummaryMobile"
+              id="hide-summary-mobile"
+              type="checkbox"
+              class="form-checkbox"
+              data-testid="hide-summary-mobile"
+              @change="toggleHideSummaryMobile(($event.target as HTMLInputElement).checked)"
+            />
+            <span class="text-sm font-medium text-gray-700 dark:text-gray-300"
+              >Hide tile descriptions on phones</span
+            >
+          </label>
         </fieldset>
       </div>
 

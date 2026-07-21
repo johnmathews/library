@@ -177,4 +177,28 @@ describe('useAuthStore', () => {
     }
     expect(auth.phoneColumns).toBe(3)
   })
+
+  it('hideSummaryMobile defaults to false when the preference is absent', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'u',
+      display_name: 'U',
+      is_admin: false,
+      preferences: { dashboard_fields: [] },
+    }
+    expect(auth.hideSummaryMobile).toBe(false)
+  })
+
+  it('hideSummaryMobile reflects the stored preference', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'u',
+      display_name: 'U',
+      is_admin: false,
+      preferences: { dashboard_fields: [], hide_summary_mobile: true },
+    }
+    expect(auth.hideSummaryMobile).toBe(true)
+  })
 })

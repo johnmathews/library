@@ -533,6 +533,20 @@ def _resolve_phone_columns(blob: dict[str, Any]) -> int:
     return _coerce_phone_columns(blob.get("phone_columns"))
 
 
+DEFAULT_HIDE_SUMMARY_MOBILE: Final[bool] = False
+
+
+def _resolve_hide_summary_mobile(blob: dict[str, Any]) -> bool:
+    """Pick the stored "hide tile description on mobile" flag.
+
+    Tolerant like the other appearance resolvers: only a real ``bool`` counts;
+    anything else (absent key, a hand-edited string/number) resolves to the
+    default rather than raising.
+    """
+    raw = blob.get("hide_summary_mobile")
+    return raw if isinstance(raw, bool) else DEFAULT_HIDE_SUMMARY_MOBILE
+
+
 class DockPosition(StrEnum):
     """Where the freeform-card action dock docks on the dashboard.
 
@@ -570,6 +584,7 @@ class AppearancePreferences(BaseModel):
     tile_preview: TilePreview = DEFAULT_TILE_PREVIEW
     dock_position: DockPosition = DEFAULT_DOCK_POSITION
     phone_columns: int = DEFAULT_PHONE_COLUMNS
+    hide_summary_mobile: bool = DEFAULT_HIDE_SUMMARY_MOBILE
 
     @field_validator("background_tone", mode="before")
     @classmethod
@@ -600,6 +615,12 @@ class AppearancePreferences(BaseModel):
     def _default_out_of_range_phone_columns(cls, value: object) -> int:
         """Coerce an unknown/out-of-range column count to the default (never a 422)."""
         return _coerce_phone_columns(value)
+
+    @field_validator("hide_summary_mobile", mode="before")
+    @classmethod
+    def _default_non_bool_hide_summary_mobile(cls, value: object) -> bool:
+        """Coerce a non-bool flag to the default (never a 422)."""
+        return value if isinstance(value, bool) else DEFAULT_HIDE_SUMMARY_MOBILE
 
 
 # Per-kind tile border colours are stored as raw ``#rrggbb`` hex — unlike the
@@ -837,6 +858,7 @@ class UserPreferences(BaseModel):
     tile_preview: TilePreview
     dock_position: DockPosition
     phone_columns: int
+    hide_summary_mobile: bool
     kind_colors: dict[str, str]
     notifications: NotificationSettingsOut
 
@@ -854,6 +876,7 @@ def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
         tile_preview=_resolve_tile_preview(blob),
         dock_position=_resolve_dock_position(blob),
         phone_columns=_resolve_phone_columns(blob),
+        hide_summary_mobile=_resolve_hide_summary_mobile(blob),
         kind_colors=_resolve_kind_colors(blob),
         notifications=resolve_notification_settings(blob),
     )

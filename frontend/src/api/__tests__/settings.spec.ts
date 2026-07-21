@@ -39,7 +39,7 @@ describe('settings api', () => {
     expect(JSON.parse(init.body)).toEqual({ dashboard_fields: ['tags'] })
   })
 
-  it('PUT /api/settings/appearance sends tone, tile preview, dock position, and phone columns', async () => {
+  it('PUT /api/settings/appearance sends tone, tile preview, dock position, phone columns, and hide-summary-mobile', async () => {
     const fetchMock = vi
       .fn()
       .mockResolvedValue(
@@ -49,11 +49,13 @@ describe('settings api', () => {
           tile_preview: 'whole_page',
           dock_position: 'bottom-left',
           phone_columns: 3,
+          hide_summary_mobile: true,
         }),
       )
     vi.stubGlobal('fetch', fetchMock)
-    const result = await updateAppearance('slate', 'whole_page', 'bottom-left', 3)
+    const result = await updateAppearance('slate', 'whole_page', 'bottom-left', 3, true)
     expect(result.phone_columns).toBe(3)
+    expect(result.hide_summary_mobile).toBe(true)
     const [url, init] = fetchMock.mock.calls[0]!
     expect(String(url)).toBe('/api/settings/appearance')
     expect(init.method).toBe('PUT')
@@ -62,6 +64,7 @@ describe('settings api', () => {
       tile_preview: 'whole_page',
       dock_position: 'bottom-left',
       phone_columns: 3,
+      hide_summary_mobile: true,
     })
   })
 

@@ -195,6 +195,7 @@ async def put_appearance(
         "tile_preview": payload.tile_preview.value,
         "dock_position": payload.dock_position.value,
         "phone_columns": payload.phone_columns,
+        "hide_summary_mobile": payload.hide_summary_mobile,
     }
     await db.commit()
     return resolve_preferences(user.preferences)

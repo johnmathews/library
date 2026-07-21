@@ -4,6 +4,7 @@ import { ApiError, apiFetch } from '@/api/client'
 import {
   DEFAULT_BACKGROUND_TONE,
   DEFAULT_DOCK_POSITION,
+  DEFAULT_HIDE_SUMMARY_MOBILE,
   DEFAULT_PHONE_COLUMNS,
   DEFAULT_TILE_PREVIEW,
   type BackgroundTone,
@@ -66,6 +67,13 @@ export const useAuthStore = defineStore('auth', () => {
   // user is absent or a payload predates the preference.
   const phoneColumns = computed<number>(
     () => user.value?.preferences?.phone_columns ?? DEFAULT_PHONE_COLUMNS,
+  )
+
+  // Whether to hide each dashboard tile's description on phones (< 641px).
+  // Server-synced; defaults (show it) when the user is absent or a payload
+  // predates the preference.
+  const hideSummaryMobile = computed<boolean>(
+    () => user.value?.preferences?.hide_summary_mobile ?? DEFAULT_HIDE_SUMMARY_MOBILE,
   )
 
   // The Pushover/forwarding notification settings, defaulting to an empty,
@@ -132,6 +140,7 @@ export const useAuthStore = defineStore('auth', () => {
     tilePreview,
     dockPosition,
     phoneColumns,
+    hideSummaryMobile,
     notificationSettings,
     kindColors,
     applyPreferences,

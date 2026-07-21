@@ -611,6 +611,7 @@ function toggleSortDirection(): void {
       v-if="items.length"
       id="dashboard-grid"
       class="app-doc-grid"
+      :class="{ 'app-doc-grid--hide-summary-mobile': auth.hideSummaryMobile }"
       :style="gridColsStyle"
     >
       <li

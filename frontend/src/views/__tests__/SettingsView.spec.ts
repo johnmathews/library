@@ -156,6 +156,7 @@ describe('SettingsView', () => {
       tile_preview: 'full_width',
       dock_position: 'top-right',
       phone_columns: 2,
+      hide_summary_mobile: false,
     })
     expect(wrapper.find('[data-testid="tone-slate"]').attributes('aria-checked')).toBe('true')
     expect(auth.backgroundTone).toBe('slate')
@@ -186,6 +187,7 @@ describe('SettingsView', () => {
       tile_preview: 'whole_page',
       dock_position: 'top-right',
       phone_columns: 2,
+      hide_summary_mobile: false,
     })
     expect(wrapper.find('[data-testid="tile-whole_page"]').attributes('aria-checked')).toBe('true')
     expect(auth.tilePreview).toBe('whole_page')
@@ -250,6 +252,7 @@ describe('SettingsView', () => {
       tile_preview: 'full_width',
       dock_position: 'bottom-left',
       phone_columns: 2,
+      hide_summary_mobile: false,
     })
     expect(wrapper.find('[data-testid="dock-position-bottom-left"]').attributes('aria-checked')).toBe('true')
     expect(auth.dockPosition).toBe('bottom-left')
@@ -321,6 +324,7 @@ describe('SettingsView', () => {
       tile_preview: 'full_width',
       dock_position: 'top-right',
       phone_columns: 3,
+      hide_summary_mobile: false,
     })
     expect(wrapper.find('[data-testid="phone-columns-3"]').attributes('aria-checked')).toBe('true')
     expect(auth.phoneColumns).toBe(3)
@@ -351,6 +355,82 @@ describe('SettingsView', () => {
     expect(wrapper.find('[data-testid="appearance-error"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="phone-columns-2"]').attributes('aria-checked')).toBe('true')
     expect(auth.phoneColumns).toBe(2)
+  })
+
+  it('persists the hide-tile-description-on-mobile toggle via the appearance endpoint', async () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'a',
+      display_name: 'A',
+      is_admin: false,
+      preferences: {
+        dashboard_fields: ['kind'],
+        background_tone: 'neutral',
+        tile_preview: 'full_width',
+        dock_position: 'top-right',
+        phone_columns: 2,
+        hide_summary_mobile: false,
+      },
+    }
+    stubFetch({
+      dashboard_fields: ['kind'],
+      background_tone: 'neutral',
+      tile_preview: 'full_width',
+      dock_position: 'top-right',
+      phone_columns: 2,
+      hide_summary_mobile: true,
+    })
+
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+    await wrapper.find('[data-testid="tab-appearance-btn"]').trigger('click')
+    const toggle = wrapper.find('[data-testid="hide-summary-mobile"]')
+    expect((toggle.element as HTMLInputElement).checked).toBe(false)
+
+    await toggle.setValue(true)
+    // Optimistic: the store updates before the round-trip resolves.
+    expect(auth.hideSummaryMobile).toBe(true)
+    await flushPromises()
+
+    const [url, init] = fetchMock.mock.calls.at(-1)!
+    expect(String(url)).toBe('/api/settings/appearance')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({
+      background_tone: 'neutral',
+      tile_preview: 'full_width',
+      dock_position: 'top-right',
+      phone_columns: 2,
+      hide_summary_mobile: true,
+    })
+    expect(auth.hideSummaryMobile).toBe(true)
+  })
+
+  it('reverts the hide-summary-mobile toggle and shows an error when the appearance save fails', async () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'a',
+      display_name: 'A',
+      is_admin: false,
+      preferences: {
+        dashboard_fields: ['kind'],
+        background_tone: 'neutral',
+        tile_preview: 'full_width',
+        dock_position: 'top-right',
+        phone_columns: 2,
+        hide_summary_mobile: false,
+      },
+    }
+    stubFetch({ detail: 'boom' }, 500)
+
+    const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+    await wrapper.find('[data-testid="tab-appearance-btn"]').trigger('click')
+    await wrapper.find('[data-testid="hide-summary-mobile"]').setValue(true)
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="appearance-error"]').exists()).toBe(true)
+    expect((wrapper.find('[data-testid="hide-summary-mobile"]').element as HTMLInputElement).checked).toBe(false)
+    expect(auth.hideSummaryMobile).toBe(false)
   })
 
   describe('Notifications tab', () => {

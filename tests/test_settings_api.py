@@ -775,3 +775,35 @@ def test_get_settings_resolves_garbage_phone_columns_to_default(
 ) -> None:
     _seed_raw_preferences(api_database_url, auth_user.id, {"phone_columns": "lots"})
     assert api_client.get("/api/settings").json()["phone_columns"] == 2
+
+
+def test_get_settings_includes_default_hide_summary_mobile(api_client: TestClient) -> None:
+    assert api_client.get("/api/settings").json()["hide_summary_mobile"] is False
+
+
+def test_put_appearance_round_trips_hide_summary_mobile(api_client: TestClient) -> None:
+    put = api_client.put(
+        "/api/settings/appearance",
+        json={"background_tone": "neutral", "hide_summary_mobile": True},
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["hide_summary_mobile"] is True
+    assert api_client.get("/api/settings").json()["hide_summary_mobile"] is True
+
+
+def test_put_appearance_non_bool_hide_summary_mobile_falls_back_to_default(
+    api_client: TestClient,
+) -> None:
+    put = api_client.put(
+        "/api/settings/appearance",
+        json={"background_tone": "neutral", "hide_summary_mobile": "yes please"},
+    )
+    assert put.status_code == 200, put.text
+    assert put.json()["hide_summary_mobile"] is False
+
+
+def test_get_settings_resolves_garbage_hide_summary_mobile_to_default(
+    api_client: TestClient, auth_user: AuthUser, api_database_url: str
+) -> None:
+    _seed_raw_preferences(api_database_url, auth_user.id, {"hide_summary_mobile": "sure"})
+    assert api_client.get("/api/settings").json()["hide_summary_mobile"] is False

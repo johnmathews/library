@@ -93,7 +93,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | POST   | `/api/held-emails/{id}/dismiss` | Dismiss a held email (DB-only; the message stays in the Held folder) |
 | GET    | `/api/settings` | Your display preferences (dashboard fields + page-canvas tone + tile preview + action dock position) |
 | PUT    | `/api/settings` | Update your dashboard fields |
-| PUT    | `/api/settings/appearance` | Update your page-canvas tone, tile preview, and action dock position |
+| PUT    | `/api/settings/appearance` | Update your page-canvas tone, tile preview, action dock position, phone columns, and mobile hide-description flag |
 | PUT    | `/api/settings/kind-colors` | Update your per-kind tile border colours |
 | PUT    | `/api/settings/notifications` | Update your Pushover notifications + email forwarding addresses |
 | GET    | `/api/settings/email-triage` | Effective email-in triage configuration (instance-wide, read-only, secret-free) |
@@ -696,7 +696,7 @@ user has never saved preferences, the **default set** is returned (no
 `404` or empty body).
 
 ```json
-{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"], "background_tone": "neutral", "tile_preview": "full_width", "dock_position": "top-right", "kind_colors": {}, "notifications": {"enabled": false, "pushover_app_token_set": false, "pushover_user_key_set": false, "pushover_device": null, "events": [], "email_forward_addresses": []}}
+{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"], "background_tone": "neutral", "tile_preview": "full_width", "dock_position": "top-right", "phone_columns": 2, "hide_summary_mobile": false, "kind_colors": {}, "notifications": {"enabled": false, "pushover_app_token_set": false, "pushover_user_key_set": false, "pushover_device": null, "events": [], "email_forward_addresses": []}}
 ```
 
 ### 1.10.2 `PUT /api/settings`
@@ -745,10 +745,10 @@ is returned as-is.
 ### 1.10.3 `PUT /api/settings/appearance`
 
 Body: `{"background_tone": "<tone>", "tile_preview": "<mode>", "dock_position":
-"<position>"}`. Persists all three appearance settings and returns the full
-resolved preference set (same shape as GET). Auth + CSRF apply. The tone
-applies to the light-mode page background only — dark mode keeps its
-`gray-900` canvas.
+"<position>", "phone_columns": <1|2|3>, "hide_summary_mobile": <bool>}`.
+Persists the appearance settings and returns the full resolved preference set
+(same shape as GET). Auth + CSRF apply. The tone applies to the light-mode page
+background only — dark mode keeps its `gray-900` canvas.
 
 **Valid tones:** `neutral` (default — `gray-200`), `light` (`gray-100`,
 the original airier canvas), `soft`, `slate`, `sand`, `mist`. The token is
@@ -769,13 +769,20 @@ token is a name, not a coordinate: the frontend owns the actual CSS placement
 (and the header-clearance offset for the `top-*` positions) for each, so the
 layout can be retuned without a schema or data migration.
 
+**Phone columns.** `phone_columns` (`1`, `2`, or `3`; default `2`) sets how
+many dashboard tile columns render on phone-width screens (`< 641px`); the
+frontend owns the CSS. **Hide description on mobile.** `hide_summary_mobile`
+(bool; default `false`) hides each dashboard tile's description on phones when
+`true`; larger screens always show it.
+
 **Tolerant validation.** An unknown tone resolves to `neutral`, an unknown
-tile preview to `full_width`, and an unknown dock position to `top-right` —
-`200` with the default, never `422` — matching `dashboard_fields`.
-`tile_preview` and `dock_position` are both optional in the body (defaulting
-to `full_width` and `top-right` respectively), so a client sending only
-`background_tone` still succeeds. On read, absent keys resolve to their
-defaults.
+tile preview to `full_width`, an unknown dock position to `top-right`, an
+out-of-range `phone_columns` to `2`, and a non-bool `hide_summary_mobile` to
+`false` — `200` with the default, never `422` — matching `dashboard_fields`.
+`tile_preview`, `dock_position`, `phone_columns`, and `hide_summary_mobile` are
+all optional in the body (defaulting to `full_width`, `top-right`, `2`, and
+`false` respectively), so a client sending only `background_tone` still
+succeeds. On read, absent keys resolve to their defaults.
 
 ### 1.10.4 `PUT /api/settings/kind-colors`
 

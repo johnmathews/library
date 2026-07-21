@@ -211,6 +211,21 @@ describe('DocumentListView', () => {
     expect(tile.attributes('style') ?? '').toContain('--card-accent: #112233')
   })
 
+  it('adds the hide-summary-mobile grid class only when the preference is on', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem({ summary: 'A description.' })]))
+    // Off by default: the grid carries no hide-summary class and the summary renders.
+    let w = await mountView()
+    expect(w.find('ul.app-doc-grid').classes()).not.toContain('app-doc-grid--hide-summary-mobile')
+    expect(w.find('[data-testid="doc-summary"]').exists()).toBe(true)
+
+    // On: the grid gains the class (CSS hides the summary on phones; the element
+    // still renders in the DOM, so behaviour above the phone breakpoint is intact).
+    useAuthStore().user!.preferences.hide_summary_mobile = true
+    w = await mountView()
+    expect(w.find('ul.app-doc-grid').classes()).toContain('app-doc-grid--hide-summary-mobile')
+    expect(w.find('[data-testid="doc-summary"]').exists()).toBe(true)
+  })
+
   it('renders tiles in the dashboard grid with title link, tags, sender and date', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()

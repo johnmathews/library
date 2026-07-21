@@ -100,6 +100,9 @@ export const DEFAULT_DOCK_POSITION: DockPosition = 'top-right'
 export const PHONE_COLUMNS_OPTIONS = [1, 2, 3] as const
 export const DEFAULT_PHONE_COLUMNS = 2
 
+/** Whether to hide each tile's description on phones (< 641px). Default: show it. */
+export const DEFAULT_HIDE_SUMMARY_MOBILE = false
+
 /**
  * The built-in default tile-border colour for each document kind, by slug. Only
  * the kinds that meaningfully occur are coloured; every other kind (incl.
@@ -194,6 +197,7 @@ export interface UserPreferences {
   kind_colors?: Record<string, string>
   notifications?: NotificationPreferences
   phone_columns?: number
+  hide_summary_mobile?: boolean
 }
 
 /** GET /api/settings — resolved display preferences. */
@@ -206,12 +210,16 @@ export function updateSettings(prefs: { dashboard_fields: DashboardField[] }): P
   return apiFetch<UserPreferences>('/api/settings', { method: 'PUT', body: prefs })
 }
 
-/** PUT /api/settings/appearance — persist tone, tile preview, dock position, and phone columns. */
+/**
+ * PUT /api/settings/appearance — persist tone, tile preview, dock position,
+ * phone columns, and the mobile "hide tile description" flag.
+ */
 export function updateAppearance(
   tone: BackgroundTone,
   tilePreview: TilePreview,
   dockPosition: DockPosition,
   phoneColumns: number,
+  hideSummaryMobile: boolean,
 ): Promise<UserPreferences> {
   return apiFetch<UserPreferences>('/api/settings/appearance', {
     method: 'PUT',
@@ -220,6 +228,7 @@ export function updateAppearance(
       tile_preview: tilePreview,
       dock_position: dockPosition,
       phone_columns: phoneColumns,
+      hide_summary_mobile: hideSummaryMobile,
     },
   })
 }
