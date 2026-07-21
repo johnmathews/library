@@ -459,25 +459,42 @@ describe('AskView', () => {
     expect(html.indexOf('data-testid="page-header"')).toBeLessThan(html.indexOf('id="ask-page"'))
   })
 
-  it('docks the composer at the bottom: footer on mobile, sticky at lg+ (W4/K1)', () => {
+  it('docks the composer at the bottom: a shrink-0 footer on every breakpoint (W4/K1)', () => {
     const w = mountView()
     const form = w.find('[data-testid="ask-form"]')
     expect(form.exists()).toBe(true)
-    // On mobile it is a shrink-0 FOOTER of the fixed-height chat column (not
-    // sticky — sticky only pins on overflow, which floated it mid-page on short
-    // chats). At lg+ it is a sticky bottom bar over the page-scrolling transcript.
+    // A shrink-0 FOOTER of the fixed-height chat column at every breakpoint — NOT
+    // sticky. Sticky only pins on overflow, which floated it mid-page on short
+    // chats (mobile) and left it mid-panel below the tall sidebar (desktop).
     expect(form.classes()).toContain('shrink-0')
-    expect(form.classes()).toContain('lg:sticky')
-    expect(form.classes()).not.toContain('sticky') // base (mobile) is not sticky
+    expect(form.classes()).not.toContain('lg:sticky')
+    expect(form.classes()).not.toContain('sticky')
     // Never hidden behind a reveal step.
     expect(form.classes()).not.toContain('max-lg:hidden')
-    // The transcript is the internal scroll area on mobile; at lg+ it keeps the
-    // sticky-composer clearance.
+    // The transcript is the internal scroll area on every breakpoint, so the
+    // composer below it is a real footer (no page-scroll clearance padding).
     const transcript = w.find('[data-testid="ask-transcript"]')
-    expect(transcript.classes()).toContain('max-lg:overflow-y-auto')
-    expect(transcript.classes()).toContain('max-lg:flex-1')
-    expect(transcript.classes()).toContain('lg:pb-28')
+    expect(transcript.classes()).toContain('overflow-y-auto')
+    expect(transcript.classes()).toContain('flex-1')
+    expect(transcript.classes()).toContain('min-h-0')
+    expect(transcript.classes()).not.toContain('lg:pb-28')
     expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
+  })
+
+  it('fills the viewport as a fixed-height column on desktop so the composer docks (K1)', () => {
+    // At lg+ the whole view is a bounded-height flex column (100dvh − the 4rem
+    // header − the 4rem #app-page py-8), the #ask-page panel takes the rest, and
+    // its columns scroll internally — so the composer sits at the viewport bottom
+    // instead of the panel growing with the tall conversation-list sidebar.
+    const w = mountView()
+    const root = w.find('#ask-page').element.parentElement as HTMLElement
+    expect(root.className).toContain('lg:flex')
+    expect(root.className).toContain('lg:flex-col')
+    expect(root.className).toContain('lg:h-[calc(100dvh_-_8rem)]')
+    const page = w.find('#ask-page')
+    expect(page.classes()).toContain('lg:flex-1')
+    expect(page.classes()).toContain('lg:min-h-0')
+    expect(page.classes()).toContain('lg:overflow-hidden')
   })
 
   it('fills the viewport as a fixed-height column on the mobile chat screen (K1)', async () => {
@@ -605,19 +622,6 @@ describe('AskView', () => {
     await flushPromises()
     expect(vi.mocked(deleteThread)).toHaveBeenCalledWith(7)
     expect(router.currentRoute.value.name).toBe('ask')
-  })
-
-  it('lets the transcript grow with the page rather than scrolling internally', () => {
-    const w = mountView()
-    const transcript = w.find('[data-testid="ask-transcript"]')
-    expect(transcript.exists()).toBe(true)
-    // The transcript now flows at its natural height and grows with the
-    // conversation; the whole page scrolls instead of a fixed-height internal
-    // scroller. So it must NOT be an overflow-y-auto/fixed-height column.
-    expect(transcript.classes()).not.toContain('lg:overflow-y-auto')
-    expect(transcript.classes()).not.toContain('lg:flex-1')
-    // Likewise the outer view no longer pins itself to the viewport height.
-    expect(w.find('#ask-page').classes()).not.toContain('lg:flex-1')
   })
 
   it('shows the no-threads empty-state prompt when no conversations exist (W10)', async () => {
