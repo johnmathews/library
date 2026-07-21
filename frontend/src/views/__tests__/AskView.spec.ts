@@ -211,18 +211,21 @@ describe('AskView', () => {
     expect(w.find('[data-testid="error-summary"]').exists()).toBe(false)
   })
 
-  it('renders the answer on a distinct surface card (item 4)', async () => {
+  it('renders the answer on a distinct surface card at lg+, flat on mobile (item 4 / P4)', async () => {
     askQuestionMock.mockResolvedValueOnce(sampleResponse())
     const w = mountView()
     await typeAndSubmit(w, 'which invoices are due?')
-    // The answer sits inside a bordered, shaded surface card that is separate
-    // from the panel background — so panel, question, and answer read as three
-    // distinct layers.
+    // At lg+ the answer sits on a bordered, shaded surface card (distinct from the
+    // two-pane panel). On mobile that card is dropped — the answer is flat text
+    // under the violet question bubble — so the classes are lg-gated.
     const surface = w.find('[data-testid="ask-answer-surface"]')
     expect(surface.exists()).toBe(true)
-    expect(surface.classes()).toContain('bg-gray-50')
-    expect(surface.classes()).toContain('border')
-    // The answer body lives inside the card.
+    expect(surface.classes()).toContain('lg:bg-gray-50')
+    expect(surface.classes()).toContain('lg:border')
+    // The mobile (unprefixed) card classes are gone.
+    expect(surface.classes()).not.toContain('bg-gray-50')
+    expect(surface.classes()).not.toContain('border')
+    // The answer body lives inside it either way.
     expect(surface.find('[data-testid="ask-answer"]').exists()).toBe(true)
   })
 
@@ -378,7 +381,9 @@ describe('AskView', () => {
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
   })
 
-  it('sends on plain Enter, not on Shift+Enter / Ctrl+J / while composing', async () => {
+  it('sends on plain Enter (desktop), not on Shift+Enter / Ctrl+J / while composing', async () => {
+    // Plain Enter sends only on desktop (lg+); stub that viewport.
+    stubDesktopViewport()
     askQuestionMock.mockResolvedValue(sampleResponse({ thread_id: 1 }))
     const w = mountView()
     const ta = w.find('#ask-question')
@@ -386,7 +391,7 @@ describe('AskView', () => {
 
     await ta.trigger('keydown', { key: 'Enter' })
     await flushPromises()
-    expect(askQuestionMock).toHaveBeenCalledTimes(1) // plain Enter sends
+    expect(askQuestionMock).toHaveBeenCalledTimes(1) // plain Enter sends on desktop
 
     await ta.trigger('keydown', { key: 'Enter', shiftKey: true })
     await flushPromises()
@@ -413,6 +418,30 @@ describe('AskView', () => {
     await ta.trigger('keydown', { key: 'Enter', metaKey: true })
     await flushPromises()
     expect(askQuestionMock).toHaveBeenCalledTimes(2) // cmd/ctrl+enter still sends
+  })
+
+  it('on a phone, plain Enter does not send; Cmd/Ctrl+Enter still does (P3)', async () => {
+    // Default jsdom viewport = mobile (matchMedia unset → useMediaQuery false).
+    askQuestionMock.mockResolvedValue(sampleResponse({ thread_id: 1 }))
+    const w = mountView()
+    const ta = w.find('#ask-question')
+    await ta.setValue('hello')
+
+    // Plain Enter inserts a newline (browser default), so onSubmit is NOT called.
+    await ta.trigger('keydown', { key: 'Enter' })
+    await flushPromises()
+    expect(askQuestionMock).not.toHaveBeenCalled()
+
+    // The Send button still works on a phone…
+    await w.find('[data-testid="ask-form"]').trigger('submit')
+    await flushPromises()
+    expect(askQuestionMock).toHaveBeenCalledTimes(1)
+
+    // …and a hardware keyboard's Cmd/Ctrl+Enter still sends.
+    await ta.setValue('again')
+    await ta.trigger('keydown', { key: 'Enter', metaKey: true })
+    await flushPromises()
+    expect(askQuestionMock).toHaveBeenCalledTimes(2)
   })
 
   it('uses the shared PageHeader and imposes no max-width cap (W10)', () => {
@@ -443,6 +472,34 @@ describe('AskView', () => {
     expect(form.classes()).not.toContain('max-lg:hidden')
     expect(w.find('[data-testid="ask-transcript"]').classes()).toContain('pb-28')
     expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
+  })
+
+  it('is full-bleed on mobile and carded at lg+ (P1)', () => {
+    const w = mountView()
+    const page = w.find('#ask-page')
+    // Breaks out of the shell's side padding and drops the card chrome on mobile…
+    expect(page.classes()).toContain('-mx-4')
+    expect(page.classes()).toContain('rounded-none')
+    expect(page.classes()).toContain('border-0')
+    // …but is the bordered two-pane card again at lg+.
+    expect(page.classes()).toContain('lg:mx-0')
+    expect(page.classes()).toContain('lg:rounded-xl')
+    expect(page.classes()).toContain('lg:border')
+  })
+
+  it('composer is one full-width pill: borderless field, actions on their own row (P2)', () => {
+    const w = mountView()
+    const field = w.find('#ask-question')
+    // A raw, borderless, full-width textarea (no boxed .form-textarea).
+    expect(field.element.tagName).toBe('TEXTAREA')
+    expect(field.classes()).toContain('w-full')
+    expect(field.classes()).toContain('border-0')
+    expect(field.classes()).not.toContain('form-textarea')
+    // Attach and Send both exist (on their own row inside the pill).
+    expect(w.find('[data-testid="ask-image-attach"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ask-submit"]').exists()).toBe(true)
+    // The old two-line hint is gone.
+    expect(w.text()).not.toContain('Shift+Enter for new line')
   })
 
   it('shows the list on /ask and the chat pane on /ask/new (mobile screen model, W1/W3/W4)', async () => {

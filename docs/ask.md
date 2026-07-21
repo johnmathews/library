@@ -1,6 +1,6 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-07-21 (Ask web UI redesigned to a two-screen, route-driven layout — Option B: `/ask` is the conversation list, `/ask/new` + `/ask/:threadId` are the chat screen with a bottom-pinned composer, back arrow, a ⋯ rename/delete menu, an inline paperclip, and a new-chat greeting with example prompts; §1.6). Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9); (2026-07-02) metadata write tool, recipient in answer context, citations collapsed by default.
+**Status:** active. **Last updated:** 2026-07-21 (two-screen, route-driven Ask — Option B — plus a mobile density pass: the chat is full-bleed on a phone, the composer is one full-width pill with attach/send on their own row, turns are flat on mobile, and plain Enter inserts a newline on a phone / sends on desktop; §1.6). Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9); (2026-07-02) metadata write tool, recipient in answer context, citations collapsed by default.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -266,7 +266,10 @@ carries a **⋯ overflow menu** with Rename and Delete — no always-on links). 
 menu, the transcript, and a **composer pinned to the bottom** (sticky) that is
 always present — there is no "reveal the composer" step. The transcript grows with
 the page and leaves bottom padding so its last citations are never hidden behind
-the pinned composer. **Desktop** keeps the familiar two-pane layout (rail |
+the pinned composer. On mobile the chat is **full-bleed** — no bordered card and
+no page side-padding, so the conversation and composer run edge-to-edge — and
+each turn is **flat** (a violet question bubble over plain answer text, no nested
+card). **Desktop** keeps the familiar two-pane layout (rail |
 thread): the page header sits on top, the rail lists threads with the same ⋯
 menu, and the thread pane carries a title bar and the sticky composer.
 
@@ -288,12 +291,14 @@ lives (on mobile the list screen has no composer). It is **pre-fill only**: no
 backend change and no document scoping — the named document is surfaced by the
 ordinary Ask retrieval.
 
-Each turn is visually layered so the panel, the question, and the answer are
-distinguishable: the question is a right-aligned violet bubble, and the answer
-(with its citations disclosure and tools/cost meta) sits on a subtle surface card
-— a lightly shaded, bordered block distinct from the panel background. The
-composer's **inline paperclip** attaches images (up to five; previewed as
-thumbnails above the field).
+Each turn is visually layered: the question is a right-aligned violet bubble. **At
+`lg+`** the answer (with its citations disclosure and tools/cost meta) sits on a
+subtle shaded, bordered surface card; **on mobile** that card is dropped and the
+answer is flat text under the bubble. The composer is a **single full-width
+pill** — a borderless, auto-growing textarea with the **attach (paperclip)** and
+**Send/Stop** controls on their own row *inside* the pill, so the text field is
+full width and the controls never squeeze it. Attach handles up to five images
+(previewed as thumbnails inside the pill).
 
 Sending is asynchronous and follows the Claude-app pattern: on submit the
 question appears in the transcript **immediately** as an optimistic turn and the
@@ -301,11 +306,12 @@ composer clears, while the answer slot shows a **thinking indicator** until the
 answer lands. The primary action becomes a live **Stop** button that cancels the
 in-flight request (it is never a greyed-out, inert control); a user-initiated
 stop or an API error removes the optimistic turn and restores the question to the
-composer for editing/resend. In the composer, plain **Enter sends**;
-**Shift+Enter** and **Ctrl+J** insert a newline instead; **Cmd/Ctrl+Enter**
-still sends; Enter is ignored while an IME composition is in progress (see
-[frontend.md §1.5](frontend.md)). The selected conversation is marked with a
-full-perimeter ring.
+composer for editing/resend. In the composer, **Cmd/Ctrl+Enter** always sends and
+**Shift+Enter** / **Ctrl+J** always insert a newline. Plain **Enter** sends on
+**desktop (`lg+`)** but inserts a **newline on a phone** (below `lg`), where
+sending is the Send button's job — matching mobile chat apps. Enter is ignored
+while an IME composition is in progress (see [frontend.md §1.5](frontend.md)). The
+selected conversation is marked with a full-perimeter ring.
 
 The empty states distinguish three cases: a **new chat** (`ask-new`) shows a
 greeting plus example-prompt buttons that fill the composer

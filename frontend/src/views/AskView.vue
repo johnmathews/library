@@ -19,10 +19,11 @@
  * set with v-html.
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { useMediaQuery } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
-import { AppButton, AppDetails, AppErrorSummary, AppTextarea, PageHeader } from '@/components/app'
+import { AppButton, AppDetails, AppErrorSummary, PageHeader } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
 import {
   askQuestion,
@@ -93,6 +94,22 @@ const pendingImages = ref<PendingImage[]>([])
 const imageInput = ref<HTMLInputElement | null>(null)
 const transcriptRef = ref<HTMLElement | null>(null)
 const composerRef = ref<HTMLElement | null>(null)
+const questionEl = ref<HTMLTextAreaElement | null>(null)
+
+// Desktop is lg+; below that the composer behaves like a phone chat app: the
+// Return key inserts a newline (send is the button's job) — see onComposerKeydown.
+const isLargeScreen = useMediaQuery('(min-width: 1024px)')
+
+/** Grow the composer textarea to fit its content, up to a cap, so it starts at
+ * one line and expands as the question wraps (a chat-composer convention). */
+function autoGrow(): void {
+  const el = questionEl.value
+  if (!el) return
+  el.style.height = 'auto'
+  el.style.height = `${Math.min(el.scrollHeight, 160)}px`
+}
+// Re-fit on any value change (typing, clearing after send, prompt seeding).
+watch(question, () => void nextTick(autoGrow))
 
 // Inline rename / delete of the ACTIVE thread from the chat title bar (the same
 // actions the list rows offer, for the thread you're currently reading).
@@ -299,8 +316,11 @@ function stopAnswering(): void {
 }
 
 /**
- * Enter sends; Shift+Enter and Ctrl+J insert a newline; Cmd/Ctrl+Enter still
- * sends. Enter while an IME composition is in progress never sends.
+ * Composer keys. On desktop (lg+): plain Enter sends; Shift+Enter and Ctrl+J
+ * insert a newline; Cmd/Ctrl+Enter sends. On a phone (below lg): plain Enter
+ * inserts a newline like every mobile chat app — sending is the Send button's
+ * job — while Cmd/Ctrl+Enter still sends for anyone on a hardware keyboard.
+ * Enter while an IME composition is in progress never sends.
  */
 function onComposerKeydown(event: KeyboardEvent): void {
   if (event.isComposing || event.keyCode === 229) return
@@ -318,7 +338,16 @@ function onComposerKeydown(event: KeyboardEvent): void {
   }
 
   if (event.key === 'Enter') {
+    // Shift+Enter always inserts a newline (let the browser handle it).
     if (event.shiftKey) return
+    // Cmd/Ctrl+Enter always sends, on any device.
+    if (event.metaKey || event.ctrlKey) {
+      event.preventDefault()
+      void onSubmit()
+      return
+    }
+    // Plain Enter: sends on desktop, inserts a newline on a phone.
+    if (!isLargeScreen.value) return
     event.preventDefault()
     void onSubmit()
   }
@@ -521,9 +550,13 @@ defineExpose({ resetConversation })
     <!-- One cohesive chat panel. On lg+ a two-pane row (rail | thread); below lg
          the rail (list screen) and the thread column (chat screen) are shown one
          at a time, gated by the route-derived mobileScreen. -->
+    <!-- On mobile this is a FULL-BLEED chat: no card border/rounding/shadow, and
+         it breaks out of the shell's side padding (`#app-page` is px-4 sm:px-6)
+         so the conversation and composer run edge-to-edge. At lg+ it is the
+         bordered two-pane card again. -->
     <div
       id="ask-page"
-      class="flex flex-col lg:flex-row rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 shadow-xs"
+      class="flex flex-col lg:flex-row bg-white dark:bg-gray-800 -mx-4 sm:-mx-6 lg:mx-0 -mt-4 lg:mt-0 border-0 rounded-none shadow-none lg:rounded-xl lg:border lg:border-gray-200 dark:lg:border-gray-700/60 lg:shadow-xs"
     >
       <ConversationSidebar
         ref="sidebarRef"
@@ -631,7 +664,7 @@ defineExpose({ resetConversation })
         <div
           ref="transcriptRef"
           data-testid="ask-transcript"
-          class="p-5 sm:p-6 pb-28"
+          class="px-3 pt-4 pb-28 sm:px-6 sm:pt-6"
         >
           <div v-if="turns.length" class="space-y-8">
             <section
@@ -649,10 +682,12 @@ defineExpose({ resetConversation })
                 </p>
               </div>
 
-              <!-- Assistant answer on a subtle surface card. -->
+              <!-- Assistant answer. On mobile it is flat text under the violet
+                   question bubble (no nested card); at lg+ it sits on a subtle
+                   bordered surface card, distinct from the two-pane panel. -->
               <div
                 data-testid="ask-answer-surface"
-                class="space-y-3 rounded-2xl rounded-tl-sm border border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-gray-900/40 px-4 py-3"
+                class="space-y-3 px-0.5 lg:rounded-2xl lg:rounded-tl-sm lg:border lg:border-gray-200 dark:lg:border-gray-700/60 lg:bg-gray-50 dark:lg:bg-gray-900/40 lg:px-4 lg:py-3"
               >
                 <div
                   v-if="turn.pending"
@@ -785,95 +820,102 @@ defineExpose({ resetConversation })
           id="ask-form"
           ref="composerRef"
           novalidate
-          class="sticky bottom-0 z-10 shrink-0 border-t border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 p-3 sm:p-4 rounded-b-xl"
+          class="sticky bottom-0 z-10 shrink-0 border-t border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-2 py-2 sm:px-4 sm:py-3 lg:rounded-b-xl"
           data-testid="ask-form"
           @submit.prevent="onSubmit"
         >
-          <!-- Pending image attachments: preview thumbnails + remove. -->
-          <ul
-            v-if="pendingImages.length"
-            data-testid="ask-image-previews"
-            class="mb-3 flex flex-wrap gap-2"
+          <!-- One composer pill: the text field spans the full width, and the
+               attach + send controls sit on their OWN row inside the pill, so
+               they never squeeze the text on a narrow screen. The pill owns the
+               border/rounding — there is no separate boxed field inside it. -->
+          <div
+            class="rounded-3xl border border-gray-300 dark:border-gray-600/80 bg-gray-50 dark:bg-gray-900/40 px-3 pt-2.5 pb-2 transition-colors focus-within:border-violet-400 dark:focus-within:border-violet-500"
           >
-            <li v-for="(image, i) in pendingImages" :key="i" class="relative">
-              <img
-                :src="image.url"
-                :alt="image.name"
-                data-testid="ask-image-preview"
-                class="h-16 w-16 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
+            <!-- Pending image attachments, inside the pill above the text. -->
+            <ul
+              v-if="pendingImages.length"
+              data-testid="ask-image-previews"
+              class="mb-2 flex flex-wrap gap-2"
+            >
+              <li v-for="(image, i) in pendingImages" :key="i" class="relative">
+                <img
+                  :src="image.url"
+                  :alt="image.name"
+                  data-testid="ask-image-preview"
+                  class="h-16 w-16 object-cover rounded-lg border border-gray-200 dark:border-gray-700"
+                />
+                <button
+                  type="button"
+                  data-testid="ask-image-remove"
+                  :aria-label="`Remove ${image.name}`"
+                  class="absolute -top-2 -right-2 h-5 w-5 flex items-center justify-center rounded-full bg-gray-700 text-white text-xs hover:bg-red-600"
+                  @click="removeImage(i)"
+                >
+                  ×
+                </button>
+              </li>
+            </ul>
+
+            <!-- Full-width, borderless, auto-growing text field. -->
+            <textarea
+              id="ask-question"
+              ref="questionEl"
+              v-model="question"
+              rows="1"
+              data-testid="ask-question"
+              :aria-label="turns.length ? 'Follow-up question' : 'Your question'"
+              :placeholder="turns.length ? 'Ask a follow-up…' : 'Ask a question…'"
+              class="block w-full resize-none border-0 bg-transparent p-1 text-base sm:text-sm leading-5 text-gray-800 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-0"
+              @keydown="onComposerKeydown"
+            ></textarea>
+
+            <!-- Action row inside the pill: attach on the left, send on the right. -->
+            <div class="mt-1 flex items-center justify-between gap-2">
+              <input
+                ref="imageInput"
+                type="file"
+                accept="image/png,image/jpeg,image/gif,image/webp"
+                multiple
+                class="hidden"
+                data-testid="ask-image-input"
+                @change="onImagesPicked"
               />
               <button
                 type="button"
-                data-testid="ask-image-remove"
-                :aria-label="`Remove ${image.name}`"
-                class="absolute -top-2 -right-2 h-5 w-5 flex items-center justify-center rounded-full bg-gray-700 text-white text-xs hover:bg-red-600"
-                @click="removeImage(i)"
+                data-testid="ask-image-attach"
+                aria-label="Attach image"
+                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700/60 disabled:opacity-40 transition"
+                :disabled="pendingImages.length >= MAX_IMAGES"
+                @click="imageInput?.click()"
               >
-                ×
+                <svg class="h-5 w-5 fill-none stroke-current" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M21 12.5 12 21a5 5 0 0 1-7-7l8.5-8.5a3.5 3.5 0 0 1 5 5L10 18a1.5 1.5 0 0 1-2-2l7.5-7.5" />
+                </svg>
               </button>
-            </li>
-          </ul>
 
-          <div class="flex items-end gap-2">
-            <input
-              ref="imageInput"
-              type="file"
-              accept="image/png,image/jpeg,image/gif,image/webp"
-              multiple
-              class="hidden"
-              data-testid="ask-image-input"
-              @change="onImagesPicked"
-            />
-            <!-- Inline paperclip attach: a compact icon-button inside the
-                 composer, replacing the old labelled "Attach image" button. -->
-            <button
-              type="button"
-              data-testid="ask-image-attach"
-              aria-label="Attach image"
-              class="mb-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700/60 disabled:opacity-40 transition"
-              :disabled="pendingImages.length >= MAX_IMAGES"
-              @click="imageInput?.click()"
-            >
-              <svg class="h-5 w-5 fill-none stroke-current" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-                <path d="M21 12.5 12 21a5 5 0 0 1-7-7l8.5-8.5a3.5 3.5 0 0 1 5 5L10 18a1.5 1.5 0 0 1-2-2l7.5-7.5" />
-              </svg>
-            </button>
-
-            <div class="min-w-0 flex-1">
-              <AppTextarea
-                id="ask-question"
-                v-model="question"
-                :label="turns.length ? 'Follow-up question' : 'Your question'"
-                hide-label
-                hint="Enter to send · Shift+Enter for new line"
-                :rows="2"
-                data-testid="ask-question"
-                @keydown="onComposerKeydown"
-              />
+              <!-- While answering, the primary action is a live Stop control, not
+                   a greyed-out button — the request is cancellable. -->
+              <AppButton
+                v-if="isAnswering"
+                id="ask-submit"
+                type="button"
+                variant="warning"
+                size="sm"
+                data-testid="ask-submit"
+                @click="stopAnswering"
+              >
+                Stop
+              </AppButton>
+              <AppButton
+                v-else
+                id="ask-submit"
+                type="submit"
+                size="sm"
+                data-testid="ask-submit"
+              >
+                Send
+              </AppButton>
             </div>
-
-            <!-- While answering, the primary action is a live Stop control, not a
-                 greyed-out button — the request is cancellable. -->
-            <AppButton
-              v-if="isAnswering"
-              id="ask-submit"
-              type="button"
-              variant="warning"
-              data-testid="ask-submit"
-              class="mb-1"
-              @click="stopAnswering"
-            >
-              Stop
-            </AppButton>
-            <AppButton
-              v-else
-              id="ask-submit"
-              type="submit"
-              data-testid="ask-submit"
-              class="mb-1"
-            >
-              Send
-            </AppButton>
           </div>
         </form>
       </div>
