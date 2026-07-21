@@ -2,6 +2,7 @@
 import { computed, nextTick, onMounted, ref } from 'vue'
 import { listThreads, deleteThread, renameThread, type ThreadSummary } from '@/api/ask'
 import { AppButton } from '@/components/app'
+import ThreadActionsMenu from './ThreadActionsMenu.vue'
 
 // `newDisabled` greys out "New conversation" when the view is already an empty
 // new conversation (no thread, no turns): starting a new one is redundant there,
@@ -35,10 +36,11 @@ async function refresh(): Promise<void> {
   emit('threads-changed', threads.value.length)
 }
 
-// Inline two-step delete: the first click arms the confirm/cancel affordance,
-// the confirm click actually deletes. Prevents a single misclick on the small
-// "Delete" link from destroying a conversation with no undo.
+// Inline two-step delete: the ⋯ menu's Delete arms the confirm/cancel
+// affordance, the confirm click actually deletes. Prevents a single misclick
+// from destroying a conversation with no undo.
 function requestDelete(thread: ThreadSummary): void {
+  editingId.value = null
   confirmingId.value = thread.id
 }
 
@@ -98,21 +100,23 @@ defineExpose({ refresh })
 </script>
 
 <template>
-  <!-- Conversation rail. Lives INSIDE the unified Ask panel: it owns no card
-       chrome of its own — just an internal divider separating it from the
-       thread (a bottom divider when stacked on mobile, a right divider beside
-       the thread on lg+). -->
+  <!-- Conversation rail / list. On mobile it is the full-screen list screen
+       (fills its parent and scrolls); at lg+ it is a fixed-width docked rail
+       beside the thread. It owns no card chrome of its own — just an internal
+       right divider on desktop. -->
   <aside
-    class="flex flex-col border-b border-gray-200 dark:border-gray-700/60 lg:border-b-0 lg:border-r lg:w-72 lg:shrink-0 lg:min-h-0"
+    class="flex flex-col min-h-0 flex-1 lg:flex-none lg:w-72 lg:shrink-0 lg:border-r lg:border-gray-200 dark:lg:border-gray-700/60"
     data-testid="conversation-sidebar"
   >
     <div class="flex flex-col gap-2 p-3 border-b border-gray-200 dark:border-gray-700/60">
+      <!-- On mobile the list screen's top bar owns "New" (a ＋ icon), so the
+           full-width button is desktop-only here to avoid two "new" affordances. -->
       <AppButton
         variant="primary"
         size="sm"
         type="button"
         data-testid="new-conversation"
-        class="w-full"
+        class="w-full max-lg:hidden"
         :disabled="newDisabled"
         @click="!newDisabled && emit('new')"
       >
@@ -140,11 +144,7 @@ defineExpose({ refresh })
       </p>
     </div>
 
-    <!-- On mobile the list is capped so it can't dominate the screen above the
-         thread; on lg+ it flexes to fill the rail's height and scrolls. -->
-    <ul
-      class="max-lg:max-h-64 lg:flex-1 lg:min-h-0 overflow-y-auto thin-scrollbar p-2 space-y-1"
-    >
+    <ul class="flex-1 min-h-0 overflow-y-auto thin-scrollbar p-2 space-y-1">
       <li
         v-for="thread in filteredThreads"
         :key="thread.id"
@@ -225,24 +225,13 @@ defineExpose({ refresh })
               Cancel
             </button>
           </template>
-          <template v-else>
-            <button
-              data-testid="thread-rename"
-              type="button"
-              class="text-xs text-gray-400 hover:text-violet-500 dark:hover:text-violet-400 transition"
-              @click.stop="startRename(thread)"
-            >
-              Rename
-            </button>
-            <button
-              data-testid="thread-delete"
-              type="button"
-              class="text-xs text-gray-400 hover:text-red-500 dark:hover:text-red-400 transition"
-              @click.stop="requestDelete(thread)"
-            >
-              Delete
-            </button>
-          </template>
+          <ThreadActionsMenu
+            v-else
+            testid="thread-actions-menu"
+            :label="`Actions for ${thread.title}`"
+            @rename="startRename(thread)"
+            @delete="requestDelete(thread)"
+          />
         </div>
       </li>
 

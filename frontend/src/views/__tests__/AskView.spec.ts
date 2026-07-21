@@ -10,6 +10,7 @@ vi.mock('@/api/ask', () => ({
   getThread: vi.fn(),
   listThreads: vi.fn(),
   deleteThread: vi.fn(),
+  renameThread: vi.fn(),
 }))
 
 const askQuestionMock = vi.mocked(askQuestion)
@@ -44,7 +45,8 @@ describe('AskView', () => {
       routes: [
         { path: '/', name: 'documents', component: Stub },
         { path: '/ask', name: 'ask', component: AskView },
-        { path: '/ask/:threadId', name: 'ask-thread', component: AskView },
+        { path: '/ask/new', name: 'ask-new', component: AskView },
+        { path: '/ask/:threadId(\\d+)', name: 'ask-thread', component: AskView },
         { path: '/documents/:id', name: 'document-detail', component: Stub },
       ],
     })
@@ -428,40 +430,101 @@ describe('AskView', () => {
     expect(html.indexOf('data-testid="page-header"')).toBeLessThan(html.indexOf('id="ask-page"'))
   })
 
-  it('renders a bottom composer with a Send button (W10)', () => {
+  it('pins the composer to the bottom of the chat with a Send button (W4)', () => {
     const w = mountView()
-    // Not position:sticky — a sticky bottom bar overlaps the last turn's
-    // citations on short viewports and intercepts their clicks. In the chat
-    // layout it is a shrink-0 flex sibling below the scrolling transcript.
+    // The composer is docked to the bottom of the chat area (sticky), always
+    // present on the chat screen. The transcript's bottom padding keeps the last
+    // turn's citations clear of it (the historical citation-overlap bug).
     const form = w.find('[data-testid="ask-form"]')
     expect(form.exists()).toBe(true)
-    expect(form.classes()).not.toContain('sticky')
+    expect(form.classes()).toContain('sticky')
     expect(form.classes()).toContain('shrink-0')
+    // It is never hidden behind a reveal step any more.
+    expect(form.classes()).not.toContain('max-lg:hidden')
+    expect(w.find('[data-testid="ask-transcript"]').classes()).toContain('pb-28')
     expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
   })
 
-  it('hides the composer on mobile and reveals + focuses it on New conversation (W12)', async () => {
-    vi.mocked(listThreads).mockResolvedValue([])
+  it('shows the list on /ask and the chat pane on /ask/new (mobile screen model, W1/W3/W4)', async () => {
+    await router.push('/ask')
     const w = mountView()
     await flushPromises()
+    // List screen: the conversation list is on-screen; the chat pane is the
+    // mobile-hidden one. The mobile ＋ starts a new chat.
+    expect(w.find('[data-testid="conversation-sidebar"]').classes()).not.toContain('max-lg:hidden')
+    expect(w.find('[data-testid="ask-thread-pane"]').classes()).toContain('max-lg:hidden')
+    expect(w.find('[data-testid="ask-new-mobile"]').exists()).toBe(true)
 
-    // Collapsed on mobile by default (the gate is a no-op at lg+), so the user
-    // never has to scroll past the sidebar to find a far-off input box.
-    expect(w.find('[data-testid="ask-form"]').classes()).toContain('max-lg:hidden')
-
-    // The prominent "New conversation" button now reveals + focuses the composer.
-    await w.find('[data-testid="new-conversation"]').trigger('click')
+    // The ＋ navigates to a fresh chat screen.
+    await w.find('[data-testid="ask-new-mobile"]').trigger('click')
     await flushPromises()
-    expect(w.find('[data-testid="ask-form"]').classes()).not.toContain('max-lg:hidden')
-    expect(document.activeElement).toBe(w.find('#ask-question').element)
+    expect(router.currentRoute.value.name).toBe('ask-new')
+    // Chat screen: the pane is visible on mobile, the list is the hidden one.
+    expect(w.find('[data-testid="ask-thread-pane"]').classes()).not.toContain('max-lg:hidden')
+    expect(w.find('[data-testid="conversation-sidebar"]').classes()).toContain('max-lg:hidden')
   })
 
-  it('reveals the composer when a thread is opened (W12)', async () => {
-    getThreadMock.mockResolvedValue({ id: 7, title: 'X', turns: [] })
+  it('shows a greeting with example prompts on a new chat and fills the composer (W4)', async () => {
+    await router.push('/ask/new')
+    const w = mountView()
+    await flushPromises()
+    expect(w.find('[data-testid="ask-greeting"]').exists()).toBe(true)
+    const prompts = w.findAll('[data-testid="ask-example-prompt"]')
+    expect(prompts.length).toBeGreaterThan(0)
+    await prompts[0]!.trigger('click')
+    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe(prompts[0]!.text())
+  })
+
+  it('returns to the list when the chat back arrow is tapped (W4)', async () => {
+    getThreadMock.mockResolvedValue({ id: 7, title: 'Energy', turns: [] })
     await router.push('/ask/7')
     const w = mountView()
     await flushPromises()
-    expect(w.find('[data-testid="ask-form"]').classes()).not.toContain('max-lg:hidden')
+    expect(w.find('[data-testid="ask-thread-bar"]').exists()).toBe(true)
+    await w.find('[data-testid="ask-back"]').trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.name).toBe('ask')
+  })
+
+  it('renames the active thread from the chat title bar ⋯ menu (W5)', async () => {
+    const { renameThread } = await import('@/api/ask')
+    vi.mocked(renameThread).mockResolvedValue({
+      id: 7,
+      title: 'Renamed',
+      created_at: '',
+      updated_at: '',
+      turn_count: 0,
+      total_cost_usd: 0,
+    })
+    getThreadMock.mockResolvedValue({ id: 7, title: 'Energy', turns: [] })
+    await router.push('/ask/7')
+    const w = mountView()
+    await flushPromises()
+    await w.find('[data-testid="ask-title-actions"]').trigger('click')
+    await w.find('[data-testid="thread-rename"]').trigger('click')
+    const input = w.find('[data-testid="ask-title-rename-input"]')
+    expect((input.element as HTMLInputElement).value).toBe('Energy')
+    await input.setValue('Renamed')
+    await w.find('[data-testid="ask-title-rename-save"]').trigger('click')
+    await flushPromises()
+    expect(vi.mocked(renameThread)).toHaveBeenCalledWith(7, 'Renamed')
+  })
+
+  it('deletes the active thread from the chat title bar and returns to the list (W5)', async () => {
+    const { deleteThread } = await import('@/api/ask')
+    vi.mocked(deleteThread).mockResolvedValue()
+    getThreadMock.mockResolvedValue({ id: 7, title: 'Energy', turns: [] })
+    await router.push('/ask/7')
+    const w = mountView()
+    await flushPromises()
+    await w.find('[data-testid="ask-title-actions"]').trigger('click')
+    await w.find('[data-testid="thread-delete"]').trigger('click')
+    // Two-step: nothing deleted until confirm.
+    expect(vi.mocked(deleteThread)).not.toHaveBeenCalled()
+    await w.find('[data-testid="ask-title-delete-confirm"]').trigger('click')
+    await flushPromises()
+    expect(vi.mocked(deleteThread)).toHaveBeenCalledWith(7)
+    expect(router.currentRoute.value.name).toBe('ask')
   })
 
   it('lets the transcript grow with the page rather than scrolling internally', () => {
@@ -578,5 +641,50 @@ describe('AskView', () => {
     // The thread resumes; the composer is not seeded (no q) and stays empty.
     expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe('')
     expect(w.text()).toContain('Vattenfall')
+  })
+
+  it('drops a stale in-flight answer when the user switches threads mid-request (W4)', async () => {
+    // Ask on a new chat, then open a different thread before the answer lands.
+    // The stale answer must not corrupt the now-active thread's transcript or
+    // force-navigate back to the thread it belonged to.
+    let resolveAsk!: (value: AskResponse) => void
+    askQuestionMock.mockReturnValue(
+      new Promise<AskResponse>((r) => {
+        resolveAsk = r
+      }),
+    )
+    getThreadMock.mockResolvedValue({
+      id: 7,
+      title: 'Energy',
+      turns: [
+        {
+          id: 1,
+          query: 'who?',
+          answer: 'Vattenfall.',
+          citations: [],
+          used_tools: [],
+          cost_usd: 0.02,
+          created_at: '',
+        },
+      ],
+    })
+    await router.push('/ask/new')
+    const w = mountView()
+    await flushPromises()
+    await typeAndSubmit(w, 'first question') // optimistic turn, request in flight
+
+    // Navigate to thread 7 while the first answer is still generating.
+    await router.push('/ask/7')
+    await flushPromises()
+    expect(w.text()).toContain('Vattenfall')
+
+    // The stale answer resolves — it must be dropped, not applied to thread 7.
+    resolveAsk(sampleResponse({ answer: 'STALE ANSWER', thread_id: 1 }))
+    await flushPromises()
+    expect(w.text()).toContain('Vattenfall')
+    expect(w.text()).not.toContain('STALE ANSWER')
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
+    expect(router.currentRoute.value.name).toBe('ask-thread')
+    expect(router.currentRoute.value.params.threadId).toBe('7')
   })
 })

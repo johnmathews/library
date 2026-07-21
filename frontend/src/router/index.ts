@@ -52,7 +52,15 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/AskView.vue'),
   },
   {
-    path: '/ask/:threadId',
+    // A fresh conversation (mobile: the chat screen with the empty state). Must
+    // be declared before the numeric `:threadId` route; the digit constraint on
+    // that route means `new` can never be swallowed as a thread id.
+    path: '/ask/new',
+    name: 'ask-new',
+    component: () => import('../views/AskView.vue'),
+  },
+  {
+    path: '/ask/:threadId(\\d+)',
     name: 'ask-thread',
     component: () => import('../views/AskView.vue'),
   },
