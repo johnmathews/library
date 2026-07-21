@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import ConversationSidebar from '../ConversationSidebar.vue'
 import { listThreads, deleteThread, renameThread } from '@/api/ask'
 
@@ -16,6 +16,11 @@ describe('ConversationSidebar', () => {
     ])
   })
   afterEach(() => vi.clearAllMocks())
+
+  /** Rename/Delete live behind a per-row "⋯" overflow menu now; open it first. */
+  async function openMenu(w: VueWrapper): Promise<void> {
+    await w.find('[data-testid="thread-actions-menu"]').trigger('click')
+  }
 
   it('lists threads and emits select when one is clicked', async () => {
     const w = mount(ConversationSidebar, { props: { activeThreadId: null } })
@@ -49,12 +54,16 @@ describe('ConversationSidebar', () => {
     expect(w.emitted('new')).toBeFalsy()
   })
 
-  it('requires confirmation before deleting, then deletes and refreshes (W3)', async () => {
+  it('opens the ⋯ menu and requires confirmation before deleting, then deletes and refreshes (W2)', async () => {
     vi.mocked(deleteThread).mockResolvedValue()
     const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
     await flushPromises()
 
-    // First click only asks for confirmation — nothing is deleted yet.
+    // The row shows a ⋯ menu, not always-on Rename/Delete links.
+    expect(w.find('[data-testid="thread-actions-menu"]').exists()).toBe(true)
+    await openMenu(w)
+
+    // The menu's Delete only asks for confirmation — nothing is deleted yet.
     await w.find('[data-testid="thread-delete"]').trigger('click')
     expect(deleteThread).not.toHaveBeenCalled()
     expect(w.find('[data-testid="thread-delete-confirm"]').exists()).toBe(true)
@@ -67,19 +76,20 @@ describe('ConversationSidebar', () => {
     expect(w.emitted('new')).toBeTruthy()
   })
 
-  it('cancels a pending delete without calling the API (W3)', async () => {
+  it('cancels a pending delete without calling the API (W2)', async () => {
     vi.mocked(deleteThread).mockResolvedValue()
     const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
     await flushPromises()
+    await openMenu(w)
     await w.find('[data-testid="thread-delete"]').trigger('click')
     await w.find('[data-testid="thread-delete-cancel"]').trigger('click')
     expect(deleteThread).not.toHaveBeenCalled()
-    // Back to the plain Delete affordance.
-    expect(w.find('[data-testid="thread-delete"]').exists()).toBe(true)
+    // Back to the ⋯ menu affordance.
+    expect(w.find('[data-testid="thread-actions-menu"]').exists()).toBe(true)
     expect(w.find('[data-testid="thread-delete-confirm"]').exists()).toBe(false)
   })
 
-  it('renames a thread inline, then refreshes', async () => {
+  it('renames a thread inline from the ⋯ menu, then refreshes', async () => {
     vi.mocked(renameThread).mockResolvedValue({
       id: 1,
       title: 'Utility costs',
@@ -91,7 +101,8 @@ describe('ConversationSidebar', () => {
     const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
     await flushPromises()
 
-    // Arm the inline editor: an input seeded with the current title appears.
+    // Arm the inline editor via the menu: an input seeded with the current title.
+    await openMenu(w)
     await w.find('[data-testid="thread-rename"]').trigger('click')
     const input = w.find('[data-testid="thread-rename-input"]')
     expect(input.exists()).toBe(true)
@@ -108,6 +119,7 @@ describe('ConversationSidebar', () => {
   it('does not select the row when clicking inside the rename input', async () => {
     const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
     await flushPromises()
+    await openMenu(w)
     await w.find('[data-testid="thread-rename"]').trigger('click')
     await w.find('[data-testid="thread-rename-input"]').trigger('click')
     expect(w.emitted('select')).toBeFalsy()
@@ -116,11 +128,12 @@ describe('ConversationSidebar', () => {
   it('cancels a rename without calling the API', async () => {
     const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
     await flushPromises()
+    await openMenu(w)
     await w.find('[data-testid="thread-rename"]').trigger('click')
     await w.find('[data-testid="thread-rename-input"]').setValue('Something else')
     await w.find('[data-testid="thread-rename-cancel"]').trigger('click')
     expect(renameThread).not.toHaveBeenCalled()
-    // Back to the label + plain Rename affordance.
+    // Back to the label + ⋯ affordance.
     expect(w.find('[data-testid="thread-rename-input"]').exists()).toBe(false)
     expect(w.text()).toContain('Energy bills')
   })
@@ -129,10 +142,12 @@ describe('ConversationSidebar', () => {
     const w = mount(ConversationSidebar, { props: { activeThreadId: 1 } })
     await flushPromises()
     // Unchanged title → no request, editor closes.
+    await openMenu(w)
     await w.find('[data-testid="thread-rename"]').trigger('click')
     await w.find('[data-testid="thread-rename-save"]').trigger('click')
     await flushPromises()
     // Blank title → no request either.
+    await openMenu(w)
     await w.find('[data-testid="thread-rename"]').trigger('click')
     await w.find('[data-testid="thread-rename-input"]').setValue('   ')
     await w.find('[data-testid="thread-rename-save"]').trigger('click')

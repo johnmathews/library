@@ -1,6 +1,6 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-07-06 (`get_document` read tool — full text + comments for a located document, comments authoritative over inference, §1.2/§1.9; document comments — a new dated-annotation concept, embedded as their own searchable chunks, §1.9; composer Enter-to-send, §1.6). Earlier (2026-07-02): metadata write tool — propose-then-confirm; recipient in answer context; citations collapsed by default; empty-state distinguishes no-conversations from none-selected.
+**Status:** active. **Last updated:** 2026-07-21 (Ask web UI redesigned to a two-screen, route-driven layout — Option B: `/ask` is the conversation list, `/ask/new` + `/ask/:threadId` are the chat screen with a bottom-pinned composer, back arrow, a ⋯ rename/delete menu, an inline paperclip, and a new-chat greeting with example prompts; §1.6). Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9); (2026-07-02) metadata write tool, recipient in answer context, citations collapsed by default.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -246,37 +246,54 @@ See [api.md](api.md) §1.11 for the full wire contract.
 
 ### Web UI
 
-The Ask view (`/ask`) is a chat interface: the page title and description sit
-full-width at the top, with the working area below — a conversation sidebar
-listing past threads (by title and relative time) with resume, **rename**, and
-delete actions, a transcript of Q&A pairs, and a follow-up input below. The chat
-panel **grows with the conversation and the whole page scrolls** — it is not
-trapped in a fixed viewport-height internal scroller; the empty state keeps a
-sensible minimum height so the panel never looks broken before the first turn. On a phone the
-sidebar stacks beneath the title/description; on wide screens it sits beside the
-answer column. `/ask/:threadId` loads an existing thread. **"New conversation"**
-clears to an empty thread; when the view is already an empty new conversation (no
-thread selected, no turns) the button is greyed out and disabled, since starting
-a new one there would do nothing.
+Ask is a **two-screen** chat interface whose visible screen is driven by the
+**route**, so the phone's back gesture and browser history behave like a native
+chat app. Three routes, all served by `AskView.vue`:
 
-**Renaming.** Each sidebar row has an inline **Rename** affordance (mirroring the
-two-step delete): it swaps the title for an editable input seeded with the
-current title — Enter or **Save** commits via `PATCH /api/ask/threads/{id}`, Esc
-or **Cancel** aborts; a blank or unchanged title is a no-op.
+| Route | Name | Mobile screen | Desktop (`lg+`) |
+| --- | --- | --- | --- |
+| `/ask` | `ask` | The conversation **list** (full screen) | Two-pane, no thread selected |
+| `/ask/new` | `ask-new` | A fresh **chat** (empty state) | Two-pane, composer focused |
+| `/ask/:threadId` | `ask-thread` | The **chat** for that thread | Two-pane, thread active |
 
-On a **fresh `/ask`** the view reads a **`?q=` query parameter** on initial mount:
-when present (and not resuming a `/ask/:threadId` thread) it seeds the composer
-textarea with that text and opens/focuses the composer, ready to send or edit.
-This is what the document detail view's **"Ask about this document"** button uses
-(see [frontend.md §1.5](frontend.md)) — it links to `/ask?q=<prompt>` in a new
-tab with a prompt naming the document. It is **pre-fill only**: there is no
+The `:threadId` param is constrained to digits (`:threadId(\d+)`) and the
+`/ask/new` route is declared before it, so `new` is never parsed as a thread id.
+
+**Mobile** is two full screens. The **list screen** has a compact "Ask" title
+bar with a ＋ that starts a new chat, a search box, and the thread list (each row
+carries a **⋯ overflow menu** with Rename and Delete — no always-on links). The
+**chat screen** has a back arrow (→ the list), the thread title with its own ⋯
+menu, the transcript, and a **composer pinned to the bottom** (sticky) that is
+always present — there is no "reveal the composer" step. The transcript grows with
+the page and leaves bottom padding so its last citations are never hidden behind
+the pinned composer. **Desktop** keeps the familiar two-pane layout (rail |
+thread): the page header sits on top, the rail lists threads with the same ⋯
+menu, and the thread pane carries a title bar and the sticky composer.
+
+**New conversation.** The mobile ＋ and the desktop "New conversation" button both
+go to `/ask/new`; the desktop button is greyed out when the view is already an
+empty new conversation (no thread, no turns), since starting another does nothing.
+
+**Rename / delete.** Both the list rows and the chat title bar expose a **⋯ menu**
+with Rename and Delete. Rename swaps the title for an editable input seeded with
+the current title — Enter or **Save** commits via `PATCH /api/ask/threads/{id}`,
+Esc or **Cancel** aborts; a blank or unchanged title is a no-op. **Delete** is a
+two-step confirm (Delete → Delete/Cancel) so a single misclick cannot destroy a
+thread; deleting the active thread from the chat title bar returns to the list.
+
+**`?q=` deep link.** A `/ask?q=<prompt>` link (the document detail view's **"Ask
+about this document"** button; see [frontend.md §1.5](frontend.md)) is redirected
+to `/ask/new?q=<prompt>` so the seed lands on the chat screen where the composer
+lives (on mobile the list screen has no composer). It is **pre-fill only**: no
 backend change and no document scoping — the named document is surfaced by the
 ordinary Ask retrieval.
 
 Each turn is visually layered so the panel, the question, and the answer are
 distinguishable: the question is a right-aligned violet bubble, and the answer
 (with its citations disclosure and tools/cost meta) sits on a subtle surface card
-— a lightly shaded, bordered block distinct from the panel background.
+— a lightly shaded, bordered block distinct from the panel background. The
+composer's **inline paperclip** attaches images (up to five; previewed as
+thumbnails above the field).
 
 Sending is asynchronous and follows the Claude-app pattern: on submit the
 question appears in the transcript **immediately** as an optimistic turn and the
@@ -287,16 +304,15 @@ stop or an API error removes the optimistic turn and restores the question to th
 composer for editing/resend. In the composer, plain **Enter sends**;
 **Shift+Enter** and **Ctrl+J** insert a newline instead; **Cmd/Ctrl+Enter**
 still sends; Enter is ignored while an IME composition is in progress (see
-[frontend.md §1.5](frontend.md)). The
-selected conversation in the sidebar is marked with a full-perimeter ring, and
-**Delete** is a two-step inline confirm (Delete → Confirm/Cancel) so a single
-misclick cannot destroy a thread.
+[frontend.md §1.5](frontend.md)). The selected conversation is marked with a
+full-perimeter ring.
 
-The empty state
-distinguishes two cases: when **no conversations exist yet** it invites the user
-to ask a first question, whereas when **conversations exist but none is selected**
-it prompts the user to pick one from the sidebar or start a new one
-(`[data-testid="ask-select-thread"]`).
+The empty states distinguish three cases: a **new chat** (`ask-new`) shows a
+greeting plus example-prompt buttons that fill the composer
+(`[data-testid="ask-greeting"]`); when **conversations exist but none is
+selected** (chiefly the desktop rail) it prompts the user to pick one
+(`[data-testid="ask-select-thread"]`); and when **no conversations exist yet** it
+invites a first question (`[data-testid="ask-empty"]`).
 
 ## 1.7 Document series + comparative queries
 

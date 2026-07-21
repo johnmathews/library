@@ -160,18 +160,13 @@ test('ask citation deep-links to the cited PDF page', async ({ page }, testInfo)
   })
 
   // ── Ask a question ──────────────────────────────────────────────────────────
-  await page.goto('/ask')
-  // The composer is collapsed by default on small viewports — "New conversation"
-  // reveals + focuses it. At lg+ the composer is always docked, so from this
-  // fresh state "New conversation" is redundant and disabled (item 2); only click
-  // it (to reveal the composer) on the mobile/tablet projects where it's hidden.
-  // Wait for the view to mount (the sidebar button is present on every viewport)
-  // before probing composer visibility, so the check isn't racing hydration.
-  await expect(page.getByTestId('new-conversation')).toBeVisible()
+  // Ask is a two-screen UI (Option B): `/ask` is the conversation list and
+  // `/ask/new` is a fresh chat with the composer. Go straight to the chat screen
+  // so the composer is present and visible on every viewport project (chromium,
+  // mobile-webkit, tablet-webkit) — no reveal step.
+  await page.goto('/ask/new')
   const composer = page.locator('#ask-question')
-  if (!(await composer.isVisible())) {
-    await page.getByTestId('new-conversation').click()
-  }
+  await expect(composer).toBeVisible()
   await composer.fill(TEST_QUESTION)
   await page.getByTestId('ask-submit').click()
 

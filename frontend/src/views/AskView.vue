@@ -1,32 +1,40 @@
 <script setup lang="ts">
 /**
- * Ask page (routes `/ask` and `/ask/:threadId`).
+ * Ask page — a two-screen conversational UI (Option B).
  *
- * Renders a scrollable multi-turn chat transcript. Each turn shows the
- * user's question, a sanitized markdown answer, a citation card list,
- * and a tools/cost meta line. A follow-up input is pinned below the
- * transcript; it posts with the active thread_id so the backend groups
- * turns into a conversation.
+ * The visible screen is driven by the ROUTE, so the phone's back gesture and
+ * browser history behave like a native chat app:
  *
- * Route resume: when mounted on /ask/:threadId (e.g. via the sidebar in
- * Task 7), the component calls getThread() and rehydrates the turn list.
- * A watcher on route.params.threadId handles sidebar navigation without a
- * full remount.
+ *   - `/ask`            (name `ask`)        → the conversation LIST.
+ *   - `/ask/new`        (name `ask-new`)    → a fresh CHAT (empty state).
+ *   - `/ask/:threadId`  (name `ask-thread`) → the CHAT for that thread.
  *
- * The answer is Claude-authored markdown (bold, lists, inline citations
- * like [#42]); it is rendered to sanitized HTML via marked + DOMPurify
- * before being set with v-html.
+ * On mobile each is a full screen: the list fills the viewport; opening a thread
+ * (or ＋ New) swaps to the chat screen, which carries a back arrow and a composer
+ * pinned to the bottom. At lg+ both panes are shown side by side (rail | thread)
+ * and the route only decides which thread is active.
+ *
+ * The answer is Claude-authored markdown (bold, lists, inline citations like
+ * [#42]); it is rendered to sanitized HTML via marked + DOMPurify before being
+ * set with v-html.
  */
 import { computed, nextTick, onMounted, ref, watch } from 'vue'
-import { useMediaQuery } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { AppButton, AppDetails, AppErrorSummary, AppTextarea, PageHeader } from '@/components/app'
 import type { ErrorSummaryItem } from '@/components/app'
-import { askQuestion, getThread, type AskCitation, type AskImage } from '@/api/ask'
+import {
+  askQuestion,
+  getThread,
+  renameThread,
+  deleteThread,
+  type AskCitation,
+  type AskImage,
+} from '@/api/ask'
 import { ApiError } from '@/api/client'
 import ConversationSidebar from '@/components/ask/ConversationSidebar.vue'
+import ThreadActionsMenu from '@/components/ask/ThreadActionsMenu.vue'
 
 interface TurnVM {
   query: string
@@ -54,19 +62,28 @@ const SUPPORTED_IMAGE_TYPES: AskImage['media_type'][] = [
   'image/webp',
 ]
 
+// A few starter questions shown in the new-chat empty state; tapping one fills
+// the composer, ready to edit or send.
+const EXAMPLE_PROMPTS = [
+  'Which invoices are due this month?',
+  'Summarise my latest energy contract',
+  'When does my passport expire?',
+]
+
 const route = useRoute()
 const router = useRouter()
 
 const question = ref('')
 // True from the moment a request is dispatched until its answer lands or fails.
-// Distinct from "sending": the question and the user's optimistic turn appear
-// instantly; isAnswering only gates the in-flight LLM call.
 const isAnswering = ref(false)
 // The controller for the in-flight ask, so the Stop button can cancel it.
 let inFlight: AbortController | null = null
 const errorMessage = ref<string | null>(null)
 const turns = ref<TurnVM[]>([])
 const threadId = ref<number | null>(null)
+// The active thread's title, shown in the chat title bar and edited inline
+// there. Empty for a not-yet-saved new chat.
+const threadTitle = ref('')
 const sidebarRef = ref<InstanceType<typeof ConversationSidebar> | null>(null)
 // How many conversation threads exist (surfaced by the sidebar via its
 // `threads-changed` event). Lets the empty state tell "no conversations yet"
@@ -76,31 +93,38 @@ const pendingImages = ref<PendingImage[]>([])
 const imageInput = ref<HTMLInputElement | null>(null)
 const transcriptRef = ref<HTMLElement | null>(null)
 const composerRef = ref<HTMLElement | null>(null)
-// On small screens the composer used to sit far below the sidebar + transcript,
-// so asking a question meant scrolling past everything to find it. It is now
-// hidden on mobile (`max-lg:hidden`) until the user opens it — via "New
-// conversation" or by opening a thread. At lg+ it is always docked beside the
-// thread, so this flag is a no-op there.
-const composerOpen = ref(false)
 
-/** Reveal the composer (on mobile), focus the question box, and bring it into
- * view. Wired to "New conversation" so that prominent button does something
- * visible instead of silently clearing state off-screen. */
-function openComposer(): void {
-  composerOpen.value = true
+// Inline rename / delete of the ACTIVE thread from the chat title bar (the same
+// actions the list rows offer, for the thread you're currently reading).
+const titleEditing = ref(false)
+const titleDraft = ref('')
+const titleConfirmingDelete = ref(false)
+
+// The route name decides the mobile screen and the empty-state copy.
+const mobileScreen = computed<'list' | 'chat'>(() =>
+  route.name === 'ask' ? 'list' : 'chat',
+)
+const isNewChat = computed<boolean>(() => route.name === 'ask-new')
+// Whether the thread pane has a conversation to show (an active thread, a fresh
+// new chat, or turns on screen). Drives the title bar; on desktop `/ask` with
+// nothing selected this is false and the pane shows the "select a conversation"
+// empty state instead of a title bar.
+const hasChatContext = computed<boolean>(
+  () => threadId.value !== null || isNewChat.value || turns.value.length > 0,
+)
+
+/** Focus the composer's question box (used when starting or opening a chat). */
+function focusComposer(): void {
   void nextTick(() => {
     const field = document.getElementById('ask-question') as HTMLTextAreaElement | null
     field?.focus()
-    composerRef.value?.scrollIntoView?.({ behavior: 'smooth', block: 'center' })
   })
 }
 
-// Keep the latest turn in view after the DOM updates. The transcript now grows
-// with the page rather than scrolling internally, so bring the newest turn to
-// the bottom of the viewport via the page scroll. (If the transcript is ever
+// Keep the latest turn in view after the DOM updates. The transcript grows with
+// the page rather than scrolling internally, so bring the newest turn to the
+// bottom of the viewport via the page scroll. (If the transcript is ever
 // internally scrollable — a narrow edge case — jump its own scrollTop instead.)
-// Called on a new optimistic turn, on a resolving answer (length unchanged, so
-// a watcher would miss it), and on a rehydrated thread.
 function scrollToBottom(): void {
   void nextTick(() => {
     const el = transcriptRef.value
@@ -146,22 +170,16 @@ function removeImage(index: number): void {
   pendingImages.value.splice(index, 1)
 }
 
-// The composer is docked at lg+ but hidden on mobile until revealed
-// (composerOpen). Track the lg breakpoint so we know whether the composer is
-// already on screen.
-const isLargeScreen = useMediaQuery('(min-width: 1024px)')
+function usePrompt(prompt: string): void {
+  question.value = prompt
+  focusComposer()
+}
 
 // "New conversation" is redundant only when the view is already an empty new
-// conversation (no thread, no turns) AND the composer is already visible — i.e.
-// at lg+, or on mobile once the composer has been opened. There the button does
-// nothing, so the sidebar greys it out. On a fresh mobile load the composer is
-// still hidden, so the button stays enabled: it reveals the composer (its real
-// job) rather than stranding the user with no way to start typing.
+// conversation (no thread, no turns) — starting another does nothing. The
+// sidebar greys its button out then; the mobile ＋ always navigates.
 const newConversationRedundant = computed<boolean>(
-  () =>
-    threadId.value === null &&
-    turns.value.length === 0 &&
-    (isLargeScreen.value || composerOpen.value),
+  () => threadId.value === null && turns.value.length === 0,
 )
 
 const errors = computed<ErrorSummaryItem[]>(() =>
@@ -209,8 +227,7 @@ async function onSubmit(): Promise<void> {
   }))
 
   // Optimistically render the question with a thinking placeholder and clear the
-  // composer immediately. Sending is instant and visibly distinct from the LLM
-  // thinking that follows (the placeholder turn), per the Claude-app pattern.
+  // composer immediately.
   turns.value.push({
     query: trimmed,
     answerHtml: '',
@@ -219,7 +236,14 @@ async function onSubmit(): Promise<void> {
     costUsd: 0,
     pending: true,
   })
-  const pendingIndex = turns.value.length - 1
+  // The array we appended the optimistic turn to. If the user navigates to a
+  // different thread (or a new/empty chat) before this request resolves,
+  // `turns.value` is replaced wholesale (loadThread / applyRoute). Applying a
+  // stale result to the *new* array would corrupt the now-active transcript and
+  // could force-navigate back, so both branches below bail when the reference
+  // has changed. (applyRoute also aborts an in-flight ask on navigation.)
+  const activeTurns = turns.value
+  const pendingIndex = activeTurns.length - 1
   question.value = ''
   pendingImages.value = []
   scrollToBottom()
@@ -233,8 +257,10 @@ async function onSubmit(): Promise<void> {
       controller.signal,
       apiImages.length ? apiImages : undefined,
     )
-    // Fill the placeholder turn in place (its position in the transcript is
-    // already correct) with the rendered answer.
+    // The user navigated to another thread/chat while this was in flight — the
+    // answer belongs to a screen that is no longer shown. Drop it silently.
+    if (turns.value !== activeTurns) return
+    // Fill the placeholder turn in place with the rendered answer.
     turns.value[pendingIndex] = {
       query: trimmed,
       answerHtml: renderAnswer(res.answer),
@@ -245,11 +271,13 @@ async function onSubmit(): Promise<void> {
     scrollToBottom()
     // The answer has rendered successfully. Everything below is a post-success
     // side effect (track the thread in state, sync the URL, refresh the
-    // sidebar). A failure here — e.g. a malformed response missing thread_id,
-    // or a Vue Router navigation rejection — must NEVER be surfaced as an error
-    // on a valid answer, so it lives outside onSubmit's answer-error catch.
+    // sidebar). A failure here must NEVER be surfaced as an error on a valid
+    // answer, so it lives outside onSubmit's answer-error catch.
     void syncThread(res.thread_id, wasNewThread)
   } catch (error: unknown) {
+    // Navigated away mid-request: the optimistic turn is gone with the old
+    // transcript, and there is nothing on this screen to restore or report.
+    if (turns.value !== activeTurns) return
     // Drop the optimistic turn and restore the question + images so the user can
     // edit and resend. A user-initiated Stop (AbortError) is silent; any other
     // failure surfaces the friendly error.
@@ -272,14 +300,11 @@ function stopAnswering(): void {
 
 /**
  * Enter sends; Shift+Enter and Ctrl+J insert a newline; Cmd/Ctrl+Enter still
- * sends. Enter while an IME composition is in progress (e.g. finishing a
- * candidate) never sends.
+ * sends. Enter while an IME composition is in progress never sends.
  */
 function onComposerKeydown(event: KeyboardEvent): void {
-  // IME composition: Enter commits the candidate, never sends.
   if (event.isComposing || event.keyCode === 229) return
 
-  // Ctrl+J inserts a newline at the caret (not a default insertion key).
   if (event.key === 'j' && event.ctrlKey && !event.metaKey) {
     event.preventDefault()
     const el = event.target as HTMLTextAreaElement
@@ -293,9 +318,7 @@ function onComposerKeydown(event: KeyboardEvent): void {
   }
 
   if (event.key === 'Enter') {
-    // Shift+Enter: let the browser insert a newline.
     if (event.shiftKey) return
-    // Plain Enter, or Cmd/Ctrl+Enter: send.
     event.preventDefault()
     void onSubmit()
   }
@@ -305,11 +328,8 @@ function onComposerKeydown(event: KeyboardEvent): void {
  * Post-success side effects after a turn has rendered: record the thread id,
  * sync the URL to /ask/:threadId, and refresh the sidebar for a new thread.
  *
- * This is deliberately fire-and-forget and self-contained: it must never throw
- * back into onSubmit, because by the time it runs the answer is already on
- * screen. A missing/non-numeric thread_id (malformed response) is skipped, and
- * a router rejection (e.g. a redundant navigation) is logged rather than shown
- * as a spurious "Something went wrong" error on a successful ask.
+ * Fire-and-forget and self-contained: it must never throw back into onSubmit,
+ * because by the time it runs the answer is already on screen.
  */
 async function syncThread(newThreadId: unknown, wasNewThread: boolean): Promise<void> {
   if (typeof newThreadId !== 'number' || !Number.isFinite(newThreadId)) {
@@ -317,9 +337,8 @@ async function syncThread(newThreadId: unknown, wasNewThread: boolean): Promise<
     return
   }
   threadId.value = newThreadId
-  // If we started on /ask (no threadId param), update the URL so the
-  // browser history and sidebar can track this conversation.
-  if (!route.params.threadId) {
+  // Move to /ask/:threadId unless we're already there (following a thread).
+  if (route.name !== 'ask-thread' || Number(route.params.threadId) !== newThreadId) {
     try {
       await router.replace({ name: 'ask-thread', params: { threadId: newThreadId } })
     } catch (navError: unknown) {
@@ -334,6 +353,8 @@ async function syncThread(newThreadId: unknown, wasNewThread: boolean): Promise<
 
 async function loadThread(id: number): Promise<void> {
   errorMessage.value = null
+  titleEditing.value = false
+  titleConfirmingDelete.value = false
   try {
     const detail = await getThread(id)
     turns.value = detail.turns.map((t) => ({
@@ -344,71 +365,151 @@ async function loadThread(id: number): Promise<void> {
       costUsd: t.cost_usd,
     }))
     threadId.value = id
-    // Viewing a thread → the composer (for follow-ups) is relevant, so reveal
-    // it on mobile. Don't steal focus: the user is reading the answer first.
-    composerOpen.value = true
+    threadTitle.value = detail.title
     scrollToBottom()
   } catch (error: unknown) {
     errorMessage.value = friendlyError(error)
   }
 }
 
-/** Clear to a fresh conversation and open the composer ready to type. Wired to
- * the sidebar "New conversation" button. */
-function resetConversation(): void {
-  turns.value = []
-  threadId.value = null
-  question.value = ''
-  errorMessage.value = null
-  router.push({ name: 'ask' })
-  openComposer()
-}
-
-// Resume a thread when the route param is present (including sidebar navigation
-// that changes the param without remounting the component).
-watch(
-  () => route.params.threadId,
-  (id) => {
-    if (id && Number(id) !== threadId.value) {
-      loadThread(Number(id))
-    }
-  },
-)
-
-onMounted(() => {
-  const id = route.params.threadId
-  if (id) {
-    loadThread(Number(id))
+/** Navigate to a fresh chat screen and focus the composer. */
+function startNewChat(): void {
+  if (route.name === 'ask-new') {
+    // Already on a fresh chat: just clear and focus (router.push would reject).
+    turns.value = []
+    threadId.value = null
+    threadTitle.value = ''
+    question.value = ''
+    errorMessage.value = null
+    focusComposer()
     return
   }
-  // On a fresh /ask (no thread to resume), pre-fill the composer from ?q= —
-  // e.g. the document detail view's "Ask about this document" button. Vue
-  // Router already URL-decodes query values, so seed as-is. Only on the initial
-  // mount, so it isn't clobbered by the empty default or a later reset.
-  const seed = route.query.q
-  if (typeof seed === 'string' && seed.length > 0) {
-    question.value = seed
-    openComposer()
-  }
-})
+  void router.push({ name: 'ask-new' })
+}
 
-// Expose resetConversation so the sidebar (Task 7) can call it via template ref.
+/** Back arrow on the chat screen → the conversation list. */
+function backToList(): void {
+  void router.push({ name: 'ask' })
+}
+
+/** Exposed for the sidebar's "new" event (and delete-of-active fallback). */
+function resetConversation(): void {
+  startNewChat()
+}
+
+// ── Chat title-bar actions (rename / delete the active thread) ───────────────
+function startTitleRename(): void {
+  titleConfirmingDelete.value = false
+  titleDraft.value = threadTitle.value
+  titleEditing.value = true
+  void nextTick(() => {
+    document.getElementById('ask-title-rename-input')?.focus()
+  })
+}
+
+function cancelTitleRename(): void {
+  titleEditing.value = false
+  titleDraft.value = ''
+}
+
+async function saveTitleRename(): Promise<void> {
+  const title = titleDraft.value.trim()
+  if (threadId.value === null || !title || title === threadTitle.value) {
+    cancelTitleRename()
+    return
+  }
+  await renameThread(threadId.value, title)
+  threadTitle.value = title
+  cancelTitleRename()
+  sidebarRef.value?.refresh()
+}
+
+async function confirmTitleDelete(): Promise<void> {
+  if (threadId.value === null) return
+  const id = threadId.value
+  titleConfirmingDelete.value = false
+  await deleteThread(id)
+  sidebarRef.value?.refresh()
+  backToList()
+}
+
+/**
+ * React to route changes (initial mount and subsequent navigation, including
+ * the sidebar changing the thread id without a remount). One place decides what
+ * each screen shows.
+ */
+function applyRoute(): void {
+  // If an answer is still generating for the screen we're leaving, cancel it —
+  // its result belongs to the old thread. onSubmit's navigation guard makes this
+  // safe even if the abort races the transcript swap.
+  if (isAnswering.value) inFlight?.abort()
+  const name = route.name
+  if (name === 'ask-thread') {
+    const id = Number(route.params.threadId)
+    if (Number.isFinite(id) && id !== threadId.value) loadThread(id)
+    return
+  }
+  // A `/ask?q=…` deep link (e.g. the document detail "Ask about this document"
+  // button) seeds a NEW question — send it to the chat screen where the composer
+  // lives (on mobile the list screen has no composer). Preserve the query.
+  if (name === 'ask' && typeof route.query.q === 'string' && route.query.q.length > 0) {
+    void router.replace({ name: 'ask-new', query: { q: route.query.q } })
+    return
+  }
+  // `ask` (empty list / nothing selected) or `ask-new` (fresh chat): no active
+  // thread. Clear the transcript so a stale thread doesn't linger.
+  turns.value = []
+  threadId.value = null
+  threadTitle.value = ''
+  titleEditing.value = false
+  titleConfirmingDelete.value = false
+  errorMessage.value = null
+  if (name === 'ask-new') {
+    const seed = route.query.q
+    question.value = typeof seed === 'string' && seed.length > 0 ? seed : ''
+    focusComposer()
+  }
+}
+
+watch(() => route.fullPath, applyRoute)
+
+onMounted(applyRoute)
+
+// Expose resetConversation so the sidebar can call it via template ref.
 defineExpose({ resetConversation })
 </script>
 
 <template>
-  <!-- The Ask view is a normal-flow block that grows with its content: the chat
-       panel (#ask-page) is as tall as the conversation and the whole page
-       scrolls, rather than trapping the transcript in a fixed viewport-height
-       internal scroller. Empty/short conversations keep a sensible minimum
-       height (set on the transcript), so the panel never looks broken. -->
+  <!-- The Ask view grows with its content and the whole page scrolls. On mobile
+       it is two full screens (list ⇄ chat); at lg+ it is one two-pane panel. -->
   <div>
-    <!-- Standard layout: the page title + description sit at the top, full
-         width, ABOVE the chat panel (a sibling, never inside it). -->
+    <!-- Desktop page header. Hidden on mobile, where the list screen has its own
+         compact title bar and the chat screen has none (F6: no big blurb). -->
     <PageHeader
       title="Ask"
       description="Ask a question about your documents in plain language and get an answer with citations."
+      class="max-lg:hidden"
     />
+
+    <!-- Mobile list-screen title bar: a compact "Ask" heading + a ＋ that starts
+         a new chat. Only on mobile, only on the list screen. -->
+    <div
+      v-if="mobileScreen === 'list'"
+      class="lg:hidden flex items-center justify-between mb-4"
+    >
+      <h1 class="text-2xl font-bold text-gray-800 dark:text-gray-100">Ask</h1>
+      <button
+        type="button"
+        data-testid="ask-new-mobile"
+        aria-label="New conversation"
+        class="flex h-10 w-10 items-center justify-center rounded-xl bg-violet-500 text-white shadow-xs hover:bg-violet-600 transition"
+        @click="startNewChat"
+      >
+        <svg class="h-5 w-5 fill-current" viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M15 7H9V1c0-.6-.4-1-1-1S7 .4 7 1v6H1c-.6 0-1 .4-1 1s.4 1 1 1h6v6c0 .6.4 1 1 1s1-.4 1-1V9h6c.6 0 1-.4 1-1s-.4-1-1-1z" />
+        </svg>
+      </button>
+    </div>
 
     <AppErrorSummary
       v-if="errors.length"
@@ -417,36 +518,120 @@ defineExpose({ resetConversation })
       class="mb-6"
     />
 
-    <!-- One cohesive chat panel: the conversation rail, the message thread and
-         the composer all share a single Mosaic surface with internal dividers —
-         not three separate floating cards. On lg+ it is a two-pane row
-         (rail | thread); below lg it stacks (rail above, then thread, composer
-         last). The panel grows with the conversation and the page scrolls. -->
+    <!-- One cohesive chat panel. On lg+ a two-pane row (rail | thread); below lg
+         the rail (list screen) and the thread column (chat screen) are shown one
+         at a time, gated by the route-derived mobileScreen. -->
     <div
       id="ask-page"
-      class="flex flex-col lg:flex-row overflow-hidden rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 shadow-xs"
+      class="flex flex-col lg:flex-row rounded-xl border border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 shadow-xs"
     >
       <ConversationSidebar
         ref="sidebarRef"
         :active-thread-id="threadId"
         :new-disabled="newConversationRedundant"
+        :class="{ 'max-lg:hidden': mobileScreen !== 'list' }"
         @select="(id: number) => router.push({ name: 'ask-thread', params: { threadId: id } })"
         @new="resetConversation"
         @threads-changed="(count: number) => (sidebarThreadCount = count)"
       />
 
-      <!-- Thread + composer column: a flex column that flows at its natural
-           height (thread, then composer beneath it) and grows with the
-           conversation. -->
-      <div class="flex flex-col flex-1 min-w-0">
-        <!-- Message thread: the user's question as a right-aligned violet chat
-             bubble, the answer beneath it on a subtle surface card. It flows at
-             its natural height and grows with the conversation; the page (not
-             this box) scrolls. -->
+      <!-- Thread + composer column (the chat screen on mobile). -->
+      <div
+        data-testid="ask-thread-pane"
+        class="flex flex-col flex-1 min-w-0"
+        :class="{ 'max-lg:hidden': mobileScreen !== 'chat' }"
+      >
+        <!-- Chat title bar: back arrow (mobile), the thread title (or inline
+             rename), and a ⋯ menu for the active thread. Shown whenever there's
+             a conversation in the pane. -->
+        <div
+          v-if="hasChatContext"
+          data-testid="ask-thread-bar"
+          class="shrink-0 flex items-center gap-2 border-b border-gray-200 dark:border-gray-700/60 px-3 py-2.5 min-h-[3.25rem]"
+        >
+          <button
+            type="button"
+            data-testid="ask-back"
+            aria-label="Back to conversations"
+            class="lg:hidden flex h-9 w-9 shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700/60 transition"
+            @click="backToList"
+          >
+            <svg class="h-5 w-5 fill-none stroke-current" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M15 5l-7 7 7 7" />
+            </svg>
+          </button>
+
+          <template v-if="titleEditing">
+            <input
+              id="ask-title-rename-input"
+              v-model="titleDraft"
+              data-testid="ask-title-rename-input"
+              type="text"
+              maxlength="120"
+              aria-label="Conversation title"
+              class="form-input flex-1 text-sm"
+              @keydown.enter.prevent="saveTitleRename"
+              @keydown.esc.prevent="cancelTitleRename"
+            />
+            <button
+              type="button"
+              data-testid="ask-title-rename-save"
+              class="text-xs font-medium text-violet-600 hover:text-violet-700 dark:text-violet-400 transition"
+              @click="saveTitleRename"
+            >
+              Save
+            </button>
+            <button
+              type="button"
+              class="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition"
+              @click="cancelTitleRename"
+            >
+              Cancel
+            </button>
+          </template>
+
+          <template v-else>
+            <span class="min-w-0 flex-1 truncate text-sm font-medium text-gray-800 dark:text-gray-100">
+              {{ threadTitle || 'New conversation' }}
+            </span>
+            <template v-if="threadId !== null">
+              <template v-if="titleConfirmingDelete">
+                <button
+                  type="button"
+                  data-testid="ask-title-delete-confirm"
+                  class="text-xs font-medium text-red-500 hover:text-red-600 dark:hover:text-red-400 transition"
+                  @click="confirmTitleDelete"
+                >
+                  Delete
+                </button>
+                <button
+                  type="button"
+                  class="text-xs text-gray-400 hover:text-gray-600 dark:hover:text-gray-200 transition"
+                  @click="titleConfirmingDelete = false"
+                >
+                  Cancel
+                </button>
+              </template>
+              <ThreadActionsMenu
+                v-else
+                testid="ask-title-actions"
+                label="Conversation actions"
+                @rename="startTitleRename"
+                @delete="titleConfirmingDelete = true"
+              />
+            </template>
+          </template>
+        </div>
+
+        <!-- Message thread: the user's question as a right-aligned violet bubble,
+             the answer beneath it on a subtle surface card. It grows with the
+             conversation; the page (not this box) scrolls. Bottom padding leaves
+             room for the pinned composer so the last turn's citations are never
+             hidden behind it. -->
         <div
           ref="transcriptRef"
           data-testid="ask-transcript"
-          class="p-5 sm:p-6"
+          class="p-5 sm:p-6 pb-28"
         >
           <div v-if="turns.length" class="space-y-8">
             <section
@@ -464,17 +649,11 @@ defineExpose({ resetConversation })
                 </p>
               </div>
 
-              <!-- Assistant answer sits on a subtle surface card (item 4): a
-                   lightly shaded, bordered block, distinct from the panel
-                   background and from the violet question bubble. It wraps both
-                   the pending indicator and the resolved answer so the surface
-                   does not pop into existence when the answer lands. -->
+              <!-- Assistant answer on a subtle surface card. -->
               <div
                 data-testid="ask-answer-surface"
                 class="space-y-3 rounded-2xl rounded-tl-sm border border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-gray-900/40 px-4 py-3"
               >
-                <!-- While the answer generates, the turn shows a thinking
-                     indicator in the answer slot (instead of the answer body). -->
                 <div
                   v-if="turn.pending"
                   data-testid="ask-thinking"
@@ -489,7 +668,6 @@ defineExpose({ resetConversation })
                 </div>
 
                 <template v-else>
-                  <!-- Sanitized markdown answer body, on the surface card. -->
                   <!-- eslint-disable-next-line vue/no-v-html -- sanitized via DOMPurify in renderAnswer -->
                   <div
                     class="ask-answer text-gray-800 dark:text-gray-100"
@@ -542,13 +720,44 @@ defineExpose({ resetConversation })
             </section>
           </div>
 
-          <!-- Empty states — centred in a minimum-height thread area so the
-               panel never looks broken before the first question. The min-height
-               lives here (not on the growing transcript) so short conversations
-               still get a sensible floor. -->
-          <div v-else class="min-h-[18rem] flex items-center justify-center text-center">
+          <!-- Empty states, centred in a minimum-height area so the pane never
+               looks broken before the first question. -->
+          <div v-else class="min-h-[18rem] flex flex-col items-center justify-center text-center">
+            <!-- New chat: a friendly greeting + a few example prompts. -->
+            <template v-if="isNewChat">
+              <div
+                data-testid="ask-greeting"
+                class="flex flex-col items-center gap-4 max-w-sm"
+              >
+                <span class="flex h-14 w-14 items-center justify-center rounded-2xl bg-violet-50 dark:bg-violet-500/15 text-violet-600 dark:text-violet-400">
+                  <svg class="h-7 w-7 fill-none stroke-current" stroke-width="1.8" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z" />
+                  </svg>
+                </span>
+                <div>
+                  <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Ask your documents</h2>
+                  <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+                    Ask a question in plain language and get an answer with citations.
+                  </p>
+                </div>
+                <div class="flex w-full flex-col gap-2">
+                  <button
+                    v-for="prompt in EXAMPLE_PROMPTS"
+                    :key="prompt"
+                    type="button"
+                    data-testid="ask-example-prompt"
+                    class="rounded-xl border border-gray-200 dark:border-gray-700/60 px-4 py-2.5 text-left text-sm text-gray-700 dark:text-gray-200 hover:border-violet-400 hover:bg-violet-50 dark:hover:bg-violet-500/10 transition"
+                    @click="usePrompt(prompt)"
+                  >
+                    {{ prompt }}
+                  </button>
+                </div>
+              </div>
+            </template>
+
+            <!-- Nothing selected (chiefly the desktop rail with no active thread). -->
             <p
-              v-if="sidebarThreadCount > 0 && threadId === null"
+              v-else-if="sidebarThreadCount > 0"
               data-testid="ask-select-thread"
               class="max-w-sm text-gray-500 dark:text-gray-400"
             >
@@ -566,35 +775,25 @@ defineExpose({ resetConversation })
           </div>
         </div>
 
-        <!-- Composer. A shrink-0 flex sibling below the thread, divided from it
-             by a top border; it flows beneath the conversation and scrolls with
-             the page. Below lg it is hidden until opened (via "New conversation"
-             or opening a thread) so it isn't a far-off box the user must scroll
-             to find; at lg+ it is always shown. -->
+        <!-- Composer. Pinned to the bottom of the chat area (sticky), always
+             present on the chat screen — no reveal step. A solid background masks
+             the transcript scrolling beneath it; the transcript's bottom padding
+             keeps the last turn's citations clear of it (the historical
+             citation-overlap bug). Hidden on the mobile list screen because the
+             whole thread column is. -->
         <form
           id="ask-form"
           ref="composerRef"
           novalidate
-          class="shrink-0 border-t border-gray-200 dark:border-gray-700/60 p-4"
-          :class="{ 'max-lg:hidden': !composerOpen }"
+          class="sticky bottom-0 z-10 shrink-0 border-t border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 p-3 sm:p-4 rounded-b-xl"
           data-testid="ask-form"
           @submit.prevent="onSubmit"
         >
-          <AppTextarea
-            id="ask-question"
-            v-model="question"
-            :label="turns.length ? 'Follow-up question' : 'Your question'"
-            hint="Enter to send · Shift+Enter for new line"
-            :rows="3"
-            data-testid="ask-question"
-            @keydown="onComposerKeydown"
-          />
-
-          <!-- Pending image attachments (W11): preview thumbnails + remove. -->
+          <!-- Pending image attachments: preview thumbnails + remove. -->
           <ul
             v-if="pendingImages.length"
             data-testid="ask-image-previews"
-            class="mt-3 flex flex-wrap gap-2"
+            class="mb-3 flex flex-wrap gap-2"
           >
             <li v-for="(image, i) in pendingImages" :key="i" class="relative">
               <img
@@ -615,7 +814,7 @@ defineExpose({ resetConversation })
             </li>
           </ul>
 
-          <div class="mt-3 flex items-center justify-between gap-2">
+          <div class="flex items-end gap-2">
             <input
               ref="imageInput"
               type="file"
@@ -625,24 +824,43 @@ defineExpose({ resetConversation })
               data-testid="ask-image-input"
               @change="onImagesPicked"
             />
+            <!-- Inline paperclip attach: a compact icon-button inside the
+                 composer, replacing the old labelled "Attach image" button. -->
             <button
               type="button"
               data-testid="ask-image-attach"
-              class="btn-sm bg-gray-100 dark:bg-gray-700 text-gray-700 dark:text-gray-200 hover:bg-gray-200 dark:hover:bg-gray-600 disabled:opacity-50"
+              aria-label="Attach image"
+              class="mb-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700/60 disabled:opacity-40 transition"
               :disabled="pendingImages.length >= MAX_IMAGES"
               @click="imageInput?.click()"
             >
-              Attach image
+              <svg class="h-5 w-5 fill-none stroke-current" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+                <path d="M21 12.5 12 21a5 5 0 0 1-7-7l8.5-8.5a3.5 3.5 0 0 1 5 5L10 18a1.5 1.5 0 0 1-2-2l7.5-7.5" />
+              </svg>
             </button>
-            <!-- While answering, the primary action is a live Stop control, not
-                 a greyed-out button — the request is cancellable, and the UI is
-                 never a dead rectangle. Same data-testid on both states. -->
+
+            <div class="min-w-0 flex-1">
+              <AppTextarea
+                id="ask-question"
+                v-model="question"
+                :label="turns.length ? 'Follow-up question' : 'Your question'"
+                hide-label
+                hint="Enter to send · Shift+Enter for new line"
+                :rows="2"
+                data-testid="ask-question"
+                @keydown="onComposerKeydown"
+              />
+            </div>
+
+            <!-- While answering, the primary action is a live Stop control, not a
+                 greyed-out button — the request is cancellable. -->
             <AppButton
               v-if="isAnswering"
               id="ask-submit"
               type="button"
               variant="warning"
               data-testid="ask-submit"
+              class="mb-1"
               @click="stopAnswering"
             >
               Stop
@@ -652,6 +870,7 @@ defineExpose({ resetConversation })
               id="ask-submit"
               type="submit"
               data-testid="ask-submit"
+              class="mb-1"
             >
               Send
             </AppButton>
