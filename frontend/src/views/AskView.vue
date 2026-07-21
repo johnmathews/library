@@ -136,7 +136,8 @@ const hasChatContext = computed<boolean>(
 // composer footer sits right at the bottom (short chat or long, above the
 // keyboard when it's open) instead of floating mid-page on a sticky that only
 // pins when content overflows. The `-my-8` cancels `#app-page`'s `py-8`. At `lg+`
-// (and on the list screen) this is empty and the layout is unchanged.
+// (and on the list screen) this is empty; the desktop fill lives in the static
+// `lg:` classes on the same root instead.
 const chatFillClass = computed<string>(() =>
   mobileScreen.value === 'chat'
     ? 'max-lg:flex max-lg:flex-col max-lg:h-[calc(100dvh_-_4rem)] max-lg:-my-8 max-lg:overflow-hidden'
@@ -151,10 +152,10 @@ function focusComposer(): void {
   })
 }
 
-// Keep the latest turn in view after the DOM updates. The transcript grows with
-// the page rather than scrolling internally, so bring the newest turn to the
-// bottom of the viewport via the page scroll. (If the transcript is ever
-// internally scrollable — a narrow edge case — jump its own scrollTop instead.)
+// Keep the latest turn in view after the DOM updates. The transcript is the
+// internal scroll area on every breakpoint, so jump its own scrollTop to the
+// bottom. (Before the first overflow it isn't scrollable yet — fall back to
+// bringing the newest turn into view.)
 function scrollToBottom(): void {
   void nextTick(() => {
     const el = transcriptRef.value
@@ -522,16 +523,20 @@ defineExpose({ resetConversation })
 </script>
 
 <template>
-  <!-- At lg+ the Ask view grows with its content and the page scrolls (two-pane
-       panel). On the mobile chat screen `chatFillClass` makes it a fixed-height
-       column that fills the viewport so the composer docks at the bottom. -->
-  <div :class="chatFillClass">
+  <!-- At lg+ the Ask view is a fixed-height flex column that fills the viewport
+       below the app header (`100dvh` − the 4rem header − the 4rem `#app-page`
+       py-8): the PageHeader is a shrink-0 lead, the two-pane panel takes the
+       rest (`flex-1`), and inside it the transcript scrolls internally so the
+       composer docks at the bottom like a normal chat UI (instead of the panel
+       growing with content and the composer sitting mid-page). On the mobile
+       chat screen `chatFillClass` does the equivalent fill. -->
+  <div class="lg:flex lg:flex-col lg:h-[calc(100dvh_-_8rem)]" :class="chatFillClass">
     <!-- Desktop page header. Hidden on mobile, where the list screen has its own
          compact title bar and the chat screen has none (F6: no big blurb). -->
     <PageHeader
       title="Ask"
       description="Ask a question about your documents in plain language and get an answer with citations."
-      class="max-lg:hidden"
+      class="max-lg:hidden lg:shrink-0"
     />
 
     <!-- Mobile list-screen title bar: a compact "Ask" heading + a ＋ that starts
@@ -558,7 +563,7 @@ defineExpose({ resetConversation })
       v-if="errors.length"
       :errors="errors"
       data-testid="error-summary"
-      class="mb-6"
+      class="mb-6 lg:shrink-0"
     />
 
     <!-- One cohesive chat panel. On lg+ a two-pane row (rail | thread); below lg
@@ -570,7 +575,7 @@ defineExpose({ resetConversation })
          bordered two-pane card again. -->
     <div
       id="ask-page"
-      class="flex flex-col lg:flex-row bg-white dark:bg-gray-800 -mx-4 sm:-mx-6 lg:mx-0 max-lg:flex-1 max-lg:min-h-0 border-0 rounded-none shadow-none lg:rounded-xl lg:border lg:border-gray-200 dark:lg:border-gray-700/60 lg:shadow-xs"
+      class="flex flex-col lg:flex-row bg-white dark:bg-gray-800 -mx-4 sm:-mx-6 lg:mx-0 max-lg:flex-1 max-lg:min-h-0 lg:flex-1 lg:min-h-0 lg:overflow-hidden border-0 rounded-none shadow-none lg:rounded-xl lg:border lg:border-gray-200 dark:lg:border-gray-700/60 lg:shadow-xs"
     >
       <ConversationSidebar
         ref="sidebarRef"
@@ -671,18 +676,15 @@ defineExpose({ resetConversation })
         </div>
 
         <!-- Message thread: the user's question as a right-aligned violet bubble,
-             the answer beneath it on a subtle surface card. It grows with the
-             conversation; the page (not this box) scrolls. Bottom padding leaves
-             room for the pinned composer so the last turn's citations are never
-             hidden behind it. -->
-        <!-- On mobile the transcript is the internal scroll area of the
-             fixed-height chat column (flex-1 + overflow-y-auto), so the composer
-             below it is a real footer. At lg+ it flows with the page and leaves
-             pb-28 clearance for the sticky composer. -->
+             the answer beneath it on a subtle surface card. It is the internal
+             scroll area of the fixed-height chat column (flex-1 + min-h-0 +
+             overflow-y-auto) on every breakpoint, so the composer below it is a
+             real bottom-docked footer rather than a sticky bar that only pins on
+             overflow. -->
         <div
           ref="transcriptRef"
           data-testid="ask-transcript"
-          class="px-3 pt-4 sm:px-6 sm:pt-6 max-lg:flex-1 max-lg:min-h-0 max-lg:overflow-y-auto max-lg:pb-4 lg:pb-28"
+          class="px-3 pt-4 sm:px-6 sm:pt-6 flex-1 min-h-0 overflow-y-auto pb-4 lg:pb-6"
         >
           <div v-if="turns.length" class="space-y-8">
             <section
@@ -828,17 +830,17 @@ defineExpose({ resetConversation })
           </div>
         </div>
 
-        <!-- Composer. On mobile it is the bottom **footer** of the fixed-height
-             chat column (shrink-0) — so it always sits at the bottom, above the
-             on-screen keyboard, whatever the conversation length. At lg+ it is a
-             `sticky` bottom bar over the page-scrolling transcript. The bottom
-             padding includes the safe-area inset so it clears the home indicator
-             (viewport-fit=cover). Hidden on the mobile list screen with the pane. -->
+        <!-- Composer: the bottom **footer** of the fixed-height chat column
+             (shrink-0) on every breakpoint — so it always sits at the bottom,
+             whatever the conversation length (and above the on-screen keyboard on
+             mobile). The bottom padding includes the safe-area inset so it clears
+             the home indicator (viewport-fit=cover). Hidden on the mobile list
+             screen with the pane. -->
         <form
           id="ask-form"
           ref="composerRef"
           novalidate
-          class="shrink-0 border-t border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-3 pt-2 sm:px-4 sm:pt-3 lg:sticky lg:bottom-0 lg:z-10 lg:rounded-b-xl"
+          class="shrink-0 border-t border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-3 pt-2 sm:px-4 sm:pt-3 lg:rounded-b-xl"
           style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.625rem)"
           data-testid="ask-form"
           @submit.prevent="onSubmit"
