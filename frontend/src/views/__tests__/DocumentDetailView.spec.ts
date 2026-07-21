@@ -613,14 +613,26 @@ describe('DocumentDetailView', () => {
     expect((w.find('#edit-recipient').element as HTMLSelectElement).value).toBe('Landlord')
   })
 
-  it('tags editor sends a comma-split full-replacement list', async () => {
+  it('tags multiselect adds a tag via Enter and PATCHes a full-replacement slug list', async () => {
+    // The doc starts with the `energie` chip; typing a new slug and pressing
+    // Enter adds it, PATCHing the whole slug set (the backend upserts unknowns).
     const w = await mountView()
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
-    await w.find('#edit-tags').setValue(' energie,  wonen ,')
-    await w.find('#edit-tags').trigger('change')
+    expect(w.findAll('[data-testid="edit-tags-chip"]')).toHaveLength(1)
+    await w.find('#edit-tags').setValue('wonen')
+    await w.find('#edit-tags').trigger('keydown.enter')
     await flushPromises()
     expect(patchCalls()[0]!.body).toEqual({ tags: ['energie', 'wonen'] })
+  })
+
+  it('tags multiselect removes a tag and PATCHes the reduced slug list', async () => {
+    const w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    await w.find('[data-testid="edit-tags-remove"]').trigger('click')
+    await flushPromises()
+    expect(patchCalls()[0]!.body).toEqual({ tags: [] })
   })
 
   it('projects multiselect adds an existing project from the menu', async () => {

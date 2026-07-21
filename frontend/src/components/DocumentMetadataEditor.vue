@@ -73,14 +73,18 @@ const recipients = ref<RecipientOption[]>([])
 // Existing projects & matters feed their respective multiselects (picking an
 // existing name or typing a new one, which the backend upserts on save).
 const {
+  tags: tagOptions,
   projects: projectOptions,
   matters: matterOptions,
   ensureLoaded: ensureProjectsLoaded,
 } = useTaxonomyOptions()
-// Only the Content tile renders the projects/matters multiselects; the
+// Only the Content tile renders the tags/projects/matters multiselects; the
 // composable caches its fetch, so this is at most one request across the whole
 // page regardless.
 if (props.section === 'content') void ensureProjectsLoaded()
+// Tags are identified by slug (unlike projects/matters, keyed by name): the
+// multiselect binds slugs, so its suggestion list is the existing tag slugs.
+const tagOptionSlugs = computed(() => tagOptions.value.map((tag) => tag.slug))
 const projectOptionNames = computed(() => projectOptions.value.map((project) => project.name))
 const matterOptionNames = computed(() => matterOptions.value.map((matter) => matter.name))
 
@@ -358,7 +362,6 @@ type StringDraftField =
   | 'summary'
   | 'sender'
   | 'recipient'
-  | 'tags'
   | 'kind'
   | 'language'
   | 'amount'
@@ -369,11 +372,14 @@ const drafts = reactive<Record<StringDraftField, string>>({
   summary: '',
   sender: '',
   recipient: '',
-  tags: '',
   kind: '',
   language: '',
   amount: '',
 })
+/** Tags draft as a discrete slug list (not a comma-joined string): binds the
+ * chip multiselect directly, mirroring {@link projectsDraft}. Tags are keyed by
+ * slug, so this is the list of slugs the PATCH sends and the chips display. */
+const tagsDraft = ref<string[]>([])
 /** Projects draft as a discrete list (not a comma-joined string): project names
  * are free text and may contain commas, so the multiselect binds this array
  * directly — no encode/decode round-trip that a comma would corrupt. */
@@ -402,7 +408,7 @@ function hydrateDrafts(): void {
   drafts.summary = d.summary ?? ''
   drafts.sender = d.sender?.name ?? ''
   drafts.recipient = d.recipient?.name ?? ''
-  drafts.tags = d.tags.map((tag) => tag.slug).join(', ')
+  tagsDraft.value = d.tags.map((tag) => tag.slug)
   projectsDraft.value = d.projects.map((project) => project.name)
   mattersDraft.value = d.matters.map((matter) => matter.name)
   drafts.kind = d.kind?.slug ?? ''
@@ -424,7 +430,7 @@ function hydrateField(field: EditableField, d: DocumentDetail): void {
     case 'summary': drafts.summary = d.summary ?? ''; break
     case 'sender': drafts.sender = d.sender?.name ?? ''; break
     case 'recipient': drafts.recipient = d.recipient?.name ?? ''; break
-    case 'tags': drafts.tags = d.tags.map((tag) => tag.slug).join(', '); break
+    case 'tags': tagsDraft.value = d.tags.map((tag) => tag.slug); break
     case 'projects': projectsDraft.value = d.projects.map((project) => project.name); break
     case 'matters': mattersDraft.value = d.matters.map((matter) => matter.name); break
     case 'kind': drafts.kind = d.kind?.slug ?? ''; break
@@ -480,10 +486,12 @@ function fieldDirty(field: EditableField): boolean {
     case 'kind': return (drafts.kind || null) !== (d.kind?.slug ?? null)
     case 'language': return drafts.language !== d.language
     case 'tags': {
-      // Tags are an unordered set: compare sorted slugs so a reorder-only edit
-      // (or the server returning a different order) isn't seen as a change.
-      const next = drafts.tags.split(',').map((t) => t.trim()).filter(Boolean).sort()
-      return next.join(',') !== d.tags.map((t) => t.slug).sort().join(',')
+      // Tags are an unordered set, full-replaced by slug; compare sorted slugs
+      // element-wise so a reorder-only edit (or the server returning a different
+      // order) isn't seen as a change. Mirrors projects/matters.
+      const next = [...tagsDraft.value].sort()
+      const current = d.tags.map((t) => t.slug).sort()
+      return next.length !== current.length || next.some((slug, i) => slug !== current[i])
     }
     case 'projects': {
       // Projects are an unordered set, full-replaced by name; compare sorted
@@ -530,7 +538,7 @@ function buildPatch(field: EditableField): DocumentUpdate | null {
     case 'language':
       return { language: drafts.language as DocumentLanguage }
     case 'tags':
-      return { tags: drafts.tags.split(',').map((tag) => tag.trim()).filter(Boolean) }
+      return { tags: [...tagsDraft.value] }
     case 'projects':
       return { projects: [...projectsDraft.value] }
     case 'matters':
@@ -571,9 +579,10 @@ async function saveField(field: EditableField): Promise<void> {
     const updated = await updateDocument(props.doc.id, patch)
     emit('update:doc', updated)
     hydrateField(field, updated)
-    // A projects/matters edit may have created a new entry inline; refresh the
-    // shared taxonomy cache so it's offered in the multiselect and elsewhere.
-    if (field === 'projects' || field === 'matters') void refreshTaxonomyOptions()
+    // A tags/projects/matters edit may have created a new entry inline; refresh
+    // the shared taxonomy cache so it's offered in the multiselect and elsewhere.
+    if (field === 'tags' || field === 'projects' || field === 'matters')
+      void refreshTaxonomyOptions()
     savedField[field] = true
     window.setTimeout(() => {
       savedField[field] = false
@@ -824,6 +833,23 @@ const latestExtractionEvent = computed(() => {
                 <AppBadge :colour="tagColour(matter.name)">{{ matter.name }}</AppBadge>
               </RouterLink>
             </dd>
+            <!-- Tags render as badges linking to the tag-filtered dashboard,
+                 mirroring the project/matter badges above. -->
+            <dd
+              v-else-if="!editMode && field === 'tags' && doc.tags.length"
+              class="mt-2 flex flex-wrap gap-2"
+              data-testid="row-value"
+            >
+              <RouterLink
+                v-for="tag in doc.tags"
+                :key="tag.slug"
+                :to="{ path: '/', query: { tag: tag.slug } }"
+                data-testid="tag-badge"
+                class="rounded-full"
+              >
+                <AppBadge :colour="tagColour(tag.name)">{{ tag.name }}</AppBadge>
+              </RouterLink>
+            </dd>
             <dd
               v-else-if="!editMode"
               class="mt-2 min-w-0 break-words leading-snug text-gray-800 dark:text-gray-100"
@@ -973,16 +999,15 @@ const latestExtractionEvent = computed(() => {
                 :error-message="fieldError.language ?? undefined"
                 @change="saveField('language')"
               />
-              <AppInput
+              <AppMultiSelect
                 v-else-if="field === 'tags'"
                 id="edit-tags"
-                v-model="drafts.tags"
+                v-model="tagsDraft"
                 label="Tags"
-                hide-label
-                hint="Separate tags with commas"
+                :options="tagOptionSlugs"
+                placeholder="Select or add a tag…"
                 :error-message="fieldError.tags ?? undefined"
                 @change="saveField('tags')"
-                @keyup.enter="saveField('tags')"
               />
               <AppMultiSelect
                 v-else-if="field === 'projects'"

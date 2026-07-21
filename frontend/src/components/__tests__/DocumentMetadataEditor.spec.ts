@@ -15,10 +15,14 @@ vi.mock('@/api/taxonomy', () => ({
   listRecipients: vi.fn(),
 }))
 
-// The shared taxonomy cache (projects multiselect + refresh-after-inline-add).
+// The shared taxonomy cache (projects/tags multiselects + refresh-after-inline-add).
 vi.mock('@/composables/taxonomyOptions', () => ({
   refreshTaxonomyOptions: vi.fn().mockResolvedValue(undefined),
   useTaxonomyOptions: () => ({
+    tags: ref([
+      { slug: 'energie', name: 'Energie', document_count: 4 },
+      { slug: 'wonen', name: 'Wonen', document_count: 2 },
+    ]),
     projects: ref([]),
     matters: ref([]),
     ensureLoaded: vi.fn().mockResolvedValue(undefined),
@@ -28,6 +32,7 @@ vi.mock('@/composables/taxonomyOptions', () => ({
 import { ref } from 'vue'
 import { updateDocument, type DocumentDetail } from '@/api/documents'
 import { listKinds, listRecipients, listSenders } from '@/api/taxonomy'
+import { refreshTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 import DocumentMetadataEditor from '../DocumentMetadataEditor.vue'
 
@@ -235,11 +240,93 @@ describe('DocumentMetadataEditor', () => {
 
     const badge = wrapper.find('[data-testid="matter-badge"]')
     expect(badge.exists()).toBe(true)
-    expect(wrapper.findComponent(RouterLinkStub).props('to')).toEqual({
+    // Scope to the matter badge's own link: the doc also carries a tag, whose
+    // read-mode badge renders a RouterLink too, so `findComponent` (first match)
+    // would pick that up instead.
+    expect(wrapper.getComponent<typeof RouterLinkStub>('[data-testid="matter-badge"]').props('to')).toEqual({
       path: '/',
       query: { matter: 'acme-merger' },
     })
     expect(badge.text()).toContain('Acme merger')
+  })
+
+  it('renders the document tags as chips in edit mode', async () => {
+    const { wrapper } = mountEditor('content')
+    await flushPromises()
+
+    await enterEditMode()
+
+    const chips = wrapper.findAll('[data-testid="edit-tags-chip"]')
+    expect(chips.map((chip) => chip.text().replace('×', '').trim())).toEqual(['energie'])
+  })
+
+  it('adds a tag and PATCHes tags as a full-replacement slug list', async () => {
+    const fresh = makeDetail({
+      tags: [
+        { slug: 'energie', name: 'Energie' },
+        { slug: 'wonen', name: 'Wonen' },
+      ],
+    })
+    vi.mocked(updateDocument).mockResolvedValue(fresh)
+    const { wrapper, doc } = mountEditor('content')
+    await flushPromises()
+
+    await enterEditMode()
+    // Type an existing tag slug and commit it with Enter (AppMultiSelect emits change).
+    await wrapper.find('#edit-tags').setValue('wonen')
+    await wrapper.find('#edit-tags').trigger('keydown.enter')
+    await flushPromises()
+
+    expect(updateDocument).toHaveBeenCalledWith(doc.id, { tags: ['energie', 'wonen'] })
+  })
+
+  it('creates a brand-new tag inline and refreshes the shared taxonomy cache', async () => {
+    const fresh = makeDetail({
+      tags: [
+        { slug: 'energie', name: 'Energie' },
+        { slug: 'verzekering', name: 'Verzekering' },
+      ],
+    })
+    vi.mocked(updateDocument).mockResolvedValue(fresh)
+    const { wrapper, doc } = mountEditor('content')
+    await flushPromises()
+
+    await enterEditMode()
+    await wrapper.find('#edit-tags').setValue('verzekering')
+    await wrapper.find('#edit-tags').trigger('keydown.enter')
+    await flushPromises()
+
+    expect(updateDocument).toHaveBeenCalledWith(doc.id, { tags: ['energie', 'verzekering'] })
+    expect(refreshTaxonomyOptions).toHaveBeenCalled()
+  })
+
+  it('removes a tag and PATCHes the reduced slug list (clears with [])', async () => {
+    vi.mocked(updateDocument).mockResolvedValue(makeDetail({ tags: [] }))
+    const { wrapper, doc } = mountEditor('content')
+    await flushPromises()
+
+    await enterEditMode()
+    await wrapper.find('[data-testid="edit-tags-remove"]').trigger('click')
+    await flushPromises()
+
+    expect(updateDocument).toHaveBeenCalledWith(doc.id, { tags: [] })
+  })
+
+  it('renders tag badges linking to the tag-filtered dashboard in read mode', async () => {
+    const doc = makeDetail({ tags: [{ slug: 'energie', name: 'Energie' }] })
+    const wrapper = mount(DocumentMetadataEditor, {
+      props: { doc, section: 'content' as const },
+      global: { stubs: { RouterLink: RouterLinkStub } },
+    })
+    await flushPromises()
+
+    const badge = wrapper.find('[data-testid="tag-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(wrapper.getComponent<typeof RouterLinkStub>('[data-testid="tag-badge"]').props('to')).toEqual({
+      path: '/',
+      query: { tag: 'energie' },
+    })
+    expect(badge.text()).toContain('Energie')
   })
 
   it('renders the sender datalist adjacent to the sender input', async () => {
