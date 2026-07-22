@@ -321,9 +321,14 @@ the sidebar **Search** nav item (both emit `open-search` →
 `searchModal.open()`), and pressing **`/`** anywhere outside a form field.
 It exposes `open()` via
 `defineExpose`, pre-fills its fields (`AppInput` query, `AppSelect`
-kind/sender/tag/language fed lazily from the cached taxonomy endpoints,
+kind/sender/tag/**matter**/language fed lazily from the cached taxonomy endpoints,
 `AppDateInput` from/to) from the current route query, and on submit pushes the
-query to the documents route. Native dialog semantics give focus containment,
+query to the documents route. Tag and matter are single-select in the modal even
+though both are multi-value in the URL: opening pre-fills the select only when
+exactly one value is active, and submitting **preserves the original multi-value
+set** unless the user picks a specific one (which replaces it) — so a
+multi-matter filter set on the dashboard survives editing an unrelated field in
+the modal. Native dialog semantics give focus containment,
 ESC-to-close and `::backdrop`; focus is handed back to the opener on close.
 Layout lives in `.app-search-modal` (`utility-patterns.css`): a centered
 `max-w-2xl` card on desktop, full-screen below 640px. It reasserts

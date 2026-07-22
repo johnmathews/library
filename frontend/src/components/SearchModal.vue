@@ -31,13 +31,14 @@ const dialog = ref<HTMLDialogElement | null>(null)
 let opener: HTMLElement | null = null
 
 // Taxonomy options are fetched lazily on first open and cached app-wide.
-const { kinds, senders, tags, ensureLoaded } = useTaxonomyOptions()
+const { kinds, senders, tags, matters, ensureLoaded } = useTaxonomyOptions()
 
 const draft = reactive({
   q: '',
   kind: '',
   senderId: '',
   tag: '',
+  matter: '',
   language: '',
   dateFrom: null as string | null,
   dateTo: null as string | null,
@@ -50,6 +51,12 @@ const draft = reactive({
 let initialTags: string[] = []
 let prefilledTag = ''
 
+// Same preservation dance for matters: they OR-compose and a document can
+// belong to several, but the modal exposes a single-select. Remembering the
+// opening set lets onSubmit keep a multi-matter filter intact when untouched.
+let initialMatters: string[] = []
+let prefilledMatter = ''
+
 const kindItems = computed<SelectItem[]>(() => [
   { value: '', text: 'All kinds' },
   ...kinds.value.map((kind) => ({ value: kind.slug, text: kind.name })),
@@ -61,6 +68,10 @@ const senderItems = computed<SelectItem[]>(() => [
 const tagItems = computed<SelectItem[]>(() => [
   { value: '', text: 'All tags' },
   ...tags.value.map((tag) => ({ value: tag.slug, text: tag.name })),
+])
+const matterItems = computed<SelectItem[]>(() => [
+  { value: '', text: 'All matters' },
+  ...matters.value.map((matter) => ({ value: matter.slug, text: matter.name })),
 ])
 const languageItems: SelectItem[] = [
   { value: '', text: 'All languages' },
@@ -79,10 +90,15 @@ function open(): void {
   // active filter set.
   prefilledTag = applied.tags.length === 1 ? (applied.tags[0] ?? '') : ''
 
+  // Matters follow the same rule (see initialMatters above).
+  initialMatters = applied.matters
+  prefilledMatter = applied.matters.length === 1 ? (applied.matters[0] ?? '') : ''
+
   draft.q = applied.q
   draft.kind = applied.kind
   draft.senderId = applied.senderId
   draft.tag = prefilledTag
+  draft.matter = prefilledMatter
   draft.language = applied.language
   draft.dateFrom = applied.dateFrom || null
   draft.dateTo = applied.dateTo || null
@@ -114,13 +130,18 @@ function onSubmit(): void {
   const resolvedTags: string[] =
     draft.tag === prefilledTag ? initialTags : draft.tag ? [draft.tag] : []
 
+  // Same logic for matters: untouched field keeps the opening (possibly multi)
+  // set; an explicit pick replaces it with that single matter.
+  const resolvedMatters: string[] =
+    draft.matter === prefilledMatter ? initialMatters : draft.matter ? [draft.matter] : []
+
   const next: AppliedFilters = {
     q: draft.q.trim(),
     kind: draft.kind,
     senderId: draft.senderId,
     recipientId: current.recipientId, // preserved — modal doesn't manage it
     projects: current.projects, // preserved — modal doesn't manage it
-    matters: current.matters, // preserved — modal doesn't manage it
+    matters: resolvedMatters,
     tags: resolvedTags,
     language: draft.language,
     status: current.status, // preserved — modal doesn't manage it
@@ -141,6 +162,7 @@ function clearFields(): void {
   draft.kind = ''
   draft.senderId = ''
   draft.tag = ''
+  draft.matter = ''
   draft.language = ''
   draft.dateFrom = null
   draft.dateTo = null
@@ -222,6 +244,12 @@ defineExpose({ open })
             :items="senderItems"
           />
           <AppSelect id="filter-tag" v-model="draft.tag" label="Tag" :items="tagItems" />
+          <AppSelect
+            id="filter-matter"
+            v-model="draft.matter"
+            label="Matter"
+            :items="matterItems"
+          />
           <AppSelect
             id="filter-language"
             v-model="draft.language"

@@ -35,6 +35,10 @@ function jsonResponse(body: unknown, status = 200): Response {
 const KINDS = [{ slug: 'invoice', name: 'Invoice', document_count: 3 }]
 const SENDERS = [{ id: 3, name: 'Eneco', document_count: 3 }]
 const TAGS = [{ slug: 'energie', name: 'Energie', document_count: 2 }]
+const MATTERS = [
+  { slug: 'smith-divorce', name: 'Smith Divorce', document_count: 4 },
+  { slug: 'jones-estate', name: 'Jones Estate', document_count: 2 },
+]
 
 const Stub = { template: '<div />' }
 
@@ -57,6 +61,7 @@ describe('SearchModal', () => {
       if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
       if (url === '/api/senders') return Promise.resolve(jsonResponse(SENDERS))
       if (url === '/api/tags') return Promise.resolve(jsonResponse(TAGS))
+      if (url === '/api/matters') return Promise.resolve(jsonResponse(MATTERS))
       return Promise.resolve(jsonResponse({ detail: `unexpected ${url}` }, 500))
     })
     router = createRouter({
@@ -265,5 +270,55 @@ describe('SearchModal', () => {
     // buildDocumentQuery always emits tag as an array (the documented contract);
     // ['energie'] and 'energie' parse identically via parseDocumentQuery.
     expect(router.currentRoute.value.query.tag).toEqual(['energie'])
+  })
+
+  it('renders the matter options on open, blank-first', async () => {
+    const w = await mountModal()
+    exposed(w).open()
+    await flushPromises()
+    expect(w.find('#filter-matter').findAll('option').map((o) => o.text())).toEqual([
+      'All matters',
+      'Smith Divorce',
+      'Jones Estate',
+    ])
+  })
+
+  it('pre-fills the matter select from a single-matter query', async () => {
+    await router.push('/?matter=smith-divorce')
+    const w = await mountModal()
+    exposed(w).open()
+    await flushPromises()
+    expect((w.find('#filter-matter').element as HTMLSelectElement).value).toBe('smith-divorce')
+  })
+
+  it('preserves multiple matters when submitting after editing only the query', async () => {
+    await router.push('/?matter=smith-divorce&matter=jones-estate&status=indexed')
+    const w = await mountModal()
+    exposed(w).open()
+    await flushPromises()
+    // pre-fill is blank for a multi-matter set; user touches only the search text
+    expect((w.find('#filter-matter').element as HTMLSelectElement).value).toBe('')
+
+    await w.find('#search').setValue('rekening')
+    await w.find('form[role="search"]').trigger('submit')
+    await flushPromises()
+
+    const q = router.currentRoute.value.query
+    // both matters preserved (OR-composed array), status preserved, q updated
+    expect(q.matter).toEqual(['smith-divorce', 'jones-estate'])
+    expect(q.status).toBe('indexed')
+    expect(q.q).toBe('rekening')
+  })
+
+  it('replaces the matter set when the user picks a single matter in the modal', async () => {
+    await router.push('/?matter=smith-divorce&matter=jones-estate')
+    const w = await mountModal()
+    exposed(w).open()
+    await flushPromises()
+    // pre-fill blank for multi-matter; user explicitly selects one
+    await w.find('#filter-matter').setValue('smith-divorce')
+    await w.find('form[role="search"]').trigger('submit')
+    await flushPromises()
+    expect(router.currentRoute.value.query.matter).toEqual(['smith-divorce'])
   })
 })
