@@ -685,8 +685,15 @@ async def summarize_series(
     )
 
 
-async def _load_authored_members(session: AsyncSession, authored_series_id: int) -> list[_Member]:
-    """Amount-bearing, non-deleted members of an authored series."""
+async def _load_authored_members(
+    session: AsyncSession, authored_series_id: int, target_currency: str | None
+) -> list[_Member]:
+    """Amount-bearing, non-deleted members of an authored series, FX-converted.
+
+    Each member's amount is converted into ``target_currency`` at its own date
+    (like a pinned emergent member); a member with no resolvable rate is dropped
+    from the stats and logged — it cannot contribute a comparable data point.
+    """
     statement = (
         select(
             Document.id,
@@ -709,10 +716,22 @@ async def _load_authored_members(session: AsyncSession, authored_series_id: int)
         )
     )
     rows = (await session.execute(statement)).all()
-    return [
-        _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title)
-        for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows
-    ]
+    members: list[_Member] = []
+    for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
+        converted = await convert_amount(session, amount, currency, target_currency, ddate)
+        if converted is None:
+            logger.warning(
+                "authored series %s doc %s: no FX rate %s->%s; dropped from series stats",
+                authored_series_id,
+                did,
+                currency,
+                target_currency,
+            )
+            continue
+        members.append(
+            _Member(did, sname, kslug, ddate, _money(converted), target_currency, sid, kid, title)
+        )
+    return members
 
 
 def _empty_authored_summary(authored: AuthoredSeries) -> SeriesSummary:
@@ -762,7 +781,7 @@ async def summarize_authored_series(
     authored = await session.get(AuthoredSeries, authored_series_id)
     if authored is None:
         return None
-    members = await _load_authored_members(session, authored_series_id)
+    members = await _load_authored_members(session, authored_series_id, authored.currency)
     if not members:
         return _empty_authored_summary(authored)
     return _summarize_members(
@@ -805,7 +824,10 @@ async def load_authored_signature(
     session: AsyncSession, authored_series_id: int
 ) -> SeriesSignature | None:
     """The :class:`SeriesSignature` of an authored series' current membership."""
-    members = await _load_authored_members(session, authored_series_id)
+    authored = await session.get(AuthoredSeries, authored_series_id)
+    if authored is None:
+        return None
+    members = await _load_authored_members(session, authored_series_id, authored.currency)
     return derive_signature(members)
 
 

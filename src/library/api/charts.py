@@ -187,7 +187,7 @@ async def list_charts(
         if summary is None:
             continue
         body = serialise_summary(summary, include_points=True)
-        body |= await _authored_signature_extras(session, settings, authored_id)
+        body |= await _authored_signature_extras(session, settings, authored_id, summary.currency)
         signature = body.get("signature")
         if isinstance(signature, dict):
             authored_signatures.add(
@@ -261,7 +261,7 @@ async def get_chart(
         if summary is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown series")
         body = serialise_summary(summary, include_points=True)
-        body |= await _authored_signature_extras(session, settings, authored_id)
+        body |= await _authored_signature_extras(session, settings, authored_id, summary.currency)
         return body
     sender_id, kind_id, currency = _decode_or_404(series_id)
     summary = await _summarize_one(session, settings, sender_id, kind_id, currency)
@@ -445,7 +445,7 @@ def _serialise_member(member: _Member) -> dict[str, object]:
 
 
 async def _authored_signature_extras(
-    session: AsyncSession, settings: Settings, authored_id: int
+    session: AsyncSession, settings: Settings, authored_id: int, currency: str | None
 ) -> dict[str, object]:
     """Additive signature/suggestion/odd-one-out keys for an authored ``/charts`` entry.
 
@@ -454,9 +454,10 @@ async def _authored_signature_extras(
     (the same set ``GET .../suggestions`` returns — pending, not yet
     accepted/dismissed); ``odd_one_out_count`` is how many current members break
     the signature. Computed here in the endpoint layer, not threaded through
-    ``SeriesSummary``.
+    ``SeriesSummary``. ``currency`` is the authored series' own currency (mixed
+    -currency members are FX-converted into it before the signature is derived).
     """
-    members = await _load_authored_members(session, authored_id)
+    members = await _load_authored_members(session, authored_id, currency)
     signature = derive_signature(members)
     extras: dict[str, object] = {"signature": _serialise_signature(signature)}
     if signature is None:
@@ -718,8 +719,8 @@ async def get_authored_odd_ones_out(
     The whole path is deterministic: both the match and the ``reason`` sentence
     are built from the documents' real sender/kind/currency (no LLM), so the
     reason can never name a sender/kind/currency that isn't in the series."""
-    await _get_authored_or_404(session, authored_id)
-    members = await _load_authored_members(session, authored_id)
+    authored = await _get_authored_or_404(session, authored_id)
+    members = await _load_authored_members(session, authored_id, authored.currency)
     signature = derive_signature(members)
     if signature is None:
         return {"members": []}
