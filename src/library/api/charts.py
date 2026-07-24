@@ -20,18 +20,22 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.auth.deps import current_user
 from library.config import Settings, get_settings
 from library.db import get_session
+from library.embedding import embed_query
 from library.models import (
     AuthoredSeries,
     AuthoredSeriesMember,
     AuthoredSeriesSuggestion,
     Document,
     Kind,
+    MemberOrigin,
     Sender,
     SeriesMetaOverride,
+    SeriesMode,
     SuggestionState,
     User,
 )
-from library.search import DocumentFilters
+from library.search import DocumentFilters, semantic_search
+from library.semantic_membership import MembershipScore, sweep_backfill
 from library.series import (
     SeriesSignature,
     SeriesSummary,
@@ -349,6 +353,10 @@ class AuthoredSeriesCreate(BaseModel):
     description: str | None = None
     # Optional initial membership; unknown/deleted ids are silently ignored.
     document_ids: list[int] = Field(default_factory=list)
+    mode: SeriesMode = SeriesMode.MANUAL
+    # Semantic mode only: documents that anchor the first backfill sweep. Falls
+    # back to document_ids when unset, so manual-style callers keep working.
+    seed_document_ids: list[int] = Field(default_factory=list)
 
 
 class AuthoredSeriesUpdate(BaseModel):
@@ -413,6 +421,47 @@ async def _authored_body(
     if summary is None:  # pragma: no cover - the caller just created/loaded it
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown series")
     return serialise_summary(summary, include_points=True)
+
+
+async def _name_anchor_ids(session: AsyncSession, settings: Settings, name: str) -> list[int]:
+    """Turn a Smart Group's name into a few anchor documents via semantic search.
+
+    Best-effort: embedding failures (feature disabled, sidecar unreachable, no
+    seeds) return ``[]`` so a group with hand-picked seeds still sweeps on those
+    alone, and tests without an embedding backend don't explode.
+    """
+    try:
+        embedding = await embed_query(name, settings=settings)
+    except Exception:
+        return []
+    hits = await semantic_search(
+        session, query=name, query_embedding=embedding, top_k=settings.series_suggestion_limit
+    )
+    return [hit.document.id for hit in hits]
+
+
+async def _backfill_payload(
+    session: AsyncSession, hits: list[tuple[int, MembershipScore]]
+) -> list[dict[str, object]]:
+    """JSON rows for staged backfill hits: ``{document_id, title, score}``."""
+    if not hits:
+        return []
+    document_ids = [document_id for document_id, _ in hits]
+    titles = dict(
+        (
+            await session.execute(
+                select(Document.id, Document.title).where(Document.id.in_(document_ids))
+            )
+        ).all()
+    )
+    return [
+        {
+            "document_id": document_id,
+            "title": titles.get(document_id),
+            "score": round(score.sim_pos, 4),
+        }
+        for document_id, score in hits
+    ]
 
 
 def _serialise_signature(signature: SeriesSignature | None) -> dict[str, object] | None:
@@ -482,19 +531,40 @@ async def create_authored_series(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
     """Create a user-curated series and (optionally) seed its membership. Returns
-    the series summarised exactly like one ``GET /api/charts`` entry."""
+    the series summarised exactly like one ``GET /api/charts`` entry.
+
+    ``mode=semantic`` (Smart Groups) additionally stages a backfill sweep: the
+    seed documents' membership is scored against the whole library and matches
+    are written as ``pending`` suggestions, returned under ``backfill``."""
     authored = AuthoredSeries(
         name=payload.name.strip(),
         description=payload.description,
         currency=payload.currency,
         owner_id=user.id,
+        mode=payload.mode,
     )
     session.add(authored)
     await session.flush()
-    for document_id in await _existing_document_ids(session, payload.document_ids):
-        session.add(AuthoredSeriesMember(authored_series_id=authored.id, document_id=document_id))
+
+    seed_ids = await _existing_document_ids(
+        session, payload.seed_document_ids or payload.document_ids
+    )
+    for document_id in seed_ids:
+        session.add(
+            AuthoredSeriesMember(
+                authored_series_id=authored.id,
+                document_id=document_id,
+                origin=MemberOrigin.MANUAL,
+            )
+        )
     await session.commit()
-    return await _authored_body(session, settings, authored.id)
+
+    body = await _authored_body(session, settings, authored.id)
+    if payload.mode is SeriesMode.SEMANTIC and settings.semantic_group_enabled:
+        anchor_ids = await _name_anchor_ids(session, settings, payload.name)
+        hits = await sweep_backfill(session, settings, authored.id, anchor_ids=anchor_ids)
+        body["backfill"] = await _backfill_payload(session, hits)
+    return body
 
 
 @router.patch(

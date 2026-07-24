@@ -2,14 +2,33 @@
 
 import dataclasses
 import hashlib
-from collections.abc import AsyncIterator
+import uuid
+from collections.abc import AsyncIterator, Callable
+from decimal import Decimal
 
 import pytest
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
-from library.models import EMBEDDING_DIM, Document, DocumentChunk, DocumentSource
-from library.semantic_membership import MembershipScore, document_vectors, score_vector
+from library.config import Settings
+from library.models import (
+    EMBEDDING_DIM,
+    AuthoredSeries,
+    AuthoredSeriesMember,
+    AuthoredSeriesSuggestion,
+    Document,
+    DocumentChunk,
+    DocumentSource,
+    SeriesMode,
+    SuggestionState,
+)
+from library.semantic_membership import (
+    MembershipScore,
+    document_vectors,
+    evaluate_group,
+    score_vector,
+    sweep_backfill,
+)
 
 
 @pytest.fixture
@@ -28,22 +47,52 @@ async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
         yield session
 
 
-async def make_document(session: AsyncSession, marker: str) -> Document:
-    """A bare document row (no chunks) to hang embeddings off of."""
-    document = Document(
-        sha256=hashlib.sha256(marker.encode()).hexdigest(),
-        mime_type="application/pdf",
-        source=DocumentSource.UPLOAD,
-        original_filename=marker,
-    )
-    session.add(document)
-    await session.commit()
-    return document
+@pytest.fixture
+def settings() -> Settings:
+    return Settings()
+
+
+@pytest.fixture
+def make_document(session: AsyncSession) -> Callable[..., Document]:
+    """A bare document row (no chunks) to hang embeddings off of, unique per call."""
+
+    async def _make(title: str, **fields: object) -> Document:
+        marker = f"{title}-{uuid.uuid4()}"
+        document = Document(
+            sha256=hashlib.sha256(marker.encode()).hexdigest(),
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            original_filename=title,
+            title=title,
+            **fields,
+        )
+        session.add(document)
+        await session.commit()
+        return document
+
+    return _make
+
+
+@pytest.fixture
+def add_chunk(session: AsyncSession) -> Callable[[Document, list[float]], None]:
+    """Attach a chunk embedding (padded with zeros to EMBEDDING_DIM) to a document."""
+
+    def _add(document: Document, vec: list[float]) -> None:
+        padded = list(vec) + [0.0] * (EMBEDDING_DIM - len(vec))
+        session.add(
+            DocumentChunk(
+                document_id=document.id, chunk_index=1, text=document.title, embedding=padded
+            )
+        )
+
+    return _add
 
 
 @pytest.mark.integration
-async def test_document_vectors_mean_pools_and_normalizes(session: AsyncSession) -> None:
-    doc = await make_document(session, "ev-charge-fastned")
+async def test_document_vectors_mean_pools_and_normalizes(
+    session: AsyncSession, make_document: Callable[..., Document]
+) -> None:
+    doc = await make_document("ev-charge-fastned")
     # Two chunks pointing along +x and +y; mean is (0.5, 0.5, 0, ...) -> normalized.
     dim = EMBEDDING_DIM
     vx = [1.0] + [0.0] * (dim - 1)
@@ -61,9 +110,11 @@ async def test_document_vectors_mean_pools_and_normalizes(session: AsyncSession)
 
 
 @pytest.mark.integration
-async def test_document_vectors_omits_documents_without_chunks(session: AsyncSession) -> None:
-    with_chunks = await make_document(session, "with-chunks")
-    without_chunks = await make_document(session, "without-chunks")
+async def test_document_vectors_omits_documents_without_chunks(
+    session: AsyncSession, make_document: Callable[..., Document]
+) -> None:
+    with_chunks = await make_document("with-chunks")
+    without_chunks = await make_document("without-chunks")
     session.add(
         DocumentChunk(
             document_id=with_chunks.id,
@@ -138,3 +189,87 @@ def test_sim_pos_is_native_float_not_numpy() -> None:
     result = score_vector(_graded(0.99, 0.14), [_graded(1.0, 0.0)], [], tau=0.55, margin=0.02)
     assert isinstance(result.sim_pos, float)
     assert type(result.sim_pos) is float
+
+
+# --- evaluate_group / sweep_backfill: DB-backed membership engine ---
+
+
+@pytest.mark.integration
+async def test_evaluate_group_returns_only_belonging_docs(
+    session: AsyncSession,
+    settings: Settings,
+    make_document: Callable[..., Document],
+    add_chunk: Callable[[Document, list[float]], None],
+) -> None:
+    group = AuthoredSeries(name="ev-eval-uniqtag", currency="EUR", mode=SeriesMode.SEMANTIC)
+    session.add(group)
+    await session.flush()
+    member = await make_document(title="ev-eval-member")
+    add_chunk(member, [0.9, 0.1])
+    near = await make_document(title="ev-eval-near")
+    add_chunk(near, [0.88, 0.12])
+    far = await make_document(title="ev-eval-far")
+    add_chunk(far, [0.0, 1.0])
+    session.add(AuthoredSeriesMember(authored_series_id=group.id, document_id=member.id))
+    await session.commit()
+
+    hits = await evaluate_group(session, settings, group.id, [near.id, far.id])
+    ids = [doc_id for doc_id, _ in hits]
+    assert near.id in ids
+    assert far.id not in ids
+
+
+@pytest.mark.integration
+async def test_evaluate_group_empty_candidates_returns_empty(
+    session: AsyncSession, settings: Settings
+) -> None:
+    group = AuthoredSeries(name="ev-eval-empty-uniqtag", currency="EUR", mode=SeriesMode.SEMANTIC)
+    session.add(group)
+    await session.flush()
+    await session.commit()
+
+    assert await evaluate_group(session, settings, group.id, []) == []
+
+
+@pytest.mark.integration
+async def test_sweep_backfill_writes_pending_suggestions(
+    session: AsyncSession,
+    settings: Settings,
+    make_document: Callable[..., Document],
+    add_chunk: Callable[[Document, list[float]], None],
+) -> None:
+    group = AuthoredSeries(name="ev-sweep-uniqtag", currency="EUR", mode=SeriesMode.SEMANTIC)
+    session.add(group)
+    await session.flush()
+    member = await make_document(title="ev-sweep-member")
+    add_chunk(member, [0.9, 0.1])
+    match = await make_document(
+        title="ev-sweep-match", amount_total=Decimal("50.00"), currency="EUR"
+    )
+    add_chunk(match, [0.88, 0.12])
+    noise = await make_document(
+        title="ev-sweep-noise", amount_total=Decimal("10.00"), currency="EUR"
+    )
+    add_chunk(noise, [0.0, 1.0])
+    session.add(AuthoredSeriesMember(authored_series_id=group.id, document_id=member.id))
+    await session.commit()
+
+    hits = await sweep_backfill(session, settings, group.id, anchor_ids=[])
+    hit_ids = {doc_id for doc_id, _ in hits}
+    assert match.id in hit_ids
+    assert noise.id not in hit_ids
+
+    rows = (
+        (
+            await session.execute(
+                select(AuthoredSeriesSuggestion).where(
+                    AuthoredSeriesSuggestion.authored_series_id == group.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert {row.document_id for row in rows} == {match.id}
+    assert rows[0].state == SuggestionState.PENDING
+    assert rows[0].score == pytest.approx(hits[0][1].sim_pos)

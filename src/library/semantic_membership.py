@@ -16,7 +16,15 @@ from dataclasses import dataclass
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.models import DocumentChunk
+from library.config import Settings
+from library.models import (
+    AuthoredSeriesExclusion,
+    AuthoredSeriesMember,
+    AuthoredSeriesSuggestion,
+    Document,
+    DocumentChunk,
+    SuggestionState,
+)
 
 
 async def document_vectors(
@@ -93,3 +101,115 @@ def score_vector(
     sim_neg = max((_cosine(candidate, n) for n in negatives), default=0.0)
     belongs = sim_pos >= tau and sim_pos > sim_neg + margin
     return MembershipScore(sim_pos=sim_pos, sim_neg=sim_neg, belongs=belongs)
+
+
+# --- DB-backed membership engine (Smart Groups: scoring + backfill sweep) ---
+
+
+async def _member_ids(session: AsyncSession, group_id: int) -> list[int]:
+    rows = await session.execute(
+        select(AuthoredSeriesMember.document_id).where(
+            AuthoredSeriesMember.authored_series_id == group_id
+        )
+    )
+    return [r[0] for r in rows]
+
+
+async def _exclusion_ids(session: AsyncSession, group_id: int) -> list[int]:
+    rows = await session.execute(
+        select(AuthoredSeriesExclusion.document_id).where(
+            AuthoredSeriesExclusion.authored_series_id == group_id
+        )
+    )
+    return [r[0] for r in rows]
+
+
+async def evaluate_group(
+    session: AsyncSession,
+    settings: Settings,
+    group_id: int,
+    candidate_ids: Sequence[int],
+    *,
+    extra_positive_ids: Sequence[int] = (),
+) -> list[tuple[int, MembershipScore]]:
+    """Score candidates against a group's members (+ optional anchors) and exclusions.
+
+    Returns only the candidates that ``belong``, sorted by ``sim_pos`` descending.
+    """
+    if not candidate_ids:
+        return []
+    positive_ids = list(dict.fromkeys([*await _member_ids(session, group_id), *extra_positive_ids]))
+    negative_ids = await _exclusion_ids(session, group_id)
+    needed = list(dict.fromkeys([*positive_ids, *negative_ids, *candidate_ids]))
+    vectors = await document_vectors(session, needed)
+    positives = [vectors[i] for i in positive_ids if i in vectors]
+    negatives = [vectors[i] for i in negative_ids if i in vectors]
+    if not positives:
+        return []
+    hits: list[tuple[int, MembershipScore]] = []
+    for candidate_id in candidate_ids:
+        vec = vectors.get(candidate_id)
+        if vec is None:
+            continue
+        score = score_vector(
+            vec,
+            positives,
+            negatives,
+            tau=settings.semantic_group_min_similarity,
+            margin=settings.semantic_group_neg_margin,
+        )
+        if score.belongs:
+            hits.append((candidate_id, score))
+    hits.sort(key=lambda pair: pair[1].sim_pos, reverse=True)
+    return hits
+
+
+async def _eligible_candidate_ids(session: AsyncSession, group_id: int) -> list[int]:
+    """Non-deleted, amount-bearing docs not already a member or exclusion of the group."""
+    member_sub = select(AuthoredSeriesMember.document_id).where(
+        AuthoredSeriesMember.authored_series_id == group_id
+    )
+    excl_sub = select(AuthoredSeriesExclusion.document_id).where(
+        AuthoredSeriesExclusion.authored_series_id == group_id
+    )
+    rows = await session.execute(
+        select(Document.id).where(
+            Document.deleted_at.is_(None),
+            Document.amount_total.isnot(None),
+            Document.id.notin_(member_sub),
+            Document.id.notin_(excl_sub),
+        )
+    )
+    return [r[0] for r in rows]
+
+
+async def sweep_backfill(
+    session: AsyncSession,
+    settings: Settings,
+    group_id: int,
+    anchor_ids: Sequence[int] = (),
+) -> list[tuple[int, MembershipScore]]:
+    """Score the whole library and write ``pending`` suggestions for matches.
+
+    ``anchor_ids`` seed the positive set alongside the group's real members —
+    useful for a brand-new group that has few or no members yet. Capped at
+    ``settings.series_suggestion_limit`` (also keeps the write, and any API
+    payload built from the result, within the list-size limits elsewhere in
+    the app). Returns the (possibly capped) hits that were written.
+    """
+    candidate_ids = await _eligible_candidate_ids(session, group_id)
+    hits = await evaluate_group(
+        session, settings, group_id, candidate_ids, extra_positive_ids=anchor_ids
+    )
+    hits = hits[: settings.series_suggestion_limit]
+    for document_id, score in hits:
+        session.add(
+            AuthoredSeriesSuggestion(
+                authored_series_id=group_id,
+                document_id=document_id,
+                state=SuggestionState.PENDING,
+                score=score.sim_pos,
+            )
+        )
+    await session.commit()
+    return hits
