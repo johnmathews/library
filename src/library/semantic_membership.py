@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -50,3 +51,45 @@ async def document_vectors(
         norm = math.sqrt(sum(value * value for value in mean))
         result[document_id] = [value / norm for value in mean] if norm > 0 else mean
     return result
+
+
+@dataclass(frozen=True, slots=True)
+class MembershipScore:
+    sim_pos: float  # cosine to nearest positive
+    sim_neg: float  # cosine to nearest negative (0.0 if none)
+    belongs: bool
+
+
+def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    na = math.sqrt(sum(x * x for x in a))
+    nb = math.sqrt(sum(y * y for y in b))
+    if na == 0.0 or nb == 0.0:
+        return 0.0
+    # pgvector rows surface numpy.float32 scalars; cast to a native float so
+    # downstream JSON serialization (API responses, DB storage) never chokes
+    # on a numpy type.
+    return float(dot / (na * nb))
+
+
+def score_vector(
+    candidate: Sequence[float],
+    positives: Sequence[Sequence[float]],
+    negatives: Sequence[Sequence[float]],
+    *,
+    tau: float,
+    margin: float,
+) -> MembershipScore:
+    """Nearest-positive-neighbour membership with a negative veto.
+
+    Belongs iff the candidate is within ``tau`` cosine of some positive AND that
+    similarity beats its nearest negative by more than ``margin``. Works with a
+    handful of positives and zero negatives (cold start): the ``tau`` gate alone
+    admits, and ``max`` over positives lets diverse sub-clusters each count.
+    """
+    if not positives:
+        return MembershipScore(0.0, 0.0, False)
+    sim_pos = max(_cosine(candidate, p) for p in positives)
+    sim_neg = max((_cosine(candidate, n) for n in negatives), default=0.0)
+    belongs = sim_pos >= tau and sim_pos > sim_neg + margin
+    return MembershipScore(sim_pos=sim_pos, sim_neg=sim_neg, belongs=belongs)
