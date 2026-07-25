@@ -144,6 +144,30 @@ and `npm run dev` (Vite on :5173, proxying `/api` — see
 CI's `compose-smoke` job boots this exact file and asserts healthy +
 login on every push.
 
+### 1.4.1 Verifying the deployed version
+
+`/healthz` is unauthenticated and returns the commit baked into the running
+image, so a deploy can be confirmed with one request — no admin login:
+
+```bash
+curl -s https://library.<host>/healthz
+# {"status":"ok","version":"0.1.0","git_sha":"<commit>"}
+```
+
+`git_sha` is the `GIT_SHA` build-arg CI bakes in (`ENV LIBRARY_GIT_SHA` →
+`Settings.git_sha`); it is `null` on a locally-built/dev image. To confirm the
+server is running the commit CI just promoted, compare it to `origin/main`:
+
+```bash
+test "$(curl -s https://library.<host>/healthz | jq -r .git_sha)" \
+     = "$(git rev-parse origin/main)" && echo "up to date" || echo "STALE — redeploy"
+```
+
+A mismatch means the registry `:latest` moved but the box hasn't pulled +
+recreated the container yet (`docker compose pull && docker compose up -d`, or
+`make deploy`) — retagging `:latest` never restarts a running server. The same
+`git_sha` is also on the admin **System** view (`GET /api/admin/system`).
+
 ## 1.5 Reverse proxy (HTTPS)
 
 Session cookies default to `Secure`, so put TLS in front for real use.
