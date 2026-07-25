@@ -2,8 +2,10 @@ name: CI
 
 on:
   push:
-    # Every branch, so feature work is gated by the full pipeline (incl. e2e)
-    # before it reaches main — not only after the merge lands.
+    # Every branch, so feature work is gated before it reaches main. The heavy
+    # 3-browser e2e is scoped down below (it runs on PRs, main, and manual
+    # dispatch — not on every intermediate feature-branch push); the fast gates
+    # still run on branch pushes.
     branches: ["**"]
   pull_request:
   workflow_dispatch:
@@ -15,7 +17,53 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Compute which areas the change touches so the unit-test jobs can be skipped
+  # when clearly irrelevant (frontend-only change → skip backend; backend/docs
+  # change → skip frontend). SAFETY: on main we force both test jobs to run
+  # regardless (see their `if:`), because the `build` job bakes real backend +
+  # frontend coverage numbers into the promoted image — main must never skip a
+  # side and bake a null. A change under .github/workflows (the `ci` output)
+  # runs everything. `promote` and the deploy path are unaffected: on main all
+  # jobs run. The required check is the `ci-gate` aggregator below, which treats
+  # a skipped job as a pass — so path-skipping never blocks a merge.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      backend: ${{ steps.filter.outputs.backend }}
+      frontend: ${{ steps.filter.outputs.frontend }}
+      ci: ${{ steps.filter.outputs.ci }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            backend:
+              - 'src/**'
+              - 'tests/**'
+              - 'migrations/**'
+              - 'conftest.py'
+              - 'pyproject.toml'
+              - 'uv.lock'
+              - 'Dockerfile'
+              - 'docker-compose.yml'
+              - 'scripts/**'
+              - 'docs/**'
+              - 'journal/**'
+              - '**/*.md'
+            frontend:
+              - 'frontend/**'
+            ci:
+              - '.github/workflows/**'
+
   backend:
+    needs: changes
+    # Always on main (coverage baked into the promoted image); on branches/PRs
+    # only when backend-relevant paths or the workflow itself changed.
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      needs.changes.outputs.backend == 'true' ||
+      needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -82,6 +130,13 @@ jobs:
           path: coverage.md
 
   frontend:
+    needs: changes
+    # Always on main (coverage baked into the promoted image); on branches/PRs
+    # only when frontend paths or the workflow itself changed.
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      needs.changes.outputs.frontend == 'true' ||
+      needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -131,6 +186,22 @@ jobs:
     # and shares no artifacts with them, so it runs fully in parallel to cut total
     # wall-clock. The deploy gate stays safe — `promote` still needs all of
     # backend/frontend/e2e/compose-smoke to pass (see its `needs` below).
+    #
+    # SCOPE: the full 3-browser e2e is the pipeline's long pole (~25-30 min), so
+    # it runs only where it earns its cost — pull requests, main, and manual
+    # dispatch — not on every intermediate feature-branch push. A PR re-runs it
+    # before merge, and main runs it as the promote gate, so nothing reaches
+    # production un-e2e'd. Path-gated too: skipped when only docs/config changed
+    # with no code (backend/frontend/ci all false).
+    needs: changes
+    if: >-
+      (github.event_name == 'pull_request' ||
+       github.ref == 'refs/heads/main' ||
+       github.event_name == 'workflow_dispatch') &&
+      (github.ref == 'refs/heads/main' ||
+       needs.changes.outputs.backend == 'true' ||
+       needs.changes.outputs.frontend == 'true' ||
+       needs.changes.outputs.ci == 'true')
     runs-on: ubuntu-latest
     env:
       # Both compose files for every compose invocation (up/exec/logs/down).
@@ -212,8 +283,15 @@ jobs:
         run: docker compose down -v
 
   # Deployment smoke test: the exact production compose file boots to a
-  # healthy stack and a working login (W17 acceptance).
+  # healthy stack and a working login (W17 acceptance). Path-gated: skipped
+  # when nothing that affects the built image changed.
   compose-smoke:
+    needs: changes
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      needs.changes.outputs.backend == 'true' ||
+      needs.changes.outputs.frontend == 'true' ||
+      needs.changes.outputs.ci == 'true'
     runs-on: ubuntu-latest
     env:
       # The runner talks plain HTTP to :8000; Secure cookies would be
@@ -260,14 +338,21 @@ jobs:
 
   # Build the published image, gated on the backend + frontend test jobs so it
   # can bake in their real coverage numbers (the unified coverage-summary.json
-  # the admin views read). Image readiness is unaffected in practice: promote
-  # already waits for the full green suite (incl. e2e + compose-smoke). Pushes
-  # the immutable :sha tag on main (the rollback artifact and the source the
-  # promote step retags); on branches it skips the push and only warms the
-  # cache. This job is the sole writer of the `library-image` layer-cache scope
-  # that the e2e and compose-smoke bake builds read from.
+  # the admin views read). Runs when at least one test job passed and neither
+  # failed — so a path-skipped side (backend-only or frontend-only branch/PR)
+  # still builds. On main both test jobs always run, so the promoted image bakes
+  # complete coverage. Pushes the immutable :sha tag on main (the rollback
+  # artifact and the source the promote step retags); on branches it skips the
+  # push and only warms the cache. This job is the sole writer of the
+  # `library-image` layer-cache scope that the e2e and compose-smoke bake builds
+  # read from.
   build:
-    needs: [backend, frontend]
+    needs: [changes, backend, frontend]
+    if: >-
+      !cancelled() &&
+      needs.backend.result != 'failure' &&
+      needs.frontend.result != 'failure' &&
+      (needs.backend.result == 'success' || needs.frontend.result == 'success')
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -323,7 +408,8 @@ jobs:
   # Promote the tested build to :latest — a registry-side retag of the :sha
   # image (no rebuild, no pull, ~seconds), gated on the full green suite.
   # :latest is what production deploys, so it only moves once backend, frontend,
-  # e2e and compose-smoke have all passed.
+  # e2e and compose-smoke have all passed. On main every gated job runs, so the
+  # standard all-success gating below holds.
   promote:
     needs: [build, backend, frontend, e2e, compose-smoke]
     if: github.ref == 'refs/heads/main'
@@ -344,3 +430,32 @@ jobs:
           docker buildx imagetools create \
             --tag ghcr.io/johnmathews/library:latest \
             "ghcr.io/johnmathews/library:${GITHUB_SHA}"
+
+  # Single required status check. With per-area path skipping, individual jobs
+  # can legitimately be `skipped` — a skipped *required* check would otherwise
+  # block the merge forever (this is what stranded a Dependabot PR once). This
+  # aggregator runs always and passes when every upstream job either succeeded
+  # or was skipped, failing only on a real failure/cancellation. Point branch
+  # protection at THIS job (`ci-gate`) as the sole required check instead of the
+  # individual jobs.
+  ci-gate:
+    needs: [backend, frontend, e2e, compose-smoke, build]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require that no upstream job failed
+        run: |
+          results="backend=${{ needs.backend.result }}"
+          results="$results frontend=${{ needs.frontend.result }}"
+          results="$results e2e=${{ needs.e2e.result }}"
+          results="$results compose-smoke=${{ needs.compose-smoke.result }}"
+          results="$results build=${{ needs.build.result }}"
+          echo "upstream results: $results"
+          for kv in $results; do
+            r="${kv#*=}"
+            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
+              echo "::error::required job '${kv%%=*}' did not pass (result: $r)"
+              exit 1
+            fi
+          done
+          echo "all upstream jobs passed or were skipped"
