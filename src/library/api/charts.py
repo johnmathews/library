@@ -23,6 +23,7 @@ from library.db import get_session
 from library.embedding import embed_query
 from library.models import (
     AuthoredSeries,
+    AuthoredSeriesExclusion,
     AuthoredSeriesMember,
     AuthoredSeriesSuggestion,
     Document,
@@ -625,7 +626,14 @@ async def add_authored_member(
         session.add(
             AuthoredSeriesMember(authored_series_id=authored_id, document_id=payload.document_id)
         )
-        await session.commit()
+    # A hand re-add clears any prior prune so it sticks.
+    await session.execute(
+        delete(AuthoredSeriesExclusion).where(
+            AuthoredSeriesExclusion.authored_series_id == authored_id,
+            AuthoredSeriesExclusion.document_id == payload.document_id,
+        )
+    )
+    await session.commit()
     return await _authored_body(session, settings, authored_id)
 
 
@@ -652,6 +660,12 @@ async def remove_authored_member(
     ).scalar_one_or_none()
     if member is not None:
         await session.delete(member)
+        # Prune = negative example: veto re-adding this document to this series.
+        await session.execute(
+            pg_insert(AuthoredSeriesExclusion)
+            .values(authored_series_id=authored_id, document_id=document_id)
+            .on_conflict_do_nothing(constraint="authored_series_exclusions_series_document")
+        )
         await session.commit()
     return await _authored_body(session, settings, authored_id)
 
@@ -725,12 +739,25 @@ async def accept_authored_suggestion(
     if document is None or document.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document")
     if document_id not in await _authored_member_ids(session, authored_id):
-        session.add(AuthoredSeriesMember(authored_series_id=authored_id, document_id=document_id))
+        session.add(
+            AuthoredSeriesMember(
+                authored_series_id=authored_id,
+                document_id=document_id,
+                origin=MemberOrigin.ACCEPTED_SUGGESTION,
+            )
+        )
     # The document is now a member; drop any pending/dismissed suggestion row.
     await session.execute(
         delete(AuthoredSeriesSuggestion).where(
             AuthoredSeriesSuggestion.authored_series_id == authored_id,
             AuthoredSeriesSuggestion.document_id == document_id,
+        )
+    )
+    # Accepting clears any prior prune (exclusion) for this document.
+    await session.execute(
+        delete(AuthoredSeriesExclusion).where(
+            AuthoredSeriesExclusion.authored_series_id == authored_id,
+            AuthoredSeriesExclusion.document_id == document_id,
         )
     )
     await session.commit()
@@ -769,6 +796,13 @@ async def dismiss_authored_suggestion(
         )
     )
     await session.execute(statement)
+    # Dismissing writes a negative example so a later semantic sweep does not
+    # re-propose (or auto-add) this document to this series.
+    await session.execute(
+        pg_insert(AuthoredSeriesExclusion)
+        .values(authored_series_id=authored_id, document_id=document_id)
+        .on_conflict_do_nothing(constraint="authored_series_exclusions_series_document")
+    )
     await session.commit()
     remaining = await suggest_signature_matches(session, authored_id, settings)
     return {"count": len(remaining)}

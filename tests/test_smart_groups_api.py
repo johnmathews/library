@@ -8,10 +8,19 @@ from decimal import Decimal
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from library.models import EMBEDDING_DIM, Document, DocumentChunk, DocumentSource
+from library.config import Settings
+from library.models import (
+    EMBEDDING_DIM,
+    AuthoredSeriesExclusion,
+    Document,
+    DocumentChunk,
+    DocumentSource,
+)
+from library.semantic_membership import auto_add_document
 
 pytestmark = pytest.mark.integration
 
@@ -121,3 +130,53 @@ def test_create_semantic_group_seed_members_are_manual_origin(
     body = resp.json()
     assert body["count"] == 0  # seed doc has no amount_total, so it doesn't chart as a point
     assert body["authored_id"] is not None
+
+
+def test_pruned_member_is_not_re_added(api_client: TestClient, api_database_url: str) -> None:
+    """Removing a member writes an exclusion (a veto), so a later semantic sweep
+    does not silently re-add the pruned document."""
+    tag = uuid.uuid4().hex[:8]
+    seed_id = make_document_with_chunk(api_database_url, f"ev-prune-seed-{tag}", [0.9, 0.1])
+    wrong_id = make_document_with_chunk(
+        api_database_url,
+        f"ev-prune-wrong-{tag}",
+        [0.88, 0.12],
+        amount_total="9.00",
+        currency="EUR",
+    )
+
+    created = api_client.post(
+        "/api/charts/authored",
+        json={
+            "name": f"ev-prune-group-{tag}",
+            "currency": "EUR",
+            "mode": "semantic",
+            "seed_document_ids": [seed_id],
+        },
+    ).json()
+    authored_id = created["authored_id"]
+    api_client.post(f"/api/charts/authored/{authored_id}/members", json={"document_id": wrong_id})
+
+    resp = api_client.delete(f"/api/charts/authored/{authored_id}/members/{wrong_id}")
+    assert resp.status_code == 200, resp.text
+
+    async def _check() -> None:
+        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                excl = (
+                    await session.execute(
+                        select(AuthoredSeriesExclusion).where(
+                            AuthoredSeriesExclusion.authored_series_id == authored_id,
+                            AuthoredSeriesExclusion.document_id == wrong_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                assert excl is not None
+                # A fresh auto-add attempt must respect the veto:
+                joined = await auto_add_document(session, Settings(), wrong_id)
+                assert authored_id not in joined
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_check())
