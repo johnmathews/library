@@ -4,7 +4,7 @@
  * backfill sweep to match one against the other) → create an authored series
  * with the "Smart Group" toggle on, seeded from the first document → the
  * staged-review modal appears with the second document as a match → accept
- * it → the tile reflects the added member.
+ * it → the tile's member count reflects both documents.
  *
  * Mirrors charts.spec.ts (create/open/delete an authored chart) and the
  * API-seeding trick used by projects.spec.ts / tags-editing.spec.ts. Both
@@ -108,11 +108,13 @@ test('create a Smart Group, review the staged backfill match, and accept it', as
   await row.getByTestId('charts-backfill-add').click()
   await expect(modal).toBeHidden()
 
-  // The tile now shows the auto-added badge and both documents as members.
+  // The tile now shows both documents as members. Accepting a staged
+  // suggestion sets origin=ACCEPTED_SUGGESTION, not `auto` — the auto-added
+  // badge/count only cover the silent background auto-add path, which this
+  // test doesn't exercise, so assert the member count instead.
   const tile = page.getByTestId('series-trend').filter({ hasText: name })
   await expect(tile).toBeVisible()
-  await expect(tile.getByTestId('series-auto-added-badge')).toBeVisible()
-  await expect(tile.getByTestId('series-auto-added-badge')).toContainText('1 added automatically')
+  await expect(tile.getByTestId('series-meta-count')).toContainText('2 documents')
 
   // Clean up: delete the series, then both throwaway documents.
   await tile.getByTestId('series-delete').click()

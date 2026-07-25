@@ -631,7 +631,8 @@ async def add_authored_member(
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
-    """Add a document to an authored series (idempotent); returns the refreshed body."""
+    """Add a document to an authored series (idempotent), clearing any prior
+    exclusion (prune) for it so the re-add sticks; returns the refreshed body."""
     await _get_authored_or_404(session, authored_id)
     document = await session.get(Document, payload.document_id)
     if document is None or document.deleted_at is not None:
@@ -662,7 +663,9 @@ async def remove_authored_member(
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
-    """Remove a document from an authored series (idempotent); returns the refreshed body."""
+    """Remove a document from an authored series (idempotent), writing an exclusion
+    so it is not silently re-added by a later sweep/auto-add; returns the
+    refreshed body."""
     await _get_authored_or_404(session, authored_id)
     member = (
         await session.execute(
@@ -746,8 +749,9 @@ async def accept_authored_suggestion(
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
-    """Promote a suggestion to a real member (idempotent) and clear any suggestion
-    row for it; returns the refreshed authored body."""
+    """Promote a suggestion to a real member (idempotent), clear any suggestion row
+    for it and any prior exclusion (prune) for this document, and return the
+    refreshed authored body."""
     await _get_authored_or_404(session, authored_id)
     document = await session.get(Document, document_id)
     if document is None or document.deleted_at is not None:
@@ -790,8 +794,10 @@ async def dismiss_authored_suggestion(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
     """Record a ``dismissed`` tombstone for ``document_id`` (upsert on the unique
-    ``(series, document)`` key) so it is never suggested for this series again.
-    Returns ``{"count": N}`` — the number of live signature matches still awaiting
+    ``(series, document)`` key), clear any existing membership so dismiss is
+    authoritative (never member + excluded at once), and write an exclusion so
+    it is never suggested or auto-added to this series again. Returns
+    ``{"count": N}`` — the number of live signature matches still awaiting
     review after the dismissal (the same set ``GET .../suggestions`` returns)."""
     await _get_authored_or_404(session, authored_id)
     document = await session.get(Document, document_id)
@@ -810,6 +816,17 @@ async def dismiss_authored_suggestion(
         )
     )
     await session.execute(statement)
+    # Dismiss is authoritative: clear any existing membership too (e.g. the
+    # document was auto-added between staging and review) so it never ends up
+    # simultaneously a member and excluded — a contradictory state neither
+    # re-sweep nor auto-add reconciles. No-op in the normal case (dismissed
+    # documents aren't members).
+    await session.execute(
+        delete(AuthoredSeriesMember).where(
+            AuthoredSeriesMember.authored_series_id == authored_id,
+            AuthoredSeriesMember.document_id == document_id,
+        )
+    )
     # Dismissing writes a negative example so a later semantic sweep does not
     # re-propose (or auto-add) this document to this series.
     await session.execute(

@@ -297,3 +297,84 @@ def test_pruned_member_is_not_re_added(api_client: TestClient, api_database_url:
             await engine.dispose()
 
     asyncio.run(_check())
+
+
+def test_dismiss_clears_existing_membership_and_blocks_reautoadd(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Dismiss must be authoritative: a document that became an AUTO member
+    (e.g. via a background auto-add pass) between staging and review, then
+    dismissed via the suggestion-review UI, must end up NOT a member, WITH an
+    exclusion recorded — never both a member and excluded. A later auto-add
+    attempt must also respect the veto."""
+    tag = uuid.uuid4().hex[:8]
+    seed_id = make_document_with_chunk(api_database_url, f"ev-dismiss-seed-{tag}", [0.9, 0.1])
+    auto_id = make_document_with_chunk(
+        api_database_url,
+        f"ev-dismiss-auto-{tag}",
+        [0.88, 0.12],
+        amount_total="9.00",
+        currency="EUR",
+    )
+
+    created = api_client.post(
+        "/api/charts/authored",
+        json={
+            "name": f"ev-dismiss-group-{tag}",
+            "currency": "EUR",
+            "mode": "semantic",
+            "seed_document_ids": [seed_id],
+        },
+    ).json()
+    authored_id = created["authored_id"]
+
+    async def _make_auto_member() -> None:
+        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                session.add(
+                    AuthoredSeriesMember(
+                        authored_series_id=authored_id,
+                        document_id=auto_id,
+                        origin=MemberOrigin.AUTO,
+                    )
+                )
+                await session.commit()
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_make_auto_member())
+
+    resp = api_client.post(f"/api/charts/authored/{authored_id}/suggestions/{auto_id}/dismiss")
+    assert resp.status_code == 200, resp.text
+
+    async def _check() -> None:
+        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                member = (
+                    await session.execute(
+                        select(AuthoredSeriesMember).where(
+                            AuthoredSeriesMember.authored_series_id == authored_id,
+                            AuthoredSeriesMember.document_id == auto_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                assert member is None  # dismiss must clear the AUTO member row
+
+                excl = (
+                    await session.execute(
+                        select(AuthoredSeriesExclusion).where(
+                            AuthoredSeriesExclusion.authored_series_id == authored_id,
+                            AuthoredSeriesExclusion.document_id == auto_id,
+                        )
+                    )
+                ).scalar_one_or_none()
+                assert excl is not None
+
+                joined = await auto_add_document(session, Settings(), auto_id)
+                assert authored_id not in joined
+        finally:
+            await engine.dispose()
+
+    asyncio.run(_check())

@@ -252,12 +252,19 @@ async def auto_add_document(
             continue
         hits = await evaluate_group(session, settings, group_id, [document_id])
         if hits:
-            session.add(
-                AuthoredSeriesMember(
+            # Upsert (no-op on conflict) for symmetry with sweep_backfill /
+            # exclusion writes: guards against a concurrent-add race hitting
+            # the (series, document) unique constraint with an IntegrityError.
+            # The member/exclusion pre-check above already gates this, so the
+            # on_conflict is belt-and-suspenders.
+            await session.execute(
+                pg_insert(AuthoredSeriesMember)
+                .values(
                     authored_series_id=group_id,
                     document_id=document_id,
-                    origin=MemberOrigin.AUTO,
+                    origin=MemberOrigin.AUTO.value,
                 )
+                .on_conflict_do_nothing(constraint="authored_series_members_series_document")
             )
             joined.append(group_id)
     if joined:
