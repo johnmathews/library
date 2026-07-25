@@ -13,9 +13,12 @@ import {
   authoredSeriesId,
   createAuthoredSeries,
   listDocuments,
+  acceptAuthoredSuggestion,
+  dismissAuthoredSuggestion,
   type DocumentSeries,
   type DocumentListItem,
   type CandidateSeries,
+  type BackfillMatch,
 } from '@/api/documents'
 import SeriesChartTile from '@/components/SeriesChartTile.vue'
 import CurrencySelect from '@/components/CurrencySelect.vue'
@@ -116,6 +119,10 @@ const createResults = ref<DocumentListItem[]>([])
 const selectedDocs = ref<{ id: number; label: string; currency: string | null }[]>([])
 const creating = ref(false)
 const createError = ref<string | null>(null)
+// Smart Group (W-smart-groups): 'semantic' seeds a backfill sweep instead of
+// (only) the hand-picked selectedDocs — the sweep's matches come back staged
+// under `backfill` for review rather than added outright.
+const newMode = ref<'manual' | 'semantic'>('manual')
 
 // Stable-identity list for AppErrorSummary: only re-derived when the message
 // changes, so editing other form fields while the error shows doesn't re-fire
@@ -151,6 +158,7 @@ function resetCreate(): void {
   createResults.value = []
   selectedDocs.value = []
   createError.value = null
+  newMode.value = 'manual'
 }
 
 function docLabel(doc: DocumentListItem): string {
@@ -186,18 +194,103 @@ async function submitCreate(): Promise<void> {
   creating.value = true
   createError.value = null
   try {
-    await createAuthoredSeries({
+    const docIds = selectedDocs.value.map((d) => d.id)
+    const result = await createAuthoredSeries({
       name,
       currency: newCurrency.value.trim().toUpperCase() || null,
       description: newDescription.value.trim() || null,
-      document_ids: selectedDocs.value.map((d) => d.id),
+      document_ids: docIds,
+      // Only sent for Smart Groups — a plain create keeps the same payload
+      // shape it always has (the backend defaults mode to 'manual').
+      ...(newMode.value === 'semantic' ? { mode: 'semantic', seed_document_ids: docIds } : {}),
     })
     resetCreate()
     await load()
+    if (result.authored_id != null && result.backfill && result.backfill.length > 0) {
+      openBackfillReview(result.authored_id, result.backfill)
+    }
   } catch {
     createError.value = 'Could not create the series. Try again.'
   } finally {
     creating.value = false
+  }
+}
+
+// --- Smart Group staged-review modal ----------------------------------------
+//
+// A semantic create's backfill sweep matches are NOT added outright — they
+// land here as `pending` suggestions the user reviews one by one (or all at
+// once). Reuses the same accept/dismiss endpoints as the tile's inline
+// suggestions panel. Closing (including auto-close once every row is
+// resolved) reloads the grid so the tile reflects the final membership.
+const backfillSeriesId = ref<number | null>(null)
+const backfillMatches = ref<BackfillMatch[]>([])
+const backfillBusy = ref(false)
+const backfillError = ref<string | null>(null)
+
+function openBackfillReview(seriesAuthoredId: number, matches: BackfillMatch[]): void {
+  backfillSeriesId.value = seriesAuthoredId
+  backfillMatches.value = matches
+  backfillError.value = null
+}
+
+function backfillLabel(match: BackfillMatch): string {
+  return match.title?.trim() ? match.title : `Document #${match.document_id}`
+}
+
+function closeBackfillReview(): void {
+  backfillSeriesId.value = null
+  backfillMatches.value = []
+  backfillError.value = null
+  void load()
+}
+
+async function acceptBackfillMatch(documentId: number): Promise<void> {
+  if (backfillSeriesId.value == null || backfillBusy.value) return
+  backfillBusy.value = true
+  backfillError.value = null
+  try {
+    await acceptAuthoredSuggestion(backfillSeriesId.value, documentId)
+    backfillMatches.value = backfillMatches.value.filter((m) => m.document_id !== documentId)
+    if (backfillMatches.value.length === 0) closeBackfillReview()
+  } catch {
+    backfillError.value = 'Could not add that document. Try again.'
+  } finally {
+    backfillBusy.value = false
+  }
+}
+
+async function dismissBackfillMatch(documentId: number): Promise<void> {
+  if (backfillSeriesId.value == null || backfillBusy.value) return
+  backfillBusy.value = true
+  backfillError.value = null
+  try {
+    await dismissAuthoredSuggestion(backfillSeriesId.value, documentId)
+    backfillMatches.value = backfillMatches.value.filter((m) => m.document_id !== documentId)
+    if (backfillMatches.value.length === 0) closeBackfillReview()
+  } catch {
+    backfillError.value = 'Could not skip that document. Try again.'
+  } finally {
+    backfillBusy.value = false
+  }
+}
+
+async function acceptAllBackfillMatches(): Promise<void> {
+  if (backfillSeriesId.value == null || backfillBusy.value) return
+  backfillBusy.value = true
+  backfillError.value = null
+  try {
+    for (const match of [...backfillMatches.value]) {
+      await acceptAuthoredSuggestion(backfillSeriesId.value, match.document_id)
+      backfillMatches.value = backfillMatches.value.filter(
+        (m) => m.document_id !== match.document_id,
+      )
+    }
+    closeBackfillReview()
+  } catch {
+    backfillError.value = 'Could not add all documents. Try again.'
+  } finally {
+    backfillBusy.value = false
   }
 }
 
@@ -273,14 +366,29 @@ onMounted(load)
         placeholder="Subtitle or context (optional) — e.g. what this series tracks and why"
       />
 
+      <label class="flex items-center gap-2 text-xs text-gray-600 dark:text-gray-300">
+        <input
+          type="checkbox"
+          data-testid="charts-create-smart"
+          class="form-checkbox"
+          :checked="newMode === 'semantic'"
+          @change="newMode = ($event.target as HTMLInputElement).checked ? 'semantic' : 'manual'"
+        />
+        Smart Group — auto-populate from similar documents (you review the first batch)
+      </label>
+
       <AppInput
         id="charts-create-search"
         v-model="createQuery"
         testid="charts-create-search"
-        label="Search documents to add"
+        :label="newMode === 'semantic' ? 'Search documents to seed from' : 'Search documents to add'"
         hide-label
         type="search"
-        placeholder="Search documents to add…"
+        :placeholder="
+          newMode === 'semantic'
+            ? 'Search documents to seed the group from…'
+            : 'Search documents to add…'
+        "
         @input="onCreateSearch"
       />
       <ul
@@ -369,6 +477,83 @@ onMounted(load)
         </AppButton>
       </div>
     </form>
+
+    <!-- Smart Group staged-review modal: shown right after a semantic create
+         whose backfill sweep found candidate documents (W-smart-groups). The
+         user accepts or skips each one; nothing is added automatically. -->
+    <div
+      v-if="backfillSeriesId !== null"
+      data-testid="charts-backfill-modal"
+      class="fixed inset-0 z-50 flex items-center justify-center bg-gray-900/30 p-4"
+      @click.self="closeBackfillReview"
+    >
+      <div class="card w-full max-w-md p-5 space-y-3 bg-white dark:bg-gray-800 shadow-lg">
+        <h2 class="text-sm font-semibold text-gray-800 dark:text-gray-100">
+          Review {{ backfillMatches.length }} documents that look like this group
+        </h2>
+        <p class="text-xs text-gray-500 dark:text-gray-400">
+          These were found automatically. Add the ones that belong, skip the rest.
+        </p>
+
+        <AppBanner v-if="backfillError" variant="error" data-testid="charts-backfill-error">
+          {{ backfillError }}
+        </AppBanner>
+
+        <ul class="space-y-2 max-h-72 overflow-y-auto">
+          <li
+            v-for="match in backfillMatches"
+            :key="match.document_id"
+            data-testid="charts-backfill-row"
+            class="flex items-center justify-between gap-3 rounded-md border border-gray-200 dark:border-gray-700 px-3 py-2"
+          >
+            <p class="min-w-0 truncate text-sm text-gray-800 dark:text-gray-100">
+              {{ backfillLabel(match) }}
+            </p>
+            <div class="flex shrink-0 items-center gap-2">
+              <button
+                type="button"
+                data-testid="charts-backfill-skip"
+                class="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                :disabled="backfillBusy"
+                @click="dismissBackfillMatch(match.document_id)"
+              >
+                Skip
+              </button>
+              <AppButton
+                variant="primary"
+                type="button"
+                data-testid="charts-backfill-add"
+                :disabled="backfillBusy"
+                @click="acceptBackfillMatch(match.document_id)"
+              >
+                Add
+              </AppButton>
+            </div>
+          </li>
+        </ul>
+
+        <div class="flex justify-end gap-2 pt-2">
+          <button
+            type="button"
+            data-testid="charts-backfill-close"
+            class="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+            :disabled="backfillBusy"
+            @click="closeBackfillReview"
+          >
+            Close
+          </button>
+          <AppButton
+            variant="secondary"
+            type="button"
+            data-testid="charts-backfill-add-all"
+            :disabled="backfillBusy || backfillMatches.length === 0"
+            @click="acceptAllBackfillMatches"
+          >
+            Add all
+          </AppButton>
+        </div>
+      </div>
+    </div>
 
     <!-- "Almost there" candidates: emergent buckets one document short of
          charting. Hidden until the header toggle reveals them (W-candidates). -->

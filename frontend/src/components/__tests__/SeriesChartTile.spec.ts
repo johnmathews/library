@@ -492,6 +492,30 @@ describe('SeriesChartTile title/description + single-chart link (W12)', () => {
   })
 })
 
+describe('SeriesChartTile auto-added badge (Smart Groups)', () => {
+  it('shows the badge for a semantic series with auto-added members', () => {
+    const wrapper = mountTile({ ...okSeries, mode: 'semantic', auto_added_count: 2 })
+    const badge = wrapper.find('[data-testid="series-auto-added-badge"]')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('2 added automatically')
+  })
+
+  it('hides the badge when auto_added_count is 0', () => {
+    const wrapper = mountTile({ ...okSeries, mode: 'semantic', auto_added_count: 0 })
+    expect(wrapper.find('[data-testid="series-auto-added-badge"]').exists()).toBe(false)
+  })
+
+  it('hides the badge when auto_added_count is absent', () => {
+    const wrapper = mountTile({ ...okSeries, mode: 'semantic' })
+    expect(wrapper.find('[data-testid="series-auto-added-badge"]').exists()).toBe(false)
+  })
+
+  it('hides the badge for a manual (non-semantic) series even with a count', () => {
+    const wrapper = mountTile({ ...okSeries, mode: 'manual', auto_added_count: 3 })
+    expect(wrapper.find('[data-testid="series-auto-added-badge"]').exists()).toBe(false)
+  })
+})
+
 describe('SeriesChartTile grouping', () => {
   function mountGrouped(grouping: 'none' | 'week' | 'month' | 'quarter' | 'year') {
     return mount(SeriesChartTile, {

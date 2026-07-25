@@ -626,20 +626,29 @@ function pointLabel(point: { title?: string | null; date: string }): string {
   >
     <header>
       <div class="flex items-start justify-between gap-2">
-        <h3
-          class="text-sm font-semibold text-gray-800 dark:text-gray-100"
-          data-testid="series-heading"
-        >
-          <RouterLink
-            v-if="detailLink"
-            :to="detailHref"
-            data-testid="series-heading-link"
-            class="hover:underline"
+        <div class="flex min-w-0 flex-wrap items-center gap-2">
+          <h3
+            class="text-sm font-semibold text-gray-800 dark:text-gray-100"
+            data-testid="series-heading"
           >
-            {{ headingMain }}
-          </RouterLink>
-          <template v-else>{{ headingMain }}</template>
-        </h3>
+            <RouterLink
+              v-if="detailLink"
+              :to="detailHref"
+              data-testid="series-heading-link"
+              class="hover:underline"
+            >
+              {{ headingMain }}
+            </RouterLink>
+            <template v-else>{{ headingMain }}</template>
+          </h3>
+          <span
+            v-if="series.mode === 'semantic' && (series.auto_added_count ?? 0) > 0"
+            data-testid="series-auto-added-badge"
+            class="inline-flex items-center gap-1 rounded-full bg-violet-100 px-2.5 py-0.5 text-xs font-medium text-violet-700 dark:bg-violet-500/20 dark:text-violet-200"
+          >
+            {{ series.auto_added_count ?? 0 }} added automatically
+          </span>
+        </div>
         <div class="flex shrink-0 items-center gap-2">
           <button
             v-if="canEdit && !editingMeta"
@@ -1115,18 +1124,28 @@ function pointLabel(point: { title?: string | null; date: string }): string {
             </RouterLink>
             <span class="text-xs tabular-nums text-gray-400 dark:text-gray-500">{{ point.date }}</span>
             <span class="text-sm tabular-nums text-right text-gray-700 dark:text-gray-300">{{ point.amount }}</span>
-            <button
-              v-if="canEdit"
-              type="button"
-              data-testid="series-remove"
-              class="text-gray-400 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
-              :disabled="busy"
-              :aria-label="`Remove ${pointLabel(point)} from this series`"
-              @click="onRemove(point.document_id, pointLabel(point))"
-            >
-              ×
-            </button>
-            <span v-else aria-hidden="true"></span>
+            <span class="flex items-center justify-end gap-1">
+              <span
+                v-if="point.origin === 'auto'"
+                data-testid="series-citation-auto"
+                class="text-[10px] font-medium text-violet-500 dark:text-violet-400"
+                title="Added automatically"
+              >
+                · auto
+              </span>
+              <button
+                v-if="canEdit"
+                type="button"
+                data-testid="series-remove"
+                class="text-gray-400 hover:text-red-600 dark:hover:text-red-400 disabled:opacity-50"
+                :disabled="busy"
+                :aria-label="`Remove ${pointLabel(point)} from this series`"
+                @click="onRemove(point.document_id, pointLabel(point))"
+              >
+                ×
+              </button>
+              <span v-else aria-hidden="true"></span>
+            </span>
           </li>
         </ul>
       </div>

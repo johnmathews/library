@@ -560,6 +560,9 @@ export interface SeriesPoint {
   amount: string
   document_id: number
   title?: string | null
+  /** Authored series only: how this member joined (Smart Groups). Present only
+   *  when the backend has an origin recorded for the point's document. */
+  origin?: 'manual' | 'accepted_suggestion' | 'auto'
 }
 
 /** Body of GET /api/documents/{id}/series (optional blocks omitted when N/A). */
@@ -606,6 +609,13 @@ export interface DocumentSeries {
   suggestion_count?: number
   /** Authored series only: how many current members break the signature. */
   odd_one_out_count?: number
+  /** Authored series only: 'manual' (curated by hand) or 'semantic' (Smart
+   *  Group — seeded then auto-populated by embedding similarity). Absent for
+   *  emergent series, which have no mode concept. */
+  mode?: 'manual' | 'semantic'
+  /** Authored series only: how many current members were added by the
+   *  semantic backfill sweep (origin === 'auto'), driving the auto-added badge. */
+  auto_added_count?: number
 }
 
 /** The mechanical identity of an authored series (backend `SeriesSignature`). */
@@ -734,14 +744,38 @@ export interface AuthoredSeriesCreate {
   currency?: string | null
   description?: string | null
   document_ids?: number[]
+  /** 'semantic' creates a Smart Group: `seed_document_ids` anchor a backfill
+   *  sweep (scored against the whole library) whose matches come back staged
+   *  under `backfill` for review, rather than added outright. Omit (or
+   *  'manual') for the plain hand-curated flow. */
+  mode?: 'manual' | 'semantic'
+  /** Semantic mode only: documents that anchor the backfill sweep. Falls back
+   *  to `document_ids` server-side when omitted. */
+  seed_document_ids?: number[]
 }
 
+/** One staged Smart Group backfill hit (`POST /api/charts/authored` with
+ *  `mode: 'semantic'`): a document the sweep scored as a likely member,
+ *  awaiting accept/dismiss via the suggestion endpoints below. `title` is
+ *  `null` when the document has none yet (no extraction has named it) — show
+ *  `Document #{document_id}` in that case, matching `SeriesSuggestion`. */
+export interface BackfillMatch {
+  document_id: number
+  title: string | null
+  score: number
+}
+
+/** DocumentSeries plus the staged backfill returned when mode==='semantic'
+ *  (only present, and only non-empty, right after a semantic create). */
+export type CreateSeriesResult = DocumentSeries & { backfill?: BackfillMatch[] }
+
 /**
- * POST /api/charts/authored — create an authored (manual) series, optionally
- * seeding its membership. Returns the series summarised like one /api/charts entry.
+ * POST /api/charts/authored — create an authored series, optionally seeding
+ * its membership. Returns the series summarised like one /api/charts entry,
+ * plus (semantic mode) the staged `backfill` matches for review.
  */
-export function createAuthoredSeries(body: AuthoredSeriesCreate): Promise<DocumentSeries> {
-  return apiFetch<DocumentSeries>('/api/charts/authored', { method: 'POST', body })
+export function createAuthoredSeries(body: AuthoredSeriesCreate): Promise<CreateSeriesResult> {
+  return apiFetch<CreateSeriesResult>('/api/charts/authored', { method: 'POST', body })
 }
 
 /** Body of PATCH /api/charts/authored/{id} (omit a field to leave it unchanged). */

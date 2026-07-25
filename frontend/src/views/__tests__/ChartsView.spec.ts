@@ -10,6 +10,9 @@ vi.mock('@/api/documents', () => ({
   authoredSeriesId: (id: number) => `a-${id}`,
   createAuthoredSeries: vi.fn(),
   listDocuments: vi.fn(),
+  // Smart Group staged-review modal (accept/skip a backfill match).
+  acceptAuthoredSuggestion: vi.fn(),
+  dismissAuthoredSuggestion: vi.fn(),
 }))
 
 import { fetchCharts, createAuthoredSeries, listDocuments } from '@/api/documents'
@@ -194,6 +197,38 @@ describe('ChartsView', () => {
     // Form closes + the grid reloads (fetchCharts called again).
     expect(wrapper.find('[data-testid="charts-create-form"]').exists()).toBe(false)
     expect(fetchCharts).toHaveBeenCalledTimes(2)
+  })
+
+  it('creates a Smart Group with mode + seed_document_ids when the toggle is on', async () => {
+    vi.mocked(fetchCharts).mockResolvedValue({ series: [] } as never)
+    vi.mocked(listDocuments).mockResolvedValue({
+      items: [{ id: 42, title: 'Invoice A', currency: 'EUR' }],
+    } as never)
+    vi.mocked(createAuthoredSeries).mockResolvedValue({ authored_id: 5 } as never)
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('[data-testid="charts-create-button"]').trigger('click')
+    await wrapper.find('[data-testid="charts-create-name"]').setValue('My smart group')
+    // Flip on the Smart Group toggle before searching/selecting the seed doc.
+    await wrapper.find('[data-testid="charts-create-smart"]').setValue(true)
+
+    await wrapper.find('[data-testid="charts-create-search"]').setValue('inv')
+    await wrapper.find('[data-testid="charts-create-search"]').trigger('input')
+    await flushPromises()
+    await wrapper.find('[data-testid="charts-create-result"]').trigger('click')
+
+    await wrapper.find('[data-testid="charts-create-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(createAuthoredSeries).toHaveBeenCalledWith({
+      name: 'My smart group',
+      currency: null,
+      description: null,
+      document_ids: [42],
+      mode: 'semantic',
+      seed_document_ids: [42],
+    })
   })
 
   it('warns when a selected document currency differs from the chart currency', async () => {
