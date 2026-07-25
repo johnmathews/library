@@ -251,9 +251,19 @@ def create_app() -> FastAPI:
     app.include_router(auth.login_router, prefix="/api")
 
     @app.get("/healthz")
-    def healthz() -> dict[str, str]:
-        """Container healthcheck: no auth, no database access."""
-        return {"status": "ok", "version": library.__version__}
+    def healthz() -> dict[str, str | None]:
+        """Container healthcheck: no auth, no database access.
+
+        ``git_sha`` is the commit baked into the image at build time (CI's
+        ``--build-arg GIT_SHA``); ``None`` in dev / unbuilt contexts. Exposed
+        here, unauthenticated, so a deploy can be verified with a single curl:
+        compare it to the commit CI promoted (see docs/deployment.md).
+        """
+        return {
+            "status": "ok",
+            "version": library.__version__,
+            "git_sha": get_settings().git_sha,
+        }
 
     # MCP server (W13): bearer-token-authenticated tools at /mcp/ — see
     # docs/mcp.md. Auth is enforced inside the mounted app (FastMCP bearer
