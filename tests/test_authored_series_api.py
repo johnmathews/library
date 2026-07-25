@@ -18,7 +18,11 @@ pytestmark = pytest.mark.integration
 
 
 async def _seed_docs(
-    database_url: str, sender_name: str, kind_slug: str, rows: list[tuple[str, str]]
+    database_url: str,
+    sender_name: str,
+    kind_slug: str,
+    rows: list[tuple[str, str]],
+    currency: str = "EUR",
 ) -> list[int]:
     """Seed documents (one per row) and return their ids, in input order."""
     engine = create_async_engine(database_url, poolclass=NullPool)
@@ -44,7 +48,7 @@ async def _seed_docs(
                     kind_id=kind.id,
                     document_date=date.fromisoformat(doc_date),
                     amount_total=Decimal(amount),
-                    currency="EUR",
+                    currency=currency,
                     title=f"{sender_name} {doc_date}",
                 )
                 session.add(doc)
@@ -57,9 +61,13 @@ async def _seed_docs(
 
 
 def seed_docs(
-    database_url: str, sender: str, kind_slug: str, rows: list[tuple[str, str]]
+    database_url: str,
+    sender: str,
+    kind_slug: str,
+    rows: list[tuple[str, str]],
+    currency: str = "EUR",
 ) -> list[int]:
-    return asyncio.run(_seed_docs(database_url, sender, kind_slug, rows))
+    return asyncio.run(_seed_docs(database_url, sender, kind_slug, rows, currency))
 
 
 ROWS = [("2025-01-03", "100.00"), ("2025-02-02", "100.00"), ("2025-03-04", "130.00")]
@@ -178,6 +186,34 @@ def test_summary_parity_with_emergent(api_client: TestClient, api_database_url: 
     assert created["trend"]["change_pct"] == emergent["trend"]["change_pct"]
     # Same point amounts, in date order.
     assert [p["amount"] for p in created["points"]] == [p["amount"] for p in emergent["points"]]
+
+
+def test_members_fx_converted_to_group_currency(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A USD document added to a EUR-currency authored group is FX-converted at
+    its own document date (mirrors the cross-currency pin behaviour in
+    ``test_series_overrides.py``), so mixed-currency Smart Groups still produce
+    one comparable currency bucket."""
+    tag = uuid.uuid4().hex[:8]
+    ids = seed_docs(
+        api_database_url,
+        f"FxMix-{tag}",
+        "utility-bill",
+        [("2022-06-01", "100.00")],
+        currency="USD",
+    )
+
+    created = api_client.post(
+        "/api/charts/authored",
+        json={"name": f"fx-mix-{tag}", "currency": "EUR", "document_ids": ids},
+    ).json()
+    assert created["status"] == "ok"
+    assert created["count"] == 1
+    assert created["currency"] == "EUR"
+    # 100 USD @2022 (rate_to_base EUR=1.053, USD=1) -> EUR 100/1.053 = 94.97.
+    assert created["points"][0]["amount"] == "94.97"
+    assert created["mean"] == "94.97"
 
 
 def test_patch_name_and_description(api_client: TestClient, api_database_url: str) -> None:

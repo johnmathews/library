@@ -42,6 +42,7 @@ from library.notifications import (
 )
 from library.ocr import router as ocr_router
 from library.schemas import NotificationEvent
+from library.semantic_membership import auto_add_document
 from library.series_insight import refresh_series_insight
 from library.series_match import propose_authored_matches
 from library.storage import derived_dir, path_for
@@ -432,6 +433,17 @@ async def advance_pipeline(
                         document.id,
                         exc_info=True,
                     )
+            # Smart Groups: silently add this document to any semantic group it
+            # matches. Unlike the two blocks above, this doesn't require a
+            # sender or kind. Best-effort, same as above.
+            try:
+                await evaluate_semantic_groups.defer_async(document_id=document.id)
+            except Exception:
+                logger.warning(
+                    "could not queue semantic-group eval for document %s; continuing",
+                    document.id,
+                    exc_info=True,
+                )
         except Exception as exc:
             failed_in = document.status
             await session.rollback()
@@ -594,6 +606,17 @@ async def evaluate_series_autocontinue(document_id: int) -> None:
     """
     async with get_sessionmaker()() as session:
         await propose_authored_matches(session, get_settings(), document_id)
+
+
+@job_app.task(name="library.jobs.evaluate_semantic_groups")
+async def evaluate_semantic_groups(document_id: int) -> None:
+    """Background task: auto-add an indexed document to any Smart Group it matches.
+
+    Deferred when a document reaches ``indexed``. Silent membership by design;
+    the tile's "added automatically" affordance keeps it prunable. Best-effort.
+    """
+    async with get_sessionmaker()() as session:
+        await auto_add_document(session, get_settings(), document_id)
 
 
 def _every_n_minutes_cron(minutes: int) -> str:

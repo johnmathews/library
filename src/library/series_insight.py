@@ -24,6 +24,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.config import Settings
 from library.extraction.extractor import estimate_cost_usd
 from library.models import (
+    AuthoredSeries,
     Document,
     Kind,
     OverrideAction,
@@ -31,7 +32,7 @@ from library.models import (
     SeriesMembershipOverride,
 )
 from library.search import DocumentFilters
-from library.series import SeriesSummary, summarize_series
+from library.series import SeriesSummary, summarize_authored_series, summarize_series
 
 logger = logging.getLogger(__name__)
 
@@ -307,3 +308,65 @@ async def refresh_series_insight(
         output_tokens=output_tokens,
         cost_usd=estimate_cost_usd(settings.extraction_model, input_tokens, output_tokens),
     )
+
+
+async def refresh_group_blurb(
+    session: AsyncSession,
+    settings: Settings,
+    group_id: int,
+    *,
+    client: AsyncAnthropic | None = None,
+) -> AuthoredSeries | None:
+    """Best-effort: fill an authored (Smart Group) series' description via the LLM.
+
+    Unlike ``refresh_series_insight`` (which caches emergent-series prose in a
+    dedicated ``series_insights`` row keyed by ``(sender, kind, currency)``), an
+    authored series already has its own ``description`` column — so this writes
+    straight to it. Mirrors the ``SeriesMetaOverride`` precedent: a user-written
+    description is never clobbered, so the write only happens when
+    ``description`` is currently ``None``.
+
+    Returns the updated row, or ``None`` when the work is skipped: feature
+    disabled, no API key, unknown group, already described, or no chartable
+    members yet. Callers should treat this as best-effort (wrap in
+    ``try/except``) — a blurb failure must never fail group creation.
+    """
+    if not settings.extraction_enabled:
+        logger.debug("group blurb skipped (extraction disabled)")
+        return None
+
+    authored = await session.get(AuthoredSeries, group_id)
+    if authored is None:
+        logger.debug("group blurb skipped (unknown group %s)", group_id)
+        return None
+    if authored.description is not None:
+        logger.debug("group blurb skipped (already described, group %s)", group_id)
+        return None
+
+    summary = await summarize_authored_series(session, group_id, settings)
+    if summary is None or summary.count == 0:
+        logger.debug("group blurb skipped (no chartable members yet, group %s)", group_id)
+        return None
+
+    owned_client = client is None
+    if owned_client:
+        if settings.anthropic_api_key is None:
+            logger.debug("group blurb skipped (missing api key)")
+            return None
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
+
+    try:
+        description, _input_tokens, _output_tokens = await generate_description(
+            client, settings.extraction_model, summary
+        )
+    finally:
+        if owned_client:
+            await client.close()
+
+    if not description:
+        logger.warning("group blurb skipped (empty description for group %s)", group_id)
+        return None
+
+    authored.description = description
+    await session.commit()
+    return authored

@@ -9,6 +9,7 @@ instead reported (without points) as near-threshold ``candidates`` — buckets o
 or more documents short of ``series_min_documents``.
 """
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -20,18 +21,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.auth.deps import current_user
 from library.config import Settings, get_settings
 from library.db import get_session
+from library.embedding import embed_query
 from library.models import (
     AuthoredSeries,
+    AuthoredSeriesExclusion,
     AuthoredSeriesMember,
     AuthoredSeriesSuggestion,
     Document,
     Kind,
+    MemberOrigin,
     Sender,
     SeriesMetaOverride,
+    SeriesMode,
     SuggestionState,
     User,
 )
-from library.search import DocumentFilters
+from library.search import DocumentFilters, semantic_search
+from library.semantic_membership import MembershipScore, sweep_backfill
 from library.series import (
     SeriesSignature,
     SeriesSummary,
@@ -47,6 +53,9 @@ from library.series import (
     summarize_authored_series,
     summarize_series,
 )
+from library.series_insight import refresh_group_blurb
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -187,7 +196,7 @@ async def list_charts(
         if summary is None:
             continue
         body = serialise_summary(summary, include_points=True)
-        body |= await _authored_signature_extras(session, settings, authored_id)
+        body |= await _authored_signature_extras(session, settings, authored_id, summary.currency)
         signature = body.get("signature")
         if isinstance(signature, dict):
             authored_signatures.add(
@@ -261,7 +270,7 @@ async def get_chart(
         if summary is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown series")
         body = serialise_summary(summary, include_points=True)
-        body |= await _authored_signature_extras(session, settings, authored_id)
+        body |= await _authored_signature_extras(session, settings, authored_id, summary.currency)
         return body
     sender_id, kind_id, currency = _decode_or_404(series_id)
     summary = await _summarize_one(session, settings, sender_id, kind_id, currency)
@@ -349,6 +358,10 @@ class AuthoredSeriesCreate(BaseModel):
     description: str | None = None
     # Optional initial membership; unknown/deleted ids are silently ignored.
     document_ids: list[int] = Field(default_factory=list)
+    mode: SeriesMode = SeriesMode.MANUAL
+    # Semantic mode only: documents that anchor the first backfill sweep. Falls
+    # back to document_ids when unset, so manual-style callers keep working.
+    seed_document_ids: list[int] = Field(default_factory=list)
 
 
 class AuthoredSeriesUpdate(BaseModel):
@@ -415,6 +428,47 @@ async def _authored_body(
     return serialise_summary(summary, include_points=True)
 
 
+async def _name_anchor_ids(session: AsyncSession, settings: Settings, name: str) -> list[int]:
+    """Turn a Smart Group's name into a few anchor documents via semantic search.
+
+    Best-effort: embedding failures (feature disabled, sidecar unreachable, no
+    seeds) return ``[]`` so a group with hand-picked seeds still sweeps on those
+    alone, and tests without an embedding backend don't explode.
+    """
+    try:
+        embedding = await embed_query(name, settings=settings)
+    except Exception:
+        return []
+    hits = await semantic_search(
+        session, query=name, query_embedding=embedding, top_k=settings.series_suggestion_limit
+    )
+    return [hit.document.id for hit in hits]
+
+
+async def _backfill_payload(
+    session: AsyncSession, hits: list[tuple[int, MembershipScore]]
+) -> list[dict[str, object]]:
+    """JSON rows for staged backfill hits: ``{document_id, title, score}``."""
+    if not hits:
+        return []
+    document_ids = [document_id for document_id, _ in hits]
+    titles = dict(
+        (
+            await session.execute(
+                select(Document.id, Document.title).where(Document.id.in_(document_ids))
+            )
+        ).all()
+    )
+    return [
+        {
+            "document_id": document_id,
+            "title": titles.get(document_id),
+            "score": round(score.sim_pos, 4),
+        }
+        for document_id, score in hits
+    ]
+
+
 def _serialise_signature(signature: SeriesSignature | None) -> dict[str, object] | None:
     """A JSON-friendly signature dict, or ``None`` for an empty (memberless) series."""
     if signature is None:
@@ -445,7 +499,7 @@ def _serialise_member(member: _Member) -> dict[str, object]:
 
 
 async def _authored_signature_extras(
-    session: AsyncSession, settings: Settings, authored_id: int
+    session: AsyncSession, settings: Settings, authored_id: int, currency: str | None
 ) -> dict[str, object]:
     """Additive signature/suggestion/odd-one-out keys for an authored ``/charts`` entry.
 
@@ -454,9 +508,10 @@ async def _authored_signature_extras(
     (the same set ``GET .../suggestions`` returns — pending, not yet
     accepted/dismissed); ``odd_one_out_count`` is how many current members break
     the signature. Computed here in the endpoint layer, not threaded through
-    ``SeriesSummary``.
+    ``SeriesSummary``. ``currency`` is the authored series' own currency (mixed
+    -currency members are FX-converted into it before the signature is derived).
     """
-    members = await _load_authored_members(session, authored_id)
+    members = await _load_authored_members(session, authored_id, currency)
     signature = derive_signature(members)
     extras: dict[str, object] = {"signature": _serialise_signature(signature)}
     if signature is None:
@@ -481,19 +536,50 @@ async def create_authored_series(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
     """Create a user-curated series and (optionally) seed its membership. Returns
-    the series summarised exactly like one ``GET /api/charts`` entry."""
+    the series summarised exactly like one ``GET /api/charts`` entry.
+
+    ``mode=semantic`` (Smart Groups) additionally stages a backfill sweep: the
+    seed documents' membership is scored against the whole library and matches
+    are written as ``pending`` suggestions, returned under ``backfill``."""
     authored = AuthoredSeries(
         name=payload.name.strip(),
         description=payload.description,
         currency=payload.currency,
         owner_id=user.id,
+        mode=payload.mode,
     )
     session.add(authored)
     await session.flush()
-    for document_id in await _existing_document_ids(session, payload.document_ids):
-        session.add(AuthoredSeriesMember(authored_series_id=authored.id, document_id=document_id))
+
+    seed_ids = await _existing_document_ids(
+        session, payload.seed_document_ids or payload.document_ids
+    )
+    for document_id in seed_ids:
+        session.add(
+            AuthoredSeriesMember(
+                authored_series_id=authored.id,
+                document_id=document_id,
+                origin=MemberOrigin.MANUAL,
+            )
+        )
     await session.commit()
-    return await _authored_body(session, settings, authored.id)
+
+    body = await _authored_body(session, settings, authored.id)
+    if payload.mode is SeriesMode.SEMANTIC and settings.semantic_group_enabled:
+        anchor_ids = await _name_anchor_ids(session, settings, payload.name)
+        hits = await sweep_backfill(session, settings, authored.id, anchor_ids=anchor_ids)
+        body["backfill"] = await _backfill_payload(session, hits)
+        # Best-effort prose blurb (never blocks/fails group creation): fills
+        # `description` only if the user didn't already set one and there's
+        # at least one chartable member to describe.
+        try:
+            blurbed = await refresh_group_blurb(session, settings, authored.id)
+        except Exception:
+            logger.warning("group blurb failed for authored series %s", authored.id, exc_info=True)
+        else:
+            if blurbed is not None:
+                body["description"] = blurbed.description
+    return body
 
 
 @router.patch(
@@ -545,7 +631,8 @@ async def add_authored_member(
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
-    """Add a document to an authored series (idempotent); returns the refreshed body."""
+    """Add a document to an authored series (idempotent), clearing any prior
+    exclusion (prune) for it so the re-add sticks; returns the refreshed body."""
     await _get_authored_or_404(session, authored_id)
     document = await session.get(Document, payload.document_id)
     if document is None or document.deleted_at is not None:
@@ -554,7 +641,14 @@ async def add_authored_member(
         session.add(
             AuthoredSeriesMember(authored_series_id=authored_id, document_id=payload.document_id)
         )
-        await session.commit()
+    # A hand re-add clears any prior prune so it sticks.
+    await session.execute(
+        delete(AuthoredSeriesExclusion).where(
+            AuthoredSeriesExclusion.authored_series_id == authored_id,
+            AuthoredSeriesExclusion.document_id == payload.document_id,
+        )
+    )
+    await session.commit()
     return await _authored_body(session, settings, authored_id)
 
 
@@ -569,7 +663,9 @@ async def remove_authored_member(
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
-    """Remove a document from an authored series (idempotent); returns the refreshed body."""
+    """Remove a document from an authored series (idempotent), writing an exclusion
+    so it is not silently re-added by a later sweep/auto-add; returns the
+    refreshed body."""
     await _get_authored_or_404(session, authored_id)
     member = (
         await session.execute(
@@ -581,6 +677,12 @@ async def remove_authored_member(
     ).scalar_one_or_none()
     if member is not None:
         await session.delete(member)
+        # Prune = negative example: veto re-adding this document to this series.
+        await session.execute(
+            pg_insert(AuthoredSeriesExclusion)
+            .values(authored_series_id=authored_id, document_id=document_id)
+            .on_conflict_do_nothing(constraint="authored_series_exclusions_series_document")
+        )
         await session.commit()
     return await _authored_body(session, settings, authored_id)
 
@@ -647,19 +749,33 @@ async def accept_authored_suggestion(
     session: Annotated[AsyncSession, Depends(get_session)],
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
-    """Promote a suggestion to a real member (idempotent) and clear any suggestion
-    row for it; returns the refreshed authored body."""
+    """Promote a suggestion to a real member (idempotent), clear any suggestion row
+    for it and any prior exclusion (prune) for this document, and return the
+    refreshed authored body."""
     await _get_authored_or_404(session, authored_id)
     document = await session.get(Document, document_id)
     if document is None or document.deleted_at is not None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document")
     if document_id not in await _authored_member_ids(session, authored_id):
-        session.add(AuthoredSeriesMember(authored_series_id=authored_id, document_id=document_id))
+        session.add(
+            AuthoredSeriesMember(
+                authored_series_id=authored_id,
+                document_id=document_id,
+                origin=MemberOrigin.ACCEPTED_SUGGESTION,
+            )
+        )
     # The document is now a member; drop any pending/dismissed suggestion row.
     await session.execute(
         delete(AuthoredSeriesSuggestion).where(
             AuthoredSeriesSuggestion.authored_series_id == authored_id,
             AuthoredSeriesSuggestion.document_id == document_id,
+        )
+    )
+    # Accepting clears any prior prune (exclusion) for this document.
+    await session.execute(
+        delete(AuthoredSeriesExclusion).where(
+            AuthoredSeriesExclusion.authored_series_id == authored_id,
+            AuthoredSeriesExclusion.document_id == document_id,
         )
     )
     await session.commit()
@@ -678,8 +794,10 @@ async def dismiss_authored_suggestion(
     settings: Annotated[Settings, Depends(get_settings)],
 ) -> dict[str, object]:
     """Record a ``dismissed`` tombstone for ``document_id`` (upsert on the unique
-    ``(series, document)`` key) so it is never suggested for this series again.
-    Returns ``{"count": N}`` — the number of live signature matches still awaiting
+    ``(series, document)`` key), clear any existing membership so dismiss is
+    authoritative (never member + excluded at once), and write an exclusion so
+    it is never suggested or auto-added to this series again. Returns
+    ``{"count": N}`` — the number of live signature matches still awaiting
     review after the dismissal (the same set ``GET .../suggestions`` returns)."""
     await _get_authored_or_404(session, authored_id)
     document = await session.get(Document, document_id)
@@ -698,6 +816,24 @@ async def dismiss_authored_suggestion(
         )
     )
     await session.execute(statement)
+    # Dismiss is authoritative: clear any existing membership too (e.g. the
+    # document was auto-added between staging and review) so it never ends up
+    # simultaneously a member and excluded — a contradictory state neither
+    # re-sweep nor auto-add reconciles. No-op in the normal case (dismissed
+    # documents aren't members).
+    await session.execute(
+        delete(AuthoredSeriesMember).where(
+            AuthoredSeriesMember.authored_series_id == authored_id,
+            AuthoredSeriesMember.document_id == document_id,
+        )
+    )
+    # Dismissing writes a negative example so a later semantic sweep does not
+    # re-propose (or auto-add) this document to this series.
+    await session.execute(
+        pg_insert(AuthoredSeriesExclusion)
+        .values(authored_series_id=authored_id, document_id=document_id)
+        .on_conflict_do_nothing(constraint="authored_series_exclusions_series_document")
+    )
     await session.commit()
     remaining = await suggest_signature_matches(session, authored_id, settings)
     return {"count": len(remaining)}
@@ -718,8 +854,8 @@ async def get_authored_odd_ones_out(
     The whole path is deterministic: both the match and the ``reason`` sentence
     are built from the documents' real sender/kind/currency (no LLM), so the
     reason can never name a sender/kind/currency that isn't in the series."""
-    await _get_authored_or_404(session, authored_id)
-    members = await _load_authored_members(session, authored_id)
+    authored = await _get_authored_or_404(session, authored_id)
+    members = await _load_authored_members(session, authored_id, authored.currency)
     signature = derive_signature(members)
     if signature is None:
         return {"members": []}

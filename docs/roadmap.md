@@ -1,6 +1,6 @@
 # Roadmap & deferred work
 
-**Status:** active. **Last updated:** 2026-07-17. **Supersedes:** none.
+**Status:** active. **Last updated:** 2026-07-25. **Supersedes:** none.
 
 Living list of agreed-but-not-yet-built work and explicitly-deferred ideas, so
 they don't get lost between sessions. Most recent context lives in
@@ -124,3 +124,18 @@ Recorded here so they read as **done**, not queued:
   lists every finding in plain language, dashboard rows show a short reason, and a
   step-through review queue (`?queue=1`) walks the `needs_review` set. See
   [frontend.md](frontend.md).
+- **Smart Groups (semantic authored series).** A `mode="semantic"` authored
+  series whose membership is *learned* from bge-m3 document embeddings
+  instead of hand-picked: nearest-positive-neighbour scoring
+  (`sim_pos ≥ τ` and `sim_pos > sim_neg + margin`) over members (positives)
+  and pruned documents (`AuthoredSeriesExclusion`, negatives) lets a group
+  span senders and currencies (e.g. "EV charging fees" across several
+  networks). Creating one stages a one-time backfill sweep for review; future
+  matching documents auto-add silently (`origin=auto`, surfaced by a
+  "N added automatically" badge); removing/dismissing a document writes a
+  negative example so it isn't re-added. The LLM never decides membership —
+  only name→seed-query and a best-effort description blurb. See
+  [smart-groups.md](smart-groups.md) and
+  [journal/260725-smart-groups.md](../journal/260725-smart-groups.md). The
+  companion duplicate-sender fix identified alongside this (design §9) is
+  **not yet shipped** — tracked as separate follow-up work.

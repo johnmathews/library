@@ -127,6 +127,13 @@ class Settings(BaseSettings):
     series_autocontinue_enabled: bool = True
     series_autocontinue_min_dominance: float = 0.6  # min signature dominance to match
     series_suggestion_limit: int = 20  # cap on suggested matches returned/considered
+    # Smart Groups (semantic authored series). Membership is learned from bge-m3
+    # embeddings: a document belongs when its nearest member (positive) is within
+    # `min_similarity` cosine AND closer than any pruned document (negative) by
+    # `neg_margin`. See docs/smart-groups.md.
+    semantic_group_enabled: bool = True
+    semantic_group_min_similarity: float = 0.55  # tau: min cosine to nearest positive
+    semantic_group_neg_margin: float = 0.02  # sim_pos must beat sim_neg by this margin
     # Consume folder watcher (see docs/ingestion.md, "Consume folder" section).
     consume_dir: Path | None = None  # unset = watcher off
     consume_force_polling: bool = False  # required for NFS/SMB mounts (no inotify)

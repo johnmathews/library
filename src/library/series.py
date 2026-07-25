@@ -14,7 +14,7 @@ from __future__ import annotations
 import itertools
 import logging
 import statistics
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Literal
@@ -30,11 +30,13 @@ from library.models import (
     AuthoredSeriesSuggestion,
     Document,
     Kind,
+    MemberOrigin,
     OverrideAction,
     Sender,
     SeriesInsight,
     SeriesMembershipOverride,
     SeriesMetaOverride,
+    SeriesMode,
 )
 from library.search import DocumentFilters, filter_conditions
 
@@ -336,6 +338,18 @@ class SeriesSummary:
     # frontend branches on this: an authored series edits its own row (PATCH)
     # rather than the meta-override endpoint.
     authored_id: int | None = None
+    # Whether an authored series is hand-curated or a Smart Group; None for
+    # emergent series (which have no ``mode`` concept).
+    mode: SeriesMode | None = None
+    # Count of this authored series' members whose ``origin`` is
+    # ``MemberOrigin.AUTO`` (silently joined by the semantic auto-add job,
+    # rather than added by hand or an accepted suggestion). Always 0 for
+    # emergent series.
+    auto_added_count: int = 0
+    # document_id -> MemberOrigin, for authored series only (empty for
+    # emergent series, which have no membership-origin concept). Lets each
+    # point in the "documents in this series" list carry how it joined.
+    origins: dict[int, MemberOrigin] = field(default_factory=dict)
 
 
 async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list[_Member]:
@@ -555,6 +569,9 @@ def _summarize_members(
     description: str | None = None,
     title: str | None = None,
     authored_id: int | None = None,
+    mode: SeriesMode | None = None,
+    auto_added_count: int = 0,
+    origins: dict[int, MemberOrigin] | None = None,
 ) -> SeriesSummary:
     """Build a ``SeriesSummary`` from an already-resolved set of ``members``.
 
@@ -564,7 +581,7 @@ def _summarize_members(
     ``summarize_authored_series`` so both produce identical distribution / trend
     / reference / year-over-year math. The caller supplies the identity labels,
     the resolved ``description``/``title``, and (for authored series)
-    ``authored_id``.
+    ``authored_id``/``mode``/``auto_added_count``.
     """
     dated = sorted(
         (m for m in members if m.document_date is not None), key=lambda m: m.document_date
@@ -619,6 +636,9 @@ def _summarize_members(
         description=description,
         title=title,
         authored_id=authored_id,
+        mode=mode,
+        auto_added_count=auto_added_count,
+        origins=origins or {},
     )
 
 
@@ -685,8 +705,15 @@ async def summarize_series(
     )
 
 
-async def _load_authored_members(session: AsyncSession, authored_series_id: int) -> list[_Member]:
-    """Amount-bearing, non-deleted members of an authored series."""
+async def _load_authored_members(
+    session: AsyncSession, authored_series_id: int, target_currency: str | None
+) -> list[_Member]:
+    """Amount-bearing, non-deleted members of an authored series, FX-converted.
+
+    Each member's amount is converted into ``target_currency`` at its own date
+    (like a pinned emergent member); a member with no resolvable rate is dropped
+    from the stats and logged — it cannot contribute a comparable data point.
+    """
     statement = (
         select(
             Document.id,
@@ -709,13 +736,53 @@ async def _load_authored_members(session: AsyncSession, authored_series_id: int)
         )
     )
     rows = (await session.execute(statement)).all()
-    return [
-        _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title)
-        for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows
-    ]
+    members: list[_Member] = []
+    for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
+        converted = await convert_amount(session, amount, currency, target_currency, ddate)
+        if converted is None:
+            logger.warning(
+                "authored series %s doc %s: no FX rate %s->%s; dropped from series stats",
+                authored_series_id,
+                did,
+                currency,
+                target_currency,
+            )
+            continue
+        members.append(
+            _Member(did, sname, kslug, ddate, _money(converted), target_currency, sid, kid, title)
+        )
+    return members
 
 
-def _empty_authored_summary(authored: AuthoredSeries) -> SeriesSummary:
+async def _load_authored_origins(
+    session: AsyncSession, authored_series_id: int
+) -> dict[int, MemberOrigin]:
+    """``document_id -> origin`` for every (non-deleted) member of an authored series.
+
+    Queried directly against the membership table rather than derived from the
+    (amount-bearing only) ``_Member`` rows ``_load_authored_members`` returns, so
+    an auto-added document with no resolvable amount/FX rate is still counted.
+    Joins ``Document`` and filters ``deleted_at IS NULL`` to match
+    ``_load_authored_members`` — otherwise a soft-deleted (not-yet-purged)
+    member would still count toward ``auto_added_count`` even though the chart
+    no longer shows it.
+    """
+    statement = (
+        select(AuthoredSeriesMember.document_id, AuthoredSeriesMember.origin)
+        .join(Document, Document.id == AuthoredSeriesMember.document_id)
+        .where(
+            AuthoredSeriesMember.authored_series_id == authored_series_id,
+            Document.deleted_at.is_(None),
+        )
+    )
+    return dict((await session.execute(statement)).all())
+
+
+def _empty_authored_summary(
+    authored: AuthoredSeries,
+    auto_added_count: int = 0,
+    origins: dict[int, MemberOrigin] | None = None,
+) -> SeriesSummary:
     """Summary for an authored series with no amount-bearing members yet.
 
     Distribution stats need at least one amount, so a fresh/empty authored
@@ -741,6 +808,9 @@ def _empty_authored_summary(authored: AuthoredSeries) -> SeriesSummary:
         description=authored.description,
         title=authored.name,
         authored_id=authored.id,
+        mode=authored.mode,
+        auto_added_count=auto_added_count,
+        origins=origins or {},
     )
 
 
@@ -757,14 +827,18 @@ async def summarize_authored_series(
     runs the same statistics as an emergent series via ``_summarize_members``,
     using the authored row's ``name`` as the title and ``description`` as the
     prose. Unlike emergent series there is no minimum-document gate — a single
-    amount-bearing member already produces a bar chart.
+    amount-bearing member already produces a bar chart. Also carries the
+    series' ``mode`` (manual/semantic) and ``auto_added_count`` (members
+    silently joined by the semantic auto-add job) for the API body.
     """
     authored = await session.get(AuthoredSeries, authored_series_id)
     if authored is None:
         return None
-    members = await _load_authored_members(session, authored_series_id)
+    origins = await _load_authored_origins(session, authored_series_id)
+    auto_added_count = sum(1 for o in origins.values() if o == MemberOrigin.AUTO)
+    members = await _load_authored_members(session, authored_series_id, authored.currency)
     if not members:
-        return _empty_authored_summary(authored)
+        return _empty_authored_summary(authored, auto_added_count, origins)
     return _summarize_members(
         members,
         currency=authored.currency,
@@ -773,6 +847,9 @@ async def summarize_authored_series(
         description=authored.description,
         title=authored.name,
         authored_id=authored.id,
+        mode=authored.mode,
+        auto_added_count=auto_added_count,
+        origins=origins,
     )
 
 
@@ -805,7 +882,10 @@ async def load_authored_signature(
     session: AsyncSession, authored_series_id: int
 ) -> SeriesSignature | None:
     """The :class:`SeriesSignature` of an authored series' current membership."""
-    members = await _load_authored_members(session, authored_series_id)
+    authored = await session.get(AuthoredSeries, authored_series_id)
+    if authored is None:
+        return None
+    members = await _load_authored_members(session, authored_series_id, authored.currency)
     return derive_signature(members)
 
 
@@ -958,6 +1038,9 @@ def serialise_summary(summary: SeriesSummary, *, include_points: bool = False) -
     }
     if summary.authored_id is not None:
         body["authored_id"] = summary.authored_id
+    if summary.mode is not None:
+        body["mode"] = summary.mode.value
+        body["auto_added_count"] = summary.auto_added_count
     if summary.title is not None:
         body["title"] = summary.title
     if summary.description is not None:
@@ -999,6 +1082,7 @@ def serialise_summary(summary: SeriesSummary, *, include_points: bool = False) -
                 "amount": str(a),
                 "document_id": did,
                 "title": summary.titles.get(did),
+                **({"origin": summary.origins[did].value} if did in summary.origins else {}),
             }
             for d, a, did in summary.points
         ]

@@ -128,6 +128,26 @@ class SuggestionState(enum.StrEnum):
     DISMISSED = "dismissed"
 
 
+class SeriesMode(enum.StrEnum):
+    """Whether an authored series is hand-curated or membership-learned (Smart Group)."""
+
+    MANUAL = "manual"
+    SEMANTIC = "semantic"
+
+
+class MemberOrigin(enum.StrEnum):
+    """How a document became a member of an authored series.
+
+    ``manual`` — added by hand; ``accepted_suggestion`` — promoted from a staged
+    backfill suggestion; ``auto`` — silently added by the semantic auto-add job
+    (surfaced with the "added automatically" affordance so the user can prune it).
+    """
+
+    MANUAL = "manual"
+    ACCEPTED_SUGGESTION = "accepted_suggestion"
+    AUTO = "auto"
+
+
 class HeldEmailStatus(enum.StrEnum):
     """Lifecycle of a held email (see ``HeldEmail``).
 
@@ -863,6 +883,17 @@ class AuthoredSeries(Base):
     name: Mapped[str] = mapped_column(String(255))
     description: Mapped[str | None] = mapped_column(Text)
     currency: Mapped[str | None] = mapped_column(CHAR(3))
+    mode: Mapped[SeriesMode] = mapped_column(
+        Enum(
+            SeriesMode,
+            name="series_mode",
+            native_enum=False,
+            length=16,
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        default=SeriesMode.MANUAL,
+        server_default=SeriesMode.MANUAL.value,
+    )
     owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
@@ -873,6 +904,9 @@ class AuthoredSeries(Base):
         back_populates="series", cascade="all, delete-orphan", lazy="selectin"
     )
     suggestions: Mapped[list["AuthoredSeriesSuggestion"]] = relationship(
+        back_populates="series", cascade="all, delete-orphan", lazy="selectin"
+    )
+    exclusions: Mapped[list["AuthoredSeriesExclusion"]] = relationship(
         back_populates="series", cascade="all, delete-orphan", lazy="selectin"
     )
 
@@ -888,6 +922,17 @@ class AuthoredSeriesMember(Base):
     )
     document_id: Mapped[int] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    origin: Mapped[MemberOrigin] = mapped_column(
+        Enum(
+            MemberOrigin,
+            name="member_origin",
+            native_enum=False,
+            length=24,
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        default=MemberOrigin.MANUAL,
+        server_default=MemberOrigin.MANUAL.value,
     )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
@@ -941,6 +986,7 @@ class AuthoredSeriesSuggestion(Base):
     signature_sender_id: Mapped[int | None] = mapped_column(Integer)
     signature_kind_id: Mapped[int | None] = mapped_column(Integer)
     signature_currency: Mapped[str | None] = mapped_column(CHAR(3))
+    score: Mapped[float | None] = mapped_column(Float)
     model: Mapped[str | None] = mapped_column(String(64))
     input_tokens: Mapped[int | None] = mapped_column(Integer)
     output_tokens: Mapped[int | None] = mapped_column(Integer)
@@ -957,6 +1003,37 @@ class AuthoredSeriesSuggestion(Base):
             "authored_series_id",
             "document_id",
             name="authored_series_suggestions_series_document",
+        ),
+    )
+
+
+class AuthoredSeriesExclusion(Base):
+    """A document the user pruned from a semantic authored series — a negative example.
+
+    Written when a member is removed (or a backfill suggestion dismissed). The
+    membership scorer treats these as vetoes so the document is neither re-added
+    by the auto-add job nor re-proposed by a later sweep. Re-adding the document
+    as a member clears its exclusion. One row per ``(series, document)``.
+    """
+
+    __tablename__ = "authored_series_exclusions"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    authored_series_id: Mapped[int] = mapped_column(
+        ForeignKey("authored_series.id", ondelete="CASCADE"), index=True
+    )
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+    series: Mapped[AuthoredSeries] = relationship(back_populates="exclusions")
+
+    __table_args__ = (
+        UniqueConstraint(
+            "authored_series_id",
+            "document_id",
+            name="authored_series_exclusions_series_document",
         ),
     )
 

@@ -12,13 +12,17 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 
 from library.config import Settings
 from library.models import (
+    AuthoredSeries,
+    AuthoredSeriesMember,
     Document,
     DocumentSource,
     Kind,
+    MemberOrigin,
     OverrideAction,
     Sender,
     SeriesInsight,
     SeriesMembershipOverride,
+    SeriesMode,
 )
 from library.search import DocumentFilters
 from library.series import SeriesSummary, serialise_summary, summarize_series
@@ -28,6 +32,7 @@ from library.series_insight import (
     build_series_prompt,
     generate_description,
     load_override_examples,
+    refresh_group_blurb,
     refresh_series_insight,
 )
 
@@ -454,3 +459,100 @@ async def test_serialise_omits_description_when_absent(session: AsyncSession) ->
     body = serialise_summary(summary)
     assert summary.description is None
     assert "description" not in body
+
+
+# --- refresh_group_blurb -----------------------------------------------------
+
+
+async def _make_group(
+    session: AsyncSession,
+    name: str,
+    *,
+    description: str | None = None,
+    mode: SeriesMode = SeriesMode.SEMANTIC,
+    currency: str | None = "EUR",
+) -> AuthoredSeries:
+    group = AuthoredSeries(name=name, description=description, mode=mode, currency=currency)
+    session.add(group)
+    await session.commit()
+    return group
+
+
+async def _add_group_member(
+    session: AsyncSession,
+    group: AuthoredSeries,
+    marker: str,
+    *,
+    amount: str,
+    currency: str = "EUR",
+    origin: MemberOrigin = MemberOrigin.MANUAL,
+) -> int:
+    document = Document(
+        sha256=hashlib.sha256(marker.encode()).hexdigest(),
+        mime_type="application/pdf",
+        source=DocumentSource.UPLOAD,
+        title=marker,
+        document_date=date(2025, 1, 1),
+        amount_total=Decimal(amount),
+        currency=currency,
+    )
+    session.add(document)
+    await session.flush()
+    session.add(
+        AuthoredSeriesMember(authored_series_id=group.id, document_id=document.id, origin=origin)
+    )
+    await session.commit()
+    return document.id
+
+
+async def test_refresh_group_blurb_never_clobbers_existing_description(
+    session: AsyncSession,
+) -> None:
+    """The safety property the feature calls out: a group that already has a
+    (presumably user-written) description is left untouched, and the LLM is
+    never called."""
+    group = await _make_group(
+        session, "already described group", description="Owner-written blurb."
+    )
+    await _add_group_member(session, group, "already-described-member", amount="50.00")
+    client = FakeAnthropic("A fresh LLM description that must not be written.")
+
+    result = await refresh_group_blurb(session, _settings(), group.id, client=client)
+
+    assert result is None
+    assert client.messages.calls == []
+    await session.refresh(group)
+    assert group.description == "Owner-written blurb."
+
+
+async def test_refresh_group_blurb_skips_when_extraction_disabled(session: AsyncSession) -> None:
+    group = await _make_group(session, "extraction disabled group", description=None)
+    await _add_group_member(session, group, "extraction-disabled-member", amount="50.00")
+    settings = Settings(
+        series_min_documents=3,
+        series_typical_pct=0.10,
+        series_flat_pct=0.05,
+        extraction_enabled=False,
+    )
+    client = FakeAnthropic()
+
+    result = await refresh_group_blurb(session, settings, group.id, client=client)
+
+    assert result is None
+    assert client.messages.calls == []
+    await session.refresh(group)
+    assert group.description is None
+
+
+async def test_refresh_group_blurb_writes_description_on_success(session: AsyncSession) -> None:
+    group = await _make_group(session, "fresh semantic group", description=None)
+    await _add_group_member(session, group, "fresh-semantic-member", amount="75.00")
+    client = FakeAnthropic("This group averages €75 per document.")
+
+    result = await refresh_group_blurb(session, _settings(), group.id, client=client)
+
+    assert result is not None
+    assert result.description == "This group averages €75 per document."
+    assert len(client.messages.calls) == 1
+    await session.refresh(group)
+    assert group.description == "This group averages €75 per document."
