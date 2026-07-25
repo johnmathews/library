@@ -73,7 +73,7 @@ async def todays_spend_usd(
 
 async def upsert_sender(session: AsyncSession, name: str) -> Sender:
     """Find a sender by case-insensitive name match, creating it if new."""
-    cleaned = name.strip()
+    cleaned = " ".join(name.split())
     existing = (
         await session.execute(select(Sender).where(func.lower(Sender.name) == cleaned.lower()))
     ).scalar_one_or_none()
