@@ -232,6 +232,93 @@ async def test_evaluate_group_empty_candidates_returns_empty(
 
 
 @pytest.mark.integration
+async def test_evaluate_group_anchor_only_scores_but_is_not_persisted(
+    session: AsyncSession,
+    settings: Settings,
+    make_document: Callable[..., Document],
+    add_chunk: Callable[[Document, list[float]], None],
+) -> None:
+    """A group with no real members still admits candidates via an anchor's
+    similarity alone (extra_positive_ids), and the anchor itself is never
+    written as a member — it's a scoring-only seed, not real membership."""
+    group = AuthoredSeries(name="ev-anchor-uniqtag", currency="EUR", mode=SeriesMode.SEMANTIC)
+    session.add(group)
+    await session.flush()
+    await session.commit()  # group has zero members and zero exclusions
+
+    anchor = await make_document(title="ev-anchor-seed")
+    add_chunk(anchor, [0.9, 0.1])
+    near = await make_document(title="ev-anchor-near")
+    add_chunk(near, [0.88, 0.12])
+    far = await make_document(title="ev-anchor-far")
+    add_chunk(far, [0.0, 1.0])
+    await session.commit()
+
+    hits = await evaluate_group(
+        session, settings, group.id, [near.id, far.id, anchor.id], extra_positive_ids=[anchor.id]
+    )
+    hit_ids = {doc_id for doc_id, _ in hits}
+    assert near.id in hit_ids
+    assert far.id not in hit_ids
+
+    rows = (
+        (
+            await session.execute(
+                select(AuthoredSeriesMember).where(
+                    AuthoredSeriesMember.authored_series_id == group.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert rows == []  # evaluate_group never writes members, anchor included
+
+
+@pytest.mark.integration
+async def test_sweep_backfill_is_idempotent_on_repeat_sweep(
+    session: AsyncSession,
+    settings: Settings,
+    make_document: Callable[..., Document],
+    add_chunk: Callable[[Document, list[float]], None],
+) -> None:
+    """A second sweep that re-surfaces a still-pending doc must not raise
+    IntegrityError on the (series, document) unique constraint, nor duplicate
+    the suggestion row."""
+    group = AuthoredSeries(name="ev-sweep-idem-uniqtag", currency="EUR", mode=SeriesMode.SEMANTIC)
+    session.add(group)
+    await session.flush()
+    member = await make_document(title="ev-sweep-idem-member")
+    add_chunk(member, [0.9, 0.1])
+    match = await make_document(
+        title="ev-sweep-idem-match", amount_total=Decimal("50.00"), currency="EUR"
+    )
+    add_chunk(match, [0.88, 0.12])
+    session.add(AuthoredSeriesMember(authored_series_id=group.id, document_id=member.id))
+    await session.commit()
+
+    first_hits = await sweep_backfill(session, settings, group.id, anchor_ids=[])
+    assert {doc_id for doc_id, _ in first_hits} == {match.id}
+
+    second_hits = await sweep_backfill(session, settings, group.id, anchor_ids=[])
+    assert {doc_id for doc_id, _ in second_hits} == {match.id}
+
+    rows = (
+        (
+            await session.execute(
+                select(AuthoredSeriesSuggestion).where(
+                    AuthoredSeriesSuggestion.authored_series_id == group.id
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    assert len(rows) == 1  # no duplicate row from the second sweep
+    assert rows[0].document_id == match.id
+
+
+@pytest.mark.integration
 async def test_sweep_backfill_writes_pending_suggestions(
     session: AsyncSession,
     settings: Settings,

@@ -14,6 +14,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
@@ -193,23 +194,34 @@ async def sweep_backfill(
 
     ``anchor_ids`` seed the positive set alongside the group's real members —
     useful for a brand-new group that has few or no members yet. Capped at
-    ``settings.series_suggestion_limit`` (also keeps the write, and any API
-    payload built from the result, within the list-size limits elsewhere in
-    the app). Returns the (possibly capped) hits that were written.
+    ``min(settings.series_suggestion_limit, 100)`` (also keeps the write, and
+    any API payload built from the result, within the list-size limits
+    elsewhere in the app — ``backfill`` on the create-series response 422s
+    above 100 entries, so this holds even if ``series_suggestion_limit`` is
+    misconfigured higher). Returns the (possibly capped) hits that were
+    written.
+
+    The suggestion write is an upsert that no-ops on a ``(series, document)``
+    conflict, so re-sweeping a group that still has the same doc pending is
+    idempotent rather than raising ``IntegrityError`` on the unique
+    constraint.
     """
     candidate_ids = await _eligible_candidate_ids(session, group_id)
     hits = await evaluate_group(
         session, settings, group_id, candidate_ids, extra_positive_ids=anchor_ids
     )
-    hits = hits[: settings.series_suggestion_limit]
+    hits = hits[: min(settings.series_suggestion_limit, 100)]
     for document_id, score in hits:
-        session.add(
-            AuthoredSeriesSuggestion(
+        statement = (
+            pg_insert(AuthoredSeriesSuggestion)
+            .values(
                 authored_series_id=group_id,
                 document_id=document_id,
-                state=SuggestionState.PENDING,
+                state=SuggestionState.PENDING.value,
                 score=score.sim_pos,
             )
+            .on_conflict_do_nothing(constraint="authored_series_suggestions_series_document")
         )
+        await session.execute(statement)
     await session.commit()
     return hits
