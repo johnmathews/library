@@ -27,6 +27,7 @@ from library.extraction.apply import (
     resolve_recipient_from_email,
     todays_spend_usd,
     upsert_recipient,
+    upsert_sender,
 )
 from library.extraction.extractor import (
     PROMPT_VERSION,
@@ -270,6 +271,20 @@ async def test_sender_upsert_is_case_insensitive(
         document = await session.get(Document, document_id)
         assert document is not None
         assert document.sender is not None and document.sender.name == "ENECO Services"
+
+
+async def test_upsert_sender_collapses_internal_whitespace(
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    """OCR can double up internal spaces (e.g. "De  Hooge   Waerder"); that must
+    resolve to the same sender row as the normally-spaced name, not create a
+    duplicate (matching taxonomy.create_sender's ``" ".join(name.split())``).
+    """
+    async with session_factory() as session:
+        a = await upsert_sender(session, "De Hooge Waerder")
+        b = await upsert_sender(session, "De  Hooge   Waerder")
+        await session.commit()
+        assert a.id == b.id
 
 
 async def test_recipient_upsert_is_case_insensitive(
