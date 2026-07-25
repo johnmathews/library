@@ -4,6 +4,7 @@
 import asyncio
 import hashlib
 import uuid
+from datetime import UTC, datetime
 from decimal import Decimal
 
 import pytest
@@ -187,6 +188,65 @@ def test_authored_body_exposes_mode_and_auto_count(
     body = resp.json()
     assert body["mode"] == "semantic"
     assert body["auto_added_count"] == 1
+
+
+async def _add_soft_deleted_auto_member(
+    database_url: str, group_id: int, *, amount_total: str, currency: str
+) -> int:
+    """A second AUTO-origin member on ``group_id`` whose document is soft-deleted
+    (``deleted_at`` set, row not yet purged); returns the document id."""
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            marker = f"smart-group-auto-deleted:{group_id}:{uuid.uuid4()}"
+            document = Document(
+                sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                mime_type="application/pdf",
+                source=DocumentSource.UPLOAD,
+                original_filename="deleted-auto-member",
+                title="deleted-auto-member",
+                amount_total=Decimal(amount_total),
+                currency=currency,
+                deleted_at=datetime.now(UTC),
+            )
+            session.add(document)
+            await session.flush()
+            session.add(
+                AuthoredSeriesMember(
+                    authored_series_id=group_id,
+                    document_id=document.id,
+                    origin=MemberOrigin.AUTO,
+                )
+            )
+            await session.commit()
+            return document.id
+    finally:
+        await engine.dispose()
+
+
+def test_soft_deleted_auto_member_not_counted(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A soft-deleted (not-yet-purged) AUTO member must not inflate
+    ``auto_added_count`` — it disagrees with the chart, which already filters
+    ``deleted_at`` via ``_load_authored_members``."""
+    tag = uuid.uuid4().hex[:8]
+    group_id, _document_id = asyncio.run(
+        _make_semantic_group_with_auto_member(
+            api_database_url, f"ev-soft-delete-{tag}", amount_total="12.00", currency="EUR"
+        )
+    )
+    asyncio.run(
+        _add_soft_deleted_auto_member(
+            api_database_url, group_id, amount_total="9.00", currency="EUR"
+        )
+    )
+
+    resp = api_client.get(f"/api/charts/a-{group_id}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["mode"] == "semantic"
+    assert body["auto_added_count"] == 1  # only the non-deleted AUTO member counts
 
 
 def test_pruned_member_is_not_re_added(api_client: TestClient, api_database_url: str) -> None:

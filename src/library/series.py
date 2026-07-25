@@ -757,14 +757,23 @@ async def _load_authored_members(
 async def _load_authored_origins(
     session: AsyncSession, authored_series_id: int
 ) -> dict[int, MemberOrigin]:
-    """``document_id -> origin`` for every member of an authored series.
+    """``document_id -> origin`` for every (non-deleted) member of an authored series.
 
     Queried directly against the membership table rather than derived from the
     (amount-bearing only) ``_Member`` rows ``_load_authored_members`` returns, so
     an auto-added document with no resolvable amount/FX rate is still counted.
+    Joins ``Document`` and filters ``deleted_at IS NULL`` to match
+    ``_load_authored_members`` — otherwise a soft-deleted (not-yet-purged)
+    member would still count toward ``auto_added_count`` even though the chart
+    no longer shows it.
     """
-    statement = select(AuthoredSeriesMember.document_id, AuthoredSeriesMember.origin).where(
-        AuthoredSeriesMember.authored_series_id == authored_series_id
+    statement = (
+        select(AuthoredSeriesMember.document_id, AuthoredSeriesMember.origin)
+        .join(Document, Document.id == AuthoredSeriesMember.document_id)
+        .where(
+            AuthoredSeriesMember.authored_series_id == authored_series_id,
+            Document.deleted_at.is_(None),
+        )
     )
     return dict((await session.execute(statement)).all())
 
