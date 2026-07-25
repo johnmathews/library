@@ -9,6 +9,7 @@ instead reported (without points) as near-threshold ``candidates`` — buckets o
 or more documents short of ``series_min_documents``.
 """
 
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -52,6 +53,9 @@ from library.series import (
     summarize_authored_series,
     summarize_series,
 )
+from library.series_insight import refresh_group_blurb
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -565,6 +569,16 @@ async def create_authored_series(
         anchor_ids = await _name_anchor_ids(session, settings, payload.name)
         hits = await sweep_backfill(session, settings, authored.id, anchor_ids=anchor_ids)
         body["backfill"] = await _backfill_payload(session, hits)
+        # Best-effort prose blurb (never blocks/fails group creation): fills
+        # `description` only if the user didn't already set one and there's
+        # at least one chartable member to describe.
+        try:
+            blurbed = await refresh_group_blurb(session, settings, authored.id)
+        except Exception:
+            logger.warning("group blurb failed for authored series %s", authored.id, exc_info=True)
+        else:
+            if blurbed is not None:
+                body["description"] = blurbed.description
     return body
 
 

@@ -15,10 +15,14 @@ from sqlalchemy.pool import NullPool
 from library.config import Settings
 from library.models import (
     EMBEDDING_DIM,
+    AuthoredSeries,
     AuthoredSeriesExclusion,
+    AuthoredSeriesMember,
     Document,
     DocumentChunk,
     DocumentSource,
+    MemberOrigin,
+    SeriesMode,
 )
 from library.semantic_membership import auto_add_document
 
@@ -130,6 +134,59 @@ def test_create_semantic_group_seed_members_are_manual_origin(
     body = resp.json()
     assert body["count"] == 0  # seed doc has no amount_total, so it doesn't chart as a point
     assert body["authored_id"] is not None
+
+
+async def _make_semantic_group_with_auto_member(
+    database_url: str, name: str, *, amount_total: str, currency: str
+) -> tuple[int, int]:
+    """A ``mode=semantic`` authored series with one amount-bearing, AUTO-origin
+    member; returns ``(group_id, document_id)``."""
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            group = AuthoredSeries(name=name, currency=currency, mode=SeriesMode.SEMANTIC)
+            session.add(group)
+            await session.flush()
+            marker = f"smart-group-auto:{name}:{uuid.uuid4()}"
+            document = Document(
+                sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                mime_type="application/pdf",
+                source=DocumentSource.UPLOAD,
+                original_filename=name,
+                title=name,
+                amount_total=Decimal(amount_total),
+                currency=currency,
+            )
+            session.add(document)
+            await session.flush()
+            session.add(
+                AuthoredSeriesMember(
+                    authored_series_id=group.id,
+                    document_id=document.id,
+                    origin=MemberOrigin.AUTO,
+                )
+            )
+            await session.commit()
+            return group.id, document.id
+    finally:
+        await engine.dispose()
+
+
+def test_authored_body_exposes_mode_and_auto_count(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    tag = uuid.uuid4().hex[:8]
+    group_id, _document_id = asyncio.run(
+        _make_semantic_group_with_auto_member(
+            api_database_url, f"ev-body-uniqtag-{tag}", amount_total="12.00", currency="EUR"
+        )
+    )
+
+    resp = api_client.get(f"/api/charts/a-{group_id}")
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body["mode"] == "semantic"
+    assert body["auto_added_count"] == 1
 
 
 def test_pruned_member_is_not_re_added(api_client: TestClient, api_database_url: str) -> None:
