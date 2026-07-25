@@ -19,11 +19,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
 from library.models import (
+    AuthoredSeries,
     AuthoredSeriesExclusion,
     AuthoredSeriesMember,
     AuthoredSeriesSuggestion,
     Document,
     DocumentChunk,
+    MemberOrigin,
+    SeriesMode,
     SuggestionState,
 )
 
@@ -225,3 +228,38 @@ async def sweep_backfill(
         await session.execute(statement)
     await session.commit()
     return hits
+
+
+async def auto_add_document(
+    session: AsyncSession, settings: Settings, document_id: int
+) -> list[int]:
+    """Silently add a newly-indexed document to every semantic group it belongs to."""
+    if not settings.semantic_group_enabled:
+        return []
+    group_ids = [
+        r[0]
+        for r in await session.execute(
+            select(AuthoredSeries.id).where(AuthoredSeries.mode == SeriesMode.SEMANTIC)
+        )
+    ]
+    joined: list[int] = []
+    for group_id in group_ids:
+        # Not in the group already? evaluate_group's candidate list handles member/excl skip.
+        existing = set(await _member_ids(session, group_id)) | set(
+            await _exclusion_ids(session, group_id)
+        )
+        if document_id in existing:
+            continue
+        hits = await evaluate_group(session, settings, group_id, [document_id])
+        if hits:
+            session.add(
+                AuthoredSeriesMember(
+                    authored_series_id=group_id,
+                    document_id=document_id,
+                    origin=MemberOrigin.AUTO,
+                )
+            )
+            joined.append(group_id)
+    if joined:
+        await session.commit()
+    return joined

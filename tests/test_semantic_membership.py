@@ -19,11 +19,13 @@ from library.models import (
     Document,
     DocumentChunk,
     DocumentSource,
+    MemberOrigin,
     SeriesMode,
     SuggestionState,
 )
 from library.semantic_membership import (
     MembershipScore,
+    auto_add_document,
     document_vectors,
     evaluate_group,
     score_vector,
@@ -360,3 +362,38 @@ async def test_sweep_backfill_writes_pending_suggestions(
     assert {row.document_id for row in rows} == {match.id}
     assert rows[0].state == SuggestionState.PENDING
     assert rows[0].score == pytest.approx(hits[0][1].sim_pos)
+
+
+# --- auto_add_document: forward auto-add on newly-indexed documents ---
+
+
+@pytest.mark.integration
+async def test_auto_add_joins_matching_group_as_auto(
+    session: AsyncSession,
+    settings: Settings,
+    make_document: Callable[..., Document],
+    add_chunk: Callable[[Document, list[float]], None],
+) -> None:
+    group = AuthoredSeries(name="ev-auto-uniqtag", currency="EUR", mode=SeriesMode.SEMANTIC)
+    session.add(group)
+    await session.flush()
+    member = await make_document(title="ev-auto-member")
+    add_chunk(member, [0.9, 0.1])
+    session.add(AuthoredSeriesMember(authored_series_id=group.id, document_id=member.id))
+    await session.commit()
+
+    incoming = await make_document(title="ev-auto-incoming", amount_total="30.00", currency="EUR")
+    add_chunk(incoming, [0.89, 0.11])
+    await session.commit()
+
+    joined = await auto_add_document(session, settings, incoming.id)
+    assert group.id in joined
+    row = (
+        await session.execute(
+            select(AuthoredSeriesMember).where(
+                AuthoredSeriesMember.authored_series_id == group.id,
+                AuthoredSeriesMember.document_id == incoming.id,
+            )
+        )
+    ).scalar_one()
+    assert row.origin == MemberOrigin.AUTO
