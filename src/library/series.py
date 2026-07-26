@@ -19,7 +19,7 @@ from datetime import date, timedelta
 from decimal import Decimal
 from typing import Literal
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
@@ -814,6 +814,35 @@ def _empty_authored_summary(
     )
 
 
+async def _resolve_display_currency(session: AsyncSession, authored: AuthoredSeries) -> str | None:
+    """The currency an authored series charts in.
+
+    An explicit ``authored.currency`` wins. Otherwise fall back to the dominant
+    currency among the series' amount-bearing, non-deleted members, so a group
+    created without a currency still charts (its members are FX-converted into
+    that currency) rather than rendering empty — every member would otherwise be
+    dropped converting into a NULL target. ``None`` only when the series has no
+    amount-bearing member carrying a currency.
+    """
+    if authored.currency:
+        return authored.currency
+    return (
+        await session.execute(
+            select(Document.currency)
+            .join(AuthoredSeriesMember, AuthoredSeriesMember.document_id == Document.id)
+            .where(
+                AuthoredSeriesMember.authored_series_id == authored.id,
+                Document.deleted_at.is_(None),
+                Document.amount_total.isnot(None),
+                Document.currency.isnot(None),
+            )
+            .group_by(Document.currency)
+            .order_by(func.count().desc(), Document.currency)
+            .limit(1)
+        )
+    ).scalar_one_or_none()
+
+
 async def summarize_authored_series(
     session: AsyncSession,
     authored_series_id: int,
@@ -834,14 +863,15 @@ async def summarize_authored_series(
     authored = await session.get(AuthoredSeries, authored_series_id)
     if authored is None:
         return None
+    display_currency = await _resolve_display_currency(session, authored)
     origins = await _load_authored_origins(session, authored_series_id)
     auto_added_count = sum(1 for o in origins.values() if o == MemberOrigin.AUTO)
-    members = await _load_authored_members(session, authored_series_id, authored.currency)
+    members = await _load_authored_members(session, authored_series_id, display_currency)
     if not members:
         return _empty_authored_summary(authored, auto_added_count, origins)
     return _summarize_members(
         members,
-        currency=authored.currency,
+        currency=display_currency,
         settings=settings,
         reference=reference,
         description=authored.description,
@@ -885,7 +915,8 @@ async def load_authored_signature(
     authored = await session.get(AuthoredSeries, authored_series_id)
     if authored is None:
         return None
-    members = await _load_authored_members(session, authored_series_id, authored.currency)
+    display_currency = await _resolve_display_currency(session, authored)
+    members = await _load_authored_members(session, authored_series_id, display_currency)
     return derive_signature(members)
 
 

@@ -4,7 +4,7 @@
 import asyncio
 import hashlib
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from decimal import Decimal
 
 import pytest
@@ -378,3 +378,60 @@ def test_dismiss_clears_existing_membership_and_blocks_reautoadd(
             await engine.dispose()
 
     asyncio.run(_check())
+
+
+async def _make_dated_doc(
+    database_url: str, title: str, amount_total: str, currency: str, on_date: date
+) -> int:
+    """An amount-bearing, dated document (no chunk needed — charting is amount+date)."""
+    engine = create_async_engine(database_url, poolclass=NullPool)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as session:
+            marker = f"null-cur:{title}:{uuid.uuid4()}"
+            document = Document(
+                sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                mime_type="application/pdf",
+                source=DocumentSource.UPLOAD,
+                original_filename=title,
+                title=title,
+                amount_total=Decimal(amount_total),
+                currency=currency,
+                document_date=on_date,
+            )
+            session.add(document)
+            await session.commit()
+            return document.id
+    finally:
+        await engine.dispose()
+
+
+def make_dated_doc(
+    database_url: str, title: str, amount_total: str, currency: str, on_date: date
+) -> int:
+    return asyncio.run(_make_dated_doc(database_url, title, amount_total, currency, on_date))
+
+
+def test_null_currency_authored_series_charts_in_dominant_member_currency(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A group created without a currency charts in its members' dominant currency.
+
+    Regression: `_load_authored_members` FX-converts every member into the
+    series' display currency, so a NULL currency dropped all members and the
+    chart rendered empty. It must fall back to the dominant member currency
+    (here USD: 2 USD vs 1 EUR) and FX-convert the minority into it. Dates are
+    2022 so the baked FX rates (migration 0015) apply.
+    """
+    tag = uuid.uuid4().hex[:8]
+    usd1 = make_dated_doc(api_database_url, f"nc-usd1-{tag}", "10.00", "USD", date(2022, 6, 1))
+    usd2 = make_dated_doc(api_database_url, f"nc-usd2-{tag}", "20.00", "USD", date(2022, 7, 1))
+    eur1 = make_dated_doc(api_database_url, f"nc-eur1-{tag}", "100.00", "EUR", date(2022, 6, 1))
+
+    resp = api_client.post(
+        "/api/charts/authored",
+        json={"name": f"null-cur-{tag}", "document_ids": [usd1, usd2, eur1]},
+    )
+    assert resp.status_code == 201
+    body = resp.json()
+    assert body["currency"] == "USD"  # dominant among members, not NULL
+    assert body["count"] == 3  # all three charted (EUR converted), none dropped

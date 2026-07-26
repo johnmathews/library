@@ -21,7 +21,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.auth.deps import current_user
 from library.config import Settings, get_settings
 from library.db import get_session
-from library.embedding import embed_query
 from library.models import (
     AuthoredSeries,
     AuthoredSeriesExclusion,
@@ -36,13 +35,14 @@ from library.models import (
     SuggestionState,
     User,
 )
-from library.search import DocumentFilters, semantic_search
+from library.search import DocumentFilters
 from library.semantic_membership import MembershipScore, sweep_backfill
 from library.series import (
     SeriesSignature,
     SeriesSummary,
     _load_authored_members,
     _Member,
+    _resolve_display_currency,
     decode_authored_series_id,
     decode_series_id,
     derive_signature,
@@ -428,23 +428,6 @@ async def _authored_body(
     return serialise_summary(summary, include_points=True)
 
 
-async def _name_anchor_ids(session: AsyncSession, settings: Settings, name: str) -> list[int]:
-    """Turn a Smart Group's name into a few anchor documents via semantic search.
-
-    Best-effort: embedding failures (feature disabled, sidecar unreachable, no
-    seeds) return ``[]`` so a group with hand-picked seeds still sweeps on those
-    alone, and tests without an embedding backend don't explode.
-    """
-    try:
-        embedding = await embed_query(name, settings=settings)
-    except Exception:
-        return []
-    hits = await semantic_search(
-        session, query=name, query_embedding=embedding, top_k=settings.series_suggestion_limit
-    )
-    return [hit.document.id for hit in hits]
-
-
 async def _backfill_payload(
     session: AsyncSession, hits: list[tuple[int, MembershipScore]]
 ) -> list[dict[str, object]]:
@@ -566,8 +549,12 @@ async def create_authored_series(
 
     body = await _authored_body(session, settings, authored.id)
     if payload.mode is SeriesMode.SEMANTIC and settings.semantic_group_enabled:
-        anchor_ids = await _name_anchor_ids(session, settings, payload.name)
-        hits = await sweep_backfill(session, settings, authored.id, anchor_ids=anchor_ids)
+        # Score only against the documents the user explicitly seeded. An earlier
+        # "turn the group name into a search and inject the hits as positives"
+        # step poisoned the sweep — a bare name search over a mixed archive
+        # returned unrelated documents that then defined membership. Seeds are
+        # the only trustworthy signal.
+        hits = await sweep_backfill(session, settings, authored.id)
         body["backfill"] = await _backfill_payload(session, hits)
         # Best-effort prose blurb (never blocks/fails group creation): fills
         # `description` only if the user didn't already set one and there's
@@ -855,7 +842,8 @@ async def get_authored_odd_ones_out(
     are built from the documents' real sender/kind/currency (no LLM), so the
     reason can never name a sender/kind/currency that isn't in the series."""
     authored = await _get_authored_or_404(session, authored_id)
-    members = await _load_authored_members(session, authored_id, authored.currency)
+    display_currency = await _resolve_display_currency(session, authored)
+    members = await _load_authored_members(session, authored_id, display_currency)
     signature = derive_signature(members)
     if signature is None:
         return {"members": []}
