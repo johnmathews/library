@@ -435,3 +435,58 @@ def test_null_currency_authored_series_charts_in_dominant_member_currency(
     body = resp.json()
     assert body["currency"] == "USD"  # dominant among members, not NULL
     assert body["count"] == 3  # all three charted (EUR converted), none dropped
+
+
+def test_create_authored_does_not_use_name_search() -> None:
+    """Guard: the group NAME must never seed the backfill sweep.
+
+    Turning the name into a hybrid search and injecting the hits as positive
+    examples poisoned membership on a mixed archive — unrelated documents became
+    positives (observed sim=1.000 "anchors" that were insurance policies for an
+    "Anthropic" group). Membership must come only from the user's explicit
+    seeds. This fails if the name→search→positive path is ever reintroduced.
+    """
+    import library.api.charts as charts_mod
+
+    assert not hasattr(charts_mod, "_name_anchor_ids")
+    assert "semantic_search" not in vars(charts_mod)
+    assert "embed_query" not in vars(charts_mod)
+
+
+def test_backfill_tracks_seed_embeddings_not_the_group_name(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A backfill match must be similar to the SEED, not merely match the name.
+
+    Contract for "seeds are the only signal": a document whose title matches the
+    group name but whose embedding is far from the seed is NOT suggested, while a
+    document close to the seed is — regardless of the name.
+    """
+    tag = uuid.uuid4().hex[:8]
+    name_word = f"widgetco{tag}"
+    seed_id = make_document_with_chunk(api_database_url, f"seed-{tag}", [0.9, 0.1])
+    near_id = make_document_with_chunk(
+        api_database_url, f"near-{tag}", [0.88, 0.12], amount_total="30.00", currency="EUR"
+    )
+    # Title matches the group name, but its embedding points the other way.
+    far_id = make_document_with_chunk(
+        api_database_url,
+        f"{name_word} annual report",
+        [0.0, 1.0],
+        amount_total="30.00",
+        currency="EUR",
+    )
+
+    resp = api_client.post(
+        "/api/charts/authored",
+        json={
+            "name": name_word,  # matches far_id's title, not near_id's
+            "currency": "EUR",
+            "mode": "semantic",
+            "seed_document_ids": [seed_id],
+        },
+    )
+    assert resp.status_code == 201, resp.text
+    backfill_ids = {row["document_id"] for row in resp.json()["backfill"]}
+    assert near_id in backfill_ids  # close to the seed -> suggested
+    assert far_id not in backfill_ids  # matches the name but not the seed -> not suggested
