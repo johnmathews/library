@@ -37,6 +37,12 @@ through one status per stage, emitting one `ingestion_event` per transition:
 
 `received → ocr → extract → markdown → embed → indexed`
 
+The status is committed when a stage is **entered**, not when it completes (it
+is what drives the live "now doing X" progress stream), so a crash inside a
+stage leaves the status advanced and the work undone. A resume therefore
+**re-runs the stage the document is sitting in** before advancing past it — see
+["`process_document(document_id)` — pipeline"](#process_documentdocument_id--pipeline).
+
 Any error at any stage moves the document to `failed` and writes a `failed`
 event with the error detail.
 
@@ -266,9 +272,43 @@ Decisions:
 - Stage hooks are `async def run_ocr(session, document)` / `run_extraction(session, document)` / `run_markdown(session, document)` / `run_embed(session, document)` in `library.jobs`. The OCR work
   itself is CPU-bound and subprocess-heavy, so it runs in a thread via
   `asyncio.to_thread`, keeping the async worker responsive.
-- Re-runs are idempotent: the pipeline resumes from the document's
-  current status; an already-`indexed` (or `failed`) document is left
-  untouched.
+- Re-runs are idempotent, and a resume **re-runs the stage the document is
+  sitting in**. `documents.status` records the stage that was *entered*, never
+  one that finished: it is committed (and `NOTIFY`d, so the Jobs view can show
+  "now doing X") *before* the stage hook runs. A worker hard-killed inside a hook
+  therefore leaves the status advanced and the work undone — a kill inside the
+  OCR hook leaves `status=ocr, ocr_text=NULL`, and a naive resume that computed
+  `next(ocr) = extract` would drive the document to `indexed` with no text at
+  all, permanently invisible to search, while the job logged success. So
+  `advance_pipeline` runs the entered stage's hook once up front (for any status
+  other than `received`, which has no hook) before entering the advance loop.
+  Every stage hook is re-runnable by design: OCR re-reads the content-addressed
+  original and overwrites its results, extraction is fill-only over
+  `extra["user_edited_fields"]` and budget-gated, and embedding deletes and
+  re-inserts the document's chunks. An already-`indexed` (or `failed`) document
+  is left untouched.
+- **Re-running a stage is safe; the billed stages also make it free.** The
+  status is committed at the top of the loop and the hook runs *after* it, so a
+  hook's own results land while the status still names that stage. A kill in the
+  window between "the hook committed its work" and "the next iteration committed
+  the advance" therefore leaves a **finished** stage looking exactly like an
+  **interrupted** one, and the resume re-runs it. For OCR and embedding that is
+  only wasted local CPU. For the stages that call Anthropic it would be a second
+  billed call for work already paid for, so each of those carries a completion
+  guard keyed on the stage's own durable evidence rather than on `status`:
+
+  | Stage | Guard | Evidence it already finished |
+  | --- | --- | --- |
+  | extract | `extraction_skipped {reason: "already_extracted"}` | `extra["extraction"]["prompt_version"]` equals the current `PROMPT_VERSION` |
+  | markdown | `markdown_skipped {reason: "already_generated"}` | a `markdown_completed` event at the current generator `PROMPT_VERSION` (committed in the same transaction as the page rows) |
+  | markdown (repair pass) | `extraction_repair_skipped {reason: "already_repaired"}` | `extra["extraction_repair"]["prompt_version"]` |
+  | matter classification | the deferred job returns without calling | `extra["matter_classification"]["prompt_version"]` (see "Matter classification") |
+
+  Every guard is **version-scoped**, so a prompt bump makes the whole corpus
+  eligible again and the backfill CLIs keep working. The guards apply to the
+  *pipeline* only: `extract_document` and `markdown_document` pass `force=True`,
+  because a caller who defers those tasks (the re-extract endpoint, a note edit,
+  `library backfill`, the budget backfill) is asking for a re-run on purpose.
 - Any exception marks the document `failed`, records a `failed` event
   with `{"error": …, "status": <status it failed in>}`, and re-raises so
   Procrastinate also marks the job failed. A *clean* exception is therefore
@@ -284,8 +324,12 @@ Decisions:
   Procrastinate for `process_document` jobs whose worker heartbeat is older than
   `LIBRARY_STALLED_JOB_HEARTBEAT_SECONDS` (default 60 — safely above the ~10 s
   heartbeat period, so a live worker mid-OCR is never swept) and re-enqueues
-  each via `retry_job`. Recovery is safe because the pipeline resumes
-  idempotently from the stranded status. `get_stalled_jobs` can only see a
+  each via `retry_job`. Recovery is safe *and complete* because the resume
+  re-runs the stranded stage (per the bullet above) rather than assuming it
+  finished — the stranded status names the stage that was interrupted. It is
+  also *cheap*: a sweep of a document killed just after a billed stage committed
+  hits that stage's completion guard and records an `already_extracted` /
+  `already_generated` skip instead of paying twice. `get_stalled_jobs` can only see a
   stranded job while its dead worker's row still exists, and Procrastinate
   prunes those rows at worker startup — so the prune timeout is raised to 24 h
   via `LIBRARY_STALLED_WORKER_PRUNE_SECONDS`, otherwise a redeploy could delete
@@ -461,7 +505,7 @@ the SDK converts the model to a JSON schema (with
 
 | Field | Type | Notes |
 | --- | --- | --- |
-| `kind_slug` | enum | The 14 seeded kind slugs (`invoice` … `other`, including the general-reference kinds `reference`, `research`, `note`); enforced by the JSON schema, so the model cannot invent kinds. |
+| `kind_slug` | enum | The 15 seeded kind slugs (`invoice` … `other`, including the general-reference kinds `reference`, `research`, `note` and `quote` — a priced offer not yet owed, excluded from spend totals); enforced by the JSON schema, so the model cannot invent kinds. The enum is the single source: `KIND_SLUGS = get_args(KindSlug)` in `library.extraction.schema`, pinned to the migration-seeded set by `tests/test_migrations.py`. |
 | `sender_name` | `str \| None` | Canonical short organisation/person name. The **signer** (sign-off) is the sender for letters/emails. |
 | `recipient_name` | `str \| None` | The person the document is addressed **to**, in short canonical form (e.g. "John"). The salutation ("Dear/Beste/Geachte/T.a.v. …") is the primary signal. `None` only for impersonal material. |
 | `addressee_raw`, `signer_raw` | `str \| None` | The **verbatim** salutation-target / sign-off names, copied as printed before canonicalisation. Additive (default `None`); feed the hybrid recipient path and the deterministic cross-checks. |
@@ -544,13 +588,18 @@ most often see blank or wrong: the **salutation** identifies the recipient and
 the **sign-off** identifies the sender; **due_date** (an act-by deadline) is
 distinguished from **expiry_date** (a validity end), including the Dutch
 "vervaldatum" (due) vs "verloopt/geldig tot" (expiry) trap; and a short rubric
-disambiguates overlapping `kind_slug` pairs (invoice vs receipt, utility-bill vs
-invoice, letter vs contract, …). Since `PROMPT_VERSION = "2026-07-14.1"` the
-sender rule is hardened for receipts: `sender_name` must be the **printed
-merchant/organisation name** on the document, never a generic category word
-such as "Restaurant" or "Shop" — when no name is legible the model must return
-null instead (the `generic_sender` validation rule catches any that slip
-through). The same semantics are mirrored into per-field
+disambiguates overlapping `kind_slug` pairs (invoice vs receipt, **quote vs
+invoice**, utility-bill vs invoice, letter vs contract, …). `PROMPT_VERSION` is
+currently `"2026-07-26.1"`, which added the quote rule: a quote (Dutch
+"offerte", "vrijblijvende aanbieding") is a priced offer for work not yet done
+and not yet owed, so carrying a total never on its own makes it an invoice.
+Existing documents keep whatever they were classified as until they are
+re-extracted — see "Backfill (stale prompt version)" below. From
+`"2026-07-14.1"` the sender rule is hardened for receipts: `sender_name` must
+be the **printed merchant/organisation name** on the document, never a generic
+category word such as "Restaurant" or "Shop" — when no name is legible the
+model must return null instead (the `generic_sender` validation rule catches
+any that slip through). The same semantics are mirrored into per-field
 `Field(description=…)` on the schema (Anthropic's structured-output guidance
 recommends per-field descriptions). All free-text fields (title, summary,
 reasoning_note) are **in English** (translated from the source language when the
@@ -866,10 +915,17 @@ seeded sampling is a documented follow-up.
 | --- | --- | --- |
 | `LIBRARY_EXTRACTION_ENABLED=false` | `extraction_skipped` `{reason: "disabled"}` | continues to `indexed` |
 | No `LIBRARY_ANTHROPIC_API_KEY` | `extraction_skipped` `{reason: "missing_api_key"}` | continues to `indexed` |
+| Already extracted at the current `PROMPT_VERSION` (pipeline resume) | `extraction_skipped` `{reason: "already_extracted", prompt_version}` | continues to `indexed`, metadata untouched |
 | Daily budget spent | `extraction_skipped` `{reason: "budget", spent_usd, budget_usd}` | continues to `indexed` |
 | Unusable/oversized input | `extraction_skipped` `{reason: "input_unusable" \| "file_too_large"}` | continues to `indexed` |
 | API error after SDK retries, double parse failure | `extraction_failed` `{error, prompt_version}` | continues to `indexed` |
 | Success | `extraction_completed` `{model, prompt_version, confidence, input_tokens, output_tokens, cost_usd, escalated, input_mode}` | metadata populated |
+
+`already_extracted` guards the **pipeline** only — it is what stops a resume in
+the post-hook window (see "`process_document` — pipeline") from paying twice.
+The `extract_document` task passes `force=True`, so the re-extract endpoint, the
+note-edit reprocess, the importer, and `library backfill` (including
+`--include-current`) all re-extract exactly as before.
 
 **Cost guard:** every completed call stores its estimated cost
 (`cost_usd`, from the pricing constants above) in the event detail.
@@ -915,6 +971,16 @@ already-extracted title, summary, and sender.
 is queued right after extraction commits and runs in parallel with the later
 pipeline stages. A queue error is swallowed — matter classification can **never**
 block, fail, or stall a document's ingest.
+
+The pipeline's defer carries `skip_if_classified=True`, so if a resume re-runs
+the `extract` branch and queues the job a *second* time, that duplicate returns
+without calling Anthropic once the document is stamped with the current
+classifier `prompt_version`. The guard deliberately lives on the **job**, not in
+`apply_matter_classification`: `sweep-matters --all` re-runs merge mode over
+already-classified documents on purpose (to pick up a new or re-hinted matter),
+and a guard inside the classifier would silently turn that into a no-op. It is
+evaluated when the job runs, not when it is deferred, so a duplicate queued
+behind the original still sees the original's stamp.
 
 **Contract** (`apply_matter_classification`): one Anthropic structured-output
 call (`matter_classifier_model`, default `claude-sonnet-4-6` — the
@@ -1081,6 +1147,7 @@ the document continues to `embed` and reaches `indexed`:
 |---|---|
 | `LIBRARY_MARKDOWN_ENABLED=false` | `markdown_skipped` `{reason: "disabled"}` |
 | No `LIBRARY_ANTHROPIC_API_KEY` | `markdown_skipped` `{reason: "missing_api_key"}` |
+| Pages already generated at the current `PROMPT_VERSION` (pipeline resume) | `markdown_skipped` `{reason: "already_generated", prompt_version}` |
 | Daily budget spent | `markdown_skipped` `{reason: "budget", spent_usd, budget_usd}` |
 | Renderer returns no images (oversized, corrupt) | `markdown_skipped` `{reason: "input_unusable", mime \| error}` |
 | Born-digital `text/markdown`/`text/plain` with content | `markdown_completed` `{engine: "passthrough", model: null, pages: 1, cost_usd: 0.0}` |
@@ -1088,6 +1155,13 @@ the document continues to `embed` and reaches `indexed`:
 | Generation yields no pages | `markdown_skipped` `{reason: "input_unusable", detail}` |
 | API error after SDK retries | `markdown_failed` `{error, prompt_version}` |
 | Success | `markdown_completed` `{model, prompt_version, pages, input_tokens, output_tokens, cost_usd}` |
+
+`already_generated` is checked against the `markdown_completed` events, which
+carry the generator's `prompt_version` and are committed together with the page
+rows they describe. It guards the **pipeline** only: `markdown_document`
+(`library backfill`, `backfill-markdown`, the budget backfill) passes
+`force=True` and always regenerates. The born-digital passthrough writes no
+`prompt_version`, so it is never guarded — re-running it costs nothing.
 
 The accepted limitation: a final DB-commit failure after the API call can
 fail the document — the same edge case exists in extraction.
@@ -1869,10 +1943,10 @@ Append-only audit trail in `ingestion_events`:
 | `ocr_completed` | OCR stage | `{engine, confidence, pages, characters}`; plus `gate: {tesseract_confidence, rapidocr_confidence}` when the confidence gate retried |
 | `ocr_failed` | OCR stage | `{error}` |
 | `extraction_completed` | extraction stage | `{model, prompt_version, confidence, input_tokens, output_tokens, cost_usd, escalated, input_mode}` |
-| `extraction_skipped` | extraction stage | `{reason, ...}` — `disabled`, `missing_api_key`, `budget`, `input_unusable`, `file_too_large` |
+| `extraction_skipped` | extraction stage | `{reason, ...}` — `disabled`, `missing_api_key`, `already_extracted`, `budget`, `input_unusable`, `file_too_large` |
 | `extraction_failed` | extraction stage | `{error, prompt_version}` |
 | `markdown_completed` | markdown stage | `{model, prompt_version, pages, input_tokens, output_tokens, cost_usd}`; born-digital text instead records `{engine: "passthrough", model: null, pages: 1, cost_usd: 0.0}` |
-| `markdown_skipped` | markdown stage | `{reason, ...}` — `disabled`, `missing_api_key`, `budget`, `input_unusable`, `no_text` |
+| `markdown_skipped` | markdown stage | `{reason, ...}` — `disabled`, `missing_api_key`, `already_generated`, `budget`, `input_unusable`, `no_text` |
 | `markdown_failed` | markdown stage | `{error, prompt_version}` |
 | `extraction_repair_completed` | markdown stage (repair pass) | `{model, prompt_version, input: "markdown", confidence, input_tokens, output_tokens, cost_usd, fields_filled, gaps}` — counts toward the **extraction** daily budget (see "Fill-only extraction repair") |
 | `extraction_repair_skipped` | markdown stage (repair pass) | `{reason, ...}` — `disabled`, `missing_api_key`, `no_markdown`, `no_extraction`, `already_repaired`, `no_gaps`, `budget`, `error` |

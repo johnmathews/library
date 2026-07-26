@@ -457,19 +457,55 @@ async def _apply_validation(session: AsyncSession, document: Document, settings:
     document.review_status = derive_review_status(findings)
 
 
-async def apply_extraction(session: AsyncSession, document: Document, settings: Settings) -> None:
+async def apply_extraction(
+    session: AsyncSession, document: Document, settings: Settings, *, force: bool = False
+) -> None:
     """Extract metadata for one document and persist the result.
 
     Always commits an audit event (``extraction_completed`` /
     ``extraction_skipped`` / ``extraction_failed``) and never raises for
     extraction-level problems — the document must reach ``indexed`` no
     matter what happens here.
+
+    Gate order (each skip records its reason, and no Anthropic call is made on
+    any skip path): ``disabled`` → ``missing_api_key`` → ``already_extracted``
+    (idempotency: ``extra["extraction"]`` already stamped with the current
+    :data:`PROMPT_VERSION` — a pipeline *resume* must not re-spend on a stage
+    that finished, see below) → ``budget`` (checked last so a document that was
+    never going to be extracted is not mislabelled a budget skip).
+
+    ``force=True`` bypasses the ``already_extracted`` guard for the deliberate
+    re-run paths — the ``extract_document`` task, which backs "re-extract this
+    document" (``POST /api/documents/{id}/extract``), the note-edit reprocess,
+    the importer, and the backfill CLIs. Those re-runs are the point of the
+    call, and their input (an edited note body) or their intent (a corrected
+    prompt) is not visible in the stamp. The pipeline path leaves it False:
+    ``documents.status`` names the stage a document *entered*, so a worker
+    killed after the extract hook committed — but before the loop advanced the
+    status — resumes into a re-run of an extraction that already happened, i.e.
+    a second billed call for work already paid for. The stamp is the only
+    evidence that separates "interrupted" from "finished". Version-scoped like
+    ``already_repaired``, so ``library backfill`` (which selects documents whose
+    stamp is a *stale* version) keeps working either way.
     """
     if not settings.extraction_enabled:
         await _record_event(session, document, "extraction_skipped", {"reason": "disabled"})
         return
     if settings.anthropic_api_key is None:
         await _record_event(session, document, "extraction_skipped", {"reason": "missing_api_key"})
+        return
+    extra = document.extra if isinstance(document.extra, dict) else {}
+    previous = extra.get("extraction")
+    already_extracted = (
+        isinstance(previous, dict) and previous.get("prompt_version") == PROMPT_VERSION
+    )
+    if already_extracted and not force:
+        await _record_event(
+            session,
+            document,
+            "extraction_skipped",
+            {"reason": "already_extracted", "prompt_version": PROMPT_VERSION},
+        )
         return
 
     spent = await todays_spend_usd(session)

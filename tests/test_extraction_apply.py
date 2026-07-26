@@ -415,6 +415,14 @@ async def test_reextraction_overwrites_previous_extraction_values(
     settings: Settings,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """A *deliberate* re-extraction overwrites; an unforced repeat is skipped.
+
+    ``force=True`` is what every re-run caller passes (the ``extract_document``
+    task behind the re-extract endpoint, the note-edit reprocess, the backfill
+    CLIs). Without it, a repeat at the same ``PROMPT_VERSION`` is an
+    ``already_extracted`` skip — the guard that stops a pipeline resume from
+    paying twice for an extraction that already finished.
+    """
     document_id = await make_document(session_factory, "apply-rerun")
 
     patch_extract(monkeypatch, make_outcome(make_metadata(title="First title")))
@@ -427,12 +435,26 @@ async def test_reextraction_overwrites_previous_extraction_values(
     async with session_factory() as session:
         document = await session.get(Document, document_id)
         assert document is not None
-        await apply_extraction(session, document, settings)
+        await apply_extraction(session, document, settings)  # unforced: guarded
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.title == "First title"
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings, force=True)
 
     async with session_factory() as session:
         document = await session.get(Document, document_id)
         assert document is not None
         assert document.title == "Second title"
+
+    events = await get_events(session_factory, document_id)
+    skipped = [detail for event, detail in events if event == "extraction_skipped"]
+    assert skipped == [{"reason": "already_extracted", "prompt_version": PROMPT_VERSION}]
 
 
 async def test_extraction_failure_still_reaches_indexed(

@@ -74,6 +74,20 @@ resumes idempotently, so a recovered document simply continues from where it
 died and eventually reaches `indexed`. This is why the Jobs view needs no manual
 requeue button for the common crash case.
 
+The resume **re-runs the stage the document is sitting in**. A document's
+`status` records the stage that was *entered*, not one that completed — the
+transition is committed and `NOTIFY`d before the stage's work runs, which is
+exactly what makes the live progress signal above possible ("now doing X"). The
+flip side is that a hard kill mid-stage leaves the status advanced and the work
+undone, so the resume must redo the entered stage rather than skip past it;
+otherwise a document killed inside OCR would sail to `indexed` with no text and
+report success. Every stage hook is written to tolerate that re-run, and the
+stages that call Anthropic (extract, markdown, the repair pass, matter
+classification) each carry a completion guard so a recovered document re-runs
+without being billed twice — the recovery shows up as an `already_extracted` /
+`already_generated` skip in the document's events rather than a second charge
+(see [ingestion.md](ingestion.md), "process_document — pipeline").
+
 ### 1.2.3 Recently-Deleted purge job
 
 `library.jobs.purge_deleted_documents` is a daily periodic task (small hours)

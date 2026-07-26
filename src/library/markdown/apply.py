@@ -97,8 +97,48 @@ async def _apply_born_digital_markdown(session: AsyncSession, document: Document
     )
 
 
-async def apply_markdown(session: AsyncSession, document: Document, settings: Settings) -> None:
-    """Generate per-page markdown for one document and persist it (best-effort)."""
+async def already_generated(session: AsyncSession, document: Document) -> bool:
+    """True when this document already has markdown at the current PROMPT_VERSION.
+
+    Markdown keeps no stamp on ``document.extra``; its completion marker is the
+    ``markdown_completed`` ingestion event, which is committed in the *same*
+    transaction as the page rows (see the tail of :func:`apply_markdown`) — so
+    the event's existence is exactly the proof that the pages it describes are
+    durable. Version-scoped, mirroring ``already_repaired``: a prompt bump makes
+    every document eligible again. The born-digital passthrough records no
+    ``prompt_version``, so it never matches — re-running it is free.
+    """
+    statement = (
+        select(IngestionEvent.id)
+        .where(
+            IngestionEvent.document_id == document.id,
+            IngestionEvent.event == "markdown_completed",
+            IngestionEvent.detail["prompt_version"].astext == PROMPT_VERSION,
+        )
+        .limit(1)
+    )
+    return (await session.execute(statement)).first() is not None
+
+
+async def apply_markdown(
+    session: AsyncSession, document: Document, settings: Settings, *, force: bool = False
+) -> None:
+    """Generate per-page markdown for one document and persist it (best-effort).
+
+    Gate order (each skip records its reason, and no Anthropic call is made on
+    any skip path): born-digital passthrough (no spend at all) → ``disabled`` →
+    ``missing_api_key`` → ``already_generated`` (idempotency, see
+    :func:`already_generated`) → ``budget`` (checked last, as in extraction) →
+    ``input_unusable``.
+
+    ``force=True`` bypasses the ``already_generated`` guard for the deliberate
+    re-run path (the ``markdown_document`` task, behind ``library backfill`` /
+    ``backfill-markdown`` and the budget backfill). The pipeline leaves it
+    False: a worker killed after the markdown hook committed its pages, but
+    before the loop advanced ``status`` to ``embed``, would otherwise resume
+    into a second billed vision pass over a document that already has its
+    markdown layer.
+    """
     if document.mime_type in ("text/markdown", "text/plain", DOCX_MIME):
         await _apply_born_digital_markdown(session, document)
         return
@@ -107,6 +147,14 @@ async def apply_markdown(session: AsyncSession, document: Document, settings: Se
         return
     if settings.anthropic_api_key is None:
         await _record_event(session, document, "markdown_skipped", {"reason": "missing_api_key"})
+        return
+    if not force and await already_generated(session, document):
+        await _record_event(
+            session,
+            document,
+            "markdown_skipped",
+            {"reason": "already_generated", "prompt_version": PROMPT_VERSION},
+        )
         return
 
     spent = await todays_markdown_spend_usd(session)
