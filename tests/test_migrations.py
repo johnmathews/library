@@ -7,6 +7,7 @@ from alembic import command
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
+from library.extraction.schema import KIND_SLUGS
 from tests.conftest import alembic_config, create_database, fetch_all
 
 pytestmark = pytest.mark.integration
@@ -108,6 +109,20 @@ def test_kinds_seeded(migrated_database_url: str) -> None:
     slugs = asyncio.run(_fetch_scalars(migrated_database_url, "SELECT slug FROM kinds"))
     assert len(slugs) == 15
     assert {str(slug) for slug in slugs} == EXPECTED_KIND_SLUGS
+
+
+def test_extraction_enum_covers_seeded_kinds(migrated_database_url: str) -> None:
+    """The extractor's vocabulary must equal what the migrations actually seed.
+
+    A kind seeded by a migration but missing from ``KIND_SLUGS`` is unreachable:
+    the classification prompt never mentions it and the structured-output
+    Literal would reject it (this is how ``quote`` went unclassifiable for a
+    month). ``POST /api/kinds`` lets users add arbitrary kinds at runtime, so
+    the assertion is against a freshly migrated database — the seeded set.
+    """
+    slugs = asyncio.run(_fetch_scalars(migrated_database_url, "SELECT slug FROM kinds"))
+    assert {str(slug) for slug in slugs} == EXPECTED_KIND_SLUGS
+    assert set(KIND_SLUGS) == EXPECTED_KIND_SLUGS
 
 
 def test_new_kinds_seeded(migrated_database_url: str) -> None:
