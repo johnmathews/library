@@ -1,6 +1,6 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-06-30. **Supersedes:** none.
+**Status:** active. **Last updated:** 2026-07-27. **Supersedes:** none.
 
 How to ship a merged change to the live `paperless` LXC. This is the focused
 "do it now" version; the full topology and rationale live in
@@ -28,6 +28,18 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
    verifies `:latest` resolves to the same digest as `:<HEAD-sha>` and aborts
    if `promote` hasn't caught up yet, so the footgun above is caught before any
    image is pulled.
+
+   **What "green" means.** The run's aggregator job is **`ci-gate`**, which
+   passes the `needs.<job>.result` of every other job except `promote` to
+   `scripts/ci_gate.sh`. That script tolerates `skipped` for the path-filtered
+   jobs (`backend`, `frontend`, `e2e`, `compose-smoke`, `build`) — a skipped
+   *required* check would block a merge forever — but requires **`changes`**
+   (the path-filter job all the others declare `needs:` on) to be exactly
+   `success`, since a broken `changes` skips all five and would otherwise leave
+   the gate nothing to reject. `tests/test_ci_gate.py` exercises those cases.
+   Branch protection is **not yet pointed at `ci-gate`**, so read the run's
+   result rather than trusting a required-check badge — and note `promote` sits
+   *outside* the gate, which is why the promote gate above exists.
 2. **Key-based SSH to the host works** (`ssh paperless true` returns instantly,
    no password). The script aborts early if it can't connect non-interactively.
 3. **No schema-incompatible change shipped without a backup plan.** The new

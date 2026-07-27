@@ -18,30 +18,21 @@ the extractor treats as a parse failure and escalates.
 import re
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Annotated, Literal
+from typing import Annotated, Literal, get_args
 
 from pydantic import BaseModel, BeforeValidator, ConfigDict, Field, field_validator
 
-# The seeded rows of the `kinds` table (migration 0001). Constraining the
-# schema to these slugs means the model can never invent a kind; "other" is
-# the explicit catch-all.
-KIND_SLUGS: tuple[str, ...] = (
-    "invoice",
-    "receipt",
-    "certificate",
-    "utility-bill",
-    "parking-ticket",
-    "warranty",
-    "manual",
-    "reference",
-    "research",
-    "note",
-    "letter",
-    "contract",
-    "ticket",
-    "other",
-)
-
+# The seeded rows of the `kinds` table: 11 from migration 0001, the three
+# general-reference kinds from 0010 (reference, research, note), and `quote`
+# from 0017 — 15 in total. Constraining the schema to these slugs means the
+# model can never invent a kind; "other" is the explicit catch-all.
+#
+# This Literal is the single source of truth and KIND_SLUGS is derived from
+# it (never the reverse — `Literal[*KIND_SLUGS]` does not type-check and
+# pydantic will not accept it). A slug missing here is unreachable: the
+# classification prompt is built from KIND_SLUGS and the structured-output
+# schema rejects anything outside the Literal. `tests/test_migrations.py`
+# pins this set to what the migrations actually seed.
 KindSlug = Literal[
     "invoice",
     "receipt",
@@ -56,8 +47,11 @@ KindSlug = Literal[
     "letter",
     "contract",
     "ticket",
+    "quote",
     "other",
 ]
+
+KIND_SLUGS: tuple[str, ...] = get_args(KindSlug)
 
 MAX_TAGS: int = 8
 MAX_TOPICS: int = 12
@@ -117,7 +111,10 @@ class ExtractedMetadata(BaseModel):
     kind_slug: KindSlug = Field(
         description=(
             "The single document type that fits best. invoice = a request for "
-            "payment (amount owed, often a due date); receipt = proof a payment "
+            "payment now due (amount owed, often a due date); quote = a priced "
+            "offer or estimate for work not yet done and not yet owed (Dutch "
+            "'offerte'), which is NOT an invoice even though it carries a total; "
+            "receipt = proof a payment "
             "already happened; utility-bill = a recurring energy/water/telecom/"
             "municipal charge (prefer over invoice for utilities); letter = "
             "personal or official correspondence with no contractual terms; "

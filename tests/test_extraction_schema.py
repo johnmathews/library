@@ -1,12 +1,18 @@
 """Tests for the ExtractedMetadata structured-output schema."""
 
 from datetime import date
-from typing import Any
+from typing import Any, get_args
 
 import pytest
 from pydantic import ValidationError
 
-from library.extraction.schema import KIND_SLUGS, MAX_TAGS, MAX_TOPICS, ExtractedMetadata
+from library.extraction.schema import (
+    KIND_SLUGS,
+    MAX_TAGS,
+    MAX_TOPICS,
+    ExtractedMetadata,
+    KindSlug,
+)
 
 
 def payload(**overrides: Any) -> dict[str, Any]:
@@ -43,6 +49,16 @@ def test_valid_payload_parses_with_real_dates() -> None:
 def test_all_seeded_kind_slugs_accepted() -> None:
     for slug in KIND_SLUGS:
         assert ExtractedMetadata.model_validate(payload(kind_slug=slug)).kind_slug == slug
+
+
+def test_kind_slugs_derived_from_literal() -> None:
+    """One hand-maintained list, not two: the tuple is derived from the enum.
+
+    Two copies drifted apart once already — ``quote`` was seeded by migration
+    0017 but never added to either, leaving it unclassifiable.
+    """
+    assert get_args(KindSlug) == KIND_SLUGS
+    assert "quote" in KIND_SLUGS
 
 
 def test_unknown_kind_slug_rejected() -> None:

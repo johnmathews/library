@@ -17,6 +17,10 @@ from sqlalchemy.ext.asyncio import (
 
 from library import jobs
 from library.config import get_settings
+from library.extraction import apply as extraction_apply
+from library.extraction.extractor import PROMPT_VERSION as EXTRACTION_PROMPT_VERSION
+from library.extraction.extractor import CallUsage, ExtractionOutcome
+from library.extraction.schema import ExtractedMetadata
 from library.jobs import (
     advance_pipeline,
     job_app,
@@ -24,7 +28,17 @@ from library.jobs import (
     purge_deleted_documents,
     sweep_stalled_jobs,
 )
-from library.models import Document, DocumentSource, DocumentStatus, IngestionEvent
+from library.markdown import apply as markdown_apply
+from library.markdown.generator import PROMPT_VERSION as MARKDOWN_PROMPT_VERSION
+from library.markdown.generator import GeneratedPage, MarkdownResult
+from library.matter_classifier import PROMPT_VERSION as MATTER_CLASSIFIER_PROMPT_VERSION
+from library.models import (
+    Document,
+    DocumentPage,
+    DocumentSource,
+    DocumentStatus,
+    IngestionEvent,
+)
 from library.ocr import router as ocr_router
 from library.ocr.base import OcrResult
 from library.storage import path_for, store
@@ -202,7 +216,11 @@ async def test_pipeline_defers_matter_classification_after_extract(
         for job in job_connector.jobs.values()
         if job["task_name"] == "library.jobs.classify_document_matters"
     ]
-    assert [job["args"] for job in matter_jobs] == [{"document_id": document_id}]
+    # ``skip_if_classified`` rides along so a pipeline resume that re-defers
+    # this job cannot pay for a second classification of the same document.
+    assert [job["args"] for job in matter_jobs] == [
+        {"document_id": document_id, "skip_if_classified": True}
+    ]
 
 
 async def test_pipeline_defers_series_insight_when_sender_and_kind_present(
@@ -520,22 +538,274 @@ async def test_pipeline_resumes_from_midpipeline_status(
     fake_router: OcrResult,
     job_connector: InMemoryConnector,
 ) -> None:
-    """A document stranded mid-pipeline by a crash resumes to ``indexed``.
+    """A document stranded mid-pipeline by a crash resumes to ``indexed`` *and
+    re-runs the stage it was killed in*.
 
-    This is the property the stalled-job sweeper relies on: re-running
-    ``advance_pipeline`` on a non-terminal document drives it to completion.
+    This is the property the stalled-job sweeper relies on. ``status`` names the
+    stage that was **entered**, not one that finished, so a worker killed inside
+    the OCR hook leaves ``status=ocr`` with ``ocr_text`` still NULL. Reaching
+    ``indexed`` is not enough — the evidence of the interrupted stage must come
+    back, or the document is silently unsearchable forever.
     """
     document_id = await make_document(session_factory, "pipeline-resume")
     async with session_factory() as session:
         document = await session.get(Document, document_id)
         assert document is not None
-        document.status = DocumentStatus.OCR  # simulate a hard kill mid-pipeline
+        # Simulate a hard kill *inside* the OCR hook: status advanced, work undone.
+        document.status = DocumentStatus.OCR
+        document.ocr_text = None
+        document.page_count = None
         await session.commit()
 
     await advance_pipeline(session_factory, document_id)
 
     status, _ = await get_status_and_events(session_factory, document_id)
     assert status == DocumentStatus.INDEXED
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.ocr_text == "OCR says hello"
+        assert document.page_count == 2
+
+
+async def test_resume_from_extract_reruns_extraction(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A document stranded in ``extract`` re-runs the extraction hook.
+
+    Same defect as the OCR case, one stage along: ``status=extract`` means the
+    stage was entered, so the resume must run it rather than advance past it.
+    """
+    calls: list[int] = []
+
+    async def _stub_apply_extraction(
+        session: AsyncSession, document: Document, settings: object
+    ) -> None:
+        calls.append(document.id)
+
+    monkeypatch.setattr(jobs, "apply_extraction", _stub_apply_extraction)
+
+    document_id = await make_document(session_factory, "pipeline-resume-extract")
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        document.status = DocumentStatus.EXTRACT  # killed inside the extract hook
+        await session.commit()
+
+    await advance_pipeline(session_factory, document_id)
+
+    status, _ = await get_status_and_events(session_factory, document_id)
+    assert status == DocumentStatus.INDEXED
+    # The entered stage ran; without the resume hook it would have been skipped.
+    assert calls == [document_id]
+
+
+def _completed_extraction_outcome() -> ExtractionOutcome:
+    """A minimal successful extraction outcome, stamped with the current prompt."""
+    metadata = ExtractedMetadata.model_validate(
+        {
+            "kind_slug": "other",
+            "sender_name": None,
+            "recipient_name": None,
+            "title": "Resume double-spend probe",
+            "summary": "A document whose extraction already completed.",
+            "document_date": None,
+            "amount_total": None,
+            "currency": None,
+            "due_date": None,
+            "expiry_date": None,
+            "language": "eng",
+            "tags": [],
+            "confidence": "high",
+            "reasoning_note": None,
+        }
+    )
+    return ExtractionOutcome(
+        metadata=metadata,
+        model="claude-haiku-4-5",
+        prompt_version=EXTRACTION_PROMPT_VERSION,
+        input_mode="text",
+        escalated=False,
+        calls=[
+            CallUsage(model="claude-haiku-4-5", input_tokens=10, output_tokens=10, cost_usd=0.1)
+        ],
+    )
+
+
+async def test_resume_from_extract_does_not_respend_completed_extraction(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A resume in the *post-hook* window must not pay for extraction twice.
+
+    The extract hook commits its own results and its ``extraction_completed``
+    event while ``status`` is still ``extract``; the advance to ``markdown``
+    only lands at the top of the *next* loop iteration. A worker killed in
+    between therefore leaves ``status=extract`` with the stage's work already
+    done and durable — by status alone, indistinguishable from a kill *inside*
+    the hook. Re-running is not merely wasted CPU here: it is a second billed
+    Anthropic call for work already paid for. The completion stamp
+    (``extra["extraction"]["prompt_version"]``) is what tells the two apart.
+    """
+    monkeypatch.setenv("LIBRARY_ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("LIBRARY_EXTRACTION_DAILY_BUDGET_USD", "1000")
+    monkeypatch.setenv("LIBRARY_MARKDOWN_ENABLED", "false")
+    get_settings.cache_clear()
+
+    paid_calls: list[int] = []
+
+    async def counting_extract(document: Document, ocr_text: str, **kwargs: object) -> object:
+        paid_calls.append(document.id)
+        return _completed_extraction_outcome()
+
+    monkeypatch.setattr(extraction_apply, "extract", counting_extract)
+
+    document_id = await make_document(session_factory, "pipeline-resume-extract-paid")
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        # Killed AFTER the extract hook committed everything, but BEFORE the
+        # loop advanced the status to `markdown`.
+        document.status = DocumentStatus.EXTRACT
+        document.ocr_text = "OCR says hello"
+        document.extra = {
+            "extraction": {
+                "prompt_version": EXTRACTION_PROMPT_VERSION,
+                "model": "claude-haiku-4-5",
+                "fields_set": ["title", "summary"],
+            }
+        }
+        await session.commit()
+
+    await advance_pipeline(session_factory, document_id)
+
+    status, events = await get_status_and_events(session_factory, document_id)
+    assert status == DocumentStatus.INDEXED
+    assert paid_calls == []  # not one more Anthropic call
+    skipped = [detail for event, detail in events if event == "extraction_skipped"]
+    assert skipped == [{"reason": "already_extracted", "prompt_version": EXTRACTION_PROMPT_VERSION}]
+
+
+async def test_resume_from_markdown_does_not_respend_completed_markdown(
+    session_factory: async_sessionmaker[AsyncSession],
+    fake_router: OcrResult,
+    job_connector: InMemoryConnector,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same post-hook window, one stage along: markdown must not re-spend.
+
+    ``markdown_completed`` (with the generator's current ``PROMPT_VERSION``) is
+    committed in the same transaction as the page rows, so its presence proves
+    the stage finished even though ``status`` still says ``markdown``.
+    """
+    monkeypatch.setenv("LIBRARY_ANTHROPIC_API_KEY", "test-key")
+    monkeypatch.setenv("LIBRARY_MARKDOWN_DAILY_BUDGET_USD", "1000")
+    get_settings.cache_clear()
+
+    paid_calls: list[int] = []
+
+    async def counting_generate(
+        document: Document, ocr_text: str, images: list[bytes], **kwargs: object
+    ) -> MarkdownResult:
+        paid_calls.append(document.id)
+        return MarkdownResult(
+            pages=[GeneratedPage(page_number=1, markdown="# Re-generated")],
+            model="claude-haiku-4-5",
+            prompt_version=MARKDOWN_PROMPT_VERSION,
+            input_tokens=10,
+            output_tokens=10,
+            cost_usd=0.1,
+        )
+
+    def fake_render(*args: object, **kwargs: object) -> list[bytes]:
+        return [b"jpeg-bytes"]
+
+    monkeypatch.setattr(markdown_apply, "generate_markdown", counting_generate)
+    monkeypatch.setattr(markdown_apply, "render_page_images", fake_render)
+
+    document_id = await make_document(session_factory, "pipeline-resume-markdown-paid")
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        # Killed AFTER the markdown hook committed pages + event, BEFORE the
+        # loop advanced the status to `embed`.
+        document.status = DocumentStatus.MARKDOWN
+        document.ocr_text = "OCR says hello"
+        document.pages_markdown = "# Page 1"
+        session.add(
+            DocumentPage(document_id=document.id, page_number=1, markdown="# Page 1", char_count=8)
+        )
+        session.add(
+            IngestionEvent(
+                document_id=document.id,
+                event="markdown_completed",
+                detail={
+                    "model": "claude-haiku-4-5",
+                    "prompt_version": MARKDOWN_PROMPT_VERSION,
+                    "pages": 1,
+                    "cost_usd": 0.1,
+                },
+            )
+        )
+        await session.commit()
+
+    await advance_pipeline(session_factory, document_id)
+
+    status, events = await get_status_and_events(session_factory, document_id)
+    assert status == DocumentStatus.INDEXED
+    assert paid_calls == []  # not one more Anthropic call
+    skipped = [detail for event, detail in events if event == "markdown_skipped"]
+    assert skipped == [{"reason": "already_generated", "prompt_version": MARKDOWN_PROMPT_VERSION}]
+
+
+async def test_classification_job_skips_a_document_already_classified(
+    session_factory: async_sessionmaker[AsyncSession],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pipeline's re-deferred classification job must not re-spend.
+
+    A resume in the post-hook window re-runs the extract branch, which defers
+    ``classify_document_matters`` a second time. In merge mode that second call
+    can only re-attach matters the document already has — the attachments are
+    deduped, the Anthropic call is not. ``skip_if_classified`` (set only by the
+    pipeline) is what makes the duplicate job free; ``sweep-matters``, which
+    re-runs merge mode over classified documents on purpose, does not set it and
+    is unaffected.
+    """
+    billed_calls: list[int] = []
+
+    async def stub_classify(
+        session: AsyncSession, document: Document, settings: object, *, replace: bool = False
+    ) -> None:
+        billed_calls.append(document.id)
+
+    monkeypatch.setattr(jobs, "apply_matter_classification", stub_classify)
+    monkeypatch.setattr(jobs, "get_sessionmaker", lambda: session_factory)
+
+    document_id = await make_document(session_factory, "matter-already-classified")
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        document.extra = {
+            "matter_classification": {
+                "prompt_version": MATTER_CLASSIFIER_PROMPT_VERSION,
+                "mode": "merge",
+                "attached_slugs": [],
+            }
+        }
+        await session.commit()
+
+    await jobs.classify_document_matters(document_id=document_id, skip_if_classified=True)
+    assert billed_calls == []
+
+    # The CLI's deliberate re-sweep (no flag) still classifies.
+    await jobs.classify_document_matters(document_id=document_id)
+    assert billed_calls == [document_id]
 
 
 async def test_thumbnail_defer_failure_does_not_fail_document(

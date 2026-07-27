@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 
 # Bump whenever the system prompt or schema changes meaningfully; stored per
 # run so old-prompt documents can be found and re-extracted later.
-PROMPT_VERSION: str = "2026-07-14.1"
+PROMPT_VERSION: str = "2026-07-26.1"
 
 # Short OCR text (<= this many characters) is sent whole: metadata lives on
 # the first pages, and this caps per-document spend for transactional docs.
@@ -61,8 +61,11 @@ Rules:
   English, even when the document itself is in Dutch or another language.
   Translate as needed; keep proper nouns (names, brands) as-is.
 - kind_slug: one of {", ".join(KIND_SLUGS)}. Disambiguate the common pairs:
-  invoice = a request for payment (amount owed, usually a due date) vs receipt =
-  proof a payment already happened; utility-bill = a recurring energy/water/
+  invoice = a request for payment now due (amount owed, usually a due date) vs
+  quote = a priced offer or estimate for work not yet done and not yet owed
+  (Dutch "offerte", "vrijblijvende aanbieding"); a quote carries a total but
+  nothing is payable yet, so never call it an invoice; receipt = proof a
+  payment already happened; utility-bill = a recurring energy/water/
   telecom/municipal charge (prefer it over invoice for utilities); letter =
   personal/official correspondence with no binding terms vs contract = an
   agreement both parties are bound by; certificate = attests a fact/

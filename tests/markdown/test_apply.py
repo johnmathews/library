@@ -19,7 +19,7 @@ from sqlalchemy.ext.asyncio import (
 from library.config import Settings, get_settings
 from library.markdown import apply as markdown_apply
 from library.markdown.apply import apply_markdown, todays_markdown_spend_usd
-from library.markdown.generator import GeneratedPage, MarkdownResult
+from library.markdown.generator import PROMPT_VERSION, GeneratedPage, MarkdownResult
 from library.models import Document, DocumentPage, DocumentSource, IngestionEvent
 
 pytestmark = pytest.mark.integration
@@ -312,6 +312,49 @@ async def test_success_replaces_existing_pages(
 
     assert len(pages) == 1
     assert pages[0].markdown == "# Page 1"
+
+
+async def test_repeat_is_guarded_unless_forced(
+    session_factory: async_sessionmaker[AsyncSession],
+    data_dir: Path,
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A repeat at the current PROMPT_VERSION is skipped; ``force=True`` re-runs.
+
+    The guard is what stops a pipeline resume in the post-hook window from
+    paying for a second vision pass; ``markdown_document`` (backfill) passes
+    ``force=True`` because regenerating is the whole point of deferring it.
+    """
+    document_id = await make_document(session_factory, "md-apply-already-generated")
+
+    calls: list[int] = []
+
+    async def counting_generate(*args: Any, **kwargs: Any) -> MarkdownResult:
+        calls.append(1)
+        return MarkdownResult(
+            pages=[GeneratedPage(page_number=1, markdown="# Page 1")],
+            model="claude-haiku-4-5",
+            prompt_version=PROMPT_VERSION,
+            input_tokens=10,
+            output_tokens=20,
+            cost_usd=0.001,
+        )
+
+    monkeypatch.setattr(markdown_apply, "render_page_images", lambda *a, **k: [b"img1"])
+    monkeypatch.setattr(markdown_apply, "AsyncAnthropic", _stub_anthropic())
+    monkeypatch.setattr(markdown_apply, "generate_markdown", counting_generate)
+
+    for force in (False, False, True):
+        async with session_factory() as session:
+            document = await session.get(Document, document_id)
+            assert document is not None
+            await apply_markdown(session, document, settings, force=force)
+
+    assert len(calls) == 2  # the first run and the forced one, never the repeat
+    events = await get_events(session_factory, document_id)
+    skipped = [detail for ev, detail in events if ev == "markdown_skipped"]
+    assert skipped == [{"reason": "already_generated", "prompt_version": PROMPT_VERSION}]
 
 
 async def test_no_images_records_skip(

@@ -26,6 +26,7 @@ from library.embedding.chunker import chunker_for_mime
 from library.extraction.apply import apply_extraction
 from library.extraction.repair import maybe_repair_extraction
 from library.markdown.apply import apply_markdown
+from library.matter_classifier import PROMPT_VERSION as MATTER_CLASSIFIER_PROMPT_VERSION
 from library.matter_classifier import apply_matter_classification
 from library.models import (
     Document,
@@ -51,6 +52,12 @@ from library.storage import remove as remove_stored_files
 logger = logging.getLogger(__name__)
 
 # Next status in the happy path; INDEXED and FAILED are terminal.
+#
+# A document's status names the stage it has *entered*, never one it finished:
+# ``advance_pipeline`` commits the transition (so the SSE stream can show "now
+# doing X") before running that stage's hook. Reading a status as "this stage is
+# done" and jumping straight to ``_NEXT_STATUS`` would silently skip the work of
+# a stage a crashed worker never completed — see ``advance_pipeline``.
 _NEXT_STATUS: dict[DocumentStatus, DocumentStatus] = {
     DocumentStatus.RECEIVED: DocumentStatus.OCR,
     DocumentStatus.OCR: DocumentStatus.EXTRACT,
@@ -180,6 +187,11 @@ async def run_extraction(session: AsyncSession, document: Document) -> None:
     Skips/failures are recorded as ingestion events and the pipeline
     continues — extraction must not stop a document from reaching
     ``indexed`` (it stays searchable by OCR text either way).
+
+    Re-runnable, and *guarded*: a resume re-enters this hook, so
+    ``apply_extraction``'s ``already_extracted`` check (current
+    ``PROMPT_VERSION`` stamped on ``extra["extraction"]``) is what keeps a
+    resume from paying twice for an extraction that already finished.
     """
     await apply_extraction(session, document, get_settings())
 
@@ -191,6 +203,10 @@ async def run_markdown(session: AsyncSession, document: Document) -> None:
     (``library.extraction.repair``) gets one look at ``pages_markdown`` to fill
     a missing date/sender the extract stage left behind. Also best-effort: it
     records its own completed/skipped event and never raises.
+
+    Both halves are guarded against a resume re-spending on work that already
+    finished: ``already_generated`` for the vision pass, ``already_repaired``
+    for the repair pass.
     """
     settings = get_settings()
     await apply_markdown(session, document, settings)
@@ -348,9 +364,13 @@ async def _run_stage_hook(
         # set, but needs nothing else, so it runs as its own best-effort job in
         # parallel with the later stages (it sees the committed extraction once
         # this pipeline transaction lands). A transient queue error here must
-        # not strand the document in ``failed``.
+        # not strand the document in ``failed``. ``skip_if_classified`` makes
+        # the deferred job a no-op when a resume re-defers it for a document
+        # the first job already classified — see the task's docstring.
         try:
-            await classify_document_matters.defer_async(document_id=document.id)
+            await classify_document_matters.defer_async(
+                document_id=document.id, skip_if_classified=True
+            )
         except Exception:
             logger.warning(
                 "could not queue matter classification for document %s; continuing",
@@ -369,9 +389,29 @@ async def advance_pipeline(
     """Advance a document through the status lifecycle until indexed.
 
     Resumes from the document's current status, so re-running on an already
-    indexed (or failed) document is a no-op. Any exception marks the document
-    failed, records a ``failed`` event, and re-raises so the job is also
-    marked failed in Procrastinate.
+    indexed (or failed) document is a no-op. A resume *re-runs* the stage the
+    document is sitting in before advancing past it: the status records the
+    stage that was **entered**, not one that finished (the transition is
+    committed and NOTIFYd before the hook runs), so a worker killed mid-hook
+    leaves the work undone — skipping ahead would, for example, drive a document
+    killed inside OCR to ``indexed`` with ``ocr_text`` still NULL. Every stage
+    hook is idempotent, so redoing one is safe.
+
+    Redoing one is also *cheap*, but only because each billed hook carries its
+    own completion guard. The status is committed at the top of the loop and the
+    hook runs after it, so a hook's own results land while the status still
+    names that stage: a kill in the window between "hook committed" and "next
+    iteration committed the advance" leaves a finished stage looking exactly
+    like an interrupted one. The stage's own durable evidence — not the status —
+    is what tells them apart: ``already_extracted``
+    (``extra["extraction"]["prompt_version"]``), ``already_generated``
+    (a ``markdown_completed`` event at the current prompt version),
+    ``already_repaired``, and ``skip_if_classified`` on the deferred
+    matter-classification job. OCR and embedding are unguarded on purpose —
+    local CPU and a local sidecar, no per-call billing.
+
+    Any exception marks the document failed, records a ``failed`` event, and
+    re-raises so the job is also marked failed in Procrastinate.
     """
     async with session_factory() as session:
         document = await session.get(Document, document_id)
@@ -382,6 +422,14 @@ async def advance_pipeline(
             return
 
         try:
+            if document.status is not DocumentStatus.RECEIVED:
+                # `status` records the stage that was ENTERED, not one that finished:
+                # a worker killed inside a hook leaves the status advanced and the
+                # work undone. Every stage hook is idempotent (see each run_*
+                # docstring), so a resume re-runs the entered stage before advancing
+                # past it. Inside the `try` so a failure here marks the document
+                # failed exactly as it would on the first pass.
+                await _run_stage_hook(session, document, document.status)
             while document.status is not DocumentStatus.INDEXED:
                 previous = document.status
                 document.status = _NEXT_STATUS[previous]
@@ -522,17 +570,22 @@ async def extract_document(document_id: int) -> None:
     Deferred manually (e.g. after a prompt upgrade) — independent of the
     pipeline status, so it also works on already-indexed documents.
     Re-extraction overwrites extraction-owned fields but honours
-    ``extra["user_edited_fields"]`` and never removes tags.
+    ``extra["user_edited_fields"]`` and never removes tags. ``force=True``:
+    every caller of this task is asking for a re-run *on purpose* (a re-extract
+    button, an edited note body, a prompt upgrade), so the pipeline-only
+    ``already_extracted`` guard is bypassed here.
     """
     async with get_sessionmaker()() as session:
         document = await session.get(Document, document_id)
         if document is None:
             raise ValueError(f"document {document_id} not found")
-        await apply_extraction(session, document, get_settings())
+        await apply_extraction(session, document, get_settings(), force=True)
 
 
 @job_app.task(name="library.jobs.classify_document_matters")
-async def classify_document_matters(document_id: int, replace: bool = False) -> None:
+async def classify_document_matters(
+    document_id: int, replace: bool = False, skip_if_classified: bool = False
+) -> None:
     """Background task: auto-file one document into business matters.
 
     Deferred at ingest (right after extraction, ``replace=False`` so it can only
@@ -540,11 +593,35 @@ async def classify_document_matters(document_id: int, replace: bool = False) -> 
     ``--reclassify`` sweep) it re-files from scratch, replacing auto-assigned
     matters. Either way it honours ``extra["user_edited_fields"]`` and works on
     already-indexed documents.
+
+    ``skip_if_classified=True`` (the pipeline's defer, never the CLI's) skips
+    the billed call when ``extra["matter_classification"]`` is already stamped
+    with the current classifier prompt version. This is the *defer side* of the
+    resume guard: a pipeline resumed in the window after the extract hook
+    finished re-defers this job, and merge mode would then pay for a prediction
+    whose matters are all already attached. The guard lives here rather than in
+    ``apply_matter_classification`` because ``sweep-matters --all`` re-runs
+    merge mode over already-classified documents *by design* (to pick up a new
+    or re-hinted matter) — guarding the classifier itself would silently break
+    that. Evaluated when the job runs, not when it is deferred, so a duplicate
+    job queued behind the original still sees the original's stamp.
     """
     async with get_sessionmaker()() as session:
         document = await session.get(Document, document_id)
         if document is None:
             raise ValueError(f"document {document_id} not found")
+        if skip_if_classified:
+            previous = document.extra.get("matter_classification")
+            if (
+                isinstance(previous, dict)
+                and previous.get("prompt_version") == MATTER_CLASSIFIER_PROMPT_VERSION
+            ):
+                logger.info(
+                    "matter-classify: document %s already classified at %s; skipping",
+                    document_id,
+                    MATTER_CLASSIFIER_PROMPT_VERSION,
+                )
+                return
         await apply_matter_classification(session, document, get_settings(), replace=replace)
         await session.commit()
 
@@ -570,16 +647,18 @@ async def markdown_document(document_id: int) -> None:
 
     Deferred by the backfill CLI (and after a prompt upgrade), independent of
     pipeline status. Best-effort and idempotent (replaces a document's pages
-    and, via run_embed, its chunks). Like the pipeline stage, it runs the
-    fill-only extraction repair pass after the markdown layer is written; the
-    repair's ``already_repaired`` guard keeps re-runs from re-spending.
+    and, via run_embed, its chunks). ``force=True``: a caller who defers this
+    task wants the pages regenerated, so the pipeline-only ``already_generated``
+    guard is bypassed. Like the pipeline stage, it runs the fill-only extraction
+    repair pass after the markdown layer is written; the repair's
+    ``already_repaired`` guard keeps re-runs from re-spending *there*.
     """
     async with get_sessionmaker()() as session:
         document = await session.get(Document, document_id)
         if document is None:
             raise ValueError(f"document {document_id} not found")
         settings = get_settings()
-        await apply_markdown(session, document, settings)
+        await apply_markdown(session, document, settings, force=True)
         await maybe_repair_extraction(session, document, settings)
         await run_embed(session, document)
 

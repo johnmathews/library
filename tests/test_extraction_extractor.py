@@ -563,7 +563,19 @@ def test_system_prompt_forbids_generic_category_sender_names() -> None:
     assert "PRINTED" in SYSTEM_PROMPT
     assert '"Restaurant"' in SYSTEM_PROMPT
     assert "category word" in SYSTEM_PROMPT
-    assert PROMPT_VERSION == "2026-07-14.1"
+    assert PROMPT_VERSION == "2026-07-26.1"
+
+
+def test_system_prompt_offers_and_disambiguates_quote() -> None:
+    """`quote` must be in the offered vocabulary AND distinguished from invoice.
+
+    The slug list is rendered from KIND_SLUGS, so listing it is automatic; the
+    rule for choosing it over `invoice` is not. Without both, quotes land on
+    `invoice` and inflate every spend answer in Ask.
+    """
+    assert "quote" in SYSTEM_PROMPT
+    assert "offerte" in SYSTEM_PROMPT
+    assert "not yet owed" in SYSTEM_PROMPT
 
 
 def test_system_prompt_ties_salutation_to_recipient_and_signoff_to_sender() -> None:

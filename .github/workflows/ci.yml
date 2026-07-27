@@ -42,10 +42,11 @@ jobs:
               - 'src/**'
               - 'tests/**'
               - 'migrations/**'
-              - 'conftest.py'
+              - 'alembic.ini'
               - 'pyproject.toml'
               - 'uv.lock'
               - 'Dockerfile'
+              - '.dockerignore'
               - 'docker-compose.yml'
               - 'scripts/**'
               - 'docs/**'
@@ -54,7 +55,9 @@ jobs:
             frontend:
               - 'frontend/**'
             ci:
-              - '.github/workflows/**'
+              # The whole .github tree, not just workflows/: dependabot.yml and
+              # any action/config under .github/ affect CI behaviour too.
+              - '.github/**'
 
   backend:
     needs: changes
@@ -431,31 +434,40 @@ jobs:
             --tag ghcr.io/johnmathews/library:latest \
             "ghcr.io/johnmathews/library:${GITHUB_SHA}"
 
-  # Single required status check. With per-area path skipping, individual jobs
-  # can legitimately be `skipped` — a skipped *required* check would otherwise
-  # block the merge forever (this is what stranded a Dependabot PR once). This
-  # aggregator runs always and passes when every upstream job either succeeded
-  # or was skipped, failing only on a real failure/cancellation. Point branch
-  # protection at THIS job (`ci-gate`) as the sole required check instead of the
-  # individual jobs.
+  # The single aggregator status check. TODO (repo owner): branch protection is
+  # NOT configured yet — point it at THIS job (`ci-gate`) as the sole required
+  # check, instead of the individual jobs.
+  #
+  # Why the asymmetry the gate script enforces:
+  #
+  #   * Every job except `changes` may be `success` OR `skipped`. With per-area
+  #     path skipping a job can legitimately not run, and a skipped *required*
+  #     check blocks the merge forever (this is what stranded a Dependabot PR
+  #     once). That skip-tolerance is deliberate and must stay.
+  #
+  #   * `changes` must be exactly `success`. It is unconditional (no `if:`), so
+  #     the only results it can legitimately produce are success/failure/
+  #     cancelled — `skipped` there means something is structurally wrong. It is
+  #     also the job all five others declare `needs:` on, and GitHub reports a
+  #     job whose dependency failed as `skipped`. So without this rule a broken
+  #     `changes` (checkout flake, paths-filter outage, malformed `filters:`)
+  #     would skip all five, leave the gate nothing to reject, and launder a
+  #     wholly untested run into a green required check.
+  #
+  # The logic lives in scripts/ci_gate.sh so it is unit-tested
+  # (tests/test_ci_gate.py) rather than only exercised in anger.
   ci-gate:
-    needs: [backend, frontend, e2e, compose-smoke, build]
+    needs: [changes, backend, frontend, e2e, compose-smoke, build]
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v7
       - name: Require that no upstream job failed
         run: |
-          results="backend=${{ needs.backend.result }}"
-          results="$results frontend=${{ needs.frontend.result }}"
-          results="$results e2e=${{ needs.e2e.result }}"
-          results="$results compose-smoke=${{ needs.compose-smoke.result }}"
-          results="$results build=${{ needs.build.result }}"
-          echo "upstream results: $results"
-          for kv in $results; do
-            r="${kv#*=}"
-            if [ "$r" != "success" ] && [ "$r" != "skipped" ]; then
-              echo "::error::required job '${kv%%=*}' did not pass (result: $r)"
-              exit 1
-            fi
-          done
-          echo "all upstream jobs passed or were skipped"
+          scripts/ci_gate.sh \
+            "changes=${{ needs.changes.result }}" \
+            "backend=${{ needs.backend.result }}" \
+            "frontend=${{ needs.frontend.result }}" \
+            "e2e=${{ needs.e2e.result }}" \
+            "compose-smoke=${{ needs.compose-smoke.result }}" \
+            "build=${{ needs.build.result }}"
