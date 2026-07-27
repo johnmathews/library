@@ -28,7 +28,13 @@ dependencies = [
     "httpx>=0.28",
     "pwdlib[argon2]>=0.2",
     "typer>=0.15",
-    "fastmcp>=3.4.2",
+    # >=3.4.4, not >=3.4.3: 3.4.3 carries the security fixes (IPv6-transition
+    # SSRF bypasses, Host/Origin validation against DNS rebinding, OAuth
+    # redirect validation) but its Host/Origin guard changed the default for
+    # ASGI/reverse-proxy deployments — which is exactly how the MCP app is
+    # mounted here (app.py mounts create_mcp_http_app() into the FastAPI
+    # lifespan, behind a proxy). 3.4.4 restores that compatibility.
+    "fastmcp>=3.4.4",
     "watchfiles>=1.2.0",
     "imap-tools>=1.13.0",
     "sse-starlette>=2.1",
