@@ -47,7 +47,7 @@ def test_build_summary_both_present(tmp_path: Path) -> None:
     assert summary == {
         "backend": {
             "pct": 94.6,
-            "threshold": 85.0,
+            "threshold": 93.0,
             "files_total": None,
             "files_below_gate": None,
             "worst_files": [],
@@ -142,7 +142,7 @@ def test_build_summary_missing_backend(tmp_path: Path) -> None:
     )
 
     assert summary["backend"]["pct"] is None
-    assert summary["backend"]["threshold"] == 85.0
+    assert summary["backend"]["threshold"] == 93.0
     assert summary["frontend"]["pct"] == 90.0
     assert summary["git_sha"] is None
 
@@ -157,7 +157,7 @@ def test_build_summary_missing_both(tmp_path: Path) -> None:
 
     assert summary["backend"]["pct"] is None
     assert summary["frontend"]["pct"] is None
-    assert summary["backend"]["threshold"] == 85.0
+    assert summary["backend"]["threshold"] == 93.0
     assert summary["frontend"]["threshold"] == 85.0
     assert summary["generated_at"] is None
 

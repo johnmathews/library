@@ -301,6 +301,14 @@ into the image:
    (`backend`, `frontend`) carries its headline `pct` and `threshold` plus
    per-file detail: `files_total`, `files_below_gate`, and `worst_files` (the
    up-to-`MAX_WORST_FILES` lowest-covered files, ascending, each `{path, pct}`).
+   **The two sides gate at different numbers**: backend **93%**
+   (`fail_under` in `pyproject.toml`), frontend **85%** lines/statements/functions
+   and 75% branches (`frontend/vitest.config.ts`). The backend figure was
+   re-baselined from 85 once its coverage tracer was corrected — SQLAlchemy's
+   asyncio layer runs ORM work inside a greenlet and coverage lost the tracer
+   across the switch, so async handler bodies read as uncovered and the real
+   total was ~6 points higher than reported. At 85 the gate had ten points of
+   slack.
    The summary also carries `test_types` — the four kinds of test the CI
    pipeline runs (`backend`/`frontend` unit suites with line coverage, plus
    `e2e` (Playwright) and `compose-smoke`, which are pass/fail gates with no line

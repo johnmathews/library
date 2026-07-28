@@ -28,7 +28,13 @@ dependencies = [
     "httpx>=0.28",
     "pwdlib[argon2]>=0.2",
     "typer>=0.15",
-    "fastmcp>=3.4.2",
+    # >=3.4.4, not >=3.4.3: 3.4.3 carries the security fixes (IPv6-transition
+    # SSRF bypasses, Host/Origin validation against DNS rebinding, OAuth
+    # redirect validation) but its Host/Origin guard changed the default for
+    # ASGI/reverse-proxy deployments — which is exactly how the MCP app is
+    # mounted here (app.py mounts create_mcp_http_app() into the FastAPI
+    # lifespan, behind a proxy). 3.4.4 restores that compatibility.
+    "fastmcp>=3.4.4",
     "watchfiles>=1.2.0",
     "imap-tools>=1.13.0",
     "sse-starlette>=2.1",
@@ -96,17 +102,29 @@ filterwarnings = [
 
 [tool.coverage.run]
 source = ["src/library"]
-# NOTE: FastAPI's TestClient runs the app via an anyio blocking portal, and
-# coverage does not trace those handler lines — so async endpoint bodies read as
-# "missing" even though the integration tests exercise them (api/admin.py and
-# api/documents.py are the clearest cases). The behavioural coverage is higher
-# than the report shows. Critical branches are covered by direct in-event-loop
-# service tests instead (see tests/test_admin_api.py, test_charts_write_paths.py,
-# test_auth.py). Fixing the measurement itself is a separate follow-up.
+# SQLAlchemy's asyncio layer runs ORM and DBAPI work inside a greenlet, and
+# coverage loses the tracer across the greenlet switch unless `greenlet` is a
+# declared concurrency mode — so async handler bodies read as "missing" even
+# though the tests execute them. Without this, api/documents.py measured 55%
+# against a true 99%, and the whole-suite total read 89% against a true 95%.
+#
+# An earlier version of this comment blamed FastAPI's TestClient anyio blocking
+# portal. That was wrong: a minimal FastAPI app with a real suspending await
+# traces to 100% under TestClient with the default tracer. The greenlet bridge
+# is the cause, and it is one config line, not a follow-up project.
+concurrency = ["greenlet", "thread"]
 
 [tool.coverage.report]
 # Coverage gate: `coverage report` exits non-zero below this, failing CI.
-# Backend measures ~87%; the taxonomy/auth test additions restored headroom
-# over the 85% gate without it being slack.
-fail_under = 85
+#
+# Re-baselined from 85 once the greenlet tracer above was fixed. The suite
+# measures 95% honestly; at 85 the gate carried ten points of slack and a whole
+# subsystem could have landed untested without turning it red. 93 leaves ~2
+# points of headroom — roughly one new 200-statement module at 0% — which is a
+# gate that bites without failing on a single uncovered error branch.
+#
+# The frontend keeps its own, separate thresholds in frontend/vitest.config.ts;
+# the two numbers are deliberately different and scripts/coverage_summary.py
+# reports them separately.
+fail_under = 93
 show_missing = true
