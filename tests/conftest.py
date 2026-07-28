@@ -5,6 +5,7 @@ import uuid
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 from alembic import command
@@ -24,7 +25,7 @@ from library.auth.passwords import hash_password
 from library.config import get_settings
 from library.db import get_session
 from library.jobs import job_app, procrastinate_conninfo
-from library.models import User
+from library.models import Base, User
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
@@ -126,6 +127,78 @@ def api_database_url(admin_database_url: str) -> str:
     url = create_database(admin_database_url, "library_api")
     command.upgrade(alembic_config(url), "head")
     return url
+
+
+#: Tables the migrations seed as reference data. Truncating these would break
+#: every test that resolves a kind slug or a recipient, and they are not test
+#: state — they are part of a migrated schema.
+_SEEDED_TABLES: frozenset[str] = frozenset({"kinds", "recipients", "fx_rates", "alembic_version"})
+
+#: Procrastinate's own tables. Not in Base.metadata (they are created by
+#: Procrastinate's migrations, not ours), so they must be named explicitly or a
+#: test's deferred jobs leak into the next test's job assertions.
+_PROCRASTINATE_TABLES: tuple[str, ...] = (
+    "procrastinate_events",
+    "procrastinate_jobs",
+    "procrastinate_periodic_defers",
+)
+
+
+@pytest.fixture(scope="session")
+def _api_truncate_connection(api_database_url: str) -> Iterator[Any]:
+    """A sync psycopg connection used only to truncate between tests.
+
+    Sync and separate on purpose. The app's sessions are created inside
+    TestClient's own event loop (see ``api_app``), and asyncpg connections are
+    loop-bound, so a truncation running on the test's loop cannot safely share
+    the app's connection. A plain psycopg connection sidesteps the question
+    entirely and costs one connection for the whole session.
+    """
+    import psycopg
+
+    conninfo = procrastinate_conninfo(api_database_url)
+    with psycopg.connect(conninfo, autocommit=True) as connection:
+        yield connection
+
+
+@pytest.fixture(autouse=True)
+def _truncate_api_database(
+    request: pytest.FixtureRequest,
+) -> Iterator[None]:
+    """Leave the shared API database empty after every test that touched it.
+
+    ``api_database_url`` is **session-scoped** — one migrated database shared by
+    the whole API suite — so without this every test inherits the rows of every
+    test that ran before it. That produced real, recurring bugs rather than
+    theoretical ones: list endpoints default to ``limit=25``, so assertions on
+    totals or on ``.first()`` silently depended on execution order, and two
+    files had already grown their own ``delete(Document)`` workarounds.
+
+    **In teardown, not setup.** A setup-time truncate would delete the
+    ``auth_user`` row that ``api_client`` created for the test that is about to
+    run. Cleaning up after means each test starts from whatever the previous
+    test's teardown left, which is nothing.
+
+    **No ``RESTART IDENTITY``.** Sequences stay monotonic, so a stale id held by
+    a test can never coincidentally match a live row from a later one — it fails
+    loudly with a 404 instead of quietly addressing someone else's data.
+
+    Only runs for tests that actually requested the database: the fixture is
+    autouse, so it must be cheap and silent for the ~900 tests that do not.
+    """
+    yield
+    if "api_database_url" not in request.fixturenames:
+        return
+    connection = request.getfixturevalue("_api_truncate_connection")
+    targets = [
+        table.name for table in Base.metadata.sorted_tables if table.name not in _SEEDED_TABLES
+    ]
+    targets.extend(_PROCRASTINATE_TABLES)
+    # One statement: TRUNCATE takes an ACCESS EXCLUSIVE lock per table, and
+    # naming them together avoids both deadlock risk and per-table round trips.
+    # CASCADE covers FK edges to anything not listed (procrastinate's, mainly).
+    with connection.cursor() as cursor:
+        cursor.execute(f"TRUNCATE TABLE {', '.join(targets)} CASCADE")
 
 
 @pytest.fixture

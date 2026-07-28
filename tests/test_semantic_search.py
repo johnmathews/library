@@ -6,7 +6,7 @@ from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from library.models import (
@@ -55,11 +55,9 @@ async def engine(api_database_url: str) -> AsyncIterator[AsyncEngine]:
 @pytest.fixture
 async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     async with AsyncSession(engine, expire_on_commit=False) as session:
-        # These tests assert on absolute ranking/emptiness, so start each from a
-        # clean slate in the shared (session-scoped) API database. Deleting
-        # documents cascades to their chunks; seeded kinds are untouched.
-        await session.execute(delete(Document))
-        await session.commit()
+        # No delete(Document) here any more: isolation comes from conftest's
+        # autouse truncation, so these tests get a clean slate from the
+        # framework rather than each file arranging its own.
         yield session
 
 

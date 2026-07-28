@@ -1990,6 +1990,90 @@ Append-only audit trail in `ingestion_events`:
 | `matter_changed` | documents service | `{matters}` — the new full matter-slug list after a manual `PATCH /api/documents/{id}` edit of `matters` (also locks the field in `user_edited_fields`) |
 | `failed` | pipeline | `{error, status}` |
 
+## Characterisation tests over the real corpus
+
+The pipeline's synthetic fixtures (`tests/ocr_fixtures.py`) generate every PDF
+and image on the fly, which keeps the suite hermetic but means the routing
+thresholds were only ever tested against documents *we* produced. Real scanner
+exports and real government PDFs behave differently, and that is where the
+thresholds actually get decided.
+
+**The corpus is fetched, never committed** — and so are the recorded baselines.
+The documents are real financial and personal records and this repository is
+public, so both live in the private `johnmathews/library-golden-corpus`. CI checks
+them out into `samples/`, which is gitignored and where a developer already keeps
+them, so no test needs to know the difference. Point
+`LIBRARY_GOLDEN_CORPUS_DIR` elsewhere when working in a git worktree, where
+`samples/` does not exist.
+
+The baselines belong there for the same reason the documents do, which is easy to
+get wrong: the extraction snapshots carry **every document's full OCR text**
+(~153,000 characters across the corpus), the cassettes carry the model's titles,
+summaries, senders and amounts — some of it medical — and even the snapshot
+*keys* are the real filenames, which name the owner's insurer, bank and tax
+advisor. Text is not safer than bytes; it is worse, because it is readable and
+indexable. So the rule is deliberately blunt, leaving no per-field judgement call
+to get wrong later: **anything derived from the corpus lives with the corpus.**
+This repository holds the test code and nothing else.
+
+Honest cost: **pull requests from forks cannot run these tests** — no secret, no
+corpus. The mitigation matters more than it looks: when `LIBRARY_GOLDEN_CORPUS=1`
+is set (CI sets it only when the fetch succeeded), a missing corpus is a **hard
+error, not a skip**. A characterisation suite that silently skips is worse than
+none, because it reports green while measuring nothing.
+
+### Two tiers, split by what is deterministic
+
+**Tier 1 — extraction (`golden_extraction`, every PR, no API key).** Replays
+`extractor._attempt` from recorded cassettes, so `build_user_content`,
+`_thin_scan_prefers_vision` and both escalation switches all run for real while
+the LLM is deterministic. Pins `(input_mode, escalated, kind_slug, review_status,
+sorted(rules))` — categorical facts that are ours. Amounts, dates, senders and
+summaries are **not** pinned: those are the model's judgement, they move with any
+prompt change, and asserting them would make the suite flaky and therefore
+deleted.
+
+The cassette key is `(model, sha256(content))`, so a prompt change **misses** the
+cassette and raises rather than replaying an answer to a question no longer being
+asked. Re-record with `scripts/record_golden_extractions.py` — the one step that
+needs an API key and real spend (~$0.12 for the whole corpus at the current
+models). It refuses to run when tesseract lacks the configured language packs,
+because without them OCR silently falls back to each PDF's embedded text layer
+and leaves `ocr_confidence` unset, which stops the vision trigger and the
+`ocr_confidence_gate` rule from ever firing — a baseline that looks fine and
+characterises a pipeline nobody runs.
+
+This tier **does need the corpus**, despite needing no API key: `extract` runs
+`build_user_content` for real, which is what makes `input_mode` a characterised
+decision rather than a replayed constant, and a thin scan therefore reads its
+original file. As recorded, 14 of the 16 documents extract from text and 2 take
+the vision path.
+
+**Tier 2 — routing (`tests/test_golden_corpus_routing.py`, every PR, no
+binaries).** Snapshots what `_route_pdf` *decides* from `analyze_pdf`: page
+count, image-backed pages, `scan_like`, and therefore which branch. `analyze_pdf`
+is pure pypdfium2 parsing, so it answers identically on a laptop and in CI.
+
+It deliberately stops at the decision rather than running the engines. An
+engine-level snapshot depends on `tesseract-ocr-nld`, which CI installs and a dev
+machine typically lacks — recorded locally it would encode a missing language
+pack as expected behaviour and go red in CI for the wrong reason. Regenerate with
+`scripts/record_golden_routing.py`, which prints the diff and refuses to write
+without `--accept`, because a snapshot regenerated without reading the diff
+records the regression instead of catching it.
+
+### What the corpus revealed
+
+Recording Tier 2 corrected an assumption worth writing down: **6 of the 16 files
+route to the text layer and 10 to OCR**, and the Belastingdienst PDFs — genuine
+born-digital government exports with ~2,470 characters per page — are among the
+*OCR* ten, because their pages are image-backed and `scan_like` is therefore
+true. A plausible reading of the routing rule ("plenty of text means born-digital,
+trust the layer") is wrong for exactly these documents, and 10 of the 16 are
+scan-like *with* a usable text layer — the redo-OCR path. That combination is
+what `tests/test_golden_corpus_routing.py::test_scan_like_is_not_merely_a_text_length_proxy`
+now pins.
+
 ## Configuration
 
 Ingestion-related settings (the full environment reference, covering

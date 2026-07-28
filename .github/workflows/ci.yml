@@ -76,6 +76,14 @@ jobs:
     permissions:
       contents: read
       pull-requests: write # update the sticky coverage comment on PRs
+    env:
+      # Hoisted to the job so the corpus step's `if` can test it. The `secrets`
+      # context is NOT available in a step-level `if` (GitHub's context
+      # availability table lists github/needs/vars/strategy/matrix/job/runner/
+      # env/steps/inputs there, and not secrets), and referencing it anyway is a
+      # workflow *parse* error — the whole file is rejected and no job runs, which
+      # is how it presents: every check missing rather than one check red.
+      GOLDEN_CORPUS_TOKEN: ${{ secrets.GOLDEN_CORPUS_TOKEN }}
     steps:
       - uses: actions/checkout@v7
       # Full version: astral-sh/setup-uv publishes no floating `v8` major tag.
@@ -89,11 +97,43 @@ jobs:
             tesseract-ocr tesseract-ocr-nld tesseract-ocr-eng ghostscript unpaper
       - name: Install dependencies
         run: uv sync --locked
+      # The golden corpus is 15 real financial/personal documents, so it lives in
+      # a private repo rather than this public one. Fetched into samples/, which
+      # is gitignored and is where a developer already keeps it, so no test needs
+      # to know the difference. Honest cost: fork PRs get no secret and so cannot
+      # run these tests — which is why LIBRARY_GOLDEN_CORPUS below turns a
+      # missing corpus into a FAILURE here rather than a skip. A characterisation
+      # suite that silently skips reports green while measuring nothing.
+      #
+      # continue-on-error so a corpus-repo outage degrades to a clear test
+      # failure naming the missing corpus, not an opaque checkout error.
+      - name: Fetch the golden corpus
+        id: corpus
+        # Tests the job-level env above, not `secrets` (unavailable here) and not
+        # a step-level env (a step's own env is not in scope for its own `if`).
+        if: env.GOLDEN_CORPUS_TOKEN != ''
+        continue-on-error: true
+        uses: actions/checkout@v7
+        with:
+          repository: johnmathews/library-golden-corpus
+          token: ${{ secrets.GOLDEN_CORPUS_TOKEN }}
+          path: samples
       - name: Lint
         run: |
           uv run ruff check .
           uv run ruff format --check .
+          # Workflow linting. Note the limitation, so nobody trusts this further
+          # than it goes: if THIS file fails to parse, no job here runs and this
+          # step never executes. It covers the other workflow files, shell in
+          # `run:` blocks, and deprecated action versions. `make lint-actions`
+          # locally is what guards ci.yml itself.
+          uv run actionlint -shellcheck= -pyflakes= .github/workflows/*.yml
       - name: Test with coverage
+        env:
+          # Set only when the corpus was actually fetched. Where it IS set, a
+          # missing corpus is a hard error rather than a skip — see the fetch
+          # step above.
+          LIBRARY_GOLDEN_CORPUS: ${{ steps.corpus.outcome == 'success' && '1' || '' }}
         run: |
           # --junitxml feeds the real-engine non-skip floor in the next step.
           uv run coverage run -m pytest --junitxml=pytest-report.xml
@@ -124,6 +164,24 @@ jobs:
       # failure reds the job.
       - name: Assert the real OCR engines actually ran
         run: uv run python scripts/check_engine_skips.py pytest-report.xml
+      # Self-arming: hashFiles is empty until the baselines exist in the fetched
+      # corpus, so the step is inert without them and enforces the moment they
+      # land. The Tier-1 golden tests SKIP for want of cassettes, and a skip is
+      # reported as success — exactly the hole the step above closes for the OCR
+      # engines.
+      #
+      # The path is under samples/ because the baselines live in the PRIVATE
+      # corpus repo: the snapshots carry every document's full OCR text and the
+      # cassettes carry the model's titles and summaries, so neither belongs in
+      # this public repo. hashFiles is evaluated when the step is reached, which
+      # is after the fetch, so it sees the checked-out files.
+      - name: Assert the golden corpus tier actually ran
+        if: >-
+          steps.corpus.outcome == 'success' &&
+          hashFiles('samples/golden_cassettes.json') != ''
+        run: |
+          uv run python scripts/check_engine_skips.py pytest-report.xml \
+            --engine corpus --engine cassettes
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v7

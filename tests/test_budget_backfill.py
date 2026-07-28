@@ -4,7 +4,6 @@ import hashlib
 from collections.abc import AsyncIterator
 
 import pytest
-from sqlalchemy import delete
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from library import budget_backfill, jobs
@@ -26,8 +25,7 @@ async def engine(api_database_url: str) -> AsyncIterator[AsyncEngine]:
 @pytest.fixture
 async def session(engine: AsyncEngine) -> AsyncIterator[AsyncSession]:
     async with AsyncSession(engine, expire_on_commit=False) as session:
-        await session.execute(delete(Document))
-        await session.commit()
+        # Isolation comes from conftest's autouse truncation (see W20).
         yield session
 
 
