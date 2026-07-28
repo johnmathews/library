@@ -942,10 +942,22 @@ def test_backfill_markdown_include_existing(cli_database_url: str) -> None:
     assert already in enqueued
 
 
+#: The unlock password the sweep-encrypted tests configure and encrypt with.
+#: Any value works — what matters is that it is set explicitly, not defaulted.
+CLI_FIXTURE_PDF_PASSWORD = "fixture-pw-1234"
+
+
 @pytest.fixture
 def cli_data_dir(cli_database_url: str, tmp_path, monkeypatch: pytest.MonkeyPatch) -> Iterator[str]:
-    """Point storage at a temp data dir (originals live on disk for the sweep)."""
+    """Point storage at a temp data dir (originals live on disk for the sweep).
+
+    Also configures an unlock password, because every ``sweep-encrypted`` test
+    below depends on one being set. It used to come from the application default
+    — which shipped a real personal password in this public repo and is now
+    empty — so the dependency is made explicit here rather than inherited.
+    """
     monkeypatch.setenv("LIBRARY_DATA_DIR", str(tmp_path))
+    monkeypatch.setenv("LIBRARY_PDF_UNLOCK_PASSWORDS", CLI_FIXTURE_PDF_PASSWORD)
     get_settings.cache_clear()
     yield cli_database_url
     get_settings.cache_clear()
@@ -993,7 +1005,9 @@ def _make_pdf(tmp_path, text: str) -> bytes:
 def test_sweep_encrypted_dry_run_classifies(cli_data_dir: str, tmp_path) -> None:
     plain = _make_pdf(tmp_path, "Onbeveiligd")
     unlockable_id = _seed_stored_pdf(
-        cli_data_dir, encrypt_pdf(plain, user_password="2064"), filename="known.pdf"
+        cli_data_dir,
+        encrypt_pdf(plain, user_password=CLI_FIXTURE_PDF_PASSWORD),
+        filename="known.pdf",
     )
     locked_id = _seed_stored_pdf(
         cli_data_dir, encrypt_pdf(plain, user_password="not-configured"), filename="locked.pdf"
@@ -1011,7 +1025,7 @@ def test_sweep_encrypted_dry_run_classifies(cli_data_dir: str, tmp_path) -> None
 
 def test_sweep_encrypted_apply_unlocks_in_place(cli_data_dir: str, tmp_path) -> None:
     plain = _make_pdf(tmp_path, "Vertrouwelijk")
-    encrypted = encrypt_pdf(plain, user_password="2064")
+    encrypted = encrypt_pdf(plain, user_password=CLI_FIXTURE_PDF_PASSWORD)
     old_sha = hashlib.sha256(encrypted).hexdigest()
     document_id = _seed_stored_pdf(cli_data_dir, encrypted, filename="known.pdf")
 
@@ -1073,7 +1087,7 @@ def test_sweep_encrypted_apply_skips_collision(
     cli_data_dir: str, tmp_path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     plain = _make_pdf(tmp_path, "Dubbel")
-    encrypted = encrypt_pdf(plain, user_password="2064")
+    encrypted = encrypt_pdf(plain, user_password=CLI_FIXTURE_PDF_PASSWORD)
     old_sha = hashlib.sha256(encrypted).hexdigest()
     # Force a deterministic decrypted payload so the collision is exact
     # regardless of pikepdf.save byte-stability across libqpdf builds.

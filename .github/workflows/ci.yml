@@ -48,6 +48,11 @@ jobs:
               - 'Dockerfile'
               - '.dockerignore'
               - 'docker-compose.yml'
+              # .env.example is guarded by test_env_example_documents_every_setting;
+              # without it here, a PR that edits only that file skips the very
+              # test that checks it.
+              - '.env.example'
+              - 'Makefile'
               - 'scripts/**'
               - 'docs/**'
               - 'journal/**'

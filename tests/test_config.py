@@ -1,11 +1,14 @@
 """Tests for application settings."""
 
+import re
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
 from library.config import Settings, get_settings
+
+_ENV_EXAMPLE = Path(__file__).resolve().parent.parent / ".env.example"
 
 
 def test_defaults() -> None:
@@ -93,7 +96,17 @@ def test_deleted_retention_days_rejects_negative() -> None:
 
 
 def test_pdf_unlock_passwords_default() -> None:
-    assert Settings(_env_file=None).pdf_unlock_passwords == ["2064"]
+    """No password may ship as a committed default.
+
+    This previously defaulted to a real four-digit personal document password,
+    in a public repository. Empty means only the empty password is tried, so a
+    genuinely encrypted PDF is rejected with a clear PdfLockedError rather than
+    being opened with a credential nobody configured.
+
+    ``_env_file=None`` matters: without it a developer's real ``.env`` is read
+    and the assertion becomes about their machine rather than the default.
+    """
+    assert Settings(_env_file=None).pdf_unlock_passwords == []
 
 
 def test_pdf_unlock_passwords_env_split_is_case_sensitive(
@@ -101,5 +114,57 @@ def test_pdf_unlock_passwords_env_split_is_case_sensitive(
 ) -> None:
     # Comma-separated, whitespace-trimmed, blanks dropped, case preserved
     # (unlike email senders, passwords must not be lowercased).
-    monkeypatch.setenv("LIBRARY_PDF_UNLOCK_PASSWORDS", "2064, Hunter2 ,, letmeIN")
-    assert Settings(_env_file=None).pdf_unlock_passwords == ["2064", "Hunter2", "letmeIN"]
+    monkeypatch.setenv("LIBRARY_PDF_UNLOCK_PASSWORDS", "openSesame, Hunter2 ,, letmeIN")
+    assert Settings(_env_file=None).pdf_unlock_passwords == ["openSesame", "Hunter2", "letmeIN"]
+
+
+def test_env_example_documents_every_setting() -> None:
+    """`.env.example` must list every setting the app reads.
+
+    `.env.example:3-4` promises "every setting the application reads
+    (src/library/config.py) is listed here with its default", and 21 were
+    missing — including the whole Recently-Deleted purge lifecycle and the
+    Smart Groups thresholds. An operator reading the file could not discover
+    them, which is the same class of defect as an undocumented flag.
+
+    A bare subset check with **no exemption list**, deliberately. The three
+    build-injected settings (`git_sha`, `docs_dir`, `coverage_summary_path`) are
+    documented under an explicit "do not set" heading rather than exempted here:
+    they are real `LIBRARY_`-prefixed fields an operator can set and break, so
+    the alternative — narrowing the file's claim and carrying an
+    `_INTERNAL_FIELDS` set in this test — would trade one unenforced list for
+    another.
+    """
+    documented = {
+        match.group(1)
+        for match in re.finditer(
+            r"^#?\s*(LIBRARY_[A-Z0-9_]+)\s*=", _ENV_EXAMPLE.read_text(), re.MULTILINE
+        )
+    }
+    expected = {f"LIBRARY_{name.upper()}" for name in Settings.model_fields}
+
+    missing = expected - documented
+    assert missing == set(), (
+        f".env.example does not document {len(missing)} setting(s): {sorted(missing)}"
+    )
+    # The other direction: a renamed or deleted setting leaves a stale line that
+    # tells operators to set something the app no longer reads.
+    stray = documented - expected
+    assert stray == set(), f".env.example documents unknown setting(s): {sorted(stray)}"
+
+
+def test_env_example_has_no_live_values() -> None:
+    """Every line must stay commented out.
+
+    `.env.example` is copied to `.env` and is also read by docker-compose for
+    `${...}` interpolation, so a live line silently becomes the deployed default.
+    One was: `LIBRARY_PUBLIC_BASE_URL=https://library.example.com`, which pointed
+    every Pushover deep-link at a domain the operator does not own *and*
+    suppressed the startup warning that would have said so.
+    """
+    live = [
+        line
+        for line in _ENV_EXAMPLE.read_text().splitlines()
+        if re.match(r"^\s*LIBRARY_[A-Z0-9_]+\s*=", line)
+    ]
+    assert live == [], f"uncommented assignments in .env.example: {live}"

@@ -81,7 +81,11 @@ make dev
 # Frontend: Vite dev server on :5173, proxies /api to :8000
 cd frontend && npm install && npm run dev
 
-# Everything via Docker
+# Everything via Docker (db + migrate + api + worker, commit stamped into the image)
+make up          # `make down` to stop
+
+# ...or the full stack including the embedder for semantic search.
+# Note: no arm64 image exists for it, so this does not work on Apple Silicon.
 docker compose up --build
 ```
 

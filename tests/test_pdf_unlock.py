@@ -20,15 +20,15 @@ def _opens_without_password(content: bytes) -> bool:
 
 def test_unencrypted_pdf_passes_through_unchanged(tmp_path) -> None:
     content = _plain_pdf(tmp_path)
-    assert unlock_pdf(content, ["2064"]) is content
+    assert unlock_pdf(content, ["fixture-pw-1234"]) is content
 
 
 def test_correct_password_unlocks_and_reopens_without_password(tmp_path) -> None:
-    encrypted = encrypt_pdf(_plain_pdf(tmp_path), user_password="2064")
+    encrypted = encrypt_pdf(_plain_pdf(tmp_path), user_password="fixture-pw-1234")
     with pytest.raises(pikepdf.PasswordError):
         _opens_without_password(encrypted)
 
-    unlocked = unlock_pdf(encrypted, ["2064"])
+    unlocked = unlock_pdf(encrypted, ["fixture-pw-1234"])
 
     assert unlocked != encrypted
     assert _opens_without_password(unlocked)
@@ -36,7 +36,7 @@ def test_correct_password_unlocks_and_reopens_without_password(tmp_path) -> None
 
 def test_first_matching_password_in_the_list_wins(tmp_path) -> None:
     encrypted = encrypt_pdf(_plain_pdf(tmp_path), user_password="letmein")
-    unlocked = unlock_pdf(encrypted, ["nope", "letmein", "2064"])
+    unlocked = unlock_pdf(encrypted, ["nope", "letmein", "fixture-pw-1234"])
     assert _opens_without_password(unlocked)
 
 
@@ -51,10 +51,10 @@ def test_empty_password_is_always_tried(tmp_path) -> None:
 def test_no_matching_password_raises_and_never_leaks_the_attempts(tmp_path) -> None:
     encrypted = encrypt_pdf(_plain_pdf(tmp_path), user_password="s3cret")
     with pytest.raises(PdfLockedError) as excinfo:
-        unlock_pdf(encrypted, ["2064", "hunter2"])
+        unlock_pdf(encrypted, ["fixture-pw-1234", "hunter2"])
     # The exception reports a count, never the password values that were tried.
     message = str(excinfo.value)
-    assert "2064" not in message
+    assert "fixture-pw-1234" not in message
     assert "hunter2" not in message
 
 
@@ -62,7 +62,7 @@ def test_corrupt_bytes_pass_through_unchanged(tmp_path) -> None:
     # Not a valid PDF: don't fail the caller — the OCR pipeline handles
     # unreadable PDFs downstream. Mirrors the best-effort docx branch.
     garbage = b"%PDF-1.4 not really a pdf"
-    assert unlock_pdf(garbage, ["2064"]) is garbage
+    assert unlock_pdf(garbage, ["fixture-pw-1234"]) is garbage
 
 
 def test_corrupt_and_encrypted_pdf_does_not_raise(tmp_path, monkeypatch) -> None:
@@ -71,7 +71,7 @@ def test_corrupt_and_encrypted_pdf_does_not_raise(tmp_path, monkeypatch) -> None
     # non-PasswordError (PdfError). unlock_pdf must honour "never fail the
     # upload" and return the original bytes, not propagate — otherwise a direct
     # upload of such a file 500s (ingest only catches PdfLockedError).
-    encrypted = encrypt_pdf(_plain_pdf(tmp_path), user_password="2064")
+    encrypted = encrypt_pdf(_plain_pdf(tmp_path), user_password="fixture-pw-1234")
     calls = {"n": 0}
     real_open = pikepdf.open
 
@@ -82,4 +82,4 @@ def test_corrupt_and_encrypted_pdf_does_not_raise(tmp_path, monkeypatch) -> None
         raise pikepdf.PdfError("corrupt after decryption")
 
     monkeypatch.setattr(pikepdf, "open", flaky_open)
-    assert unlock_pdf(encrypted, ["2064"]) is encrypted
+    assert unlock_pdf(encrypted, ["fixture-pw-1234"]) is encrypted
