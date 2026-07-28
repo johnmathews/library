@@ -39,14 +39,37 @@ RASTER_DPI: int = 300
 
 @lru_cache(maxsize=1)
 def get_engine() -> "RapidOCR":
-    """The shared RapidOCR engine (lazy: first construction downloads models)."""
-    from rapidocr import EngineType, LangRec, ModelType, OCRVersion, RapidOCR
+    """The shared RapidOCR engine (lazy: first construction downloads models).
+
+    Every axis that selects a model file is pinned explicitly, including the
+    ones whose value equals today's rapidocr default. rapidocr resolves a
+    model from the (engine_type, ocr_version, lang_type, model_type) tuple per
+    stage and raises ``ValueError("Invalid OCR configuration.")`` when the
+    combination has no entry in its model list. Inheriting any axis from the
+    library's defaults means a rapidocr release can repoint or break our
+    pipeline without us changing a line: 3.9.x moved the Det/Rec defaults from
+    ``mobile``/PP-OCRv4 to ``small``/PP-OCRv6, and because ``Det.model_type``
+    was left implicit while ``Det.ocr_version`` was pinned to PP-OCRv5, the
+    resulting PP-OCRv5-det-``small`` pair does not exist and every photo OCR
+    call raised. Pin all four per stage; a bump then fails loudly at the pin,
+    which is a diff we can read, rather than silently selecting a model we
+    never chose.
+    """
+    from rapidocr import EngineType, LangCls, LangDet, LangRec, ModelType, OCRVersion, RapidOCR
 
     return RapidOCR(
         params={
+            # Det/Cls are language-agnostic layout stages — the "ch" models are
+            # the only detection weights shipped for PP-OCRv5 and are what the
+            # latin recognition model is meant to be paired with.
             "Det.engine_type": EngineType.ONNXRUNTIME,
             "Det.ocr_version": OCRVersion.PPOCRV5,
+            "Det.lang_type": LangDet.CH,
+            "Det.model_type": ModelType.MOBILE,
             "Cls.engine_type": EngineType.ONNXRUNTIME,
+            "Cls.ocr_version": OCRVersion.PPOCRV4,
+            "Cls.lang_type": LangCls.CH,
+            "Cls.model_type": ModelType.MOBILE,
             "Rec.engine_type": EngineType.ONNXRUNTIME,
             "Rec.lang_type": LangRec.LATIN,
             "Rec.ocr_version": OCRVersion.PPOCRV5,

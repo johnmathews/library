@@ -90,7 +90,8 @@ jobs:
           uv run ruff format --check .
       - name: Test with coverage
         run: |
-          uv run coverage run -m pytest
+          # --junitxml feeds the real-engine non-skip floor in the next step.
+          uv run coverage run -m pytest --junitxml=pytest-report.xml
           # Generate the HTML report BEFORE the fail-under gate below, so the
           # artifact is still produced (and uploaded) when coverage drops below
           # threshold — that's exactly when you want to see what's uncovered.
@@ -109,6 +110,15 @@ jobs:
           } | tee coverage.md >> "$GITHUB_STEP_SUMMARY"
           # Enforce the fail-under gate last, after artifacts are produced.
           uv run coverage report
+      # The slow_ocr tests are the only coverage over the real OCR binaries and
+      # models, and both their guards skip when the engine is unavailable — right
+      # for a laptop, a hole here, where this job installs the tesseract stack and
+      # has network for the RapidOCR model hub. pytest reports a skip as success,
+      # so without this a permanently broken engine is a green build. Runs after
+      # the coverage gate rather than before it purely for step ordering; either
+      # failure reds the job.
+      - name: Assert the real OCR engines actually ran
+        run: uv run python scripts/check_engine_skips.py pytest-report.xml
       - name: Upload coverage HTML
         if: always()
         uses: actions/upload-artifact@v7

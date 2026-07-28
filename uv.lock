@@ -1201,7 +1201,7 @@ requires-dist = [
     { name = "pydantic-settings", specifier = ">=2.14.2" },
     { name = "pypdfium2", specifier = ">=5.9.0" },
     { name = "python-multipart", specifier = ">=0.0.32" },
-    { name = "rapidocr", specifier = ">=3.8.2" },
+    { name = "rapidocr", specifier = ">=3.9.2" },
     { name = "sqlalchemy", extras = ["asyncio"], specifier = ">=2.0.50" },
     { name = "sse-starlette", specifier = ">=2.1" },
     { name = "typer", specifier = ">=0.15" },
@@ -2248,7 +2248,7 @@ wheels = [
 
 [[package]]
 name = "rapidocr"
-version = "3.8.2"
+version = "3.9.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "colorlog" },
@@ -2264,7 +2264,7 @@ dependencies = [
     { name = "tqdm" },
 ]
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/b4/d6/91971053fb1147f637e451cee99146c5d16e61dc53734099b396e7b88a94/rapidocr-3.8.2-py3-none-any.whl", hash = "sha256:f1841131919b0a00667117acf920cfed07558eac03fd69e0a70b5c903dff48a7", size = 15016707, upload-time = "2026-06-10T15:15:34.783Z" },
+    { url = "https://files.pythonhosted.org/packages/55/ed/0ee9b9281986974be9d2406ae0134c8d7c91d2fc613f16ffda9701eeda6f/rapidocr-3.9.2-py3-none-any.whl", hash = "sha256:04d6b8d151f823d930bd91910555f57bea897c0c44fa6794267b94cf9c1ef9a0", size = 27275208, upload-time = "2026-07-21T10:59:01.599Z" },
 ]
 
 [[package]]
