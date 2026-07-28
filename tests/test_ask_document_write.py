@@ -157,6 +157,9 @@ async def test_update_tool_revalidates_and_clears_finding(api_database_url: str)
         "askw-reval",
         kind_slug="invoice",
         title="Invoice",
+        # Real text: an invoice with no ocr_text would legitimately fire
+        # no_text_extracted and stay in review, which this test is not about.
+        ocr_text="Factuur 12-03-2041 totaal EUR 10,00",
         document_date=date(2041, 3, 12),  # future -> date_plausibility fires
         review_status=ReviewStatus.NEEDS_REVIEW,
         extra={

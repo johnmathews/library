@@ -1358,6 +1358,10 @@ def test_update_recomputes_validation_and_clears_resolved_finding(
         "reval-clear",
         kind_slug="invoice",
         title="Invoice",
+        # Real text matters: an invoice with zero ocr_text would legitimately
+        # fire no_text_extracted and stay in review, which is not what this
+        # test is about.
+        ocr_text="Factuur 12-03-2041 totaal EUR 10,00",
         document_date=date(2041, 3, 12),  # future -> date_plausibility fires
         review_status=ReviewStatus.NEEDS_REVIEW,
         extra={
@@ -1417,6 +1421,7 @@ def test_update_preserves_verified_status(api_client: TestClient, api_database_u
         "reval-verified",
         kind_slug="invoice",
         title="Invoice",
+        ocr_text="Factuur 01-01-2024 totaal EUR 10,00",  # see reval-clear
         document_date=date(2024, 1, 1),
         review_status=ReviewStatus.VERIFIED,
     )

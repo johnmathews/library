@@ -431,6 +431,29 @@ def validate(
             )
         )
 
+    # no_text_extracted — the document reached the pipeline's end with no
+    # searchable text at all. It still becomes `indexed` (that invariant is
+    # deliberate: the original is stored and viewable, and OCR can be re-run),
+    # but with nothing to search it is invisible to every text query and to Ask,
+    # so it must not pass silently — it goes to the review queue with a named
+    # rule, exactly like decoration_image.
+    #
+    # `not read_the_image` is the same guard amount_grounding uses, for the same
+    # reason: below MIN_TEXT_CHARS the extractor reads the page image instead, so
+    # a vision-rescued photo legitimately has empty `ocr_text` while its metadata
+    # was grounded in the image. Flagging those would nag about the case the
+    # vision fallback exists to handle.
+    if not text.strip() and not read_the_image:
+        findings.append(
+            Finding(
+                "no_text_extracted",
+                None,
+                "warn",
+                "no text could be extracted from this document, so it cannot be "
+                "found by search — the original is stored and OCR can be re-run",
+            )
+        )
+
     # decoration_image — an image document whose OCR yielded almost no text
     # AND whose extraction grounded nothing. Thin OCR alone is not enough:
     # below MIN_TEXT_CHARS the extractor reads the image itself (vision

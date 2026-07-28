@@ -463,6 +463,55 @@ def test_decoration_image_quiet_when_vision_grounded_a_field() -> None:
     )
 
 
+def test_no_text_extracted_fires_on_empty_ocr() -> None:
+    """A document with no searchable text must reach the review queue.
+
+    It still becomes `indexed` (deliberate — the original is stored and OCR can
+    be re-run), but with no text it is invisible to search and to Ask, so it
+    must be named rather than pass silently.
+    """
+    doc = _doc(mime_type="application/pdf", ocr_text="")
+    findings = validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    finding = _finding(findings, "no_text_extracted")
+    assert finding.severity == "warn"
+    assert "cannot be found by search" in finding.message
+    assert derive_review_status(findings) is ReviewStatus.NEEDS_REVIEW
+
+
+def test_no_text_extracted_fires_on_whitespace_only_ocr() -> None:
+    """Whitespace is not text — an all-blank OCR layer is still textless."""
+    doc = _doc(mime_type="application/pdf", ocr_text="  \n\n\t \r\n  ")
+    assert "no_text_extracted" in _rules(
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    )
+
+
+def test_no_text_extracted_quiet_when_vision_read_the_image() -> None:
+    """The vision fallback reads the page image, so empty ocr_text is expected.
+
+    This is the same `read_the_image` guard amount_grounding uses, for the same
+    reason: nagging here would flag exactly the case the fallback exists to
+    handle. Both input modes that mean "the model read the image" are covered.
+    """
+    for input_mode in ("document", "image"):
+        doc = _doc(
+            mime_type="image/jpeg",
+            ocr_text="",
+            extra={"extraction": {"input_mode": input_mode}},
+        )
+        assert "no_text_extracted" not in _rules(
+            validate(doc, kind_slug="receipt", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+        ), input_mode
+
+
+def test_no_text_extracted_quiet_when_any_text_was_read() -> None:
+    """Thin text is a different rule's business (decoration_image / density)."""
+    doc = _doc(mime_type="application/pdf", ocr_text="abc")
+    assert "no_text_extracted" not in _rules(
+        validate(doc, kind_slug="other", sender_name=None, ocr_floor=FLOOR, today=TODAY)
+    )
+
+
 def test_decoration_image_quiet_on_non_image_mime() -> None:
     """A thin-text PDF is the density/vision path's territory, not this rule's."""
     doc = _doc(mime_type="application/pdf", ocr_text="abc")
