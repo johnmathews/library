@@ -9,6 +9,7 @@ dispatch driven by a stubbed Anthropic client).
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date
+from decimal import Decimal
 from typing import Any, cast
 
 import pytest
@@ -143,6 +144,48 @@ async def test_update_tool_commit_writes_with_ask_provenance(api_database_url: s
         document = await _load(session, document_id)
         assert document.title == "Confirmed title"
         assert "title" in document.extra["user_edited_fields"]
+        user_edited = [e for e in await _events(session, document_id) if e.event == "user_edited"]
+        assert len(user_edited) == 1
+        assert user_edited[0].detail["edited_by"] == "ask"
+
+
+@pytest.mark.asyncio
+async def test_update_tool_writes_matters(api_database_url: str) -> None:
+    """A confirmed Ask write of `matters` applies and persists.
+
+    The end-to-end version of this unit: `matters` was absent from the writable
+    set, so the key was dropped on the way to DocumentUpdate and the tool still
+    reported `status: updated` with an empty `updated_fields` — a write that
+    looked like it worked. Also checks the preview renders slugs rather than ORM
+    reprs, since that is what the user is asked to approve.
+    """
+    document_id = await _seed_document(
+        api_database_url,
+        "askw-matters",
+        matter_slugs=["askw-matter-before"],
+    )
+
+    async with _open_session(api_database_url) as session:
+        document = await _load(session, document_id)
+        assert ask_engine._preview_current(document, "matters") == ["askw-matter-before"]
+        result = await _run_update_document(
+            session,
+            get_settings(),
+            {
+                "document_id": document_id,
+                "matters": ["askw-matter-after"],
+                "confirmed": True,
+            },
+            {document_id},
+            {document_id},  # previewed earlier in the thread
+        )
+
+    assert result["status"] == "updated"
+    assert result["updated_fields"] == ["matters"]
+
+    async with _open_session(api_database_url) as session:
+        document = await _load(session, document_id)
+        assert sorted(matter.slug for matter in document.matters) == ["askw-matter-after"]
         user_edited = [e for e in await _events(session, document_id) if e.event == "user_edited"]
         assert len(user_edited) == 1
         assert user_edited[0].detail["edited_by"] == "ask"
@@ -396,3 +439,82 @@ async def test_engine_same_turn_preview_then_confirm_is_refused(
 def test_write_tool_registered_in_tools() -> None:
     names = {tool["name"] for tool in ask_engine.TOOLS}
     assert "update_document_metadata" in names
+
+
+def _write_tool_schema() -> dict[str, Any]:
+    (tool,) = [t for t in ask_engine.TOOLS if t["name"] == "update_document_metadata"]
+    return cast(dict[str, Any], tool["input_schema"])
+
+
+def test_writable_fields_match_document_update() -> None:
+    """The writable set is derived from DocumentUpdate, not restated.
+
+    docs/ask.md documents this tool as "the same surface as
+    PATCH /api/documents/{id}", so DocumentUpdate is the specification. The
+    hand-written copy this replaced had drifted — `matters` was absent, so an
+    Ask write of it was dropped and still reported as a success.
+    """
+    assert set(ask_engine._WRITABLE_FIELDS) == set(DocumentUpdate.model_fields)
+    assert "matters" in ask_engine._WRITABLE_FIELDS
+
+
+def test_write_tool_schema_declares_every_writable_field() -> None:
+    """The model can never emit a field the tool schema does not advertise.
+
+    This is the half that cannot be derived — each property carries a
+    hand-authored description — so it needs its own guard. A field present in
+    _WRITABLE_FIELDS but missing from the schema is unreachable: the model has no
+    way to know it exists, which is how `matters` stayed broken even though the
+    forwarding code would have accepted it.
+    """
+    declared = set(_write_tool_schema()["properties"])
+    # document_id and confirmed are protocol fields, not document metadata.
+    writable = set(ask_engine._WRITABLE_FIELDS)
+    missing = writable - declared
+    assert missing == set(), f"writable but undeclared in the tool schema: {sorted(missing)}"
+    # And nothing is advertised that would be silently dropped on the way out.
+    stray = declared - writable - {"document_id", "confirmed"}
+    assert stray == set(), f"declared in the schema but not writable: {sorted(stray)}"
+
+
+async def test_preview_current_is_json_primitive_for_every_writable_field(
+    api_database_url: str,
+) -> None:
+    """Every writable field must preview as something JSON can render.
+
+    Tool output is serialised with ``json.dumps(..., default=str)``, so a
+    relationship returned as an ORM object does not raise — it renders as
+    "<Matter object at 0x...>" in the very preview the user is asked to approve.
+    Guards any future relationship field, not just `matters`.
+    """
+    document_id = await _seed_document(
+        api_database_url,
+        "askw-preview-primitives",
+        kind_slug="invoice",
+        title="Invoice",
+        ocr_text="Factuur",
+        tag_slugs=["askw-preview"],
+        project_slugs=["askw-preview-project"],
+        matter_slugs=["askw-preview-matter"],
+        document_date=date(2026, 1, 2),
+    )
+
+    async with _open_session(api_database_url) as session:
+        document = await _load(session, document_id)
+        for field in ask_engine._WRITABLE_FIELDS:
+            value = ask_engine._preview_current(document, field)
+            assert _is_json_primitive(value), (
+                f"{field} previews as {type(value).__name__} ({value!r}); "
+                "a relationship needs a branch in _preview_current"
+            )
+
+
+def _is_json_primitive(value: Any) -> bool:
+    """True when json.dumps renders this without falling back to default=str."""
+    if value is None or isinstance(value, str | int | float | bool):
+        return True
+    if isinstance(value, list | tuple):
+        return all(_is_json_primitive(item) for item in value)
+    # Decimal and date are deliberately allowed: default=str renders them
+    # correctly and readably ("12.00", "2026-01-02"), unlike an ORM object.
+    return isinstance(value, Decimal | date)
