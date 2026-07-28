@@ -1804,3 +1804,58 @@ def test_list_filters_by_recipient_id(api_client: TestClient, api_database_url: 
         ]
     ]
     assert ids == [mine]
+
+
+def test_detail_refresh_attrs_cover_every_selectin_relationship_and_onupdate_column() -> None:
+    """The refresh set is mapper-derived, so it cannot drift from the model.
+
+    Recomputes both halves independently of the constant. This is the guard that
+    replaced four hand-maintained copies of the list: it fails if someone
+    hand-edits the constant, and it fails if a new ``selectin`` relationship or
+    ``onupdate`` column is added to ``Document`` without the refresh path
+    picking it up — which is how a post-commit read becomes a MissingGreenlet.
+    """
+    from sqlalchemy import inspect as sa_inspect
+
+    from library.api.documents import _DETAIL_REFRESH_ATTRS
+
+    mapper = sa_inspect(Document)
+    expected_relationships = {rel.key for rel in mapper.relationships if rel.lazy == "selectin"}
+    expected_columns = {col.key for col in mapper.columns if col.onupdate is not None}
+
+    assert expected_relationships, "model has no selectin relationships; derivation is vacuous"
+    assert expected_columns, "model has no onupdate columns; derivation is vacuous"
+    assert set(_DETAIL_REFRESH_ATTRS) == expected_relationships | expected_columns
+    # No duplicates — a refresh list with a repeated key is a silent sign the
+    # two halves overlap and the derivation has been edited by hand.
+    assert len(_DETAIL_REFRESH_ATTRS) == len(set(_DETAIL_REFRESH_ATTRS))
+
+
+def test_every_commit_then_detail_path_uses_the_shared_refresh_helper() -> None:
+    """No endpoint may hand-roll its own refresh before ``_detail``.
+
+    The defect this unit fixes was four divergent literals, not one wrong one,
+    so the durable guard is structural: ``session.refresh(document`` may appear
+    exactly once in the whole API package — inside ``_refresh_for_detail``.
+    A new endpoint that copies the old pattern reds this.
+    """
+    from pathlib import Path
+
+    import library.api as api_package
+
+    api_root = Path(api_package.__file__).parent
+    offenders: list[str] = []
+    for source in sorted(api_root.rglob("*.py")):
+        for lineno, line in enumerate(source.read_text().splitlines(), start=1):
+            # Match the awaited call, not the substring: prose in the helper's
+            # own docstring names the pattern it replaces.
+            if "await session.refresh(document" not in line:
+                continue
+            if "_DETAIL_REFRESH_ATTRS" in line:
+                continue  # the one legitimate call, inside the helper
+            offenders.append(f"{source.relative_to(api_root)}:{lineno}: {line.strip()}")
+
+    assert offenders == [], (
+        "these sites bypass _refresh_for_detail and will drift from _detail:\n"
+        + "\n".join(offenders)
+    )

@@ -13,7 +13,7 @@ from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Response, UploadFile, status
 from fastapi.responses import FileResponse
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.auth.deps import current_user
@@ -428,13 +428,7 @@ async def update_document(
     # this is what clears a fixed "implausible date" warning on save.
     await revalidate_after_edit(session, document, get_settings())
     await session.commit()
-    # updated_at has a SQL onupdate (func.now()); SQLAlchemy expires it after the
-    # UPDATE since it can't know the server-computed value — refresh it eagerly
-    # here so _detail() doesn't trigger a lazy load of an already-expired attribute.
-    await session.refresh(
-        document,
-        ["kind", "sender", "recipient", "tags", "projects", "matters", "events", "updated_at"],
-    )
+    await _refresh_for_detail(session, document)
     return await _detail(session, document)
 
 
@@ -484,9 +478,7 @@ async def restore_document(
     document.deleted_at = None
     session.add(IngestionEvent(document_id=document.id, event="restored", detail={}))
     await session.commit()
-    # updated_at has a SQL onupdate (func.now()); expired after the UPDATE, so
-    # refresh it (and the events relationship) before _detail reads them.
-    await session.refresh(document, ["events", "updated_at"])
+    await _refresh_for_detail(session, document)
     return await _detail(session, document)
 
 
@@ -559,7 +551,7 @@ async def verify_document(
     document.review_status = ReviewStatus.VERIFIED
     session.add(IngestionEvent(document_id=document.id, event="review_verified", detail={}))
     await session.commit()
-    await session.refresh(document)
+    await _refresh_for_detail(session, document)
     return await _detail(session, document)
 
 
@@ -763,6 +755,36 @@ def _review_findings(document: Document) -> list[ValidationFindingSummary]:
         for finding in findings
         if isinstance(finding, dict)
     ]
+
+
+# Derived from the mapper, never hand-written. A commit expires exactly two
+# classes of attribute that ``_detail`` then reads, and both are enumerable:
+# ``selectin`` relationships (a post-commit read would emit IO from an async
+# context and raise MissingGreenlet) and columns with a SQL ``onupdate``, whose
+# server-computed value SQLAlchemy cannot know. Four hand-maintained copies of
+# this list existed before, and every one of them had drifted — adding a field
+# to ``_detail`` meant remembering all four, which is exactly the kind of
+# obligation that gets missed.
+#
+# Slightly broader than what ``_detail`` reads today: ``uploader`` is a
+# ``selectin`` relationship the payload does not currently expose, so refreshing
+# it costs one extra small SELECT. That is the safe direction — the alternative
+# is deriving from what the response happens to read, which is not mechanically
+# knowable and puts us straight back to a hand-maintained list.
+_DETAIL_REFRESH_ATTRS: tuple[str, ...] = (
+    *(rel.key for rel in inspect(Document).relationships if rel.lazy == "selectin"),
+    *(col.key for col in inspect(Document).columns if col.onupdate is not None),
+)
+
+
+async def _refresh_for_detail(session: AsyncSession, document: Document) -> None:
+    """Refresh exactly the attributes ``_detail`` needs after a commit.
+
+    Call this between ``session.commit()`` and ``_detail()``. Prefer it to a
+    bare ``session.refresh(document)``, which reloads every column including
+    ``ocr_text`` — a large payload nothing on the detail path needs.
+    """
+    await session.refresh(document, list(_DETAIL_REFRESH_ATTRS))
 
 
 async def _detail(session: AsyncSession, document: Document) -> DocumentDetail:

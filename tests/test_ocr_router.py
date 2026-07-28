@@ -540,6 +540,78 @@ class TestConfidenceGate:
         assert result.gate is not None
         assert result.gate.tesseract_confidence is None
 
+    def test_empty_retry_never_displaces_the_primary(
+        self,
+        image_pdf: Path,
+        derived: Path,
+        settings: Settings,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """An empty retry must not win the ratio test and restamp provenance.
+
+        Both texts empty makes the yield comparison ``0 >= 0.8 * 0`` — true —
+        so before the non-empty precondition the retry was kept and the result
+        was stamped ``engine="rapidocr"`` with RapidOCR's confidence. The text
+        is empty either way; what was wrong was the attribution, which flows on
+        into the ``ocr_completed`` event, ``document.ocr_confidence`` and the
+        ``ocr_confidence_gate`` validation rule.
+        """
+        searchable = derived / "searchable.pdf"
+        monkeypatch.setattr(
+            tesseract,
+            "ocr_pdf",
+            lambda *a, **k: replace(tesseract_result(searchable, 40.0), text=""),
+        )
+        monkeypatch.setattr(
+            photo,
+            "ocr_pdf_pages",
+            lambda pdf_path: replace(PHOTO_RESULT, text="", confidence=98.0),
+        )
+
+        result = router.run_ocr(
+            make_document("application/pdf"), image_pdf, derived, settings=settings
+        )
+
+        # Provenance stays with the engine that actually produced the result.
+        assert result.engine == "tesseract"
+        assert result.confidence == 40.0
+        assert result.text == ""
+        # Both raw confidences are still recorded, so the retry is not hidden.
+        assert result.gate is not None
+        assert result.gate.tesseract_confidence == 40.0
+        assert result.gate.rapidocr_confidence == 98.0
+
+    def test_whitespace_only_retry_never_displaces_the_primary(
+        self,
+        image_pdf: Path,
+        derived: Path,
+        settings: Settings,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Whitespace is not text: a longer all-blank retry must still lose.
+
+        ``len()`` alone would accept this one — it is *longer* than the primary
+        — which is why the precondition tests ``.strip()`` rather than length.
+        """
+        searchable = derived / "searchable.pdf"
+        monkeypatch.setattr(
+            tesseract,
+            "ocr_pdf",
+            lambda *a, **k: replace(tesseract_result(searchable, 40.0), text="real text"),
+        )
+        monkeypatch.setattr(
+            photo,
+            "ocr_pdf_pages",
+            lambda pdf_path: replace(PHOTO_RESULT, text="   \n\n\t  " * 10, confidence=98.0),
+        )
+
+        result = router.run_ocr(
+            make_document("application/pdf"), image_pdf, derived, settings=settings
+        )
+
+        assert result.engine == "tesseract"
+        assert result.text == "real text"
+
 
 def test_encrypted_pdf_raises_a_clear_error(
     settings: Settings, derived: Path, tmp_path: Path
