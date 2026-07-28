@@ -15,6 +15,9 @@ credentials.json
 # CI coverage summary (generated)
 /coverage.md
 
+# pytest JUnit report (generated; feeds scripts/check_engine_skips.py)
+/pytest-report.xml
+
 # Visual brainstorming companion
 .superpowers/
 

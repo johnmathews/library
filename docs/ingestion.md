@@ -445,6 +445,31 @@ This path produces no searchable PDF (`searchable_pdf=None`).
 RapidOCR downloads its models on first use and caches them; the worker
 image works offline after the first run.
 
+`get_engine()` pins **every** axis rapidocr uses to select a model —
+`engine_type`, `ocr_version`, `lang_type` and `model_type`, for each of
+the Det, Cls and Rec stages — including axes whose value equals the
+library's current default. rapidocr resolves each stage from that
+4-tuple and raises `ValueError("Invalid OCR configuration.")` when the
+combination is absent from its model list, so any axis left implicit lets
+a rapidocr release repoint or break the pipeline with no change on our
+side. That is why the pins look redundant and are not: the 3.9.x bump
+moved the Det/Rec defaults from `mobile`/PP-OCRv4 to `small`/PP-OCRv6,
+and since only `Det.ocr_version` had been pinned (to PP-OCRv5), the
+resulting PP-OCRv5-det-`small` pair did not exist and every photo OCR
+call raised. Bumping rapidocr therefore fails loudly at the pins, which
+is a readable diff, instead of silently selecting models we never chose.
+
+Both real-engine paths are covered by the `slow_ocr` tests in
+`tests/test_ocr_real.py`, which run the actual binaries and models. Their
+guards skip when an engine is genuinely unavailable (no tesseract on a
+laptop, a blocked model hub) but **only** for that reason: a renamed enum,
+a changed constructor or a rejected params dict propagates and fails,
+because those are our bug rather than the environment's. Since pytest
+reports a skip as success, the backend CI job additionally runs
+`scripts/check_engine_skips.py` over the JUnit report and fails if any
+test skipped for a rapidocr or tesseract reason — CI provisions both, so
+a skip there means a broken engine, not a passing build.
+
 ### Confidence gate
 
 If the Tesseract path's mean word confidence is below

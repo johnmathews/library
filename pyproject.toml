@@ -21,7 +21,13 @@ dependencies = [
     "pypdfium2>=5.9.0",
     "img2pdf>=0.6.3",
     "opencv-python-headless>=4.13.0.92",
-    "rapidocr>=3.8.2",
+    # >=3.9.2, not >=3.8.2: 3.8.2 was yanked from PyPI ("missing
+    # arch_config.yaml causing PyTorch engine failure"). The yank reason is
+    # PyTorch-engine-specific and we pin every stage to ONNXRUNTIME
+    # (ocr/photo.py get_engine), so this was never a live fault here — but a
+    # yanked floor means a fresh resolve has to pick it up explicitly, so
+    # raise the floor past it rather than carry a withdrawn release.
+    "rapidocr>=3.9.2",
     "onnxruntime>=1.26.0",
     "anthropic>=0.109.1",
     "pgvector>=0.3.6",
