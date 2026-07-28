@@ -127,7 +127,11 @@ async def test_extraction_matches_snapshot(
         pytest.skip("not recorded")
     require_corpus()  # the original must be readable; see the module docstring
     cassettes = load_cassettes()
-    assert cassettes, "snapshots exist but cassettes do not; re-record"
+    assert cassettes, (
+        "snapshots exist but cassettes do not. The corpus repo is fetched at its "
+        "default-branch HEAD, so a partial baseline push shows up here; otherwise "
+        "re-record with scripts/record_golden_extractions.py."
+    )
 
     from library.config import Settings
 

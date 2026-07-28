@@ -2006,6 +2006,15 @@ them, so no test needs to know the difference. Point
 `LIBRARY_GOLDEN_CORPUS_DIR` elsewhere when working in a git worktree, where
 `samples/` does not exist.
 
+**Ordering constraint, because the two repos are not versioned together.** The
+corpus is checked out at its **default-branch HEAD**, not at a ref pinned by this
+repository, so a change here and a baseline update there are independent pushes.
+Land the baseline update in the corpus repo *first*, then push the library change
+— otherwise CI fetches a corpus without the new baselines and the golden tests
+fail with "no recorded snapshot", which reads like a missing recording rather than
+a race. That happened once during this unit's own development, with 90 seconds
+between the two pushes.
+
 The baselines belong there for the same reason the documents do, which is easy to
 get wrong: the extraction snapshots carry **every document's full OCR text**
 (~153,000 characters across the corpus), the cassettes carry the model's titles,

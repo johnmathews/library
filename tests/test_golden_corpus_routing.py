@@ -90,8 +90,11 @@ def test_routing_decision_matches_snapshot(document_path: Path | None) -> None:
     snapshots = _load()
     key = document_path.name
     assert key in snapshots, (
-        f"no recorded routing snapshot for {key}. Regenerate with "
-        f"`python scripts/record_golden_routing.py --accept` and review the diff."
+        f"no recorded routing snapshot for {key}.\n"
+        f"Either the corpus repo does not carry the baselines yet — it is fetched "
+        f"at its default-branch HEAD, so baseline updates must land there BEFORE "
+        f"the library change is pushed — or this document is new and needs "
+        f"recording: `python scripts/record_golden_routing.py --accept`."
     )
 
     actual = routing_decision(document_path)
