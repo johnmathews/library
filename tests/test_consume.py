@@ -27,10 +27,13 @@ from sqlalchemy.ext.asyncio import (
     create_async_engine,
 )
 
-from library import worker
+from library import consume, worker
 from library.config import Settings, get_settings
 from library.consume import ConsumeWatcher
+from library.docx import DOCX_MIME
+from library.ingest import ALLOWED_MIME_TYPES
 from library.models import Document, DocumentSource, IngestionEvent, User
+from tests.docx_fixtures import make_docx
 
 pytestmark = pytest.mark.integration
 
@@ -337,15 +340,68 @@ async def test_unsupported_extension_ignored_in_place(
     session_factory: async_sessionmaker[AsyncSession],
     data_dir: Path,
 ) -> None:
-    name = f"notes-{uuid.uuid4().hex[:8]}.docx"
+    """A genuinely unsupported extension is left alone, not failed.
+
+    Previously this used ``.docx`` with the body ``b"not ours"`` and asserted
+    the file was ignored — which encoded the bug (``.docx`` *is* supported) as
+    the expected behaviour. Worse, it would have passed either way: those bytes
+    are UTF-8-decodable, so had the extension filter let them through they
+    would have sniffed as ``text/plain`` and ingested, and the test's real
+    subject was never the extension at all.
+
+    So: an extension nothing claims, and bytes that are not decodable as text
+    and carry no known magic — the file must be untouched by the *filter*,
+    before any sniffing happens.
+    """
+    name = f"archive-{uuid.uuid4().hex[:8]}.epub"
     path = consume_root / name
-    path.write_bytes(b"not ours")
+    path.write_bytes(b"\xff\xfe\x00\x01binary payload \x80\x81")
 
     await watcher.sweep()
 
+    assert path.suffix not in consume.SUPPORTED_EXTENSIONS  # the precondition
     assert path.exists()  # untouched: not moved to failed/, not ingested
     assert not failed_dir.exists()
     assert await documents_named(session_factory, name) == []
+
+
+async def test_docx_is_ingested_from_the_consume_folder(
+    watcher: ConsumeWatcher,
+    consume_root: Path,
+    session_factory: async_sessionmaker[AsyncSession],
+    job_connector: InMemoryConnector,
+    data_dir: Path,
+) -> None:
+    """A real .docx dropped in the consume dir is ingested and archived.
+
+    ``.docx`` upload support shipped 2026-07-07 but this filter was never
+    updated, so the folder path silently ignored them.
+    """
+    name = f"letter-{uuid.uuid4().hex[:8]}.docx"
+    path = consume_root / name
+    # marker= keeps the bytes unique: this suite shares one database and
+    # identical content would dedup against another test's document.
+    path.write_bytes(make_docx(paragraph="Hierbij de factuur.", marker=uuid.uuid4().hex))
+
+    await watcher.sweep()
+
+    documents = await documents_named(session_factory, name)
+    assert len(documents) == 1
+    assert documents[0].mime_type == DOCX_MIME
+    assert not path.exists()  # archived out of the consume dir
+
+
+def test_every_supported_extension_maps_to_an_allowed_mime() -> None:
+    """The extension pre-filter and the MIME allowlist must agree exactly.
+
+    Two directions, and both matter. A MIME type in ``ALLOWED_MIME_TYPES``
+    with no extension mapped to it is uploadable but invisible to the consume
+    folder — the ``.docx`` bug. An extension mapping to a MIME the allowlist
+    rejects would pass the filter only to be refused after the file was read.
+    """
+    assert set(consume.EXTENSION_TO_MIME.values()) == set(ALLOWED_MIME_TYPES)
+    assert frozenset(consume.EXTENSION_TO_MIME) == consume.SUPPORTED_EXTENSIONS
+    assert all(ext.startswith(".") and ext == ext.lower() for ext in consume.EXTENSION_TO_MIME)
 
 
 async def test_unsniffable_content_moved_to_failed(

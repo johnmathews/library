@@ -48,8 +48,9 @@ refinement cycle:
    Cheapest first step then is an LLM-judge rerank reusing the existing
    Anthropic client; only stand up a dedicated reranker model if that's
    inadequate.
-2. **`.docx` / `.epub` ingestion.** Not wanted — corpus is PDF / `.md` /
-   `.txt` only.
+2. **`.epub` ingestion.** Not wanted — the corpus is PDF / images / `.md` /
+   `.txt` / `.docx`. (`.docx` shipped 2026-07-07, converted to Markdown on
+   ingest; the consume folder accepts it too as of the `EXTENSION_TO_MIME` map.)
 3. **Document versioning / supersession (non-note files).** Edited-and-re-uploaded
    files create duplicates (SHA-256 content dedup). Now **mooted for in-app notes**
    — they are edited in place with their own `note_versions` history and bypass

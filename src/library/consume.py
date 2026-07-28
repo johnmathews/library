@@ -31,27 +31,43 @@ from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 from watchfiles import Change, awatch
 
 from library.config import Settings
+from library.docx import DOCX_MIME
 from library.ingest import IngestError, ingest_file, resolve_owner_id
 from library.models import DocumentSource
 
 logger = logging.getLogger(__name__)
 
-#: Extensions worth ingesting (must resolve to ALLOWED_MIME_TYPES content).
-SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(
-    {
-        ".pdf",
-        ".jpg",
-        ".jpeg",
-        ".png",
-        ".heic",
-        ".heif",
-        ".tif",
-        ".tiff",
-        ".txt",
-        ".md",
-        ".markdown",
-    }
-)
+#: Filename extension → the MIME type it is expected to sniff as.
+#:
+#: This is a *pre-filter*, not the type decision: the authoritative call is
+#: ``detect_mime`` on the file's content in ``ingest_file``. Its only job is to
+#: skip files that cannot possibly be ingestible without reading them.
+#:
+#: Written as a map rather than a bare set of extensions so the relationship to
+#: ``ALLOWED_MIME_TYPES`` is expressible and therefore testable —
+#: ``set(EXTENSION_TO_MIME.values()) == ALLOWED_MIME_TYPES`` is asserted in
+#: ``tests/test_consume.py``. That equality is what makes this non-recurring:
+#: ``.docx`` support landed in ``cfc981f`` (2026-07-07) and every other surface
+#: was threaded through, but this filter was missed, so a ``.docx`` dropped in
+#: the consume folder was silently ignored for weeks. A new type now cannot be
+#: added on one side alone.
+EXTENSION_TO_MIME: dict[str, str] = {
+    ".pdf": "application/pdf",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+    ".heic": "image/heic",
+    ".heif": "image/heif",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+    ".txt": "text/plain",
+    ".md": "text/markdown",
+    ".markdown": "text/markdown",
+    ".docx": DOCX_MIME,
+}
+
+#: Extensions worth ingesting, derived from the map above — never hand-listed.
+SUPPORTED_EXTENSIONS: frozenset[str] = frozenset(EXTENSION_TO_MIME)
 
 #: Legacy in-consume-dir archive locations; used only by the one-time
 #: startup migration to the configured (sibling by default) dirs.

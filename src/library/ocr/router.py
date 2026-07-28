@@ -179,7 +179,15 @@ def _tesseract_with_gate(
         return primary
     retry = photo.ocr_pdf_pages(pdf_path)
     gate = GateRetry(tesseract_confidence=primary.confidence, rapidocr_confidence=retry.confidence)
-    if len(retry.text) >= RETRY_MIN_TEXT_RATIO * len(primary.text):
+    # The non-empty precondition is load-bearing, not defensive. With both texts
+    # empty the ratio test reads `0 >= 0.8 * 0` — true — so an empty retry would
+    # "win" and `replace(retry, ...)` would stamp engine="rapidocr" plus
+    # RapidOCR's confidence onto a result that contains nothing RapidOCR found.
+    # Both branches return empty text either way, so what this corrupts is
+    # provenance: the wrong engine and confidence flow into the ocr_completed
+    # event, document.ocr_confidence, and thence the ocr_confidence_gate
+    # validation rule — which then nags about the wrong engine's score.
+    if retry.text.strip() and len(retry.text) >= RETRY_MIN_TEXT_RATIO * len(primary.text):
         # Keep the Tesseract searchable PDF as the viewing artifact.
         return replace(retry, searchable_pdf=primary.searchable_pdf, gate=gate)
     return replace(primary, gate=gate)

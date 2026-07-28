@@ -1311,8 +1311,8 @@ and the worker behaves exactly as before.
 ```
 file appears in {LIBRARY_CONSUME_DIR}
   │
-  ├─ candidate? (supported extension; not a dotfile / Syncthing temp /
-  │   *.part; not under the configured consumed/failed archive
+  ├─ candidate? (extension in EXTENSION_TO_MIME; not a dotfile / Syncthing
+  │   temp / *.part; not under the configured consumed/failed archive
   │   dirs) ── no ─► ignored entirely
   ├─ stability wait: size+mtime must be unchanged for
   │   LIBRARY_CONSUME_STABILITY_S (re-sampled until stable, up to a
@@ -1329,6 +1329,17 @@ file appears in {LIBRARY_CONSUME_DIR}
 
 Details and decisions:
 
+- **The extension filter is a pre-filter, not the type decision.**
+  `consume.EXTENSION_TO_MIME` maps each accepted extension to the MIME type it
+  is expected to sniff as; its only job is to avoid reading files that cannot
+  possibly be ingestible. The authoritative decision is still `detect_mime` on
+  the content inside `ingest_file`. It is a map rather than a bare set of
+  extensions so the invariant `set(EXTENSION_TO_MIME.values()) ==
+  ALLOWED_MIME_TYPES` is testable — and that equality is what keeps the two
+  sides from drifting. They had drifted: `.docx` upload support shipped
+  2026-07-07 and every other surface was threaded through, but this filter was
+  not, so a `.docx` dropped in the consume folder was ignored without a trace
+  (it is not even moved to `failed/` — a non-candidate is never read).
 - **Stability before ingest.** iOS Notes/Syncthing copies arrive
   incrementally. The watcher samples `(size, mtime)` and only ingests
   once two samples `LIBRARY_CONSUME_STABILITY_S` apart match. A file

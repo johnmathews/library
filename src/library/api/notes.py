@@ -27,7 +27,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import delete, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.api.documents import _detail
+from library.api.documents import _detail, _refresh_for_detail
 from library.auth.deps import current_user
 from library.db import get_session
 from library.jobs import embed_document, extract_document, process_document
@@ -44,20 +44,6 @@ from library.schemas import DocumentDetail, NoteCreate, NoteUpdate, NoteVersionO
 from library.storage import path_for
 
 router: APIRouter = APIRouter(tags=["notes"])
-
-# The attributes ``_detail`` reads that a commit can expire; refreshed after the
-# commit so the response never triggers an (async-illegal) implicit lazy load.
-# ``updated_at`` has a SQL ``onupdate`` so it is expired by any UPDATE.
-_DETAIL_REFRESH_ATTRS: list[str] = [
-    "kind",
-    "sender",
-    "recipient",
-    "tags",
-    "projects",
-    "matters",
-    "events",
-    "updated_at",
-]
 
 
 def _salted_sha256(body_bytes: bytes) -> str:
@@ -227,7 +213,7 @@ async def create_note(
     # Commit before deferring: the worker defers over its own connection.
     await session.commit()
     await process_document.defer_async(document_id=document.id)
-    await session.refresh(document, _DETAIL_REFRESH_ATTRS)
+    await _refresh_for_detail(session, document)
     return await _detail(session, document)
 
 
@@ -251,7 +237,7 @@ async def update_note(
     provided = payload.model_dump(exclude_unset=True)
     # A no-op PATCH must not pollute the version history with a phantom snapshot.
     if not provided:
-        await session.refresh(document, _DETAIL_REFRESH_ATTRS)
+        await _refresh_for_detail(session, document)
         return await _detail(session, document)
 
     await _snapshot_current(session, document)
@@ -273,7 +259,7 @@ async def update_note(
     await session.commit()
     if body_changed:
         await _reprocess_note(document.id)
-    await session.refresh(document, _DETAIL_REFRESH_ATTRS)
+    await _refresh_for_detail(session, document)
     return await _detail(session, document)
 
 
@@ -354,5 +340,5 @@ async def restore_note_version(
     )
     await session.commit()
     await _reprocess_note(document.id)
-    await session.refresh(document, _DETAIL_REFRESH_ATTRS)
+    await _refresh_for_detail(session, document)
     return await _detail(session, document)
