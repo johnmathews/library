@@ -76,6 +76,10 @@ need semantic Ask you can omit the `embedder` service and set
    docker compose ps        # wait until api/worker/db report healthy
    ```
 
+   On a development machine — especially an Apple Silicon Mac — use `make up`
+   instead, which starts `db migrate api worker` and stamps the commit into the
+   image. See §1.2.1 for why the embedder is left out and what that costs.
+
    First build takes a few minutes (npm build + Python deps + OCR
    packages). Alternatively, skip building: CI publishes the same image
    to `ghcr.io/johnmathews/library` — add `image:
@@ -111,6 +115,53 @@ need semantic Ask you can omit the `embedder` service and set
    `/data/consumed`, `/data/failed`), but if you bind-mount the consume
    dir as its **own mount root** the parent is ephemeral container
    storage — set both vars explicitly to persistent paths.
+
+### 1.2.1 The embedder is not a dependency of api/worker
+
+`api` and `worker` deliberately carry **no `depends_on: embedder`**, and adding
+one back will break local development on Apple Silicon.
+
+Two reasons. First, it was **vacuous**: the condition was `service_started`,
+which means the container process began — not that bge-m3 finished loading, which
+takes a ~2 GB download on first run. It never provided the ordering guarantee it
+appeared to. Second, embedding **must never block a document reaching
+`indexed`**: `jobs.py` states that invariant and implements it, recording an
+unreachable embedder as an ingestion event and continuing.
+
+What the dependency did do was make `docker compose up` fail outright on arm64,
+where text-embeddings-inference publishes no image — both `api` and `worker`
+refused to start over a dependency neither needs. `--no-deps` was the standing
+workaround; it is no longer necessary.
+
+`platform: linux/amd64` was considered and **rejected**: TEI's CPU images target
+AVX/AVX2, which Rosetta does not reliably provide, so the likely result is a
+crash-loop under `restart: unless-stopped` — worse than an honest
+"no matching manifest" pull error.
+
+**What you lose without the embedder running:** semantic search and the semantic
+half of Ask retrieval, plus Smart Group auto-membership. Everything else —
+upload, the consume folder, OCR, extraction, the markdown layer, full-text
+search, and Ask over full-text hits — works normally. Documents still reach
+`indexed`, each carrying an `embedding_failed` event.
+
+Production is unchanged: the full `docker compose up -d` still starts the
+embedder, and CI's `compose-smoke` job boots this exact file and asserts every
+service reports healthy, which is the regression guard.
+
+### 1.2.2 `git_sha` on locally built images
+
+All three built services (`migrate`, `api`, `worker`) take a `GIT_SHA` build arg
+— compose builds a separate image per service, so one arg per service is
+required. `make up` supplies `git rev-parse --short HEAD`.
+
+Without it the arg is empty, `LIBRARY_GIT_SHA` is unset, and `/healthz` reports
+`"git_sha": null` — indistinguishable from a deploy that failed to stamp. With
+`make up`:
+
+```console
+$ curl -s localhost:8000/healthz
+{"status":"ok","version":"0.1.0","git_sha":"2140ddf"}
+```
 
 ## 1.3 How the frontend is served
 
@@ -285,7 +336,8 @@ see 1.7.2 for that instance's exact shape):
    `docker exec <db> pg_dump -U library -Fc library > library-pre-ask.dump`.
 2. **Bump RAM** to ~6–8 GB (the embedder needs ~3 GB resident).
 3. **Edit the compose**: swap the `db` image; add the `embedder` service; add
-   `LIBRARY_EMBEDDING_SERVICE_URL` + a `depends_on: embedder` to api/worker.
+   `LIBRARY_EMBEDDING_SERVICE_URL` to api/worker. Do **not** add a
+   `depends_on: embedder` — see §1.2.1.
 4. `docker compose pull && docker compose up -d` — the `migrate` job enables
    the `vector` extension and creates `document_chunks`, `ask_threads`, and
    `ask_turns`; the

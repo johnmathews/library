@@ -49,7 +49,14 @@ services:
 
   # One-shot: runs alembic migrations, then exits. api/worker wait for it.
   migrate:
-    build: .
+    build:
+      context: .
+      # Compose builds a separate image per service, so the arg goes on all
+      # three. Empty when unset, which is what `/healthz` reported for every
+      # locally built image — indistinguishable from a broken deploy. `make up`
+      # supplies it; see the Makefile.
+      args:
+        GIT_SHA: ${GIT_SHA:-}
     command: ["alembic", "upgrade", "head"]
     env_file:
       - path: .env
@@ -62,7 +69,14 @@ services:
     restart: "no"
 
   api:
-    build: .
+    build:
+      context: .
+      # Compose builds a separate image per service, so the arg goes on all
+      # three. Empty when unset, which is what `/healthz` reported for every
+      # locally built image — indistinguishable from a broken deploy. `make up`
+      # supplies it; see the Makefile.
+      args:
+        GIT_SHA: ${GIT_SHA:-}
     restart: unless-stopped
     mem_limit: 512m
     ports:
@@ -84,8 +98,26 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-      embedder:
-        condition: service_started
+      # No `embedder` dependency, deliberately. Two reasons:
+      #
+      # 1. It was vacuous. `service_started` means the container process began,
+      #    not that bge-m3 finished loading (~2 GB download on first run), so it
+      #    never provided the ordering it looks like it provides.
+      # 2. Embedding must never block a document reaching `indexed` — jobs.py
+      #    states that invariant and implements it: an unreachable embedder is
+      #    recorded as an event and swallowed.
+      #
+      # What it *did* do was make `docker compose up` fail outright on arm64,
+      # where TEI publishes no image: both api and worker refused to start
+      # because of a dependency neither needs. `--no-deps` was the workaround;
+      # this removes the need for one. The embedder still starts with the full
+      # `docker compose up` and production is unchanged (compose-smoke in CI
+      # boots the whole file and is the regression guard).
+      #
+      # `platform: linux/amd64` was considered and rejected: TEI's CPU images
+      # target AVX/AVX2, which Rosetta does not reliably provide, so the likely
+      # outcome is a crash-loop under `restart: unless-stopped` — worse than an
+      # honest "no matching manifest" pull error.
     healthcheck:
       # curl/wget are not present in slim images; use the stdlib instead.
       test:
@@ -101,7 +133,14 @@ services:
       start_period: 10s
 
   worker:
-    build: .
+    build:
+      context: .
+      # Compose builds a separate image per service, so the arg goes on all
+      # three. Empty when unset, which is what `/healthz` reported for every
+      # locally built image — indistinguishable from a broken deploy. `make up`
+      # supplies it; see the Makefile.
+      args:
+        GIT_SHA: ${GIT_SHA:-}
     command: ["python", "-m", "library.worker"]
     restart: unless-stopped
     # OCR (tesseract/ghostscript subprocesses, RapidOCR ONNX inference)
@@ -131,8 +170,26 @@ services:
         condition: service_healthy
       migrate:
         condition: service_completed_successfully
-      embedder:
-        condition: service_started
+      # No `embedder` dependency, deliberately. Two reasons:
+      #
+      # 1. It was vacuous. `service_started` means the container process began,
+      #    not that bge-m3 finished loading (~2 GB download on first run), so it
+      #    never provided the ordering it looks like it provides.
+      # 2. Embedding must never block a document reaching `indexed` — jobs.py
+      #    states that invariant and implements it: an unreachable embedder is
+      #    recorded as an event and swallowed.
+      #
+      # What it *did* do was make `docker compose up` fail outright on arm64,
+      # where TEI publishes no image: both api and worker refused to start
+      # because of a dependency neither needs. `--no-deps` was the workaround;
+      # this removes the need for one. The embedder still starts with the full
+      # `docker compose up` and production is unchanged (compose-smoke in CI
+      # boots the whole file and is the regression guard).
+      #
+      # `platform: linux/amd64` was considered and rejected: TEI's CPU images
+      # target AVX/AVX2, which Rosetta does not reliably provide, so the likely
+      # outcome is a crash-loop under `restart: unless-stopped` — worse than an
+      # honest "no matching manifest" pull error.
     healthcheck:
       # The worker serves no HTTP; healthy = the app imports and the
       # database (which carries the job queue) is reachable.

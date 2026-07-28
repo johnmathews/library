@@ -63,7 +63,13 @@ class Settings(BaseSettings):
     # password is always tried too (library.pdf_unlock). A success stores the
     # decrypted PDF as the source of truth — safe because the app is behind auth.
     # Comma-separated in the env (LIBRARY_PDF_UNLOCK_PASSWORDS); case-sensitive.
-    pdf_unlock_passwords: Annotated[list[str], NoDecode] = ["2064"]
+    #
+    # Empty by default: this previously shipped a real four-digit personal
+    # document password as the committed default, in a public repository. Set it
+    # in `.env`, which is gitignored. With no passwords configured only the empty
+    # password is tried, so an encrypted PDF is rejected at ingest with a clear
+    # PdfLockedError rather than silently failing.
+    pdf_unlock_passwords: Annotated[list[str], NoDecode] = []
     # Claude metadata extraction (see docs/ingestion.md, "Extraction" section).
     anthropic_api_key: SecretStr | None = None
     extraction_enabled: bool = True

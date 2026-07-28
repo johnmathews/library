@@ -590,13 +590,24 @@ def _pdf_unlocked_flag(database_url: str, document_id: int) -> bool:
 
 
 def test_encrypted_pdf_is_unlocked_and_stored_decrypted(
-    api_client: TestClient, api_database_url: str, tmp_path: Path
+    api_client: TestClient,
+    api_database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    # A PDF locked with the default password 2064 is decrypted at ingest; the
-    # stored source-of-truth reopens without a password and the received event
-    # records that an unlock happened.
+    # A PDF locked with a CONFIGURED password is decrypted at ingest; the stored
+    # source-of-truth reopens without a password and the received event records
+    # that an unlock happened.
+    #
+    # The password is set explicitly rather than relying on the default: the
+    # default is now empty (it used to ship a real personal password in this
+    # public repo), so a test that leans on it would be testing nothing.
+    from library.config import get_settings
+
+    monkeypatch.setenv("LIBRARY_PDF_UNLOCK_PASSWORDS", "fixture-pw-1234")
+    get_settings.cache_clear()
     plain = make_text_pdf(tmp_path / "plain.pdf", lines=["Geheime factuur"]).read_bytes()
-    encrypted = encrypt_pdf(plain, user_password="2064")
+    encrypted = encrypt_pdf(plain, user_password="fixture-pw-1234")
 
     status_code, body = upload(api_client, encrypted, filename="locked.pdf")
     assert status_code == 201
