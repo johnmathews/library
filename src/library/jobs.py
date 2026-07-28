@@ -6,16 +6,40 @@ The OCR stage (W4) runs the routed engines from ``library.ocr``; the extract
 stage (W6) runs Claude metadata extraction from ``library.extraction``; the
 markdown stage runs Claude-vision per-page markdown generation; the embed
 stage chunks the text and computes embeddings.
+
+**Retries.** Procrastinate does not retry by default: an unhandled exception
+marks a job ``failed`` permanently, so before :data:`TRANSIENT_RETRY` every task
+lost its work to a single network blip. Retrying tasks carry
+``retry=TRANSIENT_RETRY``, whose ``retry_exceptions`` is an **allowlist** — that
+direction is the whole design. A denylist would retry anything not yet thought
+of, so a deterministic bug (a ``ValueError``, an unsupported MIME, a parse
+failure, a pydantic ``ValidationError``) would burn every attempt and land in
+``failed`` many minutes later with the same error. With an allowlist those fail
+on the first attempt, which is both faster and truthful; only the named
+transient classes are ever retried.
+
+Which tasks retry, and why not the rest, is pinned by
+``tests/test_jobs_pipeline.py::test_retry_policy_per_task`` — a table covering
+every task in this module, so a new task cannot be added without an explicit
+decision. Two groups deliberately do not retry: ``generate_thumbnail`` (a
+deterministic render of one file; a failure is a bad file, not bad luck, and the
+thumbnail is best-effort) and the four ``@job_app.periodic`` tasks, where the
+next scheduled tick *is* the retry and adding a second recovery mechanism would
+race the schedule.
 """
 
 import asyncio
 import json
 import logging
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
-from procrastinate import App, PsycopgConnector
+import anthropic
+import httpx
+from procrastinate import App, PsycopgConnector, RetryStrategy
 from sqlalchemy import delete, select
 from sqlalchemy import text as sql_text
+from sqlalchemy.exc import InterfaceError, OperationalError
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
 from library import thumbnails
@@ -23,7 +47,7 @@ from library.config import get_settings
 from library.db import get_sessionmaker
 from library.embedding import EmbeddingError, embed_texts
 from library.embedding.chunker import chunker_for_mime
-from library.extraction.apply import apply_extraction
+from library.extraction.apply import apply_extraction, flag_textless_document
 from library.extraction.repair import maybe_repair_extraction
 from library.markdown.apply import apply_markdown
 from library.matter_classifier import PROMPT_VERSION as MATTER_CLASSIFIER_PROMPT_VERSION
@@ -121,6 +145,53 @@ job_app: App = App(
     connector=PsycopgConnector(conninfo=procrastinate_conninfo(get_settings().database_url))
 )
 
+#: Exception classes that mean "try again", never "this input is wrong".
+#:
+#: An allowlist by construction — see the module docstring. Every entry is a
+#: failure of a *dependency* (network, rate limit, upstream 5xx, a dropped
+#: Postgres connection), so the same job with the same arguments can succeed
+#: unchanged a minute later. Anything absent from this tuple fails on the first
+#: attempt.
+TRANSIENT_EXCEPTIONS: tuple[type[Exception], ...] = (
+    # Anthropic: connection loss, rate limiting, upstream 5xx, and timeouts.
+    # Deliberately not APIStatusError wholesale — that covers 4xx too, and a 400
+    # for a malformed request or a 401 for a bad key will never succeed on retry.
+    anthropic.APIConnectionError,
+    anthropic.APITimeoutError,
+    anthropic.RateLimitError,
+    anthropic.InternalServerError,
+    # httpx transport-level failures (the embedder client, IMAP-over-HTTP paths).
+    # TransportError is the base of ConnectError/ReadTimeout/etc; HTTPStatusError
+    # is NOT a subclass of it, so a 4xx response still fails fast.
+    httpx.TransportError,
+    # Postgres. OperationalError is a dropped/reset connection, a deadlock or a
+    # failover window; InterfaceError is a connection-level fault from the
+    # driver. Both are transient.
+    #
+    # Deliberately NOT DBAPIError, which the plan proposed: it is the *parent*
+    # of IntegrityError, DataError, ProgrammingError and NotSupportedError, so
+    # allowlisting it would retry constraint violations and SQL bugs — the exact
+    # deterministic failures an allowlist exists to exclude. Caught by
+    # test_transient_allowlist_excludes_deterministic_failures.
+    OperationalError,
+    InterfaceError,
+    # The local embedder container being unreachable or still loading bge-m3.
+    EmbeddingError,
+)
+
+#: The retry policy shared by every task that can fail transiently.
+#:
+#: Exponential backoff, so a rate limit or a restarting dependency is given
+#: progressively longer to recover instead of being hammered: attempts land at
+#: roughly 4s, 8s, 16s, 32s. Five attempts spans ~1 minute, which comfortably
+#: covers a container restart or a failover without letting a genuinely broken
+#: dependency keep a job alive for hours.
+TRANSIENT_RETRY: RetryStrategy = RetryStrategy(
+    max_attempts=5,
+    exponential_wait=4,
+    retry_exceptions=TRANSIENT_EXCEPTIONS,
+)
+
 
 async def run_ocr(session: AsyncSession, document: Document) -> None:
     """OCR stage: route to the right engine, persist results, record an event.
@@ -170,6 +241,24 @@ async def run_ocr(session: AsyncSession, document: Document) -> None:
             detail=detail,
         )
     )
+    # A document with no text still reaches `indexed` — that invariant is
+    # deliberate — but it is invisible to search and to Ask, so it must not pass
+    # silently. Flag it here rather than relying on extraction's validation:
+    # extraction skips `input_unusable` for exactly this document, and every
+    # skip path returns before validation runs.
+    if flag_textless_document(document):
+        session.add(
+            IngestionEvent(
+                document_id=document.id,
+                event="ocr_empty",
+                detail={"engine": result.engine, "pages": result.pages},
+            )
+        )
+        logger.warning(
+            "OCR produced no text for document %s (engine=%s); flagged for review",
+            document.id,
+            result.engine,
+        )
     await session.commit()
     logger.info(
         "OCR completed for document %s: engine=%s confidence=%s pages=%s chars=%s",
@@ -339,6 +428,57 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
     )
 
 
+async def _defer_best_effort(
+    session: AsyncSession,
+    document_id: int,
+    task: str,
+    defer: Callable[[], Awaitable[object]],
+) -> None:
+    """Queue a best-effort follow-up job; make a lost defer durable if it fails.
+
+    These deferrals are correctly best-effort — the document's own work is
+    already committed and a queue hiccup must never strand it in ``failed``. But
+    a ``logger.warning`` is not a record: logs rotate, nobody greps them, and
+    the *observable* result was a document that quietly never got its thumbnail,
+    its matter classification or its Smart Group membership, with nothing on the
+    document to say so. The retry policy does not help here — the job never got
+    queued, so there is nothing to retry.
+
+    So the failure is also written as a ``job_defer_failed`` ingestion event,
+    which surfaces on the document's own timeline and is queryable. Committing
+    the event is itself wrapped: recording a loss must not become a second,
+    larger loss by failing the document.
+    """
+    try:
+        await defer()
+        return
+    except Exception as exc:
+        logger.warning(
+            "could not queue %s for document %s; continuing",
+            task,
+            document_id,
+            exc_info=True,
+        )
+        deferral_error = str(exc)
+
+    try:
+        session.add(
+            IngestionEvent(
+                document_id=document_id,
+                event="job_defer_failed",
+                detail={"task": task, "error": deferral_error},
+            )
+        )
+        await session.commit()
+    except Exception:
+        logger.warning(
+            "could not record job_defer_failed for document %s task %s",
+            document_id,
+            task,
+            exc_info=True,
+        )
+
+
 async def _run_stage_hook(
     session: AsyncSession, document: Document, status: DocumentStatus
 ) -> None:
@@ -350,14 +490,12 @@ async def _run_stage_hook(
         # it runs as a separate job, in parallel with the extract stage.
         # Best-effort: OCR results are already committed, and a transient
         # queue error here must not strand the document in ``failed``.
-        try:
-            await generate_thumbnail.defer_async(document_id=document.id)
-        except Exception:
-            logger.warning(
-                "could not queue thumbnail for document %s; continuing",
-                document.id,
-                exc_info=True,
-            )
+        await _defer_best_effort(
+            session,
+            document.id,
+            "thumbnail",
+            lambda: generate_thumbnail.defer_async(document_id=document.id),
+        )
     elif status is DocumentStatus.EXTRACT:
         await run_extraction(session, document)
         # Matter classification reads the title/summary/sender extraction just
@@ -367,16 +505,14 @@ async def _run_stage_hook(
         # not strand the document in ``failed``. ``skip_if_classified`` makes
         # the deferred job a no-op when a resume re-defers it for a document
         # the first job already classified — see the task's docstring.
-        try:
-            await classify_document_matters.defer_async(
+        await _defer_best_effort(
+            session,
+            document.id,
+            "matter classification",
+            lambda: classify_document_matters.defer_async(
                 document_id=document.id, skip_if_classified=True
-            )
-        except Exception:
-            logger.warning(
-                "could not queue matter classification for document %s; continuing",
-                document.id,
-                exc_info=True,
-            )
+            ),
+        )
     elif status is DocumentStatus.MARKDOWN:
         await run_markdown(session, document)
     elif status is DocumentStatus.EMBED:
@@ -461,37 +597,31 @@ async def advance_pipeline(
             # its cached LLM description out of band. Best-effort: a queue hiccup
             # must never strand an already-indexed document.
             if document.sender_id is not None and document.kind_id is not None:
-                try:
-                    await generate_series_insight.defer_async(
+                await _defer_best_effort(
+                    session,
+                    document.id,
+                    "series insight",
+                    lambda: generate_series_insight.defer_async(
                         sender_id=document.sender_id, kind_id=document.kind_id
-                    )
-                except Exception:
-                    logger.warning(
-                        "could not queue series insight for document %s; continuing",
-                        document.id,
-                        exc_info=True,
-                    )
+                    ),
+                )
                 # It may also match an authored series' signature: propose it for
                 # review (never a silent membership). Best-effort, same as above.
-                try:
-                    await evaluate_series_autocontinue.defer_async(document_id=document.id)
-                except Exception:
-                    logger.warning(
-                        "could not queue series autocontinue for document %s; continuing",
-                        document.id,
-                        exc_info=True,
-                    )
+                await _defer_best_effort(
+                    session,
+                    document.id,
+                    "series autocontinue",
+                    lambda: evaluate_series_autocontinue.defer_async(document_id=document.id),
+                )
             # Smart Groups: silently add this document to any semantic group it
             # matches. Unlike the two blocks above, this doesn't require a
             # sender or kind. Best-effort, same as above.
-            try:
-                await evaluate_semantic_groups.defer_async(document_id=document.id)
-            except Exception:
-                logger.warning(
-                    "could not queue semantic-group eval for document %s; continuing",
-                    document.id,
-                    exc_info=True,
-                )
+            await _defer_best_effort(
+                session,
+                document.id,
+                "semantic-group eval",
+                lambda: evaluate_semantic_groups.defer_async(document_id=document.id),
+            )
         except Exception as exc:
             failed_in = document.status
             await session.rollback()
@@ -517,7 +647,7 @@ async def advance_pipeline(
             raise
 
 
-@job_app.task(name="library.jobs.process_document")
+@job_app.task(name="library.jobs.process_document", retry=TRANSIENT_RETRY)
 async def process_document(document_id: int) -> None:
     """Background task: run the processing pipeline for one document."""
     await advance_pipeline(get_sessionmaker(), document_id)
@@ -563,7 +693,7 @@ async def generate_thumbnail(document_id: int) -> None:
     await run_generate_thumbnail(get_sessionmaker(), document_id)
 
 
-@job_app.task(name="library.jobs.extract_document")
+@job_app.task(name="library.jobs.extract_document", retry=TRANSIENT_RETRY)
 async def extract_document(document_id: int) -> None:
     """Background task: (re-)run metadata extraction for one document.
 
@@ -582,7 +712,7 @@ async def extract_document(document_id: int) -> None:
         await apply_extraction(session, document, get_settings(), force=True)
 
 
-@job_app.task(name="library.jobs.classify_document_matters")
+@job_app.task(name="library.jobs.classify_document_matters", retry=TRANSIENT_RETRY)
 async def classify_document_matters(
     document_id: int, replace: bool = False, skip_if_classified: bool = False
 ) -> None:
@@ -626,7 +756,7 @@ async def classify_document_matters(
         await session.commit()
 
 
-@job_app.task(name="library.jobs.embed_document")
+@job_app.task(name="library.jobs.embed_document", retry=TRANSIENT_RETRY)
 async def embed_document(document_id: int) -> None:
     """Background task: (re-)embed one document, independent of pipeline status.
 
@@ -641,7 +771,7 @@ async def embed_document(document_id: int) -> None:
         await run_embed(session, document)
 
 
-@job_app.task(name="library.jobs.markdown_document")
+@job_app.task(name="library.jobs.markdown_document", retry=TRANSIENT_RETRY)
 async def markdown_document(document_id: int) -> None:
     """Background task: (re-)generate markdown for one document, then re-embed.
 
@@ -663,7 +793,7 @@ async def markdown_document(document_id: int) -> None:
         await run_embed(session, document)
 
 
-@job_app.task(name="library.jobs.generate_series_insight")
+@job_app.task(name="library.jobs.generate_series_insight", retry=TRANSIENT_RETRY)
 async def generate_series_insight(sender_id: int, kind_id: int) -> None:
     """Background task: (re-)generate the cached LLM description for one series.
 
@@ -675,7 +805,7 @@ async def generate_series_insight(sender_id: int, kind_id: int) -> None:
         await refresh_series_insight(session, get_settings(), sender_id, kind_id)
 
 
-@job_app.task(name="library.jobs.evaluate_series_autocontinue")
+@job_app.task(name="library.jobs.evaluate_series_autocontinue", retry=TRANSIENT_RETRY)
 async def evaluate_series_autocontinue(document_id: int) -> None:
     """Background task: propose an indexed document for any authored series it matches.
 
@@ -687,7 +817,7 @@ async def evaluate_series_autocontinue(document_id: int) -> None:
         await propose_authored_matches(session, get_settings(), document_id)
 
 
-@job_app.task(name="library.jobs.evaluate_semantic_groups")
+@job_app.task(name="library.jobs.evaluate_semantic_groups", retry=TRANSIENT_RETRY)
 async def evaluate_semantic_groups(document_id: int) -> None:
     """Background task: auto-add an indexed document to any Smart Group it matches.
 
@@ -863,7 +993,7 @@ async def poll_email_inbox(timestamp: int) -> None:
     logger.info("email poll (scheduled for %s): %s", timestamp, summary)
 
 
-@job_app.task(name="library.jobs.ingest_held_email")
+@job_app.task(name="library.jobs.ingest_held_email", retry=TRANSIENT_RETRY)
 async def ingest_held_email(held_email_id: int, resolved_by_id: int | None = None) -> None:
     """On-demand task: ingest a held email anyway (the human override, W12).
 

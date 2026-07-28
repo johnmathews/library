@@ -447,6 +447,51 @@ async def revalidate_document(
     return findings
 
 
+def flag_textless_document(document: Document) -> bool:
+    """Seed the ``no_text_extracted`` finding at the OCR stage. Returns whether it did.
+
+    Closes a coverage hole rather than duplicating a rule. ``_apply_validation``
+    runs only on ``apply_extraction``'s *success* path, and six branches return
+    before it — ``disabled``, ``missing_api_key``, ``already_extracted``,
+    ``budget``, ``ExtractionSkipped`` and the generic failure. A textless
+    document typically takes the ``ExtractionSkipped("input_unusable")`` branch,
+    so the one document that most needs flagging got no validation at all and
+    reached ``indexed`` with ``review_status`` untouched.
+
+    Deliberately a floor, not the full rule set: at the OCR stage extraction has
+    not run, so amount/date/sender are all None and running ``validate()`` here
+    would fire ``empty_extraction`` and friends prematurely. This seeds the one
+    finding that is already knowable and lets extraction's own full validation
+    supersede it if it gets that far — ``validate()`` re-derives
+    ``no_text_extracted`` from the same empty text, so the two agree.
+
+    Skips a document that already carries a ``validation`` payload, so a
+    pipeline *resume* re-entering the OCR hook cannot overwrite a richer set of
+    findings from an earlier completed extraction with this single one.
+    """
+    if (document.ocr_text or "").strip():
+        return False
+    if isinstance(document.extra, dict) and "validation" in document.extra:
+        return False
+    finding = Finding(
+        "no_text_extracted",
+        None,
+        "warn",
+        "no text could be extracted from this document, so it cannot be found by "
+        "search — the original is stored and OCR can be re-run",
+    )
+    document.extra = {
+        **document.extra,
+        "validation": {
+            "prompt_version": PROMPT_VERSION,
+            "findings": findings_to_payload([finding]),
+            "validated_at": datetime.now(UTC).isoformat(),
+        },
+    }
+    document.review_status = derive_review_status([finding])
+    return True
+
+
 async def _apply_validation(session: AsyncSession, document: Document, settings: Settings) -> None:
     """Run validation and set review_status + extra["validation"] (extraction path).
 

@@ -106,8 +106,9 @@ restorable. See [api.md §1.6](api.md) for the delete/restore/list endpoints.
 1. Toasts fire for document processing only — manual re-extract/embed/markdown,
    email polling, importer, and series-insight jobs appear in the Jobs view but
    do not toast.
-2. The Jobs view is read-only: no cancel/retry/requeue actions (jobs are
-   retried by Procrastinate per its own policy).
+2. The Jobs view is read-only: no cancel/retry/requeue actions. Retries are
+   automatic where configured — see §1.6, which also says which tasks
+   deliberately do not retry.
 3. Transport is one-way SSE, not a WebSocket; events are not replayed on
    reconnect — the snapshot fetch covers the gap.
 
@@ -203,3 +204,65 @@ go out, but without a link. Because that looks like a bug ("my notifications
 have no link"), the API logs a one-line `WARNING` at startup whenever it is
 unset. Set it on the live host (the deployment's env/compose file) to turn the
 links on — no other configuration is required, the linking code is always on.
+
+## 1.6 Retry policy
+
+Procrastinate does **not** retry by default: an unhandled exception marks a job
+`failed` permanently. Every task therefore used to lose its work to a single
+network blip — an Anthropic rate limit, a restarting embedder, a Postgres
+failover — with no second attempt.
+
+Tasks that depend on a network service now carry `retry=TRANSIENT_RETRY`
+(`library.jobs`): five attempts with exponential backoff (~4s, 8s, 16s, 32s, so
+roughly a minute in total), which covers a container restart or a failover
+window without keeping a genuinely broken job alive for hours.
+
+`retry_exceptions` is an **allowlist**, and that direction is the design. A
+denylist would retry anything not yet thought of, so a deterministic bug — a
+`ValueError`, an unsupported MIME type, a parse failure, a pydantic
+`ValidationError` — would burn all five attempts and land in `failed` a minute
+later with the identical error. With an allowlist those fail on the first
+attempt, which is faster *and* more truthful. The allowlist is: Anthropic
+`APIConnectionError`/`APITimeoutError`/`RateLimitError`/`InternalServerError`
+(deliberately not `APIStatusError`, which would include 4xx), `httpx.TransportError`
+(not `HTTPStatusError`, which is not a subclass of it), SQLAlchemy
+`OperationalError` and `InterfaceError`, and `EmbeddingError`.
+
+`DBAPIError` is deliberately **excluded** despite being the obvious "database
+problem" class: it is the parent of `IntegrityError`, `DataError`,
+`ProgrammingError` and `NotSupportedError`, so allowlisting it would retry
+constraint violations and SQL bugs — exactly what an allowlist exists to
+prevent.
+
+Two groups do not retry:
+
+- **`generate_thumbnail`** — a deterministic render of one file. A failure means
+  a bad file, not bad luck, so retrying repeats the same outcome. It is
+  best-effort by design.
+- **The four `@job_app.periodic` tasks** (`sweep_stalled_jobs`,
+  `backfill_budget_skipped`, `purge_deleted_documents`, `poll_email_inbox`) —
+  the next scheduled tick *is* the retry. `poll_email_inbox` additionally carries
+  both `queueing_lock` and `lock`, so a retry would be a second recovery
+  mechanism racing the schedule for no gain.
+
+Every task in the module is pinned to an explicit decision by
+`tests/test_jobs_pipeline.py::test_retry_policy_per_task`, and a new task with no
+entry fails `test_retry_policy_per_task_is_complete`. That matters because
+Procrastinate's silent default makes an *omitted* decision indistinguishable
+from a considered "no".
+
+### 1.6.1 Deferrals that fail before the job exists
+
+A retry policy cannot help when the `defer_async` call itself fails — there is
+no job to retry. Five follow-up jobs are deferred best-effort after their
+document's own work has committed (thumbnail, matter classification, series
+insight, series autocontinue, semantic-group eval), and a queue error there must
+never strand an already-processed document in `failed`.
+
+Previously each of those logged a warning and moved on, which meant the
+observable result was a document that quietly never got its thumbnail or its
+Smart Group membership, with nothing on the document to say why. They now also
+record a **`job_defer_failed`** ingestion event carrying the task name and the
+error, so the loss appears on the document's own timeline and is queryable.
+Recording the event is itself guarded — noting a loss must not become a larger
+one by failing the document.

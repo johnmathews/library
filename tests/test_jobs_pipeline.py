@@ -5,9 +5,12 @@ from collections.abc import AsyncIterator, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import anthropic
+import httpx
 import pytest
 from procrastinate.testing import InMemoryConnector
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -17,6 +20,7 @@ from sqlalchemy.ext.asyncio import (
 
 from library import jobs
 from library.config import get_settings
+from library.embedding import EmbeddingError
 from library.extraction import apply as extraction_apply
 from library.extraction.extractor import PROMPT_VERSION as EXTRACTION_PROMPT_VERSION
 from library.extraction.extractor import CallUsage, ExtractionOutcome
@@ -38,9 +42,11 @@ from library.models import (
     DocumentSource,
     DocumentStatus,
     IngestionEvent,
+    ReviewStatus,
 )
 from library.ocr import router as ocr_router
 from library.ocr.base import OcrResult
+from library.ocr.router import UnsupportedOcrInputError
 from library.storage import path_for, store
 
 pytestmark = pytest.mark.integration
@@ -121,6 +127,110 @@ async def get_status_and_events(
         return document.status, [(event.event, event.detail) for event in events]
 
 
+# Every task in library.jobs, mapped to whether it retries transient failures.
+# This table IS the record of the judgement call — the reason column is why, not
+# decoration. A task added without an entry fails
+# test_retry_policy_per_task_is_complete, so the decision cannot be skipped.
+RETRY_POLICY: dict[str, tuple[bool, str]] = {
+    # Retry: each depends on a network service (Anthropic, the embedder, the DB)
+    # and each is idempotent, so a re-run after a blip is safe and cheap.
+    "library.jobs.process_document": (True, "whole pipeline; every stage hook is idempotent"),
+    "library.jobs.extract_document": (True, "Anthropic call; already_extracted guards re-spend"),
+    "library.jobs.markdown_document": (True, "Anthropic vision call; re-runnable"),
+    "library.jobs.classify_document_matters": (True, "Anthropic call; prompt-version guarded"),
+    "library.jobs.generate_series_insight": (True, "Anthropic call; overwrites its cached row"),
+    "library.jobs.embed_document": (True, "embedder HTTP; deletes and re-inserts chunks"),
+    "library.jobs.evaluate_series_autocontinue": (True, "DB work; skips already-proposed docs"),
+    "library.jobs.evaluate_semantic_groups": (True, "embedder + DB; membership is idempotent"),
+    "library.jobs.ingest_held_email": (True, "human-triggered override; losing it is visible"),
+    # No retry, deliberately.
+    "library.jobs.generate_thumbnail": (
+        False,
+        "deterministic render of one file: a failure means a bad file, not bad "
+        "luck, so retrying burns attempts on the same outcome. Best-effort by "
+        "design — the defer failure is already recorded as an event.",
+    ),
+    "library.jobs.sweep_stalled_jobs": (False, "periodic: the next tick is the retry"),
+    "library.jobs.backfill_budget_skipped": (False, "periodic: the next tick is the retry"),
+    "library.jobs.purge_deleted_documents": (False, "periodic: the next tick is the retry"),
+    "library.jobs.poll_email_inbox": (
+        False,
+        "periodic: the next tick is the retry. Also the one task carrying both "
+        "queueing_lock and lock, so a retry would be a second recovery "
+        "mechanism racing the schedule for no gain.",
+    ),
+}
+
+
+def test_retry_policy_per_task_is_complete() -> None:
+    """Every registered task must carry an explicit retry decision.
+
+    Not a coverage formality: Procrastinate silently defaults to no retry, so an
+    omitted decision is indistinguishable from a considered "no" and a new
+    network-dependent task would quietly lose its work to any blip.
+    """
+    # Procrastinate registers its own builtins (remove_old_jobs, plus a
+    # "builtin:"-prefixed alias); their retry policy is upstream's business.
+    # Matching on our own namespace still catches any new library task.
+    registered = {name for name in job_app.tasks if name.startswith("library.jobs.")}
+    assert registered == set(RETRY_POLICY), (
+        "tasks missing a retry decision: "
+        f"{sorted(registered - set(RETRY_POLICY))}; "
+        f"stale entries: {sorted(set(RETRY_POLICY) - registered)}"
+    )
+
+
+@pytest.mark.parametrize("task_name", sorted(RETRY_POLICY))
+def test_retry_policy_per_task(task_name: str) -> None:
+    """Each task's configured retry matches its recorded decision."""
+    should_retry, reason = RETRY_POLICY[task_name]
+    strategy = job_app.tasks[task_name].retry_strategy
+
+    if not should_retry:
+        assert strategy is None, f"{task_name} should not retry ({reason})"
+        return
+
+    assert strategy is not None, f"{task_name} should retry ({reason})"
+    assert strategy is jobs.TRANSIENT_RETRY, "retrying tasks share one policy"
+    assert strategy.max_attempts == 5
+    assert strategy.exponential_wait == 4  # backoff, not a tight loop
+
+
+def test_transient_allowlist_excludes_deterministic_failures() -> None:
+    """The allowlist must never admit an error that retrying cannot fix.
+
+    The direction matters: a denylist would retry anything unanticipated, so a
+    plain bug would burn five attempts and reach `failed` a minute later with
+    the same message. These are the classes that must fail on attempt one.
+    """
+    retried = jobs.TRANSIENT_EXCEPTIONS
+
+    for deterministic in (
+        ValueError,
+        TypeError,
+        KeyError,
+        UnsupportedOcrInputError,
+        IntegrityError,  # a constraint violation is not bad luck
+        httpx.HTTPStatusError,  # a 4xx response; NOT a TransportError subclass
+        anthropic.BadRequestError,  # 400: malformed request
+        anthropic.AuthenticationError,  # 401: the key is wrong, not flaky
+    ):
+        assert not issubclass(deterministic, retried), (
+            f"{deterministic.__name__} is deterministic and must not be retried"
+        )
+
+    # And the transient ones genuinely are covered.
+    for transient in (
+        anthropic.RateLimitError,
+        anthropic.InternalServerError,
+        httpx.ConnectError,
+        httpx.ReadTimeout,
+        EmbeddingError,
+        OperationalError,
+    ):
+        assert issubclass(transient, retried), f"{transient.__name__} should be retried"
+
+
 async def test_pipeline_reaches_indexed_with_events(
     session_factory: async_sessionmaker[AsyncSession],
     fake_router: OcrResult,
@@ -183,6 +293,93 @@ async def test_ocr_stage_persists_results_and_event(
         "pages": 2,
         "characters": len("OCR says hello"),
     }
+
+
+@pytest.fixture
+def textless_router(data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> OcrResult:
+    """An OCR router that finds no text at all (a blank or unreadable scan)."""
+    result = OcrResult(
+        text="",
+        confidence=None,
+        searchable_pdf=None,
+        engine="tesseract",
+        pages=1,
+    )
+    monkeypatch.setattr(ocr_router, "run_ocr", lambda *a, **k: result)
+    return result
+
+
+async def test_textless_document_reaches_indexed_but_is_flagged_for_review(
+    session_factory: async_sessionmaker[AsyncSession],
+    textless_router: OcrResult,
+    job_connector: InMemoryConnector,
+) -> None:
+    """No text must not mean silent success.
+
+    This is the coverage hole the flag closes: extraction is disabled in this
+    suite, so it returns before ``_apply_validation`` ever runs — exactly as it
+    does in production for a textless document, which takes the
+    ``ExtractionSkipped("input_unusable")`` branch. Relying on extraction's
+    validation would leave the one document that most needs flagging unflagged.
+    """
+    document_id = await make_document(session_factory, "pipeline-textless")
+
+    await advance_pipeline(session_factory, document_id)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        # The invariant holds: no text does not stop a document being indexed.
+        assert document.status == DocumentStatus.INDEXED
+        assert document.ocr_text is None
+        # But it is now in the review queue with a named rule.
+        assert document.review_status is ReviewStatus.NEEDS_REVIEW
+        rules = [finding["rule"] for finding in document.extra["validation"]["findings"]]
+        assert rules == ["no_text_extracted"]
+
+    _, events = await get_status_and_events(session_factory, document_id)
+    empty = [detail for name, detail in events if name == "ocr_empty"]
+    assert len(empty) == 1
+    assert empty[0] == {"engine": "tesseract", "pages": 1}
+
+
+async def test_textless_flag_does_not_clobber_existing_validation_on_resume(
+    session_factory: async_sessionmaker[AsyncSession],
+    textless_router: OcrResult,
+    job_connector: InMemoryConnector,
+) -> None:
+    """A resume re-enters the OCR hook; richer findings must survive it.
+
+    The OCR-stage flag is a floor, not the authority. A document whose
+    extraction already ran full validation carries a complete finding set, and
+    re-running OCR must not replace it with this single finding.
+    """
+    document_id = await make_document(session_factory, "pipeline-textless-resume")
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        document.extra = {
+            **document.extra,
+            "validation": {
+                "prompt_version": "pinned",
+                "findings": [
+                    {"rule": "empty_extraction", "field": None, "severity": "warn", "message": "x"}
+                ],
+                "validated_at": "2026-07-01T00:00:00+00:00",
+            },
+        }
+        await session.commit()
+
+    await advance_pipeline(session_factory, document_id)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        rules = [finding["rule"] for finding in document.extra["validation"]["findings"]]
+        assert rules == ["empty_extraction"]  # preserved, not overwritten
+
+    _, events = await get_status_and_events(session_factory, document_id)
+    assert [name for name, _ in events if name == "ocr_empty"] == []
 
 
 async def test_pipeline_defers_thumbnail_job_after_ocr(
@@ -829,6 +1026,15 @@ async def test_thumbnail_defer_failure_does_not_fail_document(
         document = await session.get(Document, document_id)
         assert document is not None
         assert document.status is DocumentStatus.INDEXED
+
+    # ...and the loss is durable, not just a log line. The retry policy cannot
+    # help here — the job was never queued, so there is nothing to retry — so
+    # the document's own timeline is the only place this can surface.
+    _, events = await get_status_and_events(session_factory, document_id)
+    lost = [detail for name, detail in events if name == "job_defer_failed"]
+    assert len(lost) == 1
+    assert lost[0]["task"] == "thumbnail"
+    assert "transient queue blip" in lost[0]["error"]
 
 
 async def test_born_digital_markdown_reaches_indexed_with_page_and_chunks(

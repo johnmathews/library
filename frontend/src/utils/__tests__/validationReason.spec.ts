@@ -54,6 +54,25 @@ describe('resolveReviewReason', () => {
     expect(unsure.detail).toBe('the extractor was unsure: two candidate totals')
   })
 
+  it('titles the textless and decoration rules rather than falling back', () => {
+    // A textless document still reaches `indexed`, so the review queue is the
+    // only place it surfaces — a generic "Needs a quick check" would tell the
+    // user nothing about why it cannot be found by search.
+    const textless = resolveReviewReason(
+      finding('no_text_extracted', 'no text could be extracted from this document, so it cannot be found by search'),
+    )
+    expect(textless.title).toBe('No text could be read')
+    expect(textless.detail).toContain('cannot be found by search')
+
+    // decoration_image has fired in validation.py since the thin-OCR work but
+    // had no title here, so it rendered as the generic fallback.
+    const decoration = resolveReviewReason(
+      finding('decoration_image', 'this image produced almost no text and is likely a logo'),
+    )
+    expect(decoration.title).toBe('Looks like a logo, not a document')
+    expect(decoration.title).not.toBe('Needs a quick check')
+  })
+
   it('titles the email-labeller ambiguity flag', () => {
     const ambiguous = resolveReviewReason(
       finding('email_item_ambiguous', 'the email labeller flagged this item as possible noise'),

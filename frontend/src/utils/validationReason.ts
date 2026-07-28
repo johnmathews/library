@@ -60,6 +60,10 @@ const RULE_TITLES: Record<string, string> = {
   missing_sender: 'Sender not identified',
   email_attachments_dropped: 'Some email attachments could not be added',
   email_item_ambiguous: 'Might not be a real document',
+  no_text_extracted: 'No text could be read',
+  // decoration_image has existed in validation.py since the thin-OCR work but
+  // was never given a title here, so it rendered as the generic fallback.
+  decoration_image: 'Looks like a logo, not a document',
 }
 
 const GENERIC_TITLE = 'Needs a quick check'
