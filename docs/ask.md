@@ -458,11 +458,28 @@ below are enforced regardless of what the model does.
 
 ### Editable fields
 
-A safe subset of the document metadata — **title, summary, recipient, sender,
-kind, tags, projects, document/due/expiry dates, amount, currency, language**
-(`_WRITABLE_FIELDS`) — the **same surface as `PATCH /api/documents/{id}`**
-([api.md §1.5](api.md)); status/review fields are deliberately excluded. Only
-the fields supplied change; `tags` and `projects` are full-replacement lists.
+**Exactly the fields of `DocumentUpdate`** — title, summary, recipient, sender,
+kind, tags, projects, matters, document/due/expiry dates, amount, currency,
+language — because `_WRITABLE_FIELDS` is now *derived* as
+`tuple(DocumentUpdate.model_fields)` rather than hand-listed. This is the
+**same surface as `PATCH /api/documents/{id}`** ([api.md §1.5](api.md)), which is
+what makes deriving correct rather than merely convenient: `DocumentUpdate` is
+the specification, and it contains no status or review fields to exclude.
+
+The hand-written list this replaced had drifted: `matters` was missing, so an Ask
+write of it was dropped on the way to `DocumentUpdate` and the tool still
+reported `status: updated` — a write that looked like it worked and changed
+nothing. Three surfaces have to agree for a field to be usable, and each has its
+own guard in `tests/test_ask_document_write.py`: the writable set (derived), the
+tool's `input_schema` (**not** derivable — each property carries a hand-authored
+description, so a field missing here is invisible to the model), and
+`_preview_current` (a relationship without a branch there renders as
+`<Matter object at 0x...>` in the preview the user is asked to approve, because
+tool output is serialised with `json.dumps(..., default=str)` and so fails
+silently rather than loudly).
+
+Only the fields supplied change; `tags`, `projects` and `matters` are
+full-replacement lists.
 Edits are recorded with `edited_by="ask"` provenance and the standard
 `user_edited` ingestion event (so an Ask edit locks the field against
 re-extraction exactly like a UI edit, and is auditable as having come from Ask).

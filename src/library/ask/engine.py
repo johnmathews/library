@@ -218,6 +218,11 @@ TOOLS: list[dict[str, Any]] = [
                     "items": {"type": "string"},
                     "description": "Full replacement list of project slugs/names.",
                 },
+                "matters": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Full replacement list of business-matter slugs/names.",
+                },
                 "document_date": {"type": "string", "description": "ISO date (YYYY-MM-DD)."},
                 "due_date": {"type": "string", "description": "ISO date (YYYY-MM-DD)."},
                 "expiry_date": {"type": "string", "description": "ISO date (YYYY-MM-DD)."},
@@ -243,23 +248,19 @@ TOOLS: list[dict[str, Any]] = [
     },
 ]
 
-# Editable metadata fields the write tool forwards to DocumentUpdate. A safe
-# subset of DocumentUpdate (no status/review fields) that mirrors the PATCH body.
-_WRITABLE_FIELDS: tuple[str, ...] = (
-    "title",
-    "summary",
-    "recipient",
-    "sender",
-    "kind_slug",
-    "tags",
-    "projects",
-    "document_date",
-    "due_date",
-    "expiry_date",
-    "amount_total",
-    "currency",
-    "language",
-)
+# Editable metadata fields the write tool forwards to DocumentUpdate.
+#
+# Derived, not listed. docs/ask.md already documents this as "the same surface as
+# PATCH /api/documents/{id}", so DocumentUpdate *is* the specification and any
+# hand-written copy can only drift from it — as it had: `matters` was missing, so
+# an Ask write of {"matters": [...]} was silently dropped from `fields` here and
+# reported as a success with nothing changed.
+#
+# The old comment called this "a safe subset (no status/review fields)", which
+# was misleading: DocumentUpdate contains no status or review fields at all, so
+# there is nothing to subset. Every field on it is user-editable by definition —
+# that is what makes deriving safe rather than merely convenient.
+_WRITABLE_FIELDS: tuple[str, ...] = tuple(DocumentUpdate.model_fields)
 
 
 @dataclass(frozen=True, slots=True)
@@ -457,6 +458,12 @@ def _preview_current(document: Document, field: str) -> Any:
         return sorted(tag.slug for tag in document.tags)
     if field == "projects":
         return sorted(project.slug for project in document.projects)
+    if field == "matters":
+        return sorted(matter.slug for matter in document.matters)
+    # Scalars fall through. Any *relationship* field must get a branch above:
+    # tool output is serialised with json.dumps(..., default=str), so a bare ORM
+    # object does not fail loudly — it renders as "<Matter object at 0x...>" in
+    # the preview the user is asked to approve.
     return getattr(document, field, None)
 
 
