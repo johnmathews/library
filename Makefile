@@ -1,4 +1,4 @@
-.PHONY: dev up down test lint lint-actions fmt deploy deploy-status
+.PHONY: dev up down test lint lint-actions check-docs fmt deploy deploy-status
 
 dev:
 	uv run uvicorn library.main:app --reload --host 0.0.0.0 --port 8000
@@ -26,6 +26,12 @@ test:
 
 lint:
 	uv run ruff check . && uv run ruff format --check . && $(MAKE) lint-actions
+
+# Documentation freshness. Not part of `lint`: it reds today's tree by design
+# until W27's verify-and-stamp sweep lands, and a `make lint` that always fails
+# is a `make lint` nobody runs.
+check-docs:
+	uv run python scripts/check_docs.py
 
 # Lint the workflow files. Worth its own target because this is the one check
 # that CANNOT be enforced from inside CI for the file it matters most for: an
