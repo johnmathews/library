@@ -1,4 +1,4 @@
-.PHONY: dev up down test lint fmt deploy deploy-status
+.PHONY: dev up down test lint lint-actions fmt deploy deploy-status
 
 dev:
 	uv run uvicorn library.main:app --reload --host 0.0.0.0 --port 8000
@@ -25,7 +25,14 @@ test:
 	uv run coverage run -m pytest && uv run coverage report
 
 lint:
-	uv run ruff check . && uv run ruff format --check .
+	uv run ruff check . && uv run ruff format --check . && $(MAKE) lint-actions
+
+# Lint the workflow files. Worth its own target because this is the one check
+# that CANNOT be enforced from inside CI for the file it matters most for: an
+# unparseable ci.yml means no job in ci.yml runs, so its own lint step never
+# executes. Catching it locally is the only thing that works.
+lint-actions:
+	uv run actionlint -shellcheck= -pyflakes= .github/workflows/*.yml
 
 fmt:
 	uv run ruff check --fix . && uv run ruff format .

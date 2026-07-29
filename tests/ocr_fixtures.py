@@ -6,6 +6,11 @@ image-only PDFs are a Pillow-rendered image wrapped with img2pdf (exactly how
 a scanner-app export looks to the pipeline); photos are Pillow-rendered
 JPEG/PNG/TIFF. Pillow >= 10.1's ``ImageFont.load_default(size=...)`` provides
 an embedded scalable font, so rendering needs no system fonts.
+
+That remains true of **this** repository. The characterisation suite
+(``tests/golden_corpus.py``) does use 15 real documents, but they are *fetched*
+from a private sibling repo into ``samples/`` rather than committed here — see
+that module and ``docs/ingestion.md``.
 """
 
 import io

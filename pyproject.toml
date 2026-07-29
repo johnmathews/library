@@ -56,6 +56,12 @@ dev = [
     "httpx>=0.28",
     "ruff>=0.11",
     "testcontainers[postgres]>=4.14.2",
+    # Lints .github/workflows/**: expression contexts, action versions, shell.
+    # Added after a `secrets` reference in a step-level `if` — not an available
+    # context there — made the whole workflow unparseable. That mode is nastier
+    # than a red check: NO job runs, so every check is simply absent rather than
+    # failing, and nothing in the repo read the file to say why.
+    "actionlint-py>=1.7.7",
 ]
 
 [project.scripts]
@@ -95,6 +101,7 @@ testpaths = ["tests"]
 markers = [
     "integration: tests that need Docker (ephemeral Postgres via testcontainers)",
     "slow_ocr: real OCR engine runs (tesseract/ocrmypdf binaries, RapidOCR model download)",
+    "golden_extraction: characterisation of extraction over the real corpus, replayed from cassettes (no API key, no DB)",
 ]
 filterwarnings = [
     # Starlette's TestClient warns that driving it via httpx is deprecated. The
