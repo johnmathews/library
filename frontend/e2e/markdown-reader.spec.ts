@@ -9,11 +9,12 @@
  * cross-project duplicate path) and the reader assertion is unambiguous.
  */
 import { expect, test, type Page } from '@playwright/test'
+
+import { requireStack } from './fixtures/require-stack'
 import { readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const BASE_URL = process.env.E2E_BASE_URL
 const USERNAME = process.env.E2E_USERNAME ?? 'e2e'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-password-123'
 const FIXTURE = path.join(
@@ -22,10 +23,7 @@ const FIXTURE = path.join(
   'note-fixture.md',
 )
 
-test.skip(
-  !BASE_URL,
-  'E2E_BASE_URL is not set — start the compose stack and vite preview first (docs/frontend.md §1.5)',
-)
+requireStack()
 
 async function signIn(page: Page): Promise<void> {
   await page.goto('/')

@@ -8,18 +8,16 @@
  * affordance, the full-width detail view, and export/share. Uses a
  * freshly-created authored series so it does not depend on seeded emergent
  * series (the single upload fixture is too sparse to form one). Runs in all
- * three matrix projects; skips itself entirely when E2E_BASE_URL is unset.
+ * three matrix projects; gated by requireStack(): skips locally, fails in CI.
  */
 import { expect, test, type Page } from '@playwright/test'
 
-const BASE_URL = process.env.E2E_BASE_URL
+import { requireStack } from './fixtures/require-stack'
+
 const USERNAME = process.env.E2E_USERNAME ?? 'e2e'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-password-123'
 
-test.skip(
-  !BASE_URL,
-  'E2E_BASE_URL is not set — start the compose stack and vite preview first (docs/frontend.md §1.5)',
-)
+requireStack()
 
 async function signIn(page: Page): Promise<void> {
   await page.goto('/')

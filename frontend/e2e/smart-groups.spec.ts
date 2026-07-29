@@ -15,14 +15,12 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 
-const BASE_URL = process.env.E2E_BASE_URL
+import { requireStack } from './fixtures/require-stack'
+
 const USERNAME = process.env.E2E_USERNAME ?? 'e2e'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-password-123'
 
-test.skip(
-  !BASE_URL,
-  'E2E_BASE_URL is not set — start the compose stack and vite preview first (docs/frontend.md §1.5)',
-)
+requireStack()
 
 // This journey is gated behind an explicit opt-in and does NOT run in the CI
 // e2e gate. It depends on the async OCR → chunk → embed → FTS pipeline having

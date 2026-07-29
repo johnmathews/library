@@ -66,7 +66,9 @@ const describedBy = computed(() => {
 </script>
 
 <template>
-  <fieldset role="group" :aria-describedby="describedBy">
+  <!-- No role="group": <fieldset> already has it, and unlike role="list" on a
+       <ul> there is no CSS that strips the implicit semantics. -->
+  <fieldset :aria-describedby="describedBy">
     <legend :class="props.hideLegend ? 'sr-only' : 'text-sm font-semibold mb-2'">{{ props.legend }}</legend>
     <p
       v-if="props.hint"

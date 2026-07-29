@@ -639,7 +639,76 @@ the toggle. The user's choice is persisted by `useDark` (localStorage).
   scans `dist/` and fails if any file name or text content reintroduces
   `govuk-`, GDS Transport, or crown/crest references (guarding against a partial
   reskin regression).
-- `npm run test:e2e` — Playwright against the real stack. Five projects: desktop Chromium, mobile WebKit (375 px, iPhone 14), tablet WebKit (iPad gen 11), **desktop Firefox**, and **desktop WebKit** (Safari). The chromium/mobile/tablet projects run the full suite; the two desktop-engine projects are **scoped (via `testMatch`) to `e2e/pdf-preview.spec.ts` only** — they exist to prove the self-rendered PDF preview behaves identically across all three engines, without forcing the rest of the suite onto Firefox. That spec proves canvases paint and scrolling reveals page 2 on each engine. Recent flows have their own specs in `frontend/e2e/`: **`markdown-reader`** (upload a `.md` → the reader renders), **`projects`** (create → assign via the token multiselect → see it on the `/projects` index → filter the dashboard by it), **`notes`** (author a note → edit in place → restore a version), **`topics-readonly`** (topics show as read-only badges with no editor), **`admin-views`** (a normal user sees no Admin link and is redirected from `/admin`; an admin reaches `/admin` and the four tabs render), **`tile-border-colour`** (sets a per-kind override and asserts the tile's *computed* border colour — the cascade-layer regression guard), **`review-queue`** (a future-date edit flags a doc `needs_review`, then the queue is entered, advanced, and exited), and **`held-emails`** (navigation + empty state only — the e2e stack has no IMAP, so the hold flows live in vitest + backend tests). The admin spec needs a second admin login (`E2E_ADMIN_USERNAME`/`E2E_ADMIN_PASSWORD`; CI creates an `e2e-admin --admin` user). All self-skip without `E2E_BASE_URL` and run in CI's e2e job. (CI installs all three engines — `chromium firefox webkit` — in `.github/workflows/ci.yml`.)
+- `npm run test:e2e` — Playwright against the real stack. Five projects: desktop Chromium, mobile WebKit (375 px, iPhone 14), tablet WebKit (iPad gen 11), **desktop Firefox**, and **desktop WebKit** (Safari). The chromium/mobile/tablet projects run the full suite; the two desktop-engine projects are **scoped (via `testMatch`) to `e2e/pdf-preview.spec.ts` only** — they exist to prove the self-rendered PDF preview behaves identically across all three engines, without forcing the rest of the suite onto Firefox. That spec proves canvases paint and scrolling reveals page 2 on each engine. Recent flows have their own specs in `frontend/e2e/`: **`markdown-reader`** (upload a `.md` → the reader renders), **`projects`** (create → assign via the token multiselect → see it on the `/projects` index → filter the dashboard by it), **`notes`** (author a note → edit in place → restore a version), **`topics-readonly`** (topics show as read-only badges with no editor), **`admin-views`** (a normal user sees no Admin link and is redirected from `/admin`; an admin reaches `/admin` and the four tabs render), **`tile-border-colour`** (sets a per-kind override and asserts the tile's *computed* border colour — the cascade-layer regression guard), **`review-queue`** (a future-date edit flags a doc `needs_review`, then the queue is entered, advanced, and exited), and **`held-emails`** (navigation + empty state only — the e2e stack has no IMAP, so the hold flows live in vitest + backend tests). The admin spec needs a second admin login (`E2E_ADMIN_USERNAME`/`E2E_ADMIN_PASSWORD`; CI creates an `e2e-admin --admin` user). Every spec is gated by `requireStack()` (`e2e/fixtures/require-stack.ts`), which **skips locally and throws in CI** — see §1.7.1. (CI installs all three engines — `chromium firefox webkit` — in `.github/workflows/ci.yml`.)
+
+### 1.7.1 The e2e job cannot pass without running
+
+`playwright test` **exits 0 when every test skips**, and there is no
+`--fail-on-skip`. Every spec used to open with
+`test.skip(!BASE_URL, 'E2E_BASE_URL is not set …')`, so deleting `E2E_BASE_URL`
+from the workflow made all 19 specs skip and the job report **green having
+launched nothing**. Nothing distinguished "the stack was fine and everything
+passed" from "the stack was never there".
+
+Two independent guards now, because they fail in different ways:
+
+1. **`requireStack()`** — `throw` when `CI` is set and `E2E_BASE_URL` is not;
+   `test.skip` otherwise. The local behaviour is deliberately unchanged: running
+   `npm run test:e2e` without a stack still skips cleanly, which is the whole
+   reason the original gate existed.
+2. **`scripts/assert-e2e-ran.mjs`** — parses the Playwright JSON report and fails
+   when fewer than 40 tests executed, or when any skip reason mentions
+   `E2E_BASE_URL`. Not redundant: a reporter change, a `--grep` that matches
+   nothing, a project-filter typo, or a spec that fails to collect all produce a
+   green run with too few tests and none of them trip a throw at module scope.
+   A missing or unparseable report exits 2 — distinct from 1, because "no report"
+   and "nothing wrong" must not share an exit code.
+
+CI runs **`npm run test:e2e:ci`**, which chains the assertion; local
+`npm run test:e2e` is untouched. The floor of 40 is set well below a real run's
+count so adding or removing a test does not red it — it answers "did the suite
+run at all", not "how many tests are there".
+
+Demonstrated rather than assumed: with `CI=1` and no `E2E_BASE_URL` the run exits
+**1**; without `CI` it reports **32 skipped** and exits 0.
+
+### 1.7.2 Accessibility lint
+
+`eslint-plugin-vuejs-accessibility` (`flat/recommended`) runs as part of
+`npm run lint`, which CI already gates. The app had 172 `aria-*` attributes, 54
+roles and a native `<dialog>` with focus restore, and **nothing protected any of
+it**.
+
+Vue's own `flat/essential` is deliberately **kept** rather than upgraded to
+`flat/recommended`, which the plan proposed as "near-zero cost". Measured, it is
+not: `flat/recommended` adds **1,598 pure-formatting violations**
+(`vue/html-indent`, `vue/max-attributes-per-line`, …) against **55** real a11y
+ones. That is an enormous diff for no reader benefit, and it would bury the
+signal the a11y plugin exists to surface. The formatting upgrade is a separate
+decision.
+
+Two real defects were fixed:
+
+- **`ThreadActionsMenu.vue`** announced `role="menu"` with `role="menuitem"`
+  children and implemented none of the ARIA menu keyboard contract — no arrow
+  keys, no roving tabindex, no focus-in on open. The roles are removed, so it now
+  announces as what it is: two ordinary buttons in a container, Tab-reachable and
+  Enter/Space-operable. (`AppPopover.vue` implements the contract properly and is
+  the model if the roles are ever wanted back.)
+- **`AppSidebar.vue`** made the persistent wordmark an `<h1>`, so every
+  authenticated page had two competing top-level headings alongside
+  `PageHeader`'s. It is a `<p>` now, with identical classes — a screen-reader
+  heading list no longer leads with "LIBRARY" instead of the page title.
+
+The remaining rules are **off with a named exit** in `eslint.config.ts`, matching
+the mypy ratchet's shape: the gate is real from its first run for everything
+else, and new code cannot regress the rules that are on. One is off permanently
+rather than as a ratchet, and the reason is worth knowing before someone "fixes"
+it: **`no-redundant-roles` fires on `role="list"` on a `<ul>`, and that role is
+load-bearing here** — Tailwind preflight sets `list-style: none`, and Safari drops
+list semantics from an unmarkered list, so removing the role to satisfy the
+linter would silently cost VoiceOver users the list. The genuinely redundant case
+(`<fieldset role="group">`) was fixed instead.
 
 ## 1.8 What did not change
 

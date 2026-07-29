@@ -12,7 +12,14 @@ describe('AppDateInput', () => {
   it('renders three labelled fields following the day/month/year pattern', () => {
     const wrapper = mountDateInput()
 
-    expect(wrapper.find('fieldset[role="group"]').exists()).toBe(true)
+    // A <fieldset>, asserted without role="group": the element carries that role
+    // implicitly, so the explicit attribute was redundant (and flagged by
+    // vuejs-accessibility/no-redundant-roles). Asserting the attribute pinned the
+    // mechanism; asserting the element pins the grouping semantics that actually
+    // matter to a screen reader.
+    const fieldset = wrapper.find('fieldset')
+    expect(fieldset.exists()).toBe(true)
+    expect(fieldset.attributes('role')).toBeUndefined()
     expect(wrapper.find('#received').exists()).toBe(true)
 
     const inputs = wrapper.findAll('input')

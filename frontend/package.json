@@ -13,7 +13,8 @@
     "build-only": "vite build",
     "check:assets": "node scripts/check-assets.mjs",
     "type-check": "vue-tsc --build",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "test:e2e:ci": "playwright test && node scripts/assert-e2e-ran.mjs e2e-report.json"
   },
   "dependencies": {
     "@vueuse/core": "^12.5.0",
@@ -45,6 +46,7 @@
     "@vue/tsconfig": "^0.9.1",
     "eslint": "^10.4.1",
     "eslint-plugin-vue": "^10.9.2",
+    "eslint-plugin-vuejs-accessibility": "^2.5.0",
     "jiti": "^2.7.0",
     "jsdom": "^29.0.2",
     "npm-run-all2": "^8.0.4",

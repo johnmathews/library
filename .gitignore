@@ -18,6 +18,9 @@ credentials.json
 # pytest JUnit report (generated; feeds scripts/check_engine_skips.py)
 /pytest-report.xml
 
+# Playwright JSON report (generated; feeds frontend/scripts/assert-e2e-ran.mjs)
+/frontend/e2e-report.json
+
 # Visual brainstorming companion
 .superpowers/
 
