@@ -205,6 +205,47 @@ jobs:
           header: backend-coverage
           path: coverage.md
 
+  # Documentation freshness. Its own job because it needs `fetch-depth: 0` — the
+  # whole gate is comparative (`git log` per file), and under checkout's default
+  # depth-1 every file reports HEAD's date, so every doc looks freshly touched and
+  # the gate passes everything forever. Verified against a real shallow clone: the
+  # three docs sampled all reported the same date.
+  #
+  # No path filter and no `needs: changes`, deliberately: the check is over repo
+  # STATE, not the diff. A doc goes stale because the code it describes moved,
+  # which is a commit that touches no docs at all.
+  #
+  # A RATCHET, not continue-on-error. The gate legitimately reds today's tree — 7
+  # unstamped docs and 8 stamped-but-unverified — and W27 is the sweep that clears
+  # it. But `continue-on-error` would make this a permanently red check, and a
+  # check that is always red trains everyone to ignore it. With a baseline it is a
+  # real gate from its first run: documentation cannot get WORSE, and the failure
+  # is actionable ("stamp the doc you touched").
+  #
+  # --max-violations also fails when the count comes in BELOW the baseline, so an
+  # improvement must be locked in by lowering the number here rather than leaving
+  # slack for the next regression to hide in. W27 drives it to 0 and adds this job
+  # to ci-gate's needs.
+  #
+  # Not in ci-gate's needs yet, for the reason the CI-gate laws give: never
+  # require a check that cannot pass — it would block every merge including the
+  # PR that fixes it.
+  docs-stamps:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+      - name: Check documentation stamps
+        # Baseline measured on this tree: 7 no-stamp + 8 missing-verified. Lower
+        # it as docs get stamped; W27 takes it to 0.
+        run: uv run python scripts/check_docs.py --max-violations 15
+
   frontend:
     needs: changes
     # Always on main (coverage baked into the promoted image); on branches/PRs
