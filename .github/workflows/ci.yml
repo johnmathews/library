@@ -215,15 +215,25 @@ jobs:
   # STATE, not the diff. A doc goes stale because the code it describes moved,
   # which is a commit that touches no docs at all.
   #
-  # Deliberately NOT in ci-gate's needs yet. It reds today's tree by design — 7
-  # unstamped docs and 8 stamped-but-unverified — and W27 is the verify-and-stamp
-  # sweep that clears it. Requiring a check that cannot pass would block every
-  # merge including the PR that fixes it; W27 adds the wiring once it exits 0.
+  # A RATCHET, not continue-on-error. The gate legitimately reds today's tree — 7
+  # unstamped docs and 8 stamped-but-unverified — and W27 is the sweep that clears
+  # it. But `continue-on-error` would make this a permanently red check, and a
+  # check that is always red trains everyone to ignore it. With a baseline it is a
+  # real gate from its first run: documentation cannot get WORSE, and the failure
+  # is actionable ("stamp the doc you touched").
+  #
+  # --max-violations also fails when the count comes in BELOW the baseline, so an
+  # improvement must be locked in by lowering the number here rather than leaving
+  # slack for the next regression to hide in. W27 drives it to 0 and adds this job
+  # to ci-gate's needs.
+  #
+  # Not in ci-gate's needs yet, for the reason the CI-gate laws give: never
+  # require a check that cannot pass — it would block every merge including the
+  # PR that fixes it.
   docs-stamps:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-    continue-on-error: true # until W27's sweep lands; see above
     steps:
       - uses: actions/checkout@v7
         with:
@@ -232,7 +242,9 @@ jobs:
         with:
           enable-cache: true
       - name: Check documentation stamps
-        run: uv run python scripts/check_docs.py
+        # Baseline measured on this tree: 7 no-stamp + 8 missing-verified. Lower
+        # it as docs get stamped; W27 takes it to 0.
+        run: uv run python scripts/check_docs.py --max-violations 15
 
   frontend:
     needs: changes

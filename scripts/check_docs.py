@@ -275,6 +275,24 @@ def _git(*args: str) -> str:
     ).stdout.strip()
 
 
+def interpret_shallow(rev_parse_output: str, shallow_marker_exists: bool) -> bool:
+    """Decide shallowness from git's answer plus the ``.git/shallow`` marker.
+
+    Pure, so it is testable without cloning: the ambient repo's depth is a
+    property of the *checkout*, not of this code, and a test that asserts it
+    passes on a full clone and fails in any job using the default
+    ``fetch-depth: 1`` — which is how the first version of this broke CI.
+
+    The marker is checked as well as the command because
+    ``rev-parse --is-shallow-repository`` needs git >= 2.15 and prints nothing
+    when unsupported. Treating "no answer" as "not shallow" would fail open on
+    exactly the guard that stops the whole gate going blind.
+    """
+    if rev_parse_output.strip() == "true":
+        return True
+    return shallow_marker_exists
+
+
 def is_shallow_clone() -> bool:
     """True when history is truncated, which silently breaks every date check.
 
@@ -282,7 +300,9 @@ def is_shallow_clone() -> bool:
     ``git log -1`` returns HEAD's date, so every document looks freshly touched
     and the gate passes everything forever. Detect it and refuse to run.
     """
-    return _git("rev-parse", "--is-shallow-repository") == "true"
+    git_dir = _git("rev-parse", "--git-dir")
+    marker = (Path(git_dir) if git_dir else REPO_ROOT / ".git") / "shallow"
+    return interpret_shallow(_git("rev-parse", "--is-shallow-repository"), marker.exists())
 
 
 def git_last_commit_date(path: str) -> date | None:
@@ -301,6 +321,22 @@ def git_changed_since(since: date, patterns: tuple[str, ...]) -> tuple[str, ...]
     return tuple(changed)
 
 
+def _repo_relative(path: Path) -> str:
+    """``path`` relative to the repo when it is inside it, else as given.
+
+    ``Path.relative_to`` raises for a path outside the repo, which turned an
+    explicit argument pointing anywhere else — a scratch file, a tmpdir in a test
+    — into a traceback rather than a usable message. The git lookups simply
+    return nothing for such a path, which the `untracked` rule already reports.
+    """
+    if not path.is_absolute():
+        return str(path)
+    try:
+        return str(path.relative_to(REPO_ROOT))
+    except ValueError:
+        return str(path)
+
+
 def gated_documents() -> list[Path]:
     """The living documents this gate covers, in a stable order."""
     found: list[Path] = []
@@ -315,6 +351,16 @@ def gated_documents() -> list[Path]:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("paths", nargs="*", type=Path, help="documents to check")
+    parser.add_argument(
+        "--max-violations",
+        type=int,
+        default=0,
+        help=(
+            "tolerate up to N violations (a ratchet baseline). Exceeding it fails; "
+            "coming in UNDER it also fails, so the baseline cannot silently rot "
+            "upward once docs improve. Default 0."
+        ),
+    )
     parser.add_argument(
         "--today",
         type=date.fromisoformat,
@@ -345,7 +391,7 @@ def main(argv: list[str] | None = None) -> int:
         except OSError as exc:
             print(f"error: cannot read {document}: {exc}", file=sys.stderr)
             return 2
-        relative = str(document.relative_to(REPO_ROOT)) if document.is_absolute() else str(document)
+        relative = _repo_relative(document)
         last_commit = git_last_commit_date(relative)
         stamp = parse_stamp(text)
         covered: tuple[str, ...] = ()
@@ -357,7 +403,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
-    if not violations:
+    if not violations and args.max_violations == 0:
         print(f"ok: {len(documents)} document(s) carry a current, verified stamp")
         return 0
 
@@ -366,10 +412,41 @@ def main(argv: list[str] | None = None) -> int:
         print(violation.render(), file=sys.stderr)
         by_rule[violation.rule] = by_rule.get(violation.rule, 0) + 1
     summary = ", ".join(f"{rule}={count}" for rule, count in sorted(by_rule.items()))
+    count = len(violations)
     print(
-        f"\n{len(violations)} violation(s) across {len(documents)} document(s): {summary}",
+        f"\n{count} violation(s) across {len(documents)} document(s): {summary}",
         file=sys.stderr,
     )
+
+    # Ratchet. A baseline exists because the gate legitimately reds today's tree
+    # and W27 is the sweep that clears it — but `continue-on-error` would make
+    # this a permanently red check, which trains everyone to ignore it. With a
+    # baseline it is a real gate from its first run: docs cannot get worse.
+    if args.max_violations:
+        if count > args.max_violations:
+            print(
+                f"FAIL: {count} violation(s) exceeds the baseline of "
+                f"{args.max_violations}. Documentation got worse — stamp the doc "
+                "you touched rather than raising the baseline.",
+                file=sys.stderr,
+            )
+            return 1
+        if count < args.max_violations:
+            # Tightening must be deliberate, or the baseline drifts up again the
+            # next time something regresses and nobody notices it had improved.
+            print(
+                f"FAIL: {count} violation(s) is BELOW the baseline of "
+                f"{args.max_violations}. Documentation improved — lower the "
+                "baseline in .github/workflows/ci.yml to lock the gain in.",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            f"ok: {count} violation(s), exactly the baseline. No regression, but "
+            "these are real — W27 is the sweep that clears them.",
+            file=sys.stderr,
+        )
+        return 0
     return 1
 
 

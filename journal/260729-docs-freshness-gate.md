@@ -94,3 +94,38 @@ on its **own line**: appended, the one field a reader needs would be buried in t
 
 26 new tests, 1453 passing overall, coverage 95%. The gate exits 1 on today's tree naming all 15
 violations, exits 2 on a shallow clone, and stays green on an old-but-undisturbed document.
+
+
+## 7. Postscript: two CI failures, both mine
+
+**The shallow-clone test asserted the wrong thing.** `test_shallow_clone_detection_is_wired`
+asserted `is_shallow_clone() is False` — a property of the *checkout*, not of the code. It
+passed locally on a full clone and failed in CI's backend job, which legitimately uses
+`fetch-depth: 1`; only `docs-stamps` needs full history.
+
+The irony is exact: this module's own docstring claims "only `git_last_commit_date` and
+`git_changed_since` touch the repo", and `is_shallow_clone` touched it too. Fixed by following
+the design I had already written down — `interpret_shallow(rev_parse_output, marker_exists)` is
+pure and gets five cases, and the wrapper is asserted only to return a bool.
+
+That refactor also closed a fail-open hole I would otherwise have shipped:
+`rev-parse --is-shallow-repository` needs git >= 2.15 and prints *nothing* when unsupported, so
+the original `== "true"` test would have answered "not shallow" on older git — silently
+disabling the one guard whose job is to stop the gate passing everything. It now also checks for
+the `.git/shallow` marker.
+
+**`continue-on-error` was the wrong mechanism.** It made `docs-stamps` a permanently red check,
+and a check that is always red trains everyone to ignore it — which is how a gate becomes
+decoration by a different route than the one this unit was worrying about.
+
+Replaced with a **ratchet**: `--max-violations 15`, the measured baseline. Documentation cannot
+get worse from its first run, and the failure is actionable ("stamp the doc you touched rather
+than raising the baseline"). It also fails when the count comes in *below* the baseline, which
+is the half that keeps it honest — slack left in the number is exactly where a future regression
+hides, so an improvement has to be locked in by lowering it. W27 drives it to 0 and adds the job
+to `ci-gate`'s needs.
+
+A third bug fell out of writing the ratchet tests: passing an absolute path from outside the
+repo crashed on `Path.relative_to` instead of reporting cleanly. Fixed with `_repo_relative`.
+
+Final: 34 tests, 1461 passing.

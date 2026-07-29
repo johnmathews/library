@@ -31,7 +31,7 @@ lint:
 # until W27's verify-and-stamp sweep lands, and a `make lint` that always fails
 # is a `make lint` nobody runs.
 check-docs:
-	uv run python scripts/check_docs.py
+	uv run python scripts/check_docs.py --max-violations 15
 
 # Lint the workflow files. Worth its own target because this is the one check
 # that CANNOT be enforced from inside CI for the file it matters most for: an

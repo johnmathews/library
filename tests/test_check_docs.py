@@ -239,17 +239,67 @@ class TestRepoState:
         assert set(counts) <= {"no-stamp", "missing-verified", "stale-doc-edit"}, counts
 
 
-def test_shallow_clone_detection_is_wired() -> None:
-    """The guard exists and answers for this repo.
+class TestShallowDetection:
+    """The guard that stops the whole gate going blind.
 
-    Under `actions/checkout`'s default `fetch-depth: 1`, every file's `git log -1`
-    returns HEAD's date, so every document looks freshly touched and the gate
-    passes everything forever. The CI job therefore carries `fetch-depth: 0`, and
-    this asserts the detector is real rather than trusting that.
+    Tested through the pure `interpret_shallow`, NOT by asserting the ambient
+    repo's depth. The first version of this asserted
+    `is_shallow_clone() is False`, which is a property of the *checkout* rather
+    than of this code: it passed locally on a full clone and failed in CI's
+    backend job, which legitimately uses the default `fetch-depth: 1`. Only the
+    docs-stamps job needs full history.
     """
-    assert check_docs.is_shallow_clone() is False
+
+    def test_git_says_shallow(self) -> None:
+        assert check_docs.interpret_shallow("true", False) is True
+
+    def test_git_says_not_shallow(self) -> None:
+        assert check_docs.interpret_shallow("false", False) is False
+
+    def test_the_shallow_marker_alone_is_enough(self) -> None:
+        """`rev-parse --is-shallow-repository` needs git >= 2.15.
+
+        On older git it prints nothing, and treating "no answer" as "not shallow"
+        would fail OPEN on the one guard whose whole job is to stop the gate
+        passing everything silently.
+        """
+        assert check_docs.interpret_shallow("", True) is True
+
+    def test_no_answer_and_no_marker_is_not_shallow(self) -> None:
+        assert check_docs.interpret_shallow("", False) is False
+
+    def test_whitespace_is_tolerated(self) -> None:
+        assert check_docs.interpret_shallow(" true\n", False) is True
+
+    def test_the_real_detector_returns_a_bool(self) -> None:
+        """The wiring runs; its ANSWER depends on the checkout, so is not asserted."""
+        assert isinstance(check_docs.is_shallow_clone(), bool)
 
 
 def test_main_exits_two_on_an_unreadable_path(tmp_path: Path) -> None:
     """Cannot-check must never share an exit code with nothing-wrong."""
     assert check_docs.main([str(tmp_path / "absent.md")]) == 2
+
+
+class TestRatchet:
+    """--max-violations must fail in BOTH directions.
+
+    Failing when the count rises is obvious. Failing when it FALLS is the part
+    that keeps the baseline honest: slack left in the number is somewhere a future
+    regression hides, so an improvement has to be locked in explicitly.
+    """
+
+    def test_at_the_baseline_passes(self, tmp_path: Path) -> None:
+        doc_path = tmp_path / "unstamped.md"
+        doc_path.write_text("# No stamp\n\nProse.\n")
+        assert check_docs.main([str(doc_path), "--max-violations", "1"]) == 0
+
+    def test_above_the_baseline_fails(self, tmp_path: Path) -> None:
+        doc_path = tmp_path / "unstamped.md"
+        doc_path.write_text("# No stamp\n\nProse.\n")
+        assert check_docs.main([str(doc_path), "--max-violations", "0"]) == 1
+
+    def test_below_the_baseline_fails_so_gains_get_locked_in(self, tmp_path: Path) -> None:
+        doc_path = tmp_path / "unstamped.md"
+        doc_path.write_text("# No stamp\n\nProse.\n")
+        assert check_docs.main([str(doc_path), "--max-violations", "5"]) == 1
