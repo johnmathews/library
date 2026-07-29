@@ -341,9 +341,24 @@ jobs:
         run: |
           nohup npm run preview -- --port 4173 --strictPort > preview.log 2>&1 &
           timeout 60 bash -c 'until curl -fsS http://localhost:4173 > /dev/null; do sleep 1; done'
+      # test:e2e:ci, not test:e2e: the CI variant chains
+      # scripts/assert-e2e-ran.mjs, which fails when the suite reported success
+      # without executing anything. `playwright test` exits 0 when every test
+      # skips and offers no --fail-on-skip, so deleting E2E_BASE_URL above used
+      # to make all 19 specs skip and this job report green having launched
+      # nothing. Local `npm run test:e2e` is deliberately left alone, so running
+      # it without a stack still skips cleanly.
       - name: Run Playwright tests
         working-directory: frontend
-        run: npm run test:e2e
+        run: npm run test:e2e:ci
+      - name: Upload the e2e JSON report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: playwright-json-report
+          path: frontend/e2e-report.json
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Upload Playwright report
         if: failure()
         uses: actions/upload-artifact@v7

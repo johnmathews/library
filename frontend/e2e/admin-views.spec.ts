@@ -14,16 +14,14 @@
  */
 import { expect, test, type Page } from '@playwright/test'
 
-const BASE_URL = process.env.E2E_BASE_URL
+import { requireStack } from './fixtures/require-stack'
+
 const USERNAME = process.env.E2E_USERNAME ?? 'e2e'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-password-123'
 const ADMIN_USERNAME = process.env.E2E_ADMIN_USERNAME ?? 'e2e-admin'
 const ADMIN_PASSWORD = process.env.E2E_ADMIN_PASSWORD ?? 'e2e-admin-password-123'
 
-test.skip(
-  !BASE_URL,
-  'E2E_BASE_URL is not set — start the compose stack and vite preview first (docs/frontend.md §1.5)',
-)
+requireStack()
 
 async function signIn(page: Page, username: string, password: string): Promise<void> {
   await page.goto('/')

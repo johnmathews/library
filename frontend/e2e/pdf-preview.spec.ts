@@ -14,10 +14,11 @@
  * prove the lazy multi-page scroll-through behavior (canvas[data-page="2"]).
  */
 import { expect, test, type Page } from '@playwright/test'
+
+import { requireStack } from './fixtures/require-stack'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const BASE_URL = process.env.E2E_BASE_URL
 const USERNAME = process.env.E2E_USERNAME ?? 'e2e'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-password-123'
 const FIXTURE = path.join(
@@ -26,10 +27,7 @@ const FIXTURE = path.join(
   'pdf-preview-2page.pdf',
 )
 
-test.skip(
-  !BASE_URL,
-  'E2E_BASE_URL is not set — start the compose stack and vite preview first (docs/frontend.md §1.5)',
-)
+requireStack()
 
 async function signIn(page: Page): Promise<void> {
   await page.goto('/')

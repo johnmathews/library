@@ -9,15 +9,16 @@
  *
  * Requires the real stack (docker compose db/migrate/api/worker + the
  * built frontend behind `vite preview`'s /api proxy) and an `e2e` user;
- * skips itself entirely when E2E_BASE_URL is unset. Claude extraction is
+ * gated by requireStack(): skips locally, fails in CI. Claude extraction is
  * not required: the assertions only rely on the OCR/text-layer pipeline
  * (status `indexed`, text search), never on extracted metadata.
  */
 import { expect, test, type Page } from '@playwright/test'
+
+import { requireStack } from './fixtures/require-stack'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const BASE_URL = process.env.E2E_BASE_URL
 const USERNAME = process.env.E2E_USERNAME ?? 'e2e'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-password-123'
 const FIXTURE = path.join(
@@ -26,10 +27,7 @@ const FIXTURE = path.join(
   'library-fixture.pdf',
 )
 
-test.skip(
-  !BASE_URL,
-  'E2E_BASE_URL is not set — start the compose stack and vite preview first (docs/frontend.md §1.5)',
-)
+requireStack()
 
 async function signIn(page: Page): Promise<void> {
   await page.goto('/')

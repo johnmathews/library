@@ -79,15 +79,22 @@ onBeforeUnmount(() => {
       </svg>
     </button>
 
+    <!-- No role="menu"/"menuitem" here, deliberately. Those roles promise the
+         ARIA menu keyboard contract — arrow keys move between items, a roving
+         tabindex, focus moving into the menu on open, Tab leaving it — and none
+         of that was implemented, so assistive technology was told to expect
+         navigation that does not work. (AppPopover.vue implements the contract
+         properly; this component never did.) Without the roles it announces as
+         what it actually is: two ordinary buttons revealed in a container, both
+         reachable by Tab and operable by Enter/Space, which is honest and
+         already works. Re-adding the roles means implementing the contract. -->
     <div
       v-if="open"
-      role="menu"
       class="absolute right-0 top-9 z-20 min-w-[8rem] rounded-xl border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1 shadow-lg"
       @click.stop
     >
       <button
         type="button"
-        role="menuitem"
         data-testid="thread-rename"
         class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-700 dark:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-700/60 transition"
         @click.stop="choose('rename')"
@@ -99,7 +106,6 @@ onBeforeUnmount(() => {
       </button>
       <button
         type="button"
-        role="menuitem"
         data-testid="thread-delete"
         class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-red-500 hover:bg-red-50 dark:hover:bg-red-500/10 transition"
         @click.stop="choose('delete')"

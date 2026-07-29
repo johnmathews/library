@@ -33,7 +33,13 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
-  reporter: process.env.CI ? [['list'], ['html', { open: 'never' }]] : 'list',
+  // The json reporter feeds scripts/assert-e2e-ran.mjs, which fails the CI run
+  // when the suite reported success without executing anything. Playwright exits
+  // 0 when every test skips and there is no --fail-on-skip, so the count has to
+  // be checked from outside.
+  reporter: process.env.CI
+    ? [['list'], ['html', { open: 'never' }], ['json', { outputFile: 'e2e-report.json' }]]
+    : 'list',
   use: {
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:4173',
     trace: 'retain-on-failure',

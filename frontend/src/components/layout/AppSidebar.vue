@@ -141,13 +141,19 @@ watch(
       <!-- Sidebar header -->
       <div class="flex justify-between mb-10 pr-3 sm:px-2">
         <!-- Logo / title — hidden when sidebar is collapsed on desktop -->
+        <!-- A <p>, not an <h1>: this wordmark is persistent chrome, and
+             PageHeader renders the page's real <h1>. As an <h1> it gave every
+             authenticated page two competing top-level headings, so a
+             screen-reader user tabbing the heading list saw "LIBRARY" before
+             the title of the page they were actually on. Presentation is
+             unchanged — the classes are identical. -->
         <RouterLink class="block" to="/" aria-label="Library home">
           <div>
-            <h1
+            <p
               class="text-2xl md:text-xl md:pl-2 text-gray-800 dark:text-gray-100 font-bold lg:opacity-0 lg:sidebar-expanded:opacity-100 duration-200 lg:whitespace-nowrap lg:sidebar-expanded:whitespace-normal overflow-hidden"
             >
               LIBRARY
-            </h1>
+            </p>
           </div>
         </RouterLink>
       </div>
