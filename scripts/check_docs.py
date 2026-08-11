@@ -337,6 +337,36 @@ def _repo_relative(path: Path) -> str:
         return str(path)
 
 
+def ratchet_verdict(count: int, baseline: int) -> tuple[int, str]:
+    """Decide the ratchet outcome. Pure, so tests need no repo and no checkout.
+
+    Extracted because ``main`` runs the shallow-clone guard first and returns 2
+    in a shallow checkout — which is correct behaviour and makes any test that
+    drives ``main`` depend on the ambient ``fetch-depth``. That is exactly the
+    mistake this module already made once with ``is_shallow_clone``.
+
+    Both directions fail. Rising is the obvious one. Falling matters just as
+    much: slack left in the baseline is where the next regression hides, so a
+    gain has to be locked in by lowering the number.
+    """
+    if count > baseline:
+        return 1, (
+            f"FAIL: {count} violation(s) exceeds the baseline of {baseline}. "
+            "Documentation got worse — stamp the doc you touched rather than "
+            "raising the baseline."
+        )
+    if count < baseline:
+        return 1, (
+            f"FAIL: {count} violation(s) is BELOW the baseline of {baseline}. "
+            "Documentation improved — lower the baseline in "
+            ".github/workflows/ci.yml to lock the gain in."
+        )
+    return 0, (
+        f"ok: {count} violation(s), exactly the baseline. No regression, but these "
+        "are real — W27 is the sweep that clears them."
+    )
+
+
 def gated_documents() -> list[Path]:
     """The living documents this gate covers, in a stable order."""
     found: list[Path] = []
@@ -423,30 +453,9 @@ def main(argv: list[str] | None = None) -> int:
     # this a permanently red check, which trains everyone to ignore it. With a
     # baseline it is a real gate from its first run: docs cannot get worse.
     if args.max_violations:
-        if count > args.max_violations:
-            print(
-                f"FAIL: {count} violation(s) exceeds the baseline of "
-                f"{args.max_violations}. Documentation got worse — stamp the doc "
-                "you touched rather than raising the baseline.",
-                file=sys.stderr,
-            )
-            return 1
-        if count < args.max_violations:
-            # Tightening must be deliberate, or the baseline drifts up again the
-            # next time something regresses and nobody notices it had improved.
-            print(
-                f"FAIL: {count} violation(s) is BELOW the baseline of "
-                f"{args.max_violations}. Documentation improved — lower the "
-                "baseline in .github/workflows/ci.yml to lock the gain in.",
-                file=sys.stderr,
-            )
-            return 1
-        print(
-            f"ok: {count} violation(s), exactly the baseline. No regression, but "
-            "these are real — W27 is the sweep that clears them.",
-            file=sys.stderr,
-        )
-        return 0
+        code, message = ratchet_verdict(count, args.max_violations)
+        print(message, file=sys.stderr)
+        return code
     return 1
 
 

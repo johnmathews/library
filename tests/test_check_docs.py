@@ -16,6 +16,8 @@ import sys
 from datetime import date
 from pathlib import Path
 
+import pytest
+
 _SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "check_docs.py"
 _spec = importlib.util.spec_from_file_location("check_docs", _SCRIPT)
 assert _spec is not None and _spec.loader is not None
@@ -284,22 +286,52 @@ def test_main_exits_two_on_an_unreadable_path(tmp_path: Path) -> None:
 class TestRatchet:
     """--max-violations must fail in BOTH directions.
 
-    Failing when the count rises is obvious. Failing when it FALLS is the part
-    that keeps the baseline honest: slack left in the number is somewhere a future
-    regression hides, so an improvement has to be locked in explicitly.
+    Driven through the pure `ratchet_verdict`, NOT through `main`. `main` runs the
+    shallow-clone guard first and returns 2 in a shallow checkout — correct
+    behaviour, and the reason the first version of these tests passed locally and
+    failed in CI's backend job, which uses the default `fetch-depth: 1`. That is
+    the same environment-dependence this file already got wrong once.
     """
 
-    def test_at_the_baseline_passes(self, tmp_path: Path) -> None:
+    def test_at_the_baseline_passes(self) -> None:
+        code, message = check_docs.ratchet_verdict(15, 15)
+        assert code == 0
+        assert "exactly the baseline" in message
+
+    def test_above_the_baseline_fails(self) -> None:
+        code, message = check_docs.ratchet_verdict(16, 15)
+        assert code == 1
+        assert "got worse" in message
+
+    def test_below_the_baseline_fails_so_gains_get_locked_in(self) -> None:
+        """Slack in the baseline is where the next regression hides."""
+        code, message = check_docs.ratchet_verdict(14, 15)
+        assert code == 1
+        assert "lower the baseline" in message
+
+    def test_zero_baseline_is_the_post_sweep_state(self) -> None:
+        """What W27 drives it to: no violations, no tolerance."""
+        assert check_docs.ratchet_verdict(0, 0)[0] == 0
+        assert check_docs.ratchet_verdict(1, 0)[0] == 1
+
+    def test_main_applies_the_ratchet_when_history_is_available(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One end-to-end pass, with the environment-dependent guard stubbed."""
+        monkeypatch.setattr(check_docs, "is_shallow_clone", lambda: False)
         doc_path = tmp_path / "unstamped.md"
         doc_path.write_text("# No stamp\n\nProse.\n")
+        # Exactly one violation: `no-stamp` returns early, so `untracked` is
+        # never also reported for the same document — one actionable message per
+        # doc rather than a pile.
         assert check_docs.main([str(doc_path), "--max-violations", "1"]) == 0
+        assert check_docs.main([str(doc_path), "--max-violations", "2"]) == 1
 
-    def test_above_the_baseline_fails(self, tmp_path: Path) -> None:
+    def test_main_refuses_before_ratcheting_in_a_shallow_clone(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Cannot-check outranks the ratchet: exit 2, never a tolerated 0."""
+        monkeypatch.setattr(check_docs, "is_shallow_clone", lambda: True)
         doc_path = tmp_path / "unstamped.md"
         doc_path.write_text("# No stamp\n\nProse.\n")
-        assert check_docs.main([str(doc_path), "--max-violations", "0"]) == 1
-
-    def test_below_the_baseline_fails_so_gains_get_locked_in(self, tmp_path: Path) -> None:
-        doc_path = tmp_path / "unstamped.md"
-        doc_path.write_text("# No stamp\n\nProse.\n")
-        assert check_docs.main([str(doc_path), "--max-violations", "5"]) == 1
+        assert check_docs.main([str(doc_path), "--max-violations", "99"]) == 2
