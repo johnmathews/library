@@ -15,6 +15,7 @@ import importlib.util
 import sys
 from datetime import date
 from pathlib import Path
+from typing import ClassVar
 
 import pytest
 
@@ -239,6 +240,172 @@ class TestRepoState:
             counts[violation.rule] = counts.get(violation.rule, 0) + 1
         # Every living doc is either unstamped or stamped-without-verification.
         assert set(counts) <= {"no-stamp", "missing-verified", "stale-doc-edit"}, counts
+
+
+PLAN_FRONTMATTER = """---
+plan: library-greenfield-build
+units:
+  - id: W1
+    title: Repo scaffold
+  - id: W2
+    title: Database schema
+  - id: W17
+    title: Deployment hardening
+---
+
+# Improvement plan
+"""
+
+
+class TestWorkUnitCitations:
+    """`Wn` in a gated doc must resolve against the archived plan (W14)."""
+
+    def test_units_parse_from_the_frontmatter(self) -> None:
+        assert check_docs.parse_plan_units(PLAN_FRONTMATTER) == frozenset({1, 2, 17})
+
+    def test_a_known_citation_is_clean(self) -> None:
+        violations = check_docs.check_work_unit_citations(
+            "docs/api.md", "the upload path (W2) does this", frozenset({1, 2, 17})
+        )
+        assert violations == []
+
+    def test_a_seeded_w99_fails(self) -> None:
+        violations = check_docs.check_work_unit_citations(
+            "docs/api.md", "as decided in (W99)", frozenset({1, 2, 17})
+        )
+        assert rules(violations) == {"unknown-work-unit"}
+        assert "W99" in violations[0].message
+
+    def test_w3c_is_not_a_citation(self) -> None:
+        """`\\b` on both sides: the standards body is not work unit 3."""
+        violations = check_docs.check_work_unit_citations(
+            "docs/frontend.md", "follows the W3C spec", frozenset({1, 2, 17})
+        )
+        assert violations == []
+
+    def test_each_unknown_unit_is_reported_once(self) -> None:
+        violations = check_docs.check_work_unit_citations(
+            "docs/api.md", "(W99) and again (W99) and (W98)", frozenset({1, 2, 17})
+        )
+        assert len(violations) == 2
+
+    def test_an_empty_unit_list_is_a_violation_not_a_pass(self) -> None:
+        """The rule must not go quietly vacuous if the plan moves.
+
+        Checking membership against an empty set would pass every citation,
+        which is the "check that cannot fail" this whole module is built
+        against.
+        """
+        violations = check_docs.check_work_unit_citations("docs/api.md", "(W99)", frozenset())
+        assert rules(violations) == {"plan-unreadable"}
+
+    def test_the_real_plan_declares_the_seventeen_units(self) -> None:
+        plan = check_docs.REPO_ROOT / check_docs.WORK_UNIT_PLAN
+        assert check_docs.parse_plan_units(plan.read_text(encoding="utf-8")) == frozenset(
+            range(1, 18)
+        )
+
+    def test_every_citation_in_the_repo_resolves(self) -> None:
+        """The W14 acceptance criterion, as a standing gate."""
+        units = check_docs.parse_plan_units(
+            (check_docs.REPO_ROOT / check_docs.WORK_UNIT_PLAN).read_text(encoding="utf-8")
+        )
+        offenders: list = []
+        for path in check_docs.gated_documents():
+            relative = str(path.relative_to(check_docs.REPO_ROOT))
+            offenders.extend(
+                check_docs.check_work_unit_citations(
+                    relative, path.read_text(encoding="utf-8"), units
+                )
+            )
+        assert offenders == [], [v.render() for v in offenders]
+
+
+CONFIG_SOURCE = """
+_PRICED_MODEL_FIELDS: tuple[str, ...] = (
+    "extraction_model",
+    "ask_model",
+)
+
+
+class Settings(BaseSettings):
+    extraction_model: str = "claude-haiku-4-5"
+    ask_model: str = "claude-opus-4-8"
+    unpriced_model: str = "claude-something-else"
+"""
+
+
+class TestModelIdentity:
+    """A model id quoted next to its settings field must match config (W13)."""
+
+    def test_defaults_parse_and_exclude_unpriced_fields(self) -> None:
+        assert check_docs.parse_model_defaults(CONFIG_SOURCE) == {
+            "extraction_model": "claude-haiku-4-5",
+            "ask_model": "claude-opus-4-8",
+        }
+
+    DEFAULTS: ClassVar[dict[str, str]] = {
+        "ask_model": "claude-opus-4-8",
+        "extraction_model": "claude-haiku-4-5",
+    }
+
+    @pytest.mark.parametrize(
+        "text",
+        [
+            "model (`ask_model` = `claude-opus-4-8`). Each has",
+            "`ask_model` (`claude-opus-4-8`) is multimodal",
+            "call (`ask_model`, default `claude-opus-4-8` — the",
+            "`ask_model`: `claude-opus-4-8`",
+        ],
+        ids=["equals", "parenthetical", "default", "colon"],
+    )
+    def test_the_correct_id_passes_in_every_phrasing(self, text: str) -> None:
+        assert check_docs.check_model_identity("docs/api.md", text, self.DEFAULTS) == []
+
+    def test_the_stale_claim_this_rule_was_written_for_fails(self) -> None:
+        """The real defect: api.md said sonnet while config said opus."""
+        violations = check_docs.check_model_identity(
+            "docs/api.md",
+            "model (`ask_model` = `claude-sonnet-4-6`). Each has",
+            self.DEFAULTS,
+        )
+        assert rules(violations) == {"stale-model-id"}
+        assert "claude-opus-4-8" in violations[0].message
+
+    def test_a_relationship_phrasing_does_not_fire(self) -> None:
+        """Narrow by design — see the docstring on `check_model_identity`.
+
+        This sentence names a field and a different model, but asserts nothing
+        about the default. A rule that reds it gets switched off.
+        """
+        violations = check_docs.check_model_identity(
+            "docs/ingestion.md",
+            "escalates from `extraction_model` to `claude-sonnet-4-6` on low confidence",
+            self.DEFAULTS,
+        )
+        assert violations == []
+
+    def test_the_real_config_parses(self) -> None:
+        config = check_docs.REPO_ROOT / check_docs.CONFIG_SOURCE
+        defaults = check_docs.parse_model_defaults(config.read_text(encoding="utf-8"))
+        assert defaults["ask_model"] == "claude-opus-4-8"
+        assert defaults["matter_classifier_model"] == "claude-sonnet-4-6"
+        assert len(defaults) == 8
+
+    def test_every_model_claim_in_the_repo_is_current(self) -> None:
+        """The W13 acceptance criterion, as a standing gate."""
+        defaults = check_docs.parse_model_defaults(
+            (check_docs.REPO_ROOT / check_docs.CONFIG_SOURCE).read_text(encoding="utf-8")
+        )
+        offenders: list = []
+        for path in check_docs.gated_documents():
+            relative = str(path.relative_to(check_docs.REPO_ROOT))
+            offenders.extend(
+                check_docs.check_model_identity(
+                    relative, path.read_text(encoding="utf-8"), defaults
+                )
+            )
+        assert offenders == [], [v.render() for v in offenders]
 
 
 class TestShallowDetection:

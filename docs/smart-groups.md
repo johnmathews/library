@@ -80,27 +80,29 @@ boundary.
 `POST /api/charts/authored` with `mode="semantic"`:
 
 1. The group is created with any hand-picked `seed_document_ids` as
-   `origin=manual` members.
-2. The group **name** is turned into a semantic search query
-   (`_name_anchor_ids` → `embed_query` + `semantic_search`) to widen the seed
-   set with a few more anchor documents — best-effort; a failure (feature
-   disabled, no embedding backend) just falls back to the hand-picked seeds
-   alone.
-3. `sweep_backfill` scores every eligible document in the library (non-deleted,
+   `origin=manual` members. **The group's name is never used to widen the seed
+   set.** An earlier version turned the name into a semantic search and injected
+   the hits as positive examples; on a mixed archive that poisoned membership —
+   unrelated documents became positives (an insurance policy scoring sim=1.000
+   as an "anchor" for a group named "Anthropic"). Positives come only from the
+   user's explicit seeds, and
+   `test_create_authored_does_not_use_name_search` fails if the path is
+   reintroduced.
+2. `sweep_backfill` scores every eligible document in the library (non-deleted,
    amount-bearing, not already a member/exclusion) against the seeded
    positives and writes `pending` `AuthoredSeriesSuggestion` rows (with
    `score = sim_pos`) for every match, capped at
    `min(settings.series_suggestion_limit, 100)` (the API's `limit <= 100`
    cap). The write is an upsert that no-ops on conflict, so re-sweeping is
    idempotent.
-4. The response carries the staged hits under `backfill`; the frontend opens
+3. The response carries the staged hits under `backfill`; the frontend opens
    a one-time review modal ("Review N documents that look like this group")
    before creation is really "done." Accept promotes a hit to a member with
    `origin=accepted_suggestion` (via the existing
    `POST …/suggestions/{doc}/accept`); dismiss/leave-unchecked writes an
    exclusion (`POST …/suggestions/{doc}/dismiss`).
-5. After the review commits, `refresh_group_blurb` best-effort fills the
-   group's description (§5).
+4. After the review commits, `refresh_group_blurb` best-effort fills the
+   group's description (§6).
 
 Only this first sweep is staged for review — it is a one-time retroactive
 sweep of the whole library, which is exactly the kind of bulk change a user
@@ -138,8 +140,14 @@ exclusion, so a prune is reversible, not permanent.
 ## 5. Mixed currency
 
 The scorer is currency-agnostic — embeddings carry meaning, not money — so a
-Smart Group can freely mix currencies. `AuthoredSeries.currency` is the
-group's **display** currency; `_load_authored_members` (`series.py`)
+Smart Group can freely mix currencies. The group's **display** currency is
+resolved by `_resolve_display_currency` (`series.py`): an explicit
+`AuthoredSeries.currency` wins, and when it is NULL the currency falls back to
+the **dominant currency among the group's amount-bearing, non-deleted
+members** (ties broken alphabetically). Without that fallback a group created
+without a currency charted empty — every member was dropped converting into a
+NULL target. It resolves to `None` only when no amount-bearing member carries a
+currency at all. Once resolved, `_load_authored_members` (`series.py`)
 FX-converts every member's amount into it via `convert_amount(session,
 amount, currency, target_currency, ddate)`, the same path used for pinned
 emergent members. A member whose FX rate can't be resolved for its date is
@@ -159,11 +167,9 @@ and be flagged; only the currency dimension is inert for authored series
 
 ## 6. The LLM's role — and what it explicitly does not do
 
-The LLM has exactly two jobs in Smart Groups, both narrow:
+The LLM has exactly one job in Smart Groups, and it is narrow:
 
-1. **Name → seed query** (§4.1 step 2): one embedding/search call to widen
-   the initial positive set from the group's name.
-2. **Description blurb** (`refresh_group_blurb` in `series_insight.py`):
+1. **Description blurb** (`refresh_group_blurb` in `series_insight.py`):
    reuses the existing `series_insight.py` machinery
    (`SERIES_SYSTEM_PROMPT`/`generate_description`, `settings.extraction_model`,
    200-token cap) to write `AuthoredSeries.description` — but **only** when
@@ -178,8 +184,9 @@ rationale documents that an LLM once asked to phrase *why* a document breaks
 a series' signature hallucinated a sender name that appeared in none of the
 documents — so that reasoning was made purely mechanical (built only from
 real database values). Smart Groups' membership engine follows the same
-rule from day one: the LLM only seeds a search query and writes prose after
-the fact: it never decides who's in or out.
+rule from day one: the LLM only writes prose after the fact — it never
+decides who's in or out, and since the name→seed-query step was removed it no
+longer influences the inputs to that decision either.
 
 ## 7. See also
 

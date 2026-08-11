@@ -65,8 +65,11 @@ refinement cycle:
    Anthropic call per document today. A cheaper future optimisation is to file
    documents by nearest-neighbour over the existing bge-m3 embeddings against
    per-matter centroids (built from each matter's `hint` and its member docs),
-   reserving the LLM for ambiguous cases. **Not needed today** — per-document
-   Haiku cost is negligible at personal scale and the vocabulary is small.
+   reserving the LLM for ambiguous cases. **Not needed today** — the
+   per-document classifier cost is negligible at personal scale and the
+   vocabulary is small. (The classifier runs on `matter_classifier_model` =
+   `claude-sonnet-4-6`, deliberately **not** Haiku: the judgement — "car-related
+   but not car *insurance*" — rewards nuance, and the call is infrequent.)
 
 ## 1.3 Decided — `topics` vs `tags`
 
@@ -93,7 +96,7 @@ Recorded here so they read as **done**, not queued:
   many-to-many dimension (`matters` + `document_matters`, migration 0028): a
   document belongs to any number of admin-curated matters (car insurance, health
   insurance, subscriptions). Filled automatically by a **separate LLM classifier
-  pass** (its own cheap Anthropic call, deferred best-effort after extraction,
+  pass** (its own Anthropic call on Sonnet, deferred best-effort after extraction,
   merge-only, budget-gated, user-edit-respecting) so the vocabulary can change
   and the corpus be re-filed cheaply — `library sweep-matters` backfills after a
   vocabulary edit. Full REST surface (`/api/matters` CRUD + counts, repeatable
@@ -134,9 +137,10 @@ Recorded here so they read as **done**, not queued:
   networks). Creating one stages a one-time backfill sweep for review; future
   matching documents auto-add silently (`origin=auto`, surfaced by a
   "N added automatically" badge); removing/dismissing a document writes a
-  negative example so it isn't re-added. The LLM never decides membership —
-  only name→seed-query and a best-effort description blurb. See
+  negative example so it isn't re-added. The LLM never decides membership — its
+  only job is a best-effort description blurb. See
   [smart-groups.md](smart-groups.md) and
   [journal/260725-smart-groups.md](../journal/260725-smart-groups.md). The
-  companion duplicate-sender fix identified alongside this (design §9) is
-  **not yet shipped** — tracked as separate follow-up work.
+  companion duplicate-sender fix identified alongside this (design §9) **shipped
+  in `a6c0457` (#40)** — `upsert_sender` collapses internal whitespace, so
+  senders differing only by spacing no longer split.

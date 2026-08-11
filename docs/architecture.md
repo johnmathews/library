@@ -3,10 +3,13 @@
 **Status:** active. **Last updated:** 2026-07-17 (business matters: the `matters`/`document_matters` collection (migration 0028) and the separate best-effort matter-classification pass after extract; §1.2 step 3, §1.3). Earlier (2026-07-15, data model: `email_selection_traces`, the per-email skip audit, migration 0027). Earlier (2026-07-06): authorization model §1.5.1: shared library, no per-user ownership — deliberate. Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
 
 Library is a self-hosted personal/family document archive. This document
-describes the system design. The full decision record (with research and
-rejected alternatives) lives in
-`.engineering-team/runs/manual-20260610-154616/` and the development
-journal in `journal/`.
+describes the system design. The original decision record (with research and
+rejected alternatives) is archived at
+[archive/260610-project-inception-decisions.md](archive/260610-project-inception-decisions.md)
+and [archive/260610-greenfield-build-plan.md](archive/260610-greenfield-build-plan.md)
+— both are historical and describe the system as *planned*, not as built.
+Per-feature design specs and plans live in [superpowers/](superpowers/), and the
+development journal in [../journal/](../journal/).
 
 ## 1.1 System overview
 

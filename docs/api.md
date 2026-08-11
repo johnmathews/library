@@ -950,8 +950,8 @@ and conversational threading — is in [ask.md](ask.md); this is the wire contra
 `thread_id` is optional. Omit it to start a new conversation; supply it to
 continue an existing one. Auth + CSRF apply (it is a `POST`).
 
-`images` is optional (W11): up to **5** base64 attachments for the multimodal
-model (`ask_model` = `claude-sonnet-4-6`). Each has a `media_type` of
+`images` is optional: up to **5** base64 attachments for the multimodal
+model (`ask_model` = `claude-opus-4-8`). Each has a `media_type` of
 `image/png`, `image/jpeg`, `image/gif`, or `image/webp` and base64 `data` with
 no `data:` prefix. They become image content blocks on the question turn (and
 persist in `ask_turns.messages` for replay). `422` if more than 5 images or an
