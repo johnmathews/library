@@ -67,11 +67,37 @@ EXCLUDED_DIRS: frozenset[str] = frozenset({"archive", "adr", "rfc", "benchmarks"
 #: `Last updated`, so an exemption expires by itself.
 NOT_YET_GRACE_DAYS: int = 60
 
+#: The archived greenfield plan whose `units:` frontmatter the `Wn` citations in
+#: `docs/` refer to. Restored from history in W14 — before that the reference in
+#: `architecture.md` pointed at a path that no longer existed, so no `Wn` token
+#: in the documentation could be resolved by a reader at all.
+WORK_UNIT_PLAN: str = "docs/archive/260610-greenfield-build-plan.md"
+
+#: Where the model defaults live. Parsed **textually**, not imported: this script
+#: is pure stdlib and runs in CI without the application's dependencies, and
+#: importing `library.config` would drag pydantic into the docs gate.
+CONFIG_SOURCE: str = "src/library/config.py"
+
 _STATUS_RE = re.compile(r"\*\*Status:\*\*\s*(?P<value>[^.\n]*)", re.IGNORECASE)
 _VERIFIED_RE = re.compile(r"\*\*Last verified:\*\*\s*(?P<value>[^\n]*)", re.IGNORECASE)
 _UPDATED_RE = re.compile(r"\*\*Last updated:\*\*\s*(?P<value>[^\n(]*)", re.IGNORECASE)
 _COVERS_RE = re.compile(r"\*\*Covers:\*\*\s*(?P<value>[^\n]*)", re.IGNORECASE)
 _ISO_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})$")
+
+#: A work-unit citation. `\b` on both sides so `W3C` is not read as `W3`.
+_WORK_UNIT_RE = re.compile(r"\bW(\d{1,2})\b")
+
+#: `  - id: W7` in the archived plan's YAML frontmatter.
+_PLAN_UNIT_RE = re.compile(r"^\s*-\s*id:\s*W(\d{1,2})\s*$", re.MULTILINE)
+
+#: `_PRICED_MODEL_FIELDS: tuple[str, ...] = (...)` and the `"field",` lines in it.
+_PRICED_BLOCK_RE = re.compile(r"_PRICED_MODEL_FIELDS.*?=\s*\((?P<body>.*?)\)", re.DOTALL)
+_PRICED_NAME_RE = re.compile(r'"(\w+)"')
+
+#: `    ask_model: str = "claude-opus-4-8"` — the default for a settings field.
+_MODEL_DEFAULT_RE = re.compile(
+    r'^\s*(?P<field>\w+):\s*str\s*=\s*"(?P<model>claude-[\w.-]+)"', re.MULTILINE
+)
 
 
 @dataclass(frozen=True)
@@ -266,6 +292,107 @@ def check_document(
     return violations
 
 
+# --- Work-unit citations (W14) ------------------------------------------------
+
+
+def parse_plan_units(plan_text: str) -> frozenset[int]:
+    """The unit numbers declared in the archived plan's YAML frontmatter."""
+    return frozenset(int(match) for match in _PLAN_UNIT_RE.findall(plan_text))
+
+
+def check_work_unit_citations(path: str, text: str, known_units: frozenset[int]) -> list[Violation]:
+    """Every ``Wn`` cited in a gated doc must exist in the archived plan.
+
+    The failure this prevents is a dangling reference: `architecture.md` pointed
+    at a decision record that had been untracked, so a reader hitting "(W6)" had
+    nowhere to resolve it. Restoring the plan makes the tokens meaningful; this
+    rule keeps them meaningful.
+
+    **What it cannot catch**, deliberately stated so nobody trusts it further
+    than it goes: a citation of the *right-shaped but wrong* unit. Three such
+    citations existed — `(W11)` in `api.md`, `(W11)` and `(W9)` in `ask.md` —
+    which named units from a *different* run's numbering. All three tokens are
+    present in this plan, so membership cannot distinguish them; they were found
+    by reading and deleted in W14. This rule enforces membership, not intent.
+    """
+    if not known_units:
+        # An empty unit list means the plan moved or its frontmatter changed
+        # shape. Passing every citation on an empty set would be a check that
+        # cannot fail — the exact defect this module exists to avoid.
+        return [
+            Violation(
+                path,
+                "plan-unreadable",
+                f"no units parsed from {WORK_UNIT_PLAN}; the citation rule cannot run",
+            )
+        ]
+    violations: list[Violation] = []
+    for number in sorted({int(match) for match in _WORK_UNIT_RE.findall(text)}):
+        if number not in known_units:
+            violations.append(
+                Violation(
+                    path,
+                    "unknown-work-unit",
+                    f"cites `W{number}`, which is not a unit in {WORK_UNIT_PLAN} "
+                    f"(it declares W1-W{max(known_units)}) — the reference does not resolve",
+                )
+            )
+    return violations
+
+
+# --- Model identity (W13) -----------------------------------------------------
+
+
+def parse_model_defaults(config_text: str) -> dict[str, str]:
+    """The priced settings fields mapped to their default model ids.
+
+    Only the fields listed in ``_PRICED_MODEL_FIELDS`` are returned: those are
+    the ones a reader of the docs might quote, and the ones already required to
+    carry a pricing row.
+    """
+    block = _PRICED_BLOCK_RE.search(config_text)
+    if block is None:
+        return {}
+    priced = set(_PRICED_NAME_RE.findall(block.group("body")))
+    return {
+        match.group("field"): match.group("model")
+        for match in _MODEL_DEFAULT_RE.finditer(config_text)
+        if match.group("field") in priced
+    }
+
+
+def check_model_identity(path: str, text: str, defaults: dict[str, str]) -> list[Violation]:
+    """A model id quoted next to its settings field must be that field's default.
+
+    `api.md` claimed ``ask_model`` was `claude-sonnet-4-6` while it had been
+    `claude-opus-4-8` for weeks — a 67% understatement of the cost of the
+    feature the page documents. Prose drifts from config silently because
+    nothing links them; this is that link.
+
+    Deliberately narrow: it fires only when the field and the model are joined
+    by ``=``, ``default``, ``:`` or immediate parentheses. Prose that mentions a
+    *different* model near a field — "escalates from `extraction_model` to
+    `claude-sonnet-4-6`" — is describing a relationship, not asserting a
+    default, and must not red the gate. A rule that cried wolf on that phrasing
+    would be turned off, and then it would catch nothing at all.
+    """
+    violations: list[Violation] = []
+    for name, expected in sorted(defaults.items()):
+        pattern = re.compile(
+            rf"`?\b{re.escape(name)}\b`?\s*(?:=|:|,?\s*default|\()\s*`?(claude-[\w.-]+)`?"
+        )
+        for found in pattern.findall(text):
+            if found != expected:
+                violations.append(
+                    Violation(
+                        path,
+                        "stale-model-id",
+                        f"says `{name}` is `{found}`; {CONFIG_SOURCE} sets `{expected}`",
+                    )
+                )
+    return violations
+
+
 # --- The git shell -----------------------------------------------------------
 
 
@@ -414,6 +541,30 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     today = args.today or date.today()
+
+    # Read the two cross-referenced sources once. Both are "cannot check"
+    # conditions rather than violations if they are missing outright: a rule
+    # that silently passes because its reference disappeared is the failure this
+    # module is built against.
+    try:
+        plan_units = parse_plan_units((REPO_ROOT / WORK_UNIT_PLAN).read_text(encoding="utf-8"))
+    except OSError as exc:
+        print(f"error: cannot read {WORK_UNIT_PLAN}: {exc}", file=sys.stderr)
+        return 2
+    try:
+        config_text = (REPO_ROOT / CONFIG_SOURCE).read_text(encoding="utf-8")
+        model_defaults = parse_model_defaults(config_text)
+    except OSError as exc:
+        print(f"error: cannot read {CONFIG_SOURCE}: {exc}", file=sys.stderr)
+        return 2
+    if not model_defaults:
+        print(
+            f"error: no priced model defaults parsed from {CONFIG_SOURCE}; the "
+            "model-identity rule cannot run",
+            file=sys.stderr,
+        )
+        return 2
+
     violations: list[Violation] = []
     for document in documents:
         try:
@@ -432,6 +583,8 @@ def main(argv: list[str] | None = None) -> int:
                 relative, text, last_commit=last_commit, covered_changes=covered, today=today
             )
         )
+        violations.extend(check_work_unit_citations(relative, text, plan_units))
+        violations.extend(check_model_identity(relative, text, model_defaults))
 
     if not violations and args.max_violations == 0:
         print(f"ok: {len(documents)} document(s) carry a current, verified stamp")

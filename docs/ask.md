@@ -116,7 +116,7 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    that page (`#page=N` in the URL fragment); citations from documents without a
    markdown layer show only the title.
 
-**Image attachments (W11).** `ask_model` (`claude-opus-4-8`) is multimodal, so
+**Image attachments.** `ask_model` (`claude-opus-4-8`) is multimodal, so
 a question may carry up to 5 base64 images (see [api.md §1.11](api.md)). They are
 rendered as image content blocks on the question turn alongside the text, and the
 system prompt tells the model to read them as evidence and combine them with tool
@@ -397,7 +397,7 @@ rather than generated per request:
   (`settings.extraction_model`, the cheap Haiku tier) to write the prose, then
   upserts the row. It is best-effort: a disabled feature, a missing API key, or
   an insufficient series all skip quietly.
-- **Membership hints (W9).** If the owner has manually pinned/excluded documents
+- **Membership hints.** If the owner has manually pinned/excluded documents
   for this series (see [api.md §1.15](api.md)), up to
   `MAX_OVERRIDE_EXAMPLES` examples per direction are appended to the prompt as a
   labelled, authoritative "curated membership" block, and the system prompt is
