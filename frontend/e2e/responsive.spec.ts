@@ -24,6 +24,7 @@
 import { expect, test, type Page } from '@playwright/test'
 
 import { requireStack } from './fixtures/require-stack'
+import { expectNoHorizontalOverflow, gridColumnCount } from './fixtures/layout'
 
 const USERNAME = process.env.E2E_USERNAME ?? 'e2e'
 const PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-password-123'
@@ -37,17 +38,6 @@ async function signIn(page: Page): Promise<void> {
   await page.locator('#password').fill(PASSWORD)
   await page.getByRole('button', { name: 'Sign in' }).click()
   await expect(page.getByRole('heading', { name: 'Documents', exact: true })).toBeVisible()
-}
-
-async function expectNoHorizontalOverflow(page: Page, label: string): Promise<void> {
-  const { scrollWidth, clientWidth } = await page.evaluate(() => ({
-    scrollWidth: document.documentElement.scrollWidth,
-    clientWidth: document.documentElement.clientWidth,
-  }))
-  expect(
-    scrollWidth,
-    `${label}: scrollWidth ${scrollWidth} must not exceed clientWidth ${clientWidth} (+1 rounding)`,
-  ).toBeLessThanOrEqual(clientWidth + 1)
 }
 
 test('no horizontal overflow on login, documents and upload', async ({ page }) => {
@@ -105,15 +95,6 @@ test('wide desktops get the widened content container', async ({ page }, testInf
   await expect(page.locator('.app-doc-card').first()).toBeVisible()
   expect(await gridColumnCount(page)).toBe(4)
 })
-
-/** Computed column count of the dashboard grid (0 when no grid). */
-async function gridColumnCount(page: Page): Promise<number> {
-  const grid = page.locator('.app-doc-grid')
-  if ((await grid.count()) === 0) return 0
-  return grid.evaluate(
-    (element) => getComputedStyle(element).gridTemplateColumns.split(' ').length,
-  )
-}
 
 test('the dashboard grid has the expected column count per viewport', async ({
   page,

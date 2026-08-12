@@ -1,6 +1,6 @@
 # Smart Groups
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: the blurb is written inside the create request, not after the review; closing the review modal is not a dismissal; fixed the §3.x cross-references, which pointed at the scorer rather than the three flows). Shipped 2026-07-24. Design: [superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md](superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md).
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: the blurb is written inside the create request, not after the review; closing the review modal is not a dismissal; fixed the §3.x cross-references, which pointed at the scorer rather than the three flows; new §6.1 recording that the full journey now runs nightly). Shipped 2026-07-24. Design: [superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md](superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md).
 **Last verified:** 2026-08-12 — method: checked each claim against `semantic_membership.py`, `series.py`, `api/charts.py`, `series_insight.py`, `jobs.py` and `config.py`, plus `tests/test_smart_groups_api.py` and the `ChartsView.vue`/`SeriesChartTile.vue` surfaces, and confirmed via `grep -rn "_name_anchor_ids" src/ tests/` that only the negative-guard assertion remains; no tests were executed.
 
 ## 1. What it is
@@ -191,6 +191,19 @@ real database values). Smart Groups' membership engine follows the same
 rule from day one: the LLM only writes prose after the fact — it never
 decides who's in or out, and since the name→seed-query step was removed it no
 longer influences the inputs to that decision either.
+
+### 6.1 How this journey is tested
+
+The membership engine is covered by the backend suite and the UI pieces by
+Vitest, but the **full journey** — seed → create with the Smart Group toggle →
+staged-review modal → accept → member count — is `frontend/e2e/smart-groups.spec.ts`.
+
+That spec cannot run in the PR gate: it needs a warm embedder, and the CI `e2e`
+job starts no embedder at all. It runs in `.github/workflows/e2e-nightly.yml`
+instead, nightly and on demand, with the embedder up and its model loaded.
+Before that workflow existed the spec's `E2E_SMART_GROUPS` opt-in was set
+nowhere, so this journey had never actually executed — the tests described above
+were the only evidence any of it worked end to end.
 
 ## 7. See also
 

@@ -31,8 +31,13 @@ requireStack()
 // warm embedder, so the run times out. The create-toggle payload and the
 // auto-added badge are covered deterministically by Vitest unit tests
 // (ChartsView.spec.ts / SeriesChartTile.spec.ts) and the membership engine by
-// the backend suite; this spec is the manual full-journey check. Run it against
-// a warm local stack with E2E_SMART_GROUPS=1. See docs/smart-groups.md.
+// the backend suite; this spec is the full-journey check.
+//
+// It is NOT manual-only any more: `.github/workflows/e2e-nightly.yml` runs it
+// nightly with the embedder up and warm. Until that workflow existed,
+// E2E_SMART_GROUPS was set nowhere in the repo, so the gate below always fired
+// and this journey had never executed anywhere. Run it locally the same way,
+// against a warm stack, with E2E_SMART_GROUPS=1. See docs/smart-groups.md.
 test.skip(
   !process.env.E2E_SMART_GROUPS,
   'Smart Groups full-journey e2e requires a warm embedding pipeline; set E2E_SMART_GROUPS=1 to run locally',

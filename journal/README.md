@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-137 entries.
+138 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -16,6 +16,7 @@ CI checks it is current.
 - **2026-08-12** — [Verifying sixteen documents, then closing the ratchet](260812-verify-and-stamp-sweep.md)
 - **2026-08-12** — [A type checker that was never actually pinned](260812-mypy-ratchet.md)
 - **2026-08-12** — [A map of the code, and three ways to find things](260812-module-map-and-findability.md)
+- **2026-08-12** — [Measuring layout, and running a journey that never ran](260812-layout-specs-and-a-nightly.md)
 - **2026-08-11** — [Docs corrections and the archive restore](260811-docs-corrections-and-archive-restore.md)
 
 ## July 2026
