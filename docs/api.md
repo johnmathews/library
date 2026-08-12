@@ -1,6 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-07-17 (business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: documented `DELETE /api/admin/users/{id}` and the Smart Groups create/exclusion contract; corrected the `status` enum, the login/`me` and preferences shapes, the coverage and note-edit claims, and the `ts_rank` normalisation). Earlier (2026-07-17, business matters: business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Last verified:** 2026-08-12 — method: enumerated every `@router` decorator under `src/library/` and diffed it against the documented surface in both directions, then checked each endpoint's parameters, request/response fields, status codes and auth rules against `src/library/api/**`, `schemas.py`, `config.py` and `app.py`, all read in full; nothing was executed.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -104,6 +105,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/admin/users` | List all users (admin only) |
 | POST   | `/api/admin/users` | Create a user (admin only) |
 | PATCH  | `/api/admin/users/{id}` | Promote/demote, activate/deactivate a user (admin only) |
+| DELETE | `/api/admin/users/{id}` | Delete a user (admin only) |
 | POST   | `/api/admin/recipients` | Create a recipient (dedupes case-insensitively) (admin only) |
 | PATCH  | `/api/admin/recipients/{id}` | Rename or merge a recipient (admin only) |
 | DELETE | `/api/admin/recipients/{id}` | Delete a recipient, reassigning its documents (admin only) |
@@ -152,7 +154,7 @@ ingestion semantics are documented in [ingestion.md](ingestion.md).
 | `project` | string, repeatable | Project slug; repeating the parameter **ORs** them (`?project=a&project=b` returns documents in *either*) — unlike `tag`, which ANDs. A document rarely belongs to several projects, so intersection would usually return nothing |
 | `matter` | string, repeatable | Business-matter slug; repeating the parameter **ORs** them (`?matter=a&matter=b` returns documents in *either*) — like `project`, and unlike `tag` which ANDs. A document belongs to any number of matters, so OR is the useful default |
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown` |
-| `status` | enum | `received` / `ocr` / `extract` / `embed` / `indexed` / `failed` |
+| `status` | enum | `received` / `ocr` / `extract` / `markdown` / `embed` / `indexed` / `failed` |
 | `date_from`, `date_to` | date | Inclusive bounds on `document_date` |
 | `review_status` | enum | `verified` / `needs_review` / `unreviewed` — filter by extraction-quality review state |
 | `source` | enum | `upload` / `consume` / `email` / `api` / `mcp` / `import` / `note` |
@@ -236,6 +238,9 @@ dashboard-field catalog in §1.10.2.
   double-count).
 - The rank is `greatest(ts_rank(nl), ts_rank(en))` — the best of the two
   language interpretations — and results are ordered by it, descending.
+  `ts_rank` is called with normalization bitmask `1`, so the raw rank is divided
+  by `1 + log(document length)`; long documents do not out-rank short ones
+  merely for containing the term more often.
 - `snippet` is `ts_headline` over the same `coalesce(pages_markdown, ocr_text)`
   source, generated with whichever config produced the higher rank, capped with
   `MaxFragments=2, MaxWords=12, MinWords=4, ShortWord=2,
@@ -610,7 +615,7 @@ library user list
 ### 1.9.1 Sessions — `POST /api/auth/login`
 
 JSON body `{"username": "...", "password": "..."}`. On success, `200` with
-`{id, username, display_name, preferences}` and two cookies:
+`{id, username, display_name, is_admin, preferences}` and two cookies:
 
 | Cookie | Flags | Purpose |
 |--------|-------|---------|
@@ -628,11 +633,12 @@ pushes the expiry forward (the refresh is write-throttled to at most once
 per ~5 minutes). `POST /api/auth/logout` deletes the session row — the
 cookie is dead server-side immediately — and clears both cookies.
 
-`GET /api/auth/me` returns `{id, username, display_name, preferences}` for
-the authenticated user (either credential). The login response (`POST
-/api/auth/login`) returns the same shape. `preferences` is
-`{"dashboard_fields": [...], "background_tone": "neutral", "tile_preview": "full_width", "dock_position": "top-right"}` —
-the resolved preference set (defaults filled; see 1.10).
+`GET /api/auth/me` returns `{id, username, display_name, is_admin, preferences}`
+for the authenticated user (either credential). The login response (`POST
+/api/auth/login`) returns the same shape. `preferences` is the resolved
+preference set (defaults filled; see §1.10) — all eight keys:
+`dashboard_fields`, `background_tone`, `tile_preview`, `dock_position`,
+`phone_columns`, `hide_summary_mobile`, `kind_colors`, `notifications`.
 
 ### 1.9.2 CSRF (cookie requests only)
 
@@ -1231,7 +1237,9 @@ field to leave it unchanged; send `null` to clear an existing override):
 When a `title` override is set it is exposed as a `title` field on the series
 body (the chart tile prefers it over the derived heading); a `description`
 override **replaces** the cached LLM `description`. `PUT` returns the updated
-single-series body (same shape as `GET`). It is `404` when the id is malformed
+single-series body (same shape as `GET`) when the series is chartable; when the
+override persists but the series is too sparse to chart, it returns the reduced
+body `{sender_id, kind_id, currency, title, description}`. It is `404` when the id is malformed
 or the sender/kind do not exist; `401` when unauthenticated. Any authenticated
 user may edit, mirroring the series-membership endpoints (§1.15) that edit the
 same tile.
@@ -1255,11 +1263,11 @@ minimum-document gate — a single amount-bearing member already charts.
 
 | Method | Path | Effect |
 |--------|------|--------|
-| POST | `/api/charts/authored` | Create. Body: `{name, currency?, description?, document_ids?}`. Returns the summarised series (`201`). |
+| POST | `/api/charts/authored` | Create. Body: `{name, currency?, description?, document_ids?, mode?, seed_document_ids?}`. Returns the summarised series (`201`). |
 | PATCH | `/api/charts/authored/{id}` | Update `name` and/or `description` (omit a field to leave it). |
 | DELETE | `/api/charts/authored/{id}` | Delete the series (membership cascades) — `204`. |
 | POST | `/api/charts/authored/{id}/members` | Add a document — body `{document_id}` (idempotent). |
-| DELETE | `/api/charts/authored/{id}/members/{document_id}` | Remove a document (idempotent). |
+| DELETE | `/api/charts/authored/{id}/members/{document_id}` | Remove a document (idempotent). Also writes an **exclusion** (a negative example) that vetoes future re-adds and semantic auto-adds; adding the document back clears it. |
 
 Create body (`document_ids` optional initial membership; unknown/deleted ids are
 silently ignored):
@@ -1268,10 +1276,20 @@ silently ignored):
 {"name": "Energy — main flat", "currency": "EUR", "document_ids": [12, 19, 27]}
 ```
 
-All mutating endpoints return the refreshed single-series body (same shape as one
-`/api/charts` entry, with `authored_id` set). The owner is recorded as the
-creating user (`owner_id`). `404` when the series id is unknown (or, for add, the
-document is unknown/deleted); `401` when unauthenticated.
+**Smart Groups.** `mode` is `manual` (default) or `semantic`. A `semantic`
+create scores the archive against the documents in `seed_document_ids` only —
+never against the group's *name* — and returns an extra `backfill` key,
+`[{document_id, title, score}]`, staging the matches for review rather than
+adding them. The same request may also fill `description` with a generated
+blurb when the caller left it empty. The full model, including the
+suggestion/exclusion lifecycle, is in [smart-groups.md](smart-groups.md).
+
+Mutating endpoints return the refreshed single-series body (same shape as one
+`/api/charts` entry, with `authored_id` set) — except `DELETE
+/api/charts/authored/{id}`, which returns `204`, and the dismiss endpoint
+(§1.14.3), which returns `{count}`. The owner is recorded as the creating user
+(`owner_id`). `404` when the series id is unknown (or, for add, the document is
+unknown/deleted); `401` when unauthenticated.
 
 ### 1.14.3 Authored-series smart features — signature, suggestions, odd-ones-out
 
@@ -1303,13 +1321,15 @@ suggestion writes a `dismissed` tombstone so it is never re-proposed.
 | GET | `/api/charts/authored/{id}/signature` | The `{sender_id, kind_id, currency, member_count, dominant_count, dominance}` signature (nulls/zeros for an empty series). |
 | GET | `/api/charts/authored/{id}/suggestions` | `{suggestions: [{id, title, sender, kind, currency, document_date, amount}], count}` — signature-matching non-members, newest first, capped at `series_suggestion_limit` (default 20). |
 | POST | `/api/charts/authored/{id}/suggestions/{document_id}/accept` | Promote to a member (idempotent); clears the suggestion row; returns the refreshed series body. |
-| POST | `/api/charts/authored/{id}/suggestions/{document_id}/dismiss` | Write a `dismissed` tombstone; returns `{count}` — remaining live matches. |
+| POST | `/api/charts/authored/{id}/suggestions/{document_id}/dismiss` | Write a `dismissed` tombstone, delete any existing membership, and write an **exclusion** so the scorer cannot re-add it; returns `{count}` — remaining live matches. |
 | GET | `/api/charts/authored/{id}/odd-ones-out` | `{members: [{id, title, sender, kind, currency, document_date, amount, axis, reason}]}` — members breaking the signature. `reason` is a deterministic, grounded sentence (no LLM), so it can never name a value absent from the series. |
 
 Additively, each **authored** entry in `GET /api/charts` and
-`GET /api/charts/{id}` carries three extra keys the dashboard reads without a
+`GET /api/charts/{id}` carries extra keys the dashboard reads without a
 follow-up fetch: `signature` (object or `null`), `suggestion_count` (int, pending
-matches), and `odd_one_out_count` (int).
+matches), `odd_one_out_count` (int), `mode` (`manual`/`semantic`) and
+`auto_added_count` (int). Individual `points` may additionally carry `origin`,
+recording how that member joined the group.
 
 ## 1.15 Series membership overrides — `/api/series/{sender_id}/{kind_id}/members`
 
@@ -1418,12 +1438,12 @@ CSRF apply exactly as elsewhere (§1.9).
 | Method | Path | Notes |
 |--------|------|-------|
 | POST | `/api/notes` | Body `{title, body_markdown}`. Creates the note and queues processing; `201` with the full document detail (same shape as `GET /api/documents/{id}`, §1.4). |
-| PATCH | `/api/notes/{id}` | Body `{title?, body_markdown?}`; only present fields change. Snapshots the prior (title, body) into history, applies the edit, and (on a body change) re-runs extraction + markdown (which re-embeds). Returns the updated detail. `404` for unknown, deleted, or **non-note** documents. |
+| PATCH | `/api/notes/{id}` | Body `{title?, body_markdown?}`; only present fields change. Snapshots the prior (title, body) into history, applies the edit, and (on a body change) re-runs extraction and embedding — no markdown pass. Returns the updated detail. `404` for unknown, deleted, or **non-note** documents. |
 | GET | `/api/notes/{id}/versions` | The note's version history, **newest first**: `[{version_no, title, body, created_at}, …]`. `404` for non-note documents. |
 | POST | `/api/notes/{id}/versions/{version_no}/restore` | Snapshots the current state, then re-applies the chosen version's title + body (a restore is itself an edit, so it can be undone). Returns the updated detail. `404` for an unknown note **or** unknown version number. |
 
 **Title is locked.** A note's `title` is added to `extra["user_edited_fields"]`
-on create, so re-extraction (and the re-extraction triggered by every edit)
+on create, so re-extraction (and the re-extraction a body edit triggers)
 never overwrites it; the body still drives the auto-extracted summary, topics,
 tags, and kind. Each create/edit/restore also appends an ingestion event
 (`received` / `note_edited` / `note_restored`) to the document's audit trail.
@@ -1444,10 +1464,11 @@ in [admin.md](admin.md).
 |--------|------|-------|
 | GET | `/api/admin/system` | App version + git sha, redacted operational config, deployment topology, and live DB stats (documents by status, users, job-queue depth, total extraction spend). |
 | GET | `/api/admin/architecture` | `docs/architecture.md` + `docs/ingestion.md` as `{docs: [{name, title, markdown}]}` (rendered client-side). |
-| GET | `/api/admin/coverage` | Backend/frontend coverage vs gate from the CI-baked summary: `{available, backend, frontend, generated_at, git_sha}`; `available: false` when no summary is baked in. |
+| GET | `/api/admin/coverage` | Backend/frontend coverage vs gate from the CI-baked summary: `{available, backend, frontend, test_types, generated_at, git_sha}`, where `test_types` lists the CI test types the summary recorded; `available: false` when no summary is baked in. |
 | GET | `/api/admin/users` | Every user: `[{id, username, display_name, is_admin, is_active, created_at}]`. |
 | POST | `/api/admin/users` | Body `{username, password, display_name?, is_admin?}`. `201`; `409` if the username exists. |
 | PATCH | `/api/admin/users/{id}` | Body `{is_admin?, is_active?}`. Promote/demote, activate/deactivate. `404` unknown; `409` if it would remove the **last active admin**. Deactivating also revokes the user's sessions and tokens. |
+| DELETE | `/api/admin/users/{id}` | Permanently delete a user. `204`; `404` unknown; `409` if it would remove the **last active admin**; `400` for your own account. The last-admin check runs first, so a sole admin deleting themselves gets the clearer `409`. Sessions and API tokens cascade away; the linked recipient is only **unlinked** (`recipients.user_id` is `ON DELETE SET NULL`), so documents addressed to that person stay addressed. |
 | PATCH | `/api/admin/recipients/{id}` | Rename or merge a recipient. See §1.18.1. |
 | DELETE | `/api/admin/recipients/{id}` | Delete a recipient, reassigning its documents. See §1.18.2. |
 

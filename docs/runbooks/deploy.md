@@ -1,6 +1,8 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-07-27. **Supersedes:** none.
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: `docs-stamps` is now inside `ci-gate`; the SSH probe runs before the promote gate; `--status` also reports the embedder). Earlier: 2026-07-27. **Supersedes:** none.
+**Last verified:** 2026-08-12 — method: executed the runbook end to end against the live `paperless` host — `make deploy` at `2c31c4b`, which ran the promote gate, `library-migrate`, the webserver/worker recreate and the `/healthz` check, then `--status` and a `git_sha` comparison against `origin/main` (matched) — and separately read every documented flag, env default and error string in `scripts/deploy.sh`, and §1.2's "what green means" against `scripts/ci_gate.sh` and `ci.yml`.
+**Covers:** scripts/deploy.sh, scripts/ci_gate.sh
 
 How to ship a merged change to the live `paperless` LXC. This is the focused
 "do it now" version; the full topology and rationale live in
@@ -30,8 +32,8 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
    image is pulled.
 
    **What "green" means.** The run's aggregator job is **`ci-gate`**, which
-   passes the `needs.<job>.result` of every other job except `promote` to
-   `scripts/ci_gate.sh`. That script tolerates `skipped` for the path-filtered
+   passes the `needs.<job>.result` of every other job except `promote` —
+   including `docs-stamps` — to `scripts/ci_gate.sh`. That script tolerates `skipped` for the path-filtered
    jobs (`backend`, `frontend`, `e2e`, `compose-smoke`, `build`) — a skipped
    *required* check would block a merge forever — but requires **`changes`**
    (the path-filter job all the others declare `needs:` on) to be exactly
@@ -49,11 +51,13 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
 
 ## 1.3 What `scripts/deploy.sh` does
 
-First, locally, it runs the **promote gate**: it inspects the registry (via
-`docker buildx imagetools`, no pull) and confirms `:latest` resolves to the
-same digest as `ghcr.io/johnmathews/library:<HEAD-sha>`. If `promote` hasn't
-retagged this commit yet — or `docker`/git isn't available to check — it aborts
-*before* touching the host, so it can't silently redeploy the previous image.
+It first probes SSH reachability (`ssh <host> true`), then runs the **promote
+gate** locally: it inspects the registry (via `docker buildx imagetools`, no
+pull) and confirms `:latest` resolves to the same digest as
+`ghcr.io/johnmathews/library:<HEAD-sha>`. If `promote` hasn't retagged this
+commit yet — or `docker`/git isn't available to check — it aborts *before
+pulling or deploying anything*, so it can't silently redeploy the previous
+image.
 
 Then, on the host, in `/srv/apps`, it runs:
 
@@ -97,7 +101,7 @@ the promote gate, like `--force`).
 The script already checks migrate + `/healthz`, but for a human sanity pass:
 
 ```bash
-scripts/deploy.sh --status        # web/worker/db healthy, head = expected revision
+scripts/deploy.sh --status        # web/worker/db/embedder up, head = expected revision
 ssh paperless 'cd /srv/apps && docker compose logs --tail 30 library-worker'
 ```
 

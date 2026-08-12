@@ -1,6 +1,7 @@
 # Email triage: reading the decision trace
 
 **Status:** active. **Last updated:** 2026-07-15.
+**Last verified:** 2026-08-12 — method: checked the trace-line format string, every verdict/reason/stage token, the four hold verdicts and their reason strings, both named endpoints, the `held_emails` and `email_selection_traces` columns and the 20-row limit, and every `LIBRARY_EMAIL_*` setting and default, against `email_ingest.py`, `email_label.py`, `api/held_emails.py`, `api/settings.py`, `models.py`, `config.py` and `.env.example`; no mailbox was polled.
 
 "What happened to the email I forwarded?" — the answer is always in the
 **decision trace**: one greppable log line per email recording what happened to

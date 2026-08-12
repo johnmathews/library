@@ -215,21 +215,17 @@ jobs:
   # STATE, not the diff. A doc goes stale because the code it describes moved,
   # which is a commit that touches no docs at all.
   #
-  # A RATCHET, not continue-on-error. The gate legitimately reds today's tree — 7
-  # unstamped docs and 8 stamped-but-unverified — and W27 is the sweep that clears
-  # it. But `continue-on-error` would make this a permanently red check, and a
-  # check that is always red trains everyone to ignore it. With a baseline it is a
-  # real gate from its first run: documentation cannot get WORSE, and the failure
-  # is actionable ("stamp the doc you touched").
+  # A RATCHET, not continue-on-error. It started at a baseline of 15 (7 unstamped
+  # docs, 8 stamped-but-unverified) because `continue-on-error` would have made
+  # this a permanently red check, and a check that is always red trains everyone
+  # to ignore it. W27 did the verify-and-stamp sweep, so the baseline is now 0 and
+  # the job is in ci-gate's needs: a doc edited without a re-stamp blocks the
+  # merge, and the failure is actionable ("re-verify and re-stamp the doc you
+  # touched").
   #
-  # --max-violations also fails when the count comes in BELOW the baseline, so an
-  # improvement must be locked in by lowering the number here rather than leaving
-  # slack for the next regression to hide in. W27 drives it to 0 and adds this job
-  # to ci-gate's needs.
-  #
-  # Not in ci-gate's needs yet, for the reason the CI-gate laws give: never
-  # require a check that cannot pass — it would block every merge including the
-  # PR that fixes it.
+  # --max-violations also fails when the count comes in BELOW the baseline, which
+  # is what forced this to be lowered rather than left with slack for the next
+  # regression to hide in. At 0 that direction is inert, which is the point.
   docs-stamps:
     runs-on: ubuntu-latest
     permissions:
@@ -242,9 +238,11 @@ jobs:
         with:
           enable-cache: true
       - name: Check documentation stamps
-        # Baseline measured on this tree: 7 no-stamp + 8 missing-verified. Lower
-        # it as docs get stamped; W27 takes it to 0.
-        run: uv run python scripts/check_docs.py --max-violations 15
+        # The ratchet, at its floor: every gated doc is stamped and verified, so
+        # the only acceptable count is 0. Kept explicit rather than relying on the
+        # default so the baseline stays greppable — raising this number back above
+        # 0 is re-opening the ratchet and should look like it.
+        run: uv run python scripts/check_docs.py --max-violations 0
       - name: Check the journal index is current
         # Same contract as `ruff format --check`: the generated index must equal
         # what the generator would write, so a new entry without a regenerated
@@ -593,12 +591,15 @@ jobs:
   # The logic lives in scripts/ci_gate.sh so it is unit-tested
   # (tests/test_ci_gate.py) rather than only exercised in anger.
   ci-gate:
-    needs: [changes, backend, frontend, e2e, compose-smoke, build]
+    needs: [changes, backend, frontend, e2e, compose-smoke, build, docs-stamps]
     if: always()
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - name: Require that no upstream job failed
+        # A job must appear in BOTH `needs:` above and the argument list below.
+        # Listing it only in `needs:` makes the gate wait for it and then ignore
+        # its result — silently, since ci_gate.sh can only judge what it is given.
         run: |
           scripts/ci_gate.sh \
             "changes=${{ needs.changes.result }}" \
@@ -606,4 +607,5 @@ jobs:
             "frontend=${{ needs.frontend.result }}" \
             "e2e=${{ needs.e2e.result }}" \
             "compose-smoke=${{ needs.compose-smoke.result }}" \
-            "build=${{ needs.build.result }}"
+            "build=${{ needs.build.result }}" \
+            "docs-stamps=${{ needs.docs-stamps.result }}"

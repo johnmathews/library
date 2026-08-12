@@ -1,6 +1,7 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-06-11.
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: removed a stale `LIBRARY_PDF_UNLOCK_PASSWORDS` default that republished a withdrawn password; `node:26-slim`, not `node:22-slim`; corrected the `compose-smoke` scope and reconciled the RAM guidance). Earlier: 2026-06-11.
+**Last verified:** 2026-08-12 — method: checked every service name, image tag, memory limit, volume, healthcheck, build arg, env var, CLI command and API path against `docker-compose.yml`, `Dockerfile`, `Makefile`, `.env.example`, `config.py`, `app.py`, `cli.py` and `api/`; §1.7.2's deploy path was additionally exercised for real (`make deploy` to the live `paperless` LXC). The §1.2 Proxmox walkthrough, §1.5 reverse proxy and §1.6 backup commands were read, not executed.
 
 How to run Library in production: a single `docker compose up` on any
 Docker host. The walkthrough targets the intended home — a Debian LXC on
@@ -43,8 +44,9 @@ need semantic Ask you can omit the `embedder` service and set
 
 ## 1.2 Fresh-machine walkthrough (Proxmox LXC)
 
-1. **Container.** Create a Debian 12/13 LXC — 4 vCPU, **6–8 GB RAM**
-   (the bge-m3 embedder needs ~3 GB; 4 GB is enough only with
+1. **Container.** Create a Debian 12/13 LXC — 4 vCPU, **8 GB RAM or more**
+   (matching §1.1; the bge-m3 embedder needs ~3 GB resident but its
+   `mem_limit` is 6 GB, and 4 GB is enough only with
    `LIBRARY_EMBEDDING_ENABLED=false` and no `embedder` service), 32 GB+
    disk (documents live here; size for your archive). Docker-in-LXC
    needs nesting: set **Options → Features → nesting=1** (and
@@ -145,8 +147,9 @@ search, and Ask over full-text hits — works normally. Documents still reach
 `indexed`, each carrying an `embedding_failed` event.
 
 Production is unchanged: the full `docker compose up -d` still starts the
-embedder, and CI's `compose-smoke` job boots this exact file and asserts every
-service reports healthy, which is the regression guard.
+embedder, and CI's `compose-smoke` job boots this exact file and asserts that
+`api`, `worker` and `db` report healthy, which is the regression guard.
+(`embedder` and `migrate` declare no healthcheck, so they cannot be asserted on.)
 
 ### 1.2.2 `git_sha` on locally built images
 
@@ -165,7 +168,7 @@ $ curl -s localhost:8000/healthz
 
 ## 1.3 How the frontend is served
 
-The Docker image builds the Vue SPA in a `node:22-slim` stage and bakes
+The Docker image builds the Vue SPA in a `node:26-slim` stage and bakes
 `frontend/dist` into the runtime image; the **api process serves it**
 (no nginx, no separate frontend container):
 
@@ -193,7 +196,8 @@ and `npm run dev` (Vite on :5173, proxying `/api` — see
 
 `docker compose ps` shows all three as `healthy` when the stack is up.
 CI's `compose-smoke` job boots this exact file and asserts healthy +
-login on every push.
+login on every push to `main`, and on branches when backend, frontend or
+CI paths changed.
 
 ### 1.4.1 Verifying the deployed version
 
@@ -334,7 +338,8 @@ see 1.7.2 for that instance's exact shape):
 
 1. **Back up the DB first** — always, before any DB image change:
    `docker exec <db> pg_dump -U library -Fc library > library-pre-ask.dump`.
-2. **Bump RAM** to ~6–8 GB (the embedder needs ~3 GB resident).
+2. **Bump RAM** to 8 GB or more (the embedder needs ~3 GB resident, under a
+   6 GB `mem_limit`).
 3. **Edit the compose**: swap the `db` image; add the `embedder` service; add
    `LIBRARY_EMBEDDING_SERVICE_URL` to api/worker. Do **not** add a
    `depends_on: embedder` — see §1.2.1.
@@ -443,7 +448,8 @@ image; proxmox-setup owns how it is run. Concrete details:
   benchmark are in [ingestion.md](ingestion.md) and
   [benchmarks/260610-ocr-benchmark.md](benchmarks/260610-ocr-benchmark.md).
 - **Password-protected PDF failed** — an encrypted PDF whose password is
-  not in `LIBRARY_PDF_UNLOCK_PASSWORDS` (default `2064`) fails at OCR. Add
+  not in `LIBRARY_PDF_UNLOCK_PASSWORDS` (**empty by default**, so out of the
+  box every encrypted PDF fails this way) fails at OCR. Add
   the password to that setting; new uploads unlock at ingest, and existing
   failures are unlocked in place by `library sweep-encrypted` (dry-run
   first — [ingestion.md](ingestion.md), "Unlocking encrypted PDFs").

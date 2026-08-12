@@ -1,6 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-07-17 (business matters: the `matters`/`document_matters` collection (migration 0028) and the separate best-effort matter-classification pass after extract; §1.2 step 3, §1.3). Earlier (2026-07-15, data model: `email_selection_traces`, the per-email skip audit, migration 0027). Earlier (2026-07-06): authorization model §1.5.1: shared library, no per-user ownership — deliberate. Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: §1.5.1 now names the two genuinely per-user resources — Ask threads and saved views — instead of claiming no ownership anywhere; Inter is CDN-loaded, not self-hosted; corrected the module-map gap wording). Earlier (2026-07-17, business matters: business matters: the `matters`/`document_matters` collection (migration 0028) and the separate best-effort matter-classification pass after extract; §1.2 step 3, §1.3). Earlier (2026-07-15, data model: `email_selection_traces`, the per-email skip audit, migration 0027). Earlier (2026-07-06): authorization model §1.5.1: shared library, no per-user ownership — deliberate. Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
+**Last verified:** 2026-08-12 — method: checked §1.6's module map against `wc -l` of every module and the floor rule in `scripts/check_docs.py`, the pipeline order against `_NEXT_STATUS` and each stage hook in `jobs.py`, the §1.3 table against `__tablename__` in `models.py` plus `migrations/versions/`, the §1.5 claims against every `/api` router's owner-scoping, and each model id against `config.py`.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -244,7 +245,7 @@ re-derivable artifact.
 - **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens.
   Tools for searching, reading, and ingesting documents from LLM clients.
 - **Web app** — Vue 3 SPA using the **Mosaic** (Cruip) theme: violet accent,
-  soft rounded-xl cards, dark mode, self-hosted Inter. Content-first,
+  soft rounded-xl cards, dark mode, Inter loaded from Google Fonts. Content-first,
   responsive 320px-up, accessible. (Reskinned from GOV.UK — see
   [frontend.md](frontend.md) and `journal/260613-mosaic-reskin.md`.)
 
@@ -282,18 +283,24 @@ gate global project mutations and an admin-only views surface
 ### 1.5.1 Authorization model — shared library, no per-user ownership
 
 This is a **deliberate design decision**, stated here so it is not mistaken for
-a gap: **there is no per-user resource ownership.** Authentication is the only
-gate on the library, and beyond the admin/non-admin split every authenticated
+a gap: **the corpus itself has no per-user resource ownership.** Authentication
+is the only gate on it, and beyond the admin/non-admin split every authenticated
 user has full read **and write** access to the *entire* library.
 
 - The API router applies `current_user` + CSRF globally (`src/library/app.py`),
-  so anonymous requests are rejected (`401`). But no endpoint checks the caller
-  against a resource's creator. Any signed-in user can view, edit, and delete
-  **any** document, its metadata, notes, **comments**, tags, projects, and
-  series — not only the ones they created.
+  so anonymous requests are rejected (`401`). But no *corpus* endpoint checks the
+  caller against a resource's creator. Any signed-in user can view, edit, and
+  delete **any** document, its metadata, notes, **comments**, tags, projects,
+  matters and series — not only the ones they created.
 - `documents.uploader_id` and `document_comments.author_id` are **provenance /
   attribution** ("who added this"), surfaced for context. They are **not**
   authorization boundaries and are never enforced on read or mutation.
+- **Two exceptions, both per-user by design and genuinely enforced:**
+  **Ask conversations** (`ask_threads`) and **saved views** (`saved_views`).
+  Each is scoped to `user_id` and another user's row 404s rather than loading —
+  `src/library/api/ask.py` (`thread.user_id != user.id`) and
+  `src/library/api/saved_views.py` (`_get_owned_view_or_404`). These are
+  personal working state, not shared corpus, which is why they are scoped.
 - The only elevated boundary is **admin** (`users.is_admin`), which gates global
   taxonomy/project mutations, user management, and the `/admin` surface.
 
@@ -353,6 +360,7 @@ does not exist, and when a package or a top-level module of at least
 372 lines (`email_label.py` sits at 299), so a floor down there would push
 modules in and out of the mandatory set on single-line edits and red CI for no
 real change. 400 sits in the middle of the one wide gap in the distribution
-(512 → 372), so crossing it means a module genuinely grew. Listing **more** than
+(512 → 372) — the one near the floor; the distribution has a wider one higher
+up, at 1015 → 643 — so crossing it means a module genuinely grew. Listing **more** than
 the floor requires is deliberate and always allowed — an entry is never a
 violation for being small.
