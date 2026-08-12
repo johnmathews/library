@@ -214,32 +214,45 @@ class TestTheGatedSet:
 
 
 class TestRepoState:
-    def test_repo_docs_report_the_expected_violations(self) -> None:
-        """The gate reds today's tree, and this records exactly why.
+    def test_every_gated_doc_carries_a_verified_stamp(self) -> None:
+        """Every living document is stamped, verified, and says how.
 
-        Deliberately not asserting zero: W27 does the verify-and-stamp sweep. This
-        pins the starting position so that sweep's progress is measurable, and it
-        is the check that proves the gate is not vacuous on real input.
+        The verify-and-stamp sweep cleared the backlog this used to pin, so the
+        assertion is now the shape the sweep established: a parseable stamp,
+        status `active`, a real (non-future) ISO date, and a non-empty `method`.
 
-        Flips to expecting zero in W27.
+        **Deliberately no git in this test.** The comparative rules
+        (`stale-doc-edit`, `stale-covered-code`) need real history, and the
+        `backend` job checks out at `fetch-depth: 1` — under which every file
+        reports HEAD's date, so asserting on them here would red this job on the
+        first unrelated merge while `docs-stamps` (`fetch-depth: 0`) stayed
+        green. Those rules are covered by the pure unit tests above and enforced
+        for real by the `docs-stamps` job; this test owns the part that is a
+        property of the *text*.
         """
-        violations: list = []
-        for path in check_docs.gated_documents():
+        gated = check_docs.gated_documents()
+        assert gated, "no gated documents found — the glob is broken"
+
+        today = date.today()
+        problems: list[str] = []
+        for path in gated:
             relative = str(path.relative_to(check_docs.REPO_ROOT))
-            violations.extend(
-                check_docs.check_document(
-                    relative,
-                    path.read_text(encoding="utf-8"),
-                    last_commit=check_docs.git_last_commit_date(relative),
-                    today=TODAY,
-                )
-            )
-        assert violations, "the gate found nothing on a tree known to be unstamped"
-        counts: dict[str, int] = {}
-        for violation in violations:
-            counts[violation.rule] = counts.get(violation.rule, 0) + 1
-        # Every living doc is either unstamped or stamped-without-verification.
-        assert set(counts) <= {"no-stamp", "missing-verified", "stale-doc-edit"}, counts
+            stamp = check_docs.parse_stamp(path.read_text(encoding="utf-8"))
+            if stamp is None:
+                problems.append(f"{relative}: no stamp")
+                continue
+            if stamp.status != "active":
+                # A living doc that is not `active` would silently skip every
+                # rule below, so the sweep's guarantee has to name it.
+                problems.append(f"{relative}: status is {stamp.status!r}, not 'active'")
+                continue
+            if stamp.verified_date is None:
+                problems.append(f"{relative}: `Last verified` is not an ISO date")
+            elif stamp.verified_date > today:
+                problems.append(f"{relative}: `Last verified` is in the future")
+            if not stamp.method:
+                problems.append(f"{relative}: no `— method:` on the stamp")
+        assert not problems, problems
 
 
 PLAN_FRONTMATTER = """---

@@ -1,5 +1,8 @@
 # Jobs view & live notifications
 
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: the Jobs view is one ordered table, not an Active/Recent split — corrected the column set and refresh trigger and documented the three filters; fixed the ownerless-document examples, the `duplicate` dispatch site and the document-less push link titles).
+**Last verified:** 2026-08-12 — method: checked every event name, channel, endpoint, payload field, task name, cron, retry-exception class, `data-testid` and storage key against `jobs.py`, `events_broker.py`, `api/events.py`, `api/jobs.py`, `notifications.py` and the Jobs view, jobs/notifications stores, toast container and header indicator in `frontend/src`.
+
 How Library surfaces background work to the user: a **Jobs view**, **toasts**,
 and a **navbar running-jobs indicator**, all fed by a live Server-Sent Events
 stream. For the API contract see [api.md](api.md) §1.8 / §1.8.5; for the
@@ -15,23 +18,28 @@ worker→api bridge see [architecture.md](architecture.md) §1.4.1.
    processed” on success, a red “Processing failed” on failure (errors stay until
    dismissed; successes auto-dismiss). Each links to the document. Toasts cover
    the **document-processing lifecycle only**; other job types stay quiet.
-3. **Jobs view (`/jobs`).** A dashboard of background jobs split into **Active**
-   (queued/running) and **Recent** (finished). Active rows show the document
-   (linked), task name, status, and a started timestamp; Recent rows add a
-   finished timestamp, run **duration** (from the job's `started_at`/`finished_at`
-   events), extraction cost, and any error. The task name (humanised from the
-   Procrastinate `task_name`, e.g. *Poll email inbox*) makes document-less
-   **system tasks** legible — previously their row was an empty `—`. It refreshes
-   automatically as documents finish. The **Recent** table has a **Columns**
-   visibility menu (`[data-testid="jobs-columns-button"]`) — toggling a column
-   persists to `localStorage['library:jobs-columns']` (merged over defaults, so
-   new columns keep their default visibility); column widths are fixed via
-   `table-fixed` + a `<colgroup>` of `clamp()` widths so the Document column no
-   longer dominates the row. Both sections are **responsive**: a table from the
-   `sm` breakpoint up (`hidden sm:block`) and a card/tile list below it
-   (`sm:hidden`) — the cards lead with Document + Status and render the remaining
-   *visible* columns as a meta grid (mirroring the journal-insights webapp
-   convention).
+3. **Jobs view (`/jobs`).** A dashboard of background jobs as a **single ordered
+   table** — active (queued/running) rows sort to the top and carry a spinner,
+   finished rows follow in the server's order. There is no Active/Recent split
+   and no Started column: the columns are `document, task, status, finished,
+   duration, cost, error`, with `started_at` used only to compute **duration**.
+   The task name (humanised from the Procrastinate `task_name`, e.g. *Poll email
+   inbox*) makes document-less **system tasks** legible — previously their row
+   was an empty `—`. It refetches on **every** document event (not only terminal
+   ones) and on every filter change. Three controls sit above the table: a
+   **Show system tasks** checkbox (`include_system`), a **Task type** filter
+   (options from `GET /api/jobs/task-names`) and a **Document** filter, which
+   switches the server into that document's uncollapsed history. Both filters
+   are URL-query-backed, so a filtered view is deep-linkable. The table has a
+   **Columns** visibility menu (`[data-testid="jobs-columns-button"]`) —
+   toggling a column persists to `localStorage['library:jobs-columns']` (merged
+   over defaults, so new columns keep their default visibility); widths are
+   fixed via `table-fixed` + a `<colgroup>` (`clamp()` for the document and
+   error columns, fixed `rem` for the rest) so the Document column no longer
+   dominates the row. It is **responsive**: the table from the `sm` breakpoint up
+   (`hidden sm:block`) and a card/tile list below it (`sm:hidden`) — the cards
+   lead with Document + Status and render the remaining *visible* columns as a
+   meta grid (mirroring the journal-insights webapp convention).
 
 ## 1.2 How it works
 
@@ -147,8 +155,11 @@ Five opt-in event kinds: `document_success`, `processing_error`, `needs_review`
 (processed but extraction flagged it low-confidence), `duplicate`, and
 `email_held` (an inbound email was held for review instead of filed). A
 notification is sent to the **document's owner** (`uploader_id`) only — so for a
-family deployment, each person hears about their own documents. Documents with
-no owner (consume-folder, paperless import) notify no one; email-in documents are
+family deployment, each person hears about their own documents. A document with
+no owner notifies no one — but the consume folder and the paperless importer are
+**not** examples of that: both attribute an owner from
+`LIBRARY_IMPORT_DEFAULT_OWNER` when it is set (and only leave documents ownerless
+when it is not). Email-in documents are
 attributed to a user via their forwarding addresses (see
 [ingestion.md](ingestion.md), "Email-in").
 
@@ -179,8 +190,10 @@ are its surface. Normal priority because a hold is review work, not an error.
 
 `document_success` / `processing_error` / `needs_review` are dispatched from the
 **worker** at the pipeline's terminal transition (`library.jobs.advance_pipeline`).
-`duplicate` is dispatched at **ingest time** (`library.ingest.ingest_file`),
-because a duplicate never enters the worker pipeline. The document-less
+`duplicate` is dispatched at **ingest time** from
+`library.ingest._duplicate_result` — the shared exit both duplicate paths in
+`ingest_file` return through — because a duplicate never enters the worker
+pipeline. The document-less
 **attachments-dropped** push fires from the **email poller**
 (`dispatch_attachments_dropped_notification`, once per message with drops, only
 after the message's successful Processed move), and the document-less
@@ -194,10 +207,13 @@ never fail a job, an upload, or a poll.
 
 Set `LIBRARY_PUBLIC_BASE_URL` to the web app's public URL (no trailing slash,
 e.g. `https://library.example.com`) to make every push carry a link straight to
-the document it refers to. The dispatcher attaches it as Pushover's
-supplementary URL (`url` + `url_title` "Open in Library"), pointing at
-`{LIBRARY_PUBLIC_BASE_URL}/documents/{id}` — so tapping the notification on your
-phone opens that document in the app.
+what it refers to. The dispatcher attaches it as Pushover's supplementary URL:
+for the **document-scoped** pushes that is `url_title` "Open in Library"
+pointing at `{LIBRARY_PUBLIC_BASE_URL}/documents/{id}` — so tapping the
+notification on your phone opens that document in the app. The two
+document-less pushes link elsewhere: attachments-dropped uses "Open Library"
+(the app root), and the held-email push uses "Open held emails", pointing at
+`{LIBRARY_PUBLIC_BASE_URL}/held-emails`.
 
 When the variable is **unset** the feature silently no-ops: notifications still
 go out, but without a link. Because that looks like a bug ("my notifications

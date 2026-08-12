@@ -1,11 +1,14 @@
 # Frontend view design principles
 
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim; labelled the 2026-06-28 `max-w` block as since-fixed; stopped pointing new views at `DocumentDetailView`'s hand-rolled header).
+**Last verified:** 2026-08-12 — method: resolved every file path, component name, CSS class and design token it names against `frontend/src/`, read `assets/main.css` and `assets/utility-patterns.css`, and re-checked each behavioural claim at its call site.
+
 How to build a Library view that looks **right the first time** — using the
 Mosaic design language already in the app. This is a checklist plus the reasoning
 behind it. If you follow §1 you will avoid every layout problem found in the
 2026-06-28 UX pass. Companion docs: [frontend.md](frontend.md) (architecture,
 shell, `App*` components), and the Mosaic reskin design record
-([archive](superpowers/specs/2026-06-13-mosaic-reskin-design.md)).
+([design record](superpowers/specs/2026-06-13-mosaic-reskin-design.md)).
 
 ## 1. The checklist
 
@@ -55,6 +58,9 @@ Before a view is "done", every box is ticked:
 The single most common defect in the 2026-06-28 pass: views re-imposed a narrow
 cap inside the already-wide shell.
 
+As found in the 2026-06-28 pass — **all three have since been fixed**; none of
+these views carries a root cap today. Kept as the worked example of the defect:
+
 ```
 DefaultLayout  → max-w-[96rem]   (correct, one source of truth)
   NewNoteView  → max-w-4xl       ❌ ~57% of width used
@@ -76,11 +82,14 @@ Defined in `assets/main.css` (`@theme` tokens) and
   hairline border, defined once in `utility-patterns.css`); it carries **no
   padding**, so add your own `p-5` (`class="card p-5"`). Apply the class; don't
   re-spec the surface recipe per view.
-- **Buttons:** `AppButton` (`.btn` / `.btn-sm` / `.btn-lg` / `.btn-xs`), violet
-  primary, gray secondary, red destructive.
+- **Buttons:** `AppButton` — `variant` is `primary` (violet, the default) /
+  `secondary` (gray) / `warning` (red, the destructive one) / `inverse`, and
+  `size` is `sm` / `lg` or omitted, mapping to `.btn-sm` / `.btn-lg` / `.btn`.
+  (`.btn-xs` exists in the CSS but `AppButton` cannot emit it and nothing in
+  `frontend/src/` uses it.)
 - **Forms:** `AppInput` / `AppTextarea` / `AppSelect` / `AppCheckboxes` /
   `AppRadios` (`.form-input` etc.) — label + hint + error baked in, a11y
-  preserved (error-summary focus, 44px targets).
+  preserved (the error summary takes focus on mount).
 - **Accent:** violet (`--color-violet-500` family). Status colours: green / red /
   yellow / sky scales.
 - **Type:** Inter; headings `text-2xl md:text-3xl font-bold` for page titles.
@@ -101,7 +110,8 @@ Full `App*` inventory: `components/app/index.ts`.
 
 Established pattern (mirror it — don't invent a new one):
 
-- `AppSidebar.vue` persists `sidebar-expanded`.
+- `AppSidebar.vue` persists `library:sidebar-expanded` (the bare
+  `sidebar-expanded` key is a legacy read-once fallback, not the pattern).
 - `JobsView.vue` persists table column visibility under `library:jobs-columns`.
 - `@vueuse/core` `useStorage` is already a dependency — prefer it over raw
   `localStorage.getItem/setItem` for new keys.
@@ -156,8 +166,11 @@ inspiration: tokens defined once (`@theme` in `main.css`), a small shared CSS
 component layer (`utility-patterns.css`), one naming vocabulary (`data-testid`),
 all enforced by lint/format/coverage gates. You get "right the first time" by
 *applying* the system, not re-deciding padding, colour, and radius each view.
-Because tests assert on `data-testid` (not classes), a bar can be fully restyled
-without breaking contracts — so consistency is cheap to maintain.
+Because the filter-bar specs assert on `data-testid` (not classes), a bar can be
+fully restyled without breaking contracts — so consistency is cheap to maintain.
+(This is the rule for *filter bars*, not the whole suite: plenty of `App*`
+component specs do assert on classes, deliberately, because the class **is** the
+contract there.)
 
 ## 6. Which error surface to use
 
@@ -182,8 +195,12 @@ panels) are the one deliberate exception — they stay next to their row.
 
 ## 7. When you add a new view
 
-1. Start from `DocumentDetailView.vue` as the structural template (header,
-   no root cap, responsive grid).
+1. Start from `ProjectsListView.vue` (index) or `SettingsView.vue` (tabbed
+   detail) as the structural template: `PageHeader`, no root cap, content in a
+   responsive grid. **Not `DocumentDetailView.vue`** — it predates `PageHeader`
+   and hand-rolls its own `<h1>`s, so copying it reproduces exactly the defect
+   §1 tells you to avoid. Its *layout* (no root cap, `grid-cols-1
+   lg:grid-cols-2`) is still the reference; its header is not.
 2. Drop in `PageHeader` with the title, one-line description, and actions.
 3. Lay out content as cards in a responsive grid; default to filling the width.
 4. Wire any per-machine preference through `localStorage` (§4).

@@ -1,6 +1,8 @@
 # Migrating from paperless-ngx
 
-**Status:** active. **Last updated:** 2026-06-11.
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: documented `LIBRARY_IMPORT_DEFAULT_OWNER`, the `senders:` block in the dry-run report, and the `id`/`document_type` keys in `extra["paperless"]`; corrected the `user_edited_fields` names). Earlier: 2026-06-11.
+**Last verified:** 2026-08-12 — method: read `importer/client.py`, `mapper.py` and `runner.py` in full, compared the `library import paperless` command and all five `typer.Option` flags and defaults against `cli.py`, and traced every row of the §1.3.1 mapping table, both §1.4 idempotency keys and each §1.6 limitation to its implementing line; the importer was not run (no paperless instance).
+**Covers:** src/library/importer/, src/library/cli.py
 
 `library import paperless` copies every document out of a running
 paperless-ngx instance (2.x or 3.0) into Library over the paperless REST
@@ -29,6 +31,12 @@ Credentials are given as flags or environment variables:
 | `--url` | `LIBRARY_PAPERLESS_URL` |
 | `--token` | `LIBRARY_PAPERLESS_TOKEN` |
 
+Paperless has no notion of a Library user, so every imported document is
+attributed to a **default owner** resolved from `LIBRARY_IMPORT_DEFAULT_OWNER`
+(setting `import_default_owner`). That user becomes each document's `uploader`,
+which is also the last rung of the recipient ladder — so leaving it unset means
+imported documents arrive with no uploader to fall back to.
+
 The client pins `Accept: application/json; version=9`, which both
 paperless-ngx 2.x and 3.0 understand.
 
@@ -52,6 +60,10 @@ paperless import (dry run — nothing was written)
   kinds:
     invoice: 612
     receipt: 401
+    ...
+  senders:
+    Belastingdienst: 214
+    Vattenfall: 96
     ...
   storage paths:
     Family: 1102
@@ -98,11 +110,14 @@ Downloads run with small concurrency (4); trashed documents
 | custom field, documentlink | `extra["paperless"]["linked_documents"]`, remapped to Library document ids in a second pass after all documents exist |
 | other custom fields | `extra["paperless"]["custom_fields"]` verbatim |
 | `added`, `archive_serial_number`, notes | `extra["paperless"]` (`added`, `asn`, `notes`) |
+| paperless id, document type name | always in `extra["paperless"]` as `id`; `document_type` when the document has one |
 | trashed (`deleted_at` set) | skipped |
 
-Every field migrated from paperless (title, date, kind, sender, amount)
-is listed in `extra["user_edited_fields"]`, so later Claude extraction
-fills gaps but never overwrites curated paperless values.
+Every field migrated from paperless is listed in
+`extra["user_edited_fields"]`, so later Claude extraction fills gaps but never
+overwrites curated paperless values. The entries are **column** names, not the
+paperless ones: `title`, `document_date`, `amount_total`, `currency`, `kind_id`,
+`sender_id` — and each is recorded only when that field was actually mapped.
 
 ### 1.3.2 Follow-up processing
 

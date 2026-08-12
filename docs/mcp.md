@@ -1,5 +1,9 @@
 # MCP server
 
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: added the undocumented `list_matters` tool and the `matter` search filter, completed the two result shapes, and noted that a `source_note` is only stored when the ingest was not a duplicate).
+**Last verified:** 2026-08-12 — method: read `src/library/mcp_server.py` in full and compared all 11 registered `@mcp.tool` functions' names, parameters, defaults and return keys against the §1.3 table, then checked the mount point, CLI entry point, token constants and taxonomy result shapes in `app.py`, `pyproject.toml`, `auth/service.py`, `api/auth.py`, `taxonomy.py`, `projects.py` and `matters.py`.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py
+
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, Claude Desktop, the Anthropic API MCP
 connector, or any MCP-capable agent) can search the archive, read
@@ -84,15 +88,16 @@ explanation.
 
 | Tool | Parameters | Returns |
 |------|------------|---------|
-| `search_documents` | `query?` (websearch syntax, Dutch+English stemming), `kind?` (slug), `sender?` (case-insensitive substring of sender name), `recipient?` (case-insensitive substring of recipient name), `tag?` (slug), `project?` (slug — see `list_projects`), `language?` (`nld`/`eng`/`mixed`/`unknown`), `date_from?`, `date_to?` (ISO dates, inclusive, on `document_date`), `limit` (default 10, max 50) | `{results: [{id, title, summary, kind, sender, tags, topics, projects, document_date, language, snippet, rank}], total}` — ranked when `query` is given, newest-first otherwise. Snippets carry `<b>…</b>` match markers. |
-| `get_document` | `document_id` | Full metadata (kind, sender, tags, read-only auto-extracted topics, dates, amount, language, status, provenance) plus OCR text (truncated at 20 000 characters with an explanatory note and `ocr_text_truncated: true`) and the audit-trail events `[{event, created_at}]`. |
+| `search_documents` | `query?` (websearch syntax, Dutch+English stemming), `kind?` (slug), `sender?` (case-insensitive substring of sender name), `recipient?` (case-insensitive substring of recipient name), `tag?` (slug), `project?` (slug — see `list_projects`), `matter?` (slug — see `list_matters`), `language?` (`nld`/`eng`/`mixed`/`unknown`), `date_from?`, `date_to?` (ISO dates, inclusive, on `document_date`), `limit` (default 10, max 50) | `{results: [{id, title, summary, kind, sender, recipient, tags, topics, projects, matters, document_date, language, status, mime_type, page_count, created_at, updated_at, snippet, rank}], total}` — ranked when `query` is given, newest-first otherwise. Snippets carry `<b>…</b>` match markers. |
+| `get_document` | `document_id` | Every field of a search result (above) plus amount, provenance, `has_searchable_pdf`, OCR text (truncated at 20 000 characters with an explanatory note and `ocr_text_truncated: true`) and the audit-trail events `[{event, created_at}]`. `topics` are read-only auto-extracted. |
 | `get_document_file` | `document_id`, `variant` = `"original"` (default) or `"searchable_pdf"` | `{filename, mime_type, size_bytes, content_base64}`. Files over 10 MB are refused with an error pointing at the REST download endpoints. |
-| `ingest_document` | `filename`, `content_base64`, `source_note?` | `{id, sha256, status, duplicate}`. Runs the same ingestion service as uploads (dedup by SHA-256, OCR + extraction queued); `source` is recorded as `mcp` and the calling token's user as uploader. A `source_note` is stored on the audit trail. |
+| `ingest_document` | `filename`, `content_base64`, `source_note?` | `{id, sha256, status, duplicate}`. Runs the same ingestion service as uploads (dedup by SHA-256, OCR + extraction queued); `source` is recorded as `mcp` and the calling token's user as uploader. A `source_note` is stored on the audit trail — but only when the ingest was not a duplicate, since a duplicate creates no new document to attach it to. |
 | `list_kinds` | — | `{kinds: [{slug, name, document_count}]}` |
 | `list_senders` | — | `{senders: [{id, name, document_count}]}` |
 | `list_recipients` | — | `{recipients: [{id, name, document_count}]}` |
 | `list_tags` | — | `{tags: [{slug, name, document_count}]}` |
 | `list_projects` | — | `{projects: [{id, slug, name, description, document_count}]}` — archived projects are omitted. Use the slugs as the `project` filter of `search_documents`. |
+| `list_matters` | — | `{matters: [{id, slug, name, hint, document_count}]}` — archived matters are omitted. Use the slugs as the `matter` filter of `search_documents`. |
 | `library_stats` | — | `{total_documents, by_status, by_kind, ingested_last_7_days, oldest_document_date, newest_document_date}` |
 
 Search behaviour is identical to `GET /api/documents` — both run the same

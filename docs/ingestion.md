@@ -1,5 +1,8 @@
 # Ingestion
 
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: removed a stale `LIBRARY_PDF_UNLOCK_PASSWORDS` default that republished a withdrawn password, corrected the "no per-task retry policy" claim, the markdown grounding limit, the consume extension list and the `GET /api/jobs` contract; documented the email recipient hint and the missing ingestion events).
+**Last verified:** 2026-08-12 — method: traced each claim to source — settings and defaults against `config.py` and `.env.example`, pipeline/retry/guard behaviour against `jobs.py`, routing and thresholds against `ocr/`, limits against `extraction/` and `markdown/`, endpoint shapes against `api/` and `schemas.py` — plus a mechanical check that every `LIBRARY_*`, every `library.*` path and every emitted event name resolves.
+
 How a file becomes a Document: upload → content-addressed storage →
 database row → background job → status lifecycle. This document covers
 storage layout, MIME handling, HEIC conversion, the upload API, the
@@ -182,8 +185,10 @@ the viewer, and the *Download original* link all see a normal unlocked file.
 This is safe because the library app is itself behind authentication.
 
 The passwords tried come from `LIBRARY_PDF_UNLOCK_PASSWORDS`
-(`Settings.pdf_unlock_passwords`, comma-separated, **case-sensitive**, default
-`["2064"]`). The **empty password is always tried first**, covering PDFs with
+(`Settings.pdf_unlock_passwords`, comma-separated, **case-sensitive**, **empty
+by default** — so on a stock install a genuinely password-protected PDF is
+rejected at ingest until you configure one). The **empty password is always
+tried first**, covering PDFs with
 only an owner password or an empty user password. `unlock_pdf` uses `pikepdf`
 (already in the tree via OCRmyPDF) and:
 
@@ -312,8 +317,13 @@ Decisions:
 - Any exception marks the document `failed`, records a `failed` event
   with `{"error": …, "status": <status it failed in>}`, and re-raises so
   Procrastinate also marks the job failed. A *clean* exception is therefore
-  terminal and visible; there is no per-task retry policy (one would not help —
-  a retried job hits the now-`failed`/terminal document and no-ops).
+  terminal and visible — unless it is on the **transient allowlist**: the
+  pipeline tasks carry `retry=TRANSIENT_RETRY` (5 attempts, exponential wait),
+  whose `retry_exceptions` names only genuinely retryable failures (Anthropic
+  connection/timeout/rate-limit/5xx, `httpx.TransportError`,
+  `OperationalError`, `InterfaceError`, `EmbeddingError`). Everything else —
+  including every constraint violation — is terminal on the first raise, which
+  is the point of an allowlist rather than a blanket retry.
 - **Crash recovery (stalled-job sweeper).** A *hard* kill (OOM, `SIGKILL`, host
   crash, or a redeploy that `SIGKILL`s the worker mid-stage) never runs the
   `except` block, so the document is left in a committed non-terminal status
@@ -550,6 +560,11 @@ prompt-instructed or normalised by validators.
 
 ### Input selection
 
+- **Email recipient hint:** when the document arrived as an email attachment, a
+  one-line text block is appended to the user content naming who the email was
+  addressed to (`_email_context_block` / `build_user_content(...,
+  recipient_hint=…)`). It is a hint, not an override — a recipient named in the
+  document itself still wins.
 - **Normal case:** the user message is the document's `ocr_text`. Text up
   to `MAX_TEXT_CHARS` (8,000) is sent whole. **Longer text is sampled, not
   truncated** (`_sample_long_text`): `_SAMPLE_WINDOWS` (6) evenly-spaced
@@ -838,7 +853,7 @@ Written by `_apply_validation` in `apply.py` as part of the extraction commit:
 
 ```json
 {
-  "prompt_version": "v3",
+  "prompt_version": "2026-07-26.1",
   "findings": [
     {"rule": "amount_grounding", "field": "amount_total", "severity": "warn",
      "message": "amount_total does not appear in the document text"}
@@ -863,7 +878,7 @@ improvement:
   "original_value": "120.00",
   "corrected_value": "12.00",
   "source_excerpt": "…Totaal € 12,00…",
-  "prompt_version": "v3",
+  "prompt_version": "2026-07-26.1",
   "model": "claude-haiku-4-5",
   "corrected_at": "2026-06-21T10:00:00Z"
 }
@@ -995,8 +1010,11 @@ already-extracted title, summary, and sender.
 **Where it runs.** Deferred as its own best-effort job at the tail of the
 `extract` stage (`classify_document_matters`, wired in `library.jobs`): the job
 is queued right after extraction commits and runs in parallel with the later
-pipeline stages. A queue error is swallowed — matter classification can **never**
-block, fail, or stall a document's ingest.
+pipeline stages. A queue error never propagates — matter classification can
+**never** block, fail, or stall a document's ingest — but it is not silent
+either: `_defer_best_effort` records a `job_defer_failed` ingestion event on
+the document, so a follow-up job that was never enqueued is visible rather
+than lost.
 
 The pipeline's defer carries `skip_if_classified=True`, so if a resume re-runs
 the `extract` branch and queues the job a *second* time, that duplicate returns
@@ -1099,11 +1117,12 @@ skipped with `reason: "input_unusable"`).
 | `image/tiff` | the OCR-produced `searchable.pdf`'s pages |
 | `image/jpeg`, `image/png` | the single image → one page |
 | `image/heic`, `image/heif` | the derived `converted.jpg` → one page |
-| `text/markdown`, `text/plain` | **no vision call** — born-digital text is its own markdown layer (see below) |
+| `text/markdown`, `text/plain`, `.docx` | **no vision call** — born-digital text is its own markdown layer (see below) |
 
 **Model call.** One `client.messages.parse()` call (async SDK, structured
-outputs) per page-image batch, with content `[page images…] + [full
-ocr_text as grounding text] + [instruction]` and schema `DocumentMarkdown
+outputs) per page-image batch, with content `[page images…] + [one text
+block: ocr_text as grounding, truncated to `MAX_GROUNDING_CHARS` = 12,000
+characters, followed by the instruction]` and schema `DocumentMarkdown
 {pages: list[PageMarkdown]}` where `PageMarkdown = {page_number: int,
 markdown: str}`. Pages are sent in batches of
 `LIBRARY_MARKDOWN_PAGE_BATCH` (default 10); the per-batch results are
@@ -1404,7 +1423,7 @@ no-ops.
 
 ### Supported extensions
 
-`.pdf .jpg .jpeg .png .heic .heif .tif .tiff .txt .md .markdown`
+`.pdf .jpg .jpeg .png .heic .heif .tif .tiff .txt .md .markdown .docx`
 (case-insensitive).
 Anything else is ignored in place — extensionless or unknown files are
 *not* moved to `{LIBRARY_FAILED_DIR}/`, because Syncthing folders routinely contain
@@ -1929,8 +1948,9 @@ asynchronously for the *derived* layers only: metadata extraction and embeddings
   body in place (file + `ocr_text` + page rewritten synchronously), records a
   `note_edited` event, and — when the body changed — re-defers `extract_document`
   and `embed_document`. The current body for snapshotting is the document's
-  `ocr_text` (the authoritative born-digital layer). A no-op edit (empty body)
-  is a no-op: no snapshot, no event. 
+  `ocr_text` (the authoritative born-digital layer). A PATCH that supplies **no
+  fields at all** is a no-op: no snapshot, no event. (An explicit empty-string
+  body is a real edit — it snapshots and rewrites.)
 - **Version history** (`GET /api/notes/{id}/versions`): every prior snapshot,
   newest first.
 - **Restore** (`POST /api/notes/{id}/versions/{n}/restore`): snapshots the
@@ -1958,11 +1978,16 @@ Multipart upload, field name `file`.
 
 ### `GET /api/jobs?limit=N`
 
-Reads the `procrastinate_jobs` table directly: returns the most recent
-jobs as
-`[{id, status, task_name, attempts, scheduled_at, document_id}]`,
-with `document_id` pulled from the job's JSON args when present.
-`limit` defaults to 50 (max 500).
+Reads the `procrastinate_jobs` table directly. By default it **collapses to
+one row per document** (not a flat "most recent jobs" list) and hides
+document-less system jobs unless they are failed or running; `include_system=1`
+shows them, `document_id=N` switches to that document's uncollapsed history,
+and `task_name=…` filters by task. Rows are
+`[{id, status, task_name, attempts, scheduled_at, started_at, finished_at,
+active, document_id, document_title, document_status, error, cost_usd,
+tokens}]`, with `document_id` pulled from the job's JSON args when present.
+`limit` defaults to 50 (max 500). The task names available for the filter come
+from `GET /api/jobs/task-names`.
 
 ## Ingestion events
 
@@ -1970,7 +1995,7 @@ Append-only audit trail in `ingestion_events`:
 
 | event | written by | detail |
 | --- | --- | --- |
-| `received` | ingest | `{filename, size, mime_type, source}`; email adds `{email_from, email_subject, email_message_id}`; a note records `{source: "note", size}` |
+| `received` | ingest | `{filename, size, mime_type, source, pdf_unlocked}`; email adds `{email_from, email_subject, email_message_id}`; a note records `{source: "note", size}` |
 | `duplicate_upload` | ingest | `{filename, source}`; email adds the same `email_*` keys |
 | `email_selection` | email poller | Per-item decision trace, persisted on each new document the email produced: `{email_from, email_subject, email_message_id, email_to?, items}` where each item is `{kind, filename, mime, size, stage, verdict, reason}` (see "Email item selection"). A *held* email produced no document, so its trace is snapshotted on the `held_emails` row instead — no ingestion event |
 | `email_label_completed` | email poller | `{cost_usd, model, input_tokens, output_tokens, prompt_version, items}` — one per billed LLM label pass whose email filed, written on the first produced document (new or duplicate); the label budget gate sums these **plus** the `trace["label_usage"]` costs on today's `held_emails` rows |
@@ -1979,7 +2004,7 @@ Append-only audit trail in `ingestion_events`:
 | `status_changed` | pipeline | `{from, to}` |
 | `ocr_completed` | OCR stage | `{engine, confidence, pages, characters}`; plus `gate: {tesseract_confidence, rapidocr_confidence}` when the confidence gate retried |
 | `ocr_failed` | OCR stage | `{error}` |
-| `extraction_completed` | extraction stage | `{model, prompt_version, confidence, input_tokens, output_tokens, cost_usd, escalated, input_mode}` |
+| `extraction_completed` | extraction stage | `{model, prompt_version, confidence, input_tokens, output_tokens, cost_usd, escalated, input_mode, fields_set}` |
 | `extraction_skipped` | extraction stage | `{reason, ...}` — `disabled`, `missing_api_key`, `already_extracted`, `budget`, `input_unusable`, `file_too_large` |
 | `extraction_failed` | extraction stage | `{error, prompt_version}` |
 | `markdown_completed` | markdown stage | `{model, prompt_version, pages, input_tokens, output_tokens, cost_usd}`; born-digital text instead records `{engine: "passthrough", model: null, pages: 1, cost_usd: 0.0}` |
@@ -1988,6 +2013,12 @@ Append-only audit trail in `ingestion_events`:
 | `extraction_repair_completed` | markdown stage (repair pass) | `{model, prompt_version, input: "markdown", confidence, input_tokens, output_tokens, cost_usd, fields_filled, gaps}` — counts toward the **extraction** daily budget (see "Fill-only extraction repair") |
 | `extraction_repair_skipped` | markdown stage (repair pass) | `{reason, ...}` — `disabled`, `missing_api_key`, `no_markdown`, `no_extraction`, `already_repaired`, `no_gaps`, `budget`, `error` |
 | `matter_changed` | documents service | `{matters}` — the new full matter-slug list after a manual `PATCH /api/documents/{id}` edit of `matters` (also locks the field in `user_edited_fields`) |
+| `matter_classification_completed` | matter classifier | the best-effort classification pass that runs after extract |
+| `ocr_empty` | OCR stage | the stage produced no text |
+| `embedded` / `embedding_skipped` / `embedding_failed` | embed stage | the embed stage's three outcomes |
+| `thumbnail_generated` / `thumbnail_skipped` | thumbnail task | best-effort, never retried |
+| `pdf_unlocked_backfill` | `library sweep-encrypted` | an already-failed encrypted PDF unlocked in place |
+| `job_defer_failed` | pipeline | a best-effort `_defer_best_effort` enqueue that raised — recorded rather than swallowed, so a lost follow-up job is visible on the document |
 | `failed` | pipeline | `{error, status}` |
 
 ## Characterisation tests over the real corpus
@@ -2092,6 +2123,7 @@ every `LIBRARY_*` variable, is [`.env.example`](../.env.example)):
 | --- | --- | --- |
 | `LIBRARY_DATA_DIR` | `/data` | Root of `originals/` and `derived/` |
 | `LIBRARY_MAX_UPLOAD_BYTES` | `104857600` (100 MB) | Upload size cap |
+| `LIBRARY_PDF_UNLOCK_PASSWORDS` | *(empty)* | Comma-separated passwords tried when unlocking an encrypted PDF. Empty by default, so an encrypted PDF is rejected at ingest until one is configured |
 | `LIBRARY_DATABASE_URL` | (see `config.py`) | Database + job queue (translated for psycopg) |
 | `LIBRARY_OCR_LANGUAGES` | `nld+eng` | Tesseract language pack(s) (`-l` value) |
 | `LIBRARY_OCR_CONFIDENCE_THRESHOLD` | `65.0` | Below this mean word confidence, retry via the photo path |

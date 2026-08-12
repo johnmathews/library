@@ -1,6 +1,7 @@
 # Smart Groups
 
-**Status:** shipped 2026-07-24. Design: [superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md](superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md).
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: the blurb is written inside the create request, not after the review; closing the review modal is not a dismissal; fixed the §3.x cross-references, which pointed at the scorer rather than the three flows). Shipped 2026-07-24. Design: [superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md](superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md).
+**Last verified:** 2026-08-12 — method: checked each claim against `semantic_membership.py`, `series.py`, `api/charts.py`, `series_insight.py`, `jobs.py` and `config.py`, plus `tests/test_smart_groups_api.py` and the `ChartsView.vue`/`SeriesChartTile.vue` surfaces, and confirmed via `grep -rn "_name_anchor_ids" src/ tests/` that only the negative-guard assertion remains; no tests were executed.
 
 ## 1. What it is
 
@@ -26,11 +27,11 @@ Two sets per group, both scoped `(authored_series_id, document_id)`:
 
 - **Positives** — `AuthoredSeriesMember` rows, each carrying an `origin`:
   - `manual` — added by hand (default; also what plain `mode="manual"` series use).
-  - `accepted_suggestion` — promoted from a staged backfill suggestion (§3.1).
-  - `auto` — silently added by the forward auto-add job (§3.2).
+  - `accepted_suggestion` — promoted from a staged backfill suggestion (§4.1).
+  - `auto` — silently added by the forward auto-add job (§4.2).
 - **Negatives** — `AuthoredSeriesExclusion` rows: documents the scorer must
   never re-add. Written whenever a member is removed or a suggestion is
-  dismissed (§3.3), regardless of that member's `origin`.
+  dismissed (§4.3), regardless of that member's `origin`.
 
 Re-adding a document (manual add, or accepting a suggestion) clears any
 matching exclusion, so "I changed my mind" is not permanent.
@@ -99,10 +100,13 @@ boundary.
    a one-time review modal ("Review N documents that look like this group")
    before creation is really "done." Accept promotes a hit to a member with
    `origin=accepted_suggestion` (via the existing
-   `POST …/suggestions/{doc}/accept`); dismiss/leave-unchecked writes an
-   exclusion (`POST …/suggestions/{doc}/dismiss`).
-4. After the review commits, `refresh_group_blurb` best-effort fills the
-   group's description (§6).
+   `POST …/suggestions/{doc}/accept`); dismiss writes an exclusion
+   (`POST …/suggestions/{doc}/dismiss`). Closing the modal is not a dismissal —
+   rows left unreviewed stay `pending` and no exclusion is written.
+4. `refresh_group_blurb` best-effort fills the group's description (§6). This
+   happens in the create request itself, right after the sweep and before the
+   response returns — so the blurb is written off the seeded members, before
+   the review modal is opened.
 
 Only this first sweep is staged for review — it is a one-time retroactive
 sweep of the whole library, which is exactly the kind of bulk change a user

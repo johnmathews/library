@@ -1,6 +1,7 @@
 # Roadmap & deferred work
 
-**Status:** active. **Last updated:** 2026-07-25. **Supersedes:** none.
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: recorded Recently Deleted, Saved Views and document comments as shipped; narrowed the `ON DELETE SET NULL` claim to `documents`' own FKs). Earlier: 2026-07-25. **Supersedes:** none.
+**Last verified:** 2026-08-12 — method: checked every deferred item against the code that would implement it (greps for `rerank`, `ALLOWED_MIME_TYPES`, matter aggregation, the classifier), every shipped item against its module, migration or e2e spec, and the one cited commit against `git log`; then swept `git log --since=2026-07-20` and the recent migrations for shipped work the document did not record.
 
 Living list of agreed-but-not-yet-built work and explicitly-deferred ideas, so
 they don't get lost between sessions. Most recent context lives in
@@ -92,6 +93,11 @@ editable taxonomy.
 
 Recorded here so they read as **done**, not queued:
 
+- **Recently Deleted, Saved Views and document comments** (all 2026-07-06):
+  a soft-delete holding area at `/deleted` with restore and purge; per-user
+  saved dashboards (`saved_views`, migration 0024, scoped to their owner); and
+  threaded per-document comments (`document_comments`, migration 0022) that also
+  become Ask-searchable chunks.
 - **Business matters (auto-filed subject categories).** An evergreen
   many-to-many dimension (`matters` + `document_matters`, migration 0028): a
   document belongs to any number of admin-curated matters (car insurance, health
@@ -115,7 +121,8 @@ Recorded here so they read as **done**, not queued:
   reference entities: senders, kinds, recipients (create / rename-or-merge /
   reassign-then-delete), series-aware currency normalization, and **FX-rate
   seeding** (`/api/admin/fx-rates`, base = USD, date-aware) so cross-currency
-  series can convert. All reference FKs are `ON DELETE SET NULL`; every mutation
+  series can convert. `documents`' reference FKs (sender, recipient, kind) are
+`ON DELETE SET NULL`; the series override tables cascade instead. Every mutation
   is guarded by a shared advisory lock. See [admin.md](admin.md) and
   [api.md §1.18](api.md).
 - **Per-user per-kind tile border colours.** Each user can colour dashboard tiles

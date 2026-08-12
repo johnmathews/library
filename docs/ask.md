@@ -1,6 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-07-21 (two-screen, route-driven Ask — Option B — plus a mobile pass: full-bleed chat, one full-width pill composer, flat turns, phone Enter = newline; and the mobile chat is now a fixed-height `100dvh` flex column with an internal-scroll transcript and a footer composer that docks at the bottom / above the on-screen keyboard via `interactive-widget=resizes-content` + safe-area inset; §1.6). Desktop now
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: `SeriesChartTile` is a bar chart, not a line chart; three question classes, not two; documented the trend widget's `ChartControls` row; corrected the prompt-cache breakpoint wording). Earlier (2026-07-21, two-screen, route-driven Ask — Option B — plus a mobile pass: full-bleed chat, one full-width pill composer, flat turns, phone Enter = newline; and the mobile chat is now a fixed-height `100dvh` flex column with an internal-scroll transcript and a footer composer that docks at the bottom / above the on-screen keyboard via `interactive-widget=resizes-content` + safe-area inset; §1.6). Desktop now
+**Last verified:** 2026-08-12 — method: checked each claim against `ask/engine.py`, `api/ask.py`, `search.py`, `structured_query.py`, `series.py`, `series_insight.py`, `jobs.py`, `models.py`, `config.py`, `extraction/pricing.py` and `.env.example`, and the §1.6 UI claims (routes, redirect, the two `100dvh` heights, keyboard rules, testids) against `AskView.vue`, `router/index.ts` and `frontend/index.html`; no tests were run.
 uses the same fixed-height fill (`calc(100dvh - 8rem)`) so its composer docks at
 the bottom too, replacing the old `sticky` composer (§1.6). Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9); (2026-07-02) metadata write tool, recipient in answer context, citations collapsed by default.
 
@@ -11,9 +12,9 @@ contract?"* or *"who was my energy provider last year?"*. It runs in-app
 leaves the host for indexing (local embeddings), and only the final answer
 step calls Claude.
 
-## 1.1 The two question classes
+## 1.1 The three question classes
 
-Ask handles two different shapes of question, and the answer engine picks the
+Ask handles three different shapes of question, and the answer engine picks the
 right tool per question:
 
 1. **Content questions** ("what does this document say?") — e.g. the travel
@@ -223,7 +224,9 @@ without re-querying — the faithful replay path.
 
 **Prompt caching.** When a history prefix is present, the engine marks the
 boundary of the rehydrated prefix with an Anthropic `cache_control: ephemeral`
-breakpoint, and the static system prompt/tool definitions also carry a breakpoint.
+breakpoint, and the static system prompt carries one of its own. The tool
+definitions carry no breakpoint but sit *before* the system block in the cached
+prefix, so the system breakpoint covers them too.
 Re-sent turns hit the Anthropic prompt cache, reducing cost and latency on
 follow-ups.
 
@@ -416,10 +419,13 @@ the API body. The description is absent until the first successful generation.
 
 The document detail view includes a **`DocumentSeriesTrend`** panel that fetches
 the document's series on mount and renders a **`SeriesChartTile`**: a Chart.js
-line chart of the series' dated points (current document's point highlighted),
+bar chart of the series' dated points (current document's point highlighted),
 the cached description, a one-line verdict (e.g. *"6.4% above usual · trend
 rising"*), and a list of **citation links** (each point → `/documents/{id}`). The
 panel hides itself silently when `status:"insufficient"` or on fetch error.
+It also carries its own `ChartControls` row (time range, from/to, group-by),
+persisted under `library:doc-series-*` keys, and shows a `doc-series-empty`
+state when the selected window contains no points.
 
 The **`/charts`** view (sidebar nav) renders a responsive grid of the same
 `SeriesChartTile`, one per eligible series, fed by `GET /api/charts`. Tiles here

@@ -1,5 +1,8 @@
 # Admin role & admin views
 
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: `/matters` is a normal route with admin-gated *writes*, not an admin-only page; the Metadata tab covers senders, recipients, kinds, currencies and FX, not recipients alone).
+**Last verified:** 2026-08-12 — method: checked every endpoint, verb, status code and 409 body key against `src/library/api/admin/*.py`, `require_admin` and its mount in `app.py`, the `user`/`sweep-matters` CLI commands, and the router guard, tab list and per-row affordances in `frontend/src/views/admin/**` and `AppSidebar.vue`.
+
 The library is a multi-user "named family accounts over one shared library"
 (see [architecture.md](architecture.md) §1.5). On top of that, a single boolean
 role — **admin** — gates a handful of cross-cutting operations and an
@@ -217,9 +220,12 @@ matters are filled **automatically**: a per-document LLM classifier auto-files
 each document into the matters it clearly belongs to (see docs/ingestion.md,
 "Matter classification"). Admins own the vocabulary the classifier chooses from.
 
-Matters are managed from the dedicated **`/matters`** page (a separate admin-only
-route, not one of the `/admin` tabs), backed by `POST/PATCH/DELETE /api/matters`
-(docs/api.md §1.22). You can:
+Matters are managed from the dedicated **`/matters`** page (a route of its own,
+not one of the `/admin` tabs). The page itself is **not** admin-gated — every
+authenticated user can browse matters and their counts — but the write
+affordances are `v-if="isAdmin"` in the view and the endpoints behind them are
+`require_admin`, so the gate is real on the server, not just hidden in the UI.
+Backed by `POST/PATCH/DELETE /api/matters` (docs/api.md §1.22). You can:
 
 - **Create** a matter (name + optional `hint`).
 - **Rename** it — the slug is immutable, so the `?matter=` filter and any saved
@@ -282,10 +288,12 @@ link, with five tabs backed by the endpoints above: **System**, **Architecture**
 (markdown → sanitised HTML via the shared marked + DOMPurify pipeline),
 **Coverage**, **Users** (promote/demote/activate + create + delete, with inline
 last-admin error handling; each row offers a two-step **Delete** confirm except
-your own, which shows "You" instead), and **Metadata** (recipient management, §1.2.3) —
-each recipient row has an inline **Rename** (revealing a merge prompt on a `409`
+your own, which shows "You" instead), and **Metadata** — three
+`TaxonomyCrudPanel`s (senders, recipients and kinds, §1.2.3) plus the
+**Currencies** card and the **FX rates** subsection (§1.2.5, §1.2.6). Each
+recipient row has an inline **Rename** (revealing a merge prompt on a `409`
 collision) and an inline **Delete** (with a reassign-target picker for in-use
-recipients). The router's `authGuard` redirects non-admins away from
+recipients); senders behave the same way, and kinds are rename-only. The router's `authGuard` redirects non-admins away from
 `meta.adminOnly` routes, so the page is unreachable without the role even by deep
 link.
 
