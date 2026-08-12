@@ -127,7 +127,16 @@ def _ocr_array(image: np.ndarray) -> tuple[str, float | None]:
     txts: Sequence[Any] | None = getattr(result, "txts", None)
     if not txts:
         return "", None
-    ordered = sort_reading_order(result.boxes, txts, result.scores)
+    # RapidOCR's return type is a union of four output shapes; only the full
+    # `RapidOCROutput` carries boxes/scores. Reaching here means `txts` was
+    # populated, so it is that shape — but assert it rather than crashing inside
+    # `sort_reading_order`, and never quietly return empty text for a result the
+    # engine did produce.
+    boxes: Sequence[Any] | None = getattr(result, "boxes", None)
+    scores: Sequence[Any] | None = getattr(result, "scores", None)
+    if boxes is None or scores is None:
+        raise TypeError(f"RapidOCR returned {type(result).__name__} with txts but no boxes/scores")
+    ordered = sort_reading_order(boxes, txts, scores)
     text = "\n".join(item_text for item_text, _ in ordered)
     confidence = 100.0 * sum(score for _, score in ordered) / len(ordered)
     return text, confidence

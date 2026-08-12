@@ -12,9 +12,10 @@ a failure means for the document.
 import base64
 import logging
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from anthropic import AsyncAnthropic
+from anthropic.types import ContentBlockParam
 
 from library.config import Settings
 from library.extraction.pricing import MODEL_PRICING_USD_PER_MTOK
@@ -336,7 +337,8 @@ async def _attempt(
         model=model,
         max_tokens=MAX_OUTPUT_TOKENS,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": content}],
+        # Hand-built blocks crossing into the SDK's TypedDict union; see judge.py.
+        messages=[{"role": "user", "content": cast("list[ContentBlockParam]", content)}],
         output_format=ExtractedMetadata,
     )
     usage = CallUsage(

@@ -11,8 +11,10 @@ from __future__ import annotations
 import base64
 import logging
 from dataclasses import dataclass
+from typing import cast
 
 from anthropic import AsyncAnthropic
+from anthropic.types import ContentBlockParam
 
 from library.config import Settings
 from library.extraction.extractor import estimate_cost_usd
@@ -117,7 +119,8 @@ async def generate_markdown(
             model=settings.markdown_model,
             max_tokens=MAX_OUTPUT_TOKENS,
             system=SYSTEM_PROMPT,
-            messages=[{"role": "user", "content": content}],
+            # Hand-built blocks crossing into the SDK's TypedDict union; see judge.py.
+            messages=[{"role": "user", "content": cast("list[ContentBlockParam]", content)}],
             output_format=DocumentMarkdown,
         )
         input_tokens += response.usage.input_tokens

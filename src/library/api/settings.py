@@ -245,12 +245,18 @@ async def put_notifications(
     user_key = payload.pushover_user_key or existing.get("pushover_user_key")
     device = payload.pushover_device  # non-secret, echoed back → authoritative
 
-    if payload.enabled and not (app_token and user_key):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="A Pushover app token and user key are both required to enable notifications.",
-        )
+    # One branch, not two: the credentials are only known non-empty inside the
+    # branch that raised on the empty case, and splitting it across two separate
+    # `if payload.enabled` blocks threw that away (for the reader as much as for
+    # the type checker).
     if payload.enabled:
+        if not (app_token and user_key):
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=(
+                    "A Pushover app token and user key are both required to enable notifications."
+                ),
+            )
         validation = await notifications.validate_pushover(
             app_token=app_token, user_key=user_key, device=device
         )

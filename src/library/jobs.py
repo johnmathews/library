@@ -596,13 +596,17 @@ async def advance_pipeline(
             # This document may have joined (or grown) a recurring series; refresh
             # its cached LLM description out of band. Best-effort: a queue hiccup
             # must never strand an already-indexed document.
-            if document.sender_id is not None and document.kind_id is not None:
+            sender_id, kind_id = document.sender_id, document.kind_id
+            if sender_id is not None and kind_id is not None:
                 await _defer_best_effort(
                     session,
                     document.id,
                     "series insight",
+                    # Bound to locals, not read off `document` inside the lambda:
+                    # the guard above cannot narrow an attribute across a nested
+                    # scope, and the lambda would otherwise re-read it at call time.
                     lambda: generate_series_insight.defer_async(
-                        sender_id=document.sender_id, kind_id=document.kind_id
+                        sender_id=sender_id, kind_id=kind_id
                     ),
                 )
                 # It may also match an authored series' signature: propose it for

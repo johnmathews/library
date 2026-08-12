@@ -156,9 +156,12 @@ async def ask(
         session.add(thread)
         await session.flush()
     else:
-        thread = await session.get(AskThread, request.thread_id)
-        if thread is None or thread.user_id != user.id:
+        # Bound through a separate name so the `is None` check narrows: assigning
+        # the Optional straight back into `thread` widens the branch above.
+        existing = await session.get(AskThread, request.thread_id)
+        if existing is None or existing.user_id != user.id:
             raise HTTPException(status_code=404, detail="Conversation not found.")
+        thread = existing
 
     history = await _history_messages(session, thread.id, settings.ask_history_turns)
 

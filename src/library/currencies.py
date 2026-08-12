@@ -32,9 +32,9 @@ NULL kind collide with another NULL/NULL row).
 
 import re
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal, cast
 
-from sqlalchemy import text
+from sqlalchemy import CursorResult, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 _CODE_RE = re.compile(r"[A-Z]{3}")
@@ -174,7 +174,10 @@ async def normalize_currency(
     counts: dict[str, int] = {}
 
     async def _run(sql: str) -> int:
-        result = await session.execute(text(sql), params)
+        # `AsyncSession.execute` is typed as returning `Result`, which has no
+        # `rowcount`; every statement here is DML, so the runtime object is a
+        # `CursorResult`. Narrowed rather than ignored so the attribute stays checked.
+        result = cast(CursorResult[Any], await session.execute(text(sql), params))
         return result.rowcount
 
     # Plain updates (currency is in no unique tuple here).

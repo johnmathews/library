@@ -62,6 +62,12 @@ dev = [
     # than a red check: NO job runs, so every check is simply absent rather than
     # failing, and nothing in the repo read the file to say why.
     "actionlint-py>=1.7.7",
+    # Pinned to a minor range, not left floating. Before this, mypy was in
+    # neither pyproject.toml nor uv.lock, so `uv run mypy` silently fell through
+    # to whatever ambient install the developer happened to have — which means
+    # the error count was a property of the machine, not of the code, and no
+    # baseline taken on one checkout could be reproduced on another (or in CI).
+    "mypy>=1.19,<1.20",
 ]
 
 [project.scripts]
@@ -94,6 +100,82 @@ select = [
     "C4",  # flake8-comprehensions
     "RUF", # ruff-specific
 ]
+
+[tool.mypy]
+python_version = "3.13"
+files = ["src"]
+# Deliberately not `strict`. The point of the first pass is a gate that is green
+# on day one and rejects new breakage — not a 700-error wall nobody clears, which
+# is the shape that gets `continue-on-error`'d and then ignored. Tightening is a
+# follow-up, one flag at a time, each with its own cleanup.
+warn_redundant_casts = true
+warn_unused_ignores = true
+# `# type: ignore` with no code is a blanket suppression that also hides the next,
+# unrelated error on that line. Require the code so a suppression stays specific.
+enable_error_code = ["ignore-without-code"]
+
+# Third-party packages that ship no type information. This is not a suppression
+# of our code: without it mypy reports the *import* and then treats the module as
+# `Any`, so the errors it produces are noise about someone else's packaging.
+[[tool.mypy.overrides]]
+module = [
+    "asyncpg.*",
+    "filetype.*",
+    "img2pdf.*",
+    "mammoth.*",
+    "pgvector.*",
+    "pillow_heif.*",
+    "pypdfium2.*",
+]
+ignore_missing_imports = true
+
+# --- Quarantine -------------------------------------------------------------
+#
+# Four modules carry 77 of the 98 real errors. They are suppressed by error
+# *code*, never by excluding the file: an excluded file gets zero checking
+# forever, while a code-suppressed one still catches every other class of error
+# in new code. Each block names the follow-up that removes it.
+#
+# Known weakness, stated rather than hidden: unlike the docs ratchet, this one
+# only fails in one direction. mypy has no baseline mechanism, so if a module is
+# cleaned up the override lingers silently instead of failing to force the gain
+# to be locked in. `warn_unused_ignores` covers that for inline `# type: ignore`,
+# but there is no equivalent for a module override. Making it two-directional
+# needs a per-module count check, which is its own unit.
+
+[[tool.mypy.overrides]]
+# RATCHET: 40 union-attr + 4 arg-type + 1 attr-defined. Anthropic SDK response
+# unions — `response.content[i]` is a union of ~15 block types, so every `.text`
+# access needs `isinstance` narrowing. Exit: narrow once at the top of each tool
+# loop into a typed local, rather than 40 asserts.
+module = "library.ask.engine"
+disable_error_code = ["union-attr", "attr-defined"]
+
+[[tool.mypy.overrides]]
+# RATCHET: 13 union-attr + 2 arg-type. Same SDK-union cause as ask.engine, plus
+# `SeriesSummary` fields that are `| None` on the dataclass but non-None by the
+# time the formatter runs. Exit: split the summary type so the chartable case is
+# its own non-optional shape.
+module = "library.series_insight"
+disable_error_code = ["union-attr"]
+
+[[tool.mypy.overrides]]
+# RATCHET: 7 arg-type + 1 each of return-value, misc, assignment. Mostly
+# `SeriesSummary.currency: str | None` flowing into helpers typed `str`. Exit:
+# the same summary-type split as series_insight — these two travel together.
+module = "library.series"
+disable_error_code = ["arg-type", "return-value", "misc", "assignment"]
+
+[[tool.mypy.overrides]]
+# RATCHET: 5 index + 2 arg-type. Untyped `email.message.Message` payload
+# indexing, plus `imap_tools`' `message.uid: str | None` flowing into
+# `mailbox.move`. Deliberately left rather than "fixed" here: the uid is
+# non-None for anything the poller fetched, and adding a guard would change what
+# the live email poller does on a path this unit has no test for. Exit: a small
+# typed accessor over the stdlib email API and one uid guard with a test, which
+# would also remove several `or ""` defensive reads.
+module = "library.email_ingest"
+disable_error_code = ["index", "arg-type"]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"

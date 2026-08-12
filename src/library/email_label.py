@@ -34,6 +34,7 @@ docs/ingestion.md, "Email item selection".
 """
 
 import logging
+from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal
@@ -165,7 +166,7 @@ class LabelOutcome:
     only when a call actually billed, so the caller records the budget event.
     """
 
-    verdicts: dict[int, tuple[str, str | None]]
+    verdicts: Mapping[int, tuple[str, str | None]]
     usage: LabelUsage | None
     skip_reason: str | None  # "budget" | "error" | None
     email_verdict: str = "file"  # "file" | "hold"
