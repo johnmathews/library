@@ -16,12 +16,22 @@
     <title>Library</title>
   </head>
   <body>
+    <!-- Seed `body.sidebar-expanded` before Vue boots so the shell paints in
+         its final state. This must mirror AppSidebar.vue's precedence exactly
+         — the `library:`-prefixed key, then the legacy bare key, then the
+         `matchMedia` viewport default — because any divergence *is* the flash
+         this script exists to prevent. Guarded by
+         `src/__tests__/sidebar-seed.spec.ts`. -->
     <script>
-      if (localStorage.getItem('sidebar-expanded') == 'true') {
-        document.querySelector('body').classList.add('sidebar-expanded');
-      } else {
-        document.querySelector('body').classList.remove('sidebar-expanded');
-      }
+      (function () {
+        var stored = localStorage.getItem('library:sidebar-expanded');
+        if (stored === null) stored = localStorage.getItem('sidebar-expanded');
+        var expanded =
+          stored === null
+            ? window.matchMedia('(min-width: 1024px)').matches
+            : stored === 'true';
+        document.querySelector('body').classList.toggle('sidebar-expanded', expanded);
+      })();
     </script>
     <div id="app"></div>
     <script type="module" src="/src/main.ts"></script>
