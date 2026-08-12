@@ -245,6 +245,13 @@ jobs:
         # Baseline measured on this tree: 7 no-stamp + 8 missing-verified. Lower
         # it as docs get stamped; W27 takes it to 0.
         run: uv run python scripts/check_docs.py --max-violations 15
+      - name: Check the journal index is current
+        # Same contract as `ruff format --check`: the generated index must equal
+        # what the generator would write, so a new entry without a regenerated
+        # index reds here rather than silently leaving the index incomplete.
+        # Journal *cadence* is deliberately not gated — that would be a calendar
+        # gate in disguise and would red on legitimately quiet weeks.
+        run: uv run python scripts/build_journal_index.py --check
 
   frontend:
     needs: changes

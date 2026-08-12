@@ -308,3 +308,51 @@ ownership — e.g. "IDOR: user A can edit user B's comment" — describes the
 need revisiting **only** if the app is ever opened beyond a single trusted
 household; at that point per-resource authorization would have to be added
 across documents, notes, comments, and taxonomy alike.
+
+## 1.6 Module map
+
+Where things live under `src/library/`. Packages first, then the substantial
+top-level modules.
+
+| Package | What is in it |
+| --- | --- |
+| `src/library/api/` | HTTP API routers, mounted under `/api` by the application factory. The admin surface is the nested `api/admin/` package. |
+| `src/library/ask/` | Natural-language question answering over the archive: retrieval, the agentic tool loop, citations. |
+| `src/library/auth/` | Argon2 passwords, cookie sessions, bearer API tokens. |
+| `src/library/embedding/` | Local embedding (bge-m3 via a text-embeddings-inference sidecar). |
+| `src/library/extraction/` | Claude metadata extraction: schema, extractor, pricing, and pipeline glue. |
+| `src/library/importer/` | paperless-ngx importer: REST client, payload mapper, batch runner. |
+| `src/library/markdown/` | Vision-model page-to-markdown conversion and its storage. |
+| `src/library/ocr/` | Routed OCR: text-layer extraction, OCRmyPDF/Tesseract, OpenCV+RapidOCR. |
+
+| Module | What it does |
+| --- | --- |
+| `src/library/email_ingest.py` | Email-in ingestion: poll an IMAP mailbox and ingest its attachments. |
+| `src/library/models.py` | SQLAlchemy 2.0 declarative models — the data model in §1.3. |
+| `src/library/series.py` | Recurring-document series detection and comparative statistics. |
+| `src/library/schemas.py` | Pydantic request/response schemas for the HTTP API. |
+| `src/library/cli.py` | The `library` administration CLI (typer): accounts, imports, sweeps. |
+| `src/library/jobs.py` | Procrastinate job queue wiring and the document-processing pipeline (§1.2). |
+| `src/library/taxonomy.py` | Taxonomy listing: kinds, senders, recipients, tags, with counts. |
+| `src/library/mcp_server.py` | The MCP server: FastMCP tools over the archive (§1.4). |
+| `src/library/notifications.py` | Pushover push notifications (per-user, opt-in). |
+| `src/library/search.py` | Shared document query building for the REST API and the MCP server. |
+| `src/library/series_insight.py` | Precomputed, cached LLM prose description for a series. |
+| `src/library/consume.py` | Consume-folder watcher: ingest files dropped into a watched directory. |
+| `src/library/ingest.py` | Ingestion service: bytes in, `Document` row + queued job out. |
+| `src/library/config.py` | Settings, loaded from the environment with the `LIBRARY_` prefix. |
+
+Everything else under `src/library/` is a single-purpose helper of under ~300
+lines — storage, FX, matters, projects, PDF unlock, the events broker and
+similar — named plainly enough to find by filename.
+
+**This table is gated.** `scripts/check_docs.py` fails CI when a listed path
+does not exist, and when a package or a top-level module of at least
+`MODULE_MAP_LINE_FLOOR` lines is missing from it. The floor is **400**, not the
+~300 boundary this table actually documents: module sizes cluster tightly below
+372 lines (`email_label.py` sits at 299), so a floor down there would push
+modules in and out of the mandatory set on single-line edits and red CI for no
+real change. 400 sits in the middle of the one wide gap in the distribution
+(512 → 372), so crossing it means a module genuinely grew. Listing **more** than
+the floor requires is deliberate and always allowed — an entry is never a
+violation for being small.

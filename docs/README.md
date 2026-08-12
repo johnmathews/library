@@ -26,6 +26,7 @@ New to the codebase? Read in this order:
 | [`frontend-view-principles.md`](frontend-view-principles.md) | How to build a new view that is consistent the first time: layout, shared classes, form/filter recipes. |
 | [`admin.md`](admin.md) | The admin role and admin views: users, taxonomy (senders/kinds/recipients), currencies, FX rates, business matters. |
 | [`jobs-and-notifications.md`](jobs-and-notifications.md) | Background jobs, the Jobs view, live SSE toasts, and Pushover notifications. |
+| [`smart-groups.md`](smart-groups.md) | Smart Groups: semantic authored series — the membership scorer, the three flows, mixed currency, and the LLM's one narrow role. |
 | [`migration.md`](migration.md) | Migrating an existing archive from paperless-ngx. |
 | [`roadmap.md`](roadmap.md) | Deferred work and forward-looking notes. |
 

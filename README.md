@@ -8,7 +8,7 @@ structured metadata via the Claude API (kind, sender, recipient, dates,
 amounts, tags, summary), and makes everything searchable in Dutch and English.
 
 **Status: v0.1.0 — feature-complete first release.** Everything below
-works today (see [`CHANGELOG.md`](CHANGELOG.md) for the full list and
+works today (see [`CHANGELOG.md`](CHANGELOG.md) for notable changes and
 [`docs/architecture.md`](docs/architecture.md) for the design):
 
 - **Ingestion from anywhere:** web upload (camera-friendly on mobile), a

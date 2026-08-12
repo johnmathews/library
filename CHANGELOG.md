@@ -8,6 +8,49 @@ All notable changes to Library are documented here. The format follows
 
 ### Added
 
+**Smart Groups — semantic auto-populated series** (`#39`) — an authored series
+with `mode="semantic"` whose membership is *learned from document meaning*
+rather than hand-picked, so one group can span senders (Fastned, Shell Recharge,
+Allego) that share no `(sender, kind, currency)` seed. Creating one stages a
+one-time backfill sweep over the library for review; afterwards matching
+documents auto-add silently and a dismissal writes a negative example. Membership
+is decided by a deterministic scorer, never by the LLM. See
+[`docs/smart-groups.md`](docs/smart-groups.md).
+
+**Business matters (auto-filed subject categories)** (`#27`, `#28`) — an
+evergreen many-to-many dimension (`matters` + `document_matters`): a document
+belongs to any number of admin-curated matters (car insurance, health insurance,
+subscriptions), filled automatically by a separate best-effort LLM classifier
+pass after extraction. Merge-only, budget-gated and respectful of user edits, so
+the vocabulary can change and the corpus be re-filed cheaply — `library
+sweep-matters` backfills after a vocabulary edit, and `--reclassify` replaces
+auto-assigned matters. Full REST surface (`/api/matters` CRUD + counts, a
+repeatable OR-composing `?matter=` filter, `matters` on document responses and in
+the `PATCH` body) plus a Matter filter in the search modal.
+
+**Document comments** — a Comments card on the document detail view, with
+`GET`/`POST /api/documents/{id}/comments` and `PATCH`/`DELETE
+/api/documents/{id}/comments/{cid}`. Authorship is attribution, not an
+authorization boundary (see the shared-library model in
+[`docs/architecture.md`](docs/architecture.md) §1.5.1).
+
+**Two-screen Ask** (`#30`, `#31`) — Ask became a route-driven chat UI: a
+conversation list and a thread view instead of one composite screen, with
+full-bleed mobile chat and a full-width pill composer. New threads are
+auto-named by a cheap title model rather than a truncated first question, and
+`PATCH /api/ask/threads/{id}` renames one.
+
+**Password-protected PDFs are unlocked at ingest** — an encrypted PDF is
+decrypted on the way in rather than failing OCR, with `library sweep-encrypted`
+to backfill-unlock documents already in the archive.
+
+**Email skip audit** — `GET /api/settings/email-triage/recent-skips` returns the
+last 20 emails that had an item skipped, so a silently-dropped attachment is
+visible instead of merely absent.
+
+**`git_sha` on `/healthz`** (`#43`) — the running image reports the commit it was
+built from, so a deploy can be verified rather than assumed.
+
 **Email triage settings tab** — read-only view of the hold/label pipeline
 configuration at `/settings` (new tab + `GET /api/settings/email-triage`,
 instance-wide and secret-free).
