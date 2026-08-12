@@ -400,6 +400,7 @@ onMounted(load)
           <button
             type="button"
             data-testid="charts-create-result"
+            :data-doc-id="doc.id"
             class="text-sm text-left text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:underline"
             @click="addSelected(doc)"
           >

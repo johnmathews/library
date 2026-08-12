@@ -87,6 +87,30 @@ async function seedDocument(page: Page, marker: string, body: string): Promise<n
 }
 
 /**
+ * Give a seeded document the metadata a Smart Group needs, deterministically.
+ *
+ * `_eligible_candidate_ids` requires `amount_total IS NOT NULL`, and the only
+ * thing that ever sets an amount is **extraction** — an Anthropic call. On a
+ * stack with no API key (this one, and CI's) extraction is skipped, so a
+ * freshly-uploaded document is permanently ineligible and the sweep can never
+ * suggest it. That, not the embedder, is why this journey had never passed.
+ *
+ * Setting the amount through the documented PATCH endpoint keeps the test on
+ * the thing it is actually about — the semantic membership engine — instead of
+ * making it a test of the extractor, and removes the LLM from the loop
+ * entirely. The title is set for the same reason: without extraction a document
+ * has none, and the review modal lists documents by title.
+ */
+async function setChartableMetadata(page: Page, id: number, title: string): Promise<void> {
+  const csrf = (await page.context().cookies()).find((c) => c.name === 'library_csrftoken')
+  const response = await page.request.patch(`/api/documents/${id}`, {
+    headers: { 'X-CSRF-Token': csrf!.value },
+    data: { title, amount_total: '42.50', currency: 'EUR' },
+  })
+  expect(response.status(), `setting metadata on document ${id} failed`).toBe(200)
+}
+
+/**
  * Block until a seeded document has been through the pipeline and is `indexed`.
  *
  * The first real run of this journey (the nightly's first dispatch) died here,
@@ -150,6 +174,10 @@ test('create a Smart Group, review the staged backfill match, and accept it', as
   await waitForIndexed(page, seedId, `${marker}-a`)
   await waitForIndexed(page, matchId, `${marker}-b`)
 
+  // Both need a title and an amount before the sweep will look at them.
+  await setChartableMetadata(page, seedId, `${marker}-a`)
+  await setChartableMetadata(page, matchId, `${marker}-b`)
+
   await openChartsPage(page)
 
   // Create a Smart Group seeded from the first document.
@@ -158,9 +186,15 @@ test('create a Smart Group, review the staged backfill match, and accept it', as
   await page.getByTestId('charts-create-name').fill(name)
   await page.getByTestId('charts-create-smart').check()
   await page.getByTestId('charts-create-search').fill(marker)
+  // Selected by document id, not by label. The label is `docLabel()`, which
+  // falls back to `Document #<id>` when the document has no title — and an
+  // uploaded file has no title until *extraction* writes one, which never
+  // happens on a stack with no Anthropic key (this one). Filtering on the
+  // marker text could therefore only have matched in an environment that runs
+  // the LLM, which is the second reason this journey had never passed: waiting
+  // for `indexed` was necessary but not sufficient.
   await page
-    .getByTestId('charts-create-result')
-    .filter({ hasText: `${marker}-a` })
+    .locator(`[data-testid="charts-create-result"][data-doc-id="${seedId}"]`)
     .click()
   await page.getByTestId('charts-create-submit').click()
 
