@@ -1,6 +1,6 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: `docs-stamps` is now inside `ci-gate`; the SSH probe runs before the promote gate; `--status` also reports the embedder). Earlier: 2026-07-27. **Supersedes:** none.
+**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: `docs-stamps` and the new `typecheck` job are both inside `ci-gate`; the SSH probe runs before the promote gate; `--status` also reports the embedder). Earlier: 2026-07-27. **Supersedes:** none.
 **Last verified:** 2026-08-12 — method: executed the runbook end to end against the live `paperless` host — `make deploy` at `2c31c4b`, which ran the promote gate, `library-migrate`, the webserver/worker recreate and the `/healthz` check, then `--status` and a `git_sha` comparison against `origin/main` (matched) — and separately read every documented flag, env default and error string in `scripts/deploy.sh`, and §1.2's "what green means" against `scripts/ci_gate.sh` and `ci.yml`.
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh
 
@@ -33,12 +33,13 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
 
    **What "green" means.** The run's aggregator job is **`ci-gate`**, which
    passes the `needs.<job>.result` of every other job except `promote` —
-   including `docs-stamps` — to `scripts/ci_gate.sh`. That script tolerates `skipped` for the path-filtered
-   jobs (`backend`, `frontend`, `e2e`, `compose-smoke`, `build`) — a skipped
+   including `docs-stamps` and `typecheck` — to `scripts/ci_gate.sh`. That
+   script tolerates `skipped` for the path-filtered jobs (`backend`,
+   `frontend`, `e2e`, `compose-smoke`, `build`, `typecheck`) — a skipped
    *required* check would block a merge forever — but requires **`changes`**
    (the path-filter job all the others declare `needs:` on) to be exactly
-   `success`, since a broken `changes` skips all five and would otherwise leave
-   the gate nothing to reject. `tests/test_ci_gate.py` exercises those cases.
+   `success`, since a broken `changes` skips every one of them and would
+   otherwise leave the gate nothing to reject. `tests/test_ci_gate.py` exercises those cases.
    Branch protection is **not yet pointed at `ci-gate`**, so read the run's
    result rather than trusting a required-check badge — and note `promote` sits
    *outside* the gate, which is why the promote gate above exists.

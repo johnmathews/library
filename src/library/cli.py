@@ -981,7 +981,8 @@ def eval_extractions(
     is a documented follow-up.
     """
     settings = get_settings()
-    if settings.anthropic_api_key is None:
+    api_key = settings.anthropic_api_key
+    if api_key is None:
         typer.echo("error: LIBRARY_ANTHROPIC_API_KEY is required to run the judge")
         raise typer.Exit(code=1)
 
@@ -1002,7 +1003,7 @@ def eval_extractions(
             eligible = eligible[:sample]
 
         results: list[JudgeResult] = []
-        async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as client:
+        async with AsyncAnthropic(api_key=api_key.get_secret_value()) as client:
             for document in eligible:
                 results.append(await judge(document, client=client, settings=settings))
 

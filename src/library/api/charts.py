@@ -192,9 +192,10 @@ async def list_charts(
     # being offered for promotion, spawning duplicate authored series.
     authored_signatures: set[tuple[object, object, object]] = set()
     for authored_id in authored_ids:
-        summary = await summarize_authored_series(session, authored_id, settings)
-        if summary is None:
+        authored_summary = await summarize_authored_series(session, authored_id, settings)
+        if authored_summary is None:
             continue
+        summary = authored_summary
         body = serialise_summary(summary, include_points=True)
         body |= await _authored_signature_extras(session, settings, authored_id, summary.currency)
         signature = body.get("signature")
@@ -435,13 +436,12 @@ async def _backfill_payload(
     if not hits:
         return []
     document_ids = [document_id for document_id, _ in hits]
-    titles = dict(
-        (
-            await session.execute(
-                select(Document.id, Document.title).where(Document.id.in_(document_ids))
-            )
-        ).all()
-    )
+    rows = (
+        await session.execute(
+            select(Document.id, Document.title).where(Document.id.in_(document_ids))
+        )
+    ).all()
+    titles: dict[int, str | None] = {row.id: row.title for row in rows}
     return [
         {
             "document_id": document_id,

@@ -7,9 +7,10 @@ source. Used by the eval harness; never called from the live pipeline.
 
 import json
 import logging
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 from anthropic import AsyncAnthropic
+from anthropic.types import ContentBlockParam
 from pydantic import BaseModel, ConfigDict
 
 from library.config import Settings
@@ -86,7 +87,10 @@ async def judge(document: Document, *, client: AsyncAnthropic, settings: Setting
         model=settings.extraction_judge_model,
         max_tokens=MAX_OUTPUT_TOKENS,
         system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": content}],
+        # Hand-built blocks crossing into the SDK's TypedDict union. Building them
+        # as `ContentBlockParam` throughout is the real fix and a wider change than
+        # this unit; the assertion is made once, where the boundary actually is.
+        messages=[{"role": "user", "content": cast("list[ContentBlockParam]", content)}],
         output_format=JudgeResult,
     )
     parsed = response.parsed_output

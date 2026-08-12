@@ -1559,7 +1559,7 @@ async def _ingest_candidate(
     async with session_factory() as session:
         owner_id = await resolve_sender_owner(
             session,
-            candidate.event_detail.get("email_from"),  # type: ignore[arg-type]
+            candidate.event_detail.get("email_from"),
             default_owner_username=default_owner_username,
         )
         # Carry the To: addresses onto Document.extra so extraction can use them

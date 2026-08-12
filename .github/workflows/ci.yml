@@ -251,6 +251,44 @@ jobs:
         # gate in disguise and would red on legitimately quiet weeks.
         run: uv run python scripts/build_journal_index.py --check
 
+  # Static type checking. Its own job rather than a step in `backend` because it
+  # needs neither Postgres nor the OCR system packages, so it returns a verdict in
+  # under a minute instead of waiting behind a twelve-minute suite — and a type
+  # error is exactly the kind of thing you want to hear about immediately.
+  #
+  # Green from its first run, by design. The four modules carrying most of the
+  # errors are quarantined by error *code* in `[tool.mypy]` (never by excluding a
+  # file — an excluded file gets zero checking forever), each with a `# RATCHET:`
+  # comment naming the follow-up that removes it. Verified: adding `x: int = "s"`
+  # to a quarantined module still fails, because `assignment` is not in its
+  # disable list. So the quarantine bounds the *known* debt without granting the
+  # module a permanent exemption from everything else.
+  #
+  # mypy is pinned to `>=1.19,<1.20` in the dev group. Before that it was in
+  # neither pyproject.toml nor uv.lock, so `uv run mypy` fell through to whatever
+  # ambient install the developer had — an error count that was a property of the
+  # machine, not the code.
+  typecheck:
+    needs: changes
+    if: >-
+      github.ref == 'refs/heads/main' ||
+      needs.changes.outputs.backend == 'true' ||
+      needs.changes.outputs.ci == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v9.0.0
+        with:
+          enable-cache: true
+      - name: Install dependencies
+        run: uv sync --locked
+      - name: Type check
+        # Paths come from `files = ["src"]` in [tool.mypy], so the CLI and the
+        # local `uv run mypy` check exactly the same set.
+        run: uv run mypy
+
   frontend:
     needs: changes
     # Always on main (coverage baked into the promoted image); on branches/PRs
@@ -591,7 +629,7 @@ jobs:
   # The logic lives in scripts/ci_gate.sh so it is unit-tested
   # (tests/test_ci_gate.py) rather than only exercised in anger.
   ci-gate:
-    needs: [changes, backend, frontend, e2e, compose-smoke, build, docs-stamps]
+    needs: [changes, backend, frontend, e2e, compose-smoke, build, docs-stamps, typecheck]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -608,4 +646,5 @@ jobs:
             "e2e=${{ needs.e2e.result }}" \
             "compose-smoke=${{ needs.compose-smoke.result }}" \
             "build=${{ needs.build.result }}" \
-            "docs-stamps=${{ needs.docs-stamps.result }}"
+            "docs-stamps=${{ needs.docs-stamps.result }}" \
+            "typecheck=${{ needs.typecheck.result }}"

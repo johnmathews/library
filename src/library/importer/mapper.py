@@ -288,7 +288,13 @@ def map_document(doc: dict[str, Any], taxonomies: Taxonomies) -> MappedDocument:
 
     # Deduplicate tag slugs, first occurrence wins.
     seen: set[str] = set()
-    unique_tags = [tag for tag in tags if not (tag.slug in seen or seen.add(tag.slug))]
+    unique_tags: list[TagSpec] = []
+    # Not `tag`: that name is already bound in this function to a paperless tag
+    # dict, and the old comprehension only avoided the clash by having its own scope.
+    for spec in tags:
+        if spec.slug not in seen:
+            seen.add(spec.slug)
+            unique_tags.append(spec)
 
     return MappedDocument(
         paperless_id=doc["id"],

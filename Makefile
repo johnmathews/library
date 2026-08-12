@@ -26,13 +26,20 @@ test:
 
 lint:
 	uv run ruff check . && uv run ruff format --check . && $(MAKE) lint-actions && \
-	uv run python scripts/build_journal_index.py --check
+	uv run python scripts/build_journal_index.py --check && uv run mypy && \
+	$(MAKE) check-docs
 
-# Documentation freshness. Not part of `lint`: it reds today's tree by design
-# until W27's verify-and-stamp sweep lands, and a `make lint` that always fails
-# is a `make lint` nobody runs.
+# Documentation freshness. Now part of `lint`: it was held out while it reded the
+# tree by design (a `make lint` that always fails is a `make lint` nobody runs),
+# and the verify-and-stamp sweep cleared that, so it is a check you can actually
+# run before pushing — which is the point, since it is the gate most likely to be
+# tripped by an ordinary edit.
+#
+# The baseline must match the one in .github/workflows/ci.yml. The ratchet fails
+# in BOTH directions, so a stale copy here reds even when the tree is clean —
+# which is exactly how this was found after the sweep lowered ci.yml alone.
 check-docs:
-	uv run python scripts/check_docs.py --max-violations 15
+	uv run python scripts/check_docs.py --max-violations 0
 
 # Regenerate the journal index. `--check` is in `lint` (and CI) with the same
 # contract as `ruff format --check`: add an entry, re-run this, commit both.

@@ -19,9 +19,10 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Literal, cast
 
 from anthropic import AsyncAnthropic
+from anthropic.types import MessageParam, TextBlockParam, ToolParam
 from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import select
@@ -431,7 +432,7 @@ async def _run_compare_to_series(
         date_to=_parse_date(args.get("date_to")),
     )
     raw_reference = args.get("reference", "latest")
-    reference: Decimal | str
+    reference: Decimal | Literal["latest"]
     if raw_reference in (None, "latest", ""):
         reference = "latest"
     else:
@@ -810,9 +811,12 @@ async def run_ask(
         response = await client.messages.create(
             model=model,
             max_tokens=settings.ask_max_answer_tokens,
-            system=system_prompt,
-            tools=TOOLS,
-            messages=messages,
+            # Hand-built blocks crossing into the SDK's TypedDict unions, as in
+            # extraction/judge.py. `messages` is appended to throughout the tool
+            # loop below, so it stays a plain list and the assertion is made here.
+            system=cast("list[TextBlockParam]", system_prompt),
+            tools=cast("list[ToolParam]", TOOLS),
+            messages=cast("list[MessageParam]", messages),
         )
         result.input_tokens += response.usage.input_tokens
         result.output_tokens += response.usage.output_tokens

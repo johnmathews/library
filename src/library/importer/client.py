@@ -129,12 +129,14 @@ class PaperlessClient:
         record the failure and continue with the rest of the run.
         """
         metadata = await self.document_metadata(document_id)
-        expected = metadata.get("original_checksum")
+        expected: str = metadata.get("original_checksum") or ""
+        if not expected:
+            # Nothing to verify against; hoisted out of the loop, where it was
+            # re-tested every attempt and never depended on the attempt.
+            return await self.download_original(document_id)
         last_actual = ""
         for attempt in (1, 2):
             content = await self.download_original(document_id)
-            if not expected:
-                return content  # nothing to verify against
             last_actual = hashlib.md5(content).hexdigest()
             if last_actual == expected.lower():
                 return content

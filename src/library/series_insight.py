@@ -273,7 +273,9 @@ async def refresh_series_insight(
         return None
 
     owned_client = client is None
-    if owned_client:
+    # Narrowed on `client` itself, not on `owned_client`: a bool derived from the
+    # check cannot narrow the variable the check was about.
+    if client is None:
         if settings.anthropic_api_key is None:
             logger.debug("series insight skipped (missing api key)")
             return None
@@ -349,7 +351,9 @@ async def refresh_group_blurb(
         return None
 
     owned_client = client is None
-    if owned_client:
+    # Narrowed on `client` itself, not on `owned_client`: a bool derived from the
+    # check cannot narrow the variable the check was about.
+    if client is None:
         if settings.anthropic_api_key is None:
             logger.debug("group blurb skipped (missing api key)")
             return None
