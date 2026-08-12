@@ -86,9 +86,51 @@ async function seedDocument(page: Page, marker: string, body: string): Promise<n
   return id
 }
 
+/**
+ * Block until a seeded document has been through the pipeline and is `indexed`.
+ *
+ * The first real run of this journey (the nightly's first dispatch) died here,
+ * 180s into `charts-create-search` finding nothing: the spec seeded two
+ * documents and immediately searched for them. A just-POSTed document is
+ * `received` — it has no `ocr_text`, so it is not in the FTS index the create
+ * form searches, and it has no chunk embeddings, so the semantic sweep could not
+ * have scored it either. The spec's own header always said "a just-POSTed
+ * document is not immediately searchable"; it just never waited.
+ *
+ * `failed` raises rather than looping to the deadline, so a broken pipeline is
+ * reported as a broken pipeline instead of as a timeout.
+ */
+async function waitForIndexed(page: Page, id: number, marker: string): Promise<void> {
+  const deadlineMs = 240_000
+  const startedAt = Date.now()
+  let lastStatus = 'unknown'
+  while (Date.now() - startedAt < deadlineMs) {
+    const response = await page.request.get(`/api/documents/${id}`)
+    if (response.ok()) {
+      const document = (await response.json()) as { status: string }
+      lastStatus = document.status
+      if (lastStatus === 'indexed') return
+      if (lastStatus === 'failed') {
+        throw new Error(`${marker} (document ${id}) failed processing — see the worker logs`)
+      }
+    }
+    await page.waitForTimeout(2_000)
+  }
+  throw new Error(
+    `${marker} (document ${id}) never reached "indexed" within ${deadlineMs}ms ` +
+      `(last status: ${lastStatus}). The worker or the embedder is not keeping up.`,
+  )
+}
+
 test('create a Smart Group, review the staged backfill match, and accept it', async ({
   page,
 }, testInfo) => {
+  // Well above the 180s default: this test waits for two documents to go all the
+  // way through OCR → extract → markdown → embed → indexed before it can even
+  // begin, and then for a semantic sweep over the archive. The wait is bounded
+  // and reported per-document by `waitForIndexed`, so a hang names the document
+  // and its last status rather than expiring anonymously.
+  test.setTimeout(600_000)
   await signIn(page)
 
   // Two documents with near-identical prose (same marker family, same
@@ -102,6 +144,11 @@ test('create a Smart Group, review the staged backfill match, and accept it', as
     `Smart Groups e2e journey. Amount due covers this billing period.`
   const seedId = await seedDocument(page, `${marker}-a`, seedText)
   const matchId = await seedDocument(page, `${marker}-b`, matchText)
+
+  // Both must be `indexed` before the create form can find them, and before the
+  // semantic sweep has embeddings to score. This is the slow part of the test.
+  await waitForIndexed(page, seedId, `${marker}-a`)
+  await waitForIndexed(page, matchId, `${marker}-b`)
 
   await openChartsPage(page)
 
