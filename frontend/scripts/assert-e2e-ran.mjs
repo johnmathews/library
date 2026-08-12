@@ -30,8 +30,26 @@ import process from 'node:process'
  * "did the suite run at all" check, not a test-count assertion. A real run
  * executes well over 100 across the five-project matrix; anything under 40
  * means the matrix or the stack collapsed.
+ *
+ * Overridable because the nightly Smart Groups job runs exactly one spec on one
+ * project, where the honest floor is 1. The override is a floor, never a
+ * disable: an unparseable or missing value exits 2 rather than falling back to
+ * something permissive, so a typo in the workflow cannot quietly turn the gate
+ * off — which is the failure mode this whole script exists for.
  */
-const MIN_EXPECTED = 40
+const MIN_EXPECTED = (() => {
+  const raw = process.env.E2E_MIN_EXPECTED
+  if (raw === undefined || raw === '') return 40
+  const parsed = Number(raw)
+  if (!Number.isInteger(parsed) || parsed < 1) {
+    console.error(
+      `assert-e2e-ran: E2E_MIN_EXPECTED must be a positive integer, got ${JSON.stringify(raw)}. ` +
+        'Refusing to run with an unusable floor.',
+    )
+    process.exit(2)
+  }
+  return parsed
+})()
 
 const reportPath = process.argv[2] ?? 'e2e-report.json'
 

@@ -1,6 +1,6 @@
 # Frontend
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical).
+**Status:** active. **Last updated:** 2026-08-12 (nightly Smart Groups heartbeat §1.7.0 and the Playwright-not-jsdom layout rule §1.7.3; earlier the same day, documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical).
 **Last verified:** 2026-08-12 — method: cross-checked the document against `frontend/src`, `frontend/e2e` and the vite/vitest/playwright/eslint configs, reading the shell components and router line by line, and mechanically confirming that every `data-testid`, hyphenated identifier and file path it cites exists in the tree.
 
 The Library web UI: a Vue 3 single-page app styled with the **Mosaic** design
@@ -673,6 +673,25 @@ parseable and complete, and every icon it references really ships.
   reskin regression).
 - `npm run test:e2e` — Playwright against the real stack. Five projects: desktop Chromium, mobile WebKit (375 px, iPhone 14), tablet WebKit (iPad gen 11), **desktop Firefox**, and **desktop WebKit** (Safari). The chromium/mobile/tablet projects run the full suite; the two desktop-engine projects are **scoped (via `testMatch`) to `e2e/pdf-preview.spec.ts` only** — they exist to prove the self-rendered PDF preview behaves identically across all three engines, without forcing the rest of the suite onto Firefox. That spec proves canvases paint and scrolling reveals page 2 on each engine. Recent flows have their own specs in `frontend/e2e/`: **`markdown-reader`** (upload a `.md` → the reader renders), **`projects`** (create → assign via the token multiselect → see it on the `/projects` index → filter the dashboard by it), **`notes`** (author a note → edit in place → restore a version), **`topics-readonly`** (topics show as read-only badges with no editor), **`admin-views`** (a normal user sees no Admin link and is redirected from `/admin`; an admin reaches `/admin` and all five tabs render), **`tile-border-colour`** (sets a per-kind override and asserts the tile's *computed* border colour — the cascade-layer regression guard), **`review-queue`** (a future-date edit flags a doc `needs_review`, then the queue is entered, advanced, and exited), and **`held-emails`** (navigation + empty state only — the e2e stack has no IMAP, so the hold flows live in vitest + backend tests). The admin spec needs a second admin login (`E2E_ADMIN_USERNAME`/`E2E_ADMIN_PASSWORD`; CI creates an `e2e-admin --admin` user). Every spec is gated by `requireStack()` (`e2e/fixtures/require-stack.ts`), which **skips locally and throws in CI** — see §1.7.1. (CI installs all three engines — `chromium firefox webkit` — in `.github/workflows/ci.yml`.)
 
+### 1.7.0 The nightly Smart Groups heartbeat
+
+One journey does not run in the PR gate and cannot: `smart-groups.spec.ts` needs
+the **embedder**, and the `e2e` job starts `db migrate api worker` only. It also
+depends on the async OCR → chunk → embed pipeline having indexed two
+freshly-seeded documents and on the semantic sweep scoring them as a match —
+not properties a merge gate can rely on.
+
+`.github/workflows/e2e-nightly.yml` runs it nightly (03:20 UTC, plus
+`workflow_dispatch`) with the whole stack including the embedder, waiting on
+TEI's own `/health` from inside the compose network before starting. It sets
+`E2E_SMART_GROUPS=1` — which, before this workflow existed, was set nowhere in
+the repo, so the journey had never executed anywhere.
+
+It reuses `assert-e2e-ran.mjs` with `E2E_MIN_EXPECTED=1`, so a lost env var or a
+filter typo fails the run instead of passing it having executed nothing. It is
+deliberately **not** in `ci-gate` and not a `promote` gate: a nightly failure is
+a signal to look, not a merge blocker.
+
 ### 1.7.1 The e2e job cannot pass without running
 
 `playwright test` **exits 0 when every test skips**, and there is no
@@ -741,6 +760,36 @@ load-bearing here** — Tailwind preflight sets `list-style: none`, and Safari d
 list semantics from an unmarkered list, so removing the role to satisfy the
 linter would silently cost VoiceOver users the list. The genuinely redundant case
 (`<fieldset role="group">`) was fixed instead.
+
+### 1.7.3 Layout is asserted in Playwright, never in jsdom
+
+**The rule: layout is asserted against real rects in Playwright. jsdom specs
+assert behaviour and data flow only.**
+
+It is written down because breaking it is so easy and so quiet. jsdom has no
+layout engine, so `getBoundingClientRect` returns zeros — which means a
+component spec can only test layout by *mocking* the rect, and a mocked rect
+asserts the mock. Three separate composer fixes (`bf8da0c`, `60a2f06`,
+`5a878a0`) each shipped with unit specs that asserted class strings, and none of
+them could have caught the next regression.
+
+The layout specs are `responsive.spec.ts`, `ask-layout.spec.ts`,
+`detail-layout.spec.ts` and `charts-layout.spec.ts`, sharing
+`e2e/fixtures/layout.ts` (overflow, grid column count, rect reads, docking and
+overlap checks, and the internal-scroll helper). Two facts about this app that
+those helpers encode, because both cost real time to rediscover:
+
+- **`window.scrollTo` does nothing.** The shell is a fixed-height flex column
+  and `#app-content` is the element that scrolls, so the document's own
+  `scrollHeight` always equals its `clientHeight`. Use
+  `scrollAppContentToBottom`.
+- **Some things are not in the DOM until you scroll.** The detail view's action
+  dock is `v-if`-mounted by an IntersectionObserver on the hero, so a spec must
+  scroll it into existence — and the shared fixture document is exactly one
+  viewport tall, so `detail-layout.spec.ts` seeds its own long note first.
+
+The two `App*` specs that mock rects (`AppPopover.spec.ts`, `FilterPill.spec.ts`)
+are deliberately left alone: they test open/close behaviour, not geometry.
 
 ## 1.8 What did not change
 
