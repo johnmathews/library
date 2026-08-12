@@ -46,6 +46,7 @@ import argparse
 import re
 import subprocess
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -78,6 +79,25 @@ WORK_UNIT_PLAN: str = "docs/archive/260610-greenfield-build-plan.md"
 #: importing `library.config` would drag pydantic into the docs gate.
 CONFIG_SOURCE: str = "src/library/config.py"
 
+#: The document carrying the module map, and the section that holds it.
+MODULE_MAP_DOC: str = "docs/architecture.md"
+MODULE_MAP_SECTION: str = "## 1.6 Module map"
+
+#: A top-level module at or above this many lines **must** appear in the map.
+#:
+#: Not the ~300-line boundary the map actually documents, and the difference is
+#: the whole design. Module sizes cluster tightly below 372 lines — 372, 371,
+#: 360, 334, 299, 281, 276, 272 — so a floor down there would move modules in and
+#: out of the mandatory set on single-line edits, redding CI for changes that
+#: mean nothing. `email_label.py` at 299 would cross a 300 floor by adding one
+#: line. 400 sits in the middle of the one wide gap in the distribution
+#: (512 -> 372), so crossing it means a module genuinely grew.
+#:
+#: Listing more than this requires is always allowed: the rule is a floor on
+#: what must be documented, never a ceiling. An entry is never a violation for
+#: being small — only for naming a path that does not exist.
+MODULE_MAP_LINE_FLOOR: int = 400
+
 _STATUS_RE = re.compile(r"\*\*Status:\*\*\s*(?P<value>[^.\n]*)", re.IGNORECASE)
 _VERIFIED_RE = re.compile(r"\*\*Last verified:\*\*\s*(?P<value>[^\n]*)", re.IGNORECASE)
 _UPDATED_RE = re.compile(r"\*\*Last updated:\*\*\s*(?P<value>[^\n(]*)", re.IGNORECASE)
@@ -86,6 +106,16 @@ _ISO_DATE_RE = re.compile(r"^(\d{4}-\d{2}-\d{2})$")
 
 #: A work-unit citation. `\b` on both sides so `W3C` is not read as `W3`.
 _WORK_UNIT_RE = re.compile(r"\bW(\d{1,2})\b")
+
+#: The index a cold reader is pointed at first.
+DOCS_INDEX: str = "docs/README.md"
+
+#: A relative markdown link target in the index: `[text](runbooks/deploy.md)`.
+#: Anchors, absolute URLs and bare directory links are not file claims.
+_INDEX_LINK_RE = re.compile(r"\]\((?!https?://|#)([\w./-]+\.md)\)")
+
+#: A `src/library/...` path token: a package (trailing `/`) or a `.py` module.
+_SOURCE_PATH_RE = re.compile(r"src/library/(?:[\w./]*\.py|[\w.]+/)")
 
 #: `  - id: W7` in the archived plan's YAML frontmatter.
 _PLAN_UNIT_RE = re.compile(r"^\s*-\s*id:\s*W(\d{1,2})\s*$", re.MULTILINE)
@@ -340,6 +370,142 @@ def check_work_unit_citations(path: str, text: str, known_units: frozenset[int])
     return violations
 
 
+# --- Module map (W24) ---------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class SourceInventory:
+    """What is actually under `src/library/`, as data.
+
+    Passed to the rule as an argument so the rule is pure: the filesystem walk
+    lives in :func:`scan_source_tree` and nothing else touches the disk.
+    """
+
+    packages: frozenset[str] = frozenset()
+    modules: dict[str, int] = field(default_factory=dict)
+
+    def known_paths(self) -> frozenset[str]:
+        return frozenset(self.packages) | frozenset(self.modules)
+
+
+def extract_section(text: str, heading: str) -> str | None:
+    """The body of one markdown section, or None when the heading is absent.
+
+    Ends at the next heading of the same or higher level, so a subsection stays
+    part of its parent.
+    """
+    lines = text.splitlines()
+    level = len(heading) - len(heading.lstrip("#"))
+    for index, line in enumerate(lines):
+        if line.strip() != heading:
+            continue
+        body: list[str] = []
+        for following in lines[index + 1 :]:
+            stripped = following.lstrip("#")
+            if following.startswith("#") and (len(following) - len(stripped)) <= level:
+                break
+            body.append(following)
+        return "\n".join(body)
+    return None
+
+
+def check_module_map(path: str, text: str, inventory: SourceInventory) -> list[Violation]:
+    """The module map must name real paths, and must not omit the big ones.
+
+    `docs/README.md` advertises `architecture.md` as covering "module layout",
+    which for a long time it simply did not — a cold reader following the
+    "start here" order hit a promise the document did not keep. A prose map
+    fixes that once; this rule is what stops it silently rotting as modules are
+    added, renamed and split.
+
+    Two directions, because a map can fail either way:
+
+    * naming a path that no longer exists — the map rotted behind a rename;
+    * omitting a package, or a module at or above
+      :data:`MODULE_MAP_LINE_FLOOR` — the codebase grew past the map.
+
+    A listed module *below* the floor is deliberately fine. The floor says what
+    must be documented, not what may be.
+    """
+    if path != MODULE_MAP_DOC:
+        return []
+
+    section = extract_section(text, MODULE_MAP_SECTION)
+    if section is None:
+        return [
+            Violation(
+                path,
+                "no-module-map",
+                f"no `{MODULE_MAP_SECTION}` section; `docs/README.md` advertises this "
+                "document as covering module layout",
+            )
+        ]
+    if not inventory.modules:
+        # Nothing scanned means the tree moved or the walk broke. Checking
+        # "every required module is present" against an empty requirement set
+        # passes trivially — a check that cannot fail.
+        return [
+            Violation(
+                path,
+                "source-tree-unreadable",
+                "no modules found under src/library/; the module-map rule cannot run",
+            )
+        ]
+
+    violations: list[Violation] = []
+    cited = set(_SOURCE_PATH_RE.findall(section))
+    known = inventory.known_paths()
+
+    for reference in sorted(cited - known):
+        violations.append(
+            Violation(
+                path,
+                "map-names-missing-path",
+                f"the module map lists `{reference}`, which does not exist",
+            )
+        )
+
+    for package in sorted(inventory.packages - cited):
+        violations.append(
+            Violation(
+                path,
+                "map-missing-package",
+                f"package `{package}` is not in the module map",
+            )
+        )
+
+    for module, lines in sorted(inventory.modules.items()):
+        if lines >= MODULE_MAP_LINE_FLOOR and module not in cited:
+            violations.append(
+                Violation(
+                    path,
+                    "map-missing-module",
+                    f"`{module}` is {lines} lines (floor {MODULE_MAP_LINE_FLOOR}) "
+                    "but is not in the module map — add a one-line entry",
+                )
+            )
+
+    return violations
+
+
+def scan_source_tree(root: Path) -> SourceInventory:
+    """Walk `src/library/` once. The only part of the module-map rule on disk."""
+    base = root / "src" / "library"
+    if not base.is_dir():
+        return SourceInventory()
+    packages = {
+        f"src/library/{child.name}/"
+        for child in base.iterdir()
+        if child.is_dir() and (child / "__init__.py").exists()
+    }
+    modules = {
+        f"src/library/{child.name}": len(child.read_text(encoding="utf-8").splitlines())
+        for child in base.iterdir()
+        if child.is_file() and child.suffix == ".py" and child.name != "__init__.py"
+    }
+    return SourceInventory(packages=frozenset(packages), modules=modules)
+
+
 # --- Model identity (W13) -----------------------------------------------------
 
 
@@ -390,6 +556,56 @@ def check_model_identity(path: str, text: str, defaults: dict[str, str]) -> list
                         f"says `{name}` is `{found}`; {CONFIG_SOURCE} sets `{expected}`",
                     )
                 )
+    return violations
+
+
+# --- Docs index (W25) ---------------------------------------------------------
+
+
+def check_docs_index(index_text: str, gated: tuple[str, ...]) -> list[Violation]:
+    """Every gated document must be reachable from `docs/README.md`.
+
+    `smart-groups.md` was reachable only through a footnote in `roadmap.md`,
+    despite declaring itself authoritative over another document. A doc nobody
+    can find is worse than one that is merely stale: staleness is at least
+    visible to whoever opens it.
+
+    Both directions again — an unlisted document, and a link to a file that is
+    not there.
+    """
+    violations: list[Violation] = []
+    linked = set(_INDEX_LINK_RE.findall(index_text))
+
+    for document in sorted(gated):
+        name = document.split("/")[-1]
+        if document == DOCS_INDEX or name == "README.md":
+            continue
+        # Links in the index are relative to docs/, so a runbook appears as
+        # `runbooks/deploy.md`.
+        relative = document[len("docs/") :]
+        if relative not in linked and name not in linked:
+            violations.append(
+                Violation(
+                    DOCS_INDEX,
+                    "doc-not-indexed",
+                    f"`{relative}` is a gated document but is not linked from the index",
+                )
+            )
+    return violations
+
+
+def check_index_targets(index_text: str, exists: Callable[[str], bool]) -> list[Violation]:
+    """Every relative link in the index must point at a file that exists."""
+    violations: list[Violation] = []
+    for target in sorted(set(_INDEX_LINK_RE.findall(index_text))):
+        if not exists(target):
+            violations.append(
+                Violation(
+                    DOCS_INDEX,
+                    "index-link-broken",
+                    f"the index links `{target}`, which does not exist",
+                )
+            )
     return violations
 
 
@@ -557,6 +773,13 @@ def main(argv: list[str] | None = None) -> int:
     except OSError as exc:
         print(f"error: cannot read {CONFIG_SOURCE}: {exc}", file=sys.stderr)
         return 2
+    inventory = scan_source_tree(REPO_ROOT)
+    if not inventory.modules:
+        print(
+            "error: no modules found under src/library/; the module-map rule cannot run",
+            file=sys.stderr,
+        )
+        return 2
     if not model_defaults:
         print(
             f"error: no priced model defaults parsed from {CONFIG_SOURCE}; the "
@@ -585,6 +808,20 @@ def main(argv: list[str] | None = None) -> int:
         )
         violations.extend(check_work_unit_citations(relative, text, plan_units))
         violations.extend(check_model_identity(relative, text, model_defaults))
+        violations.extend(check_module_map(relative, text, inventory))
+
+    # Index rules are properties of the index as a whole, not of each document,
+    # so they run once over the full gated set rather than per file.
+    if not args.paths:
+        index = REPO_ROOT / DOCS_INDEX
+        try:
+            index_text = index.read_text(encoding="utf-8")
+        except OSError as exc:
+            print(f"error: cannot read {DOCS_INDEX}: {exc}", file=sys.stderr)
+            return 2
+        gated = tuple(_repo_relative(document) for document in documents)
+        violations.extend(check_docs_index(index_text, gated))
+        violations.extend(check_index_targets(index_text, lambda t: (index.parent / t).exists()))
 
     if not violations and args.max_violations == 0:
         print(f"ok: {len(documents)} document(s) carry a current, verified stamp")

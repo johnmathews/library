@@ -408,6 +408,184 @@ class TestModelIdentity:
         assert offenders == [], [v.render() for v in offenders]
 
 
+MAP_DOC = """# Architecture
+
+**Status:** active. **Last updated:** 2026-08-12 (x).
+**Last verified:** 2026-08-12 — method: read it
+
+## 1.5 Something else
+
+Prose.
+
+## 1.6 Module map
+
+| Package | What |
+| --- | --- |
+| `src/library/api/` | routers |
+
+| Module | What |
+| --- | --- |
+| `src/library/models.py` | models |
+
+## 1.7 After
+
+Not part of the map: `src/library/ghost.py`.
+"""
+
+
+def inventory(**modules: int) -> object:
+    return check_docs.SourceInventory(
+        packages=frozenset({"src/library/api/"}), modules=dict(modules)
+    )
+
+
+class TestModuleMap:
+    """The map must name real paths and must not omit the big ones (W24)."""
+
+    def test_a_complete_map_is_clean(self) -> None:
+        violations = check_docs.check_module_map(
+            "docs/architecture.md", MAP_DOC, inventory(**{"src/library/models.py": 1156})
+        )
+        assert violations == []
+
+    def test_a_module_over_the_floor_but_absent_fails(self) -> None:
+        violations = check_docs.check_module_map(
+            "docs/architecture.md",
+            MAP_DOC,
+            inventory(**{"src/library/models.py": 1156, "src/library/huge.py": 900}),
+        )
+        assert rules(violations) == {"map-missing-module"}
+        assert "huge.py" in violations[0].message
+
+    def test_a_module_under_the_floor_may_be_absent(self) -> None:
+        """The floor is a minimum to document, not a ceiling."""
+        violations = check_docs.check_module_map(
+            "docs/architecture.md",
+            MAP_DOC,
+            inventory(**{"src/library/models.py": 1156, "src/library/small.py": 120}),
+        )
+        assert violations == []
+
+    def test_a_listed_module_under_the_floor_is_not_a_violation(self) -> None:
+        """Listing more than required must never red the gate."""
+        doc_text = MAP_DOC.replace(
+            "| `src/library/models.py` | models |",
+            "| `src/library/models.py` | models |\n| `src/library/tiny.py` | helper |",
+        )
+        violations = check_docs.check_module_map(
+            "docs/architecture.md",
+            doc_text,
+            inventory(**{"src/library/models.py": 1156, "src/library/tiny.py": 40}),
+        )
+        assert violations == []
+
+    def test_a_map_entry_for_a_nonexistent_path_fails(self) -> None:
+        doc_text = MAP_DOC.replace(
+            "| `src/library/models.py` | models |",
+            "| `src/library/models.py` | models |\n| `src/library/gone.py` | renamed away |",
+        )
+        violations = check_docs.check_module_map(
+            "docs/architecture.md", doc_text, inventory(**{"src/library/models.py": 1156})
+        )
+        assert rules(violations) == {"map-names-missing-path"}
+        assert "gone.py" in violations[0].message
+
+    def test_a_missing_package_fails(self) -> None:
+        doc_text = MAP_DOC.replace("| `src/library/api/` | routers |", "")
+        violations = check_docs.check_module_map(
+            "docs/architecture.md", doc_text, inventory(**{"src/library/models.py": 1156})
+        )
+        assert rules(violations) == {"map-missing-package"}
+
+    def test_a_missing_section_fails(self) -> None:
+        violations = check_docs.check_module_map(
+            "docs/architecture.md",
+            "# Architecture\n\nNo map here.\n",
+            inventory(**{"src/library/models.py": 1156}),
+        )
+        assert rules(violations) == {"no-module-map"}
+
+    def test_the_section_ends_at_the_next_heading(self) -> None:
+        """`ghost.py` sits under 1.7 and must not count as a map entry."""
+        section = check_docs.extract_section(MAP_DOC, "## 1.6 Module map")
+        assert section is not None
+        assert "models.py" in section
+        assert "ghost.py" not in section
+
+    def test_an_empty_inventory_is_a_violation_not_a_pass(self) -> None:
+        violations = check_docs.check_module_map(
+            "docs/architecture.md", MAP_DOC, check_docs.SourceInventory()
+        )
+        assert rules(violations) == {"source-tree-unreadable"}
+
+    def test_the_rule_only_applies_to_its_own_document(self) -> None:
+        assert check_docs.check_module_map("docs/api.md", "# API\n", inventory()) == []
+
+    def test_the_real_tree_matches_the_real_map(self) -> None:
+        """The W24 acceptance criterion, as a standing gate."""
+        found = check_docs.scan_source_tree(check_docs.REPO_ROOT)
+        text = (check_docs.REPO_ROOT / check_docs.MODULE_MAP_DOC).read_text(encoding="utf-8")
+        violations = check_docs.check_module_map(check_docs.MODULE_MAP_DOC, text, found)
+        assert violations == [], [v.render() for v in violations]
+
+    def test_deleting_the_series_row_reds_the_gate(self) -> None:
+        """Named in the acceptance criteria, so pinned explicitly."""
+        found = check_docs.scan_source_tree(check_docs.REPO_ROOT)
+        text = (check_docs.REPO_ROOT / check_docs.MODULE_MAP_DOC).read_text(encoding="utf-8")
+        without = "\n".join(
+            line for line in text.splitlines() if "`src/library/series.py`" not in line
+        )
+        violations = check_docs.check_module_map(check_docs.MODULE_MAP_DOC, without, found)
+        assert "map-missing-module" in rules(violations)
+
+
+INDEX = """# Documentation
+
+| [`architecture.md`](architecture.md) | design |
+| [`runbooks/deploy.md`](runbooks/deploy.md) | deploys |
+"""
+
+
+class TestDocsIndex:
+    """Every gated doc must be reachable from the index (W25)."""
+
+    def test_a_complete_index_is_clean(self) -> None:
+        gated = ("docs/architecture.md", "docs/runbooks/deploy.md", "docs/README.md")
+        assert check_docs.check_docs_index(INDEX, gated) == []
+
+    def test_an_unlisted_doc_fails(self) -> None:
+        gated = ("docs/architecture.md", "docs/smart-groups.md")
+        violations = check_docs.check_docs_index(INDEX, gated)
+        assert rules(violations) == {"doc-not-indexed"}
+        assert "smart-groups.md" in violations[0].message
+
+    def test_the_index_does_not_have_to_list_itself(self) -> None:
+        assert check_docs.check_docs_index(INDEX, ("docs/README.md",)) == []
+
+    def test_a_broken_link_fails(self) -> None:
+        violations = check_docs.check_index_targets(INDEX, lambda t: t != "architecture.md")
+        assert rules(violations) == {"index-link-broken"}
+        assert "architecture.md" in violations[0].message
+
+    def test_external_and_anchor_links_are_not_file_claims(self) -> None:
+        text = "[a](https://example.com/x.md) [b](#section) [c](other.md)"
+        violations = check_docs.check_index_targets(text, lambda t: False)
+        assert len(violations) == 1
+        assert "other.md" in violations[0].message
+
+    def test_the_real_index_lists_every_gated_doc(self) -> None:
+        """The W25 acceptance criterion, as a standing gate."""
+        index = check_docs.REPO_ROOT / check_docs.DOCS_INDEX
+        gated = tuple(
+            str(p.relative_to(check_docs.REPO_ROOT)) for p in check_docs.gated_documents()
+        )
+        text = index.read_text(encoding="utf-8")
+        offenders = check_docs.check_docs_index(text, gated) + check_docs.check_index_targets(
+            text, lambda t: (index.parent / t).exists()
+        )
+        assert offenders == [], [v.render() for v in offenders]
+
+
 class TestShallowDetection:
     """The guard that stops the whole gate going blind.
 

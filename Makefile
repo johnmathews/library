@@ -25,13 +25,19 @@ test:
 	uv run coverage run -m pytest && uv run coverage report
 
 lint:
-	uv run ruff check . && uv run ruff format --check . && $(MAKE) lint-actions
+	uv run ruff check . && uv run ruff format --check . && $(MAKE) lint-actions && \
+	uv run python scripts/build_journal_index.py --check
 
 # Documentation freshness. Not part of `lint`: it reds today's tree by design
 # until W27's verify-and-stamp sweep lands, and a `make lint` that always fails
 # is a `make lint` nobody runs.
 check-docs:
 	uv run python scripts/check_docs.py --max-violations 15
+
+# Regenerate the journal index. `--check` is in `lint` (and CI) with the same
+# contract as `ruff format --check`: add an entry, re-run this, commit both.
+journal-index:
+	uv run python scripts/build_journal_index.py
 
 # Lint the workflow files. Worth its own target because this is the one check
 # that CANNOT be enforced from inside CI for the file it matters most for: an
