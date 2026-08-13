@@ -4,7 +4,7 @@
  *
  *  - A normal user (`e2e`) sees no Admin sidebar link, and navigating straight
  *    to /admin bounces them back to the documents dashboard.
- *  - An admin user (`e2e-admin`) sees the link, reaches /admin, and the four
+ *  - An admin user (`e2e-admin`) sees the link, reaches /admin, and the five
  *    tabs (Users / Metadata / Architecture / Coverage / System) render real data.
  *
  * Requires the real stack (docker compose db/migrate/api/worker + the built
@@ -44,7 +44,7 @@ test('a normal user has no admin link and is redirected away from /admin', async
   await expect(page.getByRole('heading', { name: 'Documents', exact: true })).toBeVisible()
 })
 
-test('an admin reaches /admin and the four tabs render', async ({ page }) => {
+test('an admin reaches /admin and the five tabs render', async ({ page }) => {
   await signIn(page, ADMIN_USERNAME, ADMIN_PASSWORD)
 
   // The admin link is present in the sidebar (the gating signal). We assert its

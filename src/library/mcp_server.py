@@ -69,8 +69,8 @@ English, made searchable by OCR and metadata extraction.
 Start with `search_documents` to find documents (full-text search with
 Dutch and English stemming, plus metadata filters), then `get_document`
 for the full text of one document. Use `list_kinds`, `list_senders`,
-`list_recipients`, `list_tags`, and `list_projects` to discover valid
-filter values,
+`list_recipients`, `list_tags`, `list_projects`, and `list_matters` to
+discover valid filter values,
 `library_stats` for an overview, `get_document_file` to retrieve the
 actual file, and `ingest_document` to add a new document to the archive.
 """

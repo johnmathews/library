@@ -37,6 +37,7 @@ from sqlalchemy.pool import NullPool
 
 from library.auth.service import API_TOKEN_PREFIX, sha256_hex
 from library.jobs import job_app, procrastinate_conninfo
+from library.mcp_server import SERVER_INSTRUCTIONS, mcp
 from library.models import ApiToken, DocumentLanguage
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
 from library.storage import derived_dir, store
@@ -198,6 +199,24 @@ async def test_list_tools(mcp_connect: McpConnector) -> None:
     assert {tool.name for tool in tools} == EXPECTED_TOOLS
     for tool in tools:
         assert tool.description and len(tool.description.strip()) > 20, tool.name
+
+
+async def test_instructions_mention_every_tool(mcp_connect: McpConnector) -> None:
+    """Every registered tool is named in the instructions clients are handed.
+
+    The server's own instructions are how an LLM client learns what it can
+    do; a tool missing from them is effectively undiscoverable however well
+    it is implemented (`list_matters` was, for a while). Assert against the
+    live registry rather than ``EXPECTED_TOOLS`` so a newly added tool trips
+    this too.
+    """
+    async with mcp_connect() as session:
+        tools = (await session.list_tools()).tools
+
+    # `mcp.instructions` is what the initialize response hands the client.
+    assert mcp.instructions == SERVER_INSTRUCTIONS
+    missing = sorted(t.name for t in tools if f"`{t.name}`" not in SERVER_INSTRUCTIONS)
+    assert not missing, f"tools absent from SERVER_INSTRUCTIONS: {missing}"
 
 
 # --- search ------------------------------------------------------------------

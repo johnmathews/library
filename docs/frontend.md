@@ -1,7 +1,7 @@
 # Frontend
 
-**Status:** active. **Last updated:** 2026-08-12 (nightly Smart Groups heartbeat §1.7.0 and the Playwright-not-jsdom layout rule §1.7.3; earlier the same day, documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical).
-**Last verified:** 2026-08-12 — method: cross-checked the document against `frontend/src`, `frontend/e2e` and the vite/vitest/playwright/eslint configs, reading the shell components and router line by line, and mechanically confirming that every `data-testid`, hyphenated identifier and file path it cites exists in the tree.
+**Status:** active. **Last updated:** 2026-08-13 (the `index.html` sidebar seed now mirrors the store's full key precedence, so §1.2's note about it reading only the legacy key no longer applies; earlier, 2026-08-12: nightly Smart Groups heartbeat §1.7.0 and the Playwright-not-jsdom layout rule §1.7.3; earlier the same day, documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical).
+**Last verified:** 2026-08-13 — method: partial re-verification, scoped to the sidebar collapse-state paragraph only (the rest of the document carries forward the 2026-08-12 full cross-check): re-read `AppSidebar.vue`'s storage-key precedence and `index.html`'s seed script side by side, and confirmed the new `src/__tests__/sidebar-seed.spec.ts` guard reds when the seed is reverted to its previous legacy-only lookup.
 
 The Library web UI: a Vue 3 single-page app styled with the **Mosaic** design
 language (Cruip) — Tailwind 4, the Inter typeface, a violet accent, soft
@@ -224,9 +224,10 @@ Collapsible left sidebar. Props `{ sidebarOpen }`, emits `close-sidebar` and
 - **Collapse state** persists to `localStorage['library:sidebar-expanded']`
   (legacy bare `sidebar-expanded` key still read once as a fallback), mirrored
   onto `body.sidebar-expanded` (seeded by an inline script in `index.html` to
-  avoid a flash — note that seed script still reads only the **legacy bare**
-  key, so a user with no legacy value gets the default seed and the sidebar
-  settles to the stored preference a frame later); when unset it defaults from a `matchMedia('(min-width:1024px)')`
+  avoid a flash; the seed mirrors this resolution order exactly — primary key,
+  then legacy key, then the viewport default — and
+  `src/__tests__/sidebar-seed.spec.ts` executes the real script out of
+  `index.html` to keep the two in step); when unset it defaults from a `matchMedia('(min-width:1024px)')`
   check. A desktop expand/collapse button toggles between **narrow (icons only)**
   and **wide (icons + text)** at **every** desktop width — the sidebar is no
   longer force-widened at `2xl` (that hid the toggle on large monitors).
