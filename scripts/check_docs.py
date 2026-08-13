@@ -68,6 +68,13 @@ EXCLUDED_DIRS: frozenset[str] = frozenset({"archive", "adr", "rfc", "benchmarks"
 #: `Last updated`, so an exemption expires by itself.
 NOT_YET_GRACE_DAYS: int = 60
 
+#: Slack for `future-date`, because "today" is not one date worldwide. Commit
+#: dates render in the commit's own UTC offset, so a doc committed just after
+#: midnight in `+0200` reads as tomorrow to a UTC runner — and `stale-doc-edit`
+#: then *requires* the stamp `future-date` would reject. One day covers every
+#: real offset (max ±14h) while still catching a date that is simply wrong.
+FUTURE_DATE_GRACE_DAYS: int = 1
+
 #: The archived greenfield plan whose `units:` frontmatter the `Wn` citations in
 #: `docs/` refer to. Restored from history in W14 — before that the reference in
 #: `architecture.md` pointed at a path that no longer existed, so no `Wn` token
@@ -278,7 +285,7 @@ def check_document(
         )
         return violations
 
-    if stamp.verified_date > today:
+    if (stamp.verified_date - today).days > FUTURE_DATE_GRACE_DAYS:
         violations.append(
             Violation(
                 path,
@@ -655,13 +662,35 @@ def git_last_commit_date(path: str) -> date | None:
 
 
 def git_changed_since(since: date, patterns: tuple[str, ...]) -> tuple[str, ...]:
-    """Which of ``patterns`` have commits after ``since``."""
-    changed: list[str] = []
-    for pattern in patterns:
-        out = _git("log", f"--since={since.isoformat()}", "--format=%H", "--", pattern)
-        if out:
-            changed.append(pattern)
-    return tuple(changed)
+    """Which of ``patterns`` were last committed on a date after ``since``.
+
+    Deliberately **not** ``git log --since=<date>``. Git's ``approxidate`` fills
+    the fields a date string leaves unspecified from the *current clock*, so
+    ``--since=2026-08-12`` does not mean "since the start of the 12th" — it means
+    "since the 12th at whatever time it is now, locally". A commit made partway
+    through the verified date is then reported by a morning run and hidden by an
+    afternoon one, every day, indefinitely. That is how `migration.md` sat stale
+    on a green `main`: its covered `cli.py` changed at 16:08Z on the date the doc
+    was stamped, so CI's verdict depended on what time the job happened to start.
+
+    Comparing dates via :func:`git_last_commit_date` — whose ``--date=short``
+    renders each commit in its own recorded offset, and so reads the same on
+    every machine — makes the answer a property of the history alone. It also
+    gives both comparative rules one shared meaning of "since": this is exactly
+    the comparison ``stale-doc-edit`` already makes.
+
+    Same-date changes are not reported, for the reason ``stale-doc-edit`` does
+    not report them either: a stamp is a date, so a commit on that same date
+    cannot be ordered against it, and flagging it would fire on the ordinary
+    workflow of verifying a document in the same commit as the code it covers.
+    The residual blind spot is one day wide, and it is why the ``method:`` string
+    — not this rule — carries the real guarantee.
+    """
+    return tuple(
+        pattern
+        for pattern in patterns
+        if (last := git_last_commit_date(pattern)) is not None and last > since
+    )
 
 
 def _repo_relative(path: Path) -> str:

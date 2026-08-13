@@ -12,8 +12,10 @@ what a calendar-based gate gets wrong.
 """
 
 import importlib.util
+import os
+import subprocess
 import sys
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import ClassVar
 
@@ -111,6 +113,23 @@ class TestSeededViolations:
     def test_future_date_fails(self) -> None:
         assert "future-date" in rules(check(doc(verified="2027-01-01 — method: x")))
 
+    def test_future_date_tolerates_one_day_of_timezone_skew(self) -> None:
+        """Tomorrow's date is allowed, because it is reachable without lying.
+
+        `git log --date=short` renders a commit in its own recorded offset, so a
+        commit authored at 00:42+0200 reads as the 13th on a UTC runner too, and
+        `stale-doc-edit` then *requires* a stamp of the 13th. But `today` here is
+        the runner's, still the 12th for those two hours. Without slack the two
+        rules contradict each other and no stamp value passes both.
+        """
+        tomorrow = TODAY + timedelta(days=1)
+        assert "future-date" not in rules(check(doc(verified=f"{tomorrow} — method: x")))
+
+    def test_future_date_still_fails_beyond_the_skew(self) -> None:
+        """The slack is one day, not a licence: no offset is two days wide."""
+        far = TODAY + timedelta(days=2)
+        assert "future-date" in rules(check(doc(verified=f"{far} — method: x")))
+
     def test_doc_edited_after_verification_fails(self) -> None:
         """The comparative rule: edited without being re-verified."""
         violations = check(doc(verified="2026-07-20 — method: x"), last_commit="2026-07-25")
@@ -146,6 +165,89 @@ class TestCoveredCode:
         stamp = check_docs.parse_stamp(doc(covers="`src/a.py`, src/b/**"))
         assert stamp is not None
         assert stamp.covers == ("src/a.py", "src/b/**")
+
+
+def _repo_with_commit_at(repo: Path, when: str) -> Path:
+    """A one-commit git repo whose single commit is stamped at ``when``.
+
+    Both author and committer dates are pinned, since the two are compared by
+    different rules and a drifting committer date would make the test's own
+    history depend on when it ran.
+    """
+    repo.mkdir()
+
+    def run(*args: str, **dates: str) -> None:
+        subprocess.run(args, cwd=repo, check=True, capture_output=True, env={**os.environ, **dates})
+
+    run("git", "init", "-q", ".")
+    run("git", "config", "user.email", "t@example.com")
+    run("git", "config", "user.name", "T")
+    (repo / "covered.py").write_text("x = 1\n")
+    run("git", "add", "covered.py")
+    run("git", "commit", "-q", "-m", "c", GIT_AUTHOR_DATE=when, GIT_COMMITTER_DATE=when)
+    return repo
+
+
+class TestCoveredChangeDetectionIsClockIndependent:
+    """`stale-covered-code` must give the same answer at every hour of the day.
+
+    It was written as ``git log --since=<verified_date>``. Git's ``approxidate``
+    fills the fields a date string leaves unspecified from the **current clock**,
+    so that argument does not mean "since the start of that date" — it means
+    "since that date at whatever time it is now, locally". A commit made partway
+    through the verified date is therefore reported by a morning run and hidden
+    by an afternoon one, every day, indefinitely. `migration.md` sat stale on a
+    green `main` that way: its covered `cli.py` changed at 16:08Z on the very
+    date it was stamped.
+
+    The replacement compares the last commit *date* per covered path, which is
+    what `stale-doc-edit` already does, so both comparative rules now share one
+    primitive and one meaning of "since".
+    """
+
+    def test_it_compares_last_commit_dates(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """The unit that needs no repository and no clock."""
+        last: dict[str, date | None] = {
+            "after.py": date(2026, 7, 30),
+            "same-day.py": date(2026, 7, 29),
+            "before.py": date(2026, 7, 28),
+            "untracked.py": None,
+        }
+        monkeypatch.setattr(check_docs, "git_last_commit_date", lambda path: last[path])
+        changed = check_docs.git_changed_since(date(2026, 7, 29), tuple(last))
+        assert changed == ("after.py",)
+
+    def test_a_same_day_change_is_not_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Date-granularity, stated deliberately rather than left to emerge.
+
+        A stamp is a date, so a code commit on that same date cannot be ordered
+        against it — and the normal workflow is to verify a doc and commit it
+        *alongside* the code change, which `>=` would flag every single time.
+        `stale-doc-edit` already resolves this the same way. The cost is a
+        bounded blind spot of one day, and it is the reason the rule is not the
+        whole guarantee: the `method:` string is.
+        """
+        monkeypatch.setattr(check_docs, "git_last_commit_date", lambda path: date(2026, 7, 29))
+        assert check_docs.git_changed_since(date(2026, 7, 29), ("x.py",)) == ()
+
+    def test_the_hour_of_the_commit_cannot_change_the_verdict(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The property, against a real repository rather than a stub.
+
+        Two commits on the same day, one just after midnight and one just before
+        it. Under date comparison they are indistinguishable, so the rule must
+        return the same verdict for both. Under `--since` it returned different
+        verdicts for all but ~30 minutes of each day.
+        """
+        stamped = date(2026, 7, 29)
+        verdicts = set()
+        for hour in ("00:30:00", "23:30:00"):
+            repo = _repo_with_commit_at(tmp_path / f"repo-{hour[:2]}", f"{stamped}T{hour}+00:00")
+            monkeypatch.setattr(check_docs, "REPO_ROOT", repo)
+            verdicts.add(check_docs.git_changed_since(stamped, ("covered.py",)))
+
+        assert len(verdicts) == 1, f"verdict depends on the commit's hour: {verdicts}"
 
 
 class TestNotYet:
@@ -248,7 +350,10 @@ class TestRepoState:
                 continue
             if stamp.verified_date is None:
                 problems.append(f"{relative}: `Last verified` is not an ISO date")
-            elif stamp.verified_date > today:
+            elif (stamp.verified_date - today).days > check_docs.FUTURE_DATE_GRACE_DAYS:
+                # Same slack as the rule itself: this job runs in UTC, and a doc
+                # stamped just after midnight in +0200 is legitimately "tomorrow"
+                # here. Without it this test reds for two hours a day.
                 problems.append(f"{relative}: `Last verified` is in the future")
             if not stamp.method:
                 problems.append(f"{relative}: no `— method:` on the stamp")
