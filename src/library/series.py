@@ -289,6 +289,24 @@ class _Member:
 
 
 @dataclass(frozen=True, slots=True)
+class _Dated:
+    """A member whose ``document_date`` is known, with the date lifted out.
+
+    ``_Member.document_date`` is ``date | None``, but every time-series statistic
+    — ordering, cadence, trend, year-over-year — needs a real date. Filtering
+    ``members`` in a generator establishes that at runtime and nowhere in the
+    types: the narrowing does not survive past the comprehension, so each
+    downstream use had to be trusted rather than checked.
+
+    Lifting the date into its own non-optional field once, at the point the
+    filter happens, is what lets the rest of ``_summarize_members`` be typed.
+    """
+
+    member: _Member
+    date: date
+
+
+@dataclass(frozen=True, slots=True)
 class SeriesSignature:
     """The mechanical identity of a series: its dominant member triple + dominance.
 
@@ -413,6 +431,30 @@ async def _load_override_ids(
     return pinned, excluded
 
 
+async def _convert_into(
+    session: AsyncSession,
+    amount: Decimal,
+    currency: str | None,
+    target: str | None,
+    on_date: date | None,
+) -> Decimal | None:
+    """Convert ``amount`` into ``target``, or ``None`` when that is impossible.
+
+    A series bucket can be keyed on ``None`` — the documents that carry no
+    currency at all — and there is nothing to convert *into* such a bucket: only
+    a member that is itself currency-less belongs in it.
+
+    That case used to reach ``convert_amount``, whose ``to_currency: str``
+    contract it violates. The rate lookup for ``None`` then returned no rate, so
+    the member was dropped and logged as "no FX rate EUR->None". The outcome was
+    right by accident, arrived at through a failed lookup rather than a stated
+    rule. This states the rule; the behaviour is unchanged in both directions.
+    """
+    if target is None or currency is None:
+        return amount if currency == target else None
+    return await convert_amount(session, amount, currency, target, on_date)
+
+
 async def _load_pinned_members(
     session: AsyncSession, document_ids: list[int], target_currency: str | None
 ) -> list[_Member]:
@@ -448,7 +490,7 @@ async def _load_pinned_members(
     rows = (await session.execute(statement)).all()
     members: list[_Member] = []
     for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
-        converted = await convert_amount(session, amount, currency, target_currency, ddate)
+        converted = await _convert_into(session, amount, currency, target_currency, ddate)
         if converted is None:
             logger.warning(
                 "series pin doc %s: no FX rate %s->%s; dropped from series stats",
@@ -584,21 +626,22 @@ def _summarize_members(
     ``authored_id``/``mode``/``auto_added_count``.
     """
     dated = sorted(
-        (m for m in members if m.document_date is not None), key=lambda m: m.document_date
+        (_Dated(m, d) for m in members if (d := m.document_date) is not None),
+        key=lambda item: item.date,
     )
-    points = [(m.document_date, m.amount, m.document_id) for m in dated]
-    trend_points = [(m.document_date, m.amount) for m in dated]
+    points = [(item.date, item.member.amount, item.member.document_id) for item in dated]
+    trend_points = [(item.date, item.member.amount) for item in dated]
     amounts = [m.amount for m in members]
     dist = distribution(amounts)
-    cadence = classify_cadence([m.document_date for m in dated])
+    cadence = classify_cadence([item.date for item in dated])
     trend = compute_trend(trend_points, settings.series_flat_pct)
 
     # Resolve the reference value + anchor date.
     ref_value: Decimal | None
     ref_date = reference_date
     if reference == "latest":
-        ref_value = dated[-1].amount if dated else None
-        ref_date = ref_date or (dated[-1].document_date if dated else None)
+        ref_value = dated[-1].member.amount if dated else None
+        ref_date = ref_date or (dated[-1].date if dated else None)
     elif isinstance(reference, Decimal):
         ref_value = reference
     else:
@@ -611,7 +654,7 @@ def _summarize_members(
     )
     yoy = None
     if ref_date is not None:
-        yoy_points = [(m.document_date, m.amount, m.document_id) for m in dated]
+        yoy_points = [(item.date, item.member.amount, item.member.document_id) for item in dated]
         if ref_value is not None and ref_date not in {p[0] for p in points}:
             yoy_points.append((ref_date, ref_value, -1))
         yoy = year_over_year(yoy_points, ref_date, cadence)
@@ -660,6 +703,10 @@ async def summarize_series(
     by_currency: dict[str | None, list[_Member]] = {}
     for m in members:
         by_currency.setdefault(m.currency, []).append(m)
+    # Annotated because the dominant bucket may legitimately be the NULL one:
+    # inferring from the `reference_currency` branch alone would make this `str`
+    # and hide that. `SeriesSummary.currency` is `str | None` for the same reason.
+    currency: str | None
     if reference_currency is not None and reference_currency in by_currency:
         currency = reference_currency
     else:
@@ -738,7 +785,7 @@ async def _load_authored_members(
     rows = (await session.execute(statement)).all()
     members: list[_Member] = []
     for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
-        converted = await convert_amount(session, amount, currency, target_currency, ddate)
+        converted = await _convert_into(session, amount, currency, target_currency, ddate)
         if converted is None:
             logger.warning(
                 "authored series %s doc %s: no FX rate %s->%s; dropped from series stats",
@@ -775,7 +822,11 @@ async def _load_authored_origins(
             Document.deleted_at.is_(None),
         )
     )
-    return dict((await session.execute(statement)).all())
+    # `.tuples()` rather than `.all()`: a SQLAlchemy `Row` is a sequence at
+    # runtime but is not typed as a 2-tuple, so `dict()` cannot see the pairing.
+    # Rewriting it as a comprehension satisfies mypy but trips ruff's C416,
+    # which wants `dict()` back — `.tuples()` is what satisfies both.
+    return dict((await session.execute(statement)).tuples().all())
 
 
 def _empty_authored_summary(

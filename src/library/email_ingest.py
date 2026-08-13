@@ -825,6 +825,51 @@ def _corroborating_signals(candidate: IngestCandidate, settings: Settings) -> li
     return [name for name, hit in signals.items() if hit]
 
 
+def _move_message(mailbox: MailboxProtocol, message: MailMessage, folder: str) -> bool:
+    """File ``message`` into ``folder``. ``False`` when it has no uid to move by.
+
+    ``MailMessage.uid`` is ``str | None``: imap_tools populates it from the fetch
+    response, and a message that arrived without one cannot be addressed by a
+    later IMAP command. ``None`` used to be passed straight to ``move``, whose
+    contract is ``str`` — building a malformed command rather than failing
+    usefully.
+
+    The uid is non-None for anything this poller fetched, so the ``False`` branch
+    covers a case that should not occur. It logs rather than raising because
+    every caller has already written the durable record — the held row, the
+    ingested documents — by the time it files anything. Leaving one message
+    unfiled in the inbox is recoverable; aborting a poll batch part-way through
+    is not.
+    """
+    if message.uid is None:
+        logger.warning(
+            "email: message %r has no IMAP uid and cannot be moved to %r; it stays "
+            "in the inbox (its documents and any held row are already recorded)",
+            message.subject,
+            folder,
+        )
+        return False
+    mailbox.move(message.uid, folder)
+    return True
+
+
+def _noise_verdict(verdict: tuple[str, str | None] | None) -> tuple[bool, str | None]:
+    """``(flagged, reason)`` for one LLM label verdict.
+
+    Callers used to keep the verdict tuple around and re-index it under a
+    ``flagged`` boolean. That boolean carries "the verdict exists" at runtime but
+    not in the types, so each later ``verdict[1]`` was an index into a value
+    mypy still saw as ``... | None``. Binding the reason at the point of the
+    check is what makes both facts travel together.
+
+    A flagged verdict may still have no reason — hence ``str | None`` rather
+    than a falsy sentinel, which would collapse "not flagged" into "no reason".
+    """
+    if verdict is not None and verdict[0] == "probably_noise":
+        return True, verdict[1]
+    return False, None
+
+
 def _ingest_attachments(
     message: MailMessage,
     ingest: IngestCallable,
@@ -863,8 +908,7 @@ def _ingest_attachments(
     produced: list[IngestResult] = []
     new = duplicates = 0
     for index, candidate in enumerate(candidates):
-        verdict = verdicts.get(index)
-        flagged = verdict is not None and verdict[0] == "probably_noise"
+        flagged, noise_reason = _noise_verdict(verdicts.get(index))
         if flagged:
             corroborating = _corroborating_signals(candidate, settings)
             if corroborating:
@@ -874,7 +918,7 @@ def _ingest_attachments(
                 skip = SkippedAttachment(
                     candidate.filename,
                     "llm_noise_corroborated",
-                    f"LLM judged probably-noise ({verdict[1] or 'no reason given'}); "
+                    f"LLM judged probably-noise ({noise_reason or 'no reason given'}); "
                     f"corroborated by decoration signal(s): {', '.join(corroborating)}",
                     size=len(candidate.content),
                     mime=candidate.mime,
@@ -891,7 +935,7 @@ def _ingest_attachments(
             # positive costs a review click, not a lost document).
             extra["email_selection"] = {
                 "verdict": "probably_noise",
-                "reason": verdict[1],
+                "reason": noise_reason,
                 "source": "llm_label",
             }
         stamped = replace(candidate, extra_document=extra) if extra else candidate
@@ -914,7 +958,7 @@ def _ingest_attachments(
         elif flagged:
             new += 1
             decisions.append(
-                _candidate_decision(candidate, "flagged_ambiguous", verdict[1], stage="llm_label")
+                _candidate_decision(candidate, "flagged_ambiguous", noise_reason, stage="llm_label")
             )
         else:
             new += 1
@@ -1183,7 +1227,7 @@ def _hold_message(
                 imap_uid=message.uid,
             )
         )
-    mailbox.move(message.uid, settings.email_held_folder)
+    _move_message(mailbox, message, settings.email_held_folder)
     logger.info(
         "email: message %r held for review (%s: %s); moved to %r",
         message.subject,
@@ -1371,9 +1415,8 @@ def poll_mailbox(
                             # "attachments couldn't be added" review reason would be
                             # absent exactly when every attachment was dropped.
                             dropped_siblings = _dropped_siblings_payload(dropped_attachments)
-                            body_verdict = label_outcome.verdicts.get(len(candidates))
-                            body_flagged = (
-                                body_verdict is not None and body_verdict[0] == "probably_noise"
+                            body_flagged, body_noise_reason = _noise_verdict(
+                                label_outcome.verdicts.get(len(candidates))
                             )
                             extra: dict[str, object] = {}
                             if dropped_siblings:
@@ -1383,7 +1426,7 @@ def poll_mailbox(
                                 # the LLM only annotates, never drops.
                                 extra["email_selection"] = {
                                     "verdict": "probably_noise",
-                                    "reason": body_verdict[1],
+                                    "reason": body_noise_reason,
                                     "source": "llm_label",
                                 }
                             if extra:
@@ -1406,7 +1449,7 @@ def poll_mailbox(
                                         _body_decision(
                                             body,
                                             "flagged_ambiguous",
-                                            body_verdict[1],
+                                            body_noise_reason,
                                             stage="llm_label",
                                         )
                                     )
@@ -1489,7 +1532,7 @@ def poll_mailbox(
                     # message stays put and is re-run whole next poll — the retry
                     # ingests as all-duplicates and only then notifies.
                     try:
-                        mailbox.move(message.uid, settings.email_processed_folder)
+                        _move_message(mailbox, message, settings.email_processed_folder)
                     except Exception:
                         logger.error(
                             "email: failed to move message %r (uid %s) to %r; "
@@ -1557,9 +1600,15 @@ async def _ingest_candidate(
     default_owner_username: str | None = None,
 ) -> IngestResult:
     async with session_factory() as session:
+        # `event_detail` is `dict[str, object]` (it carries addresses, subjects
+        # and lists), so reading a value back gives no type. `_event_detail`
+        # always stores a string here; `isinstance` states that at the read
+        # rather than trusting it, and degrades to the owner fallback if a
+        # future writer puts something else under the key.
+        email_from = candidate.event_detail.get("email_from")
         owner_id = await resolve_sender_owner(
             session,
-            candidate.event_detail.get("email_from"),
+            email_from if isinstance(email_from, str) else None,
             default_owner_username=default_owner_username,
         )
         # Carry the To: addresses onto Document.extra so extraction can use them
@@ -2152,7 +2201,12 @@ async def ingest_held_email_async(
             try:
                 if not mailbox.folder.exists(settings.email_processed_folder):
                     mailbox.folder.create(settings.email_processed_folder)
-                mailbox.move(message.uid, settings.email_processed_folder)
+                if not _move_message(mailbox, message, settings.email_processed_folder):
+                    error = (
+                        f"ingested (documents {document_ids}) but the message has no "
+                        "IMAP uid, so it could not be moved to "
+                        f"{settings.email_processed_folder!r}"
+                    )
             except Exception as exc:
                 logger.error(
                     "email: held email %s ingested but the move of message %r to %r failed; "

@@ -221,8 +221,14 @@ def make_body_mail(
     return message.as_bytes()
 
 
-def mail_message(raw: bytes, uid: str) -> MailMessage:
-    """A real imap-tools MailMessage with the (fetch-derived) uid injected."""
+def mail_message(raw: bytes, uid: str | None) -> MailMessage:
+    """A real imap-tools MailMessage with the (fetch-derived) uid injected.
+
+    ``uid`` is ``str | None`` because ``MailMessage.uid`` is: imap_tools fills it
+    from the fetch response, and a message that arrived without one cannot be
+    addressed by a later IMAP command. Passing ``None`` is how the tests reach
+    the no-uid branch of the move helper.
+    """
     message = MailMessage.from_bytes(raw)
     message.__dict__["uid"] = uid  # pre-populate the cached_property
     return message
@@ -3392,4 +3398,53 @@ async def test_below_substance_hold_records_label_usage(
     assert len(rows) == 1
     assert rows[0].verdict == "below_substance"
     assert rows[0].trace["label_usage"]["cost_usd"] > 0
+    assert summary == EmailPollSummary(messages_seen=1, messages_held=1)
+
+
+# --- Messages with no IMAP uid ----------------------------------------------
+#
+# `MailMessage.uid` is `str | None`. It is non-None for anything this poller
+# fetched, so these paths should not occur in production — but `None` was
+# previously passed straight through to `mailbox.move`, whose contract is `str`.
+# These pin what happens instead: the durable record is written either way, and
+# only the filing is skipped, because losing the move is recoverable and
+# aborting the batch mid-poll is not.
+
+
+def test_message_without_uid_is_processed_without_attempting_a_move() -> None:
+    tag = uuid.uuid4().hex[:8]
+    raw = make_raw_mail(attachments=[(f"invoice-{tag}.pdf", make_pdf(), "application", "pdf")])
+    mailbox = FakeMailBox([mail_message(raw, uid=None)])
+    calls: list[IngestCandidate] = []
+
+    summary = poll_mailbox(
+        Settings(email_host="imap.example.test"),
+        _recording_ingest(calls),
+        mailbox_factory=lambda: mailbox,
+    )
+
+    # The attachment still reaches ingest — the uid only governs IMAP filing.
+    assert [candidate.filename for candidate in calls] == [f"invoice-{tag}.pdf"]
+    assert mailbox.moved == []
+    assert summary == EmailPollSummary(
+        messages_seen=1, messages_processed=1, attachments_ingested=1
+    )
+
+
+def test_message_without_uid_is_held_without_attempting_a_move() -> None:
+    settings = Settings(email_host="imap.example.test", email_hold_below_substance=True)
+    tag = uuid.uuid4().hex[:8]
+    raw = make_body_mail(subject=f"cover only {tag}", text="FYI see attached")
+    mailbox = FakeMailBox([mail_message(raw, uid=None)])
+    holds: list[HoldRecord] = []
+
+    summary = poll_mailbox(
+        settings, _recording_ingest([]), mailbox_factory=lambda: mailbox, persist_hold=holds.append
+    )
+
+    # The hold row is the durable record and is written before any move, so a
+    # message that cannot be filed is still reviewable.
+    assert len(holds) == 1
+    assert holds[0].verdict == "below_substance"
+    assert mailbox.moved == []
     assert summary == EmailPollSummary(messages_seen=1, messages_held=1)
