@@ -288,6 +288,13 @@ jobs:
         # Paths come from `files = ["src"]` in [tool.mypy], so the CLI and the
         # local `uv run mypy` check exactly the same set.
         run: uv run mypy
+      - name: Check the mypy quarantine ratchet
+        # `uv run mypy` above is green *because* of the quarantine, so on its
+        # own it cannot see the suppressed errors change. This re-runs mypy with
+        # the quarantine lifted and compares the per-module counts to
+        # mypy-baseline.json — failing on a rise, on an un-locked-in fall, and
+        # on an override that has stopped suppressing anything.
+        run: uv run python scripts/check_mypy.py
 
   frontend:
     needs: changes

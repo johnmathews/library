@@ -36,7 +36,7 @@ from library.models import Document, DocumentComment, DocumentPage
 from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, semantic_search
 from library.series import serialise_summary, summarize_series
-from library.structured_query import CONCEPT_TO_KIND, query_documents
+from library.structured_query import CONCEPT_TO_KIND, QueryResult, query_documents
 
 logger = logging.getLogger(__name__)
 
@@ -401,7 +401,7 @@ async def _run_semantic_search(
 
 async def _run_query_documents(
     session: AsyncSession, args: dict[str, Any], cited: set[int]
-) -> dict[str, Any]:
+) -> QueryResult:
     filters = DocumentFilters(
         kind_slug=args.get("kind"),
         sender_contains=args.get("sender_contains"),
@@ -632,9 +632,12 @@ async def _dispatch_tool(
         editable_ids.update(cited)
         return result
     if name == "query_documents":
-        result = await _run_query_documents(session, args, cited)
+        query_result = await _run_query_documents(session, args, cited)
         editable_ids.update(cited)
-        return result
+        # `dict(...)` widens the TypedDict to the plain mapping this dispatcher
+        # returns: mypy treats a TypedDict as incompatible with `dict[str, Any]`
+        # because a caller could insert a key the declaration forbids.
+        return dict(query_result)
     if name == "compare_to_series":
         result = await _run_compare_to_series(session, settings, args, cited)
         editable_ids.update(cited)
@@ -836,7 +839,12 @@ async def run_ask(
 
         tool_results: list[dict[str, Any]] = []
         for block in response.content:
-            if getattr(block, "type", None) != "tool_use":
+            # `block.type`, not `getattr(block, "type", None)`: every member of
+            # the SDK's content union carries `type`, and the literal comparison
+            # is what narrows the union to `ToolUseBlock` for the accesses below.
+            # `getattr` defeats that narrowing and was the sole cause of the 40
+            # `union-attr` errors this module was once quarantined for.
+            if block.type != "tool_use":
                 continue
             used.append(block.name)
             output = await _dispatch_tool(

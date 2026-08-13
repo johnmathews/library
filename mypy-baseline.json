@@ -1,0 +1,15 @@
+{
+  "library.email_ingest": {
+    "arg-type": 3,
+    "index": 5
+  },
+  "library.series": {
+    "arg-type": 7,
+    "assignment": 1,
+    "misc": 1,
+    "return-value": 1
+  },
+  "library.series_insight": {
+    "union-attr": 11
+  }
+}

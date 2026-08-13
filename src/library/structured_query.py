@@ -17,7 +17,7 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass
 from datetime import date
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal, TypedDict
 
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -190,6 +190,22 @@ async def sum_amount(
     return groups
 
 
+class QueryResult(TypedDict):
+    """The shape every ``query_documents`` branch returns.
+
+    A ``TypedDict`` rather than ``dict[str, object]`` so the caller can iterate
+    ``result["rows"]`` without a cast: the row type is derived from this
+    declaration instead of being re-asserted at the call site.
+
+    ``result_type`` reuses ``Aggregate`` rather than widening to ``str``, so a
+    new aggregate cannot be echoed back under a name the dispatcher does not
+    know about.
+    """
+
+    result_type: Aggregate
+    rows: list[dict[str, Any]]
+
+
 async def query_documents(
     session: AsyncSession,
     *,
@@ -197,7 +213,7 @@ async def query_documents(
     aggregate: Aggregate = "list",
     group_by: GroupBy | None = None,
     limit: int = 50,
-) -> dict[str, object]:
+) -> QueryResult:
     """Dispatch a structured query and return a JSON-friendly result.
 
     The single entry point the ``/ask`` tool-use loop calls. ``result_type``
