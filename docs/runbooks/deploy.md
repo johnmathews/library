@@ -1,6 +1,6 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-08-13 (§1.2: the `main` ruleset does require `ci-gate` — the claim that branch protection was not yet pointed at it was written before the ruleset existed; documented the `check_mypy.py` quarantine ratchet as the second `typecheck` step). Earlier: 2026-08-12, 2026-07-27. **Supersedes:** none.
+**Status:** active. **Last updated:** 2026-08-13 (§1.2: the `main` ruleset does require `ci-gate` — the claim that branch protection was not yet pointed at it was written before the ruleset existed; documented the `check_mypy.py` ratchet as the second `typecheck` step, now guarding an empty quarantine). Earlier: 2026-08-12, 2026-07-27. **Supersedes:** none.
 **Last verified:** 2026-08-13 — method: partial, scoped to §1.2. Re-read the "what green means" paragraph against `ci.yml` and `scripts/ci_gate.sh`, and checked the branch-protection claim against the live `main` ruleset via `gh api repos/johnmathews/library/rulesets` (active since 2026-07-28; requires `ci-gate`, blocks deletion and non-fast-forward, `bypass_actors: []`). The deploy-script flags and the end-to-end run remain as verified on 2026-08-12 and were not re-executed.
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh
 
@@ -45,17 +45,16 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
    gate blocks the merge rather than merely reporting it. Note `promote` sits
    *outside* the gate, which is why the promote gate above exists.
 
-   **`typecheck` runs two steps, and the second is the one with teeth.**
-   `uv run mypy` is green by construction — the `[[tool.mypy.overrides]]`
-   quarantine in `pyproject.toml` suppresses the errors three modules still
-   carry, so that step alone cannot see them change. `scripts/check_mypy.py`
-   re-runs mypy with the quarantine lifted (regenerating the config *from*
-   `pyproject.toml`, so a settings change reaches it with no edit) and compares
-   the per-module, per-error-code counts against `mypy-baseline.json`. It fails
-   on a rise, on a fall that has not been locked in by lowering the number, and
-   on an override entry that has stopped suppressing anything — that last case
-   being a check silently disabled for a whole module at no apparent cost.
-   Cleaning up types therefore means editing the baseline in the same commit.
+   **`typecheck` runs two steps.** `uv run mypy` is green, and — since the
+   quarantine was cleared — green because the tree is clean rather than because
+   anything is suppressed. `scripts/check_mypy.py` keeps that honest: it re-runs
+   mypy with any `[[tool.mypy.overrides]]` `disable_error_code` lifted
+   (regenerating the config *from* `pyproject.toml`, so a settings change
+   reaches it with no edit) and compares the per-module, per-error-code counts
+   against `mypy-baseline.json`, currently `{}`. It fails on a rise, on a fall
+   not locked in by lowering the number, and on an override that has stopped
+   suppressing anything. Re-quarantining a module is allowed; doing it without a
+   measured count beside it is not.
 2. **Key-based SSH to the host works** (`ssh paperless true` returns instantly,
    no password). The script aborts early if it can't connect non-interactively.
 3. **No schema-incompatible change shipped without a backup plan.** The new

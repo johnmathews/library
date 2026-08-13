@@ -169,9 +169,11 @@ async def generate_description(
         system=SERIES_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": build_series_prompt(summary, overrides)}],
     )
-    text = "".join(
-        block.text for block in response.content if getattr(block, "type", None) == "text"
-    ).strip()
+    # `block.type`, not `getattr(block, "type", None)`: the literal comparison
+    # narrows the SDK's content union to `TextBlock`, which is what makes
+    # `block.text` legal. `getattr` defeats that narrowing — the same bug that
+    # kept `ask.engine` quarantined for 40 errors.
+    text = "".join(block.text for block in response.content if block.type == "text").strip()
     return text, response.usage.input_tokens, response.usage.output_tokens
 
 
