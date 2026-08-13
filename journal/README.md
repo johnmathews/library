@@ -13,7 +13,7 @@ CI checks it is current.
 
 ## August 2026
 
-- **2026-08-13** — [Three drifts, and a gate that only failed in one timezone](260813-three-drifts-and-a-timezone.md)
+- **2026-08-13** — [Three drifts, and a staleness rule that answers differently before and after lunch](260813-three-drifts-and-a-timezone.md)
 - **2026-08-12** — [Verifying sixteen documents, then closing the ratchet](260812-verify-and-stamp-sweep.md)
 - **2026-08-12** — [A type checker that was never actually pinned](260812-mypy-ratchet.md)
 - **2026-08-12** — [A map of the code, and three ways to find things](260812-module-map-and-findability.md)

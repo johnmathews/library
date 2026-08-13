@@ -1,4 +1,4 @@
-# Three drifts, and a gate that only failed in one timezone
+# Three drifts, and a staleness rule that answers differently before and after lunch
 
 **Date:** 2026-08-13. Follow-ups to the verify-and-stamp sweep, plus one thing
 the sweep could not have found.
@@ -84,34 +84,53 @@ confirmed through PR state rather than git ancestry, since squash-merge makes
 `git merge-base --is-ancestor` report false for every merged branch. `origin`
 now carries `main` alone.
 
-## 5. The finding: a gate that failed in one timezone and not the other
+## 5. The finding: a staleness rule that answers differently before and after lunch
 
 `check_docs.py` was reporting `docs/migration.md` as stale on this laptop while
 `docs-stamps` was green on `main`. The first read — pre-existing, CI-green,
 unrelated to this work, leave it — was wrong, and became visibly wrong about an
 hour later when the same check started failing under `TZ=UTC` too.
 
-The mechanism. `stale-covered-code` detects drift with
-`git log --since=<verified_date> -- <path>`, and git resolves a **bare date** in
-the machine's local timezone. `1f5e6d4` (the mypy ratchet) touched `cli.py` and
-`importer/`, both declared in `migration.md`'s `Covers:`, at `2026-08-12T16:08Z`.
-For a `+0200` laptop, `--since=2026-08-12` means `2026-08-11T22:00Z`, and the
-commit is after it. For a UTC runner still on the 12th, it is not yet "since".
-The rule therefore fired locally and stayed silent in CI for the better part of
-a day, then began firing for everyone at 00:00 UTC.
+**The explanation written into that session's commit message was also wrong**,
+and is worth correcting here rather than quietly restating, because it is the
+same error the sweep exists to catch: a confident mechanism inferred from two
+data points and never tested. It claimed the bare date passed to `--since` is
+resolved at local midnight, so the rule would differ between a `+0200` laptop
+and a UTC runner and flip once at 00:00 UTC. The timezone is involved, but that
+is not the mechanism, and the real one is worse.
+
+Git's `approxidate` fills the fields a date string leaves unspecified from **the
+current clock**, not from midnight. So `--since=2026-08-12` does not mean "since
+the start of the 12th". It means "since the 12th at whatever time it is right
+now, locally". Demonstrated in a scratch repo with two commits on the same day
+and the check run at 11:27 UTC:
+
+```
+commit at 2026-08-12T05:00Z   --since=2026-08-12  ->  not reported
+commit at 2026-08-12T20:00Z   --since=2026-08-12  ->  reported
+```
+
+The cutoff was 11:27 on the 12th — the wall clock, pasted onto the requested
+date. The consequence is not a one-off flip at midnight UTC. It is that the rule
+**oscillates daily and permanently**: `1f5e6d4` landed at 16:08Z, so a run before
+16:08 local time reports the drift and a run after it does not, every day,
+indefinitely. Yesterday's session happened to observe the two sides of that
+oscillation an hour apart and mistook them for a single midnight transition.
 
 The silent direction is the dangerous one. A ratchet that reports clean while
 covered code has moved on is worse than no ratchet, because the green is read as
-a claim that the prose was checked.
+a claim that the prose was checked — and here "clean" was never a stable state
+to begin with, just the afternoon half of a coin flip.
 
-There is a second, sharper edge to the same root cause. `git log --date=short`
-renders a commit in **its own** stored offset, so a commit authored at
-`00:42 +0200` reads as the next day in CI as well. That forces the stamp to the
-local date, since `stale-doc-edit` requires `verified >= commit date`. But
-`future-date` compares against the runner's `date.today()`, which is UTC. Between
-00:00 and 02:00 local, no stamp value satisfies both rules at once, and the only
-options are to wait for 00:00 UTC or to eat a red that clears on a re-run. This
-session waited.
+A second, genuinely separate defect sits next to it, and this half of yesterday's
+analysis did survive testing. `git log --date=short` renders a commit in **its
+own** recorded offset — verified across `UTC`, `America/New_York` and
+`Europe/Amsterdam`, all returning the same day for a `+0200` commit — so a commit
+authored at `00:42 +0200` reads as the 13th on every machine. `stale-doc-edit`
+therefore requires a stamp of the 13th. But `future-date` compares against the
+runner's `date.today()`, which on a UTC runner is still the 12th. For those two
+hours no stamp value satisfies both rules at once. This session waited for 00:00
+UTC rather than eat a red that clears on a re-run.
 
 `migration.md`'s prose needed no change — all three edits in that commit are
 behaviour-preserving refactors (a narrowing alias, a hoisted empty-checksum
@@ -124,9 +143,12 @@ the `method:` string says exactly that. A stamp is a claim about work performed;
 "partial re-verification, scoped to X" is a true claim, and "read in full" would
 not have been.
 
-**The rule is still timezone-dependent.** Only the symptom was fixed. Comparing
-commit timestamps instead of handing a bare date to `--since` is the actual fix
-and is not attempted here.
+**Only the symptom was fixed** in that session — `migration.md` got a stamp, and
+the rule that failed to catch it was left alone. The actual fix is to stop
+passing a bare date to `--since` and instead compare the last commit date per
+covered path, which `git_last_commit_date` already computes deterministically;
+`future-date` needs a day of slack so the two-hour dead zone closes. That work
+follows this entry.
 
 ## 6. Numbers
 
