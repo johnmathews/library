@@ -131,49 +131,47 @@ ignore_missing_imports = true
 
 # --- Quarantine -------------------------------------------------------------
 #
-# Four modules carry 77 of the 98 real errors. They are suppressed by error
+# Three modules carry the 29 errors that remain. They are suppressed by error
 # *code*, never by excluding the file: an excluded file gets zero checking
 # forever, while a code-suppressed one still catches every other class of error
 # in new code. Each block names the follow-up that removes it.
 #
-# Known weakness, stated rather than hidden: unlike the docs ratchet, this one
-# only fails in one direction. mypy has no baseline mechanism, so if a module is
-# cleaned up the override lingers silently instead of failing to force the gain
-# to be locked in. `warn_unused_ignores` covers that for inline `# type: ignore`,
-# but there is no equivalent for a module override. Making it two-directional
-# needs a per-module count check, which is its own unit.
+# The counts below are NOT maintained here. `mypy-baseline.json` holds them and
+# `scripts/check_mypy.py` enforces them in both directions — a rise, a fall, and
+# an entry that has stopped suppressing anything all fail the build. That check
+# exists because this quarantine was previously one-directional: mypy has no
+# baseline mechanism, so a cleaned-up module left its override lingering
+# silently instead of forcing the gain to be locked in. It had already happened
+# — the numbers these comments used to carry had drifted from the real ones by
+# the time the check was written.
+#
+# `library.ask.engine` was the fourth module, quarantined for 40 `union-attr`
+# errors. All 40 came from one `getattr(block, "type", None)` comparison, which
+# defeats mypy's narrowing of the SDK's content union; a direct `block.type`
+# comparison removed every one of them and the override with it.
 
 [[tool.mypy.overrides]]
-# RATCHET: 40 union-attr + 4 arg-type + 1 attr-defined. Anthropic SDK response
-# unions — `response.content[i]` is a union of ~15 block types, so every `.text`
-# access needs `isinstance` narrowing. Exit: narrow once at the top of each tool
-# loop into a typed local, rather than 40 asserts.
-module = "library.ask.engine"
-disable_error_code = ["union-attr", "attr-defined"]
-
-[[tool.mypy.overrides]]
-# RATCHET: 13 union-attr + 2 arg-type. Same SDK-union cause as ask.engine, plus
-# `SeriesSummary` fields that are `| None` on the dataclass but non-None by the
-# time the formatter runs. Exit: split the summary type so the chartable case is
-# its own non-optional shape.
+# RATCHET: union-attr. `SeriesSummary` fields that are `| None` on the dataclass
+# but non-None by the time the formatter runs. Exit: split the summary type so
+# the chartable case is its own non-optional shape.
 module = "library.series_insight"
 disable_error_code = ["union-attr"]
 
 [[tool.mypy.overrides]]
-# RATCHET: 7 arg-type + 1 each of return-value, misc, assignment. Mostly
-# `SeriesSummary.currency: str | None` flowing into helpers typed `str`. Exit:
-# the same summary-type split as series_insight — these two travel together.
+# RATCHET: mostly `SeriesSummary.currency: str | None` flowing into helpers
+# typed `str`. Exit: the same summary-type split as series_insight — these two
+# travel together.
 module = "library.series"
 disable_error_code = ["arg-type", "return-value", "misc", "assignment"]
 
 [[tool.mypy.overrides]]
-# RATCHET: 5 index + 2 arg-type. Untyped `email.message.Message` payload
-# indexing, plus `imap_tools`' `message.uid: str | None` flowing into
-# `mailbox.move`. Deliberately left rather than "fixed" here: the uid is
-# non-None for anything the poller fetched, and adding a guard would change what
-# the live email poller does on a path this unit has no test for. Exit: a small
-# typed accessor over the stdlib email API and one uid guard with a test, which
-# would also remove several `or ""` defensive reads.
+# RATCHET: untyped `email.message.Message` payload indexing, plus `imap_tools`'
+# `message.uid: str | None` flowing into `mailbox.move`. Deliberately left
+# rather than "fixed" here: the uid is non-None for anything the poller fetched,
+# and adding a guard would change what the live email poller does on a path this
+# unit has no test for. Exit: a small typed accessor over the stdlib email API
+# and one uid guard with a test, which would also remove several `or ""`
+# defensive reads.
 module = "library.email_ingest"
 disable_error_code = ["index", "arg-type"]
 

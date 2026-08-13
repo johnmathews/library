@@ -1,7 +1,7 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: `docs-stamps` and the new `typecheck` job are both inside `ci-gate`; the SSH probe runs before the promote gate; `--status` also reports the embedder). Earlier: 2026-07-27. **Supersedes:** none.
-**Last verified:** 2026-08-12 — method: executed the runbook end to end against the live `paperless` host — `make deploy` at `2c31c4b`, which ran the promote gate, `library-migrate`, the webserver/worker recreate and the `/healthz` check, then `--status` and a `git_sha` comparison against `origin/main` (matched) — and separately read every documented flag, env default and error string in `scripts/deploy.sh`, and §1.2's "what green means" against `scripts/ci_gate.sh` and `ci.yml`.
+**Status:** active. **Last updated:** 2026-08-13 (§1.2: the `main` ruleset does require `ci-gate` — the claim that branch protection was not yet pointed at it was written before the ruleset existed; documented the `check_mypy.py` quarantine ratchet as the second `typecheck` step). Earlier: 2026-08-12, 2026-07-27. **Supersedes:** none.
+**Last verified:** 2026-08-13 — method: partial, scoped to §1.2. Re-read the "what green means" paragraph against `ci.yml` and `scripts/ci_gate.sh`, and checked the branch-protection claim against the live `main` ruleset via `gh api repos/johnmathews/library/rulesets` (active since 2026-07-28; requires `ci-gate`, blocks deletion and non-fast-forward, `bypass_actors: []`). The deploy-script flags and the end-to-end run remain as verified on 2026-08-12 and were not re-executed.
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh
 
 How to ship a merged change to the live `paperless` LXC. This is the focused
@@ -40,9 +40,22 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
    (the path-filter job all the others declare `needs:` on) to be exactly
    `success`, since a broken `changes` skips every one of them and would
    otherwise leave the gate nothing to reject. `tests/test_ci_gate.py` exercises those cases.
-   Branch protection is **not yet pointed at `ci-gate`**, so read the run's
-   result rather than trusting a required-check badge — and note `promote` sits
+   The `main` ruleset **does** require `ci-gate` (it also blocks deletion and
+   force-pushes, requires a pull request, and has no bypass actors), so a red
+   gate blocks the merge rather than merely reporting it. Note `promote` sits
    *outside* the gate, which is why the promote gate above exists.
+
+   **`typecheck` runs two steps, and the second is the one with teeth.**
+   `uv run mypy` is green by construction — the `[[tool.mypy.overrides]]`
+   quarantine in `pyproject.toml` suppresses the errors three modules still
+   carry, so that step alone cannot see them change. `scripts/check_mypy.py`
+   re-runs mypy with the quarantine lifted (regenerating the config *from*
+   `pyproject.toml`, so a settings change reaches it with no edit) and compares
+   the per-module, per-error-code counts against `mypy-baseline.json`. It fails
+   on a rise, on a fall that has not been locked in by lowering the number, and
+   on an override entry that has stopped suppressing anything — that last case
+   being a check silently disabled for a whole module at no apparent cost.
+   Cleaning up types therefore means editing the baseline in the same commit.
 2. **Key-based SSH to the host works** (`ssh paperless true` returns instantly,
    no password). The script aborts early if it can't connect non-interactively.
 3. **No schema-incompatible change shipped without a backup plan.** The new
