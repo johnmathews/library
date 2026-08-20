@@ -87,7 +87,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       # Full version: astral-sh/setup-uv publishes no floating `v8` major tag.
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Install OCR system packages
@@ -234,7 +234,7 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Check documentation stamps
@@ -279,7 +279,7 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v9.0.0
+      - uses: astral-sh/setup-uv@v10.0.1
         with:
           enable-cache: true
       - name: Install dependencies
