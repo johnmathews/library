@@ -113,9 +113,17 @@ describe('SettingsView — LLM backend tab', () => {
     routeFetch()
     const wrapper = await openTab()
 
-    expect(wrapper.find('[data-testid="llm-credentials-status"]').text()).toBe('healthy')
+    const badge = wrapper.find('[data-testid="llm-credentials-status"]')
+    expect(badge.text()).toBe('Healthy')
+    // The colour is the whole point of a status badge — a grey "Healthy" reads
+    // as "no information". AppBadge takes `colour`, not `variant`, and passing
+    // the wrong prop is silently ignored: that shipped, and a text-only
+    // assertion did not catch it.
+    expect(badge.classes().join(' ')).toMatch(/green/)
     expect(wrapper.find('[data-testid="llm-credentials-detail"]').text()).toContain('refresh token present')
-    expect(wrapper.find('[data-testid="llm-api-key-status"]').text()).toContain('Configured')
+    const keyBadge = wrapper.find('[data-testid="llm-api-key-status"]')
+    expect(keyBadge.text()).toContain('Configured')
+    expect(keyBadge.classes().join(' ')).toMatch(/green/)
     expect(wrapper.text()).not.toContain('sk-ant')
   })
 
@@ -139,8 +147,11 @@ describe('SettingsView — LLM backend tab', () => {
     expect(
       (wrapper.find('[data-testid="llm-backend-select-ask"]').element as HTMLSelectElement).value,
     ).toBe('subscription')
-    // The deployed default is still visible, so "overridden" is not a mystery.
-    expect(wrapper.find('[data-testid="llm-overridden-ask"]').text()).toContain('api')
+    // Plain wording, and the reset button names the value it reverts to — the
+    // old badge restated the same fact in jargon ("Overridden (deployed
+    // default: api)") right next to the button that already implied it.
+    expect(wrapper.find('[data-testid="llm-overridden-ask"]').text()).toBe('Changed here')
+    expect(wrapper.find('[data-testid="llm-reset-ask"]').text()).toBe('Reset to Metered API')
   })
 
   it('surfaces the server reason when a change is refused', async () => {
@@ -228,5 +239,22 @@ describe('SettingsView — LLM backend tab', () => {
 
     expect(wrapper.find('[data-testid="llm-backend-error"]').exists()).toBe(true)
     expect(wrapper.find('[data-testid="llm-surfaces"]').exists()).toBe(false)
+  })
+
+  it('colours the credential badge by severity, not just by text', async () => {
+    routeFetch({
+      'GET /api/settings/llm-backends': () =>
+        jsonResponse({
+          ...BACKENDS,
+          credentials_status: 'unhealthy',
+          credentials_detail: 'refresh token rejected — run `claude auth login --claudeai`',
+        }),
+    })
+    const wrapper = await openTab()
+
+    const badge = wrapper.find('[data-testid="llm-credentials-status"]')
+    expect(badge.text()).toBe('Unhealthy')
+    expect(badge.classes().join(' ')).toMatch(/red/)
+    expect(badge.classes().join(' ')).not.toMatch(/green/)
   })
 })

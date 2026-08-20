@@ -467,13 +467,26 @@ async function onLLMBackendReset(surface: string): Promise<void> {
   }
 }
 
-/** Badge tone for the credential line: green only when nothing needs doing. */
-const llmCredentialVariant = computed<'success' | 'warning' | 'danger'>(() => {
+// Badge tone for the credential line: green only when nothing needs doing.
+// AppBadge takes `colour` (the GOV.UK-derived palette), NOT `variant` — passing
+// `variant` is silently ignored and every badge falls back to grey, which is
+// exactly what shipped and made "healthy" indistinguishable from a problem.
+const llmCredentialColour = computed<'green' | 'yellow' | 'red'>(() => {
   const status = llm.value?.credentials_status
-  if (status === 'healthy') return 'success'
-  if (status === 'degraded') return 'warning'
-  return 'danger'
+  if (status === 'healthy') return 'green'
+  if (status === 'degraded') return 'yellow'
+  return 'red'
 })
+
+/** Sentence-case a raw status for display ("healthy" -> "Healthy"). */
+function titleCase(value: string): string {
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : value
+}
+
+/** The human label for a backend id, shared by the select and the reset button. */
+function backendLabel(backend: LLMBackend): string {
+  return backend === 'subscription' ? 'Claude subscription' : 'Metered API'
+}
 
 /** The LLM label pass status line — distinguishes WHY it is inactive. */
 const triageLabelState = computed<string>(() => {
@@ -1248,15 +1261,15 @@ const tabClass = (active: boolean): string =>
 
           <div class="mt-4 flex flex-wrap items-center gap-3">
             <span :class="triageLabelClass">Anthropic API key</span>
-            <AppBadge :variant="llm.api_key_configured ? 'success' : 'warning'" data-testid="llm-api-key-status">
+            <AppBadge :colour="llm.api_key_configured ? 'green' : 'yellow'" data-testid="llm-api-key-status">
               {{ llm.api_key_configured ? 'Configured' : 'Not configured' }}
             </AppBadge>
           </div>
 
           <div class="mt-4 flex flex-wrap items-center gap-3">
             <span :class="triageLabelClass">Subscription credentials</span>
-            <AppBadge :variant="llmCredentialVariant" data-testid="llm-credentials-status">
-              {{ llm.credentials_status }}
+            <AppBadge :colour="llmCredentialColour" data-testid="llm-credentials-status">
+              {{ titleCase(llm.credentials_status) }}
             </AppBadge>
           </div>
           <p class="mt-1 text-sm text-gray-500 dark:text-gray-400" data-testid="llm-credentials-detail">
@@ -1280,10 +1293,10 @@ const tabClass = (active: boolean): string =>
               <h3 class="text-sm font-semibold text-gray-800 dark:text-gray-100">{{ surface.label }}</h3>
               <AppBadge
                 v-if="surface.overridden"
-                variant="info"
+                colour="blue"
                 :data-testid="`llm-overridden-${surface.surface}`"
               >
-                Overridden (deployed default: {{ surface.default }})
+                Changed here
               </AppBadge>
             </div>
             <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ surface.description }}</p>
@@ -1315,7 +1328,7 @@ const tabClass = (active: boolean): string =>
                 :data-testid="`llm-reset-${surface.surface}`"
                 @click="onLLMBackendReset(surface.surface)"
               >
-                Reset to deployed default
+                Reset to {{ backendLabel(surface.default) }}
               </AppButton>
             </div>
           </div>

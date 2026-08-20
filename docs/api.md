@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: documented `DELETE /api/admin/users/{id}` and the Smart Groups create/exclusion contract; corrected the `status` enum, the login/`me` and preferences shapes, the coverage and note-edit claims, and the `ts_rank` normalisation). Earlier (2026-07-17, business matters: business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
-**Last verified:** 2026-08-12 — method: enumerated every `@router` decorator under `src/library/` and diffed it against the documented surface in both directions, then checked each endpoint's parameters, request/response fields, status codes and auth rules against `src/library/api/**`, `schemas.py`, `config.py` and `app.py`, all read in full; nothing was executed.
+**Status:** active. **Last updated:** 2026-08-20 (LLM backend selection: new `GET /api/settings/llm-backends` and admin-only `PUT`/`DELETE /api/settings/llm-backends/{surface}`, §1.10.8–1.10.10; `POST /api/ask` now answers **503** with the fix when the subscription backend cannot authenticate, §1.11). Earlier: 2026-08-12 (documentation verification sweep: documented `DELETE /api/admin/users/{id}` and the Smart Groups create/exclusion contract; corrected the `status` enum, the login/`me` and preferences shapes, the coverage and note-edit claims, and the `ts_rank` normalisation). Earlier (2026-07-17, business matters: business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Last verified:** 2026-08-20 — method: the new §1.10.8–1.10.10 wire shapes and status codes checked against `src/library/api/settings.py` and `src/library/schemas.py`, and the §1.11 503 against `src/library/api/ask.py`; both covered by executed tests (`tests/test_llm_backends.py`, `tests/test_api_ask.py`) in a full run of 1632 passing. The rest of the document is unchanged since its previous verification, whose method was: 2026-08-12 — method: enumerated every `@router` decorator under `src/library/` and diffed it against the documented surface in both directions, then checked each endpoint's parameters, request/response fields, status codes and auth rules against `src/library/api/**`, `schemas.py`, `config.py` and `app.py`, all read in full; nothing was executed.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -683,7 +683,7 @@ curl -H "Authorization: Bearer library_3q2…" \
 Bearer requests are CSRF-exempt (the header cannot be set cross-site).
 Revoked or unknown tokens, and tokens of disabled users, get `401`.
 
-## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`, `PUT /api/settings/kind-colors`, `PUT /api/settings/notifications`, `GET /api/settings/email-triage`, `GET /api/settings/email-triage/recent-skips`
+## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`, `PUT /api/settings/kind-colors`, `PUT /api/settings/notifications`, `GET /api/settings/email-triage`, `GET /api/settings/email-triage/recent-skips`, `GET /api/settings/llm-backends`, `PUT`/`DELETE /api/settings/llm-backends/{surface}`
 
 Per-user preferences: which metadata fields appear on the dashboard tiles, the
 page-canvas tone behind them, how each tile previews the document's first page,
@@ -937,6 +937,78 @@ Settings tab. Read-only; any authenticated user.
 per-item trace, ingested siblings included) and projected to a compact shape —
 `kind`/`filename`/`reason`/`detail`, no mime/size/stage.
 
+### 1.10.8 `GET /api/settings/llm-backends`
+
+Which transport each LLM surface uses to reach Claude — **instance-wide, not
+per-user**. Readable by any authenticated user (it explains why Ask behaves as
+it does); only an admin may change it, which `editable` reports so the client
+renders read-only controls rather than discovering a 403. The narrative — the
+two backends, the per-call harness cost, and provisioning — is in
+[llm-backends.md](llm-backends.md).
+
+Secret-free by construction: it reports *whether* an API key is configured,
+never the key, and the subscription credential status without the tokens
+behind it.
+
+```json
+{
+  "surfaces": [
+    {
+      "surface": "ask",
+      "label": "Ask",
+      "description": "The question-answering tool loop and the model that names new conversations. …",
+      "backend": "subscription",
+      "default": "api",
+      "overridden": true
+    },
+    {
+      "surface": "series_insight",
+      "label": "Series descriptions",
+      "description": "The one-line prose description cached for each document series. …",
+      "backend": "api",
+      "default": "api",
+      "overridden": false
+    }
+  ],
+  "credentials_status": "healthy",
+  "credentials_detail": "access token valid (7.5h), refresh token present",
+  "api_key_configured": true,
+  "editable": true
+}
+```
+
+`backend` is one of `api` (metered Anthropic Messages API) or `subscription`
+(Claude Code CLI against a Claude subscription). `default` is what the
+deployed environment supplies when no override is stored, and `overridden`
+says whether an admin has changed it — so the UI can distinguish deployed
+config from a person's decision.
+
+### 1.10.9 `PUT /api/settings/llm-backends/{surface}`
+
+Switch one surface's backend. **Admin only** (403 otherwise). Takes effect on
+the next request — no restart, because the value is resolved per request.
+
+**Request:** `{"backend": "api" | "subscription"}` — any other value is a 422.
+
+**Responses:**
+
+| Status | When |
+| --- | --- |
+| `200` | Saved. Body is the full `GET` payload above, re-resolved. |
+| `403` | Not an admin. |
+| `404` | Unknown `surface`. |
+| `409` | The chosen backend cannot authenticate — e.g. `subscription` with no Claude credentials provisioned. The `detail` names the command to run on the host. |
+
+The `409` is deliberate: the request is well-formed and the value is legal, the
+server simply is not in a state to honour it. Validating on write means the
+admin making the change hears about it, rather than the next person to ask a
+question discovering it as a failed query.
+
+### 1.10.10 `DELETE /api/settings/llm-backends/{surface}`
+
+Drop the override so the surface follows the deployed default again. **Admin
+only**; same `403`/`404` semantics. Returns the re-resolved `GET` payload.
+
 ## 1.11 Ask — `POST /api/ask`
 
 Answer a natural-language question about the archive, grounded in retrieved
@@ -955,6 +1027,12 @@ and conversational threading — is in [ask.md](ask.md); this is the wire contra
 
 `thread_id` is optional. Omit it to start a new conversation; supply it to
 continue an existing one. Auth + CSRF apply (it is a `POST`).
+
+**503** — Ask cannot reach a model. Two causes, distinguished by the `detail`:
+the `api` backend with no `LIBRARY_ANTHROPIC_API_KEY` configured, or the
+`subscription` backend that cannot authenticate. The latter names the command
+to run on the host, because the alternative is a bare `500` with the reason
+buried in a container log (see [llm-backends.md](llm-backends.md) §5.2).
 
 `images` is optional: up to **5** base64 attachments for the multimodal
 model (`ask_model` = `claude-opus-4-8`). Each has a `media_type` of
