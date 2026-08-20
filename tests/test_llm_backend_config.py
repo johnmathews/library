@@ -126,4 +126,46 @@ def test_healthz_degrades_when_credentials_need_a_human(
 
     assert body["status"] == "degraded"
     assert body["claude_credentials"] == "unhealthy"
-    assert "claude setup-token" in body["claude_credentials_detail"]
+    assert "claude auth login" in body["claude_credentials_detail"]
+
+
+def test_healthz_reports_credentials_whenever_they_exist(
+    client: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The alarm must not depend on the environment default.
+
+    The live backend is an instance setting resolved from the database, but
+    /healthz is deliberately DB-free — so keying the check on
+    ``settings.ask_llm_backend`` meant that enabling the subscription through
+    the Settings UI (the intended path) left the credential alarm permanently
+    silent. Observed in production: Ask running on the subscription while
+    /healthz reported nothing at all about credentials.
+
+    Presence of the credentials file is the right trigger: they are on disk to
+    be used, and the write-time guard means no surface can be switched to
+    ``subscription`` without them.
+    """
+    from library.config import get_settings
+
+    settings = get_settings()
+    assert settings.ask_llm_backend == "api"  # the environment default, as in prod
+    monkeypatch.setattr(settings, "claude_config_dir", tmp_path)
+    _write_creds(tmp_path)
+
+    body = client.get("/healthz").json()
+
+    assert body["claude_credentials"] == "healthy"
+
+
+def test_healthz_stays_quiet_with_no_credentials_and_no_subscription(
+    client: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deployment that never uses OAuth must not carry a permanent warning."""
+    from library.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "claude_config_dir", tmp_path)
+
+    body = client.get("/healthz").json()
+
+    assert body["status"] == "ok"
+    assert "claude_credentials" not in body

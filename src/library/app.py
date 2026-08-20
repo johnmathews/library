@@ -265,12 +265,25 @@ def create_app() -> FastAPI:
             "version": library.__version__,
             "git_sha": settings.git_sha,
         }
-        # Only meaningful when a surface actually uses OAuth. A dead refresh
-        # token cannot self-heal — it needs a human — and without this the
-        # symptom is every question failing while /healthz still says "ok".
-        if "subscription" in (settings.ask_llm_backend, settings.series_insight_llm_backend):
-            from library.llm.oauth import token_health
+        # Only meaningful where subscription credentials are actually in play. A
+        # dead refresh token cannot self-heal — it needs a human — and without
+        # this the symptom is every question failing while /healthz says "ok".
+        #
+        # Keyed on the credentials *existing*, not on the configured backend.
+        # The live backend is an instance setting resolved from the database
+        # (library.llm.backends), and this endpoint is deliberately DB-free — so
+        # reading `settings.ask_llm_backend` here reported on the environment
+        # default while the toggle said otherwise, and the alarm stayed silent
+        # for exactly the deployments that enabled the backend through the UI.
+        # Presence is the right trigger anyway: credentials on disk are there to
+        # be used, and the write-time guard means a surface cannot be switched
+        # to `subscription` without them.
+        from library.llm.oauth import credentials_path, token_health
 
+        if credentials_path(settings.claude_config_dir).exists() or "subscription" in (
+            settings.ask_llm_backend,
+            settings.series_insight_llm_backend,
+        ):
             status, detail = token_health(settings.claude_config_dir)
             payload["claude_credentials"] = status
             payload["claude_credentials_detail"] = detail

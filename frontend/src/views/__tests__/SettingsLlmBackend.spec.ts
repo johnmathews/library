@@ -149,7 +149,7 @@ describe('SettingsView — LLM backend tab', () => {
     routeFetch({
       'PUT /api/settings/llm-backends/ask': () =>
         jsonResponse(
-          { detail: 'the Claude subscription is not usable: no credentials — run `claude setup-token` on the host' },
+          { detail: 'the Claude subscription is not usable: no credentials — run `claude auth login` on the host' },
           409,
         ),
     })
@@ -160,7 +160,7 @@ describe('SettingsView — LLM backend tab', () => {
     await select.trigger('change')
     await flushPromises()
 
-    expect(wrapper.find('[data-testid="llm-backend-error"]').text()).toContain('claude setup-token')
+    expect(wrapper.find('[data-testid="llm-backend-error"]').text()).toContain('claude auth login')
     expect(wrapper.find('[data-testid="llm-backend-saved"]').exists()).toBe(false)
   })
 

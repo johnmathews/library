@@ -56,7 +56,7 @@ _refresh_lock = asyncio.Lock()
 # SHA-256 of a refresh token the server answered with ``invalid_grant`` — i.e.
 # permanently dead. Stored as a hash so the raw secret is never held or logged.
 # Compared against the on-disk token by ``token_health`` so that re-running
-# ``claude setup-token`` clears the flag with no restart.
+# ``claude auth login`` clears the flag with no restart.
 _rejected_refresh_token_hash: str | None = None
 
 
@@ -160,7 +160,7 @@ async def _do_refresh(config_dir: Path, oauth: dict[str, Any], refresh_token: st
             _rejected_refresh_token_hash = _hash_token(refresh_token)
             logger.error(
                 "OAuth refresh token rejected (invalid_grant) — re-authenticate on the "
-                "host with `claude setup-token` and restart the container"
+                "host with `claude auth login --claudeai`"
             )
         else:
             logger.warning(
@@ -234,7 +234,10 @@ def token_health(config_dir: Path) -> tuple[str, str]:
     """
     path = credentials_path(config_dir)
     if not path.exists():
-        return ("unhealthy", f"no credentials at {path} — run `claude setup-token` on the host")
+        return (
+            "unhealthy",
+            f"no credentials at {path} — run `claude auth login --claudeai` on the host",
+        )
 
     oauth = _read_oauth(config_dir)
     if oauth is None:
@@ -255,7 +258,7 @@ def token_health(config_dir: Path) -> tuple[str, str]:
             return (
                 "unhealthy",
                 "refresh token rejected by Anthropic (invalid_grant) — re-authenticate "
-                "on the host with `claude setup-token` and restart the container",
+                "on the host with `claude auth login --claudeai`",
             )
         if remaining_hours < 0:
             return (

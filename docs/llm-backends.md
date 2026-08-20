@@ -1,7 +1,7 @@
 # LLM backends
 
-**Status:** active. **Last updated:** 2026-08-20 (credential-file permissions: refreshes now preserve `0600` instead of widening it, plus directory-ownership guidance in §4). Earlier the same day: the backend became an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
-**Last verified:** 2026-08-20 — method: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure, and the §4/§5 file-permission claims by tests asserting the on-disk mode after a refresh (including under umask 0), confirmed to fail against the previous implementation. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Not verified against a deployed container — no surface has been switched to `subscription` in production, and the Linux credentials-file path (§4) is untested since macOS uses the Keychain.
+**Status:** active. **Last updated:** 2026-08-20 (corrected the provisioning command — `claude auth login --claudeai`, not `setup-token`, which writes nothing; and `/healthz` now reports credential health whenever credentials exist rather than keying on the environment default, which left the alarm silent for deployments enabled via the toggle). Earlier the same day: credential-file permissions: refreshes now preserve `0600` instead of widening it, plus directory-ownership guidance in §4). Earlier the same day: the backend became an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
+**Last verified:** 2026-08-20 — method: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The §4 provisioning commands were run on the deploy host: `setup-token` left `claude auth status` reporting `loggedIn: false` with no credentials file anywhere, while `claude auth login --claudeai` over SSH produced a `claudeAiOauth` file and `loggedIn: true`. A live Opus call and a full Ask turn then ran on the subscription from the production container (131,966 input tokens for a one-tool turn), and the container's write path was checked to confirm §5's refresh can persist. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure, and the §4/§5 file-permission claims by tests asserting the on-disk mode after a refresh (including under umask 0), confirmed to fail against the previous implementation. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Still unverified: the ~1-year `CLAUDE_CODE_OAUTH_TOKEN` form is documented from the CLI's own output, not exercised.
 
 > **Purpose** — Library can reach Claude two ways: the metered Anthropic
 > Messages API, or a Claude subscription via the bundled Claude Code CLI. This
@@ -21,7 +21,7 @@
 The second row is the whole mechanism. Subscription access is not a different
 credential you can hand to the Messages API — it comes from *being the Claude
 Code CLI*. `claude-agent-sdk` bundles that CLI in its wheel and shells out to
-it; the CLI reads the OAuth credentials `claude setup-token` writes.
+it; the CLI reads the OAuth credentials `claude auth login` writes.
 
 An OAuth subscription token sent directly to `/v1/messages` reaches Haiku only —
 Sonnet and Opus are refused. Going through the CLI is what unlocks them.
@@ -132,11 +132,23 @@ refuse to switch a surface onto a backend that cannot authenticate.
 1. **Authenticate on the host** — on the LXC, not your laptop:
 
    ```bash
-   claude setup-token
+   claude auth login --claudeai
    ```
 
-   Use `setup-token`, not `claude login`: the login flow fails on a headless
-   host with a redirect-URI error. This writes `~/.claude/.credentials.json`.
+   It prints a URL; open it anywhere, sign in, and paste the code back. This
+   works fine over SSH — it needs a TTY (`ssh -t`), not a local browser — and
+   writes `.credentials.json` into the config directory. Confirm with
+   `claude auth status`, which should report `loggedIn: true`.
+
+   **Do not use `claude setup-token` for this.** It does something different:
+   it mints a long-lived token and *prints* it for use as
+   `CLAUDE_CODE_OAUTH_TOKEN`, writes no credentials file, and does not log the
+   CLI in — `claude auth status` still says `loggedIn: false` afterwards.
+   Library reads the credentials file, so `setup-token` alone leaves the
+   subscription backend unusable. (An earlier version of this document
+   recommended it, on the strength of a note about a much older CLI. That was
+   wrong; it was corrected after the command was run on this host and left
+   nothing behind.)
 
    > On macOS the CLI stores credentials in the Keychain instead of that file,
    > so a Mac host has nothing to mount. This path is for the Linux deploy host.
@@ -156,9 +168,12 @@ refuse to switch a surface onto a backend that cannot authenticate.
 
    ```bash
    install -d -m 700 -o 999 -g 999 /srv/apps/library/claude
-   CLAUDE_CONFIG_DIR=/srv/apps/library/claude claude setup-token
+   CLAUDE_CONFIG_DIR=/srv/apps/library/claude claude auth login --claudeai
    chown 999:999 /srv/apps/library/claude/.credentials.json
    ```
+
+   The `chown` is not optional: the CLI writes as the invoking user (root),
+   and the container cannot read — let alone refresh — a root-owned file.
 
    Mode `700` on the directory, not just the file: the file holds a live access
    token *and* a refresh token, and the refresh token is the one that cannot be
@@ -195,7 +210,7 @@ does; only an admin sees editable controls.
 
 - Changing a surface: pick a backend from its dropdown. If the chosen backend
   cannot authenticate the API returns `409` and the tab shows the reason (e.g.
-  run `claude setup-token` on the host), leaving the stored value untouched.
+  run `claude auth login` on the host), leaving the stored value untouched.
 - **Reset to deployed default** deletes the override row, so the surface follows
   `LIBRARY_*_LLM_BACKEND` again.
 
@@ -234,9 +249,11 @@ Symptom — `claude_credentials: "unhealthy"` with detail
 Recovery:
 
 ```bash
-claude setup-token                    # on the host — writes fresh credentials
-docker compose restart api worker
+CLAUDE_CONFIG_DIR=<mounted dir> claude auth login --claudeai
+chown 999:999 <mounted dir>/.credentials.json
 ```
+
+No restart needed — the next call re-reads the file.
 
 Health keys the rejection on a hash of the token itself, so re-authenticating
 clears the alarm immediately rather than at the next refresh cycle.
