@@ -156,6 +156,26 @@ def build_options(
     silently dropped on an options rebuild in sre-agent and cost a production
     outage. It is therefore set in exactly one place: here.
     """
+    env = {
+        # The CLI ranks ANTHROPIC_API_KEY (sent as X-Api-Key) *above* the OAuth
+        # credentials file. Library sets that variable for the API backend, and
+        # leaving it visible here makes the CLI send an API-key header carrying
+        # an OAuth token — which fails as "Invalid API key" rather than falling
+        # through to the credentials that would work.
+        "ANTHROPIC_API_KEY": "",
+        "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": _STREAM_CLOSE_TIMEOUT_MS,
+    }
+    # Point the CLI at the mounted credentials — but only when they are actually
+    # there. CLAUDE_CONFIG_DIR is not a hint, it is an override: setting it makes
+    # the CLI look *only* in that directory, so naming a directory with no
+    # credentials file turns a working setup into "Not logged in · Please run
+    # /login". That is exactly what happens on a macOS dev box, where the CLI
+    # keeps credentials in the Keychain and there is no file to point at.
+    # Deployment mounts them at a non-default path, so when the file does exist
+    # the variable is required.
+    if oauth.credentials_path(config_dir).exists():
+        env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+
     return ClaudeAgentOptions(
         model=model,
         system_prompt=system_prompt,
@@ -167,37 +187,38 @@ def build_options(
         # Don't inherit the host's CLAUDE.md, settings or slash commands: the
         # prompt library sends must be the prompt library wrote.
         setting_sources=[],
-        cwd=str(config_dir),
-        env={
-            # The CLI ranks ANTHROPIC_API_KEY (sent as X-Api-Key) *above* the
-            # OAuth credentials file. Library sets that variable for the API
-            # backend, and leaving it visible here makes the CLI send an API key
-            # header carrying an OAuth token — which fails as "Invalid API key"
-            # rather than falling through to the credentials that would work.
-            "ANTHROPIC_API_KEY": "",
-            "CLAUDE_CONFIG_DIR": str(config_dir),
-            "CLAUDE_CODE_STREAM_CLOSE_TIMEOUT": _STREAM_CLOSE_TIMEOUT_MS,
-        },
+        env=env,
     )
 
 
 async def _run(
     prompt: str | AsyncIterator[dict[str, Any]], options: ClaudeAgentOptions
 ) -> tuple[list[Message], Usage]:
-    """Drive one ``query()`` to completion, returning its messages and usage."""
+    """Drive one ``query()`` to completion, returning its messages and usage.
+
+    The failure is recorded and raised *after* the loop, never from inside it.
+    Raising mid-iteration abandons the SDK's async generator while it is still
+    running, and unwinding then fails with
+    ``RuntimeError: aclose(): asynchronous generator is already running`` —
+    which replaces the actual cause ("Not logged in", an auth error, a CLI
+    crash) with a traceback about generator teardown. Since the result message
+    is the last thing the SDK yields, deferring costs nothing.
+    """
     messages: list[Message] = []
     usage = Usage()
+    failure: str | None = None
+
     async for message in query(prompt=prompt, options=options):
         messages.append(message)
         if isinstance(message, ResultMessage):
             usage.add(message.usage)
-            # Running out of turns is reported as an error result but is a
-            # normal outcome the caller handles, so it must not raise.
+            # Running out of turns is also reported as an error result, but it
+            # is a normal outcome the caller handles — not a failure.
             if message.is_error and message.subtype != _MAX_TURNS_SUBTYPE:
-                raise SubscriptionBackendError(
-                    f"Claude Agent SDK returned an error result: "
-                    f"{message.result or message.subtype}"
-                )
+                failure = message.result or message.subtype
+
+    if failure is not None:
+        raise SubscriptionBackendError(f"Claude Agent SDK returned an error result: {failure}")
     return messages, usage
 
 

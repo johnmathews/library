@@ -123,7 +123,30 @@ def test_options_blank_the_api_key_for_the_subprocess(tmp_path: Path) -> None:
         model="claude-opus-4-8", system_prompt="s", config_dir=tmp_path, max_turns=8
     )
     assert options.env["ANTHROPIC_API_KEY"] == ""
-    assert options.env["CLAUDE_CONFIG_DIR"] == str(tmp_path)
+
+
+def test_config_dir_is_set_only_when_credentials_are_present(tmp_path: Path) -> None:
+    """CLAUDE_CONFIG_DIR is an override, not a hint — and pointing it at an
+    empty directory breaks a working setup.
+
+    Setting it makes the CLI look *only* there. Naming a directory with no
+    credentials file turns working auth into "Not logged in · Please run
+    /login" — which is what happens on macOS, where credentials live in the
+    Keychain and there is no file to point at. Deployment mounts them at a
+    non-default path, so when the file is there the variable is required.
+    Found by running the adapter against the live API; every stubbed test
+    passed with the broken version.
+    """
+    empty = subscription.build_options(
+        model="m", system_prompt="s", config_dir=tmp_path, max_turns=1
+    )
+    assert "CLAUDE_CONFIG_DIR" not in empty.env
+
+    (tmp_path / ".credentials.json").write_text("{}")
+    provisioned = subscription.build_options(
+        model="m", system_prompt="s", config_dir=tmp_path, max_turns=1
+    )
+    assert provisioned.env["CLAUDE_CONFIG_DIR"] == str(tmp_path)
 
 
 def test_options_block_every_builtin_and_ignore_host_settings(tmp_path: Path) -> None:
@@ -183,6 +206,38 @@ async def test_error_result_raises(tmp_path: Path, monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(SubscriptionBackendError, match="CLI exited 1"):
         await subscription.text_call(config_dir=tmp_path, model="m", system_prompt="s", prompt="p")
+
+
+async def test_error_is_raised_after_the_stream_is_drained(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Raising mid-iteration masks the real error with a teardown traceback.
+
+    Abandoning the SDK's async generator while it is still running makes the
+    unwind fail with ``RuntimeError: aclose(): asynchronous generator is already
+    running``, which replaces the actual cause — "Not logged in", an auth
+    failure, a CLI crash — with noise about generator teardown. Observed for
+    real; the stubbed error test above passed either way, because a trivial
+    generator tears down cleanly.
+
+    The generator here records whether it was allowed to run to completion.
+    """
+    drained = False
+
+    def fake_query(*, prompt: Any, options: Any, **_: Any) -> AsyncIterator[Message]:
+        async def gen() -> AsyncIterator[Message]:
+            nonlocal drained
+            yield _result(subtype="error_during_execution", is_error=True, result="boom")
+            drained = True  # only reached if the consumer keeps iterating
+
+        return gen()
+
+    monkeypatch.setattr(subscription, "query", fake_query)
+
+    with pytest.raises(SubscriptionBackendError, match="boom"):
+        await subscription.text_call(config_dir=tmp_path, model="m", system_prompt="s", prompt="p")
+
+    assert drained, "the SDK stream must be drained before the failure is raised"
 
 
 async def test_max_turns_result_does_not_raise(

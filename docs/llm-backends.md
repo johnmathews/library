@@ -1,7 +1,7 @@
 # LLM backends
 
 **Status:** active. **Last updated:** 2026-08-20 (initial version: adds the subscription backend for `ask` and, off by default, `series_insight`).
-**Last verified:** 2026-08-20 — method: the ~32k/~43k harness figures and the model-access claim are from live calls against a Claude subscription recorded in §3.1 (both spikes reproduced the numbers); the code claims are from `src/library/llm/`, `src/library/config.py`, `src/library/ask/engine.py` and `src/library/series_insight.py` at the commit that introduced them. Not verified against a deployed container — no surface has been switched to `subscription` in production yet.
+**Last verified:** 2026-08-20 — method: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure. Not verified against a deployed container — no surface has been switched to `subscription` in production, and the Linux credentials-file path (§4) is untested since macOS uses the Keychain.
 
 > **Purpose** — Library can reach Claude two ways: the metered Anthropic
 > Messages API, or a Claude subscription via the bundled Claude Code CLI. This
@@ -73,15 +73,30 @@ only the options:
 
 A custom system prompt does not replace the preset — it costs five tokens more.
 
+### 3.1.1 What it costs on a real turn
+
+The floor above is per *API call*, and one `tool_loop` makes several. Running
+library's own adapter against the live subscription — a two-tool question
+("how much is my gas bill and who is it from?", `semantic_search` then
+`get_document`, Sonnet) — recorded **134,962 input tokens** for a turn whose
+actual content is a sentence and two small JSON tool results. A one-shot
+`text_call` for a six-word thread title recorded **26,068 input / 887 output**.
+
+Budget for the real figure, not the floor: the preamble is re-sent on each
+iteration of the agent loop.
+
 ### 3.2 What follows from it
 
 The tax is *fixed per call*, so it is only tolerable where each call is already
 large and calls are infrequent.
 
-- **`ask` earns it.** `ask_model` is `claude-opus-4-8` — the priciest configured
-  model — and each call already carries a system prompt, eight tool definitions,
-  rehydrated history and tool results. Calls are human-paced. Roughly 2–3× quota
-  inflation in exchange for the dollar cost going to zero.
+- **`ask` earns it — but it is not cheap.** `ask_model` is `claude-opus-4-8`,
+  the priciest configured model, and calls are human-paced, so the dollar cost
+  going to zero is worth real quota. Size it honestly, though: §3.1.1 measured
+  ~135k input tokens for a single two-tool Sonnet turn, and Opus carries a
+  larger preamble. A busy Ask session can consume a meaningful slice of a
+  subscription's rolling window — and it is the *same* window everything else
+  on those credentials draws from.
 - **`series_insight` does not, which is why it defaults to `api`.** It runs on
   `extraction_model` (`claude-haiku-4-5`, the cheapest) with a deliberately
   bounded prompt, once per ingested document. Routing it through the SDK spends
@@ -118,6 +133,13 @@ over. `Settings` refuses to start otherwise (§6).
 
    > On macOS the CLI stores credentials in the Keychain instead of that file,
    > so a Mac host has nothing to mount. This path is for the Linux deploy host.
+   >
+   > Library sets `CLAUDE_CONFIG_DIR` for the CLI subprocess **only when
+   > `.credentials.json` actually exists** in the configured directory. That
+   > variable is an override, not a hint: setting it makes the CLI look only
+   > there, so naming an empty directory turns working auth into "Not logged in
+   > · Please run /login". Setting it unconditionally broke local development
+   > against the Keychain, which is why the check exists.
 
 2. **Check the mount is writable by the container user.** The compose file
    mounts `${CLAUDE_CONFIG_DIR:-~/.claude}` at `/app/.claude` **read-write** on

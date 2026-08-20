@@ -108,6 +108,34 @@ existing API loop moved verbatim into `_run_api_turn`.
    "subscription" deployment still needing an API key for a handful of tokens.
    The cost is one harness-taxed call per *new thread*, not per turn.
 
+## Two bugs the stubbed tests could not have found
+
+Every unit test replaces `query()` with a stub. That is right for testing
+library's side of the contract, but it means nothing had exercised the actual
+wiring. Running the real adapter against the live subscription found two defects
+immediately — and both now have regression tests that were confirmed to go red
+against the buggy code.
+
+1. **`CLAUDE_CONFIG_DIR` is an override, not a hint.** `build_options` set it
+   unconditionally. Setting it makes the CLI look *only* in that directory, so
+   naming a directory with no credentials file turns working auth into
+   "Not logged in · Please run /login" — which is exactly what happens on macOS,
+   where credentials live in the Keychain. Bisected against the live API: with
+   the variable, error; without it, fine; `cwd` was innocent. Now set only when
+   `.credentials.json` is actually present, which is the deployment case.
+
+2. **Raising inside the `async for` masked every real error.** Abandoning the
+   SDK's async generator mid-iteration made the unwind fail with
+   `RuntimeError: aclose(): asynchronous generator is already running`, which
+   buried the actual cause under a traceback about generator teardown. The
+   failure is now recorded and raised after the stream drains; since the result
+   message is the last thing the SDK yields, deferring costs nothing.
+
+The same run measured what a real turn costs: **134,962 input tokens** for one
+two-tool Sonnet question. The 32k floor is per API call, and a tool loop makes
+several — the preamble is re-sent each iteration. That figure is in the docs,
+because sizing the decision on the floor would understate it by ~4×.
+
 ## Not done
 
 Nothing was switched on. Both knobs ship defaulting to `api`, and enabling either
