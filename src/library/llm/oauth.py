@@ -27,6 +27,7 @@ import asyncio
 import hashlib
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any
@@ -190,15 +191,35 @@ async def _do_refresh(config_dir: Path, oauth: dict[str, Any], refresh_token: st
 
 
 def _write_credentials(config_dir: Path, oauth: dict[str, Any]) -> None:
-    """Write credentials atomically so a crash cannot leave a half-file.
+    """Write credentials atomically, owner-only, so a crash cannot leave a
+    half-file and a refresh cannot widen the file's permissions.
 
     A torn credentials file is unrecoverable without a human, which is exactly
-    the failure this whole module exists to avoid.
+    the failure this whole module exists to avoid — hence temp-file-then-rename.
+
+    The explicit ``0o600`` matters just as much. ``Path.write_text`` creates with
+    ``0o666 & ~umask`` (usually ``0o644``), and because the rename makes the
+    *new* file's mode win, the naive version silently relaxed the permissions of
+    a file holding a live access token **and** a refresh token — on every
+    refresh, roughly 8-hourly, quietly undoing the ``0o600`` the Claude CLI sets
+    when it first writes them.
     """
     path = credentials_path(config_dir)
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"claudeAiOauth": oauth}))
-    tmp.replace(path)
+    # os.open with the mode, rather than write-then-chmod: the latter leaves a
+    # window where the tokens are on disk world-readable.
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        with os.fdopen(fd, "w") as handle:
+            json.dump({"claudeAiOauth": oauth}, handle)
+        # Belt and braces: O_CREAT's mode is ignored when the temp file already
+        # exists (a previous crash), and some filesystems ignore it outright.
+        os.chmod(tmp, 0o600)
+        tmp.replace(path)
+    except Exception:
+        # Never leave a temp file holding credentials behind on failure.
+        tmp.unlink(missing_ok=True)
+        raise
 
 
 def token_health(config_dir: Path) -> tuple[str, str]:

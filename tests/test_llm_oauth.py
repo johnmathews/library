@@ -1,6 +1,8 @@
 """Tests for subscription OAuth credential refresh (``library.llm.oauth``)."""
 
 import json
+import os
+import stat
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -297,3 +299,66 @@ async def test_concurrent_refreshes_are_serialised(
     await asyncio.gather(*(oauth.ensure_valid_token(tmp_path) for _ in range(4)))
 
     assert peak == 1
+
+
+# --------------------------------------------------------------------------
+# Credential file permissions
+# --------------------------------------------------------------------------
+
+
+async def test_refresh_writes_credentials_owner_only(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A refresh must not widen the permissions of the credentials file.
+
+    ``Path.write_text`` creates with ``0o666 & ~umask`` (usually ``0o644``), and
+    the atomic rename makes the new file's mode win — so the naive version
+    quietly relaxed a file holding a live access token *and* a refresh token,
+    every ~8 hours, undoing the ``0o600`` the Claude CLI sets.
+    """
+    path = _write_creds(tmp_path, expires_in_hours=-1)
+    path.chmod(0o600)
+    _stub_post(monkeypatch, _ok({"access_token": "new", "expires_in": 28800}), [])
+
+    await oauth.ensure_valid_token(tmp_path)
+
+    assert path.read_text()  # the refresh really happened
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+async def test_permissions_hold_even_with_a_permissive_umask(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The mode must come from the open() call, not from the process umask.
+
+    Under umask 0 a write-then-chmod would still briefly expose the tokens, and
+    a plain write would leave them world-readable outright.
+    """
+    path = _write_creds(tmp_path, expires_in_hours=-1)
+    _stub_post(monkeypatch, _ok({"access_token": "new", "expires_in": 28800}), [])
+
+    previous = os.umask(0)
+    try:
+        await oauth.ensure_valid_token(tmp_path)
+    finally:
+        os.umask(previous)
+
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+
+
+async def test_a_failed_write_leaves_no_credentials_behind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The temp file holds the same secrets; a crash must not orphan it."""
+    _write_creds(tmp_path, expires_in_hours=-1)
+    _stub_post(monkeypatch, _ok({"access_token": "new", "expires_in": 28800}), [])
+
+    def boom(*args: Any, **kwargs: Any) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(oauth.json, "dump", boom)
+
+    # ensure_valid_token swallows failures by design; the point is the cleanup.
+    await oauth.ensure_valid_token(tmp_path)
+
+    assert not (tmp_path / ".credentials.tmp").exists()

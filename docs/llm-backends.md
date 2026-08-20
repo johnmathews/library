@@ -1,7 +1,7 @@
 # LLM backends
 
-**Status:** active. **Last updated:** 2026-08-20 (the backend is now an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
-**Last verified:** 2026-08-20 — method: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Not verified against a deployed container — no surface has been switched to `subscription` in production, and the Linux credentials-file path (§4) is untested since macOS uses the Keychain.
+**Status:** active. **Last updated:** 2026-08-20 (credential-file permissions: refreshes now preserve `0600` instead of widening it, plus directory-ownership guidance in §4). Earlier the same day: the backend became an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
+**Last verified:** 2026-08-20 — method: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure, and the §4/§5 file-permission claims by tests asserting the on-disk mode after a refresh (including under umask 0), confirmed to fail against the previous implementation. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Not verified against a deployed container — no surface has been switched to `subscription` in production, and the Linux credentials-file path (§4) is untested since macOS uses the Keychain.
 
 > **Purpose** — Library can reach Claude two ways: the metered Anthropic
 > Messages API, or a Claude subscription via the bundled Claude Code CLI. This
@@ -148,11 +148,23 @@ refuse to switch a surface onto a backend that cannot authenticate.
    > · Please run /login". Setting it unconditionally broke local development
    > against the Keychain, which is why the check exists.
 
-2. **Check the mount is writable by the container user.** The compose file
-   mounts `${CLAUDE_CONFIG_DIR:-~/.claude}` at `/app/.claude` **read-write** on
-   both `api` and `worker`. Write access is required — see §5. The image runs as
-   the unprivileged `app` user, so the host directory's uid must permit it;
-   `chown` it or pin `user:` in compose if the ids do not line up.
+2. **Check the mount is writable by the container user, and owner-only.** The
+   compose file mounts `${CLAUDE_CONFIG_DIR:-~/.claude}` at `/app/.claude`
+   **read-write** on both `api` and `worker`. Write access is required — see §5.
+   The image runs as the unprivileged `app` user (uid 999), so the host
+   directory must be owned by it:
+
+   ```bash
+   install -d -m 700 -o 999 -g 999 /srv/apps/library/claude
+   CLAUDE_CONFIG_DIR=/srv/apps/library/claude claude setup-token
+   chown 999:999 /srv/apps/library/claude/.credentials.json
+   ```
+
+   Mode `700` on the directory, not just the file: the file holds a live access
+   token *and* a refresh token, and the refresh token is the one that cannot be
+   rotated away without a human. Library writes the file itself with `0600` and
+   preserves that across every refresh (§5); the directory is yours to get
+   right.
 
 3. **Nothing else is needed to *enable* it** — `ask` ships defaulting to
    `subscription`. To change a surface later, use Settings → LLM backend (§4.1)
@@ -203,6 +215,10 @@ Three properties matter operationally:
 - **Refresh tokens are single-use.** The replacement must be persisted or the
   credentials die. Refreshes are serialised behind a lock and written
   atomically, and this is why the mount cannot be `:ro`.
+- **The write is owner-only (`0600`), explicitly.** The atomic rename makes the
+  *new* file's mode win, so writing it with default permissions would relax the
+  credentials file on every refresh — roughly 8-hourly — undoing the `0600` the
+  Claude CLI sets when it first writes them.
 - **Refresh is best-effort.** Any failure is logged and swallowed so the call
   still proceeds and surfaces its own auth error, rather than refresh becoming a
   second way for ask to fail.
