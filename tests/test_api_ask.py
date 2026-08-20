@@ -1071,3 +1071,33 @@ def test_rename_rejects_blank_or_oversized_title(
         api_client.patch(f"/api/ask/threads/{thread_id}", json={"title": "x" * 121}).status_code
         == 422
     )
+
+
+def test_ask_returns_503_when_the_subscription_cannot_authenticate(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A credential problem is an operator problem, not a 500.
+
+    Before this, an unauthenticated subscription backend raised out of run_ask
+    unhandled and FastAPI answered "Internal Server Error", with the reason —
+    which names the command to run — visible only in the container log.
+    """
+    from library.llm.subscription import SubscriptionBackendError
+
+    async def fake_run_ask(*args: Any, **kwargs: Any) -> Any:
+        raise SubscriptionBackendError(
+            "the Claude subscription backend could not authenticate: no credentials. "
+            "Run `CLAUDE_CONFIG_DIR=/app/.claude claude auth login --claudeai` on the host"
+        )
+
+    monkeypatch.setattr(ask_module, "run_ask", fake_run_ask)
+
+    response = api_client.post("/api/ask", json={"question": "where is my gas bill"})
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "claude auth login --claudeai" in detail
+    assert "could not authenticate" in detail

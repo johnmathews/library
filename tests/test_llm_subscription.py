@@ -536,3 +536,103 @@ async def test_history_is_prepended_to_the_question(
     text = messages[0]["message"]["content"][0]["text"]
     assert "<assistant>It is #7.</assistant>" in text
     assert text.endswith("and the one before that?")
+
+
+# --------------------------------------------------------------------------
+# Error translation — what an operator actually sees
+# --------------------------------------------------------------------------
+
+
+async def test_an_sdk_error_becomes_an_actionable_backend_error(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A missing credential must not surface as a raw SDK exception.
+
+    The SDK raises mid-iteration, before any result message is seen, so the
+    is_error branch never runs — an untranslated ClaudeSDKError escaped all the
+    way to FastAPI as a bare 500. And its own advice ("Please run /login") is
+    wrong here: /login is an interactive slash command, not how a container
+    authenticates.
+    """
+    from claude_agent_sdk import ClaudeSDKError
+
+    def fake_query(*, prompt: Any, options: Any, **_: Any) -> AsyncIterator[Message]:
+        async def gen() -> AsyncIterator[Message]:
+            raise ClaudeSDKError(
+                "Claude Code returned an error result: Not logged in · Please run /login"
+            )
+            yield  # pragma: no cover - unreachable, makes this an async generator
+
+        return gen()
+
+    monkeypatch.setattr(subscription, "query", fake_query)
+
+    with pytest.raises(SubscriptionBackendError) as excinfo:
+        await subscription.text_call(config_dir=tmp_path, model="m", system_prompt="s", prompt="p")
+
+    message = str(excinfo.value)
+    assert "could not authenticate" in message
+    assert "claude auth login --claudeai" in message  # the command that works
+    assert "chown 999:999" in message  # the step people forget
+    assert "Not logged in" in message  # the original cause is preserved
+
+
+async def test_a_failure_with_healthy_credentials_does_not_blame_auth(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Don't send someone to re-authenticate for a problem that isn't auth.
+
+    A CLI crash, a network blip or a rate limit with perfectly good credentials
+    must not produce "could not authenticate" and a login command — that costs
+    an operator a pointless re-auth and hides the real cause.
+    """
+    _write_valid_credentials(tmp_path)
+
+    from claude_agent_sdk import ClaudeSDKError
+
+    def fake_query(*, prompt: Any, options: Any, **_: Any) -> AsyncIterator[Message]:
+        async def gen() -> AsyncIterator[Message]:
+            raise ClaudeSDKError("CLI segfaulted")
+            yield  # pragma: no cover
+
+        return gen()
+
+    monkeypatch.setattr(subscription, "query", fake_query)
+
+    with pytest.raises(SubscriptionBackendError) as excinfo:
+        await subscription.text_call(config_dir=tmp_path, model="m", system_prompt="s", prompt="p")
+
+    message = str(excinfo.value)
+    assert "CLI segfaulted" in message
+    assert "claude auth login" not in message
+    assert "could not authenticate" not in message
+
+
+def _write_valid_credentials(config_dir: Path) -> None:
+    import json
+    import time
+
+    (config_dir / ".credentials.json").write_text(
+        json.dumps(
+            {
+                "claudeAiOauth": {
+                    "accessToken": "a",
+                    "refreshToken": "r",
+                    "expiresAt": int((time.time() + 5 * 3600) * 1000),
+                }
+            }
+        )
+    )
+
+
+async def test_an_error_result_is_also_translated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other route to failure gets the same treatment."""
+    _stub_query(
+        monkeypatch,
+        [_result(subtype="error_during_execution", is_error=True, result="CLI exited 1")],
+    )
+
+    with pytest.raises(SubscriptionBackendError, match="CLI exited 1"):
+        await subscription.text_call(config_dir=tmp_path, model="m", system_prompt="s", prompt="p")
