@@ -192,3 +192,105 @@ to the bundled CLI, so without that pin a new test touching Ask would make real
 calls against real credentials. The test asserting the shipped default therefore
 reads `Settings.model_fields[...]` rather than an instance, since the fixture
 would otherwise mask it.
+
+## Taking it to production, and what that found
+
+The first half of this entry describes code. This half describes finding out
+whether it worked, which turned out to be a different activity.
+
+### Provisioning, and two wrong instructions
+
+The docs (and my advice) said to run `claude setup-token`, on the strength of a
+note about a much older CLI. That is wrong twice over: `setup-token` mints a
+long-lived token and **prints** it — it writes no credentials file and does not
+log the CLI in, so `claude auth status` still reports `loggedIn: false`
+afterwards. Since library reads the credentials file, following the instruction
+leaves the backend unusable. The command that works is
+`claude auth login --claudeai`, which is fine headless: it prints a URL and
+takes the code back over `ssh -t`. **Confirmed** — both commands were run on
+the deploy host and the difference observed directly.
+
+The deploy host also had no Claude CLI at all, and the credentials the CLI
+writes are owned by the invoking user (root) while the container runs as uid
+999 — so `chown 999:999` is required and easy to miss.
+
+### Three defects, each found only by running it
+
+None of these were reachable from the test suite as written, because every test
+stubs `query()`. All three now have regression tests **confirmed to fail against
+the previous code**.
+
+1. **`CLAUDE_CONFIG_DIR` is an override, not a hint.** Setting it unconditionally
+   made the CLI look *only* there, so a directory with no credentials file broke
+   working auth. Bisected against the live API. Now set only when the file exists.
+2. **Raising inside the `async for`** abandoned the SDK's async generator, so
+   every real error surfaced as `RuntimeError: aclose(): asynchronous generator
+   is already running` — burying the cause. Failures are now raised after the
+   stream drains.
+3. **`/healthz` was blind to the runtime toggle.** It keyed on
+   `settings.ask_llm_backend` (the environment default) while the live value
+   comes from the database, so enabling the backend through the Settings UI —
+   the intended path — left the credential alarm permanently silent. Observed in
+   production: Ask answering on the subscription while `/healthz` said nothing
+   about credentials. Now keyed on the credentials existing, which keeps the
+   endpoint free of database access.
+
+A fourth came from the automated security review: credentials were written with
+`Path.write_text`, and since the atomic rename makes the new file's mode win,
+every refresh (~8-hourly) silently widened a file holding an access token *and*
+a refresh token. Under a permissive umask the test showed `0o666`.
+
+### The unhappy path was the weak spot
+
+Asked whether a credential-less backend fails clearly, the answer was no on three
+counts: a bare 500, the SDK's own advice pointing at `/login` (meaningless in a
+container), and — had it been translated naively — auth being blamed for every
+failure including CLI crashes and rate limits. The common thread with the three
+defects above is that **all of it lives in code that only runs when something is
+already broken**, which is exactly where stubbed tests prove nothing.
+
+### Measured cost
+
+A real two-tool Ask turn in production: **131,966 input tokens**. The ~32k figure
+from the original spike is a floor *per API call*, and a tool loop makes several
+— the Claude Code preamble is re-sent each step. Sizing the decision on the floor
+understates it roughly fourfold. `cost_usd` records ~$0.67 for such a turn, which
+is deliberately *not* the saving: it counts harness tokens the API backend never
+sends, so the honest comparison is against a much smaller API-side figure.
+
+### An out-of-repo dependency
+
+`/srv/apps/docker-compose.yml` is templated by the `document_library_lxc` ansible
+role in `home-server`. Every host change made here — the credential mount,
+`LIBRARY_CLAUDE_CONFIG_DIR` — lived only in a file ansible regenerates, so the
+next run would have silently removed them and broken Ask. Ported into the role
+(home-server#68), verified by rendering the template and diffing it against the
+running host file. **Confirmed**: applying the role is now a no-op for library.
+
+The same PR removed a duplicated `LIBRARY_ANTHROPIC_API_KEY` from both services'
+`environment:` blocks. It shadowed `env_file: .env` from the same vault variable,
+so changing the vault value would not have reached the containers.
+
+I initially reported that duplication as a security exposure ("world-readable
+key"). That was wrong and was retracted: root is the only account with a login
+shell on that host, and every container that can reach the file runs as root and
+could read the 0600 `.env` anyway. The file mode granted nobody anything. The
+real problem was the shadowing, which is a maintenance foot-gun, not a leak.
+
+## What is deliberately not done
+
+1. **`CLAUDE_CODE_OAUTH_TOKEN` support.** `setup-token`'s long-lived token would
+   remove the refresh machinery entirely — no 8-hourly rotation, no single-use
+   race, no revoked-refresh-token outage mode. Started, then dropped: the
+   file-based path already worked, and I had the variable name wrong
+   (`ANTHROPIC_AUTH_TOKEN`) which is itself evidence I was building on a guess.
+   Worth revisiting deliberately.
+2. **Series descriptions on the subscription.** Enabled by the user through the
+   UI. At ~62 documents/month this costs roughly fifteen Ask turns' worth of
+   quota — tolerable. It becomes dangerous under bulk import (the paperless-ngx
+   importer, or a backfill): ~1,000 documents would be ~32M tokens in a burst,
+   exhausting quota and taking Ask down with it. Not gated in code; documented
+   instead, which is a deliberate choice to avoid a mechanism nobody asked for.
+3. **A duplicated sentence in the credential-failure message.** The login command
+   appears twice — once from the health detail, once from the wrapper. Cosmetic,
+   and not worth its own deploy cycle.
