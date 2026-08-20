@@ -1,7 +1,7 @@
 # Documentation
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: corrected the `frontend.md` one-liner, which claimed PWA coverage the document did not have).
-**Last verified:** 2026-08-12 — method: resolved every markdown link and directory link on disk, derived the gated set from `GATED_GLOBS`/`EXCLUDED_DIRS` in `scripts/check_docs.py` and diffed it against the index in both directions, and checked each description against its target's headings.
+**Status:** active. **Last updated:** 2026-08-20 (indexed the new `llm-backends.md`). Earlier (2026-08-12, documentation verification sweep): corrected the `frontend.md` one-liner, which claimed PWA coverage the document did not have).
+**Last verified:** 2026-08-20 — method: confirmed the new `llm-backends.md` row resolves on disk and that its description matches that document's headings, and re-derived the gated set from `GATED_GLOBS`/`EXCLUDED_DIRS` in `scripts/check_docs.py` to confirm the index still covers it in both directions. The rest of the index is unchanged since the 2026-08-12 sweep, whose method was: resolved every markdown link and directory link on disk, derived the gated set from `GATED_GLOBS`/`EXCLUDED_DIRS` in `scripts/check_docs.py` and diffed it against the index in both directions, and checked each description against its target's headings.
 
 Reference documentation for Library — a self-hosted document archive (FastAPI
 backend + Vue 3 SPA, Postgres/pgvector, OCR ingestion, an MCP server, and an
