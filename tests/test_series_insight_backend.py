@@ -70,8 +70,9 @@ async def test_subscription_backend_uses_the_agent_sdk(
     monkeypatch.setattr(series_insight.subscription, "text_call", fake_text_call)
 
     result = await series_insight.describe_series(
-        _settings(series_insight_llm_backend="subscription", claude_config_dir=tmp_path),
+        _settings(claude_config_dir=tmp_path),
         summary,
+        backend="subscription",
     )
 
     assert result == ("Quarterly gas bills.", 32120, 40)
@@ -96,9 +97,10 @@ async def test_subscription_backend_ignores_an_injected_api_client(
     monkeypatch.setattr(series_insight, "generate_description", explode)
 
     result = await series_insight.describe_series(
-        _settings(series_insight_llm_backend="subscription", claude_config_dir=tmp_path),
+        _settings(claude_config_dir=tmp_path),
         summary,
         client=object(),  # type: ignore[arg-type]
+        backend="subscription",
     )
 
     assert result is not None
@@ -121,8 +123,9 @@ async def test_subscription_usage_carries_the_harness_tax_into_cost(
     monkeypatch.setattr(series_insight.subscription, "text_call", fake_text_call)
 
     described = await series_insight.describe_series(
-        _settings(series_insight_llm_backend="subscription", claude_config_dir=tmp_path),
+        _settings(claude_config_dir=tmp_path),
         summary,
+        backend="subscription",
     )
     assert described is not None
     _, input_tokens, output_tokens = described

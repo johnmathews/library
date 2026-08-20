@@ -145,3 +145,50 @@ a backend is `subscription` and the credentials directory is not mounted.
 The licensing question is flagged in `docs/llm-backends.md` §8 and not resolved:
 Anthropic's consumer subscription terms cover the Claude apps and Claude Code, not
 use as a billing backend for a self-hosted service.
+
+## Follow-up: making it a runtime setting, and turning it on
+
+Two changes after the first pass, both requested once the numbers were on the
+table: make the backend configurable from the UI rather than only by env var,
+and ship `ask` defaulting to `subscription`.
+
+**A runtime setting invalidates the startup validator.** The original design
+failed fast at boot when a surface asked for OAuth without a mounted credentials
+directory. That check cannot survive an editable setting: the backend can become
+`subscription` long after boot, so a startup check misses the real case — and
+worse, it would refuse to start a container during the §5.1 recovery, which is
+exactly when starting matters most. The guard moved to write time (`set_backend`
+refuses a backend that cannot authenticate; the API returns 409 with the reason)
+and to `/healthz`. That is a better place for it anyway: it reaches the admin
+making the change, at the moment they make it.
+
+**New: `instance_settings` (migration 0030).** Library had two kinds of
+configuration — per-user display preferences and startup env vars — and needed a
+third: instance-wide *and* mutable without a restart. Deliberately key/value
+with a JSON value, because a typed column per toggle costs a migration each
+time. It is an **override layer**: a missing row means "use the `Settings`
+value", so an empty table behaves exactly as the environment says, which is what
+every existing deployment gets on upgrade.
+
+**Resolution moved to the callers.** `resolve_backend(session, surface,
+settings)` is called by the API route and the job, which then pass `backend=`
+down to `run_ask` / `describe_series` / `generate_thread_title`. An earlier
+revision had `run_ask` resolve it internally; that made it a second database
+round-trip per turn (the route already needed the value for its 503 check) and
+broke every test that called `run_ask` with `session=None`. Passing it in is
+both cheaper and consistent with the other two call sites.
+
+**One UI bug worth recording.** The refusal path called `loadLLMBackends()` to
+re-read what is actually stored — and that function clears `llmError` first, so
+the 409's message was wiped before it could render. The reason a refusal gives
+is the entire value of the 409 (it names the command to run on the host), so
+losing it would have made the failure look arbitrary. Caught by the test that
+asserts the server's detail reaches the screen; fixed by setting the error
+*after* the reload.
+
+**`ask` now defaults to `subscription`.** The suite pins both surfaces back to
+`api` via an autouse fixture in `conftest.py` — the subscription path shells out
+to the bundled CLI, so without that pin a new test touching Ask would make real
+calls against real credentials. The test asserting the shipped default therefore
+reads `Settings.model_fields[...]` rather than an instance, since the fixture
+would otherwise mask it.

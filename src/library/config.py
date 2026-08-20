@@ -129,11 +129,17 @@ class Settings(BaseSettings):
     ask_max_tool_turns: int = 4
     ask_max_answer_tokens: int = 1024
     ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.
-    # Transport for the ask tool loop and its title call. Ask is the surface
-    # where the subscription backend pays: opus-4-8 is the priciest configured
-    # model, and calls are human-paced, so the fixed harness tax is amortised
-    # against a call that was already large.
-    ask_llm_backend: LLMBackend = "api"
+    # Transport for the ask tool loop and its title call, and the *default* only:
+    # an admin can override it at runtime from Settings (instance_settings, see
+    # library.llm.backends), so nothing may read this field to decide a live
+    # request — call ``resolve_backend`` instead.
+    #
+    # Ask is the surface where the subscription backend pays: opus-4-8 is the
+    # priciest configured model, and calls are human-paced, so the fixed harness
+    # tax is amortised against a call that was already large. Deployments
+    # without Claude CLI credentials must set this back to "api" — the test
+    # suite does exactly that (see tests/conftest.py).
+    ask_llm_backend: LLMBackend = "subscription"
     ask_get_document_max_chars: int = 8000  # cap on get_document's returned text
     # Foreign-exchange rate seeding (see docs/admin.md, "FX rates"). The admin
     # "Fetch rate" affordance calls this keyless provider for the live USD-per-unit
@@ -141,7 +147,8 @@ class Settings(BaseSettings):
     fx_api_url: str = "https://open.er-api.com/v6/latest"
     fx_api_timeout_s: float = 10.0
     # Document series + comparative queries (see docs/ask.md, "Document series").
-    # Transport for series-insight descriptions. Defaults to "api" deliberately:
+    # Transport for series-insight descriptions; the default only, overridable at
+    # runtime like ask_llm_backend above. Stays "api" deliberately:
     # this runs on the *cheapest* model with a deliberately bounded prompt, once
     # per ingested document, so routing it through the subscription would spend
     # ~32k of shared quota to avoid a fraction of a cent — and starve ask (and
@@ -348,32 +355,6 @@ class Settings(BaseSettings):
                     f"{field}={value!r} has no pricing row in MODEL_PRICING_USD_PER_MTOK; "
                     f"add it to library.extraction.pricing or set a priced model"
                 )
-        return self
-
-    @model_validator(mode="after")
-    def _require_credentials_dir_for_subscription_backends(self) -> "Settings":
-        """Fail fast when a surface asks for OAuth but the mount is missing.
-
-        Without this the misconfiguration surfaces as an "Invalid API key" from
-        a CLI subprocess on the first real question — long after deploy, in a
-        traceback that names neither the mount nor the setting. The check is on
-        the *directory*, not the credentials file: an operator recovering from a
-        revoked refresh token re-runs ``claude setup-token`` against a mounted
-        but momentarily empty directory, and bricking the container in that
-        window would make recovery harder rather than safer.
-        """
-        subscribed = [
-            name
-            for name in ("ask_llm_backend", "series_insight_llm_backend")
-            if getattr(self, name) == "subscription"
-        ]
-        if subscribed and not self.claude_config_dir.is_dir():
-            raise ValueError(
-                f"{', '.join(subscribed)} set to 'subscription' but "
-                f"claude_config_dir={self.claude_config_dir} is not a directory; "
-                f"mount the Claude CLI credentials directory read-write, or set the "
-                f"backend to 'api'"
-            )
         return self
 
 

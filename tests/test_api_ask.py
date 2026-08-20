@@ -667,8 +667,10 @@ def test_ask_follow_up_replays_prior_turn(
         client: Any,
         history_messages: list[dict[str, Any]] | None = None,
         images: list[dict[str, str]] | None = None,
+        backend: str = "api",
     ):
         captured["history"] = history_messages
+        captured["backend"] = backend
         from library.ask.engine import AskResult
 
         return AskResult(
@@ -950,7 +952,13 @@ def test_new_thread_gets_generated_title(
     """A new conversation is named by the title model, not the raw question."""
 
     async def _titler(
-        client: Any, *, model: str, question: str, answer: str, settings: Any = None
+        client: Any,
+        *,
+        model: str,
+        question: str,
+        answer: str,
+        settings: Any = None,
+        backend: str = "api",
     ) -> Any:
         return ask_engine.TitleResult(title="Tax return locations", cost_usd=0.002)
 

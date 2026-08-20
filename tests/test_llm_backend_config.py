@@ -57,44 +57,32 @@ def test_unknown_backend_is_rejected() -> None:
 
 
 # --------------------------------------------------------------------------
-# Fail-fast on a missing credentials mount
+# Defaults are only defaults
 # --------------------------------------------------------------------------
 
 
-def test_subscription_without_a_credentials_dir_is_rejected(tmp_path: Path) -> None:
-    """The forgotten-mount case must fail at startup, not on the first question."""
-    with pytest.raises(ValidationError) as excinfo:
-        _settings(ask_llm_backend="subscription", claude_config_dir=tmp_path / "nope")
+def test_ask_defaults_to_the_subscription() -> None:
+    """The shipped default.
 
-    message = str(excinfo.value)
-    assert "ask_llm_backend" in message
-    assert "claude_config_dir" in message
-
-
-def test_series_insight_subscription_is_validated_too(tmp_path: Path) -> None:
-    with pytest.raises(ValidationError) as excinfo:
-        _settings(series_insight_llm_backend="subscription", claude_config_dir=tmp_path / "nope")
-    assert "series_insight_llm_backend" in str(excinfo.value)
-
-
-def test_subscription_with_a_mounted_dir_is_accepted(tmp_path: Path) -> None:
-    settings = _settings(ask_llm_backend="subscription", claude_config_dir=tmp_path)
-    assert settings.ask_llm_backend == "subscription"
-
-
-def test_an_empty_mounted_dir_is_accepted(tmp_path: Path) -> None:
-    """Recovery must stay possible.
-
-    An operator whose refresh token was revoked re-runs `claude setup-token`
-    against a mounted directory. Requiring the credentials *file* at startup
-    would brick the container in exactly that window.
+    Read off the field rather than an instance: conftest pins the environment
+    to "api" for the whole suite (so no test can accidentally bill a real
+    subscription), which would mask the declared default here.
     """
-    assert _settings(ask_llm_backend="subscription", claude_config_dir=tmp_path)
+    assert Settings.model_fields["ask_llm_backend"].default == "subscription"
+    assert Settings.model_fields["series_insight_llm_backend"].default == "api"
 
 
-def test_api_backend_ignores_the_credentials_dir(tmp_path: Path) -> None:
-    """No mount is needed when nothing uses OAuth."""
-    assert _settings(claude_config_dir=tmp_path / "does-not-exist")
+def test_a_missing_credentials_dir_does_not_block_startup(tmp_path: Path) -> None:
+    """Startup must not validate a value that can change without a restart.
+
+    An earlier version failed fast here. That guard became wrong once the
+    backend was runtime-editable: the setting can become "subscription" long
+    after boot, so a startup check both misses the real case and bricks a
+    container whose credentials are provisioned a moment later. The guard now
+    lives at write time (test_llm_backends.py) and on /healthz (below).
+    """
+    settings = _settings(ask_llm_backend="subscription", claude_config_dir=tmp_path / "not-mounted")
+    assert settings.ask_llm_backend == "subscription"
 
 
 # --------------------------------------------------------------------------

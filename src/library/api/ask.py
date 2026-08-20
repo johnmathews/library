@@ -20,6 +20,7 @@ from library.ask.engine import generate_thread_title
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
+from library.llm.backends import resolve_backend
 from library.models import AskThread, AskTurn, User
 
 logger = logging.getLogger(__name__)
@@ -148,7 +149,8 @@ async def ask(
     release — under a subscription it is notional (see docs/llm-backends.md).
     """
     settings = get_settings()
-    if settings.ask_llm_backend == "api" and settings.anthropic_api_key is None:
+    ask_backend = await resolve_backend(session, "ask", settings)
+    if ask_backend == "api" and settings.anthropic_api_key is None:
         raise HTTPException(
             status_code=503, detail="Ask is unavailable: no Anthropic API key configured."
         )
@@ -187,6 +189,7 @@ async def ask(
             client=client,
             history_messages=history,
             images=images,
+            backend=ask_backend,
         )
         turn_cost = result.cost_usd
         # A brand-new thread was seeded with the truncated question as a
@@ -201,6 +204,7 @@ async def ask(
                     question=request.question,
                     answer=result.answer,
                     settings=settings,
+                    backend=ask_backend,
                 )
                 if title.title:
                     thread.title = title.title

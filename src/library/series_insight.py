@@ -21,9 +21,10 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.config import Settings
+from library.config import LLMBackend, Settings
 from library.extraction.extractor import estimate_cost_usd
 from library.llm import subscription
+from library.llm.backends import resolve_backend
 from library.models import (
     AuthoredSeries,
     Document,
@@ -184,6 +185,7 @@ async def describe_series(
     overrides: Sequence[OverrideExample] = (),
     *,
     client: AsyncAnthropic | None = None,
+    backend: LLMBackend = "api",
 ) -> tuple[str, int, int] | None:
     """Describe ``summary`` via the configured backend.
 
@@ -191,13 +193,15 @@ async def describe_series(
     call cannot be made at all (API backend with no key configured) — which
     callers already treat as "skip this series".
 
-    The two backends are not equivalent in cost shape, which is why the knob
-    defaults to ``api``: this is the cheapest configured model running a
-    deliberately bounded prompt once per ingested document, and the subscription
-    path adds a fixed ~32k-token harness cost per call regardless of prompt
-    size. See ``docs/llm-backends.md``.
+    ``backend`` is resolved by the caller (which has the session) rather than read
+    off ``settings``, because an admin can change it at runtime. The two backends
+    are not equivalent in cost shape, which is why it defaults to ``api``: this
+    is the cheapest configured model running a deliberately bounded prompt once
+    per ingested document, and the subscription path adds a fixed ~32k-token
+    harness cost per call regardless of prompt size. See
+    ``docs/llm-backends.md``.
     """
-    if settings.series_insight_llm_backend == "subscription":
+    if backend == "subscription":
         result = await subscription.text_call(
             config_dir=settings.claude_config_dir,
             model=settings.extraction_model,
@@ -313,7 +317,8 @@ async def refresh_series_insight(
         return None
 
     overrides = await load_override_examples(session, sender_id, kind_id, summary.currency)
-    described = await describe_series(settings, summary, overrides, client=client)
+    backend = await resolve_backend(session, "series_insight", settings)
+    described = await describe_series(settings, summary, overrides, client=client, backend=backend)
     if described is None:
         logger.debug("series insight skipped (missing api key)")
         return None
@@ -379,7 +384,8 @@ async def refresh_group_blurb(
         logger.debug("group blurb skipped (no chartable members yet, group %s)", group_id)
         return None
 
-    described = await describe_series(settings, summary, client=client)
+    backend = await resolve_backend(session, "series_insight", settings)
+    described = await describe_series(settings, summary, client=client, backend=backend)
     if described is None:
         logger.debug("group blurb skipped (missing api key)")
         return None

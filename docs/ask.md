@@ -164,9 +164,12 @@ is local and effectively free.
 
 ### Which backend answers
 
-`LIBRARY_ASK_LLM_BACKEND` selects the transport for the tool loop *and* the
-thread-title call: `api` (default) uses the metered Messages API, `subscription`
-runs the same loop through the Claude Code CLI against a Claude subscription.
+The transport for the tool loop *and* the thread-title call is an
+admin-editable instance setting (**Settings -> LLM backend**), resolved per
+request so a change needs no restart; `LIBRARY_ASK_LLM_BACKEND` supplies the
+default and ships as `subscription`. `api` uses the metered Messages API,
+`subscription` runs the same loop through the Claude Code CLI against a Claude
+subscription.
 Ask is the surface where that trade pays — `ask_model` is the priciest
 configured model and calls are human-paced — but the Agent SDK adds a fixed
 ~43k-token Claude Code preamble to every Opus call. `cost_usd` counts it, so a

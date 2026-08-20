@@ -31,6 +31,26 @@ PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
 
 @pytest.fixture(autouse=True)
+def _llm_backend_is_the_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep the suite on the metered-API backend, whatever the default is.
+
+    ``ask_llm_backend`` ships defaulting to "subscription" so the deployed app
+    uses the Claude subscription. Tests must not: that path shells out to the
+    bundled Claude CLI and would make real network calls against real
+    credentials. Pin it here rather than in each test, so a new test that
+    exercises ask cannot silently start billing someone's subscription.
+
+    Tests covering the subscription path set the backend explicitly and stub the
+    SDK (see tests/test_ask_backend.py).
+    """
+    monkeypatch.setenv("LIBRARY_ASK_LLM_BACKEND", "api")
+    monkeypatch.setenv("LIBRARY_SERIES_INSIGHT_LLM_BACKEND", "api")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
 def _embedding_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Keep the suite hermetic: embeddings off unless a test opts in.
 

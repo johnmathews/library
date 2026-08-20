@@ -1,7 +1,7 @@
 # LLM backends
 
-**Status:** active. **Last updated:** 2026-08-20 (initial version: adds the subscription backend for `ask` and, off by default, `series_insight`).
-**Last verified:** 2026-08-20 — method: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure. Not verified against a deployed container — no surface has been switched to `subscription` in production, and the Linux credentials-file path (§4) is untested since macOS uses the Keychain.
+**Status:** active. **Last updated:** 2026-08-20 (the backend is now an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
+**Last verified:** 2026-08-20 — method: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Not verified against a deployed container — no surface has been switched to `subscription` in production, and the Linux credentials-file path (§4) is untested since macOS uses the Keychain.
 
 > **Purpose** — Library can reach Claude two ways: the metered Anthropic
 > Messages API, or a Claude subscription via the bundled Claude Code CLI. This
@@ -10,7 +10,7 @@
 
 ## 1. The two backends
 
-| | `api` (default) | `subscription` |
+| | `api` | `subscription` |
 | --- | --- | --- |
 | Package | `anthropic` | `claude-agent-sdk` |
 | Transport | `POST /v1/messages` | Claude Code CLI subprocess |
@@ -31,10 +31,15 @@ Sonnet and Opus are refused. Going through the CLI is what unlocks them.
 Only two, and they are the only two library has that are *not* built on
 structured outputs:
 
-| Surface | Setting | Default |
+| Surface | Environment default | Shipped default |
 | --- | --- | --- |
-| `ask` tool loop + thread titles | `LIBRARY_ASK_LLM_BACKEND` | `api` |
+| `ask` tool loop + thread titles | `LIBRARY_ASK_LLM_BACKEND` | `subscription` |
 | `series_insight` descriptions | `LIBRARY_SERIES_INSIGHT_LLM_BACKEND` | `api` |
+
+Both are **defaults**, not the control. An admin changes the live value in
+**Settings → LLM backend** (§4), which takes effect on the next request without
+a restart. Nothing may read `settings.ask_llm_backend` to decide a live request
+— call `library.llm.backends.resolve_backend` instead.
 
 The other six LLM call sites — extraction, the extraction judge, extraction
 repair, markdown generation, email labelling, matter classification — all use
@@ -119,8 +124,10 @@ proportional to context.
 
 ## 4. Provisioning
 
-The credentials must exist on the deploy host before any surface is switched
-over. `Settings` refuses to start otherwise (§6).
+`ask` ships defaulting to `subscription`, so a deploy needs these credentials
+in place to answer questions. The app still *starts* without them — see §6 for
+why that is deliberate — but Ask will fail until they exist, and Settings will
+refuse to switch a surface onto a backend that cannot authenticate.
 
 1. **Authenticate on the host** — on the LXC, not your laptop:
 
@@ -147,11 +154,9 @@ over. `Settings` refuses to start otherwise (§6).
    the unprivileged `app` user, so the host directory's uid must permit it;
    `chown` it or pin `user:` in compose if the ids do not line up.
 
-3. **Flip the switch** in `.env` and restart:
-
-   ```
-   LIBRARY_ASK_LLM_BACKEND=subscription
-   ```
+3. **Nothing else is needed to *enable* it** — `ask` ships defaulting to
+   `subscription`. To change a surface later, use Settings → LLM backend (§4.1)
+   rather than editing `.env`; a stored override wins over the environment.
 
 4. **Verify** — `/healthz` reports credential status whenever a surface uses
    OAuth:
@@ -162,6 +167,29 @@ over. `Settings` refuses to start otherwise (§6).
 
    `claude_credentials: "healthy"` means the next call will authenticate. Then
    ask a real question, because health checks the credentials, not the path.
+
+### 4.1 Changing a backend later (Settings → LLM backend)
+
+The live value is an admin-editable instance setting, stored in
+`instance_settings` and resolved per request — so a change applies to the next
+question with no restart and no redeploy.
+
+**Settings → LLM backend** shows, for each switchable surface, the backend in
+force, whether it overrides the deployed default, and what that default is. It
+also shows whether an API key is configured and the subscription credential
+status, so you can tell *before* switching whether the target backend would
+work. Any signed-in user can read the tab — it explains why Ask behaves as it
+does; only an admin sees editable controls.
+
+- Changing a surface: pick a backend from its dropdown. If the chosen backend
+  cannot authenticate the API returns `409` and the tab shows the reason (e.g.
+  run `claude setup-token` on the host), leaving the stored value untouched.
+- **Reset to deployed default** deletes the override row, so the surface follows
+  `LIBRARY_*_LLM_BACKEND` again.
+
+The environment variables remain the *defaults* — what a surface uses when no
+override is stored, which is every deployment until an admin changes something.
+Editing `.env` does not override a stored value; clear the override instead.
 
 ## 5. Token refresh, and the failure that needs a human
 
@@ -200,18 +228,23 @@ clears the alarm immediately rather than at the next refresh cycle.
 Transient failures (5xx, network) are deliberately *not* flagged — they recover
 on the next call, and flagging them would train you to ignore the signal.
 
-## 6. Fail-fast behaviour
+## 6. Where the guard lives
 
-Setting a backend to `subscription` while `claude_config_dir` is not a directory
-is a startup error, not a runtime one — otherwise the misconfiguration surfaces
-as an "Invalid API key" from a subprocess on the first real question, in a
-traceback that names neither the mount nor the setting.
+An earlier version validated credentials at startup. That check could not
+survive a runtime-editable setting: the backend can become `subscription` long
+after boot, so a startup check both misses the real case *and* would refuse to
+start a container whose credentials are provisioned a moment later — during the
+§5.1 recovery, exactly when starting matters most.
 
-The check is on the *directory*, not the credentials file: recovery (§5.1) runs
-`claude setup-token` against a mounted but momentarily empty directory, and
-refusing to start in that window would make recovery harder.
+The guard therefore lives in two places that still work:
 
-`ask` also drops its "no Anthropic API key" 503 when the backend is
+- **Write time.** `set_backend` refuses a backend that cannot authenticate, so
+  the API returns `409` and the UI shows the reason. The admin making the change
+  hears about it, instead of the next person to ask a question.
+- **`/healthz`.** Reports `claude_credentials` whenever a surface uses OAuth, so
+  a refresh token revoked *after* the switch was flipped is still visible.
+
+`ask` also drops its "no Anthropic API key" 503 when the resolved backend is
 `subscription` — a subscription deployment needs no API key for ask at all,
 titles included.
 

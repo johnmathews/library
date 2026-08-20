@@ -28,7 +28,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.config import Settings
+from library.config import LLMBackend, Settings
 from library.documents_service import apply_document_update, revalidate_after_edit
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
@@ -333,6 +333,7 @@ async def generate_thread_title(
     question: str,
     answer: str,
     settings: Settings | None = None,
+    backend: LLMBackend = "api",
 ) -> TitleResult:
     """Summarise a question/answer exchange into a short conversation title.
 
@@ -341,19 +342,20 @@ async def generate_thread_title(
     error — the caller owns the fallback, because a title must never block or
     fail an answer.
 
-    Follows ``settings.ask_llm_backend``: titles belong to the ask surface, and
+    ``backend`` is the ask surface's resolved backend — titles follow it, because
     splitting them off would leave a "subscription" deployment still needing an
     API key for a handful of tokens. That does mean a ~32-token title pays the
-    Agent SDK's fixed harness cost — once per *new thread*, not per turn. When
-    ``settings`` is omitted the Messages API is used, which keeps the standalone
-    backfill script working without a full settings object.
+    Agent SDK's fixed harness cost, once per *new thread* rather than per turn.
+    It is passed in rather than resolved here so the caller makes one database
+    round-trip per turn, and so the standalone backfill script — which has no
+    session — keeps working on the default ``api``.
     """
     # Cap both sides so a pathologically long input can't inflate the title
     # call's token cost (the question is already ≤1000 chars from the API, but
     # the backfill path reads stored queries — keep the bound explicit).
     user_text = f"Question:\n{question.strip()[:2000]}\n\nAnswer:\n{answer.strip()[:2000]}"
 
-    if settings is not None and settings.ask_llm_backend == "subscription":
+    if backend == "subscription" and settings is not None:
         title_result = await subscription.text_call(
             config_dir=settings.claude_config_dir,
             model=model,
@@ -947,6 +949,7 @@ async def run_ask(
     client: AsyncAnthropic,
     history_messages: list[dict[str, Any]] | None = None,
     images: list[dict[str, str]] | None = None,
+    backend: LLMBackend = "api",
 ) -> AskResult:
     """Answer ``question`` from the archive via a bounded Claude tool-use loop.
 
@@ -955,10 +958,16 @@ async def run_ask(
     ``images`` are ``{"media_type", "data"}`` (base64) attachments rendered as
     image content blocks on the question turn for the multimodal model.
 
-    Which transport runs the loop is ``settings.ask_llm_backend``. Both produce
-    the same ``AskResult`` — including ``turn_messages`` in Anthropic block form
-    — so a thread stays readable and the write gate keeps working after the knob
-    is flipped either way. ``client`` is only used by the ``api`` backend.
+    ``backend`` selects the transport. It is resolved by the caller (see
+    ``library.llm.backends.resolve_backend``) rather than read off ``settings``,
+    because an admin can change it at runtime — and passed in rather than
+    resolved here because the API route already needs it for its own checks, so
+    resolving again would be a second database round-trip per turn.
+
+    Both backends produce the same ``AskResult``, including ``turn_messages`` in
+    Anthropic block form, so a thread stays readable and the write gate keeps
+    working after the setting is flipped either way. ``client`` is only used by
+    the ``api`` backend.
     """
     model = settings.ask_model
     result = AskResult(answer="", citations=[], used_tools=[], model=model)
@@ -998,7 +1007,7 @@ async def run_ask(
             session, settings, name, args, cited, pages, editable_ids, previewed_ids
         )
 
-    if settings.ask_llm_backend == "subscription":
+    if backend == "subscription":
         answer, new_messages = await _run_subscription_turn(
             settings=settings,
             model=model,

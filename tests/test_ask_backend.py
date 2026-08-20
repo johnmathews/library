@@ -26,8 +26,12 @@ def _settings(**overrides: Any) -> Settings:
 
 
 @pytest.fixture(autouse=True)
-def _no_citation_lookup(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Citation hydration needs the DB; it is covered by test_api_ask.py."""
+def _no_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Citation hydration needs the DB; it is covered by test_api_ask.py.
+
+    Backend *resolution* is not stubbed because ``run_ask`` no longer does it —
+    the caller resolves and passes ``backend`` (see test_llm_backends.py).
+    """
 
     async def fake_citations(session: Any, ids: Any, pages: Any) -> list[Any]:
         return []
@@ -68,6 +72,7 @@ async def test_subscription_backend_passes_librarys_own_tools_and_prompt(
         question="where is my gas bill",
         settings=_sub_settings(tmp_path, ask_max_tool_turns=6),
         client=object(),  # type: ignore[arg-type]
+        backend="subscription",
     )
 
     assert seen["tools"] is engine.TOOLS
@@ -109,6 +114,7 @@ async def test_subscription_dispatcher_reaches_librarys_tool_dispatch(
         question="q",
         settings=_sub_settings(tmp_path),
         client=object(),  # type: ignore[arg-type]
+        backend="subscription",
     )
 
     # Invoking the handed-over dispatcher reaches library's dispatch with the
@@ -132,6 +138,7 @@ async def test_images_and_history_reach_the_subscription_backend(
         client=object(),  # type: ignore[arg-type]
         history_messages=history,
         images=images,
+        backend="subscription",
     )
 
     assert seen["history_blocks"] == history
@@ -165,6 +172,7 @@ async def test_stored_turn_opens_with_the_question(
         settings=_sub_settings(tmp_path),
         client=object(),  # type: ignore[arg-type]
         images=[{"media_type": "image/png", "data": "AAAA"}],
+        backend="subscription",
     )
 
     first = result.turn_messages[0]
@@ -215,6 +223,7 @@ async def test_write_gate_state_survives_a_subscription_turn(
         question="q",
         settings=_sub_settings(tmp_path),
         client=object(),  # type: ignore[arg-type]
+        backend="subscription",
     )
 
     # Feeding the stored turn back as history recovers the editable ids.
@@ -231,6 +240,7 @@ async def test_turn_limit_without_an_answer_falls_back(
         question="q",
         settings=_sub_settings(tmp_path),
         client=object(),  # type: ignore[arg-type]
+        backend="subscription",
     )
 
     assert result.answer == engine._NO_ANSWER
@@ -254,6 +264,7 @@ async def test_cost_records_the_true_context_including_harness_overhead(
         question="q",
         settings=_sub_settings(tmp_path),
         client=object(),  # type: ignore[arg-type]
+        backend="subscription",
     )
 
     assert result.input_tokens == 43_320
@@ -275,6 +286,7 @@ async def test_result_shape_matches_the_api_backend(
         question="q",
         settings=_sub_settings(tmp_path),
         client=object(),  # type: ignore[arg-type]
+        backend="subscription",
     )
 
     assert isinstance(result, AskResult)
@@ -307,6 +319,7 @@ async def test_title_follows_the_ask_backend(
         question="where is my gas bill",
         answer="It is #7.",
         settings=_sub_settings(tmp_path),
+        backend="subscription",
     )
 
     assert title.title == "Gas bill location"
@@ -314,10 +327,10 @@ async def test_title_follows_the_ask_backend(
     assert seen["config_dir"] == tmp_path
 
 
-async def test_title_without_settings_uses_the_messages_api(
+async def test_title_defaults_to_the_messages_api(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """The standalone backfill script passes no settings and must keep working."""
+    """The backfill script has no session to resolve a backend and must keep working."""
 
     async def explode(**kwargs: Any) -> TextResult:
         raise AssertionError("must not use the subscription backend")
