@@ -1,7 +1,7 @@
 # LLM backends
 
-**Status:** active. **Last updated:** 2026-08-20 (corrected the provisioning command — `claude auth login --claudeai`, not `setup-token`, which writes nothing; and `/healthz` now reports credential health whenever credentials exist rather than keying on the environment default, which left the alarm silent for deployments enabled via the toggle). Earlier the same day: credential-file permissions: refreshes now preserve `0600` instead of widening it, plus directory-ownership guidance in §4). Earlier the same day: the backend became an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
-**Last verified:** 2026-08-20 — method: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The §4 provisioning commands were run on the deploy host: `setup-token` left `claude auth status` reporting `loggedIn: false` with no credentials file anywhere, while `claude auth login --claudeai` over SSH produced a `claudeAiOauth` file and `loggedIn: true`. A live Opus call and a full Ask turn then ran on the subscription from the production container (131,966 input tokens for a one-tool turn), and the container's write path was checked to confirm §5's refresh can persist. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure, and the §4/§5 file-permission claims by tests asserting the on-disk mode after a refresh (including under umask 0), confirmed to fail against the previous implementation. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Still unverified: the ~1-year `CLAUDE_CODE_OAUTH_TOKEN` form is documented from the CLI's own output, not exercised.
+**Status:** active. **Last updated:** 2026-08-20 (credential failures now answer 503 with the command that fixes them instead of a bare 500 — §5.2). Earlier the same day: corrected the provisioning command — `claude auth login --claudeai`, not `setup-token`, which writes nothing; and `/healthz` now reports credential health whenever credentials exist rather than keying on the environment default, which left the alarm silent for deployments enabled via the toggle). Earlier the same day: credential-file permissions: refreshes now preserve `0600` instead of widening it, plus directory-ownership guidance in §4). Earlier the same day: the backend became an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
+**Last verified:** 2026-08-20 — method: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The §5.2 behaviour was established by running the adapter against an unprovisioned config directory on the production container, which raised the SDK's own `ResultError` ("Not logged in · Please run /login") before any result message — the case the translation now covers; the 503 and the healthy-credentials wording are covered by tests confirmed to fail against the previous behaviour. The §4 provisioning commands were run on the deploy host: `setup-token` left `claude auth status` reporting `loggedIn: false` with no credentials file anywhere, while `claude auth login --claudeai` over SSH produced a `claudeAiOauth` file and `loggedIn: true`. A live Opus call and a full Ask turn then ran on the subscription from the production container (131,966 input tokens for a one-tool turn), and the container's write path was checked to confirm §5's refresh can persist. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure, and the §4/§5 file-permission claims by tests asserting the on-disk mode after a refresh (including under umask 0), confirmed to fail against the previous implementation. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Still unverified: the ~1-year `CLAUDE_CODE_OAUTH_TOKEN` form is documented from the CLI's own output, not exercised.
 
 > **Purpose** — Library can reach Claude two ways: the metered Anthropic
 > Messages API, or a Claude subscription via the bundled Claude Code CLI. This
@@ -260,6 +260,32 @@ clears the alarm immediately rather than at the next refresh cycle.
 
 Transient failures (5xx, network) are deliberately *not* flagged — they recover
 on the next call, and flagging them would train you to ignore the signal.
+
+### 5.2 What a credential failure looks like
+
+`POST /api/ask` answers **503** with the reason and the fix, e.g.:
+
+```
+Ask is unavailable: the Claude subscription backend could not authenticate:
+no credentials at /app/.claude/.credentials.json — run `claude auth login
+--claudeai` on the host. Run `CLAUDE_CONFIG_DIR=/app/.claude claude auth login
+--claudeai` on the host, then `chown 999:999 /app/.claude/.credentials.json`
+```
+
+Three things this deliberately avoids:
+
+- **A bare 500.** The SDK raises its own error *mid-iteration*, before any
+  result message is seen, so an untranslated exception escaped to FastAPI as
+  "Internal Server Error" with the reason only in the container log.
+- **The SDK's own advice.** It says "Please run /login", but `/login` is an
+  interactive slash command inside the CLI — not how a container
+  authenticates, and following it does nothing for this deployment.
+- **Blaming auth for everything.** When credentials are healthy the message
+  reports the underlying failure without a login command, so a CLI crash or a
+  rate limit does not send anyone through a pointless re-authentication.
+
+The series-insight job has no user-facing surface; the same message reaches the
+worker log.
 
 ## 6. Where the guard lives
 

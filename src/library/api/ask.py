@@ -21,6 +21,7 @@ from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
 from library.llm.backends import resolve_backend
+from library.llm.subscription import SubscriptionBackendError
 from library.models import AskThread, AskTurn, User
 
 logger = logging.getLogger(__name__)
@@ -182,15 +183,23 @@ async def ask(
         else "unused-by-subscription-backend"
     )
     async with AsyncAnthropic(api_key=api_key) as client:
-        result = await run_ask(
-            session,
-            question=request.question,
-            settings=settings,
-            client=client,
-            history_messages=history,
-            images=images,
-            backend=ask_backend,
-        )
+        try:
+            result = await run_ask(
+                session,
+                question=request.question,
+                settings=settings,
+                client=client,
+                history_messages=history,
+                images=images,
+                backend=ask_backend,
+            )
+        except SubscriptionBackendError as exc:
+            # 503, not 500: this is a configuration/credential problem an
+            # operator can fix, not a bug. Without this the caller gets a bare
+            # "Internal Server Error" and the actual reason — which names the
+            # command to run — stays buried in the container log.
+            logger.warning("Ask failed on the subscription backend: %s", exc)
+            raise HTTPException(status_code=503, detail=f"Ask is unavailable: {exc}") from exc
         turn_cost = result.cost_usd
         # A brand-new thread was seeded with the truncated question as a
         # placeholder title. Upgrade it to a concise generated title from the

@@ -32,6 +32,7 @@ from typing import Any
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
+    ClaudeSDKError,
     SdkMcpTool,
     create_sdk_mcp_server,
     query,
@@ -191,34 +192,66 @@ def build_options(
     )
 
 
+def _explain(failure: str, config_dir: Path) -> str:
+    """Turn an SDK failure into something an operator can act on.
+
+    The SDK's own message is often the right diagnosis wrapped in the wrong
+    instruction: a container with no credentials reports "Not logged in ·
+    Please run /login", but `/login` is an interactive slash command inside the
+    CLI, which is not how this deployment authenticates. Appending the
+    credential status and the actual command turns a dead end into a fix.
+    """
+    status, detail = oauth.token_health(config_dir)
+    if status == "healthy":
+        # Credentials are fine, so this is something else — a CLI crash, a
+        # network failure, a rate limit. Don't send anyone to re-authenticate
+        # for a problem that is not about authentication.
+        return f"the Claude subscription backend failed: {failure}"
+    return (
+        f"the Claude subscription backend could not authenticate: {detail}. "
+        f"Run `CLAUDE_CONFIG_DIR={config_dir} claude auth login --claudeai` on "
+        f"the host, then `chown 999:999 {oauth.credentials_path(config_dir)}` "
+        f"(see docs/llm-backends.md §4). Original error: {failure}"
+    )
+
+
 async def _run(
-    prompt: str | AsyncIterator[dict[str, Any]], options: ClaudeAgentOptions
+    prompt: str | AsyncIterator[dict[str, Any]],
+    options: ClaudeAgentOptions,
+    config_dir: Path,
 ) -> tuple[list[Message], Usage]:
     """Drive one ``query()`` to completion, returning its messages and usage.
 
-    The failure is recorded and raised *after* the loop, never from inside it.
-    Raising mid-iteration abandons the SDK's async generator while it is still
-    running, and unwinding then fails with
-    ``RuntimeError: aclose(): asynchronous generator is already running`` —
-    which replaces the actual cause ("Not logged in", an auth error, a CLI
-    crash) with a traceback about generator teardown. Since the result message
-    is the last thing the SDK yields, deferring costs nothing.
+    Two kinds of failure arrive by different routes, and both are translated to
+    :class:`SubscriptionBackendError` so callers have one thing to catch:
+
+    * The SDK raises :class:`ClaudeSDKError` mid-iteration — which is what a
+      missing credential actually does, before any result message is seen.
+    * A result message arrives flagged as an error. That one is recorded and
+      raised *after* the loop, never from inside it: raising mid-iteration
+      abandons the SDK's async generator while it is still running, and the
+      unwind then fails with ``RuntimeError: aclose(): asynchronous generator
+      is already running``, burying the real cause. The result message is the
+      last thing yielded, so deferring costs nothing.
     """
     messages: list[Message] = []
     usage = Usage()
     failure: str | None = None
 
-    async for message in query(prompt=prompt, options=options):
-        messages.append(message)
-        if isinstance(message, ResultMessage):
-            usage.add(message.usage)
-            # Running out of turns is also reported as an error result, but it
-            # is a normal outcome the caller handles — not a failure.
-            if message.is_error and message.subtype != _MAX_TURNS_SUBTYPE:
-                failure = message.result or message.subtype
+    try:
+        async for message in query(prompt=prompt, options=options):
+            messages.append(message)
+            if isinstance(message, ResultMessage):
+                usage.add(message.usage)
+                # Running out of turns is also reported as an error result, but
+                # it is a normal outcome the caller handles — not a failure.
+                if message.is_error and message.subtype != _MAX_TURNS_SUBTYPE:
+                    failure = message.result or message.subtype
+    except ClaudeSDKError as exc:
+        raise SubscriptionBackendError(_explain(str(exc), config_dir)) from exc
 
     if failure is not None:
-        raise SubscriptionBackendError(f"Claude Agent SDK returned an error result: {failure}")
+        raise SubscriptionBackendError(_explain(failure, config_dir))
     return messages, usage
 
 
@@ -249,7 +282,7 @@ async def text_call(
     options = build_options(
         model=model, system_prompt=system_prompt, config_dir=config_dir, max_turns=1
     )
-    messages, usage = await _run(prompt, options)
+    messages, usage = await _run(prompt, options, config_dir)
     return TextResult(text=_text_of(messages), usage=usage)
 
 
@@ -444,7 +477,7 @@ async def tool_loop(
             "session_id": "library-ask",
         }
 
-    messages, usage = await _run(stream(), options)
+    messages, usage = await _run(stream(), options, config_dir)
     answer = _text_of(messages)
     hit_limit = any(
         isinstance(message, ResultMessage) and message.subtype == _MAX_TURNS_SUBTYPE
