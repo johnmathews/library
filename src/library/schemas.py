@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Any, Final
+from typing import Annotated, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
@@ -842,6 +842,43 @@ def get_notification_credentials(
         device=device if isinstance(device, str) and device else None,
         events=events,
     )
+
+
+class LLMSurfaceOut(BaseModel):
+    """One switchable LLM surface, as the Settings view renders it."""
+
+    surface: str
+    label: str
+    description: str
+    backend: Literal["api", "subscription"]
+    # What the environment would give if the override row were deleted, so the
+    # UI can show "overridden" rather than leaving the admin guessing whether a
+    # value is deployed config or something a person changed.
+    default: Literal["api", "subscription"]
+    overridden: bool
+
+
+class LLMBackendsOut(BaseModel):
+    """The LLM backend section of the Settings view.
+
+    Instance-wide, not per-user. Readable by any signed-in user (it explains why
+    Ask behaves as it does); only an admin may change it.
+    """
+
+    surfaces: list[LLMSurfaceOut]
+    # "healthy" / "degraded" / "unhealthy" plus a human-readable reason. Present
+    # regardless of the current backend so an admin can tell *before* switching
+    # whether the subscription would work.
+    credentials_status: str
+    credentials_detail: str
+    api_key_configured: bool
+    editable: bool
+
+
+class LLMBackendIn(BaseModel):
+    """Set one surface's backend."""
+
+    backend: Literal["api", "subscription"]
 
 
 class UserPreferences(BaseModel):

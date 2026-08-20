@@ -1154,3 +1154,34 @@ class FxRate(Base):
     rate_to_base: Mapped[Decimal] = mapped_column(Numeric(18, 8))
 
     __table_args__ = (UniqueConstraint("currency", "as_of", name="fx_rates_currency_as_of"),)
+
+
+class InstanceSetting(Base):
+    """One instance-wide operational setting, changeable at runtime.
+
+    The third kind of configuration in library, alongside per-user display
+    preferences (``User.preferences``) and environment variables read once at
+    startup into ``Settings``. This one is instance-wide *and* mutable without a
+    restart — which is what an operational toggle like the LLM backend needs.
+
+    An **override layer**, not a replacement: a missing row means "use the
+    ``Settings`` value", so an empty table behaves exactly as the environment
+    says. That is also what every existing deployment gets on upgrade, and what
+    makes reverting a setting equivalent to deleting its row.
+
+    Deliberately key/value with a JSON ``value`` rather than a typed column per
+    setting: the alternative costs a migration for every new toggle.
+    """
+
+    __tablename__ = "instance_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    # SET NULL on user delete, not CASCADE: removing a user must never silently
+    # revert an instance-wide setting to its environment default.
+    updated_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )

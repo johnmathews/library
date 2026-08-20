@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 import logging
 import re
-from collections.abc import Iterator
+from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import date
 from decimal import Decimal, InvalidOperation
@@ -28,10 +28,11 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.config import Settings
+from library.config import LLMBackend, Settings
 from library.documents_service import apply_document_update, revalidate_after_edit
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
+from library.llm import subscription
 from library.models import Document, DocumentComment, DocumentPage
 from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, semantic_search
@@ -303,6 +304,13 @@ _TITLE_SYSTEM_PROMPT: str = (
     'prefix such as "Title:".'
 )
 
+# Returned when the loop ends with no usable answer, on either backend.
+_NO_ANSWER = "I couldn't find an answer to that in the archive."
+
+# Binds this turn's mutable state to ``_dispatch_tool`` so both backends drive
+# identical tool semantics; see ``run_ask``.
+_Dispatcher = Callable[[str, dict[str, Any]], Awaitable[dict[str, Any]]]
+
 # Titles are for a sidebar row; keep them short enough to read at a glance.
 _TITLE_MAX_CHARS = 60
 
@@ -324,6 +332,8 @@ async def generate_thread_title(
     model: str,
     question: str,
     answer: str,
+    settings: Settings | None = None,
+    backend: LLMBackend = "api",
 ) -> TitleResult:
     """Summarise a question/answer exchange into a short conversation title.
 
@@ -331,11 +341,34 @@ async def generate_thread_title(
     model returned nothing usable) plus the call's estimated cost. Raises on API
     error — the caller owns the fallback, because a title must never block or
     fail an answer.
+
+    ``backend`` is the ask surface's resolved backend — titles follow it, because
+    splitting them off would leave a "subscription" deployment still needing an
+    API key for a handful of tokens. That does mean a ~32-token title pays the
+    Agent SDK's fixed harness cost, once per *new thread* rather than per turn.
+    It is passed in rather than resolved here so the caller makes one database
+    round-trip per turn, and so the standalone backfill script — which has no
+    session — keeps working on the default ``api``.
     """
     # Cap both sides so a pathologically long input can't inflate the title
     # call's token cost (the question is already ≤1000 chars from the API, but
     # the backfill path reads stored queries — keep the bound explicit).
     user_text = f"Question:\n{question.strip()[:2000]}\n\nAnswer:\n{answer.strip()[:2000]}"
+
+    if backend == "subscription" and settings is not None:
+        title_result = await subscription.text_call(
+            config_dir=settings.claude_config_dir,
+            model=model,
+            system_prompt=_TITLE_SYSTEM_PROMPT,
+            prompt=user_text,
+        )
+        return TitleResult(
+            title=_clean_title(title_result.text),
+            cost_usd=estimate_cost_usd(
+                model, title_result.usage.input_tokens, title_result.usage.output_tokens
+            ),
+        )
+
     response = await client.messages.create(
         model=model,
         max_tokens=32,
@@ -755,48 +788,23 @@ def _apply_cache_control(messages: list[dict[str, Any]], history_len: int) -> No
         content[-1] = {**content[-1], "cache_control": {"type": "ephemeral"}}
 
 
-async def run_ask(
-    session: AsyncSession,
+async def _run_api_turn(
     *,
-    question: str,
     settings: Settings,
     client: AsyncAnthropic,
-    history_messages: list[dict[str, Any]] | None = None,
-    images: list[dict[str, str]] | None = None,
-) -> AskResult:
-    """Answer ``question`` from the archive via a bounded Claude tool-use loop.
+    model: str,
+    history: list[dict[str, Any]],
+    question_msg: dict[str, Any],
+    dispatch: _Dispatcher,
+    result: AskResult,
+    used: list[str],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Run the turn against the metered Messages API.
 
-    ``history_messages`` is a rehydrated prefix of prior turns (already in block
-    form); it is prepended so follow-ups can reason over earlier tool results.
-    ``images`` are ``{"media_type", "data"}`` (base64) attachments rendered as
-    image content blocks on the question turn for the multimodal model.
+    The bounded tool loop library has always used: we own the loop, so a turn is
+    a sequence of ``messages.create`` calls and we decide when to stop. Returns
+    ``(answer, turn_messages)``.
     """
-    model = settings.ask_model
-    result = AskResult(answer="", citations=[], used_tools=[], model=model)
-    cited: set[int] = set()
-    pages: dict[int, int] = {}
-    used: list[str] = []
-
-    history = list(history_messages or [])
-    # Documents the write tool is allowed to edit: those surfaced by a read tool
-    # earlier in the thread, plus any surfaced this turn (kept in sync below).
-    editable_ids: set[int] = _ids_from_history(history)
-    # Ids already shown to the user as a write preview earlier in the thread; a
-    # confirmed write requires the id to be in here (preview-then-confirm gate).
-    previewed_ids: set[int] = _previewed_ids_from_history(history)
-    question_content: list[dict[str, Any]] = [{"type": "text", "text": question}]
-    for image in images or []:
-        question_content.append(
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": image["media_type"],
-                    "data": image["data"],
-                },
-            }
-        )
-    question_msg: dict[str, Any] = {"role": "user", "content": question_content}
     messages: list[dict[str, Any]] = [*history, question_msg]
     new_messages: list[dict[str, Any]] = [question_msg]
     _apply_cache_control(messages, len(history))
@@ -847,16 +855,7 @@ async def run_ask(
             if block.type != "tool_use":
                 continue
             used.append(block.name)
-            output = await _dispatch_tool(
-                session,
-                settings,
-                block.name,
-                dict(block.input),
-                cited,
-                pages,
-                editable_ids,
-                previewed_ids,
-            )
+            output = await dispatch(block.name, dict(block.input))
             tool_results.append(
                 {
                     "type": "tool_result",
@@ -883,10 +882,156 @@ async def run_ask(
         # a follow-up — which the Anthropic API rejects (400). Close the turn
         # with the fallback answer as an assistant message so the stored history
         # alternates correctly and the tool_use/tool_result pair stays intact.
-        answer = answer or "I couldn't find an answer to that in the archive."
+        answer = answer or _NO_ANSWER
         new_messages.append({"role": "assistant", "content": [{"type": "text", "text": answer}]})
 
-    result.answer = answer or "I couldn't find an answer to that in the archive."
+    return answer, new_messages
+
+
+async def _run_subscription_turn(
+    *,
+    settings: Settings,
+    model: str,
+    question: str,
+    history: list[dict[str, Any]],
+    images: list[dict[str, str]] | None,
+    question_msg: dict[str, Any],
+    dispatch: _Dispatcher,
+    result: AskResult,
+    used: list[str],
+) -> tuple[str, list[dict[str, Any]]]:
+    """Run the turn against the Claude subscription via the Agent SDK.
+
+    Here the SDK owns the loop, so ``ask_max_tool_turns`` becomes its turn cap
+    rather than our own iteration count, and the transcript is reconstructed
+    from the SDK's message stream. ``dispatch`` is library's same tool
+    dispatcher — the SDK path adds a transport, never a second implementation.
+
+    Cost is still estimated from ``MODEL_PRICING_USD_PER_MTOK``. Under a
+    subscription no such dollars are billed, so ``cost_usd`` here means "what
+    this turn would have cost on the API" — which is the number worth recording,
+    both to measure the saving and to keep the ~32k-token harness overhead
+    visible instead of free-looking.
+    """
+    loop = await subscription.tool_loop(
+        config_dir=settings.claude_config_dir,
+        model=model,
+        system_prompt=_system_prompt(date.today()),
+        question=question,
+        tools=TOOLS,
+        dispatch=dispatch,
+        max_turns=max(1, settings.ask_max_tool_turns),
+        history_blocks=history,
+        images=images,
+    )
+
+    used.extend(loop.used_tools)
+    result.input_tokens += loop.usage.input_tokens
+    result.output_tokens += loop.usage.output_tokens
+    result.cost_usd += estimate_cost_usd(model, loop.usage.input_tokens, loop.usage.output_tokens)
+
+    answer = loop.answer
+    if loop.hit_turn_limit and not answer:
+        logger.info("ask hit the tool-turn limit without a final answer")
+        answer = _NO_ANSWER
+
+    # The question itself is not part of the SDK's reply stream, so prepend it:
+    # a stored turn must open with the user's question for the thread to
+    # rehydrate the same way it does on the API path.
+    return answer, [question_msg, *loop.blocks]
+
+
+async def run_ask(
+    session: AsyncSession,
+    *,
+    question: str,
+    settings: Settings,
+    client: AsyncAnthropic,
+    history_messages: list[dict[str, Any]] | None = None,
+    images: list[dict[str, str]] | None = None,
+    backend: LLMBackend = "api",
+) -> AskResult:
+    """Answer ``question`` from the archive via a bounded Claude tool-use loop.
+
+    ``history_messages`` is a rehydrated prefix of prior turns (already in block
+    form); it is prepended so follow-ups can reason over earlier tool results.
+    ``images`` are ``{"media_type", "data"}`` (base64) attachments rendered as
+    image content blocks on the question turn for the multimodal model.
+
+    ``backend`` selects the transport. It is resolved by the caller (see
+    ``library.llm.backends.resolve_backend``) rather than read off ``settings``,
+    because an admin can change it at runtime — and passed in rather than
+    resolved here because the API route already needs it for its own checks, so
+    resolving again would be a second database round-trip per turn.
+
+    Both backends produce the same ``AskResult``, including ``turn_messages`` in
+    Anthropic block form, so a thread stays readable and the write gate keeps
+    working after the setting is flipped either way. ``client`` is only used by
+    the ``api`` backend.
+    """
+    model = settings.ask_model
+    result = AskResult(answer="", citations=[], used_tools=[], model=model)
+    cited: set[int] = set()
+    pages: dict[int, int] = {}
+    used: list[str] = []
+
+    history = list(history_messages or [])
+    # Documents the write tool is allowed to edit: those surfaced by a read tool
+    # earlier in the thread, plus any surfaced this turn (kept in sync below).
+    editable_ids: set[int] = _ids_from_history(history)
+    # Ids already shown to the user as a write preview earlier in the thread; a
+    # confirmed write requires the id to be in here (preview-then-confirm gate).
+    previewed_ids: set[int] = _previewed_ids_from_history(history)
+    question_content: list[dict[str, Any]] = [{"type": "text", "text": question}]
+    for image in images or []:
+        question_content.append(
+            {
+                "type": "image",
+                "source": {
+                    "type": "base64",
+                    "media_type": image["media_type"],
+                    "data": image["data"],
+                },
+            }
+        )
+    question_msg: dict[str, Any] = {"role": "user", "content": question_content}
+
+    async def dispatch(name: str, args: dict[str, Any]) -> dict[str, Any]:
+        """Bind this turn's mutable state to the shared tool dispatcher.
+
+        ``cited``/``pages`` accumulate what to cite, and ``editable_ids``/
+        ``previewed_ids`` carry the write gate. Closing over them means both
+        backends drive identical tool semantics.
+        """
+        return await _dispatch_tool(
+            session, settings, name, args, cited, pages, editable_ids, previewed_ids
+        )
+
+    if backend == "subscription":
+        answer, new_messages = await _run_subscription_turn(
+            settings=settings,
+            model=model,
+            question=question,
+            history=history,
+            images=images,
+            question_msg=question_msg,
+            dispatch=dispatch,
+            result=result,
+            used=used,
+        )
+    else:
+        answer, new_messages = await _run_api_turn(
+            settings=settings,
+            client=client,
+            model=model,
+            history=history,
+            question_msg=question_msg,
+            dispatch=dispatch,
+            result=result,
+            used=used,
+        )
+
+    result.answer = answer or _NO_ANSWER
     # Prefer the documents Claude actually cited inline (#id); fall back to the
     # full retrieved set when the answer cited none explicitly.
     mentioned = {int(match) for match in re.findall(r"#(\d+)", answer)} & cited

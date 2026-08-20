@@ -27,7 +27,10 @@ import {
   TILE_PREVIEWS,
   getEmailTriage,
   getEmailTriageRecentSkips,
+  getLLMBackends,
+  resetLLMBackend,
   updateAppearance,
+  updateLLMBackend,
   updateKindColors,
   updateNotifications,
   updateSettings,
@@ -36,6 +39,8 @@ import {
   type DockPosition,
   type EmailTriageConfig,
   type EmailTriageRecentSkip,
+  type LLMBackend,
+  type LLMBackends,
   type TilePreview,
 } from '@/api/settings'
 import { listKinds, type KindOption } from '@/api/taxonomy'
@@ -46,7 +51,7 @@ import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 
-type Tab = 'dashboard' | 'appearance' | 'notifications' | 'email-triage'
+type Tab = 'dashboard' | 'appearance' | 'notifications' | 'email-triage' | 'llm-backend'
 const tab = ref<Tab>('dashboard')
 
 // --- Dashboard fields --------------------------------------------------------
@@ -394,6 +399,80 @@ async function loadTriage(): Promise<void> {
 
 watch(tab, (current) => {
   if (current === 'email-triage' && !triage.value && !triageLoading.value) void loadTriage()
+  if (current === 'llm-backend' && !llm.value && !llmLoading.value) void loadLLMBackends()
+})
+
+// --- LLM backend (instance-wide; only an admin may change it) ---------------
+// Loaded lazily like the triage tab: instance config nobody looks at most
+// visits, and the payload includes a credential check.
+const llm = ref<LLMBackends | null>(null)
+const llmLoading = ref(false)
+const llmError = ref<string | null>(null)
+const llmSaved = ref(false)
+// Which surface is mid-save, so only its own controls disable. A single
+// boolean would freeze every row while one is saving.
+const llmSaving = ref<string | null>(null)
+
+async function loadLLMBackends(): Promise<void> {
+  llmLoading.value = true
+  llmError.value = null
+  try {
+    llm.value = await getLLMBackends()
+  } catch {
+    llmError.value = 'Sorry, the LLM backend settings could not be loaded. Try again.'
+  } finally {
+    llmLoading.value = false
+  }
+}
+
+async function onLLMBackendChange(surface: string, backend: LLMBackend): Promise<void> {
+  llmSaving.value = surface
+  llmError.value = null
+  llmSaved.value = false
+  try {
+    llm.value = await updateLLMBackend(surface, backend)
+    llmSaved.value = true
+  } catch (error) {
+    // The server's message is the useful one here: a 409 explains exactly what
+    // is missing (e.g. run `claude setup-token` on the host). Surfacing a
+    // generic string instead would strip the one actionable detail.
+    const detail =
+      error instanceof ApiError
+        ? error.detail
+        : 'Sorry, that change could not be saved. Try again.'
+    // Re-read so the controls show what is actually stored, not the rejected
+    // selection the user just clicked — then set the error, because the reload
+    // clears it and the message would otherwise never reach the screen.
+    await loadLLMBackends()
+    llmError.value = detail
+  } finally {
+    llmSaving.value = null
+  }
+}
+
+async function onLLMBackendReset(surface: string): Promise<void> {
+  llmSaving.value = surface
+  llmError.value = null
+  llmSaved.value = false
+  try {
+    llm.value = await resetLLMBackend(surface)
+    llmSaved.value = true
+  } catch (error) {
+    llmError.value =
+      error instanceof ApiError
+        ? error.detail
+        : 'Sorry, that change could not be saved. Try again.'
+  } finally {
+    llmSaving.value = null
+  }
+}
+
+/** Badge tone for the credential line: green only when nothing needs doing. */
+const llmCredentialVariant = computed<'success' | 'warning' | 'danger'>(() => {
+  const status = llm.value?.credentials_status
+  if (status === 'healthy') return 'success'
+  if (status === 'degraded') return 'warning'
+  return 'danger'
 })
 
 /** The LLM label pass status line — distinguishes WHY it is inactive. */
@@ -473,6 +552,18 @@ const tabClass = (active: boolean): string =>
         @click="tab = 'email-triage'"
       >
         Email triage
+      </button>
+      <button
+        id="settings-tab-llm-backend"
+        role="tab"
+        type="button"
+        :aria-selected="tab === 'llm-backend'"
+        :tabindex="tab === 'llm-backend' ? 0 : -1"
+        :class="tabClass(tab === 'llm-backend')"
+        data-testid="tab-llm-backend-btn"
+        @click="tab = 'llm-backend'"
+      >
+        LLM backend
       </button>
     </div>
 
@@ -1119,6 +1210,115 @@ const tabClass = (active: boolean): string =>
               </ul>
             </li>
           </ul>
+        </div>
+      </template>
+    </section>
+
+    <!-- LLM backend tab: instance-wide, admin-editable. -->
+    <section
+      id="settings-panel-llm-backend"
+      v-show="tab === 'llm-backend'"
+      role="tabpanel"
+      data-testid="tab-llm-backend"
+    >
+      <AppErrorSummary
+        v-if="llmError"
+        :errors="[{ text: llmError }]"
+        data-testid="llm-backend-error"
+      />
+
+      <div v-if="llmSaved && !llmError" class="mb-6">
+        <AppBanner variant="success" data-testid="llm-backend-saved">
+          <p>Saved. The change applies to the next request — no restart needed.</p>
+        </AppBanner>
+      </div>
+
+      <div v-if="llmLoading" :class="cardClass" data-testid="llm-backend-loading">
+        <p class="text-sm text-gray-500 dark:text-gray-400">Loading the LLM backend settings…</p>
+      </div>
+
+      <template v-else-if="llm">
+        <div id="settings-card-llm-credentials" :class="cardClass" data-testid="llm-credentials">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">How Claude is reached</h2>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            These settings are instance-wide, not per-user. The metered API bills per token
+            against an Anthropic API key; the Claude subscription bills nothing but spends
+            subscription quota, and carries a large fixed overhead on every call.
+          </p>
+
+          <div class="mt-4 flex flex-wrap items-center gap-3">
+            <span :class="triageLabelClass">Anthropic API key</span>
+            <AppBadge :variant="llm.api_key_configured ? 'success' : 'warning'" data-testid="llm-api-key-status">
+              {{ llm.api_key_configured ? 'Configured' : 'Not configured' }}
+            </AppBadge>
+          </div>
+
+          <div class="mt-4 flex flex-wrap items-center gap-3">
+            <span :class="triageLabelClass">Subscription credentials</span>
+            <AppBadge :variant="llmCredentialVariant" data-testid="llm-credentials-status">
+              {{ llm.credentials_status }}
+            </AppBadge>
+          </div>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400" data-testid="llm-credentials-detail">
+            {{ llm.credentials_detail }}
+          </p>
+        </div>
+
+        <div id="settings-card-llm-surfaces" :class="cardClass" data-testid="llm-surfaces">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Per-feature backend</h2>
+          <p v-if="!llm.editable" class="mt-1 text-sm text-gray-500 dark:text-gray-400" data-testid="llm-readonly-note">
+            Read-only — only an admin can change these.
+          </p>
+
+          <div
+            v-for="surface in llm.surfaces"
+            :key="surface.surface"
+            class="mt-6 border-t border-gray-200 pt-6 first:mt-4 first:border-0 first:pt-0 dark:border-gray-700"
+            :data-testid="`llm-surface-${surface.surface}`"
+          >
+            <div class="flex flex-wrap items-center gap-3">
+              <h3 class="text-sm font-semibold text-gray-800 dark:text-gray-100">{{ surface.label }}</h3>
+              <AppBadge
+                v-if="surface.overridden"
+                variant="info"
+                :data-testid="`llm-overridden-${surface.surface}`"
+              >
+                Overridden (deployed default: {{ surface.default }})
+              </AppBadge>
+            </div>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ surface.description }}</p>
+
+            <div class="mt-3 flex flex-wrap items-end gap-3">
+              <label class="flex flex-col gap-1">
+                <span :class="triageLabelClass">Backend</span>
+                <select
+                  class="form-select"
+                  :value="surface.backend"
+                  :disabled="!llm.editable || llmSaving === surface.surface"
+                  :data-testid="`llm-backend-select-${surface.surface}`"
+                  @change="
+                    onLLMBackendChange(
+                      surface.surface,
+                      ($event.target as HTMLSelectElement).value as LLMBackend,
+                    )
+                  "
+                >
+                  <option value="api">Metered API (per-token billing)</option>
+                  <option value="subscription">Claude subscription (quota)</option>
+                </select>
+              </label>
+
+              <AppButton
+                v-if="llm.editable && surface.overridden"
+                variant="secondary"
+                :disabled="llmSaving === surface.surface"
+                :data-testid="`llm-reset-${surface.surface}`"
+                @click="onLLMBackendReset(surface.surface)"
+              >
+                Reset to deployed default
+              </AppButton>
+            </div>
+          </div>
         </div>
       </template>
     </section>

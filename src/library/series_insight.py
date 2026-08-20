@@ -21,8 +21,10 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.config import Settings
+from library.config import LLMBackend, Settings
 from library.extraction.extractor import estimate_cost_usd
+from library.llm import subscription
+from library.llm.backends import resolve_backend
 from library.models import (
     AuthoredSeries,
     Document,
@@ -177,6 +179,46 @@ async def generate_description(
     return text, response.usage.input_tokens, response.usage.output_tokens
 
 
+async def describe_series(
+    settings: Settings,
+    summary: SeriesSummary,
+    overrides: Sequence[OverrideExample] = (),
+    *,
+    client: AsyncAnthropic | None = None,
+    backend: LLMBackend = "api",
+) -> tuple[str, int, int] | None:
+    """Describe ``summary`` via the configured backend.
+
+    Returns ``(description, input_tokens, output_tokens)``, or ``None`` when the
+    call cannot be made at all (API backend with no key configured) — which
+    callers already treat as "skip this series".
+
+    ``backend`` is resolved by the caller (which has the session) rather than read
+    off ``settings``, because an admin can change it at runtime. The two backends
+    are not equivalent in cost shape, which is why it defaults to ``api``: this
+    is the cheapest configured model running a deliberately bounded prompt once
+    per ingested document, and the subscription path adds a fixed ~32k-token
+    harness cost per call regardless of prompt size. See
+    ``docs/llm-backends.md``.
+    """
+    if backend == "subscription":
+        result = await subscription.text_call(
+            config_dir=settings.claude_config_dir,
+            model=settings.extraction_model,
+            system_prompt=SERIES_SYSTEM_PROMPT,
+            prompt=build_series_prompt(summary, overrides),
+        )
+        return result.text, result.usage.input_tokens, result.usage.output_tokens
+
+    if client is not None:
+        return await generate_description(client, settings.extraction_model, summary, overrides)
+
+    if settings.anthropic_api_key is None:
+        return None
+    async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as owned:
+        return await generate_description(owned, settings.extraction_model, summary, overrides)
+
+
 async def _kind_slug(session: AsyncSession, kind_id: int) -> str | None:
     kind = await session.get(Kind, kind_id)
     return kind.slug if kind is not None else None
@@ -274,23 +316,13 @@ async def refresh_series_insight(
         )
         return None
 
-    owned_client = client is None
-    # Narrowed on `client` itself, not on `owned_client`: a bool derived from the
-    # check cannot narrow the variable the check was about.
-    if client is None:
-        if settings.anthropic_api_key is None:
-            logger.debug("series insight skipped (missing api key)")
-            return None
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
-
     overrides = await load_override_examples(session, sender_id, kind_id, summary.currency)
-    try:
-        description, input_tokens, output_tokens = await generate_description(
-            client, settings.extraction_model, summary, overrides
-        )
-    finally:
-        if owned_client:
-            await client.close()
+    backend = await resolve_backend(session, "series_insight", settings)
+    described = await describe_series(settings, summary, overrides, client=client, backend=backend)
+    if described is None:
+        logger.debug("series insight skipped (missing api key)")
+        return None
+    description, input_tokens, output_tokens = described
 
     if not description:
         logger.warning(
@@ -352,22 +384,12 @@ async def refresh_group_blurb(
         logger.debug("group blurb skipped (no chartable members yet, group %s)", group_id)
         return None
 
-    owned_client = client is None
-    # Narrowed on `client` itself, not on `owned_client`: a bool derived from the
-    # check cannot narrow the variable the check was about.
-    if client is None:
-        if settings.anthropic_api_key is None:
-            logger.debug("group blurb skipped (missing api key)")
-            return None
-        client = AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value())
-
-    try:
-        description, _input_tokens, _output_tokens = await generate_description(
-            client, settings.extraction_model, summary
-        )
-    finally:
-        if owned_client:
-            await client.close()
+    backend = await resolve_backend(session, "series_insight", settings)
+    described = await describe_series(settings, summary, client=client, backend=backend)
+    if described is None:
+        logger.debug("group blurb skipped (missing api key)")
+        return None
+    description = described[0]
 
     if not description:
         logger.warning("group blurb skipped (empty description for group %s)", group_id)

@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: `SeriesChartTile` is a bar chart, not a line chart; three question classes, not two; documented the trend widget's `ChartControls` row; corrected the prompt-cache breakpoint wording). Earlier (2026-07-21, two-screen, route-driven Ask — Option B — plus a mobile pass: full-bleed chat, one full-width pill composer, flat turns, phone Enter = newline; and the mobile chat is now a fixed-height `100dvh` flex column with an internal-scroll transcript and a footer composer that docks at the bottom / above the on-screen keyboard via `interactive-widget=resizes-content` + safe-area inset; §1.6). Desktop now
-**Last verified:** 2026-08-12 — method: checked each claim against `ask/engine.py`, `api/ask.py`, `search.py`, `structured_query.py`, `series.py`, `series_insight.py`, `jobs.py`, `models.py`, `config.py`, `extraction/pricing.py` and `.env.example`, and the §1.6 UI claims (routes, redirect, the two `100dvh` heights, keyboard rules, testids) against `AskView.vue`, `router/index.ts` and `frontend/index.html`; no tests were run.
+**Status:** active. **Last updated:** 2026-08-20 (`LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4). Earlier (2026-08-12, documentation verification sweep): `SeriesChartTile` is a bar chart, not a line chart; three question classes, not two; documented the trend widget's `ChartControls` row; corrected the prompt-cache breakpoint wording). Earlier (2026-07-21, two-screen, route-driven Ask — Option B — plus a mobile pass: full-bleed chat, one full-width pill composer, flat turns, phone Enter = newline; and the mobile chat is now a fixed-height `100dvh` flex column with an internal-scroll transcript and a footer composer that docks at the bottom / above the on-screen keyboard via `interactive-widget=resizes-content` + safe-area inset; §1.6). Desktop now
+**Last verified:** 2026-08-20 — method: the §1.4 backend paragraph checked against `ask/engine.py` (`run_ask`, `_run_subscription_turn`, `generate_thread_title`), `api/ask.py` and `config.py`, and against the measured harness figures in `llm-backends.md` §3.1; no surface has been run on `subscription` in a deployed container. Earlier (2026-08-12): checked each claim against `ask/engine.py`, `api/ask.py`, `search.py`, `structured_query.py`, `series.py`, `series_insight.py`, `jobs.py`, `models.py`, `config.py`, `extraction/pricing.py` and `.env.example`, and the §1.6 UI claims (routes, redirect, the two `100dvh` heights, keyboard rules, testids) against `AskView.vue`, `router/index.ts` and `frontend/index.html`; no tests were run.
 uses the same fixed-height fill (`calc(100dvh - 8rem)`) so its composer docks at
 the bottom too, replacing the old `sticky` composer (§1.6). Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9); (2026-07-02) metadata write tool, recipient in answer context, citations collapsed by default.
 
@@ -161,6 +161,23 @@ The answer step's token cost is estimated and recorded per turn in the
 interactive and self-limiting. A daily-budget guard mirroring the extraction
 budget (`LIBRARY_EXTRACTION_DAILY_BUDGET_USD`) can be added later. Embedding
 is local and effectively free.
+
+### Which backend answers
+
+The transport for the tool loop *and* the thread-title call is an
+admin-editable instance setting (**Settings -> LLM backend**), resolved per
+request so a change needs no restart; `LIBRARY_ASK_LLM_BACKEND` supplies the
+default and ships as `subscription`. `api` uses the metered Messages API,
+`subscription` runs the same loop through the Claude Code CLI against a Claude
+subscription.
+Ask is the surface where that trade pays — `ask_model` is the priciest
+configured model and calls are human-paced — but the Agent SDK adds a fixed
+~43k-token Claude Code preamble to every Opus call. `cost_usd` counts it, so a
+subscription-answered turn records a *higher* `cost_usd` than the same turn on
+the API: under a subscription that figure is notional ("what this would have
+cost"), and the real resource being spent is quota. On `subscription`, Ask needs
+no Anthropic API key at all and does not 503 without one. Full mechanism,
+provisioning steps and the credential runbook: [`llm-backends.md`](llm-backends.md).
 
 ## 1.5 Operations
 

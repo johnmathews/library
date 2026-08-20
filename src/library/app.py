@@ -259,11 +259,24 @@ def create_app() -> FastAPI:
         here, unauthenticated, so a deploy can be verified with a single curl:
         compare it to the commit CI promoted (see docs/deployment.md).
         """
-        return {
+        settings = get_settings()
+        payload: dict[str, str | None] = {
             "status": "ok",
             "version": library.__version__,
-            "git_sha": get_settings().git_sha,
+            "git_sha": settings.git_sha,
         }
+        # Only meaningful when a surface actually uses OAuth. A dead refresh
+        # token cannot self-heal — it needs a human — and without this the
+        # symptom is every question failing while /healthz still says "ok".
+        if "subscription" in (settings.ask_llm_backend, settings.series_insight_llm_backend):
+            from library.llm.oauth import token_health
+
+            status, detail = token_health(settings.claude_config_dir)
+            payload["claude_credentials"] = status
+            payload["claude_credentials_detail"] = detail
+            if status != "healthy":
+                payload["status"] = "degraded"
+        return payload
 
     # MCP server (W13): bearer-token-authenticated tools at /mcp/ — see
     # docs/mcp.md. Auth is enforced inside the mounted app (FastMCP bearer
