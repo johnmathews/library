@@ -89,6 +89,15 @@ COPY --chown=app:app pyproject.toml coverage-summar[y].json /app/
 # heavy docs/ subtrees are kept out of the build context by .dockerignore.
 COPY --chown=app:app docs/*.md /app/docs/
 
+# The Claude Agent SDK ships a platform-native Claude Code CLI binary inside its
+# wheel (ELF here, ~317MB) and shells out to it — that subprocess *is* how the
+# subscription LLM backend authenticates, so it has to be executable. Some
+# build/copy paths strip the execute bit; restore it rather than discover the
+# loss as an opaque "command failed" at query time. The empty-string guard keeps
+# the build working if a future SDK release stops bundling the binary.
+RUN CLAUDE_BIN="$(find /app/.venv -path '*/claude_agent_sdk/_bundled/claude' -print -quit)" \
+    && if [ -n "$CLAUDE_BIN" ]; then chmod +x "$CLAUDE_BIN"; fi
+
 ENV PATH="/app/.venv/bin:$PATH"
 
 USER app

@@ -9,6 +9,13 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from library.extraction.pricing import MODEL_PRICING_USD_PER_MTOK
 
+# Which transport a given LLM surface uses. "api" is the metered Anthropic
+# Messages API (x-api-key, per-token billing). "subscription" reaches Claude
+# through the bundled Claude Code CLI using OAuth credentials from a Claude
+# subscription — see docs/llm-backends.md, and note the ~32k-token per-call
+# harness tax that makes it unsuitable for the batch pipeline.
+LLMBackend = Literal["api", "subscription"]
+
 # The ``*_model`` knobs whose value must have a row in
 # ``MODEL_PRICING_USD_PER_MTOK`` — an unpriced model would silently record a
 # cost of 0 and defeat the daily-spend budget gate, so we fail fast at startup.
@@ -72,6 +79,11 @@ class Settings(BaseSettings):
     pdf_unlock_passwords: Annotated[list[str], NoDecode] = []
     # Claude metadata extraction (see docs/ingestion.md, "Extraction" section).
     anthropic_api_key: SecretStr | None = None
+    # Where the Claude CLI's OAuth credentials are mounted, for any surface whose
+    # backend is "subscription". Must be writable: refreshed tokens are written
+    # back, and a read-only mount silently degrades to re-refreshing every call
+    # until the refresh token rotates out from under us.
+    claude_config_dir: Path = Path("/app/.claude")
     extraction_enabled: bool = True
     extraction_model: str = "claude-haiku-4-5"
     extraction_escalation_model: str = "claude-sonnet-4-6"
@@ -117,6 +129,11 @@ class Settings(BaseSettings):
     ask_max_tool_turns: int = 4
     ask_max_answer_tokens: int = 1024
     ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.
+    # Transport for the ask tool loop and its title call. Ask is the surface
+    # where the subscription backend pays: opus-4-8 is the priciest configured
+    # model, and calls are human-paced, so the fixed harness tax is amortised
+    # against a call that was already large.
+    ask_llm_backend: LLMBackend = "api"
     ask_get_document_max_chars: int = 8000  # cap on get_document's returned text
     # Foreign-exchange rate seeding (see docs/admin.md, "FX rates"). The admin
     # "Fetch rate" affordance calls this keyless provider for the live USD-per-unit
@@ -124,6 +141,12 @@ class Settings(BaseSettings):
     fx_api_url: str = "https://open.er-api.com/v6/latest"
     fx_api_timeout_s: float = 10.0
     # Document series + comparative queries (see docs/ask.md, "Document series").
+    # Transport for series-insight descriptions. Defaults to "api" deliberately:
+    # this runs on the *cheapest* model with a deliberately bounded prompt, once
+    # per ingested document, so routing it through the subscription would spend
+    # ~32k of shared quota to avoid a fraction of a cent — and starve ask (and
+    # any other consumer of the same credentials) during an ingest burst.
+    series_insight_llm_backend: LLMBackend = "api"
     series_min_documents: int = 3  # min members before stats are reported
     series_typical_pct: float = 0.10  # half-width of the "typical" band vs median
     series_flat_pct: float = 0.05  # |first→last change| at/below which trend is flat
@@ -325,6 +348,32 @@ class Settings(BaseSettings):
                     f"{field}={value!r} has no pricing row in MODEL_PRICING_USD_PER_MTOK; "
                     f"add it to library.extraction.pricing or set a priced model"
                 )
+        return self
+
+    @model_validator(mode="after")
+    def _require_credentials_dir_for_subscription_backends(self) -> "Settings":
+        """Fail fast when a surface asks for OAuth but the mount is missing.
+
+        Without this the misconfiguration surfaces as an "Invalid API key" from
+        a CLI subprocess on the first real question — long after deploy, in a
+        traceback that names neither the mount nor the setting. The check is on
+        the *directory*, not the credentials file: an operator recovering from a
+        revoked refresh token re-runs ``claude setup-token`` against a mounted
+        but momentarily empty directory, and bricking the container in that
+        window would make recovery harder rather than safer.
+        """
+        subscribed = [
+            name
+            for name in ("ask_llm_backend", "series_insight_llm_backend")
+            if getattr(self, name) == "subscription"
+        ]
+        if subscribed and not self.claude_config_dir.is_dir():
+            raise ValueError(
+                f"{', '.join(subscribed)} set to 'subscription' but "
+                f"claude_config_dir={self.claude_config_dir} is not a directory; "
+                f"mount the Claude CLI credentials directory read-write, or set the "
+                f"backend to 'api'"
+            )
         return self
 
 

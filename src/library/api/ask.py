@@ -142,11 +142,13 @@ async def ask(
     """Answer a natural-language question from the document archive.
 
     Returns a prose answer grounded in retrieved documents plus the citations
-    it used. Requires an Anthropic API key (503 otherwise). The answer cost is
-    recorded but not budget-gated in this release.
+    it used. Requires an Anthropic API key on the ``api`` backend (503
+    otherwise); the ``subscription`` backend authenticates through the Claude
+    CLI instead. The answer cost is recorded but not budget-gated in this
+    release — under a subscription it is notional (see docs/llm-backends.md).
     """
     settings = get_settings()
-    if settings.anthropic_api_key is None:
+    if settings.ask_llm_backend == "api" and settings.anthropic_api_key is None:
         raise HTTPException(
             status_code=503, detail="Ask is unavailable: no Anthropic API key configured."
         )
@@ -167,7 +169,17 @@ async def ask(
 
     images = [{"media_type": image.media_type, "data": image.data} for image in request.images]
     turn_cost = 0.0
-    async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as client:
+    # The subscription backend authenticates through the Claude CLI and never
+    # touches this client, but ``run_ask`` and ``generate_thread_title`` still
+    # take one. The placeholder cannot reach the wire: the guard above proves a
+    # real key exists whenever the backend is "api", and the subscription path
+    # issues no request through it.
+    api_key = (
+        settings.anthropic_api_key.get_secret_value()
+        if settings.anthropic_api_key is not None
+        else "unused-by-subscription-backend"
+    )
+    async with AsyncAnthropic(api_key=api_key) as client:
         result = await run_ask(
             session,
             question=request.question,
@@ -188,6 +200,7 @@ async def ask(
                     model=settings.ask_title_model,
                     question=request.question,
                     answer=result.answer,
+                    settings=settings,
                 )
                 if title.title:
                     thread.title = title.title
