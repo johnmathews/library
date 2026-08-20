@@ -164,7 +164,7 @@ async def test_enabling_the_subscription_without_credentials_is_refused(
     """
     settings = _settings(claude_config_dir=tmp_path)  # mounted but empty
 
-    with pytest.raises(backends.BackendUnavailableError, match="claude setup-token"):
+    with pytest.raises(backends.BackendUnavailableError, match="claude auth login"):
         await backends.set_backend(db_session, "ask", "subscription", settings)
 
     # And nothing was stored.
@@ -263,7 +263,7 @@ def test_admin_switching_without_credentials_gets_409(
     response = admin_client.put("/api/settings/llm-backends/ask", json={"backend": "subscription"})
 
     assert response.status_code == 409
-    assert "claude setup-token" in response.json()["detail"]
+    assert "claude auth login" in response.json()["detail"]
 
 
 def test_unknown_surface_is_404(admin_client: TestClient) -> None:

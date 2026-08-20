@@ -434,7 +434,7 @@ async function onLLMBackendChange(surface: string, backend: LLMBackend): Promise
     llmSaved.value = true
   } catch (error) {
     // The server's message is the useful one here: a 409 explains exactly what
-    // is missing (e.g. run `claude setup-token` on the host). Surfacing a
+    // is missing (e.g. run `claude auth login` on the host). Surfacing a
     // generic string instead would strip the one actionable detail.
     const detail =
       error instanceof ApiError

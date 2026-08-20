@@ -196,7 +196,9 @@ def test_health_valid_without_refresh_token_is_degraded(tmp_path: Path) -> None:
 def test_health_missing_file_is_unhealthy_and_says_what_to_run(tmp_path: Path) -> None:
     status, detail = oauth.token_health(tmp_path)
     assert status == "unhealthy"
-    assert "claude setup-token" in detail
+    # `auth login`, not `setup-token`: the latter writes nothing and does not
+    # log the CLI in, so it never produces the file this checks for.
+    assert "claude auth login" in detail
 
 
 def test_health_unreadable_credentials_is_unhealthy(tmp_path: Path) -> None:
@@ -227,7 +229,7 @@ async def test_invalid_grant_makes_health_unhealthy(
 
     status, detail = oauth.token_health(tmp_path)
     assert status == "unhealthy"
-    assert "claude setup-token" in detail
+    assert "claude auth login" in detail
 
 
 async def test_transient_error_does_not_flag_the_token(
@@ -255,7 +257,7 @@ async def test_reauthentication_self_clears_the_rejection(
     await oauth.ensure_valid_token(tmp_path)
     assert oauth.token_health(tmp_path)[0] == "unhealthy"
 
-    # Operator runs `claude setup-token`, writing a different refresh token.
+    # Operator runs `claude auth login`, writing a different refresh token.
     _write_creds(tmp_path, expires_in_hours=8, refresh_token="refresh-fresh")
 
     assert oauth.token_health(tmp_path)[0] == "healthy"
