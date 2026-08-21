@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
 **Status:** active. **Last updated:** 2026-08-21 (§1.6: adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.
-**Last verified:** 2026-08-21 — method: the reasoning claims checked against `ask/engine.py` and `config.py`, and against 4 new tests run green, 3 of which were confirmed to fail with the settings reverted (the 4th, thinking-block replay, was confirmed separately — it failed with `KeyError: 'signature'` before `_serialize_block` learned to round-trip thinking blocks). Full backend suite 1642 passed. The 51-turn figures (4 turns at the 4-call ceiling, 5 at ≥1000 output tokens, 0 no-answer fallbacks) were queried from the deployed `ask_turns` table. **No post-change accuracy or cost measurement exists yet** — the settings are argued from the model's documented behaviour, not from an observed before/after on this archive.
+**Last verified:** 2026-08-21 — method: adaptive thinking, the thinking-block replay path and prompt-cache hit rates were all exercised **against the live API on the deployed host** (sha `ec4aa18`) by driving `run_ask` directly, because CI has no Anthropic key and stubs `/api/ask`. The per-call cache table and the 76.6% figure are that run's real numbers, with the warm-cache caveat stated inline. Backend suite 1642 passed; 4 reasoning tests confirmed to fail with the settings reverted. The 51-turn statistics were queried from the deployed `ask_turns`. **Still unmeasured:** answer accuracy before vs after — there is no eval set for Ask.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -267,6 +267,17 @@ prompt caching below offsets part of it; it is not an efficiency measure. Watch
 `ask_turns.output_tokens` and `cost_usd` after this change rather than assuming
 either direction.
 
+**Verified against the live API**, 2026-08-21, since CI cannot: the e2e stack
+has no Anthropic key and stubs `POST /api/ask`, so every automated test of the
+thinking parameter runs against a fake client. Driving the real engine on the
+deployed host with a genuine comparative question returned **three thinking
+blocks, each carrying a signature** (540, 424 and 692 characters), across a
+loop that used `compare_to_series` and `query_documents` and completed
+normally — which also exercises the replay path, since a thinking block
+returned without its signature intact is rejected on the *next* call of the
+turn. The answer correctly excluded same-*kind* documents from other senders.
+That is one observation, not an accuracy measurement.
+
 **Prompt caching.** Three breakpoints, of the four Anthropic allows. The static
 system prompt carries one; the tool definitions carry none but sit *before* the
 system block in the cached prefix, so that breakpoint covers them too. When a
@@ -281,6 +292,26 @@ A top-level `cache_control: ephemeral` on each `messages.create` caches the last
 cacheable block, which is exactly that accumulated tool-result tail, so re-reads
 bill at ~0.1x instead of full rate. It shapes the request only: same prompts,
 same answers.
+
+**Measured in production**, 2026-08-21, one real five-call tool loop:
+
+| call | uncached | cache write | cache read |
+| ---: | ---: | ---: | ---: |
+| 1 | 2 | 0 | 3,127 |
+| 2 | 2 | 0 | 3,333 |
+| 3 | 2 | 290 | 3,333 |
+| 4 | 2 | 264 | 3,623 |
+| 5 | 2 | 1,715 | 3,887 |
+| **total** | **10** | **2,269** | **17,303** |
+
+Weighted at 1.25x for writes and 0.1x for reads, that is 4,576 input-token
+equivalents against 19,582 uncached — a **76.6% reduction**. Two honest caveats:
+the identical question had been asked minutes earlier, so call 1 opens against
+an already-warm cache and the headline number is an upper bound rather than a
+typical cold start; and it is a single sample of one question. What it does
+establish unambiguously is that the within-loop caching works — cache reads grow
+across calls 2-5 as the tool-result tail accumulates, which is precisely the
+re-send this change exists to stop paying for.
 
 **Token accounting counts cached tokens.** Anthropic reports cache reads and
 cache writes in fields *separate* from `input_tokens`, so summing `input_tokens`

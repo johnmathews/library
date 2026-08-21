@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-146 entries.
+147 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -14,6 +14,7 @@ CI checks it is current.
 ## August 2026
 
 - **2026-08-21** — [Ask: cache the tool loop's growing prefix, and count cached tokens](260821-ask-prompt-cache-and-token-accounting.md)
+- **2026-08-21** — [Ask: verifying the caching and reasoning changes against the live API](260821-ask-post-deploy-verification.md)
 - **2026-08-21** — [Ask: a document view for the transcript](260821-ask-document-view.md)
 - **2026-08-21** — [Ask: document mode becomes the default, and the collapsed rail's actions come back](260821-ask-document-default-and-rail-actions.md)
 - **2026-08-21** — [Ask: turn reasoning on](260821-ask-adaptive-thinking.md)
