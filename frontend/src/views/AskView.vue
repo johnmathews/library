@@ -207,6 +207,21 @@ function scrollToBottom(): void {
   })
 }
 
+// Opening an existing conversation starts at its BEGINNING, not its end.
+//
+// Scroll-to-bottom is right when a turn arrives — you want the new thing. It is
+// wrong when you open a thread to read it: the transcript lands mid-answer with
+// the question you asked scrolled off the top, which is the first thing you
+// need in order to make sense of what follows. Document mode makes this sharper,
+// since the whole point of that layout is reading.
+function scrollToTop(): void {
+  void nextTick(() => {
+    const el = transcriptRef.value
+    if (!el) return
+    el.scrollTop = 0
+  })
+}
+
 function readAsDataUrl(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
@@ -476,7 +491,7 @@ async function loadThread(id: number): Promise<void> {
     }))
     threadId.value = id
     threadTitle.value = detail.title
-    scrollToBottom()
+    scrollToTop()
   } catch (error: unknown) {
     errorMessage.value = friendlyError(error)
   }
@@ -766,12 +781,18 @@ defineExpose({ resetConversation })
                   <path d="M4 6h16M4 12h16M4 18h16" />
                 </svg>
               </button>
+              <!-- Ghost, not violet-filled. The layout toggle immediately to the
+                   right uses a violet fill to mean "this mode is ACTIVE", and a
+                   filled primary action beside it read as part of the same
+                   control group — two violet squares side by side, one a verb
+                   and one a state. In this bar violet fill means "active";
+                   actions are ghosts. -->
               <button
                 type="button"
                 data-testid="new-conversation"
                 aria-label="New conversation"
                 title="New conversation"
-                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-500 text-white shadow-xs hover:bg-violet-600 disabled:opacity-40 disabled:hover:bg-violet-500 transition"
+                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700/60 dark:hover:text-gray-200 disabled:opacity-40 disabled:hover:bg-transparent transition"
                 :disabled="newConversationRedundant"
                 @click="!newConversationRedundant && startNewChat()"
               >
