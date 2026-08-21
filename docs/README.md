@@ -1,7 +1,7 @@
 # Documentation
 
-**Status:** active. **Last updated:** 2026-08-20 (indexed the new `llm-backends.md`). Earlier (2026-08-12, documentation verification sweep): corrected the `frontend.md` one-liner, which claimed PWA coverage the document did not have).
-**Last verified:** 2026-08-20 — method: confirmed the new `llm-backends.md` row resolves on disk and that its description matches that document's headings, and re-derived the gated set from `GATED_GLOBS`/`EXCLUDED_DIRS` in `scripts/check_docs.py` to confirm the index still covers it in both directions. The rest of the index is unchanged since the 2026-08-12 sweep, whose method was: resolved every markdown link and directory link on disk, derived the gated set from `GATED_GLOBS`/`EXCLUDED_DIRS` in `scripts/check_docs.py` and diffed it against the index in both directions, and checked each description against its target's headings.
+**Status:** active. **Last updated:** 2026-08-21 (indexed the new `observability.md`). Earlier (2026-08-20): indexed the new `llm-backends.md`. Earlier (2026-08-12, documentation verification sweep): corrected the `frontend.md` one-liner, which claimed PWA coverage the document did not have.
+**Last verified:** 2026-08-21 — method: confirmed the new `observability.md` row resolves on disk and that its description matches that document's headings, and re-derived the gated set from `GATED_GLOBS`/`EXCLUDED_DIRS` in `scripts/check_docs.py` to confirm the index still covers it in both directions. The rest of the index is unchanged since the 2026-08-12 sweep, whose method was: resolved every markdown link and directory link on disk, derived the gated set and diffed it against the index in both directions, and checked each description against its target's headings.
 
 Reference documentation for Library — a self-hosted document archive (FastAPI
 backend + Vue 3 SPA, Postgres/pgvector, OCR ingestion, an MCP server, and an
@@ -26,6 +26,7 @@ New to the codebase? Read in this order:
 | [`ask.md`](ask.md) | The "Ask" semantic Q&A feature: hybrid retrieval, the agentic tool loop, citations, metadata writes. |
 | [`mcp.md`](mcp.md) | The MCP server at `/mcp`: the tools LLM clients can call to search, read, and ingest documents. |
 | [`llm-backends.md`](llm-backends.md) | The two ways library reaches Claude: metered API vs Claude subscription, which surfaces may use which, the per-call harness cost, and the credential runbook. |
+| [`observability.md`](observability.md) | What the app measures about itself: OpenTelemetry metrics for Ask (tokens by cache kind, cost, latency, tool-loop depth, errors), the Prometheus and OTLP exporters, and the content-logging guard that keeps document text out of telemetry. |
 | [`frontend.md`](frontend.md) | The Vue 3 SPA: views, components, stores, the Mosaic design language, dark mode, PWA wiring, tests. |
 | [`frontend-view-principles.md`](frontend-view-principles.md) | How to build a new view that is consistent the first time: layout, shared classes, form/filter recipes. |
 | [`admin.md`](admin.md) | The admin role and admin views: users, taxonomy (senders/kinds/recipients), currencies, FX rates, business matters. |

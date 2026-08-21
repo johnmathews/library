@@ -284,6 +284,11 @@ class AskResult:
     model: str
     input_tokens: int = 0
     output_tokens: int = 0
+    # The same total, broken down, so telemetry can report a cache hit rate.
+    # `input_tokens` stays the total on both backends; these sit beside it.
+    fresh_input_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
     cost_usd: float = 0.0
     turn_messages: list[dict[str, Any]] = field(default_factory=list)
 
@@ -911,6 +916,11 @@ async def _run_api_turn(
         )
         total_input, billable_input = _cached_usage(response.usage)
         result.input_tokens += total_input
+        result.fresh_input_tokens += int(response.usage.input_tokens)
+        result.cache_read_tokens += int(getattr(response.usage, "cache_read_input_tokens", 0) or 0)
+        result.cache_write_tokens += int(
+            getattr(response.usage, "cache_creation_input_tokens", 0) or 0
+        )
         result.output_tokens += response.usage.output_tokens
         result.cost_usd += estimate_cost_usd(model, billable_input, response.usage.output_tokens)
 
@@ -1006,7 +1016,14 @@ async def _run_subscription_turn(
 
     used.extend(loop.used_tools)
     result.input_tokens += loop.usage.input_tokens
+    result.fresh_input_tokens += loop.usage.fresh_input_tokens
+    result.cache_read_tokens += loop.usage.cache_read_input_tokens
+    result.cache_write_tokens += loop.usage.cache_creation_input_tokens
     result.output_tokens += loop.usage.output_tokens
+    # Priced at the full input rate on purpose: this path is not metered, so the
+    # figure is a conservative notional ceiling rather than a bill. Weighting the
+    # cache components 0.1x/1.25x here (as the API path does) would change what
+    # the number MEANS, which is a separate decision from exposing the split.
     result.cost_usd += estimate_cost_usd(model, loop.usage.input_tokens, loop.usage.output_tokens)
 
     answer = loop.answer

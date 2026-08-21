@@ -15,8 +15,9 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from library import telemetry
 from library.ask import run_ask
-from library.ask.engine import generate_thread_title
+from library.ask.engine import _NO_ANSWER, generate_thread_title
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
@@ -182,24 +183,55 @@ async def ask(
         if settings.anthropic_api_key is not None
         else "unused-by-subscription-backend"
     )
+    # Instrumented HERE rather than inside `run_ask` because this is where the
+    # two backends converge: whatever `ask_backend` is, the result has the same
+    # shape by this line, so one call site covers both and they stay comparable.
     async with AsyncAnthropic(api_key=api_key) as client:
-        try:
-            result = await run_ask(
-                session,
-                question=request.question,
-                settings=settings,
-                client=client,
-                history_messages=history,
-                images=images,
-                backend=ask_backend,
-            )
-        except SubscriptionBackendError as exc:
-            # 503, not 500: this is a configuration/credential problem an
-            # operator can fix, not a bug. Without this the caller gets a bare
-            # "Internal Server Error" and the actual reason — which names the
-            # command to run — stays buried in the container log.
-            logger.warning("Ask failed on the subscription backend: %s", exc)
-            raise HTTPException(status_code=503, detail=f"Ask is unavailable: {exc}") from exc
+        with telemetry.timed() as clock:
+            try:
+                result = await run_ask(
+                    session,
+                    question=request.question,
+                    settings=settings,
+                    client=client,
+                    history_messages=history,
+                    images=images,
+                    backend=ask_backend,
+                )
+            except SubscriptionBackendError as exc:
+                # 503, not 500: this is a configuration/credential problem an
+                # operator can fix, not a bug. Without this the caller gets a bare
+                # "Internal Server Error" and the actual reason — which names the
+                # command to run — stays buried in the container log.
+                telemetry.record_error(backend=ask_backend, kind="subscription_auth")
+                logger.warning("Ask failed on the subscription backend: %s", exc)
+                raise HTTPException(status_code=503, detail=f"Ask is unavailable: {exc}") from exc
+            except Exception:
+                # Anything else is a real fault. Recorded before re-raising so a
+                # spike in 500s is visible as a metric and not only in the logs.
+                telemetry.record_error(backend=ask_backend, kind="upstream")
+                raise
+
+        telemetry.record_tokens(
+            backend=ask_backend,
+            model=result.model,
+            fresh=result.fresh_input_tokens,
+            cache_read=result.cache_read_tokens,
+            cache_write=result.cache_write_tokens,
+            output=result.output_tokens,
+        )
+        telemetry.record_turn(
+            backend=ask_backend,
+            model=result.model,
+            duration_s=clock["elapsed"],
+            tool_calls=len(result.used_tools),
+            citations=len(result.citations),
+            # The engine substitutes a fixed apology when the tool loop runs out
+            # of turns without an answer. Distinguishing that from a real answer
+            # is the whole point of raising the ceiling from 4 to 8 — without it
+            # the metric cannot show whether the new headroom is enough.
+            outcome="no_answer" if result.answer == _NO_ANSWER else "ok",
+        )
         turn_cost = result.cost_usd
         # A brand-new thread was seeded with the truncated question as a
         # placeholder title. Upgrade it to a concise generated title from the
@@ -223,6 +255,11 @@ async def ask(
                     "Ask thread title generation failed; keeping placeholder title",
                     exc_info=True,
                 )
+
+    # After the title call, so the recorded cost matches `ask_turns.cost_usd`
+    # exactly. Two numbers that are supposed to be the same thing but are
+    # computed at different points is how they drift.
+    telemetry.record_cost(backend=ask_backend, model=result.model, usd=turn_cost)
 
     session.add(
         AskTurn(

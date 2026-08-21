@@ -139,6 +139,30 @@ class Settings(BaseSettings):
     # that crowd the cap are the table-heavy ones document view exists for.
     ask_max_answer_tokens: int = 8192
     ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.
+
+    # --- OpenTelemetry (metrics only) --------------------------------------
+    #
+    # Both exporters are off by default and independent: Prometheus PULLS from
+    # GET /metrics, OTLP PUSHES to a collector. Enabling neither still leaves
+    # every instrument in place recording into a no-op provider, so the code
+    # path in production is the code path under test. See docs/observability.md.
+    otel_metrics_enabled: bool = False  # serve GET /metrics for Prometheus
+    otel_exporter_otlp_endpoint: str | None = None  # e.g. http://collector:4318/v1/metrics
+    otel_exporter_otlp_headers: str | None = None  # "k=v,k2=v2" per the OTel spec
+    otel_metric_export_interval_ms: int = 60_000  # OTLP push cadence
+
+    # Claude Code's OWN telemetry, for the subscription backend only. The CLI
+    # emits `claude_code.token.usage` broken down by input/output/cacheRead/
+    # cacheCreation, which is richer than anything this app can see from the
+    # outside — but it covers only the subscription path, so it complements the
+    # in-process metrics rather than replacing them.
+    #
+    # Content logging (OTEL_LOG_USER_PROMPTS, OTEL_LOG_RAW_API_BODIES,
+    # OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT) is NEVER enabled here and is
+    # actively refused at startup — Ask prompts and tool results carry the
+    # user's document text, and this app's contract is that document text does
+    # not leave the host. See `library.llm.subscription`.
+    claude_code_telemetry_enabled: bool = False
     # Transport for the ask tool loop and its title call, and the *default* only:
     # an admin can override it at runtime from Settings (instance_settings, see
     # library.llm.backends), so nothing may read this field to decide a live

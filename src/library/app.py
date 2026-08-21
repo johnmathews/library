@@ -29,7 +29,7 @@ from library.api import (
     taxonomy,
 )
 from library.auth.deps import csrf_protect, current_user, require_admin
-from library.config import get_settings
+from library.config import Settings, get_settings
 from library.events_broker import EventsBroker
 from library.jobs import job_app, procrastinate_conninfo
 from library.mcp_server import create_mcp_http_app
@@ -128,7 +128,12 @@ OPENAPI_TAGS: list[dict[str, str]] = [
 
 # Path heads that belong to the backend, never the SPA. A request for an
 # unknown path under these gets the normal JSON 404, not index.html.
-_BACKEND_PREFIXES = frozenset({"api", "mcp", "healthz", "docs", "redoc", "openapi.json"})
+_BACKEND_PREFIXES = frozenset(
+    # "metrics" belongs here for the same reason as "healthz": without it the
+    # SPA catch-all below answers a Prometheus scrape with index.html, which
+    # is a 200 — so the scrape looks healthy while collecting nothing.
+    {"api", "mcp", "healthz", "metrics", "docs", "redoc", "openapi.json"}
+)
 
 
 def warn_if_no_public_base_url(public_base_url: str | None) -> None:
@@ -183,6 +188,25 @@ def _mount_spa(app: FastAPI, dist: Path) -> None:
         return FileResponse(index_file, headers={"Cache-Control": "no-cache"})
 
 
+def _configure_telemetry_from_settings(settings: Settings) -> None:
+    """Install the OTel MeterProvider from configuration, at startup.
+
+    Called from the lifespan rather than at import so that tests and CLI entry
+    points that merely import the app do not install a global provider. It is
+    idempotent, so a second app instance in the same process is harmless.
+    """
+    from library.telemetry import configure_telemetry
+
+    configure_telemetry(
+        service_name="library",
+        service_version=library.__version__,
+        prometheus_enabled=settings.otel_metrics_enabled,
+        otlp_endpoint=settings.otel_exporter_otlp_endpoint,
+        otlp_headers=settings.otel_exporter_otlp_headers,
+        export_interval_ms=settings.otel_metric_export_interval_ms,
+    )
+
+
 def create_app() -> FastAPI:
     """Build and return the Library FastAPI application."""
     # Built per app instance: the MCP ASGI app's session manager is created
@@ -196,6 +220,7 @@ def create_app() -> FastAPI:
         process-wide SSE events broker (one shared Postgres LISTEN connection
         fanned out to all clients), and run the mounted MCP app's lifespan."""
         warn_if_no_public_base_url(get_settings().public_base_url)
+        _configure_telemetry_from_settings(get_settings())
         broker = EventsBroker(procrastinate_conninfo(get_settings().database_url))
         await broker.start()
         app.state.events_broker = broker
@@ -249,6 +274,24 @@ def create_app() -> FastAPI:
     # Login is the only unauthenticated /api route (and is CSRF-exempt: the
     # session doesn't exist yet, and the password itself proves intent).
     app.include_router(auth.login_router, prefix="/api")
+
+    @app.get("/metrics", include_in_schema=False)
+    def metrics_endpoint() -> Response:
+        """Prometheus scrape target. Unauthenticated, like /healthz.
+
+        Returns 404 when metrics are disabled rather than an empty 200: an
+        empty exposition is indistinguishable from "the app is running and
+        recording nothing", and a scrape that silently collects zero series is
+        the failure this endpoint exists to make visible.
+
+        Deliberately carries no per-user or per-document labels — see the
+        cardinality and privacy notes in `library.telemetry`.
+        """
+        if not get_settings().otel_metrics_enabled:
+            raise HTTPException(status_code=404, detail="metrics are not enabled")
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/healthz")
     def healthz() -> dict[str, str | None]:
