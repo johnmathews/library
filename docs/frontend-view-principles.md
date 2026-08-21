@@ -1,7 +1,7 @@
 # Frontend view design principles
 
-**Status:** active. **Last updated:** 2026-08-21 (§4: registered `library:ask-view-mode`, and wrote down the wide-only mode pattern — store the preference, clamp the render, hide the control with `v-if`). Earlier (2026-08-12, documentation verification sweep): corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim.
-**Last verified:** 2026-08-21 — method: the new §4 entries checked against `useAskViewMode.ts` and its spec (8 tests, run green); the wide-only pattern checked against both call sites (`NoteEditorPanel.vue`, `AskView.vue`) and the `v-if` claim against `AskView.spec.ts`'s toggle-presence test. §1.1's width rule re-measured in Chromium against the built CSS. Earlier (2026-08-12): every path, component, class and token resolved against `frontend/src/`.
+**Status:** active. **Last updated:** 2026-08-21 (§4: relocate what a hidden container held, and test the capability rather than the mechanism). Earlier (2026-08-21): registered `library:ask-view-mode` and the wide-only mode pattern — store the preference, clamp the render, hide the control with `v-if`. Earlier (2026-08-12, documentation verification sweep): corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim.
+**Last verified:** 2026-08-21 — method: the new §4 paragraph is a generalisation of a defect actually shipped and then fixed in this repo (PR #81 → #82); the claim that the tests passed while the capability was unreachable was confirmed by reverting the fix and watching three tests go red. Earlier (2026-08-21): §4 entries checked against `useAskViewMode.ts` and its spec; §1.1 width rule re-measured in Chromium.
 
 How to build a Library view that looks **right the first time** — using the
 Mosaic design language already in the app. This is a checklist plus the reasoning
@@ -127,6 +127,16 @@ the fallback back into storage — that silently discards the user's choice the
 first time they open the app on a small screen. And hide a wide-only control
 with `v-if`, not a `hidden`/`lg:` utility: a CSS-hidden button stays in the tab
 order and the accessibility tree.
+
+**If a wide-only mode hides a container, relocate what the container held.**
+Hiding a rail to buy back its width also removes every control inside it. The
+Ask transcript's document mode hid the conversation rail — and with it the only
+`lg+` "New conversation" button — and the tests still passed, because they
+asserted the rail *disappeared* and never asked whether its capabilities were
+still reachable. **Test the capability, not the mechanism:** assert the action
+can still be performed, by a selector that does not care which container
+currently hosts it. Keeping the moved control's original `data-testid` is the
+cheap way to get that.
 
 Per-machine (display-size) preferences = `localStorage`. Account-level
 preferences (what *fields* show on a tile, notification settings) = server-side

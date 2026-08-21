@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-08-21 (§1.6: a `conversation` | `document` transcript layout switch at `lg+`, which collapses the conversation rail, and per-table horizontal scroll containment). Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B), a mobile pass (full-bleed chat, one full-width pill composer, flat turns), and the desktop fixed-height fill that docks the composer at the bottom; §1.6. Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9).
-**Last verified:** 2026-08-21 — method: the new §1.6 layout paragraphs checked against `AskView.vue`, `useAskViewMode.ts` and 22 unit tests run green; the 332px and 620px figures measured in Chromium against the built CSS, not derived. The e2e spec `ask-document-view.spec.ts` was collected (15 tests across 3 projects) but **not executed** — it needs the compose stack. Earlier (2026-08-20): the §1.4 backend paragraph checked against `ask/engine.py`, `api/ask.py` and `config.py`.
+**Status:** active. **Last updated:** 2026-08-21 (§1.6: document layout is now the DEFAULT at `lg+`, and the collapsed rail's New/conversations actions move to the thread bar). Earlier (2026-08-21): the `conversation` | `document` transcript layout switch, the rail collapse, and per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B), a mobile pass, and the desktop fixed-height fill that docks the composer at the bottom; §1.6. Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9).
+**Last verified:** 2026-08-21 — method: the §1.6 default and relocated-action claims checked against `useAskViewMode.ts` and `AskView.vue`, and against 1087 unit tests run green (the three capability tests were confirmed to fail with the relocated actions removed). The 332px/620px figures were measured in Chromium against the built CSS. The e2e spec was collected (18 tests across 3 projects) but **not executed** locally — it needs the compose stack.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -343,13 +343,14 @@ sending is the Send button's job — matching mobile chat apps. Enter is ignored
 while an IME composition is in progress (see [frontend.md §1.5](frontend.md)). The
 selected conversation is marked with a full-perimeter ring.
 
-**Transcript layout: conversation or document.** At `lg+` the thread bar carries
-a two-button switch (`[data-testid="ask-view-mode"]`) between the default
-**conversation** layout described above and a **document** layout for prose- and
-table-heavy answers. Document mode drops the right-aligned violet bubble: each
-turn becomes a full-width tinted block under an uppercase role label (`You` /
-`Agent`), and the transcript and composer are centred on one shared `max-w-5xl`
-measure so the input lines up with the text.
+**Transcript layout: document (default) or conversation.** At `lg+` the thread
+bar carries a two-button switch (`[data-testid="ask-view-mode"]`) between
+**document** layout — the default on a wide screen, because Ask's answers are
+prose- and table-heavy — and the **conversation** bubble layout described above.
+Document mode drops the right-aligned violet bubble: each turn becomes a
+full-width tinted block under an uppercase role label (`You` / `Agent`), and the
+transcript and composer are centred on one shared `max-w-5xl` measure so the
+input lines up with the text.
 
 It also **collapses the conversation rail**, and that is load-bearing rather than
 cosmetic. With the global app sidebar expanded *and* the rail on screen, the
@@ -360,6 +361,16 @@ document mode would be a *narrower* read than the bubbles it replaces at the ver
 width it first becomes available. The rail stays when no conversation is open, so
 the "select a conversation" empty state never points at a sidebar that isn't
 there.
+
+**The rail's actions move rather than disappear.** The rail is also where
+"New conversation" and the thread list live, so while it is collapsed the thread
+bar carries a **＋ New** button (keeping the rail button's `new-conversation`
+testid, so the capability stays addressable by one selector wherever it lives)
+and a **conversations** button that returns to `/ask`, where the rail is on
+screen again and a thread can be picked. The two sets are mutually exclusive —
+whichever is showing, there is exactly one of each control in the DOM. This is
+not a nicety: with document as the default, omitting them leaves the default
+desktop experience with no way to start or switch a conversation.
 
 The preference persists per-machine under `library:ask-view-mode`
 (`useAskViewMode.ts`; see [frontend-view-principles.md](frontend-view-principles.md) §4).

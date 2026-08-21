@@ -246,13 +246,24 @@ describe('AskView', () => {
       localStorage.clear()
     })
 
-    /** Put the stored preference into document mode before mounting. */
-    function preferDocumentMode(): void {
-      localStorage.setItem('library:ask-view-mode', 'document')
+    /** Opt OUT of the default (document) before mounting. */
+    function preferConversationMode(): void {
+      localStorage.setItem('library:ask-view-mode', 'conversation')
     }
 
-    it('renders bubbles by default even on a desktop viewport', async () => {
+    it('renders document blocks by DEFAULT on a desktop viewport', async () => {
       stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('document')
+      expect(w.find('[data-testid="ask-doc-block"]').exists()).toBe(true)
+    })
+
+    it('renders bubbles on a desktop viewport when the user opts out', async () => {
+      stubDesktopViewport()
+      preferConversationMode()
       askQuestionMock.mockResolvedValueOnce(sampleResponse())
       const w = mountView()
       await typeAndSubmit(w, 'which invoices are due?')
@@ -263,7 +274,6 @@ describe('AskView', () => {
 
     it('renders role-labelled document blocks when selected on a desktop viewport', async () => {
       stubDesktopViewport()
-      preferDocumentMode()
       askQuestionMock.mockResolvedValueOnce(sampleResponse())
       const w = mountView()
       await typeAndSubmit(w, 'which invoices are due?')
@@ -281,7 +291,6 @@ describe('AskView', () => {
 
     it('drops the right-aligned bubble cap in document mode', async () => {
       stubDesktopViewport()
-      preferDocumentMode()
       askQuestionMock.mockResolvedValueOnce(sampleResponse())
       const w = mountView()
       await typeAndSubmit(w, 'which invoices are due?')
@@ -294,7 +303,6 @@ describe('AskView', () => {
       // No stubDesktopViewport(): jsdom leaves matchMedia undefined, which
       // vueuse reads as "no match", i.e. a phone. A desktop user's preference
       // must not follow them onto a phone.
-      preferDocumentMode()
       askQuestionMock.mockResolvedValueOnce(sampleResponse())
       const w = mountView()
       await typeAndSubmit(w, 'which invoices are due?')
@@ -326,12 +334,13 @@ describe('AskView', () => {
 
       const conversation = w.get('[data-testid="ask-view-mode-conversation"]')
       const document_ = w.get('[data-testid="ask-view-mode-document"]')
-      expect(conversation.attributes('aria-pressed')).toBe('true')
-      expect(document_.attributes('aria-pressed')).toBe('false')
-
-      await document_.trigger('click')
-      expect(conversation.attributes('aria-pressed')).toBe('false')
+      // Document is the default, so it starts pressed.
       expect(document_.attributes('aria-pressed')).toBe('true')
+      expect(conversation.attributes('aria-pressed')).toBe('false')
+
+      await conversation.trigger('click')
+      expect(document_.attributes('aria-pressed')).toBe('false')
+      expect(conversation.attributes('aria-pressed')).toBe('true')
     })
 
     it('switches layout and persists the choice when the toggle is clicked', async () => {
@@ -348,28 +357,89 @@ describe('AskView', () => {
       expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('conversation')
     })
 
-    it('collapses the conversation rail in document mode and restores it on the way back', async () => {
+    it('collapses the conversation rail by default and restores it in conversation mode', async () => {
       // The rail is 288px. Without giving that back, document mode at 1024px
       // leaves 332px of answer text — narrower than the phone layout it
-      // replaces — so the collapse is what makes the mode worth offering.
+      // replaces — so the collapse is what makes the mode worth defaulting to.
       stubDesktopViewport()
       askQuestionMock.mockResolvedValueOnce(sampleResponse())
       const w = mountView()
       await typeAndSubmit(w, 'which invoices are due?')
-      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
-
-      await w.get('[data-testid="ask-view-mode-document"]').trigger('click')
       expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(false)
 
       await w.get('[data-testid="ask-view-mode-conversation"]').trigger('click')
       expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
+
+      await w.get('[data-testid="ask-view-mode-document"]').trigger('click')
+      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(false)
+    })
+
+    // --- the rail's actions, when the rail is not on screen ----------------
+    //
+    // These exist because the first cut of document mode shipped without them:
+    // the rail was hidden and with it the ONLY lg+ way to start or switch a
+    // conversation. The unit tests passed, because they asserted the rail
+    // disappeared and never asked whether what it carried was still reachable.
+    // Testing the mechanism instead of the capability is what let it through.
+
+    it('keeps New conversation reachable while the rail is collapsed', async () => {
+      stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      // Rail gone, capability still addressable by the same selector.
+      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(false)
+      const newBtn = w.find('[data-testid="new-conversation"]')
+      expect(newBtn.exists()).toBe(true)
+      await newBtn.trigger('click')
+      await flushPromises()
+      expect(router.currentRoute.value.name).toBe('ask-new')
+    })
+
+    it('offers a way back to the conversation list while the rail is collapsed', async () => {
+      stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      const back = w.find('[data-testid="ask-show-conversations"]')
+      expect(back.exists()).toBe(true)
+      await back.trigger('click')
+      await flushPromises()
+      expect(router.currentRoute.value.name).toBe('ask')
+      // Landing on the list restores the rail, so a thread can be picked.
+      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
+    })
+
+    it('never shows the rail and its relocated actions at the same time', async () => {
+      stubDesktopViewport()
+      preferConversationMode()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      // Conversation mode: rail present, so the thread-bar duplicates must not be.
+      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
+      expect(w.find('[data-testid="ask-show-conversations"]').exists()).toBe(false)
+      // Exactly one New button in the DOM, wherever it lives.
+      expect(w.findAll('[data-testid="new-conversation"]')).toHaveLength(1)
+    })
+
+    it('does not put the relocated actions in a phone tab order', async () => {
+      // Below lg the rail is the list SCREEN, not a collapsed rail, so these
+      // buttons would be duplicates. v-if keeps them out of the DOM entirely.
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      expect(w.find('[data-testid="ask-show-conversations"]').exists()).toBe(false)
     })
 
     it('keeps the rail when document mode is on but no conversation is open', async () => {
       // Otherwise the empty state says "select a conversation from the
       // sidebar" with no sidebar on screen and no way to select one.
       stubDesktopViewport()
-      preferDocumentMode()
       const w = mountView()
       await flushPromises()
 
@@ -380,7 +450,6 @@ describe('AskView', () => {
       // These are pinned by e2e specs that gate deploy; document mode must not
       // rename or drop any of them.
       stubDesktopViewport()
-      preferDocumentMode()
       askQuestionMock.mockResolvedValueOnce(sampleResponse())
       const w = mountView()
       await typeAndSubmit(w, 'which invoices are due?')

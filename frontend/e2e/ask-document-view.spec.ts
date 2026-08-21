@@ -99,7 +99,7 @@ test.describe('document view mode', () => {
     }
   })
 
-  test('switching to document mode widens the answer and hides the rail', async ({
+  test('document is the default, and conversation mode narrows it and restores the rail', async ({
     page,
   }, testInfo) => {
     test.skip(testInfo.project.name !== 'chromium', 'document mode is lg+ only')
@@ -107,35 +107,64 @@ test.describe('document view mode', () => {
     await signIn(page)
     await askOnce(page, 'ask-document-view-e2e: width check')
 
-    const before = await answerWidth(page)
-    await expect(page.getByTestId('conversation-sidebar')).toBeVisible()
-
-    await page.getByTestId('ask-view-mode-document').click()
+    // Default on a wide screen: document layout, rail already collapsed.
     await expect(page.getByTestId('ask-doc-block').first()).toBeVisible()
-
-    // The rail is 288px wide and document mode gives it back to the transcript.
-    // Without that the mode is a *narrower* read than the bubbles it replaces
-    // at 1024px, which is the whole reason the collapse exists — so assert the
-    // column actually grew, not merely that the class changed.
     await expect(page.getByTestId('conversation-sidebar')).toHaveCount(0)
-    const after = await answerWidth(page)
-    expect(after).toBeGreaterThan(before)
+    const documentWidth = await answerWidth(page)
 
-    // And back again.
+    // Opting out restores the rail and therefore narrows the column. Assert the
+    // column actually shrank, not merely that a class changed — the 288px the
+    // rail costs is the whole reason document mode is the default.
     await page.getByTestId('ask-view-mode-conversation').click()
     await expect(page.getByTestId('conversation-sidebar')).toBeVisible()
-    expect(await answerWidth(page)).toBeCloseTo(before, 0)
+    const conversationWidth = await answerWidth(page)
+    expect(conversationWidth).toBeLessThan(documentWidth)
+
+    // And back again.
+    await page.getByTestId('ask-view-mode-document').click()
+    await expect(page.getByTestId('conversation-sidebar')).toHaveCount(0)
+    expect(await answerWidth(page)).toBeCloseTo(documentWidth, 0)
   })
 
-  test('the choice survives a full page load', async ({ page }, testInfo) => {
+  test('the rail\'s actions stay reachable while the rail is collapsed', async ({
+    page,
+  }, testInfo) => {
+    test.skip(testInfo.project.name !== 'chromium', 'document mode is lg+ only')
+    // The gap this closes: document mode hides the rail, and the rail held the
+    // only lg+ way to start or switch a conversation. With document as the
+    // DEFAULT that was the default desktop experience.
+    await stubAsk(page, 'Reachability check.')
+    await signIn(page)
+    await askOnce(page, 'ask-document-view-e2e: reachability')
+
+    await expect(page.getByTestId('conversation-sidebar')).toHaveCount(0)
+
+    // Start a new conversation without leaving document mode.
+    await page.getByTestId('new-conversation').click()
+    await expect(page).toHaveURL(/\/ask\/new/)
+    await expect(page.getByTestId('ask-question')).toBeVisible()
+
+    // And get back to the list to pick a different one.
+    await askOnce(page, 'ask-document-view-e2e: reachability 2')
+    await page.getByTestId('ask-show-conversations').click()
+    await expect(page).toHaveURL(/\/ask$/)
+    await expect(page.getByTestId('conversation-sidebar')).toBeVisible()
+  })
+
+  test('an explicit conversation preference survives a full page load', async ({
+    page,
+  }, testInfo) => {
     test.skip(testInfo.project.name !== 'chromium', 'document mode is lg+ only')
     await stubAsk(page, 'Persistence check.')
     await signIn(page)
     await askOnce(page, 'ask-document-view-e2e: persistence')
 
-    await page.getByTestId('ask-view-mode-document').click()
-    await expect(page.getByTestId('ask-doc-block').first()).toBeVisible()
-    expect(await page.evaluate((k) => localStorage.getItem(k), STORAGE_KEY)).toContain('document')
+    // Opt OUT of the default — persisting the default would prove nothing.
+    await page.getByTestId('ask-view-mode-conversation').click()
+    await expect(page.getByTestId('ask-doc-block')).toHaveCount(0)
+    expect(await page.evaluate((k) => localStorage.getItem(k), STORAGE_KEY)).toContain(
+      'conversation',
+    )
 
     // Reload, then ask again on a FRESH thread rather than expecting the old
     // transcript back. `stubAsk` fulfils POST /api/ask without persisting
@@ -146,25 +175,24 @@ test.describe('document view mode', () => {
     // fact about the feature. What this test is actually about is whether the
     // *preference* survives a page load, so assert that directly.
     await page.reload()
-    expect(await page.evaluate((k) => localStorage.getItem(k), STORAGE_KEY)).toContain('document')
+    expect(await page.evaluate((k) => localStorage.getItem(k), STORAGE_KEY)).toContain(
+      'conversation',
+    )
 
     await askOnce(page, 'ask-document-view-e2e: persistence after reload')
-    await expect(page.getByTestId('ask-doc-block').first()).toBeVisible()
-    await expect(page.getByTestId('ask-view-mode-document')).toHaveAttribute(
+    await expect(page.getByTestId('ask-doc-block')).toHaveCount(0)
+    await expect(page.getByTestId('ask-view-mode-conversation')).toHaveAttribute(
       'aria-pressed',
       'true',
     )
   })
 
-  test('a stored desktop preference does not apply on a phone', async ({ page }, testInfo) => {
+  test('the document default does not apply on a phone', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'mobile-webkit', 'this is the clamp, so it needs a phone')
     await stubAsk(page, 'Clamp check.')
     await signIn(page)
-    // Seed the preference as though the user had chosen it on a desktop.
-    await page.addInitScript(
-      ([k, v]) => window.localStorage.setItem(k, v),
-      [STORAGE_KEY, '"document"'],
-    )
+    // Seed nothing: the DEFAULT is document, so the clamp is what must keep a
+    // phone on bubbles. Seeding the preference would test a weaker claim.
     await askOnce(page, 'ask-document-view-e2e: clamp')
 
     await expect(page.getByTestId('ask-doc-block')).toHaveCount(0)
@@ -172,6 +200,8 @@ test.describe('document view mode', () => {
       'data-view-mode',
       'conversation',
     )
+    // And the relocated desktop actions must not be in a phone's tab order.
+    await expect(page.getByTestId('ask-show-conversations')).toHaveCount(0)
   })
 
   test('a wide table scrolls inside itself instead of panning the transcript', async ({
