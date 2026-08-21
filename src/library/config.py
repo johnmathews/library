@@ -126,8 +126,18 @@ class Settings(BaseSettings):
     # short title for the sidebar history). One bounded call per new thread;
     # failure is non-fatal and falls back to the truncated question.
     ask_title_model: str = "claude-haiku-4-5"
-    ask_max_tool_turns: int = 4
-    ask_max_answer_tokens: int = 1024
+    # How many times round the tool loop before giving up. Measured on the
+    # deployed archive: 4 of 51 turns used all four calls, and none fell back to
+    # the no-answer message — so 4 was not yet failing, but had no headroom for
+    # a question needing search → read → compare → verify. Unused turns cost
+    # nothing; the loop exits as soon as the model stops asking for tools.
+    ask_max_tool_turns: int = 8
+    # Per-call output cap. **Thinking tokens count against this**, so it cannot
+    # stay at the old 1024 now that adaptive thinking is on: reasoning would eat
+    # the budget and truncate — or entirely displace — the answer. 5 of 51 turns
+    # already produced ≥1000 output tokens with thinking OFF, and the answers
+    # that crowd the cap are the table-heavy ones document view exists for.
+    ask_max_answer_tokens: int = 8192
     ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.
     # Transport for the ask tool loop and its title call, and the *default* only:
     # an admin can override it at runtime from Settings (instance_settings, see

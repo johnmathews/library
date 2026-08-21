@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-08-21 (§1.6: prompt caching inside the tool loop, and token accounting that counts cached tokens). Earlier (2026-08-21): document layout is the DEFAULT at `lg+`, the collapsed rail's actions move to the thread bar, the `conversation` | `document` switch, and per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6. Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9).
-**Last verified:** 2026-08-21 — method: the caching and accounting claims checked against `ask/engine.py` and 6 new tests run green, 4 of which were confirmed to fail with the change reverted; full backend suite 1638 passed. The ~247k-vs-87k figure and the 25,968-avg-input-token figure were measured by querying `ask_turns` on the deployed database, not estimated. **No cache-hit rate has been observed in production yet** — the saving is projected from Anthropic's published 0.1x/1.25x multipliers, and `cache_read_input_tokens` will show the real figure once this ships.
+**Status:** active. **Last updated:** 2026-08-21 (§1.6: adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.
+**Last verified:** 2026-08-21 — method: the reasoning claims checked against `ask/engine.py` and `config.py`, and against 4 new tests run green, 3 of which were confirmed to fail with the settings reverted (the 4th, thinking-block replay, was confirmed separately — it failed with `KeyError: 'signature'` before `_serialize_block` learned to round-trip thinking blocks). Full backend suite 1642 passed. The 51-turn figures (4 turns at the 4-call ceiling, 5 at ≥1000 output tokens, 0 no-answer fallbacks) were queried from the deployed `ask_turns` table. **No post-change accuracy or cost measurement exists yet** — the settings are argued from the model's documented behaviour, not from an observed before/after on this archive.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -138,8 +138,8 @@ All settings use the `LIBRARY_` env prefix (see `.env.example` /
 | `LIBRARY_RETRIEVE_CHUNKS_PER_DOC` | `3` | Nearest passages per document folded into the Ask excerpt (best-first, `[…]`-joined); `1` = legacy single-chunk. Does not affect candidate ranking or citations. |
 | `LIBRARY_ASK_MODEL` | `claude-opus-4-8` | Answer model. |
 | `LIBRARY_ASK_TITLE_MODEL` | `claude-haiku-4-5` | Cheap model that names a new conversation from its first Q&A exchange. One bounded call per new thread; failure is non-fatal (keeps the placeholder title). Must have a `MODEL_PRICING_USD_PER_MTOK` row. |
-| `LIBRARY_ASK_MAX_TOOL_TURNS` | `4` | Tool-use loop bound per turn. |
-| `LIBRARY_ASK_MAX_ANSWER_TOKENS` | `1024` | Max answer length. |
+| `LIBRARY_ASK_MAX_TOOL_TURNS` | `8` | Tool-use loop bound per turn. |
+| `LIBRARY_ASK_MAX_ANSWER_TOKENS` | `8192` | Per-call output cap. Thinking tokens count against it — see §1.6 Reasoning. |
 | `LIBRARY_ASK_GET_DOCUMENT_MAX_CHARS` | `8000` | Cap on the text `get_document` returns for one document; longer text is truncated with `text_truncated: true`. |
 | `LIBRARY_ASK_HISTORY_TURNS` | `3` | Prior turns re-fed into the loop for follow-ups; `0` disables history (each turn answered cold, still recorded). |
 | `LIBRARY_SERIES_MIN_DOCUMENTS` | `3` | Minimum members before series stats are reported; below this `status:"insufficient"` is returned. |
@@ -236,6 +236,36 @@ turns (default 3) from the database, concatenates their serialized message
 blocks into a history prefix, and prepends that prefix to the current question
 before calling Claude. This means Claude can reason over earlier tool results
 without re-querying — the faithful replay path.
+
+**Reasoning.** The tool loop runs with **adaptive thinking on**
+(`thinking: {"type": "adaptive"}`). This is set explicitly and must stay that
+way: on this model family, *omitting* the parameter means the model runs with no
+extended reasoning at all — the absence of the parameter is not a neutral
+default, and Ask ran that way until 2026-08-21. Ask is a multi-hop task
+(retrieve, cross-check, compare against a distribution), which is the shape that
+benefits most.
+
+Three settings move together here, and changing one without the others is a
+mistake:
+
+| setting | value | why it is coupled |
+| --- | --- | --- |
+| `thinking` | `adaptive` | the accuracy lever |
+| `LIBRARY_ASK_MAX_ANSWER_TOKENS` | 8192 | **thinking tokens count against `max_tokens`** — at the old 1024 reasoning could consume the budget and truncate, or entirely displace, the answer |
+| `LIBRARY_ASK_MAX_TOOL_TURNS` | 8 | reasoning encourages more, better-targeted tool calls; the old cap of 4 was already reached by 4 of 51 measured turns |
+
+`display` is left at its default (omitted), so thinking blocks come back with
+empty text and only a `signature`. Nothing renders the reasoning, so there is no
+reason to pay to transport or store it — but the signature **must** be replayed
+byte-identical on the next call of the turn or the API rejects it.
+`_serialize_block` preserves it and `_text_of` filters to `type == "text"`, so
+reasoning never leaks into the answer.
+
+**Expect this to cost more per turn, not less.** Thinking tokens are billed as
+output, and a longer tool loop means more calls. It buys accuracy, and the
+prompt caching below offsets part of it; it is not an efficiency measure. Watch
+`ask_turns.output_tokens` and `cost_usd` after this change rather than assuming
+either direction.
 
 **Prompt caching.** Three breakpoints, of the four Anthropic allows. The static
 system prompt carries one; the tool definitions carry none but sit *before* the

@@ -38,6 +38,19 @@ class _TextBlock:
 
 
 @dataclass
+class _ThinkingBlock:
+    """A thinking block as the SDK returns one under adaptive thinking.
+
+    `display` defaults to omitted, so `thinking` comes back empty while
+    `signature` carries the payload that must be replayed unmodified.
+    """
+
+    signature: str
+    thinking: str = ""
+    type: str = "thinking"
+
+
+@dataclass
 class _ToolUseBlock:
     name: str
     input: dict[str, Any]
@@ -101,7 +114,19 @@ def _stub_thread_title(monkeypatch: pytest.MonkeyPatch) -> None:
     behavior these tests already assert. Titling-specific tests override this.
     """
 
-    async def _no_title(client: Any, *, model: str, question: str, answer: str) -> Any:
+    async def _no_title(
+        client: Any,
+        *,
+        model: str,
+        question: str,
+        answer: str,
+        settings: Any = None,
+        backend: str = "api",
+    ) -> Any:
+        # Keep this signature in step with `generate_thread_title`. Titling is
+        # deliberately non-fatal, so a stale stub does not fail a test — it
+        # raises a TypeError that the caller swallows, and every test quietly
+        # exercises the error path instead of the stub. It drifted once already.
         return ask_engine.TitleResult(title="", cost_usd=0.0)
 
     monkeypatch.setattr(ask_module, "generate_thread_title", _no_title)
@@ -265,6 +290,150 @@ def test_ask_requests_prompt_caching_on_every_tool_loop_call(
     assert len(fake.messages.calls) == 2
     for call in fake.messages.calls:
         assert call["cache_control"] == {"type": "ephemeral"}
+
+
+# --- reasoning configuration ------------------------------------------------
+#
+# On this model family, OMITTING `thinking` means no extended reasoning at all —
+# the absence of the parameter is not a neutral default. These pin the three
+# coupled settings so a future edit cannot silently turn reasoning back off or
+# re-starve its token budget.
+
+
+def test_ask_enables_adaptive_thinking_on_every_call(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[_ToolUseBlock(name="query_documents", input={}, id="t1")],
+                usage=_Usage(100, 20),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="An answer.")],
+                usage=_Usage(150, 30),
+            ),
+        ],
+    )
+
+    assert api_client.post("/api/ask", json={"question": "anything?"}).status_code == 200
+
+    assert len(fake.messages.calls) == 2
+    for call in fake.messages.calls:
+        assert call["thinking"] == {"type": "adaptive"}
+
+
+def test_ask_answer_budget_leaves_room_for_thinking(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thinking tokens are billed against `max_tokens`. At the old 1024 the
+    reasoning could consume the budget and truncate the answer, so the cap and
+    the thinking flag are one decision, not two."""
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="An answer.")],
+                usage=_Usage(100, 20),
+            )
+        ],
+    )
+
+    assert api_client.post("/api/ask", json={"question": "anything?"}).status_code == 200
+    assert fake.messages.calls[0]["max_tokens"] >= 4096
+
+
+def test_ask_replays_thinking_blocks_unmodified_to_later_calls(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The API requires thinking blocks to come back byte-identical on the next
+    call of the same turn. Dropping or rewriting the signature is rejected, and
+    the tool loop re-sends the whole assistant turn every pass — so this is the
+    path most likely to break when reasoning is switched on."""
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ThinkingBlock(signature="sig-abc123"),
+                    _ToolUseBlock(name="query_documents", input={}, id="t1"),
+                ],
+                usage=_Usage(100, 20),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="An answer.")],
+                usage=_Usage(150, 30),
+            ),
+        ],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "anything?"})
+    assert response.status_code == 200
+    # Reasoning must not leak into the user-visible answer.
+    assert response.json()["answer"] == "An answer."
+
+    # The second call must carry the first call's thinking block, signature intact.
+    second_call_messages = fake.messages.calls[1]["messages"]
+    replayed = [
+        block
+        for message in second_call_messages
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict) and block.get("type") == "thinking"
+    ]
+    assert len(replayed) == 1
+    assert replayed[0]["signature"] == "sig-abc123"
+
+
+def test_ask_tool_loop_has_headroom_beyond_four_calls(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """4 of 51 production turns used all four calls. This asserts the loop can
+    now go further — a question needing search -> read -> compare -> verify."""
+    tool_calls = [
+        _Response(
+            stop_reason="tool_use",
+            content=[_ToolUseBlock(name="query_documents", input={}, id=f"t{i}")],
+            usage=_Usage(100, 20),
+        )
+        for i in range(5)
+    ]
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            *tool_calls,
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="Reached after five tool calls.")],
+                usage=_Usage(150, 30),
+            ),
+        ],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "anything?"})
+    assert response.status_code == 200
+    # Six calls total: the old cap of 4 would have bailed out with the
+    # no-answer fallback before ever reaching the real answer.
+    assert len(fake.messages.calls) == 6
+    assert response.json()["answer"] == "Reached after five tool calls."
 
 
 def test_ask_without_api_key_returns_503(api_client: TestClient) -> None:
