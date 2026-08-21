@@ -11,28 +11,39 @@ describe('useAskViewMode', () => {
     localStorage.clear()
   })
 
-  it('defaults to conversation mode', () => {
+  it('defaults to document mode on a wide screen', () => {
     const { viewMode, effectiveViewMode, isDocumentMode } = useAskViewMode(ref(true))
-    expect(viewMode.value).toBe('conversation')
-    expect(effectiveViewMode.value).toBe('conversation')
-    expect(isDocumentMode.value).toBe(false)
-  })
-
-  it('renders document mode on a large screen once selected', () => {
-    const { viewMode, effectiveViewMode, isDocumentMode } = useAskViewMode(ref(true))
-    viewMode.value = 'document'
+    expect(viewMode.value).toBe('document')
     expect(effectiveViewMode.value).toBe('document')
     expect(isDocumentMode.value).toBe(true)
   })
 
-  it('clamps to conversation on a small screen while KEEPING the preference', () => {
-    // The whole reason preference and render decision are separate refs: a
-    // phone must not render document mode, but must not forget the choice
-    // either, or the desktop toggle silently resets on every phone visit.
-    const { viewMode, effectiveViewMode } = useAskViewMode(ref(false))
-    viewMode.value = 'document'
-    expect(effectiveViewMode.value).toBe('conversation')
+  it('defaults to conversation RENDERING on a narrow screen', () => {
+    // The default preference is still `document` — the clamp is what makes a
+    // phone render bubbles, not a different stored value. Asserting both halves
+    // here is the point: a clamp that wrote the fallback back into storage
+    // would pass a naive check and silently reset every desktop user who ever
+    // opened the app on a phone.
+    const { viewMode, effectiveViewMode, isDocumentMode } = useAskViewMode(ref(false))
     expect(viewMode.value).toBe('document')
+    expect(effectiveViewMode.value).toBe('conversation')
+    expect(isDocumentMode.value).toBe(false)
+  })
+
+  it('renders conversation mode on a large screen once selected', () => {
+    const { viewMode, effectiveViewMode, isDocumentMode } = useAskViewMode(ref(true))
+    viewMode.value = 'conversation'
+    expect(effectiveViewMode.value).toBe('conversation')
+    expect(isDocumentMode.value).toBe(false)
+  })
+
+  it('keeps an explicit conversation preference on a large screen', () => {
+    // The mirror of the clamp: an explicit opt-OUT of the new default must
+    // survive too, or the default silently overrides a deliberate choice.
+    const { viewMode, effectiveViewMode } = useAskViewMode(ref(true))
+    viewMode.value = 'conversation'
+    expect(effectiveViewMode.value).toBe('conversation')
+    expect(viewMode.value).toBe('conversation')
   })
 
   it('follows the screen ref reactively in both directions', async () => {
@@ -52,25 +63,27 @@ describe('useAskViewMode', () => {
 
   it('persists the preference under the library: key convention', async () => {
     const { viewMode } = useAskViewMode(ref(true))
-    viewMode.value = 'document'
+    viewMode.value = 'conversation'
     await nextTick()
     expect(ASK_VIEW_MODE_STORAGE_KEY).toBe('library:ask-view-mode')
-    expect(localStorage.getItem(ASK_VIEW_MODE_STORAGE_KEY)).toContain('document')
+    expect(localStorage.getItem(ASK_VIEW_MODE_STORAGE_KEY)).toContain('conversation')
   })
 
   it('honours a preference stored before the composable is called', () => {
-    localStorage.setItem(ASK_VIEW_MODE_STORAGE_KEY, 'document')
+    // Seeds the NON-default so this actually proves storage is read. Seeding
+    // 'document' would pass even if the stored value were ignored entirely.
+    localStorage.setItem(ASK_VIEW_MODE_STORAGE_KEY, 'conversation')
     const { viewMode, effectiveViewMode } = useAskViewMode(ref(true))
-    expect(viewMode.value).toBe('document')
-    expect(effectiveViewMode.value).toBe('document')
+    expect(viewMode.value).toBe('conversation')
+    expect(effectiveViewMode.value).toBe('conversation')
   })
 
   it('shares the preference across instances', async () => {
     const first = useAskViewMode(ref(true))
-    first.viewMode.value = 'document'
+    first.viewMode.value = 'conversation'
     await nextTick()
     const second = useAskViewMode(ref(true))
-    expect(second.viewMode.value).toBe('document')
+    expect(second.viewMode.value).toBe('conversation')
   })
 
   it('exposes the two modes in render order', () => {

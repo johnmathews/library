@@ -2,11 +2,12 @@ import { computed, type ComputedRef, type Ref } from 'vue'
 import { useStorage } from '@vueuse/core'
 
 /**
- * Ask transcript view mode — `conversation` (chat bubbles, the default) or
- * `document` (full-width role-labelled blocks).
+ * Ask transcript view mode — `document` (full-width role-labelled blocks, the
+ * default on a wide screen) or `conversation` (chat bubbles).
  *
  * Document mode is for prose- and table-heavy answers, where a right-aligned
- * `max-w-[85%]` bubble wastes the width those answers need. It is a
+ * `max-w-[85%]` bubble wastes the width those answers need — which describes
+ * most of what Ask produces, so it is the **default** on a wide screen. It is a
  * display-size preference about *this screen*, so it lives in localStorage
  * under the app's `library:` key convention rather than the server-side user
  * profile (docs/frontend-view-principles.md §4).
@@ -45,7 +46,11 @@ export interface AskViewModeApi {
 }
 
 export function useAskViewMode(isLargeScreen: Ref<boolean>): AskViewModeApi {
-  const viewMode = useStorage<AskViewMode>(ASK_VIEW_MODE_STORAGE_KEY, 'conversation')
+  // Document is the default on a wide screen: Ask's answers are prose- and
+  // table-heavy, so the layout that suits them is the one most people should
+  // get without going looking for a setting. `effectiveViewMode` still clamps
+  // it away below `lg`, so a phone is unaffected by this default.
+  const viewMode = useStorage<AskViewMode>(ASK_VIEW_MODE_STORAGE_KEY, 'document')
 
   const effectiveViewMode = computed<AskViewMode>(() =>
     isLargeScreen.value && viewMode.value === 'document' ? 'document' : 'conversation',

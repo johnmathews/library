@@ -741,6 +741,46 @@ defineExpose({ resetConversation })
               />
             </template>
 
+            <!-- The rail's actions, relocated when the rail is collapsed.
+                 Document mode hides the conversation rail to buy back its
+                 288px — but the rail is also where "New conversation" and the
+                 thread list live, and document mode is the DEFAULT at lg+, so
+                 without these the default desktop experience has no way to
+                 start or switch a conversation at all. Shown exactly when the
+                 rail is not on screen, so the two can never both appear.
+
+                 The New button deliberately reuses the rail button's
+                 `new-conversation` testid: the capability is what tests and
+                 users care about, and it stays addressable by one selector
+                 whichever place it currently lives. -->
+            <template v-if="isLargeScreen && !showConversationRail">
+              <button
+                type="button"
+                data-testid="ask-show-conversations"
+                aria-label="Back to conversations"
+                title="Conversations"
+                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-700 dark:text-gray-400 dark:hover:bg-gray-700/60 dark:hover:text-gray-200 transition"
+                @click="backToList"
+              >
+                <svg class="h-4 w-4 fill-none stroke-current" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                data-testid="new-conversation"
+                aria-label="New conversation"
+                title="New conversation"
+                class="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-violet-500 text-white shadow-xs hover:bg-violet-600 disabled:opacity-40 disabled:hover:bg-violet-500 transition"
+                :disabled="newConversationRedundant"
+                @click="!newConversationRedundant && startNewChat()"
+              >
+                <svg class="h-4 w-4 fill-current" viewBox="0 0 16 16" aria-hidden="true">
+                  <path d="M15 7H9V1c0-.6-.4-1-1-1S7 .4 7 1v6H1c-.6 0-1 .4-1 1s.4 1 1 1h6v6c0 .6.4 1 1 1s1-.4 1-1V9h6c.6 0 1-.4 1-1s-.4-1-1-1z" />
+                </svg>
+              </button>
+            </template>
+
             <!-- Transcript layout switch. Segmented pair rather than one toggle
                  so the current mode is stated rather than implied, matching the
                  note editor's mode buttons.
