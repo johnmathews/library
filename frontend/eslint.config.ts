@@ -59,10 +59,12 @@ export default defineConfigWithVueTs(
       // was fixed rather than suppressed.
       'vuejs-accessibility/no-redundant-roles': 'off',
 
-      // form-control-has-label (4): three inputs in SeriesChartTile and one in
-      // AskView have no programmatic label. Real, and each needs a decision
-      // about visible vs visually-hidden labelling that belongs with whoever
-      // owns those views. EXIT: label the four controls, then enable.
+      // form-control-has-label (3): three inputs in SeriesChartTile have no
+      // programmatic label. Real, and each needs a decision about visible vs
+      // visually-hidden labelling that belongs with whoever owns that view.
+      // AskView's image input was the fourth; it is now labelled
+      // (aria-label="Attach image"), leaving SeriesChartTile as the only
+      // blocker. EXIT: label the three controls, then enable.
       'vuejs-accessibility/form-control-has-label': 'off',
 
       // click-events-have-key-events (4): the sites are a native <dialog>, a

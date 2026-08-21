@@ -1,7 +1,7 @@
 # Frontend view design principles
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim; labelled the 2026-06-28 `max-w` block as since-fixed; stopped pointing new views at `DocumentDetailView`'s hand-rolled header).
-**Last verified:** 2026-08-12 — method: resolved every file path, component name, CSS class and design token it names against `frontend/src/`, read `assets/main.css` and `assets/utility-patterns.css`, and re-checked each behavioural claim at its call site.
+**Status:** active. **Last updated:** 2026-08-21 (§4: registered `library:ask-view-mode`, and wrote down the wide-only mode pattern — store the preference, clamp the render, hide the control with `v-if`). Earlier (2026-08-12, documentation verification sweep): corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim.
+**Last verified:** 2026-08-21 — method: the new §4 entries checked against `useAskViewMode.ts` and its spec (8 tests, run green); the wide-only pattern checked against both call sites (`NoteEditorPanel.vue`, `AskView.vue`) and the `v-if` claim against `AskView.spec.ts`'s toggle-presence test. §1.1's width rule re-measured in Chromium against the built CSS. Earlier (2026-08-12): every path, component, class and token resolved against `frontend/src/`.
 
 How to build a Library view that looks **right the first time** — using the
 Mosaic design language already in the app. This is a checklist plus the reasoning
@@ -113,9 +113,20 @@ Established pattern (mirror it — don't invent a new one):
 - `AppSidebar.vue` persists `library:sidebar-expanded` (the bare
   `sidebar-expanded` key is a legacy read-once fallback, not the pattern).
 - `JobsView.vue` persists table column visibility under `library:jobs-columns`.
+- `useAskViewMode.ts` persists the Ask transcript layout under
+  `library:ask-view-mode` (`conversation` | `document`).
 - `@vueuse/core` `useStorage` is already a dependency — prefer it over raw
   `localStorage.getItem/setItem` for new keys.
 - Naming: `library:<feature>-<thing>` (e.g. `library:doc-grid-cols`).
+
+**Modes that only make sense on a wide screen** (the note editor's Split, the
+Ask transcript's Document) store the *preference* and clamp the *render*
+separately: the stored value survives a visit on a phone, while a derived
+`effective*` computed falls back to the narrow layout. Do not clamp by writing
+the fallback back into storage — that silently discards the user's choice the
+first time they open the app on a small screen. And hide a wide-only control
+with `v-if`, not a `hidden`/`lg:` utility: a CSS-hidden button stays in the tab
+order and the accessibility tree.
 
 Per-machine (display-size) preferences = `localStorage`. Account-level
 preferences (what *fields* show on a tile, notification settings) = server-side

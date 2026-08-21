@@ -36,6 +36,7 @@ import {
 import { ApiError } from '@/api/client'
 import ConversationSidebar from '@/components/ask/ConversationSidebar.vue'
 import ThreadActionsMenu from '@/components/ask/ThreadActionsMenu.vue'
+import { useAskViewMode } from '@/composables/useAskViewMode'
 
 interface TurnVM {
   query: string
@@ -100,6 +101,12 @@ const questionEl = ref<HTMLTextAreaElement | null>(null)
 // Return key inserts a newline (send is the button's job) — see onComposerKeydown.
 const isLargeScreen = useMediaQuery('(min-width: 1024px)')
 
+// Transcript layout: bubbles (default) or full-width document blocks. The same
+// `isLargeScreen` ref drives the clamp, so there is exactly one media query in
+// this view and the toggle can never disagree with the Enter-key rule about
+// what "desktop" means.
+const { viewMode, effectiveViewMode, isDocumentMode, modes } = useAskViewMode(isLargeScreen)
+
 /** Grow the composer textarea to fit its content, up to a cap, so it starts at
  * one line and expands as the question wraps (a chat-composer convention). */
 function autoGrow(): void {
@@ -128,6 +135,30 @@ const isNewChat = computed<boolean>(() => route.name === 'ask-new')
 // empty state instead of a title bar.
 const hasChatContext = computed<boolean>(
   () => threadId.value !== null || isNewChat.value || turns.value.length > 0,
+)
+
+// Document mode hides the conversation rail and gives its 288px back to the
+// transcript. That is not decoration: with both the app sidebar and the rail on
+// screen at 1024px the answer column measures 332px — narrower than the 375px
+// phone width this app treats as its mobile floor — so without collapsing the
+// rail the mode would be *worse* than the bubbles it replaces at the very width
+// it first becomes available. Toggling back brings the rail straight back.
+//
+// It only collapses once there is something to READ, though. With no thread
+// selected the pane's empty state says "select a conversation from the
+// sidebar", so hiding the sidebar there would leave that instruction pointing
+// at nothing and no way to choose a thread. Document mode is a reading layout;
+// it earns the rail's space only when a conversation is open.
+const showConversationRail = computed<boolean>(
+  () => !isDocumentMode.value || !hasChatContext.value,
+)
+
+// In document mode the transcript and the composer are centred on one shared
+// measure, so the input lines up with the text above it. Conversation mode is
+// left uncapped, as it is today — the shell already caps page width, and a
+// second cap inside it just wastes screen (docs/frontend-view-principles.md §1).
+const contentWidthClass = computed<string>(() =>
+  isDocumentMode.value ? 'mx-auto w-full max-w-5xl' : '',
 )
 
 // On the MOBILE chat screen the view is a fixed-height flex column that fills the
@@ -223,10 +254,40 @@ const errors = computed<ErrorSummaryItem[]>(() =>
   errorMessage.value ? [{ text: errorMessage.value }] : [],
 )
 
+// Wrap every rendered <table> in its own horizontal scroll container.
+//
+// Without this a wide GFM table has nowhere to overflow *into*: the transcript
+// is `overflow-y-auto`, which makes the browser compute overflow-x to `auto`
+// too, so the whole transcript pans sideways — question bubbles and all — while
+// #ask-page's `overflow-hidden` clips whatever sticks out past the panel. The
+// wrapper confines that scrolling to the table itself. It only works together
+// with `table { width: max-content }` and `min-width: 0` on `.ask-answer` (see
+// the scoped styles below): max-content lets columns take their natural width
+// instead of being crushed to single characters, and min-width:0 stops the
+// flex chain being burst by the intrinsic width. Change one, check all three.
+//
+// `role="region"` + `tabindex="0"` make the scroll area reachable by keyboard,
+// which a scrollable region needs in order to be operable at all.
+function wrapTables(html: string): string {
+  return html.replace(
+    /<table\b([^>]*)>([\s\S]*?)<\/table>/g,
+    (_match, attrs: string, inner: string) =>
+      `<div class="ask-table-wrap" role="region" aria-label="Table" tabindex="0">` +
+      `<table${attrs}>${inner}</table>` +
+      `</div>`,
+  )
+}
+
 // The answer is markdown from Claude; render it to HTML and sanitize before
-// v-html (it can echo document text, so we never trust it raw).
+// v-html (it can echo document text, so we never trust it raw). The table wrap
+// is applied BEFORE sanitizing so the wrapper goes through DOMPurify like the
+// rest of the markup rather than being trusted around it; `tabindex` is not in
+// DOMPurify's default allow-list, so it has to be added explicitly or the
+// keyboard affordance is silently stripped.
 function renderAnswer(answer: string): string {
-  return DOMPurify.sanitize(marked.parse(answer, { async: false }) as string)
+  return DOMPurify.sanitize(wrapTables(marked.parse(answer, { async: false }) as string), {
+    ADD_ATTR: ['tabindex'],
+  })
 }
 
 function friendlyError(error: unknown): string {
@@ -584,6 +645,7 @@ defineExpose({ resetConversation })
       class="flex flex-col lg:flex-row bg-white dark:bg-gray-800 -mx-4 sm:-mx-6 lg:mx-0 max-lg:flex-1 max-lg:min-h-0 lg:flex-1 lg:min-h-0 overflow-hidden border-0 rounded-none shadow-none lg:rounded-xl lg:border lg:border-gray-200 dark:lg:border-gray-700/60 lg:shadow-xs"
     >
       <ConversationSidebar
+        v-if="showConversationRail"
         ref="sidebarRef"
         :active-thread-id="threadId"
         :new-disabled="newConversationRedundant"
@@ -678,6 +740,69 @@ defineExpose({ resetConversation })
                 @delete="titleConfirmingDelete = true"
               />
             </template>
+
+            <!-- Transcript layout switch. Segmented pair rather than one toggle
+                 so the current mode is stated rather than implied, matching the
+                 note editor's mode buttons.
+
+                 `v-if`, NOT a `hidden lg:flex` utility: a CSS-hidden button is
+                 still in the tab order and still in the accessibility tree, so
+                 a phone user would tab onto a control that cannot do anything
+                 (document mode is clamped off below lg). No lint rule catches
+                 that — it has to be a render decision. -->
+            <div
+              v-if="isLargeScreen"
+              data-testid="ask-view-mode"
+              class="ml-1 inline-flex shrink-0 rounded-lg border border-gray-200 dark:border-gray-700/60 bg-gray-50 dark:bg-gray-900/40 p-0.5"
+              role="group"
+              aria-label="Transcript layout"
+            >
+              <button
+                v-for="m in modes"
+                :key="m.value"
+                type="button"
+                :data-testid="`ask-view-mode-${m.value}`"
+                class="inline-flex h-7 w-7 items-center justify-center rounded-md transition"
+                :class="
+                  viewMode === m.value
+                    ? 'bg-violet-500 text-white shadow-xs'
+                    : 'text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200'
+                "
+                :aria-pressed="viewMode === m.value"
+                :aria-label="`${m.label} view`"
+                :title="`${m.label} view`"
+                @click="viewMode = m.value"
+              >
+                <!-- Speech bubble = conversation, lined page = document. -->
+                <svg
+                  v-if="m.value === 'conversation'"
+                  class="h-4 w-4 fill-none stroke-current"
+                  stroke-width="1.8"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M21 12a8 8 0 0 1-11.6 7.1L3 21l1.9-6.4A8 8 0 1 1 21 12z"
+                  />
+                </svg>
+                <svg
+                  v-else
+                  class="h-4 w-4 fill-none stroke-current"
+                  stroke-width="1.8"
+                  viewBox="0 0 24 24"
+                  aria-hidden="true"
+                >
+                  <path
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    d="M6 3h9l3.5 3.5V21H6V3z"
+                  />
+                  <path stroke-linecap="round" d="M9 12h6M9 16h6" />
+                </svg>
+              </button>
+            </div>
           </template>
         </div>
 
@@ -690,17 +815,43 @@ defineExpose({ resetConversation })
         <div
           ref="transcriptRef"
           data-testid="ask-transcript"
-          class="px-3 pt-4 sm:px-6 sm:pt-6 flex-1 min-h-0 overflow-y-auto pb-4 lg:pb-6"
+          class="px-3 pt-4 sm:px-6 sm:pt-6 flex-1 min-h-0 overflow-y-auto thin-scrollbar pb-4 lg:pb-6"
         >
-          <div v-if="turns.length" class="space-y-8">
+          <div v-if="turns.length" class="space-y-8" :class="contentWidthClass">
             <section
               v-for="(turn, i) in turns"
               :key="i"
               data-testid="ask-turn"
               class="space-y-3"
+              :data-view-mode="effectiveViewMode"
             >
-              <!-- User question — right-aligned chat bubble in the violet accent. -->
-              <div class="flex justify-end">
+              <!-- User question. Conversation mode: a right-aligned violet
+                   bubble, where alignment carries the speaker. Document mode:
+                   a full-width tinted block under an uppercase role label,
+                   because at a document measure a right-aligned bubble reads as
+                   a stray fragment and wastes the width the mode exists to buy.
+
+                   Tints are Tailwind utilities bound here rather than a class in
+                   utility-patterns.css: that stylesheet is imported into the
+                   `components` layer, which loses to the `utilities` layer
+                   regardless of specificity, so a components-layer background
+                   next to any utility class would silently not apply. -->
+              <template v-if="isDocumentMode">
+                <div data-testid="ask-doc-block" class="flex w-full flex-col">
+                  <span
+                    data-testid="ask-doc-role"
+                    class="mb-1 text-xs font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-400"
+                  >
+                    You
+                  </span>
+                  <p
+                    class="min-w-0 rounded-xl bg-violet-50 dark:bg-violet-500/10 px-4 py-3 text-sm text-gray-800 dark:text-gray-100 whitespace-pre-wrap break-words"
+                  >
+                    {{ turn.query }}
+                  </p>
+                </div>
+              </template>
+              <div v-else class="flex justify-end">
                 <p
                   class="max-w-[85%] rounded-2xl rounded-tr-sm bg-violet-600 text-white px-4 py-2 text-sm whitespace-pre-wrap break-words"
                 >
@@ -710,10 +861,19 @@ defineExpose({ resetConversation })
 
               <!-- Assistant answer. On mobile it is flat text under the violet
                    question bubble (no nested card); at lg+ it sits on a subtle
-                   bordered surface card, distinct from the two-pane panel. -->
+                   bordered surface card, distinct from the two-pane panel. In
+                   document mode it keeps that surface but goes full width and
+                   gains its own role label, matching the question above it. -->
+              <span
+                v-if="isDocumentMode"
+                data-testid="ask-doc-role"
+                class="mb-1 block text-xs font-semibold uppercase tracking-wide text-gray-500 dark:text-gray-400"
+              >
+                Agent
+              </span>
               <div
                 data-testid="ask-answer-surface"
-                class="space-y-3 px-0.5 lg:rounded-2xl lg:rounded-tl-sm lg:border lg:border-gray-200 dark:lg:border-gray-700/60 lg:bg-gray-50 dark:lg:bg-gray-900/40 lg:px-4 lg:py-3"
+                class="@container space-y-3 px-0.5 lg:rounded-2xl lg:rounded-tl-sm lg:border lg:border-gray-200 dark:lg:border-gray-700/60 lg:bg-gray-50 dark:lg:bg-gray-900/40 lg:px-4 lg:py-3"
               >
                 <div
                   v-if="turn.pending"
@@ -739,7 +899,7 @@ defineExpose({ resetConversation })
                   <div v-if="turn.citations.length" data-testid="ask-citations-disclosure">
                     <AppDetails :summary="`Citations (${turn.citations.length})`" :open="false">
                       <ul
-                        class="grid grid-cols-1 md:grid-cols-2 gap-2"
+                        class="grid grid-cols-1 @lg:grid-cols-2 gap-2"
                         data-testid="ask-citations"
                       >
                         <li v-for="citation in turn.citations" :key="citation.document_id">
@@ -857,6 +1017,7 @@ defineExpose({ resetConversation })
                border/rounding — there is no separate boxed field inside it. -->
           <div
             class="rounded-3xl border border-gray-300 dark:border-gray-600/80 bg-gray-50 dark:bg-gray-900/40 px-3 pt-2.5 pb-2 transition-colors focus-within:border-violet-400 dark:focus-within:border-violet-500"
+            :class="contentWidthClass"
           >
             <!-- Pending image attachments, inside the pill above the text. -->
             <ul
@@ -904,6 +1065,7 @@ defineExpose({ resetConversation })
                 accept="image/png,image/jpeg,image/gif,image/webp"
                 multiple
                 class="hidden"
+                aria-label="Attach image"
                 data-testid="ask-image-input"
                 @change="onImagesPicked"
               />
@@ -983,6 +1145,16 @@ defineExpose({ resetConversation })
 /* The answer is rendered markdown (v-html). Tailwind's preflight strips
    default styling from these elements, so restore readable prose spacing,
    emphasis and lists for the answer body only. */
+
+/* min-width: 0 is load-bearing, not tidiness. `.ask-answer` sits in a flex
+   chain (thread pane > transcript > answer surface > here), and a flex item
+   defaults to `min-width: auto` — its intrinsic content width. A wide table or
+   a long unbroken code line then pushes the whole column past its basis. With
+   min-width: 0 the overflow stays inside this container, where the scroll
+   wrappers below can handle it. */
+.ask-answer {
+  min-width: 0;
+}
 .ask-answer :deep(p) {
   margin-bottom: 0.75rem;
 }
@@ -1032,11 +1204,49 @@ defineExpose({ resetConversation })
   font-weight: 600;
   margin: 0.75rem 0 0.5rem;
 }
-/* Wide answers can include GFM tables; give them readable borders/spacing. */
-.ask-answer :deep(table) {
-  width: 100%;
-  border-collapse: collapse;
+/* Fenced code blocks scroll horizontally inside the answer rather than
+   overflowing it — the same rule DocumentDetailView's markdown block has had
+   since it hit this; Ask never got it. */
+.ask-answer :deep(pre) {
   margin: 0.75rem 0;
+  padding: 0.75rem;
+  border-radius: 0.375rem;
+  overflow-x: auto;
+  background: rgb(0 0 0 / 0.06);
+}
+.dark .ask-answer :deep(pre) {
+  background: rgb(255 255 255 / 0.08);
+}
+.ask-answer :deep(pre code) {
+  padding: 0;
+  background: transparent;
+}
+
+/* The per-table scroll container emitted by wrapTables(). See the comment on
+   that function: this rule, `table { width: max-content }` below, and
+   `.ask-answer { min-width: 0 }` above are one mechanism in three parts. */
+.ask-answer :deep(.ask-table-wrap) {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  margin: 0.75rem 0;
+  border-radius: 0.25rem;
+}
+.ask-answer :deep(.ask-table-wrap:focus-visible) {
+  outline: 2px solid var(--color-violet-500);
+  outline-offset: 2px;
+}
+
+/* Wide answers can include GFM tables; give them readable borders/spacing.
+   `max-content` (rather than the `width: 100%` this used to carry) lets each
+   column take its natural width and lets the wrapper above scroll — 100% did
+   the opposite, squeezing a seven-column table into unreadable slivers and
+   then bursting the column anyway. */
+.ask-answer :deep(table) {
+  width: max-content;
+  max-width: none;
+  border-collapse: collapse;
+  margin: 0;
   font-size: 0.875rem;
 }
 .ask-answer :deep(th),

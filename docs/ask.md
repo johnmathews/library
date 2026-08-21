@@ -1,9 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-08-20 (`LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4). Earlier (2026-08-12, documentation verification sweep): `SeriesChartTile` is a bar chart, not a line chart; three question classes, not two; documented the trend widget's `ChartControls` row; corrected the prompt-cache breakpoint wording). Earlier (2026-07-21, two-screen, route-driven Ask — Option B — plus a mobile pass: full-bleed chat, one full-width pill composer, flat turns, phone Enter = newline; and the mobile chat is now a fixed-height `100dvh` flex column with an internal-scroll transcript and a footer composer that docks at the bottom / above the on-screen keyboard via `interactive-widget=resizes-content` + safe-area inset; §1.6). Desktop now
-**Last verified:** 2026-08-20 — method: the §1.4 backend paragraph checked against `ask/engine.py` (`run_ask`, `_run_subscription_turn`, `generate_thread_title`), `api/ask.py` and `config.py`, and against the measured harness figures in `llm-backends.md` §3.1; no surface has been run on `subscription` in a deployed container. Earlier (2026-08-12): checked each claim against `ask/engine.py`, `api/ask.py`, `search.py`, `structured_query.py`, `series.py`, `series_insight.py`, `jobs.py`, `models.py`, `config.py`, `extraction/pricing.py` and `.env.example`, and the §1.6 UI claims (routes, redirect, the two `100dvh` heights, keyboard rules, testids) against `AskView.vue`, `router/index.ts` and `frontend/index.html`; no tests were run.
-uses the same fixed-height fill (`calc(100dvh - 8rem)`) so its composer docks at
-the bottom too, replacing the old `sticky` composer (§1.6). Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9); (2026-07-02) metadata write tool, recipient in answer context, citations collapsed by default.
+**Status:** active. **Last updated:** 2026-08-21 (§1.6: a `conversation` | `document` transcript layout switch at `lg+`, which collapses the conversation rail, and per-table horizontal scroll containment). Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B), a mobile pass (full-bleed chat, one full-width pill composer, flat turns), and the desktop fixed-height fill that docks the composer at the bottom; §1.6. Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9).
+**Last verified:** 2026-08-21 — method: the new §1.6 layout paragraphs checked against `AskView.vue`, `useAskViewMode.ts` and 22 unit tests run green; the 332px and 620px figures measured in Chromium against the built CSS, not derived. The e2e spec `ask-document-view.spec.ts` was collected (15 tests across 3 projects) but **not executed** — it needs the compose stack. Earlier (2026-08-20): the §1.4 backend paragraph checked against `ask/engine.py`, `api/ask.py` and `config.py`.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -344,6 +342,41 @@ composer for editing/resend. In the composer, **Cmd/Ctrl+Enter** always sends an
 sending is the Send button's job — matching mobile chat apps. Enter is ignored
 while an IME composition is in progress (see [frontend.md §1.5](frontend.md)). The
 selected conversation is marked with a full-perimeter ring.
+
+**Transcript layout: conversation or document.** At `lg+` the thread bar carries
+a two-button switch (`[data-testid="ask-view-mode"]`) between the default
+**conversation** layout described above and a **document** layout for prose- and
+table-heavy answers. Document mode drops the right-aligned violet bubble: each
+turn becomes a full-width tinted block under an uppercase role label (`You` /
+`Agent`), and the transcript and composer are centred on one shared `max-w-5xl`
+measure so the input lines up with the text.
+
+It also **collapses the conversation rail**, and that is load-bearing rather than
+cosmetic. With the global app sidebar expanded *and* the rail on screen, the
+answer column at a 1024px viewport measures 332px — narrower than the 375px phone
+width this app treats as its mobile floor. Giving the rail's 288px back takes it
+to 620px (measured in Chromium against the built CSS). Without the collapse,
+document mode would be a *narrower* read than the bubbles it replaces at the very
+width it first becomes available. The rail stays when no conversation is open, so
+the "select a conversation" empty state never points at a sidebar that isn't
+there.
+
+The preference persists per-machine under `library:ask-view-mode`
+(`useAskViewMode.ts`; see [frontend-view-principles.md](frontend-view-principles.md) §4).
+It is **clamped, not overwritten**, below `lg`: a phone always renders
+conversation layout, and the stored desktop choice is still there next time. The
+toggle itself is rendered with `v-if` rather than a `hidden` utility, so it is
+absent from the tab order on a phone instead of focusable-but-inert.
+
+**Wide tables scroll inside themselves.** Each rendered GFM table is wrapped in a
+keyboard-reachable `.ask-table-wrap` (`role="region"`, `tabindex="0"`) with
+`overflow-x: auto`, and the table itself uses `width: max-content`. Before this,
+a table wider than the column made the *whole transcript* pan sideways — question
+bubbles and all — because the transcript is `overflow-y-auto`, which makes the
+browser compute `overflow-x` to `auto` too; `#ask-page`'s `overflow-hidden` then
+clipped whatever ran past the panel. The wrapper, the `max-content` width and
+`min-width: 0` on `.ask-answer` are one mechanism in three parts — changing one
+without the others reintroduces the defect.
 
 The empty states distinguish three cases: a **new chat** (`ask-new`) shows a
 greeting plus example-prompt buttons that fill the composer
