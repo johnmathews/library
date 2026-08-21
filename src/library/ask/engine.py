@@ -773,6 +773,20 @@ def _serialize_block(block: Any) -> dict[str, Any]:
         return {"type": "text", "text": block.text}
     if block_type == "tool_use":
         return {"type": "tool_use", "id": block.id, "name": block.name, "input": dict(block.input)}
+    if block_type == "thinking":
+        # Thinking blocks must be replayed byte-identical or the API rejects the
+        # next call of the turn, and it is the `signature` that carries that
+        # obligation — `thinking` itself is empty under the default omitted
+        # display. The catch-all below would drop both, which fails as a 400 on
+        # a later call rather than anywhere near this line.
+        return {
+            "type": "thinking",
+            "thinking": getattr(block, "thinking", ""),
+            "signature": getattr(block, "signature", ""),
+        }
+    # Unknown block type: keep the tag so the shape survives, but note that any
+    # payload is lost. Real SDK blocks never reach here (they carry
+    # `model_dump`); this is the hand-rolled/fake path.
     return {"type": block_type}
 
 
@@ -850,6 +864,27 @@ async def _run_api_turn(
         response = await client.messages.create(
             model=model,
             max_tokens=settings.ask_max_answer_tokens,
+            # Adaptive thinking, explicitly.
+            #
+            # On this model family, OMITTING `thinking` means the model runs
+            # with no extended reasoning at all — the parameter's absence is not
+            # a neutral default. Ask is a multi-hop task (retrieve, cross-check,
+            # compare against a distribution), which is exactly the shape that
+            # benefits, so it was the single largest accuracy lever available
+            # and it costs one parameter.
+            #
+            # Two couplings worth keeping in view if this is ever tuned:
+            #   * thinking tokens count against `max_tokens` — hence the raised
+            #     `ask_max_answer_tokens` (see config.py);
+            #   * thinking blocks come back in `response.content` and MUST be
+            #     replayed unmodified on later calls. That already works:
+            #     `_serialize_block` round-trips them via `model_dump` (keeping
+            #     the signature) and `_text_of` filters to `type == "text"`, so
+            #     reasoning never leaks into the answer.
+            #
+            # `display` is left at its default (omitted): nothing renders the
+            # reasoning, so there is no reason to pay to transport or store it.
+            thinking={"type": "adaptive"},
             # Cache the growing prefix on every iteration.
             #
             # This loop re-sends the WHOLE conversation each time round, so a
