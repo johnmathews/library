@@ -56,10 +56,16 @@ Two contributing factors, both `confirmed`:
   (3) = 30 full excerpts. The two results above are 42,810 and 41,356 chars.
 - The content tokenizes densely — reported tokens ≈ characters, against the ~4
   chars/token typical of English prose. The excerpts are OCR'd Dutch markdown
-  tables (`| Schadevrije jaren | 1 |`, `OMNLINS260701096895`, `<br/>`,
-  JSON-escaped). `suspected`, not confirmed: I did not run `count_tokens` on the
-  text, and I checked and *rejected* the obvious explanation — pipes, dashes and
-  backslashes are only ~5% of the payload, so table scaffolding is not the cause.
+  tables: pipe-delimited label/value rows, `<br/>` tags, long alphanumeric
+  reference codes of the shape `XXXNNN260701096895`, and JSON escaping.
+  `suspected`, not confirmed: I did not run `count_tokens` on the text, and I
+  checked and *rejected* the obvious explanation — pipes, dashes and backslashes
+  are only ~5% of the payload, so table scaffolding is not the cause.
+
+  (An earlier revision of this entry quoted a real policy number and a real
+  field/value pair lifted verbatim from a document in the archive. This is a
+  **public** repository. Illustrate the *shape* of archive content, never the
+  content itself — the point being made here needed neither.)
 
 ## The fix
 
