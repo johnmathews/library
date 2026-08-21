@@ -127,7 +127,7 @@ test.describe('document view mode', () => {
     expect(await answerWidth(page)).toBeCloseTo(before, 0)
   })
 
-  test('the choice survives a reload', async ({ page }, testInfo) => {
+  test('the choice survives a full page load', async ({ page }, testInfo) => {
     test.skip(testInfo.project.name !== 'chromium', 'document mode is lg+ only')
     await stubAsk(page, 'Persistence check.')
     await signIn(page)
@@ -137,9 +137,23 @@ test.describe('document view mode', () => {
     await expect(page.getByTestId('ask-doc-block').first()).toBeVisible()
     expect(await page.evaluate((k) => localStorage.getItem(k), STORAGE_KEY)).toContain('document')
 
+    // Reload, then ask again on a FRESH thread rather than expecting the old
+    // transcript back. `stubAsk` fulfils POST /api/ask without persisting
+    // anything, and after the first answer the view syncs the URL to
+    // /ask/<thread_id> — so a plain reload would send the app to GET
+    // /api/ask/threads/1 against the real backend, which has no such thread.
+    // The transcript's absence there would be an artefact of the stub, not a
+    // fact about the feature. What this test is actually about is whether the
+    // *preference* survives a page load, so assert that directly.
     await page.reload()
-    await expect(page.getByTestId('ask-answer').first()).toBeVisible()
+    expect(await page.evaluate((k) => localStorage.getItem(k), STORAGE_KEY)).toContain('document')
+
+    await askOnce(page, 'ask-document-view-e2e: persistence after reload')
     await expect(page.getByTestId('ask-doc-block').first()).toBeVisible()
+    await expect(page.getByTestId('ask-view-mode-document')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
   })
 
   test('a stored desktop preference does not apply on a phone', async ({ page }, testInfo) => {
