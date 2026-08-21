@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import AskView from '../AskView.vue'
@@ -169,6 +170,85 @@ describe('AskView', () => {
     await flushPromises()
     expect(getThreadMock).toHaveBeenCalledWith(7)
     expect(w.text()).toContain('Vattenfall')
+  })
+
+  // --- transcript scroll position -----------------------------------------
+  //
+  // Two different intents share one scroll container. A turn ARRIVING should
+  // pull you to the bottom — you want the new thing. OPENING a thread to read
+  // it should start at the top, or the transcript lands mid-answer with your
+  // own question scrolled off, which is the first thing needed to make sense of
+  // what follows. Screenshot review caught this; nothing asserted it.
+  //
+  // jsdom has no layout, so `scrollHeight`/`clientHeight` are 0 and the real
+  // geometry cannot be tested here. What CAN be pinned is the direction the
+  // code drives the container, which is the part that regressed.
+
+  it('starts an opened conversation at the top, not scrolled into the answer', async () => {
+    getThreadMock.mockResolvedValue({
+      id: 7,
+      title: 'Energy',
+      turns: [
+        {
+          id: 1,
+          query: 'who is my supplier?',
+          answer: 'Vattenfall [#3].',
+          citations: [],
+          used_tools: ['query_documents'],
+          cost_usd: 0.02,
+          created_at: '',
+        },
+      ],
+    })
+    await router.push('/ask/7')
+    const w = mountView()
+    const transcript = w.get('[data-testid="ask-transcript"]').element as HTMLElement
+
+    // Give the element real geometry BEFORE the load resolves. Without this the
+    // test is vacuous: jsdom reports scrollHeight/clientHeight as 0, so
+    // scrollToBottom's overflow branch is false, it falls through to a
+    // scrollIntoView that jsdom no-ops, and scrollTop stays 0 whichever
+    // function ran. Verified by reverting the fix and watching this fail.
+    let scrollTop = 0
+    Object.defineProperty(transcript, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = v
+      },
+    })
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, get: () => 5000 })
+    Object.defineProperty(transcript, 'clientHeight', { configurable: true, get: () => 400 })
+
+    await flushPromises()
+    await nextTick()
+
+    expect(scrollTop).toBe(0)
+  })
+
+  it('drives the transcript downward when a new answer arrives', async () => {
+    // The counterpart: scroll-to-bottom must survive the change above. Written
+    // as "did it try to move down" rather than a pixel assertion, because jsdom
+    // reports zero height and a pixel test here would pass vacuously.
+    askQuestionMock.mockResolvedValueOnce(sampleResponse())
+    const w = mountView()
+    const transcript = w.get('[data-testid="ask-transcript"]').element as HTMLElement
+
+    let maxRequested = 0
+    Object.defineProperty(transcript, 'scrollTop', {
+      configurable: true,
+      get: () => maxRequested,
+      set: (v: number) => {
+        maxRequested = Math.max(maxRequested, v)
+      },
+    })
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, get: () => 5000 })
+    Object.defineProperty(transcript, 'clientHeight', { configurable: true, get: () => 400 })
+
+    await typeAndSubmit(w, 'which invoices are due?')
+    await nextTick()
+
+    expect(maxRequested).toBeGreaterThan(0)
   })
 
   it('shows a friendly error summary when the API returns 503', async () => {

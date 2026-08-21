@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
 **Status:** active. **Last updated:** 2026-08-21 (§1.6: adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.
-**Last verified:** 2026-08-21 — method: adaptive thinking, the thinking-block replay path and prompt-cache hit rates were all exercised **against the live API on the deployed host** (sha `ec4aa18`) by driving `run_ask` directly, because CI has no Anthropic key and stubs `/api/ask`. The per-call cache table and the 76.6% figure are that run's real numbers, with the warm-cache caveat stated inline. Backend suite 1642 passed; 4 reasoning tests confirmed to fail with the settings reverted. The 51-turn statistics were queried from the deployed `ask_turns`. **Still unmeasured:** answer accuracy before vs after — there is no eval set for Ask.
+**Last verified:** 2026-08-21 — method: adaptive thinking, the thinking-block replay path and prompt-cache hit rates were exercised **against the live API on the deployed host** by driving `run_ask` directly, because CI has no Anthropic key and stubs `/api/ask`; the per-call cache table and the 76.6% figure are that run's real numbers, with the warm-cache caveat stated inline. The ghost-button and scroll-on-open behaviours were found by reviewing screenshots of the running app and are pinned by 2 unit tests, both confirmed to fail when reverted (the first was vacuous until the transcript was given real geometry — jsdom reports zero height). Frontend suite 1089 passed. **Still unmeasured:** answer accuracy before vs after.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -448,7 +448,15 @@ there.
 bar carries a **＋ New** button (keeping the rail button's `new-conversation`
 testid, so the capability stays addressable by one selector wherever it lives)
 and a **conversations** button that returns to `/ask`, where the rail is on
-screen again and a thread can be picked. The two sets are mutually exclusive —
+screen again and a thread can be picked. Both are **ghost** buttons: in this bar
+a violet fill means "this layout is active", so an action wearing one too reads
+as part of the toggle rather than as a verb.
+
+**Opening a conversation starts at its beginning.** Scroll-to-bottom is right
+when a turn *arrives* — you want the new thing — and wrong when you open a
+thread to read it, where it lands you mid-answer with your own question scrolled
+off the top. `loadThread` scrolls to the top; new answers still pull to the
+bottom. The two sets are mutually exclusive —
 whichever is showing, there is exactly one of each control in the DOM. This is
 not a nicety: with document as the default, omitting them leaves the default
 desktop experience with no way to start or switch a conversation.
