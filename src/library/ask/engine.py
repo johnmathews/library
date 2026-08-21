@@ -776,6 +776,34 @@ def _serialize_block(block: Any) -> dict[str, Any]:
     return {"type": block_type}
 
 
+def _cached_usage(usage: Any) -> tuple[int, int]:
+    """``(total_input_tokens, billable_input_tokens)`` for one API response.
+
+    Anthropic reports cached tokens in fields *separate* from ``input_tokens``,
+    so summing ``input_tokens`` alone silently under-reports every request the
+    cache served — the better the cache works, the more the number lies. That
+    matters most right after enabling caching, when spend appears to collapse
+    partly because tokens stopped being counted rather than because they
+    stopped being sent.
+
+    Two different numbers are wanted, so both are returned:
+
+    * **total** — how much context actually went in, cached or not. Comparable
+      across cached and uncached turns, which is what makes it useful for
+      "is this thread getting expensive?".
+    * **billable** — the same tokens weighted by what they cost: cache reads
+      bill at ~0.1x and cache writes at ~1.25x of the input rate. Feeding this
+      to :func:`estimate_cost_usd` keeps the two-rate pricing table (which is
+      validated at startup) untouched.
+    """
+    cache_read = int(getattr(usage, "cache_read_input_tokens", 0) or 0)
+    cache_write = int(getattr(usage, "cache_creation_input_tokens", 0) or 0)
+    uncached = int(usage.input_tokens)
+    total = uncached + cache_read + cache_write
+    billable = uncached + round(cache_read * 0.1) + round(cache_write * 1.25)
+    return total, billable
+
+
 def _apply_cache_control(messages: list[dict[str, Any]], history_len: int) -> None:
     """Mark the end of the rehydrated history prefix with an ephemeral cache
     breakpoint so re-sent prior turns hit the Anthropic prompt cache. Best
@@ -822,6 +850,23 @@ async def _run_api_turn(
         response = await client.messages.create(
             model=model,
             max_tokens=settings.ask_max_answer_tokens,
+            # Cache the growing prefix on every iteration.
+            #
+            # This loop re-sends the WHOLE conversation each time round, so a
+            # tool result fetched on pass 2 is paid for again on passes 3 and 4.
+            # That is the dominant cost of a turn: measured on this archive, a
+            # single turn shipped ~247k characters across four calls while its
+            # stored transcript was only ~87k.
+            #
+            # Top-level `cache_control` caches the last cacheable block of the
+            # request, which here is precisely that accumulated tool-result
+            # tail. Re-reads then bill at ~0.1x instead of 1.0x. It is a
+            # request-shaping hint only — same prompts, same answers.
+            #
+            # Breakpoint budget: the API allows four. We use the system prompt,
+            # optionally the history boundary (`_apply_cache_control`, a no-op
+            # on a thread's first turn), and this one.
+            cache_control={"type": "ephemeral"},
             # Hand-built blocks crossing into the SDK's TypedDict unions, as in
             # extraction/judge.py. `messages` is appended to throughout the tool
             # loop below, so it stays a plain list and the assertion is made here.
@@ -829,11 +874,10 @@ async def _run_api_turn(
             tools=cast("list[ToolParam]", TOOLS),
             messages=cast("list[MessageParam]", messages),
         )
-        result.input_tokens += response.usage.input_tokens
+        total_input, billable_input = _cached_usage(response.usage)
+        result.input_tokens += total_input
         result.output_tokens += response.usage.output_tokens
-        result.cost_usd += estimate_cost_usd(
-            model, response.usage.input_tokens, response.usage.output_tokens
-        )
+        result.cost_usd += estimate_cost_usd(model, billable_input, response.usage.output_tokens)
 
         assistant_msg: dict[str, Any] = {
             "role": "assistant",
