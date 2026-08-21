@@ -25,7 +25,8 @@ flattering the subscription path.
 
 import json
 import logging
-from collections.abc import AsyncIterator, Awaitable, Callable
+import os
+from collections.abc import AsyncIterator, Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -47,6 +48,7 @@ from claude_agent_sdk.types import (
     UserMessage,
 )
 
+from library.config import Settings, get_settings
 from library.llm import oauth
 
 logger = logging.getLogger(__name__)
@@ -104,19 +106,35 @@ class Usage:
     fresh input plus cache creation plus cache reads. Callers feed it to
     ``estimate_cost_usd``, so under-reporting here would understate what the
     harness costs and make the backend look cheaper than it is.
+
+    The components are ALSO kept, individually, so telemetry can report a cache
+    hit rate for this backend the same way it does for the API one. They are
+    additive: ``input_tokens`` keeps its existing meaning as the total, and the
+    breakdown sits beside it. Redefining ``input_tokens`` as fresh-only would be
+    the tempting alternative and is a trap — it silently changes the meaning of
+    every recorded ``cost_usd`` and of ``ask_turns.input_tokens``, making
+    historical rows non-comparable with new ones.
+
+    Invariant: ``input_tokens == fresh_input_tokens + cache_creation_input_tokens
+    + cache_read_input_tokens``. Maintained by ``add`` being the only writer.
     """
 
     input_tokens: int = 0
     output_tokens: int = 0
+    fresh_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
+    cache_read_input_tokens: int = 0
 
     def add(self, raw: dict[str, Any] | None) -> None:
         if not raw:
             return
-        self.input_tokens += (
-            int(raw.get("input_tokens", 0) or 0)
-            + int(raw.get("cache_creation_input_tokens", 0) or 0)
-            + int(raw.get("cache_read_input_tokens", 0) or 0)
-        )
+        fresh = int(raw.get("input_tokens", 0) or 0)
+        cache_write = int(raw.get("cache_creation_input_tokens", 0) or 0)
+        cache_read = int(raw.get("cache_read_input_tokens", 0) or 0)
+        self.fresh_input_tokens += fresh
+        self.cache_creation_input_tokens += cache_write
+        self.cache_read_input_tokens += cache_read
+        self.input_tokens += fresh + cache_write + cache_read
         self.output_tokens += int(raw.get("output_tokens", 0) or 0)
 
 
@@ -140,6 +158,81 @@ class ToolLoopResult:
     used_tools: list[str] = field(default_factory=list)
     usage: Usage = field(default_factory=Usage)
     hit_turn_limit: bool = False
+
+
+# Claude Code's own telemetry can log CONTENT, not just counts. These four
+# variables would ship the user's document text off the host: Ask prompts embed
+# retrieved passages, and tool results ARE document passages. The app's stated
+# contract (docs/ask.md) is that document text never leaves the host for
+# indexing; a telemetry side-channel would break that just as thoroughly as an
+# indexing one, and far less visibly.
+#
+# They are neutralised in the CLI's environment rather than merely left unset,
+# because `env` is MERGED over the inherited environment — so a variable set on
+# the container would otherwise reach the CLI. Same defence as the
+# ANTHROPIC_API_KEY blanking below. `_assert_no_content_logging` additionally
+# refuses at startup, so a misconfiguration is loud rather than silent.
+_CONTENT_LOGGING_VARS = (
+    "OTEL_LOG_USER_PROMPTS",
+    "OTEL_LOG_ASSISTANT_RESPONSES",
+    "OTEL_LOG_TOOL_DETAILS",
+    "OTEL_LOG_TOOL_CONTENT",
+    "OTEL_LOG_RAW_API_BODIES",
+)
+
+
+def assert_no_content_logging(environ: Mapping[str, str] | None = None) -> None:
+    """Refuse to run with Claude Code content logging enabled.
+
+    Raises rather than warns. A warning in a container log is not a control —
+    nobody reads it, and the failure it guards against (document text leaving
+    the host) is silent, irreversible, and exactly the class of mistake that is
+    obvious only in hindsight.
+    """
+    env = os.environ if environ is None else environ
+    offenders = [name for name in _CONTENT_LOGGING_VARS if (env.get(name) or "").strip()]
+    if offenders:
+        raise SubscriptionBackendError(
+            "Refusing to start the subscription backend: Claude Code content logging is "
+            f"enabled via {', '.join(sorted(offenders))}. These export prompt, response and "
+            "tool CONTENT — which for Ask is the text of your documents. Unset them. "
+            "Token and cost metrics need none of them (see docs/observability.md)."
+        )
+
+
+def _telemetry_env(settings: Settings) -> dict[str, str]:
+    """Claude Code telemetry variables for the CLI subprocess.
+
+    Counts and costs only. Every content-logging variable is explicitly blanked,
+    whether or not telemetry itself is on, so this function is the single place
+    that decides what the CLI may emit.
+    """
+    env = dict.fromkeys(_CONTENT_LOGGING_VARS, "")
+    if not settings.claude_code_telemetry_enabled:
+        # Explicitly off, not merely absent — the CLI would otherwise inherit a
+        # host-level CLAUDE_CODE_ENABLE_TELEMETRY and start exporting from a
+        # deployment that never asked for it.
+        env["CLAUDE_CODE_ENABLE_TELEMETRY"] = ""
+        return env
+
+    env["CLAUDE_CODE_ENABLE_TELEMETRY"] = "1"
+    # Metrics only: no logs exporter means no events, which is where content
+    # would travel even with the variables above unset.
+    env["OTEL_METRICS_EXPORTER"] = "otlp"
+    env["OTEL_LOGS_EXPORTER"] = "none"
+    env["OTEL_TRACES_EXPORTER"] = "none"
+    env["OTEL_EXPORTER_OTLP_PROTOCOL"] = "http/protobuf"
+    if settings.otel_exporter_otlp_endpoint:
+        # The CLI wants the BASE endpoint and appends the signal path itself,
+        # while the in-process exporter is configured with the full metrics URL.
+        # Strip the suffix rather than making the operator configure two values
+        # that must agree.
+        base = settings.otel_exporter_otlp_endpoint.removesuffix("/v1/metrics").rstrip("/")
+        env["OTEL_EXPORTER_OTLP_ENDPOINT"] = base
+    if settings.otel_exporter_otlp_headers:
+        env["OTEL_EXPORTER_OTLP_HEADERS"] = settings.otel_exporter_otlp_headers
+    env["OTEL_METRIC_EXPORT_INTERVAL"] = str(settings.otel_metric_export_interval_ms)
+    return env
 
 
 def build_options(
@@ -176,6 +269,11 @@ def build_options(
     # the variable is required.
     if oauth.credentials_path(config_dir).exists():
         env["CLAUDE_CONFIG_DIR"] = str(config_dir)
+
+    # Telemetry last: it owns the OTEL_* and CLAUDE_CODE_ENABLE_TELEMETRY keys
+    # outright, including blanking the content-logging ones.
+    assert_no_content_logging()
+    env.update(_telemetry_env(get_settings()))
 
     return ClaudeAgentOptions(
         model=model,
