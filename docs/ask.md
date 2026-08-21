@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-08-21 (§1.6: document layout is now the DEFAULT at `lg+`, and the collapsed rail's New/conversations actions move to the thread bar). Earlier (2026-08-21): the `conversation` | `document` transcript layout switch, the rail collapse, and per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B), a mobile pass, and the desktop fixed-height fill that docks the composer at the bottom; §1.6. Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9).
-**Last verified:** 2026-08-21 — method: the §1.6 default and relocated-action claims checked against `useAskViewMode.ts` and `AskView.vue`, and against 1087 unit tests run green (the three capability tests were confirmed to fail with the relocated actions removed). The 332px/620px figures were measured in Chromium against the built CSS. The e2e spec was collected (18 tests across 3 projects) but **not executed** locally — it needs the compose stack.
+**Status:** active. **Last updated:** 2026-08-21 (§1.6: prompt caching inside the tool loop, and token accounting that counts cached tokens). Earlier (2026-08-21): document layout is the DEFAULT at `lg+`, the collapsed rail's actions move to the thread bar, the `conversation` | `document` switch, and per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6. Earlier (2026-07-06): `get_document` read tool and document comments (§1.2/§1.9).
+**Last verified:** 2026-08-21 — method: the caching and accounting claims checked against `ask/engine.py` and 6 new tests run green, 4 of which were confirmed to fail with the change reverted; full backend suite 1638 passed. The ~247k-vs-87k figure and the 25,968-avg-input-token figure were measured by querying `ask_turns` on the deployed database, not estimated. **No cache-hit rate has been observed in production yet** — the saving is projected from Anthropic's published 0.1x/1.25x multipliers, and `cache_read_input_tokens` will show the real figure once this ships.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -237,13 +237,33 @@ blocks into a history prefix, and prepends that prefix to the current question
 before calling Claude. This means Claude can reason over earlier tool results
 without re-querying — the faithful replay path.
 
-**Prompt caching.** When a history prefix is present, the engine marks the
-boundary of the rehydrated prefix with an Anthropic `cache_control: ephemeral`
-breakpoint, and the static system prompt carries one of its own. The tool
-definitions carry no breakpoint but sit *before* the system block in the cached
-prefix, so the system breakpoint covers them too.
-Re-sent turns hit the Anthropic prompt cache, reducing cost and latency on
-follow-ups.
+**Prompt caching.** Three breakpoints, of the four Anthropic allows. The static
+system prompt carries one; the tool definitions carry none but sit *before* the
+system block in the cached prefix, so that breakpoint covers them too. When a
+history prefix is present the engine marks its boundary with a second, so
+re-sent prior turns hit the cache on follow-ups.
+
+The third matters most, and it is *within* a single turn. The tool loop re-sends
+the whole conversation on every iteration, so a tool result fetched on pass 2 is
+paid for again on passes 3 and 4 — measured on this archive, one turn shipped
+~247k characters across four calls while its stored transcript was only ~87k.
+A top-level `cache_control: ephemeral` on each `messages.create` caches the last
+cacheable block, which is exactly that accumulated tool-result tail, so re-reads
+bill at ~0.1x instead of full rate. It shapes the request only: same prompts,
+same answers.
+
+**Token accounting counts cached tokens.** Anthropic reports cache reads and
+cache writes in fields *separate* from `input_tokens`, so summing `input_tokens`
+alone under-reports every cached request — and the better the cache works, the
+more the figure lies. `ask_turns.input_tokens` therefore records the **total**
+context that went in (fresh + cache reads + cache writes), which stays
+comparable across cached and uncached turns, while `cost_usd` prices those
+tokens at their real weights (reads ~0.1x, writes ~1.25x). Without this,
+enabling caching would have made recorded spend appear to collapse partly
+because tokens stopped being *counted*, not because they stopped being *sent*.
+The subscription backend already folded all three counts into one total
+(`llm/subscription.py`); it prices that total at the full input rate as a
+deliberately conservative notional figure, since that path is not metered.
 
 **Sliding window trade-off.** Older turns are dropped when a thread exceeds
 `LIBRARY_ASK_HISTORY_TURNS`. Dropped turns cause the history-prefix cache to

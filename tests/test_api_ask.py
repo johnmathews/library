@@ -25,6 +25,10 @@ pytestmark = pytest.mark.integration
 class _Usage:
     input_tokens: int
     output_tokens: int
+    # Anthropic reports cached tokens separately from `input_tokens`; default 0
+    # so existing fixtures keep meaning "nothing was cached".
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 @dataclass
@@ -69,8 +73,14 @@ class _FakeAnthropic:
         return False
 
 
-def _install_anthropic(monkeypatch: pytest.MonkeyPatch, responses: list[_Response]) -> None:
-    monkeypatch.setattr(ask_module, "AsyncAnthropic", lambda api_key: _FakeAnthropic(responses))
+def _install_anthropic(
+    monkeypatch: pytest.MonkeyPatch, responses: list[_Response]
+) -> _FakeAnthropic:
+    """Install the fake SDK and return it, so a test can assert on the kwargs
+    each `messages.create` actually received."""
+    fake = _FakeAnthropic(responses)
+    monkeypatch.setattr(ask_module, "AsyncAnthropic", lambda api_key: fake)
+    return fake
 
 
 @pytest.fixture
@@ -155,6 +165,106 @@ def test_system_prompt_includes_current_date() -> None:
     assert "2026-06-16" in prompt
     assert "The current year is 2026" in prompt
     assert '"last year" means 2025' in prompt
+
+
+# --- prompt-cache accounting -----------------------------------------------
+#
+# The tool loop re-sends the whole conversation each iteration, so a tool result
+# fetched on pass 2 is paid for again on passes 3 and 4. Top-level
+# `cache_control` makes those re-reads bill at ~0.1x. The accounting has to move
+# with it: Anthropic reports cached tokens in fields SEPARATE from
+# `input_tokens`, so counting only `input_tokens` makes spend appear to collapse
+# the moment caching starts working — partly because tokens stopped being
+# counted, not because they stopped being sent.
+
+
+def test_cached_usage_counts_nothing_extra_when_cache_is_cold() -> None:
+    total, billable = ask_engine._cached_usage(_Usage(input_tokens=1000, output_tokens=50))
+    assert (total, billable) == (1000, 1000)
+
+
+def test_cached_usage_totals_include_cached_tokens() -> None:
+    """`total` answers "how much context went in", cached or not."""
+    usage = _Usage(
+        input_tokens=100,
+        output_tokens=50,
+        cache_read_input_tokens=9000,
+        cache_creation_input_tokens=900,
+    )
+    total, _ = ask_engine._cached_usage(usage)
+    assert total == 10_000
+
+
+def test_cached_usage_prices_reads_at_a_tenth_and_writes_at_1_25x() -> None:
+    """A cache read must not cost the same as a fresh token, or the whole point
+    of caching is invisible in the recorded cost."""
+    usage = _Usage(
+        input_tokens=100,
+        output_tokens=50,
+        cache_read_input_tokens=9000,
+        cache_creation_input_tokens=900,
+    )
+    _, billable = ask_engine._cached_usage(usage)
+    # 100 fresh + 900 read-equivalent (9000 * 0.1) + 1125 write-equivalent
+    assert billable == 100 + 900 + 1125
+
+
+def test_cached_usage_billable_is_far_below_total_when_the_cache_hits() -> None:
+    """The property that matters: a warm cache is cheaper than a cold one for
+    identical context. Asserting the relationship, not just the arithmetic."""
+    context = 20_000
+    cold = ask_engine._cached_usage(_Usage(input_tokens=context, output_tokens=10))
+    warm = ask_engine._cached_usage(
+        _Usage(input_tokens=0, output_tokens=10, cache_read_input_tokens=context)
+    )
+    assert cold[0] == warm[0] == context  # same context either way
+    assert warm[1] < cold[1] / 5  # but far cheaper when served from cache
+
+
+def test_cached_usage_tolerates_a_usage_object_without_cache_fields() -> None:
+    """Older SDKs, and any provider shim, may not carry the cache fields at all.
+    Missing must read as "nothing cached", never raise."""
+
+    @dataclass
+    class _Bare:
+        input_tokens: int
+        output_tokens: int
+
+    assert ask_engine._cached_usage(_Bare(input_tokens=7, output_tokens=1)) == (7, 7)
+
+
+def test_ask_requests_prompt_caching_on_every_tool_loop_call(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without this the growing tool-result tail is re-read at full price on
+    every iteration of the loop — the dominant cost of a turn."""
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[_ToolUseBlock(name="query_documents", input={}, id="t1")],
+                usage=_Usage(100, 20),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="An answer.")],
+                usage=_Usage(150, 30),
+            ),
+        ],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "anything?"})
+    assert response.status_code == 200
+
+    # Both loop iterations, not just the first: the tail grows every pass, so a
+    # breakpoint on only the opening call would cache the cheapest request.
+    assert len(fake.messages.calls) == 2
+    for call in fake.messages.calls:
+        assert call["cache_control"] == {"type": "ephemeral"}
 
 
 def test_ask_without_api_key_returns_503(api_client: TestClient) -> None:
