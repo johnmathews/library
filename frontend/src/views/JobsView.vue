@@ -12,7 +12,7 @@
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useStorage } from '@vueuse/core'
 import { useRoute, useRouter } from 'vue-router'
-import { AppBadge, AppInput, AppPopover, AppSelect, PageHeader } from '@/components/app'
+import { AppBadge, AppPopover, PageHeader } from '@/components/app'
 import {
   getDocument,
   listDocuments,
@@ -95,6 +95,14 @@ const documentInput = ref('')
 const documentSuggestions = ref<{ id: number; title: string }[]>([])
 const documentChipTitle = ref('')
 let suggestAbort: AbortController | null = null
+
+// Set the ref, then search. Deliberately not `v-model` + `@input`: both would
+// fire on the same event and searchDocuments() reads `documentInput.value`, so
+// their ordering would decide whether it sees this keystroke or the last one.
+function onDocumentInput(event: Event): void {
+  documentInput.value = (event.target as HTMLInputElement).value
+  void searchDocuments()
+}
 
 async function searchDocuments(): Promise<void> {
   const q = documentInput.value.trim()
@@ -392,6 +400,64 @@ function cellValue(key: string, job: JobInfo): string {
 <template>
   <div id="jobs-view">
     <PageHeader title="Jobs">
+      <!-- Filter bar: pick a task type, or a document to trace its full history.
+           Both are reflected in the URL query for deep-linking.
+
+           Built from raw `.form-*` + `.filter-label` rather than `AppSelect` /
+           `AppInput` (§5): those carry the stacked-form label, and this bar now
+           shares a row with the header's own controls, so a second label recipe
+           in the same row is exactly the mismatch §5 exists to prevent. The
+           document field's guidance moves into the placeholder — a hint line
+           under one field would break the row's shared bottom edge. -->
+      <template #controls>
+        <div class="flex flex-wrap items-end gap-3" data-testid="jobs-filter-bar">
+          <div class="w-full sm:w-48">
+            <label class="filter-label" for="jobs-task-filter">Task type</label>
+            <select
+              id="jobs-task-filter"
+              v-model="taskFilter"
+              class="form-select w-full"
+              data-testid="jobs-task-filter"
+            >
+              <option v-for="item in taskOptions" :key="item.value" :value="item.value">
+                {{ item.text }}
+              </option>
+            </select>
+          </div>
+          <div class="w-full sm:w-72">
+            <label class="filter-label" for="jobs-document-filter">Document</label>
+            <input
+              id="jobs-document-filter"
+              :value="documentInput"
+              class="form-input w-full"
+              data-testid="jobs-document-filter"
+              list="jobs-document-options"
+              placeholder="Type to find a document…"
+              @input="onDocumentInput"
+              @change="applyTypedDocument"
+            />
+            <datalist id="jobs-document-options">
+              <option v-for="d in documentSuggestions" :key="d.id" :value="d.title" />
+            </datalist>
+          </div>
+          <div v-if="inHistoryMode" class="pb-1.5" data-testid="jobs-document-chip">
+            <span
+              class="inline-flex items-center gap-1.5 rounded-full bg-violet-100 dark:bg-violet-500/20 px-3 py-1 text-sm font-medium text-violet-700 dark:text-violet-300"
+            >
+              Document: {{ documentChipTitle }}
+              <button
+                type="button"
+                data-testid="jobs-document-chip-clear"
+                class="text-violet-500 hover:text-violet-700 dark:hover:text-violet-200"
+                aria-label="Clear document filter"
+                @click="clearDocumentFilter"
+              >
+                ✕
+              </button>
+            </span>
+          </div>
+        </div>
+      </template>
       <template #actions>
         <label class="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 cursor-pointer">
           <input
@@ -463,50 +529,6 @@ function cellValue(key: string, job: JobInfo): string {
     </div>
 
     <template v-else>
-      <!-- Filter bar: pick a task type, or a document to trace its full history.
-           Both are reflected in the URL query for deep-linking. The document
-           field grows to fit its hint on one line. -->
-      <div class="mb-4 flex flex-wrap items-end gap-4" data-testid="jobs-filter-bar">
-        <div class="w-full sm:w-48">
-          <AppSelect
-            id="jobs-task-filter"
-            v-model="taskFilter"
-            label="Task type"
-            :items="taskOptions"
-          />
-        </div>
-        <div class="w-full sm:flex-1 sm:min-w-[20rem] sm:max-w-xl">
-          <AppInput
-            id="jobs-document-filter"
-            v-model="documentInput"
-            label="Document"
-            hint="Type to find a document, then pick it to trace its history"
-            list="jobs-document-options"
-            @input="searchDocuments"
-            @change="applyTypedDocument"
-          />
-          <datalist id="jobs-document-options">
-            <option v-for="d in documentSuggestions" :key="d.id" :value="d.title" />
-          </datalist>
-        </div>
-        <div v-if="inHistoryMode" class="pb-1.5" data-testid="jobs-document-chip">
-          <span
-            class="inline-flex items-center gap-1.5 rounded-full bg-violet-100 dark:bg-violet-500/20 px-3 py-1 text-sm font-medium text-violet-700 dark:text-violet-300"
-          >
-            Document: {{ documentChipTitle }}
-            <button
-              type="button"
-              data-testid="jobs-document-chip-clear"
-              class="text-violet-500 hover:text-violet-700 dark:hover:text-violet-200"
-              aria-label="Clear document filter"
-              @click="clearDocumentFilter"
-            >
-              ✕
-            </button>
-          </span>
-        </div>
-      </div>
-
       <p
         v-if="orderedJobs.length === 0"
         data-testid="jobs-empty"
