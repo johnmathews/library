@@ -179,7 +179,10 @@ async function confirmDelete(slug: string): Promise<void> {
 
 <template>
   <div id="matters-view">
-    <PageHeader title="Matters">
+    <PageHeader
+      title="Matters"
+      description="A matter is an evergreen subject — car insurance, health insurance, subscriptions — that documents are filed into automatically, so everything on one topic stays together."
+    >
       <!-- One lone checkbox does not deserve a full-width band of its own, so
            it rides in the header toolbar beside "+ New matter". -->
       <template #controls>

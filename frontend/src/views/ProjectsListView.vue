@@ -170,7 +170,10 @@ async function confirmDelete(slug: string): Promise<void> {
 
 <template>
   <div id="projects-view">
-    <PageHeader title="Projects">
+    <PageHeader
+      title="Projects"
+      description="A project is a collection you put documents into yourself — a house purchase, a tax year — so everything about one undertaking stays together."
+    >
       <template #actions>
         <AppButton
           v-if="isAdmin && !showCreate"

@@ -118,4 +118,12 @@ describe('ProjectsListView', () => {
     await flushPromises()
     expect(listProjects).toHaveBeenLastCalledWith(true)
   })
+
+  it('explains what a project is for in the page lede, for every user', async () => {
+    const w = mountView(false)
+    await flushPromises()
+    const lede = w.get('[data-testid="page-lede"]').text()
+    expect(lede).toMatch(/yourself/i)
+    expect(lede).toMatch(/collection/i)
+  })
 })

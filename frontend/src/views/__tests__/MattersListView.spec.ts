@@ -130,4 +130,12 @@ describe('MattersListView', () => {
     await flushPromises()
     expect(listMatters).toHaveBeenLastCalledWith(true)
   })
+
+  it('explains what a matter is for in the page lede, for every user', async () => {
+    const w = mountView(false)
+    await flushPromises()
+    const lede = w.get('[data-testid="page-lede"]').text()
+    expect(lede).toMatch(/automatically/i)
+    expect(lede).toMatch(/subject/i)
+  })
 })
