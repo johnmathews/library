@@ -74,8 +74,62 @@ describe('PageHeader', () => {
       slots: { actions: '<button data-testid="save">Save</button>' },
     })
     const root = wrapper.get('[data-testid="page-header"]')
-    const cls = root.classes().join(' ')
+    expect(root.classes().join(' ')).toContain('w-full')
+    // The row is the root's child now that the root is the `@container`.
+    const row = wrapper.get('[data-testid="save"]').element.parentElement!.parentElement!
+    const cls = row.className
     expect(cls).toContain('flex')
     expect(cls).toContain('justify-between')
+  })
+
+  // --- the controls slot -----------------------------------------------------
+
+  it('renders controls slot content and keeps it before the actions', () => {
+    const wrapper = mount(PageHeader, {
+      props: { title: 'Charts' },
+      slots: {
+        controls: '<div data-testid="bar">filters</div>',
+        actions: '<button data-testid="create">Create</button>',
+      },
+    })
+    expect(wrapper.find('[data-testid="page-header-controls"]').exists()).toBe(true)
+    const html = wrapper.html()
+    // DOM order is visual order at every width — the controls stack above the
+    // actions below the merge threshold and sit left of them above it, so focus
+    // order never disagrees with what is on screen.
+    expect(html.indexOf('data-testid="bar"')).toBeLessThan(html.indexOf('data-testid="create"'))
+  })
+
+  it('renders the header for a controls-only view with no description or actions', () => {
+    // /matters in the non-admin case: a lone "Show archived" toggle and nothing
+    // else. That must still produce a header rather than falling into the
+    // renders-nothing branch.
+    const wrapper = mount(PageHeader, {
+      props: { title: 'Matters' },
+      slots: { controls: '<div data-testid="bar">toggle</div>' },
+    })
+    expect(wrapper.find('[data-testid="page-header"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="bar"]').exists()).toBe(true)
+  })
+
+  it('bottom-aligns the row and defers the right-push to the container query', () => {
+    const wrapper = mount(PageHeader, {
+      props: { title: 'Charts' },
+      slots: {
+        controls: '<div data-testid="bar">filters</div>',
+        actions: '<button data-testid="create">Create</button>',
+      },
+    })
+    const row = wrapper.get('[data-testid="page-header-controls"]').element.parentElement!
+    // items-end, not items-center: a row of labelled fields aligns on the
+    // inputs' bottom edge (§5) and the buttons join it.
+    expect(row.className).toContain('items-end')
+
+    const actions = wrapper.get('[data-testid="create"]').element.parentElement!
+    // `sm:` would be wrong here — the content column is the viewport minus a
+    // sidebar the user collapses independently, so the push right is gated on
+    // the container, not the viewport.
+    expect(actions.className).toContain('@5xl:ml-auto')
+    expect(actions.className).not.toContain('sm:ml-auto')
   })
 })

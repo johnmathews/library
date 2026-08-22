@@ -1,7 +1,7 @@
 # Frontend view design principles
 
-**Status:** active. **Last updated:** 2026-08-22 (§1.2 and §7: the page title moves to the app bar; the description stays as a lede at the top of `#app-page`). Earlier (2026-08-21): §4: relocate what a hidden container held, and test the capability rather than the mechanism). Earlier (2026-08-21): registered `library:ask-view-mode` and the wide-only mode pattern — store the preference, clamp the render, hide the control with `v-if`. Earlier (2026-08-12, documentation verification sweep): corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim.
-**Last verified:** 2026-08-22 — method: partial re-verification, scoped to the §1.2 / §7 `PageHeader` rules only. The relocated title was checked as a **visual** claim in the real stack (docker compose + `vite preview` + Playwright screenshots of Documents, Ask, Upload, Charts, Settings and New note at 1440px, plus Upload and the Ask list at 375px), and the "renders nothing for a bare title" rule was read off the Documents and Settings shots, not off the template. Backed by 1099 frontend unit tests and the full e2e suite (123 executed, all passing); the title-ownership guard was confirmed to red when reverted. The rest of the document carries forward its 2026-08-21 verification, whose method was: the new §4 paragraph generalises a defect shipped and fixed in this repo (PR #81 → #82), with the claim that the tests passed while the capability was unreachable confirmed by reverting the fix.
+**Status:** active. **Last updated:** 2026-08-22 (§1.2 and new §5.1: a view's filter bar moves into `PageHeader`'s `#controls` slot, merging into one toolbar via a **container** query; `/jobs`' bar rebuilt to the §5 label recipe). Earlier (2026-08-22): §1.2 and §7: the page title moves to the app bar; the description stays as a lede at the top of `#app-page`. Earlier (2026-08-21): §4: relocate what a hidden container held, and test the capability rather than the mechanism. Earlier (2026-08-21): registered `library:ask-view-mode` and the wide-only mode pattern — store the preference, clamp the render, hide the control with `v-if`. Earlier (2026-08-12, documentation verification sweep): corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim.
+**Last verified:** 2026-08-22 — method: partial re-verification, scoped to the new §5.1 and the §1.2 sentence pointing at it. These are **geometry** claims and were measured in the real stack (docker compose + the Vite dev server + Playwright) rather than read off class lists: the 1280px sidebar-expanded/collapsed table is the measured `#app-page` width and the observed merge outcome at each, and the container-vs-viewport claim was confirmed by swapping `@5xl:` for `lg:` and watching `e2e/header-toolbar.spec.ts` go red. Backed by 1102 frontend unit tests and the header-toolbar spec (5 tests). The rest of the document carries forward its 2026-08-22 verification, whose method was: the relocated title checked as a visual claim in the real stack via Playwright screenshots at 1440px and 375px.
 
 How to build a Library view that looks **right the first time** — using the
 Mosaic design language already in the app. This is a checklist plus the reasoning
@@ -23,6 +23,9 @@ Before a view is "done", every box is ticked:
 2. **Use a `PageHeader`.** Declare the title, the optional one-line description
    and any right-aligned primary/secondary actions there. Never hand-roll
    `<h1>`+`<p>`+buttons.
+
+   A view's filter/control bar goes in the header's **`#controls` slot** rather
+   than in a band of its own below it (§5.1).
 
    Note where each part lands. The **title goes to the app bar**, not to the top
    of the page body — `PageHeader` claims it through `usePageTitle` and
@@ -187,6 +190,48 @@ eye compares them directly. Use one pattern for all of them.
   replacing them with native date inputs matched the look and deleted logic. Reach
   for a bespoke multi-field control only when the native one genuinely can't do the
   job (`AppDateInput` remains for partial-date entry, e.g. `DocumentFilterBar`).
+
+### 5.1 The bar belongs in the header, not in a band below it
+
+Pass the bar to `PageHeader`'s **`#controls`** slot. The header then renders one
+toolbar — **view-state controls left, page commands right** — instead of a
+mostly-empty actions row above a mostly-empty filter row:
+
+```vue
+<PageHeader title="Charts">
+  <template #controls><ChartControls … /></template>
+  <template #actions><AppButton>+ Create a new series</AppButton></template>
+</PageHeader>
+```
+
+Three rules, each of which cost something to learn:
+
+1. **The merge is a container query (`@5xl`), never a viewport one.** The
+   content column is the viewport minus a sidebar the user collapses
+   independently, so the same viewport width offers different amounts of room.
+   Measured on `/charts`, 2026-08-22:
+
+   | viewport | sidebar | `#app-page` | merged? |
+   |---|---|---|---|
+   | 1280 | expanded | 1024 | no |
+   | 1280 | collapsed | 1200 | **yes** |
+
+   No `lg:` rule can produce that row. `e2e/header-toolbar.spec.ts` asserts both
+   halves, and goes red if the container query is swapped for a viewport one.
+2. **Below the threshold the two groups stack**, reproducing the pre-slot
+   layout. The merge is a wide-screen gain and a phone no-op. DOM order is
+   visual order at both widths — controls, then actions — so focus order never
+   disagrees with the screen.
+3. **The row is `items-end`.** A lede-and-buttons row aligns on centres, but a
+   row of labelled fields aligns on the *inputs'* bottom edge, and the buttons
+   join that edge. `PageHeader` switches between the two on the slot's presence.
+
+This is also why §5's one-recipe-per-bar rule got sharper: the bar now shares a
+row with the header's own controls, so a second label recipe is visible side by
+side rather than a band apart. `/jobs` was rebuilt from `AppSelect`/`AppInput`
+to raw `.form-*` + `.filter-label` for exactly that reason, and its document
+field's hint became a placeholder — a hint line under one field breaks the row's
+shared bottom edge.
 
 **Reference implementation:** `components/charts/ChartControls.vue` (2026-07-01).
 The sister project `journal/webapp` (same Mosaic stack) uses the identical pattern

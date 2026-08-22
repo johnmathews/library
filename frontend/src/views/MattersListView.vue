@@ -180,6 +180,20 @@ async function confirmDelete(slug: string): Promise<void> {
 <template>
   <div id="matters-view">
     <PageHeader title="Matters">
+      <!-- One lone checkbox does not deserve a full-width band of its own, so
+           it rides in the header toolbar beside "+ New matter". -->
+      <template #controls>
+        <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+          <input
+            v-model="includeArchived"
+            type="checkbox"
+            class="form-checkbox"
+            data-testid="matter-archived-toggle"
+            @change="load"
+          />
+          Show archived
+        </label>
+      </template>
       <template #actions>
         <AppButton
           v-if="isAdmin && !showCreate"
@@ -240,17 +254,6 @@ async function confirmDelete(slug: string): Promise<void> {
         </AppButton>
       </div>
     </form>
-
-    <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 mb-4">
-      <input
-        v-model="includeArchived"
-        type="checkbox"
-        class="form-checkbox"
-        data-testid="matter-archived-toggle"
-        @change="load"
-      />
-      Show archived
-    </label>
 
     <p v-if="loading" data-testid="matters-loading" class="text-gray-500 dark:text-gray-400">
       Loading…

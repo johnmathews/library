@@ -300,6 +300,22 @@ onMounted(load)
 <template>
   <div id="charts-view">
     <PageHeader title="Charts">
+      <!-- Shared time-range + grouping applied to every tile (W5). It rides in
+           the header's controls slot so the filters and the page commands share
+           one toolbar row instead of opening a second full-width band. -->
+      <template #controls>
+        <ChartControls
+          :timeframe="timeframe"
+          :timeframe-options="timeframeOptions"
+          :custom-from="customFrom"
+          :custom-to="customTo"
+          :grouping="grouping"
+          :grouping-options="groupingOptions"
+          @select-timeframe="selectTimeframe"
+          @set-custom="setCustom"
+          @update:grouping="grouping = $event"
+        />
+      </template>
       <template #actions>
         <AppButton
           v-if="candidates.length > 0"
@@ -321,20 +337,6 @@ onMounted(load)
         </AppButton>
       </template>
     </PageHeader>
-
-    <!-- Shared time-range + grouping applied to every tile (W5). -->
-    <ChartControls
-      class="mb-6"
-      :timeframe="timeframe"
-      :timeframe-options="timeframeOptions"
-      :custom-from="customFrom"
-      :custom-to="customTo"
-      :grouping="grouping"
-      :grouping-options="groupingOptions"
-      @select-timeframe="selectTimeframe"
-      @set-custom="setCustom"
-      @update:grouping="grouping = $event"
-    />
 
     <!-- Create-a-series form (W14). -->
     <form
