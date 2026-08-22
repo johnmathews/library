@@ -109,6 +109,14 @@ const actionsClass = computed<string>(() =>
     >
       {{ description }}
     </p>
+    <!-- With controls the row is a toolbar, so slotted description content
+         takes its own line above it, exactly as the `description` prop does.
+         Rendering it only in the row would silently drop it for any view that
+         passed both slots — and `hasBody` counts it, so the header would render
+         *because* of content that never appeared. -->
+    <div v-if="hasControls && $slots.description" class="mb-3">
+      <slot name="description" />
+    </div>
     <div :class="rowClass">
       <slot v-if="!hasControls" name="description" />
       <div
