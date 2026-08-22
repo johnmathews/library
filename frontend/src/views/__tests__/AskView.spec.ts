@@ -5,6 +5,7 @@ import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import AskView from '../AskView.vue'
 import { askQuestion, getThread, listThreads, type AskResponse } from '@/api/ask'
 import { ApiError } from '@/api/client'
+import { usePageTitle } from '@/composables/usePageTitle'
 
 vi.mock('@/api/ask', () => ({
   askQuestion: vi.fn(),
@@ -88,9 +89,12 @@ describe('AskView', () => {
     await flushPromises()
   }
 
-  it('renders the page heading', () => {
+  it('claims the page title for the app bar', () => {
     const w = mountView()
-    expect(w.find('h1').text()).toBe('Ask')
+    // The page title is claimed for the app bar rather than rendered in the
+    // view — see composables/usePageTitle.ts.
+    expect(w.find('h1').exists()).toBe(false)
+    expect(usePageTitle().pageTitle.value).toBe('Ask')
   })
 
   it('disables New conversation in the fresh state and enables it after an ask (item 2)', async () => {

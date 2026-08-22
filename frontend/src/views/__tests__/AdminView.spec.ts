@@ -62,6 +62,7 @@ import { refreshTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { ApiError } from '@/api/client'
 import AdminView from '../AdminView.vue'
 import { useAuthStore } from '@/stores/auth'
+import { usePageTitle } from '@/composables/usePageTitle'
 
 const systemInfo = {
   version: '1.2.3',
@@ -242,7 +243,9 @@ describe('AdminView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    expect(wrapper.find('h1').text()).toBe('Admin')
+    // The title is claimed for the app bar, so the view's first h1 is the
+    // active tab's own heading — see composables/usePageTitle.ts.
+    expect(usePageTitle().pageTitle.value).toBe('Admin')
     expect(wrapper.find('[data-testid="system-version"]').text()).toBe('1.2.3')
     expect(wrapper.find('[data-testid="system-git-sha"]').text()).toBe('abc123')
     expect(wrapper.find('[data-testid="system-deployment-row"]').text()).toContain('library-webserver')

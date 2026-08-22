@@ -621,13 +621,18 @@ defineExpose({ resetConversation })
       class="max-lg:hidden lg:shrink-0"
     />
 
-    <!-- Mobile list-screen title bar: a compact "Ask" heading + a ＋ that starts
-         a new chat. Only on mobile, only on the list screen. -->
+    <!-- Mobile list-screen action bar: a ＋ that starts a new chat. Only on
+         mobile, only on the list screen — the rail's "New conversation" button
+         is `max-lg:hidden`, so this is the only way in on a phone.
+
+         It used to carry its own big "Ask" heading too. The app bar now shows
+         the page title on every breakpoint (composables/usePageTitle.ts), so
+         that heading was a second visible "Ask" *and* a second `<h1>` on the
+         page; only the ＋ is left. -->
     <div
       v-if="mobileScreen === 'list'"
-      class="lg:hidden flex items-center justify-between mb-4"
+      class="lg:hidden flex items-center justify-end mb-4"
     >
-      <h1 class="text-2xl font-bold text-gray-800 dark:text-gray-100">Ask</h1>
       <button
         type="button"
         data-testid="ask-new-mobile"

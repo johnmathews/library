@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import SettingsView from '../SettingsView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { NEUTRAL_KIND_COLOR } from '@/api/settings'
+import { usePageTitle } from '@/composables/usePageTitle'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -38,22 +39,27 @@ describe('SettingsView', () => {
     fetchMock.mockReset()
   })
 
-  it('renders the page heading', () => {
+  it('claims the page title for the app bar', () => {
     const auth = useAuthStore()
     auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
     stubFetch({ dashboard_fields: ['kind'] })
     const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
-    expect(wrapper.find('h1').text()).toBe('Settings')
+    // The page title is claimed for the app bar rather than rendered in the
+    // view — see composables/usePageTitle.ts.
+    expect(wrapper.find('h1').exists()).toBe(false)
+    expect(usePageTitle().pageTitle.value).toBe('Settings')
   })
 
-  it('uses the shared PageHeader for the title', () => {
+  it('uses the shared PageHeader, which renders no band of its own for a bare title', () => {
     const auth = useAuthStore()
     auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
     stubFetch({ dashboard_fields: ['kind'] })
     const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
-    const header = wrapper.find('[data-testid="page-header"]')
-    expect(header.exists()).toBe(true)
-    expect(header.find('h1').text()).toBe('Settings')
+    // Settings passes a title and nothing else, so PageHeader renders nothing
+    // — an empty mb-6 band above the tabs is exactly what moving the title out
+    // was meant to reclaim.
+    expect(wrapper.find('[data-testid="page-header"]').exists()).toBe(false)
+    expect(usePageTitle().pageTitle.value).toBe('Settings')
   })
 
   it('does not cap the page width on the view root', () => {

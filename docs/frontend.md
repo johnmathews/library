@@ -1,7 +1,7 @@
 # Frontend
 
-**Status:** active. **Last updated:** 2026-08-22 (§1.5: the Ask composer is one flat full-width bar — the nested pill is gone). Earlier (2026-08-20): Settings gains an **LLM backend** tab — the instance-wide metered-API vs Claude-subscription choice per surface, admin-editable, read-only for everyone else; §1.3 `SettingsView`; badges colour-coded via AppBadge's `colour` prop, and the override badge reworded from "Overridden (deployed default: …)" to "Changed here" with the reset button naming its target value). Earlier: 2026-08-13 (the `index.html` sidebar seed now mirrors the store's full key precedence, so §1.2's note about it reading only the legacy key no longer applies; earlier, 2026-08-12: nightly Smart Groups heartbeat §1.7.0 and the Playwright-not-jsdom layout rule §1.7.3; earlier the same day, documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical).
-**Last verified:** 2026-08-22 — method: partial re-verification, scoped to the `AskView` composer sentence in §1.5 only. The flat full-width bar was checked as a **visual** claim in the real stack (docker compose + `vite preview` + Playwright screenshots at 1440px light/dark and 375px) rather than read off the class list, and the three Ask e2e specs (26 passed) plus the frontend unit suite (1089 passed) ran against that stack. The rest of the document carries forward its 2026-08-20 verification, whose method was: the `SettingsView` LLM-backend prose checked against `SettingsView.vue` (tab id, every `data-testid`, the lazy load, the per-surface `llmSaving` guard, the reload-then-set-error ordering) and against `frontend/src/api/settings.ts`, covered by `src/views/__tests__/SettingsLlmBackend.spec.ts` (10 tests, two of them confirmed to fail against the `variant` version).
+**Status:** active. **Last updated:** 2026-08-22 (the page title moves into `AppHeader`; `PageHeader` keeps only the lede + actions and renders nothing for a bare title. Also: the Ask composer is one flat full-width bar — the nested pill is gone). Earlier (2026-08-20): Settings gains an **LLM backend** tab — the instance-wide metered-API vs Claude-subscription choice per surface, admin-editable, read-only for everyone else; §1.3 `SettingsView`; badges colour-coded via AppBadge's `colour` prop, and the override badge reworded from "Overridden (deployed default: …)" to "Changed here" with the reset button naming its target value). Earlier: 2026-08-13 (the `index.html` sidebar seed now mirrors the store's full key precedence, so §1.2's note about it reading only the legacy key no longer applies; earlier, 2026-08-12: nightly Smart Groups heartbeat §1.7.0 and the Playwright-not-jsdom layout rule §1.7.3; earlier the same day, documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical).
+**Last verified:** 2026-08-22 — method: partial re-verification, scoped to the `AppHeader` section and the `AskView` composer sentence in §1.5. Both are **visual** claims and were checked visually in the real stack (docker compose + `vite preview` + Playwright screenshots) rather than read off class lists: the app-bar title on Documents/Ask/Upload/Charts/Settings/New note at 1440px and on Upload + the Ask list at 375px, the flat composer at 1440px light/dark and 375px. The 45px the Ask panel gained was measured off the before/after shots, not estimated. Backed by 1099 frontend unit tests and the full e2e suite (123 executed, all passing). The rest of the document carries forward its 2026-08-20 verification, whose method was: the `SettingsView` LLM-backend prose checked against `SettingsView.vue` and `frontend/src/api/settings.ts`, covered by `src/views/__tests__/SettingsLlmBackend.spec.ts` (10 tests, two confirmed to fail against the `variant` version).
 
 The Library web UI: a Vue 3 single-page app styled with the **Mosaic** design
 language (Cruip) — Tailwind 4, the Inter typeface, a violet accent, soft
@@ -237,11 +237,36 @@ Collapsible left sidebar. Props `{ sidebarOpen }`, emits `close-sidebar` and
 ### `src/components/layout/AppHeader.vue`
 
 Sticky top header. Props `{ sidebarOpen }`, emits `toggle-sidebar` and
-`open-search`. Contains: the mobile **hamburger** (`aria-controls="sidebar"`), a
-**search trigger** button (`data-testid="header-search-button"`, one of the
+`open-search`. Contains: the mobile **hamburger** (`aria-controls="sidebar"`),
+the **page title**, a **search trigger** button (`data-testid="header-search-button"`, one of the
 modal's entry points), the **`ThemeToggle`**, and a **user menu** showing
 `auth.user?.display_name || username` with **Settings** and **Sign Out** (calls
 `auth.logout()` then routes to `login`).
+
+**The page title lives here**, not at the top of the page body. It renders as the
+page's one `<h1>` (`[data-testid="app-bar-title"]`) immediately right of the
+hamburger — the contextual top-app-bar pattern. The *value* stays the view's:
+`PageHeader` claims it through the **`usePageTitle`** singleton
+(`src/composables/usePageTitle.ts`) and this component only renders what is
+claimed. Claims are **token-owned** so a release from a view that no longer owns
+the title is a no-op — without that, a route change that mounted the incoming
+view before unmounting the outgoing one would blank the bar, and mount ordering
+is not something this should depend on. The `<h1>` is `truncate` inside a
+`min-w-0` cluster and the right-hand cluster is `shrink-0`, so a long title
+yields rather than pushing search/theme/user off a phone. Views with their own
+hero title (document detail, note detail) claim nothing and the bar's left side
+falls back to just the hamburger.
+
+It previously showed **nothing at all** on the left at `lg+`, while every view
+spent ~44px of `#app-page` on an `<h1>` restating the highlighted sidebar item.
+That cost most on `/ask`, whose panel is sized off the remaining viewport
+(measured: the chat panel gained 45px at 1440×900). What stays in the body is the
+view's one-line **description**, restyled as a muted, `max-w-2xl` lede
+(`[data-testid="page-lede"]`) — see
+[frontend-view-principles.md §1.2](frontend-view-principles.md). A `PageHeader`
+given only a title now renders **nothing**, so title-only views (Documents,
+Settings, Admin, Recently Deleted, Saved views) start their content directly
+under the bar.
 
 It also renders the **background-jobs indicator** (`#header-jobs-indicator`,
 `[data-testid="header-jobs-button"]`), present only while `jobsStore.activeCount
@@ -748,9 +773,12 @@ Two real defects were fixed:
   Enter/Space-operable. (`AppPopover.vue` implements the contract properly and is
   the model if the roles are ever wanted back.)
 - **`AppSidebar.vue`** made the persistent wordmark an `<h1>`, so every
-  authenticated page had two competing top-level headings alongside
-  `PageHeader`'s. It is a `<p>` now, with identical classes — a screen-reader
-  heading list no longer leads with "LIBRARY" instead of the page title.
+  authenticated page had two competing top-level headings alongside the page
+  title's. It is a `<p>` now, with identical classes — a screen-reader heading
+  list no longer leads with "LIBRARY" instead of the page title. (That page
+  `<h1>` has since moved from `PageHeader` into `AppHeader`; it is still exactly
+  one per page, and `AskView`'s mobile list screen gave up its own duplicate
+  "Ask" heading when it did.)
 
 The remaining rules are **off with a named exit** in `eslint.config.ts`, matching
 the mypy ratchet's shape: the gate is real from its first run for everything

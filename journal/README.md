@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-150 entries.
+151 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## August 2026
 
+- **2026-08-22** — [Page title in the app bar](260822-page-title-in-the-app-bar.md)
 - **2026-08-22** — [Ask composer — one flat bar instead of a pill in a box](260822-ask-composer-flat-bar.md)
 - **2026-08-21** — [OpenTelemetry metrics for Ask](260821-otel-metrics-for-ask.md)
 - **2026-08-21** — [Ask: two fixes that only a screenshot could find](260821-ask-ui-polish-from-screenshots.md)
