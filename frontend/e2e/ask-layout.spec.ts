@@ -3,7 +3,7 @@
  *
  * The Ask composer has been fixed three times — `bf8da0c` (desktop composer
  * floating mid-panel after a short conversation), `60a2f06` (docking follow-up)
- * and `5a878a0` (controls colliding with the pill's curved corners) — and none
+ * and `5a878a0` (controls colliding with the then-pill's curved corners) — and none
  * of those fixes left behind a test that could catch the next one. The unit
  * specs cannot: jsdom has no layout, so `AskView.spec.ts` asserts classes, which
  * is asserting the fix rather than the property the fix was for.
@@ -133,14 +133,16 @@ test('typing a multi-line question grows the composer upward, not downward', asy
   expect(after.top, 'a grown composer must not be cut off above the viewport').toBeGreaterThanOrEqual(0)
 })
 
-test('the send and attach controls clear the composer pill corners', async ({ page }) => {
+test('the send and attach controls stay inset from the composer edges', async ({ page }) => {
   await stubAsk(page, 'Corner check.')
   await signIn(page)
   await askOnce(page, 'ask-layout-e2e: corner check')
 
-  // `5a878a0`: the controls sat in the pill's `rounded-3xl` corners, where the
-  // curve clips them. The pill's radius is 1.5rem = 24px; require each control
-  // to start inside that inset from the composer's own edges.
+  // `5a878a0`: the controls sat in the then-pill's `rounded-3xl` corners, where
+  // the curve clipped them. The composer is now a square-cornered full-width bar
+  // with no pill, so there is no curve left to collide with — but the property
+  // that fix was really about (the controls sit inside the composer's gutters,
+  // not flush against its edges) still has to hold, and this is what holds it.
   const inset = 12
   const composer = await rectOf(page, COMPOSER)
   const attach = await rectOf(page, '[data-testid="ask-image-attach"]')

@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-08-21 (§1.6: adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.
-**Last verified:** 2026-08-21 — method: adaptive thinking, the thinking-block replay path and prompt-cache hit rates were exercised **against the live API on the deployed host** by driving `run_ask` directly, because CI has no Anthropic key and stubs `/api/ask`; the per-call cache table and the 76.6% figure are that run's real numbers, with the warm-cache caveat stated inline. The ghost-button and scroll-on-open behaviours were found by reviewing screenshots of the running app and are pinned by 2 unit tests, both confirmed to fail when reverted (the first was vacuous until the transcript was given real geometry — jsdom reports zero height). Frontend suite 1089 passed. **Still unmeasured:** answer accuracy before vs after.
+**Status:** active. **Last updated:** 2026-08-22 (§1.6: the composer is one flat full-width bar — the nested pill is gone). Earlier (2026-08-21): adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.
+**Last verified:** 2026-08-22 — method: partial re-verification, scoped to the composer paragraph only. A visual claim needs a visual check, so the flat bar was screenshotted in the **real stack** (docker compose + `vite preview` + Playwright) at 1440px light/dark and 375px, not inferred from the class list; the three Ask e2e specs (26 passed, incl. the composer-geometry regressions) and the frontend unit suite (1089 passed) ran against that stack. The rest of the document carries forward its 2026-08-21 verification: adaptive thinking, thinking-block replay and prompt-cache hit rates exercised **against the live API on the deployed host** by driving `run_ask` directly (CI has no Anthropic key and stubs `/api/ask`), the cache table and 76.6% figure being that run's real numbers. **Still unmeasured:** answer accuracy before vs after.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -406,10 +406,16 @@ Each turn is visually layered: the question is a right-aligned violet bubble. **
 `lg+`** the answer (with its citations disclosure and tools/cost meta) sits on a
 subtle shaded, bordered surface card; **on mobile** that card is dropped and the
 answer is flat text under the bubble. The composer is a **single full-width
-pill** — a borderless, auto-growing textarea with the **attach (paperclip)** and
-**Send/Stop** controls on their own row *inside* the pill, so the text field is
-full width and the controls never squeeze it. Attach handles up to five images
-(previewed as thumbnails inside the pill).
+bar** — the `ask-form` element *is* the text-entry surface, square-cornered and
+flush with the panel, marked off from the transcript only by a slightly darker
+fill and a top rule. There is no pill and no boxed field nested inside it: a
+rounded field floating inside a bordered footer read as a box within a box. It
+holds a borderless, auto-growing textarea with the **attach (paperclip)** and
+**Send/Stop** controls on their own row below it, so the text field is full
+width and the controls never squeeze it. The top rule turns violet on
+`focus-within` — with the textarea's own outline suppressed, that rule is the
+composer's only visible focus indicator. Attach handles up to five images
+(previewed as thumbnails above the text).
 
 Sending is asynchronous and follows the Claude-app pattern: on submit the
 question appears in the transcript **immediately** as an optimistic turn and the
