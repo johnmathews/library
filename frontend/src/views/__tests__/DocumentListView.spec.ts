@@ -9,6 +9,7 @@ import { useFlashStore } from '@/stores/flash'
 import { useAuthStore } from '@/stores/auth'
 import { useJobsStore } from '@/stores/jobs'
 import { useSavedViewsStore } from '@/stores/savedViews'
+import { usePageTitle } from '@/composables/usePageTitle'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -234,7 +235,7 @@ describe('DocumentListView', () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()
 
-    expect(w.find('h1').text()).toBe('Documents')
+    expect(usePageTitle().pageTitle.value).toBe('Documents')
     expect(w.find('ul.app-doc-grid').exists()).toBe(true)
     const tile = w.find('[data-testid="doc-card"]')
     expect(tile.exists()).toBe(true)

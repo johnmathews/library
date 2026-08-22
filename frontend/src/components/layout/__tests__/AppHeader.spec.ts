@@ -4,6 +4,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
 import AppHeader from '../AppHeader.vue'
 import { useJobsStore, type DocumentEvent } from '@/stores/jobs'
+import { usePageTitle } from '@/composables/usePageTitle'
 
 function docEvent(id: number, status: string, title: string): DocumentEvent {
   return { document_id: id, event: 'status_changed', status, title }
@@ -79,5 +80,27 @@ describe('AppHeader', () => {
     expect(wrapper.text()).toContain('Invoice')
     expect(wrapper.text()).toContain('Receipt')
     expect(wrapper.get('[data-testid="header-jobs-viewall"]').attributes('href')).toBe('/jobs')
+  })
+
+  it('renders the claimed page title as the page h1', async () => {
+    const { claimPageTitle, releasePageTitle } = usePageTitle()
+    const view = Symbol('view')
+    claimPageTitle(view, 'Ask', 'ask-title')
+    const wrapper = mount(AppHeader, { props: { sidebarOpen: false }, global: { plugins: [router] } })
+    const h1 = wrapper.get('[data-testid="app-bar-title"]')
+    expect(h1.element.tagName).toBe('H1')
+    expect(h1.text()).toBe('Ask')
+    expect(h1.attributes('id')).toBe('ask-title')
+    // It must be the element that yields when the bar is tight, so a long
+    // title cannot push the search/theme/user cluster off a phone.
+    expect(h1.classes()).toContain('truncate')
+    releasePageTitle(view)
+  })
+
+  it('shows no title when the view claims none', () => {
+    // Detail views carry their own hero title; the bar stays empty rather than
+    // naming a section you are not on.
+    const wrapper = mount(AppHeader, { props: { sidebarOpen: false }, global: { plugins: [router] } })
+    expect(wrapper.find('[data-testid="app-bar-title"]').exists()).toBe(false)
   })
 })

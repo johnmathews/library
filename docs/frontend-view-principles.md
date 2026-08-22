@@ -1,7 +1,7 @@
 # Frontend view design principles
 
-**Status:** active. **Last updated:** 2026-08-21 (§4: relocate what a hidden container held, and test the capability rather than the mechanism). Earlier (2026-08-21): registered `library:ask-view-mode` and the wide-only mode pattern — store the preference, clamp the render, hide the control with `v-if`. Earlier (2026-08-12, documentation verification sweep): corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim.
-**Last verified:** 2026-08-21 — method: the new §4 paragraph is a generalisation of a defect actually shipped and then fixed in this repo (PR #81 → #82); the claim that the tests passed while the capability was unreachable was confirmed by reverting the fix and watching three tests go red. Earlier (2026-08-21): §4 entries checked against `useAskViewMode.ts` and its spec; §1.1 width rule re-measured in Chromium.
+**Status:** active. **Last updated:** 2026-08-22 (§1.2 and §7: the page title moves to the app bar; the description stays as a lede at the top of `#app-page`). Earlier (2026-08-21): §4: relocate what a hidden container held, and test the capability rather than the mechanism). Earlier (2026-08-21): registered `library:ask-view-mode` and the wide-only mode pattern — store the preference, clamp the render, hide the control with `v-if`. Earlier (2026-08-12, documentation verification sweep): corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim.
+**Last verified:** 2026-08-22 — method: partial re-verification, scoped to the §1.2 / §7 `PageHeader` rules only. The relocated title was checked as a **visual** claim in the real stack (docker compose + `vite preview` + Playwright screenshots of Documents, Ask, Upload, Charts, Settings and New note at 1440px, plus Upload and the Ask list at 375px), and the "renders nothing for a bare title" rule was read off the Documents and Settings shots, not off the template. Backed by 1099 frontend unit tests and the full e2e suite (123 executed, all passing); the title-ownership guard was confirmed to red when reverted. The rest of the document carries forward its 2026-08-21 verification, whose method was: the new §4 paragraph generalises a defect shipped and fixed in this repo (PR #81 → #82), with the claim that the tests passed while the capability was unreachable confirmed by reverting the fix.
 
 How to build a Library view that looks **right the first time** — using the
 Mosaic design language already in the app. This is a checklist plus the reasoning
@@ -20,8 +20,18 @@ Before a view is "done", every box is ticked:
    controlled by *content* (cards, grids, prose), never by an arbitrary outer
    wrapper. The model view is `DocumentDetailView.vue` (no root cap, internal
    two-column grid).
-2. **Use a `PageHeader`.** Title + description + right-aligned primary/secondary
-   actions, full width, at the top. Never hand-roll `<h1>`+`<p>`+buttons.
+2. **Use a `PageHeader`.** Declare the title, the optional one-line description
+   and any right-aligned primary/secondary actions there. Never hand-roll
+   `<h1>`+`<p>`+buttons.
+
+   Note where each part lands. The **title goes to the app bar**, not to the top
+   of the page body — `PageHeader` claims it through `usePageTitle` and
+   `AppHeader` renders the page's one `<h1>` beside the hamburger (the standard
+   contextual top-app-bar pattern). The **description stays at the top of
+   `#app-page`** as a muted, measure-capped *lede*, since with no title above it
+   a full-width paragraph would read as body copy. A `PageHeader` given only a
+   title renders **nothing at all** — don't add an empty description to "keep
+   the spacing".
 3. **Primary action is reachable without scrolling.** Save / Edit / Delete /
    Cancel live in the page header (or a sticky bar), not at the bottom of a long
    form. The user should never scroll down to commit.
@@ -222,7 +232,10 @@ panels) are the one deliberate exception — they stay next to their row.
    and hand-rolls its own `<h1>`s, so copying it reproduces exactly the defect
    §1 tells you to avoid. Its *layout* (no root cap, `grid-cols-1
    lg:grid-cols-2`) is still the reference; its header is not.
-2. Drop in `PageHeader` with the title, one-line description, and actions.
+2. Drop in `PageHeader` with the title, one-line description, and actions —
+   remembering the title surfaces in the app bar (§1.2). A view with its own
+   hero title (document detail) deliberately claims none, so the bar stays empty
+   rather than naming a section you are not on.
 3. Lay out content as cards in a responsive grid; default to filling the width.
 4. Wire any per-machine preference through `localStorage` (§4).
 5. Add/adjust unit tests; if you touch a responsive contract, update the e2e

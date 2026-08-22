@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import UploadView from '../UploadView.vue'
+import { usePageTitle } from '@/composables/usePageTitle'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -105,9 +106,12 @@ describe('UploadView', () => {
     return new File(['%PDF-1.4 test'], name, { type: 'application/pdf' })
   }
 
-  it('renders the page heading', () => {
+  it('claims the page title for the app bar', () => {
     const w = mountView()
-    expect(w.find('h1').text()).toBe('Upload documents')
+    // The page title is claimed for the app bar rather than rendered in the
+    // view — see composables/usePageTitle.ts.
+    expect(w.find('h1').exists()).toBe(false)
+    expect(usePageTitle().pageTitle.value).toBe('Upload documents')
   })
 
   it('does not cap the view root width', () => {

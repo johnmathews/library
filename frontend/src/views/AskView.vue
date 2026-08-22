@@ -621,13 +621,18 @@ defineExpose({ resetConversation })
       class="max-lg:hidden lg:shrink-0"
     />
 
-    <!-- Mobile list-screen title bar: a compact "Ask" heading + a ＋ that starts
-         a new chat. Only on mobile, only on the list screen. -->
+    <!-- Mobile list-screen action bar: a ＋ that starts a new chat. Only on
+         mobile, only on the list screen — the rail's "New conversation" button
+         is `max-lg:hidden`, so this is the only way in on a phone.
+
+         It used to carry its own big "Ask" heading too. The app bar now shows
+         the page title on every breakpoint (composables/usePageTitle.ts), so
+         that heading was a second visible "Ask" *and* a second `<h1>` on the
+         page; only the ＋ is left. -->
     <div
       v-if="mobileScreen === 'list'"
-      class="lg:hidden flex items-center justify-between mb-4"
+      class="lg:hidden flex items-center justify-end mb-4"
     >
-      <h1 class="text-2xl font-bold text-gray-800 dark:text-gray-100">Ask</h1>
       <button
         type="button"
         data-testid="ask-new-mobile"
@@ -1063,24 +1068,28 @@ defineExpose({ resetConversation })
              mobile). The bottom padding includes the safe-area inset so it clears
              the home indicator (viewport-fit=cover). Hidden on the mobile list
              screen with the pane. -->
+        <!-- The form IS the text-entry surface: one full-bleed bar, square with
+             the panel, whose darker fill is what marks it off from the
+             transcript above. There is no pill or boxed field nested inside it
+             — a rounded field floating inside a bordered footer read as a box
+             within a box. `lg:rounded-b-xl` only follows the panel's own bottom
+             corners so the fill does not square them off. -->
         <form
           id="ask-form"
           ref="composerRef"
           novalidate
-          class="shrink-0 border-t border-gray-200 dark:border-gray-700/60 bg-white dark:bg-gray-800 px-3 pt-2 sm:px-4 sm:pt-3 lg:rounded-b-xl"
+          class="shrink-0 border-t border-gray-200 dark:border-gray-700/60 bg-gray-100 dark:bg-gray-900/40 px-3 pt-2.5 sm:px-6 sm:pt-3 transition-colors focus-within:border-violet-400 dark:focus-within:border-violet-500 lg:rounded-b-xl"
           style="padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 0.625rem)"
           data-testid="ask-form"
           @submit.prevent="onSubmit"
         >
-          <!-- One composer pill: the text field spans the full width, and the
-               attach + send controls sit on their OWN row inside the pill, so
-               they never squeeze the text on a narrow screen. The pill owns the
-               border/rounding — there is no separate boxed field inside it. -->
-          <div
-            class="rounded-3xl border border-gray-300 dark:border-gray-600/80 bg-gray-50 dark:bg-gray-900/40 px-3 pt-2.5 pb-2 transition-colors focus-within:border-violet-400 dark:focus-within:border-violet-500"
-            :class="contentWidthClass"
-          >
-            <!-- Pending image attachments, inside the pill above the text. -->
+          <!-- Measure wrapper only — it draws nothing. In document mode it
+               centres the field on the same measure as the transcript above;
+               in conversation mode contentWidthClass is empty. The attach +
+               send controls sit on their OWN row below the text, so they never
+               squeeze it on a narrow screen. -->
+          <div :class="contentWidthClass">
+            <!-- Pending image attachments, above the text. -->
             <ul
               v-if="pendingImages.length"
               data-testid="ask-image-previews"
@@ -1105,7 +1114,9 @@ defineExpose({ resetConversation })
               </li>
             </ul>
 
-            <!-- Full-width, borderless, auto-growing text field. -->
+            <!-- Full-width, borderless, auto-growing text field. It has no surface of
+                 its own — the form is the surface — so its horizontal padding is
+                 zero and the text lines up with the transcript above. -->
             <textarea
               id="ask-question"
               ref="questionEl"
@@ -1114,11 +1125,11 @@ defineExpose({ resetConversation })
               data-testid="ask-question"
               :aria-label="turns.length ? 'Follow-up question' : 'Your question'"
               :placeholder="turns.length ? 'Ask a follow-up…' : 'Ask a question…'"
-              class="block w-full resize-none border-0 bg-transparent p-1 text-base sm:text-sm leading-5 text-gray-800 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-0"
+              class="block w-full resize-none border-0 bg-transparent px-0 py-1 text-base sm:text-sm leading-5 text-gray-800 dark:text-gray-100 placeholder-gray-400 dark:placeholder-gray-500 focus:outline-none focus:ring-0"
               @keydown="onComposerKeydown"
             ></textarea>
 
-            <!-- Action row inside the pill: attach on the left, send on the right. -->
+            <!-- Action row: attach on the left, send on the right. -->
             <div class="mt-1 flex items-center justify-between gap-2">
               <input
                 ref="imageInput"
@@ -1134,7 +1145,7 @@ defineExpose({ resetConversation })
                 type="button"
                 data-testid="ask-image-attach"
                 aria-label="Attach image"
-                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-gray-100 dark:hover:bg-gray-700/60 disabled:opacity-40 transition"
+                class="flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-gray-500 hover:bg-gray-200 dark:hover:bg-gray-700/60 disabled:opacity-40 transition"
                 :disabled="pendingImages.length >= MAX_IMAGES"
                 @click="imageInput?.click()"
               >
