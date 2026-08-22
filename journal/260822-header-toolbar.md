@@ -83,3 +83,44 @@ Frontend unit suite: 1102 passing (three new `PageHeader` cases). The one
 pre-existing failure was a spec asserting `flex`/`justify-between` on the header
 *root*, which is now the `@container` wrapper — the assertion moved to the row
 and the layout claim itself moved to the geometry spec, where it belongs.
+
+## 5. Found during wrap-up
+
+Two things the first pass missed, both caught by auditing rather than by
+re-reading what I had written:
+
+1. **Stale doc claims the first doc pass didn't reach.** Updating the
+   `PageHeader` section of `docs/frontend.md` felt like "the docs are done", but
+   the per-view table further down still described `/jobs`' task filter as an
+   `AppSelect` — which the same commit had just replaced. Also missing: the new
+   `header-toolbar.spec.ts` in the layout-spec enumeration, and any mention of
+   the matters archived toggle. The lesson is the boring one: derive the changed
+   surfaces from the diff and check each, because the surface you *edited* is
+   the one you stop looking at.
+2. **A silent slot drop in the new primitive.** `PageHeader` rendered its named
+   `#description` slot only in the no-controls branch, so a view passing both
+   `#description` and `#controls` would have lost the description with no error
+   — and `hasBody` counts that slot, so the header would have rendered *because*
+   of content that never appeared. No view passes both today, so nothing was
+   broken; it was a trap laid for the next one. Slotted content now takes its own
+   line above the toolbar, exactly as the `description` prop does, with a
+   regression test confirmed to go red without the fix.
+
+## 6. What is deliberately not done
+
+- **No other view was converted.** `/documents` keeps its `DocumentFilterBar` as
+  a separate band. It is a much larger bar (a full multi-field filter surface,
+  not a four-control strip) and would not fit a header row at any realistic
+  width, so merging it would only produce a permanently-wrapped toolbar. The
+  slot is available if that bar is ever slimmed.
+- **`ChartControls` was not given a compact variant.** The measured need
+  (987px) fits comfortably above the threshold, so shrinking the controls would
+  buy a lower breakpoint nobody asked for.
+- **The threshold is one number, not per-view.** `/jobs` and `/matters` need far
+  less width than `/charts` and could merge earlier, but a per-view threshold
+  would make the layout rule un-memorable for the sake of a band that only
+  appears in a narrow window of widths.
+- **No visual-regression snapshots.** The geometry spec asserts relationships
+  (merged/stacked, left/right, no overflow) rather than pixels, which is what
+  survives a font or padding change. Pixel snapshots for these three headers
+  would fail on every unrelated restyle.

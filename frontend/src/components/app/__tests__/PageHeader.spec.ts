@@ -112,6 +112,23 @@ describe('PageHeader', () => {
     expect(wrapper.find('[data-testid="bar"]').exists()).toBe(true)
   })
 
+  it('still renders slotted description content when controls are present', () => {
+    // Regression: the slot used to render only in the no-controls branch, so a
+    // view passing both lost it silently — and `hasBody` counts the slot, so the
+    // header rendered *because* of content that never appeared.
+    const wrapper = mount(PageHeader, {
+      props: { title: 'Charts' },
+      slots: {
+        description: '<p data-testid="lede-slot">Track recurring spend.</p>',
+        controls: '<div data-testid="bar">filters</div>',
+      },
+    })
+    expect(wrapper.find('[data-testid="lede-slot"]').exists()).toBe(true)
+    const html = wrapper.html()
+    // Above the toolbar, like the `description` prop's lede.
+    expect(html.indexOf('data-testid="lede-slot"')).toBeLessThan(html.indexOf('data-testid="bar"'))
+  })
+
   it('bottom-aligns the row and defers the right-push to the container query', () => {
     const wrapper = mount(PageHeader, {
       props: { title: 'Charts' },
