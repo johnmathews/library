@@ -29,7 +29,9 @@ import {
   getEmailTriageRecentSkips,
   getLLMBackends,
   resetLLMBackend,
+  ASK_PROFILE_MAX_CHARS,
   updateAppearance,
+  updateAskProfile,
   updateLLMBackend,
   updateKindColors,
   updateNotifications,
@@ -51,7 +53,7 @@ import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 
-type Tab = 'dashboard' | 'appearance' | 'notifications' | 'email-triage' | 'llm-backend'
+type Tab = 'dashboard' | 'appearance' | 'ask' | 'notifications' | 'email-triage' | 'llm-backend'
 const tab = ref<Tab>('dashboard')
 
 // --- Dashboard fields --------------------------------------------------------
@@ -366,6 +368,36 @@ async function onNotificationsSubmit(): Promise<void> {
   }
 }
 
+// --- Ask (About you) ---------------------------------------------------------
+
+// Free text, so an explicit Save rather than the appearance tab's save-per-click:
+// nobody wants a network round-trip per keystroke, and a half-typed note must
+// never reach the prompt. The draft is seeded from the store once; the store
+// is only updated from the server's echo on a successful save.
+const askProfile = ref(auth.askProfile)
+const askProfileSaving = ref(false)
+const askProfileSaved = ref(false)
+const askProfileError = ref<string | null>(null)
+
+async function onAskProfileSubmit(): Promise<void> {
+  askProfileSaving.value = true
+  askProfileSaved.value = false
+  askProfileError.value = null
+  try {
+    const result = await updateAskProfile(askProfile.value)
+    auth.applyPreferences(result)
+    askProfile.value = result.ask_profile ?? ''
+    askProfileSaved.value = true
+  } catch (error) {
+    askProfileError.value =
+      error instanceof ApiError && error.status === 422
+        ? `Keep the notes under ${ASK_PROFILE_MAX_CHARS} characters.`
+        : 'Sorry, your notes could not be saved. Try again.'
+  } finally {
+    askProfileSaving.value = false
+  }
+}
+
 // --- Email triage (read-only pipeline view) ----------------------------------
 
 // Loaded lazily on the tab's first show: the config is instance-wide and
@@ -541,6 +573,18 @@ const tabClass = (active: boolean): string =>
         @click="tab = 'appearance'"
       >
         Appearance
+      </button>
+      <button
+        id="settings-tab-ask"
+        role="tab"
+        type="button"
+        :aria-selected="tab === 'ask'"
+        :tabindex="tab === 'ask' ? 0 : -1"
+        :class="tabClass(tab === 'ask')"
+        data-testid="tab-ask-btn"
+        @click="tab = 'ask'"
+      >
+        Ask
       </button>
       <button
         id="settings-tab-notifications"
@@ -864,6 +908,49 @@ const tabClass = (active: boolean): string =>
             </button>
           </div>
         </fieldset>
+      </div>
+    </section>
+
+    <!-- Ask tab -->
+    <section id="settings-panel-ask" v-show="tab === 'ask'" role="tabpanel" data-testid="tab-ask">
+      <AppErrorSummary
+        v-if="askProfileError"
+        :errors="[{ text: askProfileError }]"
+        data-testid="ask-profile-error"
+      />
+
+      <div v-if="askProfileSaved" class="mb-6">
+        <AppBanner variant="success" data-testid="ask-profile-saved">
+          <p>Your notes have been saved. Ask uses them from your next question.</p>
+        </AppBanner>
+      </div>
+
+      <div id="settings-card-ask-profile" :class="cardClass">
+        <form data-testid="ask-profile-form" @submit.prevent="onAskProfileSubmit">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">About you</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Ask reads these notes with every question, as facts about you and your
+            household that the documents themselves never state: who lives with
+            you, your current address, which car is the family car, where you
+            work, when you moved. Plain sentences are fine. Ask treats them as
+            authoritative — if a document and your notes disagree, your notes win.
+            Only you can see them.
+          </p>
+          <div class="mt-5">
+            <AppTextarea
+              id="ask-profile"
+              label="Notes about you and your household"
+              :rows="8"
+              autocomplete="off"
+              :hint="`Up to ${ASK_PROFILE_MAX_CHARS} characters.`"
+              testid="ask-profile"
+              v-model="askProfile"
+            />
+          </div>
+          <div class="mt-6">
+            <AppButton type="submit" :disabled="askProfileSaving">Save changes</AppButton>
+          </div>
+        </form>
       </div>
     </section>
 

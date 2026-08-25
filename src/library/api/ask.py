@@ -17,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from library import telemetry
 from library.ask import run_ask
+from library.ask.context import load_archive_context, render_archive_context
 from library.ask.engine import _NO_ANSWER, generate_thread_title
 from library.auth.deps import current_user
 from library.config import get_settings
@@ -170,6 +171,8 @@ async def ask(
         thread = existing
 
     history = await _history_messages(session, thread.id, settings.ask_history_turns)
+    # Who is asking and what the archive calls things — see library.ask.context.
+    archive_context = render_archive_context(await load_archive_context(session, user))
 
     images = [{"media_type": image.media_type, "data": image.data} for image in request.images]
     turn_cost = 0.0
@@ -197,6 +200,7 @@ async def ask(
                     history_messages=history,
                     images=images,
                     backend=ask_backend,
+                    archive_context=archive_context,
                 )
             except SubscriptionBackendError as exc:
                 # 503, not 500: this is a configuration/credential problem an

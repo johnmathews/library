@@ -201,4 +201,28 @@ describe('useAuthStore', () => {
     }
     expect(auth.hideSummaryMobile).toBe(true)
   })
+
+  it('askProfile defaults to an empty string when the preference is absent', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'u',
+      display_name: 'U',
+      is_admin: false,
+      preferences: { dashboard_fields: [] },
+    }
+    expect(auth.askProfile).toBe('')
+  })
+
+  it('askProfile reflects the stored preference', () => {
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'u',
+      display_name: 'U',
+      is_admin: false,
+      preferences: { dashboard_fields: [], ask_profile: 'The Volvo is the family car.' },
+    }
+    expect(auth.askProfile).toBe('The Volvo is the family car.')
+  })
 })

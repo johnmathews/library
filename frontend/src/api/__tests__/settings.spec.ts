@@ -7,6 +7,7 @@ import {
   getEmailTriageRecentSkips,
   getSettings,
   updateAppearance,
+  updateAskProfile,
   updateNotifications,
   updateSettings,
 } from '../settings'
@@ -184,5 +185,22 @@ describe('settings api', () => {
     const [url, init] = fetchMock.mock.calls[0]!
     expect(String(url)).toBe('/api/settings/email-triage/recent-skips')
     expect(init.method).toBe('GET')
+  })
+})
+
+describe('ask profile api', () => {
+  afterEach(() => vi.unstubAllGlobals())
+
+  it('PUT /api/settings/ask-profile sends the profile text and returns the resolved preferences', async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(jsonResponse({ dashboard_fields: ['kind'], ask_profile: 'The Volvo is the family car.' }))
+    vi.stubGlobal('fetch', fetchMock)
+    const result = await updateAskProfile('The Volvo is the family car.')
+    expect(result.ask_profile).toBe('The Volvo is the family car.')
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toBe('/api/settings/ask-profile')
+    expect(init.method).toBe('PUT')
+    expect(JSON.parse(init.body)).toEqual({ ask_profile: 'The Volvo is the family car.' })
   })
 })
