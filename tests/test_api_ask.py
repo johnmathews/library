@@ -947,6 +947,7 @@ def test_ask_follow_up_replays_prior_turn(
         history_messages: list[dict[str, Any]] | None = None,
         images: list[dict[str, str]] | None = None,
         backend: str = "api",
+        archive_context: str | None = None,
     ):
         captured["history"] = history_messages
         captured["backend"] = backend
@@ -1380,3 +1381,72 @@ def test_ask_returns_503_when_the_subscription_cannot_authenticate(
     detail = response.json()["detail"]
     assert "claude auth login --claudeai" in detail
     assert "could not authenticate" in detail
+
+
+# --- archive context ---------------------------------------------------------
+#
+# The system prompt carries a block naming the user and the archive's vocabulary
+# (kinds, matters, projects, tags, frequent senders). Without it the model has to
+# guess slugs and cannot tell "my" bills from a housemate's.
+
+
+def test_system_prompt_appends_archive_context() -> None:
+    plain = ask_engine._system_prompt(date(2026, 6, 16))
+    with_context = ask_engine._system_prompt(
+        date(2026, 6, 16), archive_context='Archive context:\n- The user is "Ada Example".'
+    )
+    assert with_context.startswith(plain)
+    assert with_context.endswith('- The user is "Ada Example".')
+    assert ask_engine._system_prompt(date(2026, 6, 16), archive_context=None) == plain
+
+
+@pytest.mark.asyncio
+async def test_run_ask_sends_archive_context_in_the_cached_system_block() -> None:
+    from typing import cast
+
+    from library.ask.engine import run_ask
+
+    client = _FakeAnthropic(
+        [_Response(stop_reason="end_turn", content=[_TextBlock(text="ok")], usage=_Usage(1, 1))]
+    )
+    await run_ask(
+        cast(Any, None),
+        question="anything?",
+        settings=get_settings(),
+        client=cast(Any, client),
+        archive_context='- The user is "Ada Example".',
+    )
+    system = client.messages.calls[0]["system"]
+    assert 'The user is "Ada Example"' in system[0]["text"]
+    # Same block as the static prompt, so one breakpoint caches both.
+    assert system[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_ask_route_tells_the_model_who_the_user_is(
+    api_client: TestClient,
+    api_database_url: str,
+    auth_user: Any,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE users SET display_name = 'Ada Example' WHERE id = :id"),
+                {"id": auth_user.id},
+            )
+    finally:
+        engine.dispose()
+    fake = _install_anthropic(
+        monkeypatch,
+        [_Response(stop_reason="end_turn", content=[_TextBlock(text="ok")], usage=_Usage(1, 1))],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "what do I have?"})
+
+    assert response.status_code == 200, response.text
+    system_text = fake.messages.calls[0]["system"][0]["text"]
+    assert 'The user is "Ada Example"' in system_text
+    # The seeded kind vocabulary rides along so tool calls use real slugs.
+    assert "utility-bill" in system_text

@@ -19,6 +19,7 @@ from library.llm import backends as llm_backends
 from library.models import EmailSelectionTrace, User
 from library.schemas import (
     AppearancePreferences,
+    AskProfilePreferences,
     DashboardPreferences,
     EmailRecentSkipOut,
     EmailRecentSkipsOut,
@@ -200,6 +201,29 @@ async def put_appearance(
         "dock_position": payload.dock_position.value,
         "phone_columns": payload.phone_columns,
         "hide_summary_mobile": payload.hide_summary_mobile,
+    }
+    await db.commit()
+    return resolve_preferences(user.preferences)
+
+
+@router.put(
+    "/settings/ask-profile",
+    response_model=UserPreferences,
+    summary="Update the notes Ask reads about you",
+)
+async def put_ask_profile(
+    payload: AskProfilePreferences,
+    db: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(current_user)],
+) -> UserPreferences:
+    """Persist the "About you" notes the Ask prompt carries (docs/ask.md §1.2).
+
+    Blank text clears them. Over-long text is a ``422`` (see
+    ``AskProfilePreferences``), never silently cut.
+    """
+    user.preferences = {
+        **(user.preferences or {}),
+        "ask_profile": payload.ask_profile,
     }
     await db.commit()
     return resolve_preferences(user.preferences)

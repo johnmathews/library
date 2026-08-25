@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-08-20 (LLM backend selection: new `GET /api/settings/llm-backends` and admin-only `PUT`/`DELETE /api/settings/llm-backends/{surface}`, §1.10.8–1.10.10; `POST /api/ask` now answers **503** with the fix when the subscription backend cannot authenticate, §1.11). Earlier: 2026-08-12 (documentation verification sweep: documented `DELETE /api/admin/users/{id}` and the Smart Groups create/exclusion contract; corrected the `status` enum, the login/`me` and preferences shapes, the coverage and note-edit claims, and the `ts_rank` normalisation). Earlier (2026-07-17, business matters: business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
-**Last verified:** 2026-08-20 — method: the new §1.10.8–1.10.10 wire shapes and status codes checked against `src/library/api/settings.py` and `src/library/schemas.py`, and the §1.11 503 against `src/library/api/ask.py`; both covered by executed tests (`tests/test_llm_backends.py`, `tests/test_api_ask.py`) in a full run of 1632 passing. The rest of the document is unchanged since its previous verification, whose method was: 2026-08-12 — method: enumerated every `@router` decorator under `src/library/` and diffed it against the documented surface in both directions, then checked each endpoint's parameters, request/response fields, status codes and auth rules against `src/library/api/**`, `schemas.py`, `config.py` and `app.py`, all read in full; nothing was executed.
+**Status:** active. **Last updated:** 2026-08-25 (Ask profile: new `PUT /api/settings/ask-profile` and the `ask_profile` key on the resolved preference set, §1.10.11; the Ask tools' new recipient/project/matter/tag filters are prompt-side, documented in [ask.md §1.2](ask.md). Earlier (2026-08-20, LLM backend selection: new `GET /api/settings/llm-backends` and admin-only `PUT`/`DELETE /api/settings/llm-backends/{surface}`, §1.10.8–1.10.10; `POST /api/ask` now answers **503** with the fix when the subscription backend cannot authenticate, §1.11). Earlier: 2026-08-12 (documentation verification sweep: documented `DELETE /api/admin/users/{id}` and the Smart Groups create/exclusion contract; corrected the `status` enum, the login/`me` and preferences shapes, the coverage and note-edit claims, and the `ts_rank` normalisation). Earlier (2026-07-17, business matters: business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Last verified:** 2026-08-25 — method: the new §1.10.11 wire shape, status codes and the `ask_profile` read-model key checked against `src/library/api/settings.py` and `src/library/schemas.py`, covered by executed tests (`tests/test_settings_api.py`, eight new cases incl. the 422, the garbage-blob fallback and the read-side clip) in a full backend run. The rest carries forward its previous verification: 2026-08-20 — method: the new §1.10.8–1.10.10 wire shapes and status codes checked against `src/library/api/settings.py` and `src/library/schemas.py`, and the §1.11 503 against `src/library/api/ask.py`; both covered by executed tests (`tests/test_llm_backends.py`, `tests/test_api_ask.py`) in a full run of 1632 passing. The rest of the document is unchanged since its previous verification, whose method was: 2026-08-12 — method: enumerated every `@router` decorator under `src/library/` and diffed it against the documented surface in both directions, then checked each endpoint's parameters, request/response fields, status codes and auth rules against `src/library/api/**`, `schemas.py`, `config.py` and `app.py`, all read in full; nothing was executed.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -636,9 +636,10 @@ cookie is dead server-side immediately — and clears both cookies.
 `GET /api/auth/me` returns `{id, username, display_name, is_admin, preferences}`
 for the authenticated user (either credential). The login response (`POST
 /api/auth/login`) returns the same shape. `preferences` is the resolved
-preference set (defaults filled; see §1.10) — all eight keys:
+preference set (defaults filled; see §1.10) — all nine keys:
 `dashboard_fields`, `background_tone`, `tile_preview`, `dock_position`,
-`phone_columns`, `hide_summary_mobile`, `kind_colors`, `notifications`.
+`phone_columns`, `hide_summary_mobile`, `kind_colors`, `notifications`,
+`ask_profile`.
 
 ### 1.9.2 CSRF (cookie requests only)
 
@@ -683,7 +684,7 @@ curl -H "Authorization: Bearer library_3q2…" \
 Bearer requests are CSRF-exempt (the header cannot be set cross-site).
 Revoked or unknown tokens, and tokens of disabled users, get `401`.
 
-## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`, `PUT /api/settings/kind-colors`, `PUT /api/settings/notifications`, `GET /api/settings/email-triage`, `GET /api/settings/email-triage/recent-skips`, `GET /api/settings/llm-backends`, `PUT`/`DELETE /api/settings/llm-backends/{surface}`
+## 1.10 Settings — `GET /api/settings`, `PUT /api/settings`, `PUT /api/settings/appearance`, `PUT /api/settings/kind-colors`, `PUT /api/settings/notifications`, `GET /api/settings/email-triage`, `GET /api/settings/email-triage/recent-skips`, `GET /api/settings/llm-backends`, `PUT`/`DELETE /api/settings/llm-backends/{surface}`, `PUT /api/settings/ask-profile`
 
 Per-user preferences: which metadata fields appear on the dashboard tiles, the
 page-canvas tone behind them, how each tile previews the document's first page,
@@ -702,7 +703,7 @@ user has never saved preferences, the **default set** is returned (no
 `404` or empty body).
 
 ```json
-{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"], "background_tone": "neutral", "tile_preview": "full_width", "dock_position": "top-right", "phone_columns": 2, "hide_summary_mobile": false, "kind_colors": {}, "notifications": {"enabled": false, "pushover_app_token_set": false, "pushover_user_key_set": false, "pushover_device": null, "events": [], "email_forward_addresses": []}}
+{"dashboard_fields": ["kind", "sender", "tags", "date", "language", "status"], "background_tone": "neutral", "tile_preview": "full_width", "dock_position": "top-right", "phone_columns": 2, "hide_summary_mobile": false, "kind_colors": {}, "notifications": {"enabled": false, "pushover_app_token_set": false, "pushover_user_key_set": false, "pushover_device": null, "events": [], "email_forward_addresses": []}, "ask_profile": ""}
 ```
 
 ### 1.10.2 `PUT /api/settings`
@@ -1008,6 +1009,23 @@ question discovering it as a failed query.
 
 Drop the override so the surface follows the deployed default again. **Admin
 only**; same `403`/`404` semantics. Returns the re-resolved `GET` payload.
+
+### 1.10.11 `PUT /api/settings/ask-profile`
+
+Body: `{"ask_profile": "<text>"}`. Persists the user's free-text **"About you"**
+notes and returns the full resolved preference set (same shape as GET). Auth +
+CSRF apply. The text is appended to the Ask system prompt on every turn as
+authoritative personal context — who lives with the user, their current
+address, which car is theirs — see [ask.md §1.2, *Archive context*](ask.md).
+Leading/trailing whitespace is stripped; blank text clears the notes
+(`ask_profile` reads back as `""`, the default).
+
+**Not tolerant, on purpose.** Unlike the appearance flags, over-long text is a
+`422` rather than a silent truncation: the notes are the user's own words, so a
+cut would change what Ask is told without telling them. The cap is
+`MAX_ASK_PROFILE_CHARS` (4000). On read, a stored value that is not a string
+(a hand-edited blob) resolves to `""`, and a stored string longer than the cap
+is clipped to it.
 
 ## 1.11 Ask — `POST /api/ask`
 

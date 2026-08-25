@@ -547,6 +547,43 @@ def _resolve_hide_summary_mobile(blob: dict[str, Any]) -> bool:
     return raw if isinstance(raw, bool) else DEFAULT_HIDE_SUMMARY_MOBILE
 
 
+DEFAULT_ASK_PROFILE: Final[str] = ""
+# Hard cap on the "About you" notes Ask reads every turn. Generous for a
+# household (a few dozen lines) and small next to the tool results a turn
+# already ships; the point is that a runaway paste cannot become a prompt.
+MAX_ASK_PROFILE_CHARS: Final[int] = 4000
+
+
+def _resolve_ask_profile(blob: dict[str, Any]) -> str:
+    """Pick the stored Ask profile ("About you" notes), stripped.
+
+    Tolerant like the other resolvers: only a real ``str`` counts; anything
+    else (absent key, a hand-edited number/list) resolves to the empty default
+    rather than raising. Over-long stored text is clipped to the cap so a
+    blob written before the cap existed cannot exceed it on read.
+    """
+    raw = blob.get("ask_profile")
+    if not isinstance(raw, str):
+        return DEFAULT_ASK_PROFILE
+    return raw.strip()[:MAX_ASK_PROFILE_CHARS]
+
+
+class AskProfilePreferences(BaseModel):
+    """Body of PUT /api/settings/ask-profile — the user's "About you" notes.
+
+    Unlike the appearance flags this is **not** coerced on failure: the text is
+    the user's own words, so an over-long body is a ``422`` they can act on,
+    not a silent truncation.
+    """
+
+    ask_profile: str = Field(default=DEFAULT_ASK_PROFILE, max_length=MAX_ASK_PROFILE_CHARS)
+
+    @field_validator("ask_profile", mode="after")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
+
+
 class DockPosition(StrEnum):
     """Where the freeform-card action dock docks on the dashboard.
 
@@ -898,6 +935,8 @@ class UserPreferences(BaseModel):
     hide_summary_mobile: bool
     kind_colors: dict[str, str]
     notifications: NotificationSettingsOut
+    # Free-text "About you" notes appended to the Ask prompt (docs/ask.md §1.2).
+    ask_profile: str
 
 
 def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
@@ -916,6 +955,7 @@ def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
         hide_summary_mobile=_resolve_hide_summary_mobile(blob),
         kind_colors=_resolve_kind_colors(blob),
         notifications=resolve_notification_settings(blob),
+        ask_profile=_resolve_ask_profile(blob),
     )
 
 

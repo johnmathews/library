@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-153 entries.
+154 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## August 2026
 
+- **2026-08-25** — [Ask learns who is asking and what the archive calls things](260825-ask-archive-context.md)
 - **2026-08-22** — [Page title in the app bar](260822-page-title-in-the-app-bar.md)
 - **2026-08-22** — [Matters and Projects get a one-sentence lede](260822-matters-projects-ledes.md)
 - **2026-08-22** — [One header toolbar instead of two bands](260822-header-toolbar.md)

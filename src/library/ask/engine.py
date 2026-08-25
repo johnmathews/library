@@ -53,9 +53,11 @@ Use the tools to find evidence, then answer:
   clause in my contract"). Use for questions about what a document says.
 - query_documents: aggregate over structured metadata (e.g. "who was my energy
   provider last year", "how much did I spend on utilities in 2025"). Use for
-  who/how-many/how-much/which-over-time questions.
+  who/how-many/how-much/which-over-time questions. Filter by kind, sender,
+  recipient, date range, and the user's own projects, matters and tags.
 - compare_to_series: compare a recurring bill to its usual values / last year /
-  trend (e.g. "is this electricity bill higher than usual?").
+  trend (e.g. "is this electricity bill higher than usual?"). Takes the same
+  filters.
 - get_document: read one document in full (structured fields, the user's
   comments, and its text) once you have located it via another tool. A
   document's comments are the user's own notes about it and are authoritative
@@ -76,6 +78,14 @@ The user may attach one or more images (a photo or scan of a document) with the
 question. Read them directly as evidence, and combine what they show with tool
 results when answering.
 
+The "Archive context" block at the end of this prompt names the user, the
+recipient names that are theirs, and the archive's vocabulary: kind, matter,
+project and tag slugs, and the most frequent senders. Use those exact slugs and
+names in tool calls instead of guessing; when a question says "my"/"me"/"I",
+it means that user. If it carries an "About the user" note, that is the user's
+own account of their household and circumstances — authoritative personal
+context, like document comments: trust it over inference from documents.
+
 Rules:
 - Answer ONLY from tool results. Never invent facts.
 - If the tools return nothing relevant, say plainly that the archive does not
@@ -86,19 +96,60 @@ Rules:
 """
 
 
-def _system_prompt(today: date) -> str:
+def _system_prompt(today: date, archive_context: str | None = None) -> str:
     """Render the Ask system prompt with concrete dates so the model resolves
-    relative references ("last year") against the real current date."""
-    return ASK_SYSTEM_PROMPT_TEMPLATE.format(
+    relative references ("last year") against the real current date.
+
+    ``archive_context`` (see ``library.ask.context``) is appended as the final
+    block. It shares the static prompt's cache breakpoint on purpose: the
+    block only changes when the taxonomy does, so a separate breakpoint would
+    spend one of the four the API allows for no measurable gain.
+    """
+    prompt = ASK_SYSTEM_PROMPT_TEMPLATE.format(
         today=today.isoformat(),
         year=today.year,
         last_year=today.year - 1,
     )
+    if archive_context:
+        prompt = f"{prompt}\n{archive_context}"
+    return prompt
 
 
 def _kind_hint() -> str:
     pairs = ", ".join(f"{concept}={slug}" for concept, slug in CONCEPT_TO_KIND.items())
     return f"Concept→kind hints: {pairs}."
+
+
+# Filter parameters shared by the two structured tools. They map 1:1 onto
+# ``DocumentFilters``; slugs are the ones the archive-context block lists.
+_FILTER_PROPERTIES: dict[str, Any] = {
+    "kind": {"type": "string", "description": "Kind slug filter, e.g. utility-bill."},
+    "sender_contains": {"type": "string", "description": "Substring of sender name."},
+    "recipient_contains": {
+        "type": "string",
+        "description": (
+            "Substring of the recipient (addressee) name. Use the user's own "
+            "recipient names from the archive context for 'my' documents."
+        ),
+    },
+    "projects": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Project slugs; a document in ANY of them matches.",
+    },
+    "matters": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Matter slugs; a document in ANY of them matches.",
+    },
+    "tags": {
+        "type": "array",
+        "items": {"type": "string"},
+        "description": "Tag slugs; a document must carry ALL of them.",
+    },
+    "date_from": {"type": "string", "description": "Inclusive ISO date lower bound."},
+    "date_to": {"type": "string", "description": "Inclusive ISO date upper bound."},
+}
 
 
 TOOLS: list[dict[str, Any]] = [
@@ -139,10 +190,7 @@ TOOLS: list[dict[str, Any]] = [
                         "to total quotes instead). list: matching documents."
                     ),
                 },
-                "kind": {"type": "string", "description": "Kind slug filter, e.g. utility-bill."},
-                "sender_contains": {"type": "string", "description": "Substring of sender name."},
-                "date_from": {"type": "string", "description": "Inclusive ISO date lower bound."},
-                "date_to": {"type": "string", "description": "Inclusive ISO date upper bound."},
+                **_FILTER_PROPERTIES,
                 "group_by": {
                     "type": "string",
                     "enum": ["sender", "kind"],
@@ -164,10 +212,7 @@ TOOLS: list[dict[str, Any]] = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "kind": {"type": "string", "description": "Kind slug, e.g. utility-bill."},
-                "sender_contains": {"type": "string", "description": "Substring of sender name."},
-                "date_from": {"type": "string", "description": "Inclusive ISO date lower bound."},
-                "date_to": {"type": "string", "description": "Inclusive ISO date upper bound."},
+                **_FILTER_PROPERTIES,
                 "reference": {
                     "type": "string",
                     "description": "'latest' (default) to compare the newest bill, or a number.",
@@ -437,15 +482,38 @@ async def _run_semantic_search(
     return {"results": rows}
 
 
-async def _run_query_documents(
-    session: AsyncSession, args: dict[str, Any], cited: set[int]
-) -> QueryResult:
-    filters = DocumentFilters(
-        kind_slug=args.get("kind"),
-        sender_contains=args.get("sender_contains"),
+def _text_arg(value: object) -> str | None:
+    """A non-blank string argument, else None (the model sometimes sends "")."""
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+def _slug_args(value: object) -> tuple[str, ...]:
+    """A list-of-slugs argument as a tuple, tolerating None, "" and a bare string."""
+    if value is None:
+        return ()
+    items = [value] if isinstance(value, str) else list(value) if isinstance(value, list) else []
+    return tuple(slug for slug in (_text_arg(item) for item in items) if slug is not None)
+
+
+def _filters_from_args(args: dict[str, Any]) -> DocumentFilters:
+    """The ``DocumentFilters`` for a structured tool call's ``_FILTER_PROPERTIES``."""
+    return DocumentFilters(
+        kind_slug=_text_arg(args.get("kind")),
+        sender_contains=_text_arg(args.get("sender_contains")),
+        recipient_contains=_text_arg(args.get("recipient_contains")),
+        project_slugs=_slug_args(args.get("projects")),
+        matter_slugs=_slug_args(args.get("matters")),
+        tag_slugs=_slug_args(args.get("tags")),
         date_from=_parse_date(args.get("date_from")),
         date_to=_parse_date(args.get("date_to")),
     )
+
+
+async def _run_query_documents(
+    session: AsyncSession, args: dict[str, Any], cited: set[int]
+) -> QueryResult:
+    filters = _filters_from_args(args)
     result = await query_documents(
         session,
         filters=filters,
@@ -463,12 +531,7 @@ async def _run_query_documents(
 async def _run_compare_to_series(
     session: AsyncSession, settings: Settings, args: dict[str, Any], cited: set[int]
 ) -> dict[str, Any]:
-    filters = DocumentFilters(
-        kind_slug=args.get("kind"),
-        sender_contains=args.get("sender_contains"),
-        date_from=_parse_date(args.get("date_from")),
-        date_to=_parse_date(args.get("date_to")),
-    )
+    filters = _filters_from_args(args)
     raw_reference = args.get("reference", "latest")
     reference: Decimal | Literal["latest"]
     if raw_reference in (None, "latest", ""):
@@ -845,6 +908,7 @@ async def _run_api_turn(
     dispatch: _Dispatcher,
     result: AskResult,
     used: list[str],
+    archive_context: str | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Run the turn against the metered Messages API.
 
@@ -859,7 +923,7 @@ async def _run_api_turn(
     system_prompt: list[dict[str, Any]] = [
         {
             "type": "text",
-            "text": _system_prompt(date.today()),
+            "text": _system_prompt(date.today(), archive_context),
             "cache_control": {"type": "ephemeral"},
         }
     ]
@@ -988,6 +1052,7 @@ async def _run_subscription_turn(
     dispatch: _Dispatcher,
     result: AskResult,
     used: list[str],
+    archive_context: str | None = None,
 ) -> tuple[str, list[dict[str, Any]]]:
     """Run the turn against the Claude subscription via the Agent SDK.
 
@@ -1005,7 +1070,7 @@ async def _run_subscription_turn(
     loop = await subscription.tool_loop(
         config_dir=settings.claude_config_dir,
         model=model,
-        system_prompt=_system_prompt(date.today()),
+        system_prompt=_system_prompt(date.today(), archive_context),
         question=question,
         tools=TOOLS,
         dispatch=dispatch,
@@ -1046,6 +1111,7 @@ async def run_ask(
     history_messages: list[dict[str, Any]] | None = None,
     images: list[dict[str, str]] | None = None,
     backend: LLMBackend = "api",
+    archive_context: str | None = None,
 ) -> AskResult:
     """Answer ``question`` from the archive via a bounded Claude tool-use loop.
 
@@ -1064,6 +1130,10 @@ async def run_ask(
     Anthropic block form, so a thread stays readable and the write gate keeps
     working after the setting is flipped either way. ``client`` is only used by
     the ``api`` backend.
+
+    ``archive_context`` is the rendered ``library.ask.context`` block — who the
+    user is and the archive's slug vocabulary — appended to the system prompt on
+    both backends. ``None`` (the default, used by tests) answers without it.
     """
     model = settings.ask_model
     result = AskResult(answer="", citations=[], used_tools=[], model=model)
@@ -1114,6 +1184,7 @@ async def run_ask(
             dispatch=dispatch,
             result=result,
             used=used,
+            archive_context=archive_context,
         )
     else:
         answer, new_messages = await _run_api_turn(
@@ -1125,6 +1196,7 @@ async def run_ask(
             dispatch=dispatch,
             result=result,
             used=used,
+            archive_context=archive_context,
         )
 
     result.answer = answer or _NO_ANSWER

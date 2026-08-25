@@ -104,6 +104,13 @@ export const DEFAULT_PHONE_COLUMNS = 2
 export const DEFAULT_HIDE_SUMMARY_MOBILE = false
 
 /**
+ * Free-text "About you" notes Ask reads with every question (mirrors the
+ * backend's DEFAULT_ASK_PROFILE / MAX_ASK_PROFILE_CHARS).
+ */
+export const DEFAULT_ASK_PROFILE = ''
+export const ASK_PROFILE_MAX_CHARS = 4000
+
+/**
  * The built-in default tile-border colour for each document kind, by slug. Only
  * the kinds that meaningfully occur are coloured; every other kind (incl.
  * `other`) has no entry and renders with the tile's neutral default border.
@@ -198,6 +205,7 @@ export interface UserPreferences {
   notifications?: NotificationPreferences
   phone_columns?: number
   hide_summary_mobile?: boolean
+  ask_profile?: string
 }
 
 /** GET /api/settings — resolved display preferences. */
@@ -244,6 +252,14 @@ export function updateKindColors(
   return apiFetch<UserPreferences>('/api/settings/kind-colors', {
     method: 'PUT',
     body: { kind_colors: kindColors },
+  })
+}
+
+/** PUT /api/settings/ask-profile — persist the "About you" notes Ask reads. */
+export function updateAskProfile(profile: string): Promise<UserPreferences> {
+  return apiFetch<UserPreferences>('/api/settings/ask-profile', {
+    method: 'PUT',
+    body: { ask_profile: profile },
   })
 }
 

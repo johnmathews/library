@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-08-22 (§1.6: the composer is one flat full-width bar — the nested pill is gone). Earlier (2026-08-21): adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.
-**Last verified:** 2026-08-22 — method: partial re-verification, scoped to the composer paragraph only. A visual claim needs a visual check, so the flat bar was screenshotted in the **real stack** (docker compose + `vite preview` + Playwright) at 1440px light/dark and 375px, not inferred from the class list; the three Ask e2e specs (26 passed, incl. the composer-geometry regressions) and the frontend unit suite (1089 passed) ran against that stack. The rest of the document carries forward its 2026-08-21 verification: adaptive thinking, thinking-block replay and prompt-cache hit rates exercised **against the live API on the deployed host** by driving `run_ask` directly (CI has no Anthropic key and stubs `/api/ask`), the cache table and 76.6% figure being that run's real numbers. **Still unmeasured:** answer accuracy before vs after.
+**Status:** active. **Last updated:** 2026-08-25 (§1.2 *Archive context*: the system prompt now names the user, their recipient names, their free-text **About you** notes (Settings → Ask) and the archive's kind/tag/project/matter/sender vocabulary; `query_documents` and `compare_to_series` filter by `recipient_contains`, `projects`, `matters`, `tags`). Earlier (2026-08-22): the composer is one flat full-width bar — the nested pill is gone. Earlier (2026-08-21): adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.
+**Last verified:** 2026-08-25 — method: read `ask/engine.py`, `ask/context.py` and `api/ask.py` against §1.2; ran the Ask suites (`test_ask_context.py` incl. the profile cases, `test_ask_tool_filters.py`, `test_api_ask.py` — 59 passed, including the byte-stable-rendering and route-level identity checks) and the full backend suite (1723 passed before the review-driven cap, re-run under coverage after it); ruff, mypy and `check_docs` clean. The archive-context block has **not** been exercised against the live API — cache behaviour is inferred from its byte-stability, not measured. Earlier verification (2026-08-22): partial re-verification, scoped to the composer paragraph only. A visual claim needs a visual check, so the flat bar was screenshotted in the **real stack** (docker compose + `vite preview` + Playwright) at 1440px light/dark and 375px, not inferred from the class list; the three Ask e2e specs (26 passed, incl. the composer-geometry regressions) and the frontend unit suite (1089 passed) ran against that stack. The rest of the document carries forward its 2026-08-21 verification: adaptive thinking, thinking-block replay and prompt-cache hit rates exercised **against the live API on the deployed host** by driving `run_ask` directly (CI has no Anthropic key and stubs `/api/ask`), the cache table and 76.6% figure being that run's real numbers. **Still unmeasured:** answer accuracy before vs after.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -73,7 +73,12 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    (one chunk per document still drives fusion).
 3. **Structured query** (`query_documents`). Aggregations over the extracted
    columns: distinct senders, summed amounts (by currency, optionally grouped by
-   sender/kind), and document lists. Every row carries the contributing document
+   sender/kind), and document lists. Filters are the list API's
+   `DocumentFilters` vocabulary: `kind`, `sender_contains`, `recipient_contains`,
+   a date range, and the user's own organisation — `projects` and `matters`
+   (a document in *any* of the given slugs matches) and `tags` (a document must
+   carry *all* of them). Blank strings and empty lists — which the model does
+   send — are treated as absent. Every row carries the contributing document
    ids for citation; document refs also expose `title`, `sender`, `recipient`,
    `kind`, `document_date`, and `amount_total`. Aggregation citations have no text location, so their
    `page_number` is always `None`.
@@ -86,7 +91,8 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    `structured_query.sum_amount`, not the prompt, so it holds regardless of how
    the question is phrased.
 4. **Series comparison** (`compare_to_series`). Statistical summary of a
-   recurring-document series — see §1.7 for details. Returns distribution
+   recurring-document series — see §1.7 for details. Takes the same filters as
+   `query_documents`, so a series can be pinned to a matter or a recipient. Returns distribution
    (count/mean/median/stdev/min/max), a reference-vs-usual verdict, a trend
    direction, and a year-over-year comparison. All members contribute their ids
    to the citation set.
@@ -114,6 +120,45 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    `Title, p. N` when a page number is available and deep-links the PDF iframe to
    that page (`#page=N` in the URL fragment); citations from documents without a
    markdown layer show only the title.
+
+**Archive context.** The model is told who is asking and what the archive
+calls things. Each turn, `library.ask.context` reads the user's name
+(`display_name`, falling back to the username), the recipient names linked to
+that user (`Recipient.user_id` — the "this is me" link ingestion maintains),
+and the archive's vocabulary — every kind (slug and name), up to 100 tags
+(alphabetical by slug), the active projects with their descriptions and the
+active matters with their classifier hints (each capped at 50, alphabetical by
+slug: Ask's own write tool can create both, so nothing else bounds them), and
+the forty most frequent senders — and renders it as an "Archive context" block
+appended to the system prompt. The prompt tells the
+model to use those exact slugs in tool calls and to read "my"/"me"/"I" as that
+user, so "who was my energy provider" can filter on the user's own recipient
+names rather than answering for the whole household, and "what did the
+kitchen project cost" can pass the real project slug instead of guessing one.
+Archived projects and matters are omitted (nobody files under them any more).
+
+The block also carries the user's own **"About you" notes** when they have
+written any (**Settings → Ask**, `PUT /api/settings/ask-profile`,
+[api.md §1.10.11](api.md)): free text for the facts no document states — who
+lives with them, the current address, whose car the Volvo is, where they work,
+when they moved. It is rendered as an "About the user" bullet and the prompt
+frames it exactly as it frames document comments: authoritative personal
+context, to be trusted over inference from the documents. Blank notes render
+nothing. This is the generalisation of per-document comments to the whole
+archive — a comment settles one document's question ("this is my current
+house"); the notes settle the questions every turn starts from.
+
+The block is **byte-stable between requests** by construction — every list is
+sorted, and no counts or timestamps appear in it — because it sits inside the
+cached prompt prefix. It shares the static prompt's cache breakpoint rather
+than taking one of its own: it only changes when the taxonomy does, and the
+cache TTL is minutes, so a separate breakpoint would spend one of the four the
+API allows for nothing. At personal scale it is a few hundred to a couple of
+thousand tokens, billed at the cache-read rate after the first call of a
+session. Both backends receive it (it is part of the single system string the
+subscription transport takes). `run_ask` takes it as `archive_context` and
+answers without it when the caller passes none, which is what the engine tests
+do.
 
 **Image attachments.** `ask_model` (`claude-opus-4-8`) is multimodal, so
 a question may carry up to 5 base64 images (see [api.md §1.11](api.md)). They are
@@ -501,8 +546,9 @@ over the series they belong to.
 
 A **series** is the set of documents that share the same `(sender_id, kind_id)`
 pair and carry an `amount_total`. The engine identifies the series automatically
-from the `kind` and `sender_contains` parameters the model supplies; no user
-tagging or configuration is needed. If a loose filter matches multiple
+from the `kind` and `sender_contains` parameters the model supplies (plus the
+other §1.2 step 3 filters — recipient, projects, matters, tags — when it
+narrows further); no user tagging or configuration is needed. If a loose filter matches multiple
 (sender, kind) combinations, the most-populous group is used.
 
 Detection is **on the fly** — there is no materialized series table, and the

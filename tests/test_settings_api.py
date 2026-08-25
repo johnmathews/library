@@ -807,3 +807,75 @@ def test_get_settings_resolves_garbage_hide_summary_mobile_to_default(
 ) -> None:
     _seed_raw_preferences(api_database_url, auth_user.id, {"hide_summary_mobile": "sure"})
     assert api_client.get("/api/settings").json()["hide_summary_mobile"] is False
+
+
+# --- Ask profile ("About you") ---------------------------------------------
+#
+# Free text the user writes about themselves and their household, appended to
+# the Ask system prompt as authoritative personal context (docs/ask.md §1.2).
+
+
+def test_get_settings_includes_default_ask_profile(api_client: TestClient) -> None:
+    assert api_client.get("/api/settings").json()["ask_profile"] == ""
+
+
+def test_put_ask_profile_round_trips_and_trims(api_client: TestClient) -> None:
+    put = api_client.put(
+        "/api/settings/ask-profile",
+        json={"ask_profile": "  We live at Example Street 1.\nThe Volvo is the family car.  "},
+    )
+    assert put.status_code == 200, put.text
+    expected = "We live at Example Street 1.\nThe Volvo is the family car."
+    assert put.json()["ask_profile"] == expected
+    assert api_client.get("/api/settings").json()["ask_profile"] == expected
+
+
+def test_put_ask_profile_empty_clears_it(api_client: TestClient) -> None:
+    api_client.put("/api/settings/ask-profile", json={"ask_profile": "something"})
+    put = api_client.put("/api/settings/ask-profile", json={"ask_profile": "   "})
+    assert put.status_code == 200, put.text
+    assert put.json()["ask_profile"] == ""
+
+
+def test_put_ask_profile_over_limit_is_422(api_client: TestClient) -> None:
+    from library.schemas import MAX_ASK_PROFILE_CHARS
+
+    put = api_client.put(
+        "/api/settings/ask-profile", json={"ask_profile": "x" * (MAX_ASK_PROFILE_CHARS + 1)}
+    )
+    assert put.status_code == 422, put.text
+    assert api_client.get("/api/settings").json()["ask_profile"] == ""
+
+
+def test_put_ask_profile_preserves_other_preferences(api_client: TestClient) -> None:
+    api_client.put("/api/settings/appearance", json={"background_tone": "slate"})
+    put = api_client.put("/api/settings/ask-profile", json={"ask_profile": "notes"})
+    assert put.status_code == 200, put.text
+    body = api_client.get("/api/settings").json()
+    assert body["background_tone"] == "slate"
+    assert body["ask_profile"] == "notes"
+
+
+def test_get_settings_resolves_garbage_ask_profile_to_default(
+    api_client: TestClient, auth_user: AuthUser, api_database_url: str
+) -> None:
+    _seed_raw_preferences(api_database_url, auth_user.id, {"ask_profile": 42})
+    assert api_client.get("/api/settings").json()["ask_profile"] == ""
+
+
+def test_ask_profile_requires_auth(anon_client: TestClient) -> None:
+    response = anon_client.put("/api/settings/ask-profile", json={"ask_profile": "x"})
+    assert response.status_code == 401
+
+
+def test_get_settings_clips_an_over_long_stored_ask_profile(
+    api_client: TestClient, auth_user: AuthUser, api_database_url: str
+) -> None:
+    """A blob written before the cap existed must not exceed it on read."""
+    from library.schemas import MAX_ASK_PROFILE_CHARS
+
+    _seed_raw_preferences(
+        api_database_url, auth_user.id, {"ask_profile": "y" * (MAX_ASK_PROFILE_CHARS + 50)}
+    )
+    stored = api_client.get("/api/settings").json()["ask_profile"]
+    assert len(stored) == MAX_ASK_PROFILE_CHARS
