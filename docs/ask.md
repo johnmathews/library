@@ -803,3 +803,14 @@ have Ask treat that annotation as ground truth.
    sentinel. When the model phrases its own "not found" answer after a fruitless
    search, the prose-citation fallback still attaches the retrieved candidates.
    The system prompt instructs against it; it is not enforced in code.
+9. Truncation is disclosed but not remediable. `query_documents` reports
+   `over_limit` when a `list` exceeds its 50-row limit, and the tool exposes no
+   `limit` parameter — so the model can say "50 of 500" but cannot fetch the
+   rest. That is deliberate for this release (the goal was disclosure, not
+   completeness), but it means a list answer over a large match set is a sample
+   the model knows is a sample.
+10. `compare_to_series` reports no coverage. A series is deliberately narrowed
+   to one sender, one kind and one currency, and documents with no amount are
+   dropped — none of which is reported, so a "usual" band can be computed over
+   an unknown fraction of what the filters matched. `review_status` is
+   deliberately not offered on that tool for the same reason.
