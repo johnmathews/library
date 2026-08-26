@@ -14,7 +14,7 @@ from __future__ import annotations
 import itertools
 import logging
 import statistics
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Literal
@@ -32,6 +32,7 @@ from library.models import (
     Kind,
     MemberOrigin,
     OverrideAction,
+    ReviewStatus,
     Sender,
     SeriesInsight,
     SeriesMembershipOverride,
@@ -286,6 +287,7 @@ class _Member:
     sender_id: int | None
     kind_id: int | None
     title: str | None
+    review_status: ReviewStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,6 +350,11 @@ class SeriesSummary:
     # Cached LLM prose summary of the series, or None when not yet generated.
     # A user description override (SeriesMetaOverride) replaces it when present.
     description: str | None
+    # Present for emergent series (``summarize_series``); None for authored
+    # series, whose narrowing rules differ and are not reported yet. Absent
+    # therefore means "not reported", never "nothing was dropped" — an empty
+    # `excluded` inside a present coverage is what means the latter.
+    coverage: SeriesCoverage | None = None
     # A user title override (SeriesMetaOverride); None when no override is set,
     # in which case the frontend falls back to the derived heading.
     title: str | None = None
@@ -370,8 +377,83 @@ class SeriesSummary:
     origins: dict[int, MemberOrigin] = field(default_factory=dict)
 
 
-async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list[_Member]:
-    """All non-deleted documents matching ``filters`` that have an amount."""
+@dataclass(frozen=True, slots=True)
+class SeriesCoverage:
+    """How much of the filtered set a series summary's statistics account for.
+
+    ``summarize_series`` narrows aggressively and used to do it silently: it
+    drops documents with no amount, then every ``(sender_id, kind_id)`` group
+    but the most populous, then every currency bucket but the one chosen —
+    the dominant (most-populous) currency ordinarily, but the caller's
+    requested ``reference_currency`` when one is given and present among the
+    members (see ``summarize_series``'s currency-bucket selection). Each
+    narrowing is deliberate — a series must be one provider's one kind of
+    document in one currency — but the result was a "usual" band computed over
+    an unknown fraction of what the caller asked about.
+
+    ``matched`` is every non-deleted document meeting the caller's filters,
+    UNION anything a persisted PIN override pulled in from outside those
+    filters (a PIN is keyed on the resolved series identity, not on
+    ``filters``, and can reach documents the filters never touched).
+    ``included`` is what the statistics were computed from, and ``excluded``
+    maps a reason to a count — ``no_amount``, ``other_series_group``,
+    ``other_currency``, and (when a persisted EXCLUDE override removed a
+    document that would otherwise have been included)
+    ``manually_excluded``. A document a PIN restores is subtracted back out of
+    whichever reason it would otherwise have landed in, so it is never counted
+    twice. ``included + sum(excluded.values()) == matched`` is an invariant,
+    pinned by a test for every combination of PIN and EXCLUDE. Reasons that
+    dropped nothing are omitted, so an empty ``excluded`` reads as "the
+    statistics cover everything that matched".
+
+    That invariant, and the ``manually_excluded``/override reconciliation
+    above, hold once a currency bucket has been chosen and overrides resolved
+    against it — which is every ``status="ok"`` result, and the
+    ``status="insufficient"`` one returned when a chosen bucket still falls
+    short of ``settings.series_min_documents`` after overrides run. There is
+    an earlier, narrower ``status="insufficient"`` exit, before either of
+    those has happened: when fewer than ``series_min_documents`` documents
+    even match the caller's filters, ``summarize_series`` returns before
+    picking a currency bucket and therefore before resolving any override
+    (overrides are keyed on a resolved ``(sender, kind, currency)`` identity
+    that does not exist yet at that point). On that path ``excluded`` holds
+    only ``no_amount``/``other_series_group``, and both ``included`` and the
+    ``"insufficient"`` verdict itself predate any PIN/EXCLUDE — a series a
+    PIN would push over the threshold can still be reported insufficient
+    there, and a document an EXCLUDE would drop is still counted in
+    ``included``. This early-return-before-bucketing behaviour predates this
+    coverage feature; only the numbers it now surfaces are new, and only the
+    ``"ok"``/post-bucketing-``"insufficient"`` results carry the full
+    invariant this class otherwise promises.
+
+    ``needs_review`` counts documents *inside* ``included`` whose extracted
+    metadata the validator flagged — most often an ``amount_grounding``
+    finding, meaning an amount in this very distribution does not appear in
+    its document's text.
+    """
+
+    matched: int
+    included: int
+    excluded: dict[str, int]
+    needs_review: int
+
+
+async def _load_members(
+    session: AsyncSession, filters: DocumentFilters
+) -> tuple[list[_Member], int, int]:
+    """Members of the dominant series matching ``filters``, plus what was dropped.
+
+    Returns ``(members, no_amount_count, other_group_count)``. The two counts
+    are the documents this function discards: those with no ``amount_total``
+    (they cannot contribute a data point) and those in a non-dominant
+    ``(sender_id, kind_id)`` group (a loosely-filtered query must not mix two
+    providers into one series). Ordered by ``Document.id`` so a tie in group
+    size (``max(groups.values(), key=len)`` below) and member ordering are both
+    deterministic rather than depending on row-arrival order from an
+    otherwise-unordered ``SELECT``. The caller folds them into
+    :class:`SeriesCoverage`; returning them rather than logging them is what
+    lets an answer say how much of the archive its "usual" band covers.
+    """
     statement = (
         select(
             Document.id,
@@ -383,22 +465,39 @@ async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list
             Document.sender_id,
             Document.kind_id,
             Document.title,
+            Document.review_status,
         )
         .outerjoin(Sender, Document.sender_id == Sender.id)
         .outerjoin(Kind, Document.kind_id == Kind.id)
         .where(*filter_conditions(filters), Document.amount_total.isnot(None))
+        .order_by(Document.id)
     )
     rows = (await session.execute(statement)).all()
+
+    # Counted with its own aggregate rather than inferred: the statement above
+    # already excludes amountless documents, so they are not in `rows` to count.
+    no_amount = int(
+        (
+            await session.execute(
+                select(func.count(Document.id)).where(
+                    *filter_conditions(filters), Document.amount_total.is_(None)
+                )
+            )
+        ).scalar_one()
+    )
+
     # Restrict to the single most-populous (sender_id, kind_id) group so a
     # loosely-filtered query (kind only) can't mix providers into one series.
     groups: dict[tuple[int | None, int | None], list[_Member]] = {}
-    for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
+    for did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status in rows:
         groups.setdefault((sid, kid), []).append(
-            _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title)
+            _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status)
         )
     if not groups:
-        return []
-    return max(groups.values(), key=len)
+        return [], no_amount, 0
+    dominant = max(groups.values(), key=len)
+    other_group = sum(len(group) for group in groups.values() if group is not dominant)
+    return dominant, no_amount, other_group
 
 
 async def _load_override_ids(
@@ -478,6 +577,7 @@ async def _load_pinned_members(
             Document.sender_id,
             Document.kind_id,
             Document.title,
+            Document.review_status,
         )
         .outerjoin(Sender, Document.sender_id == Sender.id)
         .outerjoin(Kind, Document.kind_id == Kind.id)
@@ -489,7 +589,7 @@ async def _load_pinned_members(
     )
     rows = (await session.execute(statement)).all()
     members: list[_Member] = []
-    for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
+    for did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status in rows:
         converted = await _convert_into(session, amount, currency, target_currency, ddate)
         if converted is None:
             logger.warning(
@@ -500,7 +600,18 @@ async def _load_pinned_members(
             )
             continue
         members.append(
-            _Member(did, sname, kslug, ddate, _money(converted), target_currency, sid, kid, title)
+            _Member(
+                did,
+                sname,
+                kslug,
+                ddate,
+                _money(converted),
+                target_currency,
+                sid,
+                kid,
+                title,
+                review_status,
+            )
         )
     return members
 
@@ -524,7 +635,23 @@ async def _apply_overrides(
     return result
 
 
-def _insufficient(members: list[_Member]) -> SeriesSummary:
+def _insufficient(
+    members: list[_Member],
+    coverage: SeriesCoverage | None = None,
+    *,
+    currency: str | None = None,
+    other_currencies: list[str] | None = None,
+) -> SeriesSummary:
+    """An ``"insufficient"`` result.
+
+    ``currency``/``other_currencies`` default to ``None``/``[]`` for the
+    pre-bucketing call site in ``summarize_series``, where neither is known
+    yet (no currency bucket has been chosen). The post-bucketing call site
+    passes the already-resolved ``currency``/``other_currencies`` through, so
+    an insufficient result on that path doesn't claim "no other currencies"
+    in the same breath ``coverage.excluded`` reports documents dropped for
+    being another currency.
+    """
     head = members[0] if members else None
     return SeriesSummary(
         status="insufficient",
@@ -532,8 +659,8 @@ def _insufficient(members: list[_Member]) -> SeriesSummary:
         kind=head.kind if head else None,
         sender_id=head.sender_id if head else None,
         kind_id=head.kind_id if head else None,
-        currency=None,
-        other_currencies=[],
+        currency=currency,
+        other_currencies=other_currencies or [],
         cadence="irregular",
         count=len(members),
         distribution=None,
@@ -544,6 +671,7 @@ def _insufficient(members: list[_Member]) -> SeriesSummary:
         points=[],
         titles={},
         description=None,
+        coverage=coverage,
     )
 
 
@@ -614,6 +742,7 @@ def _summarize_members(
     mode: SeriesMode | None = None,
     auto_added_count: int = 0,
     origins: dict[int, MemberOrigin] | None = None,
+    coverage: SeriesCoverage | None = None,
 ) -> SeriesSummary:
     """Build a ``SeriesSummary`` from an already-resolved set of ``members``.
 
@@ -682,6 +811,98 @@ def _summarize_members(
         mode=mode,
         auto_added_count=auto_added_count,
         origins=origins or {},
+        coverage=coverage,
+    )
+
+
+def _needs_review_count(bucket: list[_Member]) -> int:
+    return sum(1 for member in bucket if member.review_status is ReviewStatus.NEEDS_REVIEW)
+
+
+async def _coverage_after_overrides(
+    session: AsyncSession,
+    filters: DocumentFilters,
+    *,
+    matched_base: int,
+    no_amount: int,
+    other_group: int,
+    other_currency: int,
+    dominant_sender_id: int | None,
+    dominant_kind_id: int | None,
+    bucket_pre_override: list[_Member],
+    final_bucket: list[_Member],
+) -> SeriesCoverage:
+    """Coverage once persisted PIN/EXCLUDE overrides have been applied.
+
+    Overrides act on a resolved ``(sender, kind, currency)`` identity, not on
+    ``filters`` — a PIN loads its document "regardless of its own sender/kind"
+    (see ``_load_pinned_members``) and can therefore restore a document this
+    call would otherwise have dropped as ``other_series_group`` or
+    ``other_currency`` (subtracted back out of that reason so it isn't double
+    counted), or add one from entirely outside ``filters`` (which grows
+    ``matched`` itself: ``matched`` is "everything filters matched, union
+    anything pinned in"). An EXCLUDE removes a document that WAS in
+    ``bucket_pre_override`` into a new ``manually_excluded`` reason. A
+    document that is both pinned and excluded always ends up a member: **PIN
+    wins over EXCLUDE**, not "nets to unchanged" as that might suggest.
+    ``_apply_overrides`` drops excluded ids from the pre-override bucket
+    first and only then pins in any pinned id still missing, so a document
+    already in ``bucket_pre_override`` is removed and then re-added — net
+    "unchanged" membership, but only because it started inside the bucket —
+    while one that was outside it is pinned in regardless of the EXCLUDE,
+    net "added". PIN winning is the only sane reading of a
+    self-contradictory override pair; "unchanged" describes just the one
+    case where the document was already a member, not the general rule.
+
+    ``no_amount`` never needs adjusting here: ``_load_pinned_members`` filters
+    out amountless documents in its own SQL, so one can never reach
+    ``final_bucket`` via a pin.
+    """
+    pre_ids = {m.document_id for m in bucket_pre_override}
+    final_ids = {m.document_id for m in final_bucket}
+    manually_excluded = len(pre_ids - final_ids)
+    newly_pinned_ids = final_ids - pre_ids
+
+    pinned_outside_filters = 0
+    pinned_other_group = 0
+    pinned_other_currency = 0
+    if newly_pinned_ids:
+        filter_matched_ids = set(
+            (
+                await session.execute(
+                    select(Document.id).where(
+                        *filter_conditions(filters), Document.id.in_(newly_pinned_ids)
+                    )
+                )
+            )
+            .scalars()
+            .all()
+        )
+        for member in final_bucket:
+            if member.document_id not in newly_pinned_ids:
+                continue
+            if member.document_id not in filter_matched_ids:
+                pinned_outside_filters += 1
+            elif (member.sender_id, member.kind_id) != (dominant_sender_id, dominant_kind_id):
+                pinned_other_group += 1
+            else:
+                pinned_other_currency += 1
+
+    excluded = {
+        reason: count
+        for reason, count in (
+            ("no_amount", no_amount),
+            ("other_series_group", other_group - pinned_other_group),
+            ("other_currency", other_currency - pinned_other_currency),
+            ("manually_excluded", manually_excluded),
+        )
+        if count > 0
+    }
+    return SeriesCoverage(
+        matched=matched_base + pinned_outside_filters,
+        included=len(final_bucket),
+        excluded=excluded,
+        needs_review=_needs_review_count(final_bucket),
     )
 
 
@@ -695,9 +916,25 @@ async def summarize_series(
     reference_currency: str | None = None,
 ) -> SeriesSummary:
     """Detect the (sender, kind) series matching ``filters`` and summarise it."""
-    members = await _load_members(session, filters)
+    members, no_amount, other_group = await _load_members(session, filters)
+    matched_base = len(members) + no_amount + other_group
+
     if len(members) < settings.series_min_documents:
-        return _insufficient(members)
+        # No currency bucket has been chosen yet, so overrides (which are
+        # keyed on a resolved (sender, kind, currency) identity) have not
+        # been looked up at all — nothing to reclassify.
+        excluded = {
+            reason: count
+            for reason, count in (("no_amount", no_amount), ("other_series_group", other_group))
+            if count > 0
+        }
+        coverage = SeriesCoverage(
+            matched=matched_base,
+            included=len(members),
+            excluded=excluded,
+            needs_review=_needs_review_count(members),
+        )
+        return _insufficient(members, coverage)
 
     # Currency bucket: the requested/dominant currency.
     by_currency: dict[str | None, list[_Member]] = {}
@@ -711,22 +948,35 @@ async def summarize_series(
         currency = reference_currency
     else:
         currency = max(by_currency, key=lambda c: len(by_currency[c]))
-    bucket = by_currency[currency]
+    bucket_pre_override = by_currency[currency]
     other_currencies = sorted(str(c) for c in by_currency if c != currency and c is not None)
+    other_currency = sum(len(group) for code, group in by_currency.items() if code != currency)
 
     # The series identity is the dominant natural group; all members share it.
     # Capture it before overrides so pins (foreign docs) can't shift the labels.
     series_head = members[0]
     bucket = await _apply_overrides(
         session,
-        bucket,
+        bucket_pre_override,
         sender_id=series_head.sender_id,
         kind_id=series_head.kind_id,
         currency=currency,
     )
+    coverage = await _coverage_after_overrides(
+        session,
+        filters,
+        matched_base=matched_base,
+        no_amount=no_amount,
+        other_group=other_group,
+        other_currency=other_currency,
+        dominant_sender_id=series_head.sender_id,
+        dominant_kind_id=series_head.kind_id,
+        bucket_pre_override=bucket_pre_override,
+        final_bucket=bucket,
+    )
 
     if len(bucket) < settings.series_min_documents:
-        return _insufficient(bucket)
+        return _insufficient(bucket, coverage, currency=currency, other_currencies=other_currencies)
 
     head = series_head
     description = await load_series_description(session, head.sender_id, head.kind_id, currency)
@@ -749,6 +999,7 @@ async def summarize_series(
         reference_date=reference_date,
         description=description,
         title=title_override,
+        coverage=coverage,
     )
 
 
@@ -772,6 +1023,7 @@ async def _load_authored_members(
             Document.sender_id,
             Document.kind_id,
             Document.title,
+            Document.review_status,
         )
         .join(AuthoredSeriesMember, AuthoredSeriesMember.document_id == Document.id)
         .outerjoin(Sender, Document.sender_id == Sender.id)
@@ -784,7 +1036,7 @@ async def _load_authored_members(
     )
     rows = (await session.execute(statement)).all()
     members: list[_Member] = []
-    for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
+    for did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status in rows:
         converted = await _convert_into(session, amount, currency, target_currency, ddate)
         if converted is None:
             logger.warning(
@@ -796,7 +1048,18 @@ async def _load_authored_members(
             )
             continue
         members.append(
-            _Member(did, sname, kslug, ddate, _money(converted), target_currency, sid, kid, title)
+            _Member(
+                did,
+                sname,
+                kslug,
+                ddate,
+                _money(converted),
+                target_currency,
+                sid,
+                kid,
+                title,
+                review_status,
+            )
         )
     return members
 
@@ -1019,6 +1282,7 @@ async def suggest_signature_matches(
             Document.sender_id,
             Document.kind_id,
             Document.title,
+            Document.review_status,
         )
         .outerjoin(Sender, Document.sender_id == Sender.id)
         .outerjoin(Kind, Document.kind_id == Kind.id)
@@ -1036,8 +1300,8 @@ async def suggest_signature_matches(
     )
     rows = (await session.execute(statement)).all()
     return [
-        _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title)
-        for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows
+        _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status)
+        for did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status in rows
     ]
 
 
@@ -1118,6 +1382,8 @@ def serialise_summary(summary: SeriesSummary, *, include_points: bool = False) -
         "count": summary.count,
         "document_ids": summary.document_ids,
     }
+    if summary.coverage is not None:
+        body["coverage"] = asdict(summary.coverage)
     if summary.authored_id is not None:
         body["authored_id"] = summary.authored_id
     if summary.mode is not None:

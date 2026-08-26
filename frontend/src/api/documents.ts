@@ -600,6 +600,17 @@ export interface DocumentSeries {
   }
   trend?: { direction: 'rising' | 'falling' | 'flat'; change_pct: string }
   year_over_year?: { prior_value: string; change_pct: string; document_id: number }
+  /** How much of the filtered set the statistics cover; absent for authored
+   *  series, which do not report it yet. `excluded` maps a reason
+   *  (no_amount, other_series_group, other_currency, manually_excluded) to
+   *  a count. An empty `excluded` means nothing was dropped — that is
+   *  distinct from this field being absent entirely. */
+  coverage?: {
+    matched: number
+    included: number
+    excluded: Record<string, number>
+    needs_review: number
+  }
   points?: SeriesPoint[]
   /** Authored series only: the dominant (sender, kind, currency) signature of the
    *  current membership, or null for an empty series. Drives the smart features. */

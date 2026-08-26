@@ -93,14 +93,15 @@ Rules:
 - Cite the document id(s) your answer relies on, inline like [#42]. If you
   cannot answer from the tool results, say so plainly and cite nothing — do
   not list the documents you looked at and rejected.
-- query_documents results carry a "coverage" block. If `excluded` is non-empty,
-  the rows do NOT account for every matching document, and you MUST say so in
-  your answer with the reason and the count — e.g. "EUR 1,240 across 14 bills;
-  3 more matched but no amount could be read from them". If `needs_review` is
-  above zero, you MUST also say so: those documents are included in the number
-  but the archive flagged their extracted metadata as unreliable. Never
-  present a partial total as if it were complete, and never silently drop the
-  flagged documents to make the caveat go away.
+- Some tool results carry a "coverage" block (query_documents and
+  compare_to_series). If `excluded` is non-empty, the rows do NOT account for
+  every matching document, and you MUST say so in your answer with the reason
+  and the count — e.g. "EUR 1,240 across 14 bills; 3 more matched but no
+  amount could be read from them". If `needs_review` is above zero, you
+  MUST also say so: those documents are included in the number but the
+  archive flagged their extracted metadata as unreliable. Never present a
+  partial total as if it were complete, and never silently drop the flagged
+  documents to make the caveat go away.
 - Be concise and direct. Dutch terms may answer English questions and vice
   versa (e.g. "reiskostenvergoeding" = travel allowance).
 """
@@ -162,12 +163,14 @@ _FILTER_PROPERTIES: dict[str, Any] = {
 }
 
 # `review_status` lives in its own dict rather than `_FILTER_PROPERTIES` because
-# only `query_documents` can report what it removes: its `coverage` block
-# discloses a `filtered_review_status` exclusion (see `structured_query.py`),
-# so the model can see and disclose the drop. `compare_to_series` has no
-# coverage reporting at all — `summarize_series` already silently drops
-# amountless documents, non-dominant groups, and non-dominant currency buckets
-# — so a filter whose tool cannot say what it removed does not belong there.
+# only `query_documents` accepts it as a filter and can report the drop: its
+# `coverage` block discloses a `filtered_review_status` exclusion (see
+# `structured_query.py`). `compare_to_series` reports its own `coverage`
+# block too, but for a different set of reasons — `summarize_series` narrows
+# to one sender/kind/currency, so its `excluded` covers amountless documents,
+# non-dominant groups, and non-dominant currency buckets, none of which is a
+# `review_status` filter — so offering that property here would promise a
+# filter the tool cannot honour or explain.
 _REVIEW_STATUS_PROPERTY: dict[str, Any] = {
     "review_status": {
         "type": "string",
@@ -250,7 +253,14 @@ TOOLS: list[dict[str, Any]] = [
             "values. Use for 'more/less than usual', 'compared to last year', "
             "'are my bills going up'. Identify the series via kind + sender. "
             "Returns distribution stats, a reference-vs-usual verdict, a trend, "
-            "and a year-over-year comparison. " + _kind_hint()
+            "and a year-over-year comparison. "
+            "The result carries a `coverage` block on the same terms as "
+            "query_documents: a series is deliberately narrowed to one sender, "
+            "one kind and one currency, so `excluded` reports the documents "
+            "that narrowing removed — `no_amount`, `other_series_group`, "
+            "`other_currency`, and `manually_excluded` (a user override). "
+            "A 'usual' band computed over 3 of 11 matching documents is not "
+            "a fact about all 11. " + _kind_hint()
         ),
         "input_schema": {
             "type": "object",

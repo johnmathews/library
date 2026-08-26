@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-08-26 (§1.2: new *Coverage and trust on structured results* subsection — every `query_documents` aggregate now returns a `coverage` block (`matched`/`included`/`excluded`/`needs_review`) beside its rows, and the system prompt requires the model to disclose a non-empty `excluded` or a non-zero `needs_review`; §1.10: three new limitations — `semantic_search`'s missing metadata filters, `sum_amount`'s document-not-period coverage, and no-answer citation suppression keyed on the `_NO_ANSWER` sentinel). Earlier (2026-08-25): §1.2 *Archive context*: the system prompt now names the user, their recipient names, their free-text **About you** notes (Settings → Ask) and the archive's kind/tag/project/matter/sender vocabulary; `query_documents` and `compare_to_series` filter by `recipient_contains`, `projects`, `matters`, `tags`. Earlier (2026-08-22): the composer is one flat full-width bar — the nested pill is gone. Earlier (2026-08-21): adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.
-**Last verified:** 2026-08-26 — method: read `structured_query.py` and `ask/engine.py` (current tree, past the `a2099d1` partition fix) against this rewrite of §1.2 and §1.10, and read `tests/test_structured_query.py` to confirm the exclusion-reason strings and the `included + sum(excluded.values()) == matched` invariant it pins. This task is documentation-only and changed no code, so it ran `scripts/check_docs.py` only (clean) — it did not itself re-run ruff, mypy, or the test suite; that verification belongs to the tasks that changed the code. The coverage block's effect on real answer wording is **unmeasured**: the disclosure rule is a prompt instruction, exercised by schema/string tests, not by any answer-quality eval.
+**Status:** active. **Last updated:** 2026-08-27 (final whole-branch review fix wave, three doc-only corrections: (1) §1.2's `compare_to_series` reasons list said the four reasons are "not a chained refinement of one aggregate like the three above" — false for the first three, which chain exactly as `sum_amount`'s reasons do (`no_amount` → `other_series_group` → `other_currency`, each "survived every earlier gate, fails this one"); only `manually_excluded` is the structural exception. Rewritten, because the old wording could invite a future reader to "fix" the code into independent gating — the same double-counting bug a sibling branch already shipped and had to fix. (2) The adjacent `other_currency` parenthetical said dropped documents are "still listed in `other_currencies`" — wrong: `other_currencies` skips a `NULL` currency by construction while the `other_currency` exclusion count does not, so an amount-bearing, currency-`NULL` document lands in `excluded.other_currency` but is never named in `other_currencies`; corrected. (3) §1.10 gained a new item 10 for the early-`status="insufficient"`-predates-overrides gap: §1.7 already explained it in full, but §1.10 — the limitations register a reader actually scans — had nothing pointing there, wrongly implying `compare_to_series` carries no coverage limitation. `src/library/series.py`'s `_insufficient` also had its `currency`/`other_currencies` threaded through on the post-bucketing call site (previously hardcoded `null`/`[]` even once a currency bucket was chosen); a code change, covered by a new test, not itself a doc correction. Earlier (2026-08-26): (a code review on this same branch caught an undisclosed gap this task's first pass missed: `summarize_series`'s early `status="insufficient"` exit — taken before a currency bucket is chosen, when too few documents even match the caller's filters — returns before any PIN/EXCLUDE override is resolved, so on that path `coverage`'s numbers, and `status` itself, can predate an override that would have changed them. Pre-existing `summarize_series` behaviour, not introduced by this branch; only the coverage numbers now surfaced there are new. §1.2's optional-`coverage` paragraph now flags this instead of implying unconditional trust, and §1.7's *Coverage* subsection explains it in full. The `SeriesCoverage` docstring in `src/library/series.py` was narrowed to scope its "invariant holds for every combination of PIN and EXCLUDE" claim to the paths where overrides actually run — a docstring-only change, no logic touched). Earlier (2026-08-26): §1.2: the *Coverage and trust on structured results* subsection now also covers `compare_to_series`, which carries the same `coverage` block on the same terms as `query_documents`; documented its four exclusion reasons — `no_amount`, `other_series_group`, `other_currency`, `manually_excluded` — and that the last of these comes from a persisted PIN/EXCLUDE override rather than a chained filter, with the partition invariant holding across every override combination; §1.7: new *Coverage* subsection describing the series' deliberate narrowing to one `(sender, kind, currency)` triple, now reported rather than silent, and that `review_status` still isn't offered as a filter there even though `needs_review` is reported; §1.10: item 10 removed — it asserted `compare_to_series` reports no coverage, which this branch made false since the tool only ever reaches an emergent series summary, which always carries a populated block). Earlier (2026-08-26): §1.2: new *Coverage and trust on structured results* subsection — every `query_documents` aggregate now returns a `coverage` block (`matched`/`included`/`excluded`/`needs_review`) beside its rows, and the system prompt requires the model to disclose a non-empty `excluded` or a non-zero `needs_review`; §1.10: three new limitations — `semantic_search`'s missing metadata filters, `sum_amount`'s document-not-period coverage, and no-answer citation suppression keyed on the `_NO_ANSWER` sentinel. Earlier (2026-08-25): §1.2 *Archive context*: the system prompt now names the user, their recipient names, their free-text **About you** notes (Settings → Ask) and the archive's kind/tag/project/matter/sender vocabulary; `query_documents` and `compare_to_series` filter by `recipient_contains`, `projects`, `matters`, `tags`. Earlier (2026-08-22): the composer is one flat full-width bar — the nested pill is gone. Earlier (2026-08-21): adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.
+**Last verified:** 2026-08-27 — method: for this fix-wave pass, re-read §1.2's reasons-list and the adjacent chained-refinement paragraph against `series.py:483` (`no_amount` gate), `:490-494` (`other_series_group` gate), and `:952-953` (`other_currency` list vs. count, confirming the `NULL`-currency asymmetry: `other_currencies` excludes `c is None`, `other_currency`'s count does not); confirmed the first three reasons chain by tracing `_load_members`/`summarize_series` in order. Re-read §1.10's numbered list to confirm item 10 was genuinely missing (not just misnumbered) before adding the new item. Ran `uv run ruff format .`, `uv run ruff check .`, and `uv run mypy src/library/series.py` (all clean) after the `_insufficient` signature change in `src/library/series.py`, plus `scripts/check_docs.py` and the journal-index `--check` (both clean) after these doc edits; did not run the backend test suite as part of this doc verification, that remains the controller's job. The rest carries forward its previous verification: 2026-08-26 — method: for this second pass, re-read `summarize_series` end to end in `src/library/series.py` (both `status="insufficient"` exits — the early one before currency-bucket selection, at `settings.series_min_documents` over raw filter matches, and the later one after `_apply_overrides`/`_coverage_after_overrides` have run) to confirm which one skips override resolution, and checked `git show main:src/library/series.py` to confirm the early-return shape predates this branch. Ran `scripts/check_docs.py` (clean) and the journal-index `--check` (clean) again after this edit. Because this pass also edited `src/library/series.py` (a docstring only, no logic), it ran `ruff format .`, `ruff check .`, and `mypy src/library/series.py` this time — all clean — but it still did **not** run the backend test suite; that remains the controller's job. The disclosure rule's effect on real answer wording remains **unmeasured**: there is still no answer-quality eval exercising what the model actually writes when a series' `coverage.excluded` is non-empty, or when it hits this near-threshold case, only schema/string-level tests of the block's shape and the prompt's wording.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -169,17 +169,30 @@ follow-ups. The composer offers an **Attach image** control with preview + remov
 
 ### Coverage and trust on structured results
 
-Every `query_documents` result carries a `coverage` block beside its rows:
+Every `query_documents` result carries a `coverage` block beside its rows, and
+so does `compare_to_series` (§1.7) — the two tools share the same shape:
 
 | Field | Meaning |
 |-------|---------|
 | `matched` | Documents that met the call's filters |
-| `included` | Documents the rows actually account for |
+| `included` | Documents the rows (or, for `compare_to_series`, the statistics) actually account for |
 | `excluded` | Reason → count for the difference; `{}` when the rows are the whole story |
 | `needs_review` | Of `included`, how many carry a `needs_review` extraction flag |
 
 `included + sum(excluded.values()) == matched` is an invariant, pinned by
-`tests/test_structured_query.py`.
+`tests/test_structured_query.py` for `query_documents` and by
+`tests/test_series_db.py` for `compare_to_series`.
+
+`coverage` is optional on the series side: it is present whenever
+`compare_to_series` returns (this tool only ever resolves an emergent
+`(sender, kind, currency)` series, never a user-authored one — see §1.7), so
+the block itself is never missing from this tool's results. The field exists
+to let `None` mean "not reported" for the authored/Smart-Group series this
+tool cannot reach, as distinct from a present block with an empty `excluded`,
+which means "nothing was dropped". That said, presence isn't the same as
+completeness: §1.7 describes a near-threshold case where the numbers — and
+even `status` itself — predate any override, so read that caveat before
+trusting the block fully on an `"insufficient"` result.
 
 Each aggregate's exclusion reasons are built as **successive refinements of one
 include chain**, not independently-gated conditions. `sum_amount`, for
@@ -203,6 +216,41 @@ The reasons a document is dropped, by aggregate:
   document with no extracted sender).
 - `list` — `over_limit` (the result limit is 50 and the drop is positional —
   which documents fall off depends on sort order, not a predicate).
+- `compare_to_series` — `no_amount` (the document carries no extracted total,
+  so it cannot contribute a data point), `other_series_group` (a
+  loosely-filtered query matched more than one `(sender, kind)` pair; only the
+  most-populous group becomes the series), `other_currency` (the series
+  bucket is one currency; every other currency present is dropped from the
+  statistics), and `manually_excluded` (the user persisted an EXCLUDE
+  override on this document — see [api.md §1.15](api.md)).
+
+  `other_currency` and `other_currencies` (the field, plural) are not the same
+  list. `other_currencies` names the *codes* present outside the chosen
+  bucket, and skips a `NULL` currency by construction; `other_currency` (the
+  exclusion count) tallies every document outside the chosen bucket,
+  `NULL`-currency ones included. An amount-bearing document whose `currency`
+  is `NULL` — extraction found a total but no currency — is therefore counted
+  in `excluded["other_currency"]` but never named in `other_currencies`.
+
+`compare_to_series`'s first three reasons **are** a chained refinement, the
+same "survived every earlier gate, fails this one" rule as the three
+aggregates above: a document must have an amount (`no_amount`) before its
+`(sender, kind)` group can be judged dominant-or-not (`other_series_group`),
+and must be in the dominant group before its currency bucket can be judged
+chosen-or-not (`other_currency`) — so an amountless document in a
+non-dominant group lands under `no_amount` alone, never both. Only
+`manually_excluded` breaks that chain: it comes from a persisted PIN/EXCLUDE
+override layered on afterwards, a structurally different mechanism, not a
+fourth gate in the same sequence. A PIN is keyed on the resolved series
+identity, not on the call's filters, so it can restore a document the filters
+would otherwise have dropped as `other_series_group` or `other_currency`
+(subtracted back out of whichever reason it would have landed in, so it is
+never double-counted), or pull in a document the filters never matched at all (which grows `matched`
+itself — `matched` is "everything the filters matched, union anything
+pinned in"). Either way the `included + sum(excluded.values()) == matched`
+invariant holds across every combination of PIN and EXCLUDE
+(`tests/test_series_db.py` pins this explicitly, including the override
+case).
 
 The system prompt requires the model to disclose a non-empty `excluded` and a
 non-zero `needs_review` in its answer, so a partial total reads as one. It is
@@ -632,6 +680,44 @@ bucket reported is the one matching the reference document's currency; if
 unspecified, the dominant (most-document) currency is used. Other currencies
 present in the series are listed in `other_currencies`.
 
+### Coverage
+
+A series is deliberately narrowed to one `(sender, kind, currency)` triple —
+the dominant `(sender, kind)` group (above), then the one currency bucket
+(above), then documents with no `amount_total` are dropped because they carry
+no data point. That narrowing used to happen silently; it is now reported via
+the `coverage` block described in [§1.2](#12-how-it-works) (`matched` /
+`included` / `excluded` / `needs_review`), so an answer can say what fraction
+of the matching documents its "usual" band actually covers instead of leaving
+the caller to assume it was all of them. Unlike `query_documents`,
+`compare_to_series` does not accept `review_status` as a filter — none of its
+four exclusion reasons is a review-state gate, so offering the filter would
+promise something the tool cannot honour — but `needs_review` is still
+reported as a count within the block, so an answer can flag that some of what
+it included is unverified even though it cannot filter on that state.
+
+**Near-threshold results can predate overrides — including `status` itself.**
+Before choosing a currency bucket, `summarize_series` first checks whether
+enough documents even match the caller's filters at all
+(`settings.series_min_documents`). If they don't, it returns
+`status="insufficient"` immediately — before picking a currency bucket and
+therefore before resolving any PIN/EXCLUDE override, since overrides are
+keyed on a resolved `(sender, kind, currency)` identity that doesn't exist yet
+at that point. On that path `coverage.excluded` only ever holds `no_amount`
+and `other_series_group` (never `manually_excluded`), and — more
+importantly — both `included` and the `"insufficient"` verdict itself predate
+any override: a series the owner has PINned enough documents into to clear
+the threshold can still be reported `"insufficient"` here, and a document the
+owner has EXCLUDEd is still counted in `included`. This is pre-existing
+`summarize_series` behaviour (present before this coverage feature — it
+already returned early on too few matching documents), not something
+introduced by coverage reporting; only the numbers now surfaced on that path
+are new, and this is the one case where they don't reflect overrides at all.
+A series that clears the threshold on filters alone — the ordinary case — is
+unaffected: its `coverage` (and any later `"insufficient"` verdict from too
+few documents in the *chosen currency bucket*) is computed after overrides
+have run, with the full four-reason partition described above.
+
 ### Cached series descriptions
 
 Each series also carries a one- or two-sentence **LLM-generated prose
@@ -809,8 +895,10 @@ have Ask treat that annotation as ground truth.
    rest. That is deliberate for this release (the goal was disclosure, not
    completeness), but it means a list answer over a large match set is a sample
    the model knows is a sample.
-10. `compare_to_series` reports no coverage. A series is deliberately narrowed
-   to one sender, one kind and one currency, and documents with no amount are
-   dropped — none of which is reported, so a "usual" band can be computed over
-   an unknown fraction of what the filters matched. `review_status` is
-   deliberately not offered on that tool for the same reason.
+10. `compare_to_series`'s coverage and `status` itself can predate overrides on
+    a near-threshold series. When too few documents even match the caller's
+    filters, `summarize_series` returns `status="insufficient"` before
+    choosing a currency bucket and therefore before resolving any persisted
+    PIN/EXCLUDE override — so a series a PIN would push over the threshold can
+    still report `"insufficient"`, and a document an EXCLUDE would drop is
+    still counted `included`. See §1.7 for the full explanation.

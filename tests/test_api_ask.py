@@ -1573,3 +1573,58 @@ def test_ask_system_prompt_pins_the_disclosure_obligation_as_a_MUST() -> None:
 
     assert "MUST say so" in ASK_SYSTEM_PROMPT_TEMPLATE
     assert "MUST also say so" in ASK_SYSTEM_PROMPT_TEMPLATE
+
+
+def test_compare_to_series_tool_description_explains_coverage() -> None:
+    """Mirrors test_query_documents_tool_description_explains_coverage above,
+    for the tool Task 3 gives a coverage block to. Pins that the description
+    explains what `excluded` means for a SERIES specifically — narrowed to one
+    sender, one kind, one currency — not just that the word "coverage"
+    appears: a regression that watered the description down to "returns a
+    coverage block" with no explanation of what narrowed it would still fail
+    this, since the specific reason names would be gone too.
+
+    All FOUR real reason keys from ``SeriesCoverage``'s docstring
+    (``src/library/series.py``) are asserted individually, not just a subset:
+    an earlier version of this description enumerated only three and silently
+    dropped `manually_excluded`, which a review caught. Asserting all four
+    means a future addition or removal of a reason from `SeriesCoverage`
+    without a matching edit here fails loudly instead of passing on a
+    three-out-of-four coincidence.
+
+    It would NOT catch a rewrite that keeps all four substrings but garbles
+    the sentence connecting them, or inverts what they mean — this is still a
+    containment test, just over the complete vocabulary rather than a
+    sample of it."""
+    from library.ask.engine import TOOLS
+
+    tool = next(tool for tool in TOOLS if tool["name"] == "compare_to_series")
+    description = tool["description"]
+    assert "coverage" in description
+    assert "no_amount" in description
+    assert "other_series_group" in description
+    assert "other_currency" in description
+    assert "manually_excluded" in description
+
+
+def test_disclosure_rule_names_both_coverage_reporting_tools() -> None:
+    """The disclosure rule used to open by naming query_documents alone,
+    which left compare_to_series uncovered even once it started reporting
+    coverage too. Pins that the rule's opening clause now names both tools
+    and no longer claims the block is query_documents-exclusive. This test
+    would catch the rule reverting to single-tool scope (old phrase back, or
+    compare_to_series dropped from the new one); it would NOT catch the MUST
+    obligations later in the same bullet being softened — that regression is
+    covered separately by
+    test_ask_system_prompt_pins_the_disclosure_obligation_as_a_MUST, which
+    this change must leave passing unchanged."""
+    from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
+
+    rules = ASK_SYSTEM_PROMPT_TEMPLATE.split("Rules:")[1]
+    lines = rules.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("- ") and "coverage" in line)
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("- ")), len(lines))
+    disclosure = " ".join(lines[start:end])
+    assert "query_documents results carry" not in disclosure
+    assert "query_documents" in disclosure
+    assert "compare_to_series" in disclosure
