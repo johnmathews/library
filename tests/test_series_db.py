@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from library.config import Settings
 from library.models import Document, DocumentSource, Kind, Sender
 from library.search import DocumentFilters
-from library.series import serialise_summary, summarize_series
+from library.series import _load_members, serialise_summary, summarize_series
 
 pytestmark = pytest.mark.integration
 
@@ -207,3 +207,57 @@ async def test_serialise_summary_shape(session: AsyncSession) -> None:
     assert body["points"][0]["amount"] == "100.00"
     assert isinstance(body["points"][0]["document_id"], int)
     assert body["points"][0]["document_id"] == oldest_id
+
+
+async def test_load_members_reports_amountless_and_non_dominant_drops(
+    session: AsyncSession,
+) -> None:
+    """_load_members silently discarded two sets of documents. It now counts them."""
+    alpha = await _sender(session, "AlphaEnergy")
+    beta = await _sender(session, "BetaEnergy")
+    await seed(
+        session,
+        "lm1",
+        sender_name=alpha.name,
+        kind_slug="utility-bill",
+        document_date=date(2025, 1, 1),
+        amount="100.00",
+    )
+    await seed(
+        session,
+        "lm2",
+        sender_name=alpha.name,
+        kind_slug="utility-bill",
+        document_date=date(2025, 2, 1),
+        amount="110.00",
+    )
+    await seed(
+        session,
+        "lm3",
+        sender_name=beta.name,
+        kind_slug="utility-bill",
+        document_date=date(2025, 1, 1),
+        amount="200.00",
+    )
+    kind = (await session.execute(select(Kind).where(Kind.slug == "utility-bill"))).scalar_one()
+    session.add(
+        Document(
+            sha256=hashlib.sha256(b"lm4").hexdigest(),
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            sender=alpha,
+            kind=kind,
+            document_date=date(2025, 3, 1),
+            amount_total=None,
+            currency=None,
+        )
+    )
+    await session.commit()
+
+    members, no_amount, other_group = await _load_members(
+        session, DocumentFilters(kind_slug="utility-bill")
+    )
+
+    assert [m.amount for m in members] == [Decimal("100.00"), Decimal("110.00")]
+    assert no_amount == 1
+    assert other_group == 1

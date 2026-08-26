@@ -370,8 +370,49 @@ class SeriesSummary:
     origins: dict[int, MemberOrigin] = field(default_factory=dict)
 
 
-async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list[_Member]:
-    """All non-deleted documents matching ``filters`` that have an amount."""
+@dataclass(frozen=True, slots=True)
+class SeriesCoverage:
+    """How much of the filtered set a series summary's statistics account for.
+
+    ``summarize_series`` narrows aggressively and used to do it silently: it
+    drops documents with no amount, then every ``(sender_id, kind_id)`` group
+    but the most populous, then every currency bucket but the dominant one.
+    Each narrowing is deliberate — a series must be one provider's one kind of
+    document in one currency — but the result was a "usual" band computed over
+    an unknown fraction of what the caller asked about.
+
+    ``matched`` is every non-deleted document meeting the caller's filters,
+    ``included`` is what the statistics were computed from, and ``excluded``
+    maps a reason to a count. ``included + sum(excluded.values()) == matched``
+    is an invariant, pinned by a test. Reasons that dropped nothing are
+    omitted, so an empty ``excluded`` reads as "the statistics cover
+    everything that matched".
+
+    ``needs_review`` counts documents *inside* ``included`` whose extracted
+    metadata the validator flagged — most often an ``amount_grounding``
+    finding, meaning an amount in this very distribution does not appear in
+    its document's text.
+    """
+
+    matched: int
+    included: int
+    excluded: dict[str, int]
+    needs_review: int
+
+
+async def _load_members(
+    session: AsyncSession, filters: DocumentFilters
+) -> tuple[list[_Member], int, int]:
+    """Members of the dominant series matching ``filters``, plus what was dropped.
+
+    Returns ``(members, no_amount_count, other_group_count)``. The two counts
+    are the documents this function discards: those with no ``amount_total``
+    (they cannot contribute a data point) and those in a non-dominant
+    ``(sender_id, kind_id)`` group (a loosely-filtered query must not mix two
+    providers into one series). The caller folds them into
+    :class:`SeriesCoverage`; returning them rather than logging them is what
+    lets an answer say how much of the archive its "usual" band covers.
+    """
     statement = (
         select(
             Document.id,
@@ -389,6 +430,19 @@ async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list
         .where(*filter_conditions(filters), Document.amount_total.isnot(None))
     )
     rows = (await session.execute(statement)).all()
+
+    # Counted with its own aggregate rather than inferred: the statement above
+    # already excludes amountless documents, so they are not in `rows` to count.
+    no_amount = int(
+        (
+            await session.execute(
+                select(func.count(Document.id)).where(
+                    *filter_conditions(filters), Document.amount_total.is_(None)
+                )
+            )
+        ).scalar_one()
+    )
+
     # Restrict to the single most-populous (sender_id, kind_id) group so a
     # loosely-filtered query (kind only) can't mix providers into one series.
     groups: dict[tuple[int | None, int | None], list[_Member]] = {}
@@ -397,8 +451,10 @@ async def _load_members(session: AsyncSession, filters: DocumentFilters) -> list
             _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title)
         )
     if not groups:
-        return []
-    return max(groups.values(), key=len)
+        return [], no_amount, 0
+    dominant = max(groups.values(), key=len)
+    other_group = sum(len(group) for group in groups.values() if group is not dominant)
+    return dominant, no_amount, other_group
 
 
 async def _load_override_ids(
