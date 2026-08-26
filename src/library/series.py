@@ -403,6 +403,26 @@ class SeriesCoverage:
     dropped nothing are omitted, so an empty ``excluded`` reads as "the
     statistics cover everything that matched".
 
+    That invariant, and the ``manually_excluded``/override reconciliation
+    above, hold once a currency bucket has been chosen and overrides resolved
+    against it — which is every ``status="ok"`` result, and the
+    ``status="insufficient"`` one returned when a chosen bucket still falls
+    short of ``settings.series_min_documents`` after overrides run. There is
+    an earlier, narrower ``status="insufficient"`` exit, before either of
+    those has happened: when fewer than ``series_min_documents`` documents
+    even match the caller's filters, ``summarize_series`` returns before
+    picking a currency bucket and therefore before resolving any override
+    (overrides are keyed on a resolved ``(sender, kind, currency)`` identity
+    that does not exist yet at that point). On that path ``excluded`` holds
+    only ``no_amount``/``other_series_group``, and both ``included`` and the
+    ``"insufficient"`` verdict itself predate any PIN/EXCLUDE — a series a
+    PIN would push over the threshold can still be reported insufficient
+    there, and a document an EXCLUDE would drop is still counted in
+    ``included``. This early-return-before-bucketing behaviour predates this
+    coverage feature; only the numbers it now surfaces are new, and only the
+    ``"ok"``/post-bucketing-``"insufficient"`` results carry the full
+    invariant this class otherwise promises.
+
     ``needs_review`` counts documents *inside* ``included`` whose extracted
     metadata the validator flagged — most often an ``amount_grounding``
     finding, meaning an amount in this very distribution does not appear in
