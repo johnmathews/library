@@ -19,10 +19,10 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Literal, TypedDict
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.models import Document, Kind, Sender
+from library.models import Document, Kind, ReviewStatus, Sender
 from library.search import DocumentFilters, filter_conditions
 
 # How many contributing document ids to attach to each aggregated row.
@@ -84,6 +84,86 @@ class AmountGroup:
     currency: str | None
     document_count: int
     document_ids: list[int]
+
+
+@dataclass(frozen=True, slots=True)
+class Coverage:
+    """How much of the filtered set a result's rows actually account for.
+
+    Every aggregate silently drops documents — a spend total cannot include a
+    bill whose amount never extracted, a sender breakdown cannot include a
+    document with no sender, a list cannot exceed its limit. Reporting the
+    result without reporting the drop is how a partial number gets presented as
+    a complete one, so every aggregate returns this alongside its rows.
+
+    ``matched`` is what met the caller's filters, ``included`` is what the rows
+    account for, and ``excluded`` says why the difference was dropped —
+    ``included + sum(excluded.values()) == matched`` is an invariant, pinned by
+    a test. Reasons that dropped nothing are omitted, so an empty ``excluded``
+    reads as "the rows are the whole story".
+
+    ``needs_review`` is a *trust* signal, not a coverage one: those documents are
+    counted in ``included``. It is the number of them whose extracted metadata
+    ``library.extraction.validation`` flagged as untrustworthy — most often an
+    ``amount_grounding`` finding, meaning the amount being summed here does not
+    appear anywhere in the document's text.
+    """
+
+    matched: int
+    included: int
+    excluded: dict[str, int]
+    needs_review: int
+
+
+@dataclass(frozen=True, slots=True)
+class Aggregated[T]:
+    """An aggregate's rows plus the coverage of the set they were drawn from."""
+
+    rows: list[T]
+    coverage: Coverage
+
+
+async def count_coverage(
+    session: AsyncSession,
+    *,
+    filters: DocumentFilters,
+    include_condition: ColumnElement[bool],
+    exclusions: dict[str, ColumnElement[bool]],
+) -> Coverage:
+    """Count a result's coverage in one round-trip, using conditional aggregates.
+
+    ``include_condition`` selects the documents the caller's rows are built
+    from; ``exclusions`` maps a reason name to the condition identifying the
+    documents dropped for it. The conditions must partition the matched set —
+    the caller owns that, and the invariant is asserted by the caller's tests
+    rather than here, so a legitimate partial count (``list_documents``, whose
+    over-limit drop is positional and has no SQL predicate) is still expressible.
+
+    One ``SELECT`` with Postgres ``FILTER (WHERE ...)`` clauses rather than N+1
+    counts: this runs on every structured tool call, so it must not multiply
+    the query cost of asking a question.
+    """
+    conditions = filter_conditions(filters)
+    columns = [
+        func.count(Document.id),
+        func.count(Document.id).filter(include_condition),
+        func.count(Document.id).filter(
+            include_condition, Document.review_status == ReviewStatus.NEEDS_REVIEW
+        ),
+        *(func.count(Document.id).filter(condition) for condition in exclusions.values()),
+    ]
+    row = (await session.execute(select(*columns).where(*conditions))).one()
+    matched, included, needs_review = int(row[0]), int(row[1]), int(row[2])
+    excluded = {
+        reason: int(count)
+        for reason, count in zip(exclusions, row[3:], strict=True)
+        # A reason that dropped nothing is noise in the model's context and
+        # would read as a caveat where there is none.
+        if int(count) > 0
+    }
+    return Coverage(
+        matched=matched, included=included, excluded=excluded, needs_review=needs_review
+    )
 
 
 async def list_documents(

@@ -9,9 +9,11 @@ import pytest
 from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
-from library.models import Document, DocumentSource, Kind, Sender
+from library.models import Document, DocumentSource, Kind, ReviewStatus, Sender
 from library.search import DocumentFilters
 from library.structured_query import (
+    Coverage,
+    count_coverage,
     distinct_senders,
     list_documents,
     query_documents,
@@ -197,3 +199,66 @@ async def test_query_documents_dispatch_distinct_senders(session: AsyncSession) 
 
     assert result["result_type"] == "distinct_senders"
     assert result["rows"][0]["sender"] == "Vattenfall"
+
+
+async def test_count_coverage_partitions_matched_into_included_and_excluded(
+    session: AsyncSession,
+) -> None:
+    """matched = included + sum(excluded.values()), always."""
+    await seed(session, "cov1", kind_slug="utility-bill", amount="10.00", currency="EUR")
+    await seed(session, "cov2", kind_slug="utility-bill", amount="20.00", currency="EUR")
+    await seed(session, "cov3", kind_slug="utility-bill")  # no amount
+
+    coverage: Coverage = await count_coverage(
+        session,
+        filters=DocumentFilters(kind_slug="utility-bill"),
+        include_condition=Document.amount_total.isnot(None),
+        exclusions={"no_amount": Document.amount_total.is_(None)},
+    )
+
+    assert coverage.matched == 3
+    assert coverage.included == 2
+    assert coverage.excluded == {"no_amount": 1}
+    assert coverage.needs_review == 0
+    assert coverage.included + sum(coverage.excluded.values()) == coverage.matched
+
+
+async def test_count_coverage_omits_zero_reasons(session: AsyncSession) -> None:
+    """A reason that excluded nothing is not reported — an empty dict means
+    'the rows account for everything that matched'."""
+    await seed(session, "cov4", kind_slug="invoice", amount="5.00", currency="EUR")
+
+    coverage: Coverage = await count_coverage(
+        session,
+        filters=DocumentFilters(kind_slug="invoice"),
+        include_condition=Document.amount_total.isnot(None),
+        exclusions={"no_amount": Document.amount_total.is_(None)},
+    )
+
+    assert coverage.excluded == {}
+
+
+async def test_count_coverage_counts_needs_review_among_included(
+    session: AsyncSession,
+) -> None:
+    """needs_review counts flagged documents that ARE in the rows — a flagged
+    document the aggregate already dropped must not be double-reported."""
+    included_id = await seed(
+        session, "cov5", kind_slug="utility-bill", amount="30.00", currency="EUR"
+    )
+    excluded_id = await seed(session, "cov6", kind_slug="utility-bill")  # no amount
+    for document_id in (included_id, excluded_id):
+        document = await session.get(Document, document_id)
+        assert document is not None
+        document.review_status = ReviewStatus.NEEDS_REVIEW
+    await session.commit()
+
+    coverage: Coverage = await count_coverage(
+        session,
+        filters=DocumentFilters(kind_slug="utility-bill"),
+        include_condition=Document.amount_total.isnot(None),
+        exclusions={"no_amount": Document.amount_total.is_(None)},
+    )
+
+    assert coverage.included == 1
+    assert coverage.needs_review == 1
