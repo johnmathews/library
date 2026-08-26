@@ -14,7 +14,7 @@ from __future__ import annotations
 import itertools
 import logging
 import statistics
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date, timedelta
 from decimal import Decimal
 from typing import Literal
@@ -1332,6 +1332,8 @@ def serialise_summary(summary: SeriesSummary, *, include_points: bool = False) -
         "count": summary.count,
         "document_ids": summary.document_ids,
     }
+    if summary.coverage is not None:
+        body["coverage"] = asdict(summary.coverage)
     if summary.authored_id is not None:
         body["authored_id"] = summary.authored_id
     if summary.mode is not None:

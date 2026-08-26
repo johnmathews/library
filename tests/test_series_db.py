@@ -20,7 +20,7 @@ from library.models import (
     SeriesMembershipOverride,
 )
 from library.search import DocumentFilters
-from library.series import _load_members, serialise_summary, summarize_series
+from library.series import SeriesSummary, _load_members, serialise_summary, summarize_series
 
 pytestmark = pytest.mark.integration
 
@@ -552,3 +552,126 @@ async def test_summarize_series_coverage_partitions_correctly_across_overrides(
         summary.coverage.included + sum(summary.coverage.excluded.values())
         == summary.coverage.matched
     )
+
+
+async def test_serialise_summary_emits_coverage(session: AsyncSession) -> None:
+    """Coverage has to survive serialisation into the JSON-friendly dict, or
+    the model calling ``compare_to_series`` never sees it.
+
+    Every count below is distinct (4 included, 5 no_amount, 2 other_series_group,
+    1 other_currency, 3 needs_review, 12 matched) so a reason-key swap inside
+    ``serialise_summary`` — or a mix-up between ``matched``/``included`` — would
+    change which literal the assertion fails on, the same trap
+    ``test_summarize_series_reports_all_three_drops`` guards against for the
+    dataclass this serialises.
+    """
+    alpha = await _sender(session, "AlphaEnergy")
+    beta = await _sender(session, "BetaEnergy")
+    included_ids = []
+    for index, amount in enumerate(["100.00", "110.00", "120.00", "130.00"]):
+        included_ids.append(
+            await seed(
+                session,
+                f"cs{index}",
+                sender_name=alpha.name,
+                kind_slug="utility-bill",
+                document_date=date(2025, 1, index + 1),
+                amount=amount,
+                currency="EUR",
+            )
+        )
+    # Non-dominant currency: 1 document.
+    await seed(
+        session,
+        "cs-usd",
+        sender_name=alpha.name,
+        kind_slug="utility-bill",
+        document_date=date(2025, 1, 9),
+        amount="90.00",
+        currency="USD",
+    )
+    # Non-dominant (sender, kind) group: 2 documents.
+    for index, amount in enumerate(["200.00", "210.00"]):
+        await seed(
+            session,
+            f"cs-beta{index}",
+            sender_name=beta.name,
+            kind_slug="utility-bill",
+            document_date=date(2025, 1, 10 + index),
+            amount=amount,
+            currency="EUR",
+        )
+    # Amountless: 5 documents. seed() requires an amount, so these are built
+    # inline (the pattern test_summarize_series_reports_all_three_drops uses).
+    kind = (await session.execute(select(Kind).where(Kind.slug == "utility-bill"))).scalar_one()
+    for index in range(5):
+        session.add(
+            Document(
+                sha256=hashlib.sha256(f"cs-none{index}".encode()).hexdigest(),
+                mime_type="application/pdf",
+                source=DocumentSource.UPLOAD,
+                sender=alpha,
+                kind=kind,
+                document_date=date(2025, 1, 20 + index),
+                amount_total=None,
+                currency=None,
+            )
+        )
+    # 3 of the 4 included documents are flagged for review.
+    for included_id in included_ids[:3]:
+        flagged = await session.get(Document, included_id)
+        assert flagged is not None
+        flagged.review_status = ReviewStatus.NEEDS_REVIEW
+    await session.commit()
+
+    summary = await summarize_series(
+        session,
+        filters=DocumentFilters(kind_slug="utility-bill"),
+        settings=_settings(),
+    )
+    body = serialise_summary(summary)
+
+    assert body["coverage"] == {
+        "matched": 12,
+        "included": 4,
+        "excluded": {
+            "no_amount": 5,
+            "other_series_group": 2,
+            "other_currency": 1,
+        },
+        "needs_review": 3,
+    }
+
+
+def test_serialise_summary_omits_coverage_when_absent() -> None:
+    """Absent must keep meaning "not reported" (authored series don't report
+    coverage yet) — never conflated with an empty ``excluded``, which means
+    "nothing was dropped". Constructs a ``SeriesSummary`` directly (no DB
+    needed — this is a serialisation-boundary test) with ``coverage`` left at
+    its default of ``None``, the authored-series shape: the key must not
+    appear in the body at all (a present ``{"excluded": {}, ...}`` would
+    silently claim full coverage for a series that never measured it)."""
+    summary = SeriesSummary(
+        status="insufficient",
+        sender=None,
+        kind=None,
+        sender_id=None,
+        kind_id=None,
+        currency=None,
+        other_currencies=[],
+        cadence="irregular",
+        count=0,
+        distribution=None,
+        reference=None,
+        trend=None,
+        year_over_year=None,
+        document_ids=[],
+        points=[],
+        titles={},
+        description=None,
+    )
+    assert summary.coverage is None
+
+    body = serialise_summary(summary)
+
+    assert "coverage" not in body
