@@ -1560,3 +1560,16 @@ def test_query_documents_tool_description_explains_coverage() -> None:
     assert "coverage" in tool["description"]
     assert "needs_review" in tool["description"]
     assert "excluded" in tool["description"]
+
+
+def test_ask_system_prompt_pins_the_disclosure_obligation_as_a_MUST() -> None:
+    """The other coverage/needs_review/excluded assertions are pure vocabulary
+    containment checks: 'you MUST say so' could be reworded to 'you may
+    mention it' and every one of them would still pass. The modal is the
+    actual mechanism forcing disclosure, so pin its literal strength here too
+    — a reword that softens it is a silent regression on this branch's whole
+    point, not a wording tweak."""
+    from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
+
+    assert "MUST say so" in ASK_SYSTEM_PROMPT_TEMPLATE
+    assert "MUST also say so" in ASK_SYSTEM_PROMPT_TEMPLATE

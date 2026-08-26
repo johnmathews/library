@@ -69,8 +69,8 @@ hope the right chunk lands inside `retrieve_top_k = 10`.
 (`search.py:436`) — the plumbing exists and is simply not wired to the tool.
 
 **#6 Chunks embed with no document context.**
-`jobs.py:337-353` embeds raw chunk text. A chunk reading `Termijnbedrag
-€ 142,50` carries no trace of the sender, the date, or the kind, so a query
+`jobs.py:337-353` embeds raw chunk text. A chunk reading `Bedrag
+€ 0,00` carries no trace of the sender, the date, or the kind, so a query
 naming any of them cannot match it on meaning.
 
 **#7 Retrieval depth is fixed.**
