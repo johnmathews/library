@@ -1450,3 +1450,126 @@ def test_ask_route_tells_the_model_who_the_user_is(
     assert 'The user is "Ada Example"' in system_text
     # The seeded kind vocabulary rides along so tool calls use real slugs.
     assert "utility-bill" in system_text
+
+
+def test_ask_cites_nothing_when_the_loop_produces_no_answer(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`cited` holds every candidate a read tool surfaced, including ones the
+    model looked at and rejected. Attaching them to "I couldn't find an answer"
+    presents rejected candidates as sources for a non-answer."""
+
+    # Real rows, so a lingering fallback-to-`cited` bug would actually surface
+    # them as citations rather than being masked by an empty `IN (...)` match.
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            doc_ids = [
+                connection.execute(
+                    text(
+                        "INSERT INTO documents (sha256, mime_type, status, source, ocr_text, title)"
+                        " VALUES (:sha, 'application/pdf', 'indexed', 'upload', :ocr, :title)"
+                        " RETURNING id"
+                    ),
+                    {
+                        "sha": hashlib.sha256(f"no-answer-candidate-{index}".encode()).hexdigest(),
+                        "ocr": "noise",
+                        "title": title,
+                    },
+                ).scalar_one()
+                for index, title in enumerate(["Unrelated", "Also unrelated"])
+            ]
+    finally:
+        engine.dispose()
+
+    async def fake_embed_query(
+        text_value: str, *, settings: Any, client: Any = None
+    ) -> list[float]:
+        return _unit_vector(0)
+
+    async def fake_search(session: Any, **kwargs: Any) -> list[Any]:
+        from dataclasses import dataclass as _dataclass
+
+        @_dataclass
+        class _Doc:
+            id: int
+            title: str | None
+            sender: Any = None
+            recipient: Any = None
+            document_date: Any = None
+
+        @_dataclass
+        class _Hit:
+            document: Any
+            score: float
+            chunk_index: int | None
+            chunk_text: str | None
+            page_number: int | None
+            chunk_texts: tuple[str, ...]
+
+        return [
+            _Hit(_Doc(id=doc_ids[0], title="Unrelated"), 0.1, 0, "noise", None, ("noise",)),
+            _Hit(_Doc(id=doc_ids[1], title="Also unrelated"), 0.1, 0, "noise", None, ("noise",)),
+        ]
+
+    monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
+    monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+
+    # Every response is a tool_use, so the loop exhausts ask_max_tool_turns
+    # without ever producing text and falls back to the _NO_ANSWER sentinel.
+    settings = get_settings()
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(name="semantic_search", input={"query": "tax"}, id=f"t{index}")
+                ],
+                usage=_Usage(100, 10),
+            )
+            for index in range(settings.ask_max_tool_turns)
+        ],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "Where are my tax returns?"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["answer"] == "I couldn't find an answer to that in the archive."
+    assert body["citations"] == []
+
+
+def test_ask_system_prompt_requires_disclosing_partial_coverage() -> None:
+    """The coverage block is only worth computing if the model is obliged to
+    act on it."""
+    from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
+
+    assert "coverage" in ASK_SYSTEM_PROMPT_TEMPLATE
+    assert "needs_review" in ASK_SYSTEM_PROMPT_TEMPLATE
+    assert "excluded" in ASK_SYSTEM_PROMPT_TEMPLATE
+
+
+def test_query_documents_tool_description_explains_coverage() -> None:
+    from library.ask.engine import TOOLS
+
+    tool = next(tool for tool in TOOLS if tool["name"] == "query_documents")
+    assert "coverage" in tool["description"]
+    assert "needs_review" in tool["description"]
+    assert "excluded" in tool["description"]
+
+
+def test_ask_system_prompt_pins_the_disclosure_obligation_as_a_MUST() -> None:
+    """The other coverage/needs_review/excluded assertions are pure vocabulary
+    containment checks: 'you MUST say so' could be reworded to 'you may
+    mention it' and every one of them would still pass. The modal is the
+    actual mechanism forcing disclosure, so pin its literal strength here too
+    — a reword that softens it is a silent regression on this branch's whole
+    point, not a wording tweak."""
+    from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
+
+    assert "MUST say so" in ASK_SYSTEM_PROMPT_TEMPLATE
+    assert "MUST also say so" in ASK_SYSTEM_PROMPT_TEMPLATE

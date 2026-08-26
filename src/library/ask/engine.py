@@ -33,11 +33,11 @@ from library.documents_service import apply_document_update, revalidate_after_ed
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
 from library.llm import subscription
-from library.models import Document, DocumentComment, DocumentPage
+from library.models import Document, DocumentComment, DocumentPage, ReviewStatus
 from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, semantic_search
 from library.series import serialise_summary, summarize_series
-from library.structured_query import CONCEPT_TO_KIND, QueryResult, query_documents
+from library.structured_query import CONCEPT_TO_KIND, query_documents
 
 logger = logging.getLogger(__name__)
 
@@ -90,7 +90,17 @@ Rules:
 - Answer ONLY from tool results. Never invent facts.
 - If the tools return nothing relevant, say plainly that the archive does not
   appear to contain the answer.
-- Cite the document id(s) your answer relies on, inline like [#42].
+- Cite the document id(s) your answer relies on, inline like [#42]. If you
+  cannot answer from the tool results, say so plainly and cite nothing — do
+  not list the documents you looked at and rejected.
+- query_documents results carry a "coverage" block. If `excluded` is non-empty,
+  the rows do NOT account for every matching document, and you MUST say so in
+  your answer with the reason and the count — e.g. "EUR 1,240 across 14 bills;
+  3 more matched but no amount could be read from them". If `needs_review` is
+  above zero, you MUST also say so: those documents are included in the number
+  but the archive flagged their extracted metadata as unreliable. Never
+  present a partial total as if it were complete, and never silently drop the
+  flagged documents to make the caveat go away.
 - Be concise and direct. Dutch terms may answer English questions and vice
   versa (e.g. "reiskostenvergoeding" = travel allowance).
 """
@@ -151,6 +161,29 @@ _FILTER_PROPERTIES: dict[str, Any] = {
     "date_to": {"type": "string", "description": "Inclusive ISO date upper bound."},
 }
 
+# `review_status` lives in its own dict rather than `_FILTER_PROPERTIES` because
+# only `query_documents` can report what it removes: its `coverage` block
+# discloses a `filtered_review_status` exclusion (see `structured_query.py`),
+# so the model can see and disclose the drop. `compare_to_series` has no
+# coverage reporting at all — `summarize_series` already silently drops
+# amountless documents, non-dominant groups, and non-dominant currency buckets
+# — so a filter whose tool cannot say what it removed does not belong there.
+_REVIEW_STATUS_PROPERTY: dict[str, Any] = {
+    "review_status": {
+        "type": "string",
+        "enum": ["verified", "needs_review", "unreviewed"],
+        "description": (
+            "Trust state of a document's EXTRACTED metadata, not of the document "
+            "itself. needs_review means the archive's validator flagged the "
+            "extraction — most often because the amount does not appear anywhere "
+            "in the document's text. Omit to include everything (the default, and "
+            "usually right). Use needs_review to LIST what the user should check; "
+            "do not silently filter it out of a total, because dropping it changes "
+            "the number without saying so — report the count instead."
+        ),
+    },
+}
+
 
 TOOLS: list[dict[str, Any]] = [
     {
@@ -175,7 +208,16 @@ TOOLS: list[dict[str, Any]] = [
         "name": "query_documents",
         "description": (
             "Aggregate over structured metadata (sender, kind, document_date, "
-            "amount_total). Use for who/how-many/how-much/over-time questions. " + _kind_hint()
+            "amount_total). Use for who/how-many/how-much/over-time questions. "
+            "Every result carries a `coverage` block — `matched` documents met "
+            "your filters, `included` are the ones the rows account for, "
+            "`excluded` maps a reason to how many were dropped for it, and "
+            "`needs_review` counts included documents whose extracted metadata "
+            "the archive flagged as untrustworthy. Read it before you answer: a "
+            "total over `included` documents is not a total over `matched` ones. "
+            "`matched`/`included`/`excluded` always count DOCUMENTS, even for "
+            "distinct_senders — a coverage of 1 excluded out of 12 with 3 sender "
+            "rows means 1 of 12 documents was dropped, not 1 of 3 senders. " + _kind_hint()
         ),
         "input_schema": {
             "type": "object",
@@ -191,6 +233,7 @@ TOOLS: list[dict[str, Any]] = [
                     ),
                 },
                 **_FILTER_PROPERTIES,
+                **_REVIEW_STATUS_PROPERTY,
                 "group_by": {
                     "type": "string",
                     "enum": ["sender", "kind"],
@@ -430,6 +473,11 @@ async def generate_thread_title(
 
 
 def _parse_date(value: object) -> date | None:
+    # Deliberately swallow-and-continue, unlike `_invalid_review_status` below:
+    # dates are free-text natural language the model may get slightly wrong
+    # (and this shape predates the trust-filter work), whereas `review_status`
+    # is a new enum-constrained filter the model is expected to get right from
+    # the schema — a future reader should not "unify" the two.
     if not value:
         return None
     try:
@@ -496,6 +544,50 @@ def _slug_args(value: object) -> tuple[str, ...]:
     return tuple(slug for slug in (_text_arg(item) for item in items) if slug is not None)
 
 
+def _review_status_arg(value: object) -> ReviewStatus | None:
+    """A ``ReviewStatus`` from a tool argument, or None.
+
+    An unrecognised value degrades to "no filter" rather than raising: the JSON
+    schema's ``enum`` steers the model but does not bind it, and a hallucinated
+    status must not turn into a 500 inside the tool loop. This keeps
+    ``_filters_from_args`` usable as-is by ``compare_to_series`` (whose schema
+    does not even offer ``review_status`` — see ``_REVIEW_STATUS_PROPERTY``).
+    ``query_documents`` additionally validates the raw value itself, via
+    ``_invalid_review_status`` below, so a bad value there is surfaced to the
+    model as an error instead of silently degrading like this.
+    """
+    text = _text_arg(value)
+    if text is None:
+        return None
+    try:
+        return ReviewStatus(text)
+    except ValueError:
+        logger.info("ask: ignoring unknown review_status %r", text)
+        return None
+
+
+def _invalid_review_status(value: object) -> str | None:
+    """The offending text if ``value`` is a non-blank ``review_status`` that
+    is not a valid :class:`ReviewStatus`, else ``None``.
+
+    Only ``_run_query_documents`` calls this. Unlike ``_review_status_arg``
+    (used by ``_filters_from_args`` for both structured tools), this does not
+    swallow the bad value: ``query_documents`` has a `coverage` block that can
+    describe what a filter removed, so it can also tell the model outright
+    that ``review_status`` was not understood — silently returning "no
+    filter" would hand back the entire archive under a filtered-sounding
+    tool call, with only a server-side log line to show for it.
+    """
+    text = _text_arg(value)
+    if text is None:
+        return None
+    try:
+        ReviewStatus(text)
+    except ValueError:
+        return text
+    return None
+
+
 def _filters_from_args(args: dict[str, Any]) -> DocumentFilters:
     """The ``DocumentFilters`` for a structured tool call's ``_FILTER_PROPERTIES``."""
     return DocumentFilters(
@@ -507,12 +599,22 @@ def _filters_from_args(args: dict[str, Any]) -> DocumentFilters:
         tag_slugs=_slug_args(args.get("tags")),
         date_from=_parse_date(args.get("date_from")),
         date_to=_parse_date(args.get("date_to")),
+        review_status=_review_status_arg(args.get("review_status")),
     )
 
 
 async def _run_query_documents(
     session: AsyncSession, args: dict[str, Any], cited: set[int]
-) -> QueryResult:
+) -> dict[str, Any]:
+    bad_review_status = _invalid_review_status(args.get("review_status"))
+    if bad_review_status is not None:
+        valid_values = ", ".join(status.value for status in ReviewStatus)
+        return {
+            "error": (
+                f"unrecognised review_status {bad_review_status!r}; "
+                f"valid values are: {valid_values}"
+            )
+        }
     filters = _filters_from_args(args)
     result = await query_documents(
         session,
@@ -525,7 +627,11 @@ async def _run_query_documents(
             cited.update(row["document_ids"])
         elif "id" in row:
             cited.add(row["id"])
-    return result
+    # Widen the TypedDict to the plain mapping this function's error branch
+    # above also returns: mypy treats a TypedDict as incompatible with
+    # `dict[str, Any]` because a caller could insert a key the declaration
+    # forbids.
+    return dict(result)
 
 
 async def _run_compare_to_series(
@@ -735,10 +841,7 @@ async def _dispatch_tool(
     if name == "query_documents":
         query_result = await _run_query_documents(session, args, cited)
         editable_ids.update(cited)
-        # `dict(...)` widens the TypedDict to the plain mapping this dispatcher
-        # returns: mypy treats a TypedDict as incompatible with `dict[str, Any]`
-        # because a caller could insert a key the declaration forbids.
-        return dict(query_result)
+        return query_result
     if name == "compare_to_series":
         result = await _run_compare_to_series(session, settings, args, cited)
         editable_ids.update(cited)
@@ -1202,8 +1305,16 @@ async def run_ask(
     result.answer = answer or _NO_ANSWER
     # Prefer the documents Claude actually cited inline (#id); fall back to the
     # full retrieved set when the answer cited none explicitly.
+    #
+    # The fallback exists for a real case: an answer that names its sources in
+    # prose rather than with the [#id] syntax. It must NOT fire for the
+    # no-answer sentinel, because `cited` holds every candidate a read tool
+    # surfaced — including the ones the model read and rejected. Falling back
+    # there attaches a full source list to "I couldn't find an answer", which
+    # reads as evidence for a non-answer.
     mentioned = {int(match) for match in re.findall(r"#(\d+)", answer)} & cited
-    result.citations = await _citations_for(session, mentioned or cited, pages)
+    fallback: set[int] = set() if result.answer == _NO_ANSWER else cited
+    result.citations = await _citations_for(session, mentioned or fallback, pages)
     # De-duplicate tool names, preserving first-use order.
     result.used_tools = list(dict.fromkeys(used))
     result.turn_messages = new_messages
