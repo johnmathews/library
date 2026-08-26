@@ -37,7 +37,7 @@ from library.models import Document, DocumentComment, DocumentPage, ReviewStatus
 from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, semantic_search
 from library.series import serialise_summary, summarize_series
-from library.structured_query import CONCEPT_TO_KIND, QueryResult, query_documents
+from library.structured_query import CONCEPT_TO_KIND, query_documents
 
 logger = logging.getLogger(__name__)
 
@@ -159,6 +159,16 @@ _FILTER_PROPERTIES: dict[str, Any] = {
     },
     "date_from": {"type": "string", "description": "Inclusive ISO date lower bound."},
     "date_to": {"type": "string", "description": "Inclusive ISO date upper bound."},
+}
+
+# `review_status` lives in its own dict rather than `_FILTER_PROPERTIES` because
+# only `query_documents` can report what it removes: its `coverage` block
+# discloses a `filtered_review_status` exclusion (see `structured_query.py`),
+# so the model can see and disclose the drop. `compare_to_series` has no
+# coverage reporting at all — `summarize_series` already silently drops
+# amountless documents, non-dominant groups, and non-dominant currency buckets
+# — so a filter whose tool cannot say what it removed does not belong there.
+_REVIEW_STATUS_PROPERTY: dict[str, Any] = {
     "review_status": {
         "type": "string",
         "enum": ["verified", "needs_review", "unreviewed"],
@@ -204,7 +214,10 @@ TOOLS: list[dict[str, Any]] = [
             "`excluded` maps a reason to how many were dropped for it, and "
             "`needs_review` counts included documents whose extracted metadata "
             "the archive flagged as untrustworthy. Read it before you answer: a "
-            "total over `included` documents is not a total over `matched` ones. " + _kind_hint()
+            "total over `included` documents is not a total over `matched` ones. "
+            "`matched`/`included`/`excluded` always count DOCUMENTS, even for "
+            "distinct_senders — a coverage of 1 excluded out of 12 with 3 sender "
+            "rows means 1 of 12 documents was dropped, not 1 of 3 senders. " + _kind_hint()
         ),
         "input_schema": {
             "type": "object",
@@ -220,6 +233,7 @@ TOOLS: list[dict[str, Any]] = [
                     ),
                 },
                 **_FILTER_PROPERTIES,
+                **_REVIEW_STATUS_PROPERTY,
                 "group_by": {
                     "type": "string",
                     "enum": ["sender", "kind"],
@@ -459,6 +473,11 @@ async def generate_thread_title(
 
 
 def _parse_date(value: object) -> date | None:
+    # Deliberately swallow-and-continue, unlike `_invalid_review_status` below:
+    # dates are free-text natural language the model may get slightly wrong
+    # (and this shape predates the trust-filter work), whereas `review_status`
+    # is a new enum-constrained filter the model is expected to get right from
+    # the schema — a future reader should not "unify" the two.
     if not value:
         return None
     try:
@@ -530,7 +549,12 @@ def _review_status_arg(value: object) -> ReviewStatus | None:
 
     An unrecognised value degrades to "no filter" rather than raising: the JSON
     schema's ``enum`` steers the model but does not bind it, and a hallucinated
-    status must not turn into a 500 inside the tool loop.
+    status must not turn into a 500 inside the tool loop. This keeps
+    ``_filters_from_args`` usable as-is by ``compare_to_series`` (whose schema
+    does not even offer ``review_status`` — see ``_REVIEW_STATUS_PROPERTY``).
+    ``query_documents`` additionally validates the raw value itself, via
+    ``_invalid_review_status`` below, so a bad value there is surfaced to the
+    model as an error instead of silently degrading like this.
     """
     text = _text_arg(value)
     if text is None:
@@ -540,6 +564,28 @@ def _review_status_arg(value: object) -> ReviewStatus | None:
     except ValueError:
         logger.info("ask: ignoring unknown review_status %r", text)
         return None
+
+
+def _invalid_review_status(value: object) -> str | None:
+    """The offending text if ``value`` is a non-blank ``review_status`` that
+    is not a valid :class:`ReviewStatus`, else ``None``.
+
+    Only ``_run_query_documents`` calls this. Unlike ``_review_status_arg``
+    (used by ``_filters_from_args`` for both structured tools), this does not
+    swallow the bad value: ``query_documents`` has a `coverage` block that can
+    describe what a filter removed, so it can also tell the model outright
+    that ``review_status`` was not understood — silently returning "no
+    filter" would hand back the entire archive under a filtered-sounding
+    tool call, with only a server-side log line to show for it.
+    """
+    text = _text_arg(value)
+    if text is None:
+        return None
+    try:
+        ReviewStatus(text)
+    except ValueError:
+        return text
+    return None
 
 
 def _filters_from_args(args: dict[str, Any]) -> DocumentFilters:
@@ -559,7 +605,16 @@ def _filters_from_args(args: dict[str, Any]) -> DocumentFilters:
 
 async def _run_query_documents(
     session: AsyncSession, args: dict[str, Any], cited: set[int]
-) -> QueryResult:
+) -> dict[str, Any]:
+    bad_review_status = _invalid_review_status(args.get("review_status"))
+    if bad_review_status is not None:
+        valid_values = ", ".join(status.value for status in ReviewStatus)
+        return {
+            "error": (
+                f"unrecognised review_status {bad_review_status!r}; "
+                f"valid values are: {valid_values}"
+            )
+        }
     filters = _filters_from_args(args)
     result = await query_documents(
         session,
@@ -572,7 +627,11 @@ async def _run_query_documents(
             cited.update(row["document_ids"])
         elif "id" in row:
             cited.add(row["id"])
-    return result
+    # Widen the TypedDict to the plain mapping this function's error branch
+    # above also returns: mypy treats a TypedDict as incompatible with
+    # `dict[str, Any]` because a caller could insert a key the declaration
+    # forbids.
+    return dict(result)
 
 
 async def _run_compare_to_series(
@@ -782,10 +841,7 @@ async def _dispatch_tool(
     if name == "query_documents":
         query_result = await _run_query_documents(session, args, cited)
         editable_ids.update(cited)
-        # `dict(...)` widens the TypedDict to the plain mapping this dispatcher
-        # returns: mypy treats a TypedDict as incompatible with `dict[str, Any]`
-        # because a caller could insert a key the declaration forbids.
-        return dict(query_result)
+        return query_result
     if name == "compare_to_series":
         result = await _run_compare_to_series(session, settings, args, cited)
         editable_ids.update(cited)

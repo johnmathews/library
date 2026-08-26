@@ -137,13 +137,21 @@ async def test_query_documents_tool_filters_by_matter_and_recipient(
     assert cited == {mine}
 
 
-def test_structured_tools_expose_review_status() -> None:
+def test_query_documents_exposes_review_status() -> None:
     """The archive already knows which extractions it distrusts; the model
     cannot act on that unless the tool schema offers it."""
-    for tool_name in ("query_documents", "compare_to_series"):
-        tool = next(tool for tool in TOOLS if tool["name"] == tool_name)
-        prop = tool["input_schema"]["properties"]["review_status"]
-        assert prop["enum"] == ["verified", "needs_review", "unreviewed"]
+    tool = next(tool for tool in TOOLS if tool["name"] == "query_documents")
+    prop = tool["input_schema"]["properties"]["review_status"]
+    assert prop["enum"] == ["verified", "needs_review", "unreviewed"]
+
+
+def test_compare_to_series_does_not_expose_review_status() -> None:
+    """`compare_to_series` has no coverage reporting at all (`summarize_series`
+    already silently drops amountless documents, non-dominant groups, and
+    non-dominant currency buckets), so a filter whose tool cannot report what
+    it removed does not belong on this tool's schema."""
+    tool = next(tool for tool in TOOLS if tool["name"] == "compare_to_series")
+    assert "review_status" not in tool["input_schema"]["properties"]
 
 
 @pytest.mark.asyncio
@@ -170,23 +178,32 @@ async def test_query_documents_forwards_review_status(
 
 
 @pytest.mark.asyncio
-async def test_query_documents_ignores_an_unknown_review_status(
+async def test_query_documents_reports_an_unknown_review_status_as_an_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A model-invented value must degrade to 'no filter', never raise into the
-    tool loop — the enum is a hint to the model, not a guarantee."""
-    captured: dict[str, Any] = {}
+    """A model-invented value must be surfaced to the model as an error, not
+    silently degrade to 'no filter': that would hand back the ENTIRE archive
+    under what reads as a filtered call, with only a server-side log to show
+    for it. The tool loop must not crash either — an error payload, not a
+    raised exception."""
+    called = False
 
     async def fake_query_documents(
         session: Any, *, filters: DocumentFilters, aggregate: Any, group_by: Any
     ) -> dict[str, Any]:
-        captured["filters"] = filters
+        nonlocal called
+        called = True
         return {"result_type": "list", "rows": [], "coverage": {}}
 
     monkeypatch.setattr(ask_engine, "query_documents", fake_query_documents)
 
-    await _run_query_documents(
+    result = await _run_query_documents(
         cast("AsyncSession", None), {"aggregate": "list", "review_status": "dubious"}, set()
     )
 
-    assert captured["filters"].review_status is None
+    assert "error" in result
+    assert "dubious" in result["error"]
+    assert "verified" in result["error"]
+    assert "needs_review" in result["error"]
+    assert "unreviewed" in result["error"]
+    assert called is False  # nothing was queried for a value that can't be honoured
