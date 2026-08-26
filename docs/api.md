@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-08-25 (Ask profile: new `PUT /api/settings/ask-profile` and the `ask_profile` key on the resolved preference set, §1.10.11; the Ask tools' new recipient/project/matter/tag filters are prompt-side, documented in [ask.md §1.2](ask.md). Earlier (2026-08-20, LLM backend selection: new `GET /api/settings/llm-backends` and admin-only `PUT`/`DELETE /api/settings/llm-backends/{surface}`, §1.10.8–1.10.10; `POST /api/ask` now answers **503** with the fix when the subscription backend cannot authenticate, §1.11). Earlier: 2026-08-12 (documentation verification sweep: documented `DELETE /api/admin/users/{id}` and the Smart Groups create/exclusion contract; corrected the `status` enum, the login/`me` and preferences shapes, the coverage and note-edit claims, and the `ts_rank` normalisation). Earlier (2026-07-17, business matters: business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
-**Last verified:** 2026-08-25 — method: the new §1.10.11 wire shape, status codes and the `ask_profile` read-model key checked against `src/library/api/settings.py` and `src/library/schemas.py`, covered by executed tests (`tests/test_settings_api.py`, eight new cases incl. the 422, the garbage-blob fallback and the read-side clip) in a full backend run. The rest carries forward its previous verification: 2026-08-20 — method: the new §1.10.8–1.10.10 wire shapes and status codes checked against `src/library/api/settings.py` and `src/library/schemas.py`, and the §1.11 503 against `src/library/api/ask.py`; both covered by executed tests (`tests/test_llm_backends.py`, `tests/test_api_ask.py`) in a full run of 1632 passing. The rest of the document is unchanged since its previous verification, whose method was: 2026-08-12 — method: enumerated every `@router` decorator under `src/library/` and diffed it against the documented surface in both directions, then checked each endpoint's parameters, request/response fields, status codes and auth rules against `src/library/api/**`, `schemas.py`, `config.py` and `app.py`, all read in full; nothing was executed.
+**Status:** active. **Last updated:** 2026-08-27 (series coverage: `GET /api/documents/{id}/series` (§1.13), `GET /api/charts` and `GET /api/charts/{series_id}` (§1.14) now carry a top-level `coverage` block — `matched`/`included`/`excluded`/`needs_review` — on every emergent `status:"ok"` result and on §1.13's own `status:"insufficient"` result once `summarize_series` has actually run; it is **absent** (the key omitted, not `null`) for an authored (user-curated) series and for §1.13's bespoke no-sender/kind short circuit, and a present block with an empty `excluded` means nothing was dropped, which is not the same claim as absent. See [ask.md §1.2/§1.7](ask.md) for the full design). Earlier (2026-08-25, Ask profile: new `PUT /api/settings/ask-profile` and the `ask_profile` key on the resolved preference set, §1.10.11; the Ask tools' new recipient/project/matter/tag filters are prompt-side, documented in [ask.md §1.2](ask.md). Earlier (2026-08-20, LLM backend selection: new `GET /api/settings/llm-backends` and admin-only `PUT`/`DELETE /api/settings/llm-backends/{surface}`, §1.10.8–1.10.10; `POST /api/ask` now answers **503** with the fix when the subscription backend cannot authenticate, §1.11). Earlier: 2026-08-12 (documentation verification sweep: documented `DELETE /api/admin/users/{id}` and the Smart Groups create/exclusion contract; corrected the `status` enum, the login/`me` and preferences shapes, the coverage and note-edit claims, and the `ts_rank` normalisation). Earlier (2026-07-17, business matters: business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Last verified:** 2026-08-27 — method: read §1.13/§1.14 in full and diffed the new `coverage` field (JSON examples + field lists) against `serialise_summary`, `SeriesCoverage`, `summarize_series`, and the three call sites that emit it (`src/library/api/documents.py:399`, `src/library/api/charts.py:169,277,337`) in `src/library/series.py` and `src/library/api/*.py`; also checked `get_document_series`'s bespoke no-sender/kind short-circuit dict, which the docs now note omits `coverage` entirely. Ran `uv run python scripts/check_docs.py` and `uv run python scripts/build_journal_index.py --check` (both clean) after the edit; did not run the backend test suite against this file's claims, so that remains the controller's job. Note: this same pass also threaded a resolved `currency`/`other_currencies` through the post-bucketing `"insufficient"` path in `src/library/series.py` (previously hardcoded `null`/`[]` there); §1.13's own `"insufficient"` example predates that and predates this coverage feature, documents neither field, and was not rewritten here — out of scope for this pass, left as a known pre-existing gap. The rest carries forward its previous verification: 2026-08-25 — method: the new §1.10.11 wire shape, status codes and the `ask_profile` read-model key checked against `src/library/api/settings.py` and `src/library/schemas.py`, covered by executed tests (`tests/test_settings_api.py`, eight new cases incl. the 422, the garbage-blob fallback and the read-side clip) in a full backend run. The rest carries forward its previous verification: 2026-08-20 — method: the new §1.10.8–1.10.10 wire shapes and status codes checked against `src/library/api/settings.py` and `src/library/schemas.py`, and the §1.11 503 against `src/library/api/ask.py`; both covered by executed tests (`tests/test_llm_backends.py`, `tests/test_api_ask.py`) in a full run of 1632 passing. The rest of the document is unchanged since its previous verification, whose method was: 2026-08-12 — method: enumerated every `@router` decorator under `src/library/` and diffed it against the documented surface in both directions, then checked each endpoint's parameters, request/response fields, status codes and auth rules against `src/library/api/**`, `schemas.py`, `config.py` and `app.py`, all read in full; nothing was executed.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -1165,6 +1165,12 @@ view. See [ask.md §1.7](ask.md) for the series detection and statistics design.
   "other_currencies": [],
   "cadence": "monthly",
   "count": 7,
+  "coverage": {
+    "matched": 8,
+    "included": 7,
+    "excluded": {"other_currency": 1},
+    "needs_review": 0
+  },
   "description": "Energy bills have crept up about 12% over the past year, peaking in winter.",
   "mean": "145.00",
   "median": "142.10",
@@ -1201,6 +1207,25 @@ Fields:
   series, precomputed in the background (see [ask.md §1.7](ask.md)). Absent until the
   first description has been generated for the series.
 - `other_currencies` — currencies present in the series that are not being reported.
+  Skips a `NULL` currency by construction, unlike `coverage.excluded.other_currency`
+  below, which counts every document outside the chosen bucket including
+  amount-bearing, currency-`NULL` ones.
+- `coverage` — how much of the matching document set the statistics actually
+  cover: `matched` (documents meeting the resolved filters, union anything a
+  PIN override pulled in), `included` (what the statistics were computed
+  from), `excluded` (reason → count: `no_amount`, `other_series_group`,
+  `other_currency`, `manually_excluded` — a reason present only when it
+  dropped at least one document), and `needs_review` (of `included`, how many
+  carry a `needs_review` extraction flag). See [ask.md §1.7](ask.md) for the
+  full narrowing/override design. **Absent** — the key is omitted entirely,
+  not `null` — for an authored (user-curated) series, whose membership is
+  hand-curated rather than derived by filtering and does not report coverage
+  at all; also absent from this endpoint's own `status:"insufficient"` short
+  circuit when the document itself has no `sender_id`/`kind_id` (see below),
+  which returns before `summarize_series` runs. A *present* `coverage` with an
+  empty `excluded` means nothing was dropped; an absent `coverage` means
+  "not reported" — the two are different claims, not variations on the same
+  one.
 - `cadence` — inferred recurrence: `monthly`, `quarterly`, `yearly`, or `irregular`.
 - `count`, `mean`, `median`, `stdev`, `min`, `max` — distribution stats over `amount_total`
   within the currency bucket. Money values are JSON strings (decimal precision preserved).
@@ -1227,6 +1252,12 @@ hide the trend widget rather than showing an error.
 ```
 
 `count` is the number of series members found (0 when the document has no sender or kind).
+This bare shape — no `coverage` key — is what the document-has-no-sender/kind case
+returns. When instead the document *has* a sender and kind but the series has too
+few members, `summarize_series` still ran and the response carries a `coverage`
+block on the same terms as the `"ok"` body above — including the caveat that its
+numbers, and `status` itself, can predate an unresolved PIN/EXCLUDE override on a
+near-threshold series (see [ask.md §1.7](ask.md)).
 
 **Errors:** `404` when the document does not exist or is soft-deleted.
 
@@ -1251,6 +1282,12 @@ backs the `/charts` aggregate view.
       "kind_id": 2,
       "currency": "EUR",
       "count": 7,
+      "coverage": {
+        "matched": 8,
+        "included": 7,
+        "excluded": {"other_currency": 1},
+        "needs_review": 0
+      },
       "description": "Energy bills have crept up about 12% over the past year…",
       "median": "142.10",
       "trend": { "direction": "rising", "change_pct": "+12.0%" },
@@ -1276,7 +1313,11 @@ backs the `/charts` aggregate view.
 ```
 
 Each `series` entry has the **same shape** as the `status:"ok"` body of
-`GET /api/documents/{id}/series` (with `points` always included). Series whose
+`GET /api/documents/{id}/series` (with `points` always included) — including
+`coverage` (§1.13), which is present on every emergent entry here (`/charts`
+only ever includes `status:"ok"` entries, and an emergent `"ok"` result always
+carries a populated `coverage`) but **absent** on an authored (user-curated)
+entry, which does not report it. Series whose
 dominant currency bucket is too small are omitted from `series`, so every entry
 there is `status:"ok"`. Entries are ordered by document count (busiest series
 first). There is no per-document reference point here, so
