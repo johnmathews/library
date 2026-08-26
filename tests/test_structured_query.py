@@ -327,6 +327,51 @@ async def test_sum_amount_flags_untrusted_amounts(session: AsyncSession) -> None
     assert result.coverage.needs_review == 1
 
 
+async def test_sum_amount_grouped_by_sender_partitions_a_senderless_quote_once(
+    session: AsyncSession,
+) -> None:
+    """A document that is BOTH a quote and senderless must land in exactly one
+    exclusion bucket, not two — the invariant is the regression test."""
+    await seed(session, "s9", kind_slug="quote", amount="500.00", currency="EUR")  # no sender
+
+    result = await sum_amount(session, filters=DocumentFilters(), group_by="sender")
+
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+
+
+async def test_sum_amount_grouped_by_kind_reports_kindless_documents(
+    session: AsyncSession,
+) -> None:
+    """group_by='kind' INNER JOINs Kind, so a document with no extracted kind
+    drops out of a grouped total, reported as `no_kind`."""
+    await seed(session, "k1", kind_slug="invoice", amount="40.00", currency="EUR")
+    await seed(session, "k2", amount="10.00", currency="EUR")  # no kind
+
+    result = await sum_amount(session, filters=DocumentFilters(), group_by="kind")
+
+    assert result.coverage.excluded == {"no_kind": 1}
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+
+
+async def test_sum_amount_amountless_quote_counted_once_under_no_amount(
+    session: AsyncSession,
+) -> None:
+    """An amountless quote must be reported under `no_amount` only — not also
+    under `quote_not_spend` — so it is not double-counted."""
+    await seed(session, "q1", kind_slug="quote")  # no amount at all
+
+    result = await sum_amount(session, filters=DocumentFilters())
+
+    assert result.coverage.excluded == {"no_amount": 1}
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+
+
 async def test_list_documents_reports_truncation(session: AsyncSession) -> None:
     """'List every invoice from 2024' must not return the newest N as though
     that were all of them."""

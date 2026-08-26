@@ -273,22 +273,31 @@ async def sum_amount(
     * ``no_sender`` / ``no_kind`` — only when grouping by that column, whose
       INNER JOIN drops documents that lack it.
     """
-    is_quote = select(1).where(Kind.id == Document.kind_id, Kind.slug == "quote").exists()
+    # Explicitly correlated to Document: group_by="kind" joins Kind into the
+    # outer query too, and without this SQLAlchemy auto-correlates the two
+    # Kind references and strips this subquery of its FROM entirely.
+    is_quote = (
+        select(1)
+        .where(Kind.id == Document.kind_id, Kind.slug == "quote")
+        .correlate(Document)
+        .exists()
+    )
     has_amount = Document.amount_total.isnot(None)
 
+    # Each exclusion is "survived every earlier gate, but fails this one", so the
+    # reasons partition the matched set instead of overlapping. A quote with an
+    # amount and no sender must land in exactly one bucket, not two.
     include: ColumnElement[bool] = has_amount
     exclusions: dict[str, ColumnElement[bool]] = {"no_amount": Document.amount_total.is_(None)}
     if filters.kind_slug != "quote":
+        exclusions["quote_not_spend"] = include & is_quote
         include = include & ~is_quote
-        # Conditioned on `has_amount` so an amountless quote is counted once,
-        # under `no_amount`, and the partition invariant holds.
-        exclusions["quote_not_spend"] = has_amount & is_quote
     if group_by == "sender":
+        exclusions["no_sender"] = include & Document.sender_id.is_(None)
         include = include & Document.sender_id.isnot(None)
-        exclusions["no_sender"] = has_amount & Document.sender_id.is_(None)
     elif group_by == "kind":
+        exclusions["no_kind"] = include & Document.kind_id.is_(None)
         include = include & Document.kind_id.isnot(None)
-        exclusions["no_kind"] = has_amount & Document.kind_id.is_(None)
 
     conditions = [*filter_conditions(filters), has_amount]
     if filters.kind_slug != "quote":
