@@ -1202,8 +1202,16 @@ async def run_ask(
     result.answer = answer or _NO_ANSWER
     # Prefer the documents Claude actually cited inline (#id); fall back to the
     # full retrieved set when the answer cited none explicitly.
+    #
+    # The fallback exists for a real case: an answer that names its sources in
+    # prose rather than with the [#id] syntax. It must NOT fire for the
+    # no-answer sentinel, because `cited` holds every candidate a read tool
+    # surfaced — including the ones the model read and rejected. Falling back
+    # there attaches a full source list to "I couldn't find an answer", which
+    # reads as evidence for a non-answer.
     mentioned = {int(match) for match in re.findall(r"#(\d+)", answer)} & cited
-    result.citations = await _citations_for(session, mentioned or cited, pages)
+    fallback: set[int] = set() if result.answer == _NO_ANSWER else cited
+    result.citations = await _citations_for(session, mentioned or fallback, pages)
     # De-duplicate tool names, preserving first-use order.
     result.used_tools = list(dict.fromkeys(used))
     result.turn_messages = new_messages
