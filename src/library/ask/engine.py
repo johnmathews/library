@@ -33,7 +33,7 @@ from library.documents_service import apply_document_update, revalidate_after_ed
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
 from library.llm import subscription
-from library.models import Document, DocumentComment, DocumentPage
+from library.models import Document, DocumentComment, DocumentPage, ReviewStatus
 from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, semantic_search
 from library.series import serialise_summary, summarize_series
@@ -149,6 +149,19 @@ _FILTER_PROPERTIES: dict[str, Any] = {
     },
     "date_from": {"type": "string", "description": "Inclusive ISO date lower bound."},
     "date_to": {"type": "string", "description": "Inclusive ISO date upper bound."},
+    "review_status": {
+        "type": "string",
+        "enum": ["verified", "needs_review", "unreviewed"],
+        "description": (
+            "Trust state of a document's EXTRACTED metadata, not of the document "
+            "itself. needs_review means the archive's validator flagged the "
+            "extraction — most often because the amount does not appear anywhere "
+            "in the document's text. Omit to include everything (the default, and "
+            "usually right). Use needs_review to LIST what the user should check; "
+            "do not silently filter it out of a total, because dropping it changes "
+            "the number without saying so — report the count instead."
+        ),
+    },
 }
 
 
@@ -496,6 +509,23 @@ def _slug_args(value: object) -> tuple[str, ...]:
     return tuple(slug for slug in (_text_arg(item) for item in items) if slug is not None)
 
 
+def _review_status_arg(value: object) -> ReviewStatus | None:
+    """A ``ReviewStatus`` from a tool argument, or None.
+
+    An unrecognised value degrades to "no filter" rather than raising: the JSON
+    schema's ``enum`` steers the model but does not bind it, and a hallucinated
+    status must not turn into a 500 inside the tool loop.
+    """
+    text = _text_arg(value)
+    if text is None:
+        return None
+    try:
+        return ReviewStatus(text)
+    except ValueError:
+        logger.info("ask: ignoring unknown review_status %r", text)
+        return None
+
+
 def _filters_from_args(args: dict[str, Any]) -> DocumentFilters:
     """The ``DocumentFilters`` for a structured tool call's ``_FILTER_PROPERTIES``."""
     return DocumentFilters(
@@ -507,6 +537,7 @@ def _filters_from_args(args: dict[str, Any]) -> DocumentFilters:
         tag_slugs=_slug_args(args.get("tags")),
         date_from=_parse_date(args.get("date_from")),
         date_to=_parse_date(args.get("date_to")),
+        review_status=_review_status_arg(args.get("review_status")),
     )
 
 

@@ -18,6 +18,7 @@ from sqlalchemy.pool import NullPool
 from library.ask import engine as ask_engine
 from library.ask.engine import TOOLS, _run_compare_to_series, _run_query_documents
 from library.config import get_settings
+from library.models import ReviewStatus
 from library.search import DocumentFilters
 from tests.test_documents_api import _seed_document
 
@@ -134,3 +135,58 @@ async def test_query_documents_tool_filters_by_matter_and_recipient(
         )
     assert [row["id"] for row in result["rows"]] == [mine]
     assert cited == {mine}
+
+
+def test_structured_tools_expose_review_status() -> None:
+    """The archive already knows which extractions it distrusts; the model
+    cannot act on that unless the tool schema offers it."""
+    for tool_name in ("query_documents", "compare_to_series"):
+        tool = next(tool for tool in TOOLS if tool["name"] == tool_name)
+        prop = tool["input_schema"]["properties"]["review_status"]
+        assert prop["enum"] == ["verified", "needs_review", "unreviewed"]
+
+
+@pytest.mark.asyncio
+async def test_query_documents_forwards_review_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, Any] = {}
+
+    async def fake_query_documents(
+        session: Any, *, filters: DocumentFilters, aggregate: Any, group_by: Any
+    ) -> dict[str, Any]:
+        captured["filters"] = filters
+        return {"result_type": "list", "rows": [], "coverage": {}}
+
+    monkeypatch.setattr(ask_engine, "query_documents", fake_query_documents)
+
+    await _run_query_documents(
+        cast("AsyncSession", None),
+        {"aggregate": "list", "review_status": "needs_review"},
+        set(),
+    )
+
+    assert captured["filters"].review_status is ReviewStatus.NEEDS_REVIEW
+
+
+@pytest.mark.asyncio
+async def test_query_documents_ignores_an_unknown_review_status(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model-invented value must degrade to 'no filter', never raise into the
+    tool loop — the enum is a hint to the model, not a guarantee."""
+    captured: dict[str, Any] = {}
+
+    async def fake_query_documents(
+        session: Any, *, filters: DocumentFilters, aggregate: Any, group_by: Any
+    ) -> dict[str, Any]:
+        captured["filters"] = filters
+        return {"result_type": "list", "rows": [], "coverage": {}}
+
+    monkeypatch.setattr(ask_engine, "query_documents", fake_query_documents)
+
+    await _run_query_documents(
+        cast("AsyncSession", None), {"aggregate": "list", "review_status": "dubious"}, set()
+    )
+
+    assert captured["filters"].review_status is None
