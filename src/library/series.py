@@ -383,8 +383,11 @@ class SeriesCoverage:
 
     ``summarize_series`` narrows aggressively and used to do it silently: it
     drops documents with no amount, then every ``(sender_id, kind_id)`` group
-    but the most populous, then every currency bucket but the dominant one.
-    Each narrowing is deliberate — a series must be one provider's one kind of
+    but the most populous, then every currency bucket but the one chosen —
+    the dominant (most-populous) currency ordinarily, but the caller's
+    requested ``reference_currency`` when one is given and present among the
+    members (see ``summarize_series``'s currency-bucket selection). Each
+    narrowing is deliberate — a series must be one provider's one kind of
     document in one currency — but the result was a "usual" band computed over
     an unknown fraction of what the caller asked about.
 
@@ -444,7 +447,10 @@ async def _load_members(
     are the documents this function discards: those with no ``amount_total``
     (they cannot contribute a data point) and those in a non-dominant
     ``(sender_id, kind_id)`` group (a loosely-filtered query must not mix two
-    providers into one series). The caller folds them into
+    providers into one series). Ordered by ``Document.id`` so a tie in group
+    size (``max(groups.values(), key=len)`` below) and member ordering are both
+    deterministic rather than depending on row-arrival order from an
+    otherwise-unordered ``SELECT``. The caller folds them into
     :class:`SeriesCoverage`; returning them rather than logging them is what
     lets an answer say how much of the archive its "usual" band covers.
     """
@@ -464,6 +470,7 @@ async def _load_members(
         .outerjoin(Sender, Document.sender_id == Sender.id)
         .outerjoin(Kind, Document.kind_id == Kind.id)
         .where(*filter_conditions(filters), Document.amount_total.isnot(None))
+        .order_by(Document.id)
     )
     rows = (await session.execute(statement)).all()
 
@@ -628,7 +635,23 @@ async def _apply_overrides(
     return result
 
 
-def _insufficient(members: list[_Member], coverage: SeriesCoverage | None = None) -> SeriesSummary:
+def _insufficient(
+    members: list[_Member],
+    coverage: SeriesCoverage | None = None,
+    *,
+    currency: str | None = None,
+    other_currencies: list[str] | None = None,
+) -> SeriesSummary:
+    """An ``"insufficient"`` result.
+
+    ``currency``/``other_currencies`` default to ``None``/``[]`` for the
+    pre-bucketing call site in ``summarize_series``, where neither is known
+    yet (no currency bucket has been chosen). The post-bucketing call site
+    passes the already-resolved ``currency``/``other_currencies`` through, so
+    an insufficient result on that path doesn't claim "no other currencies"
+    in the same breath ``coverage.excluded`` reports documents dropped for
+    being another currency.
+    """
     head = members[0] if members else None
     return SeriesSummary(
         status="insufficient",
@@ -636,8 +659,8 @@ def _insufficient(members: list[_Member], coverage: SeriesCoverage | None = None
         kind=head.kind if head else None,
         sender_id=head.sender_id if head else None,
         kind_id=head.kind_id if head else None,
-        currency=None,
-        other_currencies=[],
+        currency=currency,
+        other_currencies=other_currencies or [],
         cadence="irregular",
         count=len(members),
         distribution=None,
@@ -820,9 +843,16 @@ async def _coverage_after_overrides(
     ``matched`` itself: ``matched`` is "everything filters matched, union
     anything pinned in"). An EXCLUDE removes a document that WAS in
     ``bucket_pre_override`` into a new ``manually_excluded`` reason. A
-    document that is both pinned and excluded nets to "unchanged" under this
-    set-difference approach, which is the only sane reading of a
-    self-contradictory override pair.
+    document that is both pinned and excluded always ends up a member: **PIN
+    wins over EXCLUDE**, not "nets to unchanged" as that might suggest.
+    ``_apply_overrides`` drops excluded ids from the pre-override bucket
+    first and only then pins in any pinned id still missing, so a document
+    already in ``bucket_pre_override`` is removed and then re-added — net
+    "unchanged" membership, but only because it started inside the bucket —
+    while one that was outside it is pinned in regardless of the EXCLUDE,
+    net "added". PIN winning is the only sane reading of a
+    self-contradictory override pair; "unchanged" describes just the one
+    case where the document was already a member, not the general rule.
 
     ``no_amount`` never needs adjusting here: ``_load_pinned_members`` filters
     out amountless documents in its own SQL, so one can never reach
@@ -946,7 +976,7 @@ async def summarize_series(
     )
 
     if len(bucket) < settings.series_min_documents:
-        return _insufficient(bucket, coverage)
+        return _insufficient(bucket, coverage, currency=currency, other_currencies=other_currencies)
 
     head = series_head
     description = await load_series_description(session, head.sender_id, head.kind_id, currency)

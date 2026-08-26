@@ -144,6 +144,53 @@ async def test_summarize_insufficient(session: AsyncSession) -> None:
     assert summary.count == 1
 
 
+async def test_summarize_insufficient_post_bucketing_reports_chosen_currency(
+    session: AsyncSession,
+) -> None:
+    """The post-bucketing `"insufficient"` path used to hardcode `currency=None`
+    and `other_currencies=[]` even once a currency bucket had actually been
+    chosen — contradicting its own `coverage.excluded["other_currency"]` count,
+    which says documents WERE dropped for being another currency. It must
+    report the currency bucket that was chosen, and what else was seen.
+    """
+    alpha = await _sender(session, "AlphaEnergy")
+    for index, amount in enumerate(["100.00", "110.00"]):
+        await seed(
+            session,
+            f"pb-eur{index}",
+            sender_name=alpha.name,
+            kind_slug="utility-bill",
+            document_date=date(2025, 1, index + 1),
+            amount=amount,
+            currency="EUR",
+        )
+    for index, amount in enumerate(["90.00", "95.00"]):
+        await seed(
+            session,
+            f"pb-usd{index}",
+            sender_name=alpha.name,
+            kind_slug="utility-bill",
+            document_date=date(2025, 2, index + 1),
+            amount=amount,
+            currency="USD",
+        )
+
+    # 4 members match the filters — enough to clear series_min_documents (3)
+    # and reach currency bucketing — but the chosen bucket (EUR, tied 2-2 with
+    # USD, first by insertion order) then falls short on its own.
+    summary = await summarize_series(
+        session,
+        filters=DocumentFilters(kind_slug="utility-bill"),
+        settings=_settings(),
+    )
+
+    assert summary.status == "insufficient"
+    assert summary.currency == "EUR"
+    assert summary.other_currencies == ["USD"]
+    assert summary.coverage is not None
+    assert summary.coverage.excluded.get("other_currency") == 2
+
+
 async def test_summarize_picks_dominant_currency(session: AsyncSession) -> None:
     for i, amt in enumerate(["100.00", "100.00", "100.00"]):
         await seed(
