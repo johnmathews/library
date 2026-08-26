@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-08-25 (§1.2 *Archive context*: the system prompt now names the user, their recipient names, their free-text **About you** notes (Settings → Ask) and the archive's kind/tag/project/matter/sender vocabulary; `query_documents` and `compare_to_series` filter by `recipient_contains`, `projects`, `matters`, `tags`). Earlier (2026-08-22): the composer is one flat full-width bar — the nested pill is gone. Earlier (2026-08-21): adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.
-**Last verified:** 2026-08-25 — method: read `ask/engine.py`, `ask/context.py` and `api/ask.py` against §1.2; ran the Ask suites (`test_ask_context.py` incl. the profile cases, `test_ask_tool_filters.py`, `test_api_ask.py` — 59 passed, including the byte-stable-rendering and route-level identity checks) and the full backend suite (1723 passed before the review-driven cap, re-run under coverage after it); ruff, mypy and `check_docs` clean. The archive-context block has **not** been exercised against the live API — cache behaviour is inferred from its byte-stability, not measured. Earlier verification (2026-08-22): partial re-verification, scoped to the composer paragraph only. A visual claim needs a visual check, so the flat bar was screenshotted in the **real stack** (docker compose + `vite preview` + Playwright) at 1440px light/dark and 375px, not inferred from the class list; the three Ask e2e specs (26 passed, incl. the composer-geometry regressions) and the frontend unit suite (1089 passed) ran against that stack. The rest of the document carries forward its 2026-08-21 verification: adaptive thinking, thinking-block replay and prompt-cache hit rates exercised **against the live API on the deployed host** by driving `run_ask` directly (CI has no Anthropic key and stubs `/api/ask`), the cache table and 76.6% figure being that run's real numbers. **Still unmeasured:** answer accuracy before vs after.
+**Status:** active. **Last updated:** 2026-08-26 (§1.2: new *Coverage and trust on structured results* subsection — every `query_documents` aggregate now returns a `coverage` block (`matched`/`included`/`excluded`/`needs_review`) beside its rows, and the system prompt requires the model to disclose a non-empty `excluded` or a non-zero `needs_review`; §1.10: three new limitations — `semantic_search`'s missing metadata filters, `sum_amount`'s document-not-period coverage, and no-answer citation suppression keyed on the `_NO_ANSWER` sentinel). Earlier (2026-08-25): §1.2 *Archive context*: the system prompt now names the user, their recipient names, their free-text **About you** notes (Settings → Ask) and the archive's kind/tag/project/matter/sender vocabulary; `query_documents` and `compare_to_series` filter by `recipient_contains`, `projects`, `matters`, `tags`. Earlier (2026-08-22): the composer is one flat full-width bar — the nested pill is gone. Earlier (2026-08-21): adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.
+**Last verified:** 2026-08-26 — method: read `structured_query.py` and `ask/engine.py` (current tree, past the `a2099d1` partition fix) against this rewrite of §1.2 and §1.10, and read `tests/test_structured_query.py` to confirm the exclusion-reason strings and the `included + sum(excluded.values()) == matched` invariant it pins. This task is documentation-only and changed no code, so it ran `scripts/check_docs.py` only (clean) — it did not itself re-run ruff, mypy, or the test suite; that verification belongs to the tasks that changed the code. The coverage block's effect on real answer wording is **unmeasured**: the disclosure rule is a prompt instruction, exercised by schema/string tests, not by any answer-quality eval.
 
 Ask lets you put a natural-language question to the archive and get a prose
 answer with citations — e.g. *"do I have a travel allowance in my job
@@ -166,6 +166,53 @@ rendered as image content blocks on the question turn alongside the text, and th
 system prompt tells the model to read them as evidence and combine them with tool
 results. Attachments persist in `ask_turns.messages`, so they replay as history on
 follow-ups. The composer offers an **Attach image** control with preview + remove.
+
+### Coverage and trust on structured results
+
+Every `query_documents` result carries a `coverage` block beside its rows:
+
+| Field | Meaning |
+|-------|---------|
+| `matched` | Documents that met the call's filters |
+| `included` | Documents the rows actually account for |
+| `excluded` | Reason → count for the difference; `{}` when the rows are the whole story |
+| `needs_review` | Of `included`, how many carry a `needs_review` extraction flag |
+
+`included + sum(excluded.values()) == matched` is an invariant, pinned by
+`tests/test_structured_query.py`.
+
+Each aggregate's exclusion reasons are built as **successive refinements of one
+include chain**, not independently-gated conditions. `sum_amount`, for
+example, starts from "has an amount", narrows to "and is not a quote" (unless
+the caller is asking about quotes specifically), then — only when
+grouping — narrows again to "and has the group-by column". Each reason
+therefore means "survived every earlier gate, fails this one", so the reasons
+partition the matched set by construction: a document that is both a quote and
+senderless lands under `quote_not_spend` alone, never under both. An earlier
+version of this gated each reason independently off "has an amount", which let
+that case match two reasons at once and broke the invariant above; it was
+caught before release and fixed by chaining the conditions instead.
+
+The reasons a document is dropped, by aggregate:
+
+- `sum_amount` — `no_amount` (extraction found no total), `quote_not_spend`
+  (quotes are not expenditure; see below), and `no_sender`/`no_kind` — present
+  only when grouping by that column, whose inner join drops a document
+  lacking it.
+- `distinct_senders` — `no_sender` (its inner join to `Sender` drops a
+  document with no extracted sender).
+- `list` — `over_limit` (the result limit is 50 and the drop is positional —
+  which documents fall off depends on sort order, not a predicate).
+
+The system prompt requires the model to disclose a non-empty `excluded` and a
+non-zero `needs_review` in its answer, so a partial total reads as one. It is
+also told **not** to filter flagged documents out of a total to avoid the
+caveat — `review_status` is offered as a filter for *listing* what needs
+checking, not for quietly improving a number.
+
+`needs_review` is a trust signal about the *extraction*, not the document: it
+usually means `library.extraction.validation`'s `amount_grounding` rule fired,
+i.e. the amount being summed does not appear anywhere in the document's text.
 
 ## 1.3 Configuration
 
@@ -745,3 +792,14 @@ have Ask treat that annotation as ground truth.
 3. RRF fusion only — no cross-encoder re-ranking.
 4. Ask is in-app only; it is not exposed as an MCP tool yet.
 5. CPU embedding: the one-time backfill of a large archive is slow.
+6. `semantic_search` takes no metadata filters — only `query_documents` and
+   `compare_to_series` do. A content question scoped to a year or a sender must
+   search the whole archive and rely on ranking.
+7. Coverage reporting is honest about *documents*, not about *periods*.
+   `sum_amount`'s date filters bound `document_date`, which is the issue date;
+   a bill issued in January for December lands in the wrong year, and an
+   annual settlement double-counts against the instalments it settles.
+8. The no-answer citation suppression is keyed on the exact `_NO_ANSWER`
+   sentinel. When the model phrases its own "not found" answer after a fruitless
+   search, the prose-citation fallback still attaches the retrieved candidates.
+   The system prompt instructs against it; it is not enforced in code.
