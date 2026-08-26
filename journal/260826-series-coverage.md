@@ -14,7 +14,7 @@ already used for its own aggregates (`260826-ask-answer-trustworthiness.md`).
 `excluded` maps a reason to a count: `no_amount`, `other_series_group`,
 `other_currency`, and `manually_excluded`. The Ask system prompt and the
 `compare_to_series` tool description were updated to disclose it, and
-`docs/ask.md` §1.2/§1.7/§1.10 now describe it.
+`docs/ask.md` §1.2/§1.7 now describe it.
 
 ## Why
 
@@ -114,3 +114,18 @@ real answer wording is unmeasured — there is still no answer-quality eval
 exercising what the model actually writes when a series' `coverage.excluded`
 is non-empty, only schema/string-level tests of the block's shape and the
 prompt's wording.
+
+The early `status="insufficient"` exit still predates overrides. Before
+`summarize_series` picks a currency bucket, it first checks whether enough
+documents even match the caller's filters at all
+(`settings.series_min_documents`). If they don't, it returns
+`"insufficient"` immediately — before any PIN/EXCLUDE override is resolved,
+since overrides are keyed on a resolved `(sender, kind, currency)` identity
+that doesn't exist yet at that point. So on that path both the coverage
+numbers and `status` itself can predate an override that would have changed
+them: a series a PIN would push over the threshold can still report
+`"insufficient"`, and a document an EXCLUDE would drop is still counted
+`included`. This is pre-existing `summarize_series` behaviour, not introduced
+by this branch — only the coverage numbers now surfaced on that path are new.
+Not fixed here; see [docs/ask.md](../docs/ask.md) §1.7 for the full
+explanation.
