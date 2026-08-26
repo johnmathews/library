@@ -5,6 +5,7 @@ from decimal import Decimal
 
 import pytest
 
+from library.models import ReviewStatus
 from library.series import (
     Distribution,
     SeriesSignature,
@@ -29,8 +30,14 @@ def _member(
     currency: str | None = "EUR",
     sender: str | None = "Sender",
     kind: str | None = "utility-bill",
+    review_status: ReviewStatus = ReviewStatus.UNREVIEWED,
 ) -> _Member:
-    """A minimal ``_Member`` for signature/odd-one-out tests (identity only)."""
+    """A minimal ``_Member`` for signature/odd-one-out tests (identity only).
+
+    ``review_status`` defaults to ``UNREVIEWED`` — the same default a
+    freshly-ingested ``Document`` row gets (see ``Document.review_status`` in
+    ``library.models``) — since these tests are about identity, not trust.
+    """
     return _Member(
         document_id=document_id,
         sender=sender,
@@ -41,6 +48,7 @@ def _member(
         sender_id=sender_id,
         kind_id=kind_id,
         title=f"doc-{document_id}",
+        review_status=review_status,
     )
 
 
