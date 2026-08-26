@@ -1582,16 +1582,29 @@ def test_compare_to_series_tool_description_explains_coverage() -> None:
     sender, one kind, one currency — not just that the word "coverage"
     appears: a regression that watered the description down to "returns a
     coverage block" with no explanation of what narrowed it would still fail
-    this, since the specific reason names would be gone too. It would NOT
-    catch a rewrite that keeps all three substrings but garbles the sentence
-    connecting them, or inverts what they mean."""
+    this, since the specific reason names would be gone too.
+
+    All FOUR real reason keys from ``SeriesCoverage``'s docstring
+    (``src/library/series.py``) are asserted individually, not just a subset:
+    an earlier version of this description enumerated only three and silently
+    dropped `manually_excluded`, which a review caught. Asserting all four
+    means a future addition or removal of a reason from `SeriesCoverage`
+    without a matching edit here fails loudly instead of passing on a
+    three-out-of-four coincidence.
+
+    It would NOT catch a rewrite that keeps all four substrings but garbles
+    the sentence connecting them, or inverts what they mean — this is still a
+    containment test, just over the complete vocabulary rather than a
+    sample of it."""
     from library.ask.engine import TOOLS
 
     tool = next(tool for tool in TOOLS if tool["name"] == "compare_to_series")
     description = tool["description"]
     assert "coverage" in description
     assert "no_amount" in description
+    assert "other_series_group" in description
     assert "other_currency" in description
+    assert "manually_excluded" in description
 
 
 def test_disclosure_rule_names_both_coverage_reporting_tools() -> None:

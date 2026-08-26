@@ -258,8 +258,9 @@ TOOLS: list[dict[str, Any]] = [
             "query_documents: a series is deliberately narrowed to one sender, "
             "one kind and one currency, so `excluded` reports the documents "
             "that narrowing removed — `no_amount`, `other_series_group`, "
-            "`other_currency`. A 'usual' band computed over 3 of 11 matching "
-            "documents is not a fact about all 11. " + _kind_hint()
+            "`other_currency`, and `manually_excluded` (a user override). "
+            "A 'usual' band computed over 3 of 11 matching documents is not "
+            "a fact about all 11. " + _kind_hint()
         ),
         "input_schema": {
             "type": "object",
