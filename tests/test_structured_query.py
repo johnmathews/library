@@ -440,3 +440,20 @@ async def test_list_documents_rows_carry_review_status(session: AsyncSession) ->
     result = await list_documents(session, filters=DocumentFilters(kind_slug="receipt"))
 
     assert result.rows[0].review_status == "needs_review"
+
+
+async def test_query_documents_result_carries_coverage(session: AsyncSession) -> None:
+    """Coverage has to survive the dispatch layer or the model never sees it."""
+    await seed(session, "qc1", kind_slug="utility-bill", amount="12.00", currency="EUR")
+    await seed(session, "qc2", kind_slug="utility-bill")
+
+    result = await query_documents(
+        session, filters=DocumentFilters(kind_slug="utility-bill"), aggregate="sum_amount"
+    )
+
+    assert result["coverage"] == {
+        "matched": 2,
+        "included": 1,
+        "excluded": {"no_amount": 1},
+        "needs_review": 0,
+    }

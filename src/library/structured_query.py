@@ -352,10 +352,16 @@ class QueryResult(TypedDict):
     ``result_type`` reuses ``Aggregate`` rather than widening to ``str``, so a
     new aggregate cannot be echoed back under a name the dispatcher does not
     know about.
+
+    ``coverage`` is a serialised :class:`Coverage`. It is present on every
+    branch — an aggregate that has nothing to disclose reports
+    ``excluded == {}`` rather than omitting the key, so the model never has to
+    distinguish "nothing was dropped" from "this tool does not say".
     """
 
     result_type: Aggregate
     rows: list[dict[str, Any]]
+    coverage: dict[str, Any]
 
 
 async def query_documents(
@@ -369,16 +375,29 @@ async def query_documents(
     """Dispatch a structured query and return a JSON-friendly result.
 
     The single entry point the ``/ask`` tool-use loop calls. ``result_type``
-    echoes the aggregate so the caller can interpret ``rows``.
+    echoes the aggregate so the caller can interpret ``rows``; ``coverage``
+    says how much of the filtered set those rows account for.
     """
     if aggregate == "distinct_senders":
         senders = await distinct_senders(session, filters=filters)
-        return {"result_type": "distinct_senders", "rows": [asdict(group) for group in senders]}
+        return {
+            "result_type": "distinct_senders",
+            "rows": [asdict(group) for group in senders.rows],
+            "coverage": asdict(senders.coverage),
+        }
     if aggregate == "sum_amount":
         amounts = await sum_amount(session, filters=filters, group_by=group_by)
-        return {"result_type": "sum_amount", "rows": [asdict(group) for group in amounts]}
+        return {
+            "result_type": "sum_amount",
+            "rows": [asdict(group) for group in amounts.rows],
+            "coverage": asdict(amounts.coverage),
+        }
     documents = await list_documents(session, filters=filters, limit=limit)
-    return {"result_type": "list", "rows": [_serialise_ref(ref) for ref in documents]}
+    return {
+        "result_type": "list",
+        "rows": [_serialise_ref(ref) for ref in documents.rows],
+        "coverage": asdict(documents.coverage),
+    }
 
 
 def _serialise_ref(ref: DocumentRef) -> dict[str, object]:

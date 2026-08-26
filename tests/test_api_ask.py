@@ -1541,3 +1541,22 @@ def test_ask_cites_nothing_when_the_loop_produces_no_answer(
     body = response.json()
     assert body["answer"] == "I couldn't find an answer to that in the archive."
     assert body["citations"] == []
+
+
+def test_ask_system_prompt_requires_disclosing_partial_coverage() -> None:
+    """The coverage block is only worth computing if the model is obliged to
+    act on it."""
+    from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
+
+    assert "coverage" in ASK_SYSTEM_PROMPT_TEMPLATE
+    assert "needs_review" in ASK_SYSTEM_PROMPT_TEMPLATE
+    assert "excluded" in ASK_SYSTEM_PROMPT_TEMPLATE
+
+
+def test_query_documents_tool_description_explains_coverage() -> None:
+    from library.ask.engine import TOOLS
+
+    tool = next(tool for tool in TOOLS if tool["name"] == "query_documents")
+    assert "coverage" in tool["description"]
+    assert "needs_review" in tool["description"]
+    assert "excluded" in tool["description"]

@@ -91,6 +91,17 @@ Rules:
 - If the tools return nothing relevant, say plainly that the archive does not
   appear to contain the answer.
 - Cite the document id(s) your answer relies on, inline like [#42].
+- query_documents results carry a "coverage" block. If `excluded` is non-empty,
+  the rows do NOT account for every matching document, and you MUST say so in
+  your answer with the reason and the count — e.g. "EUR 1,240 across 14 bills;
+  3 more matched but no amount could be read from them". If `needs_review` is
+  above zero, say that too: those documents are included in the number but the
+  archive flagged their extracted metadata as unreliable. Never present a
+  partial total as if it were complete, and never silently drop the flagged
+  documents to make the caveat go away.
+- Cite a document with [#id] whenever your answer relies on it. If you cannot
+  answer from the tool results, say so plainly and cite nothing — do not list
+  the documents you looked at and rejected.
 - Be concise and direct. Dutch terms may answer English questions and vice
   versa (e.g. "reiskostenvergoeding" = travel allowance).
 """
@@ -188,7 +199,13 @@ TOOLS: list[dict[str, Any]] = [
         "name": "query_documents",
         "description": (
             "Aggregate over structured metadata (sender, kind, document_date, "
-            "amount_total). Use for who/how-many/how-much/over-time questions. " + _kind_hint()
+            "amount_total). Use for who/how-many/how-much/over-time questions. "
+            "Every result carries a `coverage` block — `matched` documents met "
+            "your filters, `included` are the ones the rows account for, "
+            "`excluded` maps a reason to how many were dropped for it, and "
+            "`needs_review` counts included documents whose extracted metadata "
+            "the archive flagged as untrustworthy. Read it before you answer: a "
+            "total over `included` documents is not a total over `matched` ones. " + _kind_hint()
         ),
         "input_schema": {
             "type": "object",
