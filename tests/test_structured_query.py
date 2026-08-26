@@ -85,7 +85,9 @@ async def test_distinct_senders_ranked_by_document_count(session: AsyncSession) 
     await seed(session, "v2", sender_name="Vattenfall", kind_slug="utility-bill")
     await seed(session, "e1", sender_name="Eneco", kind_slug="utility-bill")
 
-    groups = await distinct_senders(session, filters=DocumentFilters(kind_slug="utility-bill"))
+    groups = (
+        await distinct_senders(session, filters=DocumentFilters(kind_slug="utility-bill"))
+    ).rows
 
     assert [(group.sender, group.document_count) for group in groups] == [
         ("Vattenfall", 2),
@@ -111,12 +113,14 @@ async def test_distinct_senders_honours_date_window(session: AsyncSession) -> No
         document_date=date(2025, 6, 1),
     )
 
-    groups = await distinct_senders(
-        session,
-        filters=DocumentFilters(
-            kind_slug="utility-bill", date_from=date(2025, 1, 1), date_to=date(2025, 12, 31)
-        ),
-    )
+    groups = (
+        await distinct_senders(
+            session,
+            filters=DocumentFilters(
+                kind_slug="utility-bill", date_from=date(2025, 1, 1), date_to=date(2025, 12, 31)
+            ),
+        )
+    ).rows
 
     assert [group.sender for group in groups] == ["NewEnergy"]
 
@@ -126,7 +130,7 @@ async def test_sum_amount_groups_by_currency(session: AsyncSession) -> None:
     await seed(session, "b", kind_slug="invoice", amount="50.50", currency="EUR")
     await seed(session, "c", kind_slug="invoice", amount="10.00", currency="USD")
 
-    groups = await sum_amount(session, filters=DocumentFilters(kind_slug="invoice"))
+    groups = (await sum_amount(session, filters=DocumentFilters(kind_slug="invoice"))).rows
 
     totals = {(group.currency, group.total) for group in groups}
     assert totals == {("EUR", "150.50"), ("USD", "10.00")}
@@ -137,7 +141,7 @@ async def test_sum_amount_excludes_quotes_from_spend(session: AsyncSession) -> N
     await seed(session, "real", kind_slug="invoice", amount="100.00", currency="EUR")
     await seed(session, "quote", kind_slug="quote", amount="999.00", currency="EUR")
 
-    groups = await sum_amount(session, filters=DocumentFilters())
+    groups = (await sum_amount(session, filters=DocumentFilters())).rows
 
     # Only the invoice counts; the quote is ignored.
     assert {(g.currency, g.total) for g in groups} == {("EUR", "100.00")}
@@ -148,7 +152,7 @@ async def test_sum_amount_can_total_quotes_when_requested(session: AsyncSession)
     await seed(session, "real", kind_slug="invoice", amount="100.00", currency="EUR")
     await seed(session, "quote", kind_slug="quote", amount="999.00", currency="EUR")
 
-    groups = await sum_amount(session, filters=DocumentFilters(kind_slug="quote"))
+    groups = (await sum_amount(session, filters=DocumentFilters(kind_slug="quote"))).rows
 
     assert {(g.currency, g.total) for g in groups} == {("EUR", "999.00")}
 
@@ -158,7 +162,7 @@ async def test_sum_amount_grouped_by_sender(session: AsyncSession) -> None:
     await seed(session, "s2", sender_name="Acme", amount="30.00", currency="EUR")
     await seed(session, "s3", sender_name="Globex", amount="5.00", currency="EUR")
 
-    groups = await sum_amount(session, filters=DocumentFilters(), group_by="sender")
+    groups = (await sum_amount(session, filters=DocumentFilters(), group_by="sender")).rows
 
     by_sender = {group.key: group.total for group in groups}
     assert by_sender == {"Acme": "50.00", "Globex": "5.00"}
@@ -168,7 +172,7 @@ async def test_list_documents_newest_first(session: AsyncSession) -> None:
     older = await seed(session, "older", document_date=date(2024, 1, 1))
     newer = await seed(session, "newer", document_date=date(2025, 1, 1))
 
-    refs = await list_documents(session, filters=DocumentFilters())
+    refs = (await list_documents(session, filters=DocumentFilters())).rows
 
     assert [ref.id for ref in refs[:2]] == [newer, older]
 
@@ -185,7 +189,9 @@ async def test_list_documents_narrows_by_project_slug(session: AsyncSession) -> 
     document.projects = [Project(slug="renovation", name="Renovation")]
     await session.commit()
 
-    refs = await list_documents(session, filters=DocumentFilters(project_slugs=("renovation",)))
+    refs = (
+        await list_documents(session, filters=DocumentFilters(project_slugs=("renovation",)))
+    ).rows
 
     assert [ref.id for ref in refs] == [in_project]
 
@@ -262,3 +268,130 @@ async def test_count_coverage_counts_needs_review_among_included(
 
     assert coverage.included == 1
     assert coverage.needs_review == 1
+
+
+async def test_sum_amount_reports_documents_with_no_amount(session: AsyncSession) -> None:
+    """The headline bug: a spend total that silently omits bills whose amount
+    never extracted. The number is still returned — but so is the omission."""
+    await seed(session, "s1", kind_slug="utility-bill", amount="100.00", currency="EUR")
+    await seed(session, "s2", kind_slug="utility-bill", amount="50.00", currency="EUR")
+    await seed(session, "s3", kind_slug="utility-bill")  # amount extraction failed
+
+    result = await sum_amount(session, filters=DocumentFilters(kind_slug="utility-bill"))
+
+    assert result.rows[0].total == "150.00"
+    assert result.coverage.matched == 3
+    assert result.coverage.included == 2
+    assert result.coverage.excluded == {"no_amount": 1}
+
+
+async def test_sum_amount_reports_the_quote_exclusion(session: AsyncSession) -> None:
+    """Excluding quotes from spend is correct AND surprising, so it is disclosed
+    rather than merely documented."""
+    await seed(session, "s4", kind_slug="invoice", amount="200.00", currency="EUR")
+    await seed(session, "s5", kind_slug="quote", amount="9999.00", currency="EUR")
+
+    result = await sum_amount(session, filters=DocumentFilters())
+
+    assert result.rows[0].total == "200.00"
+    assert result.coverage.excluded == {"quote_not_spend": 1}
+
+
+async def test_sum_amount_grouped_by_sender_reports_senderless_documents(
+    session: AsyncSession,
+) -> None:
+    """group_by='sender' INNER JOINs Sender, so a document with no extracted
+    sender drops out of a grouped total as well as an ungrouped one."""
+    await seed(session, "s6", sender_name="Vattenfall", amount="80.00", currency="EUR")
+    await seed(session, "s7", amount="20.00", currency="EUR")  # no sender
+
+    result = await sum_amount(session, filters=DocumentFilters(), group_by="sender")
+
+    assert [(row.key, row.total) for row in result.rows] == [("Vattenfall", "80.00")]
+    assert result.coverage.excluded == {"no_sender": 1}
+
+
+async def test_sum_amount_flags_untrusted_amounts(session: AsyncSession) -> None:
+    """A summed amount the validator could not ground in the document text is
+    counted, and reported as needing review."""
+    document_id = await seed(
+        session, "s8", kind_slug="utility-bill", amount="70.00", currency="EUR"
+    )
+    document = await session.get(Document, document_id)
+    assert document is not None
+    document.review_status = ReviewStatus.NEEDS_REVIEW
+    await session.commit()
+
+    result = await sum_amount(session, filters=DocumentFilters(kind_slug="utility-bill"))
+
+    assert result.coverage.needs_review == 1
+
+
+async def test_list_documents_reports_truncation(session: AsyncSession) -> None:
+    """'List every invoice from 2024' must not return the newest N as though
+    that were all of them."""
+    for index in range(5):
+        await seed(session, f"trunc{index}", kind_slug="invoice", sender_name="Acme")
+
+    result = await list_documents(session, filters=DocumentFilters(kind_slug="invoice"), limit=2)
+
+    assert len(result.rows) == 2
+    assert result.coverage.matched == 5
+    assert result.coverage.included == 2
+    assert result.coverage.excluded == {"over_limit": 3}
+
+
+async def test_list_documents_within_limit_reports_nothing_excluded(
+    session: AsyncSession,
+) -> None:
+    await seed(session, "whole1", kind_slug="ticket")
+
+    result = await list_documents(session, filters=DocumentFilters(kind_slug="ticket"), limit=50)
+
+    assert result.coverage.excluded == {}
+    assert result.coverage.included == result.coverage.matched == 1
+
+
+async def test_list_documents_counts_needs_review_in_the_returned_page(
+    session: AsyncSession,
+) -> None:
+    """needs_review describes the rows the model can see, not the whole match."""
+    flagged = await seed(session, "flag1", kind_slug="warranty")
+    document = await session.get(Document, flagged)
+    assert document is not None
+    document.review_status = ReviewStatus.NEEDS_REVIEW
+    await session.commit()
+
+    result = await list_documents(session, filters=DocumentFilters(kind_slug="warranty"))
+
+    assert result.coverage.needs_review == 1
+
+
+async def test_distinct_senders_reports_documents_with_no_sender(
+    session: AsyncSession,
+) -> None:
+    """The sender join is an INNER JOIN, so a document whose sender never
+    extracted is absent from 'who were my providers?' entirely."""
+    await seed(session, "ds1", sender_name="Vattenfall", kind_slug="utility-bill")
+    await seed(session, "ds2", kind_slug="utility-bill")  # sender extraction failed
+
+    result = await distinct_senders(session, filters=DocumentFilters(kind_slug="utility-bill"))
+
+    assert [group.sender for group in result.rows] == ["Vattenfall"]
+    assert result.coverage.matched == 2
+    assert result.coverage.included == 1
+    assert result.coverage.excluded == {"no_sender": 1}
+
+
+async def test_list_documents_rows_carry_review_status(session: AsyncSession) -> None:
+    """A per-row trust flag, so the model can caveat one line of a list rather
+    than the whole answer."""
+    document_id = await seed(session, "rs1", kind_slug="receipt")
+    document = await session.get(Document, document_id)
+    assert document is not None
+    document.review_status = ReviewStatus.NEEDS_REVIEW
+    await session.commit()
+
+    result = await list_documents(session, filters=DocumentFilters(kind_slug="receipt"))
+
+    assert result.rows[0].review_status == "needs_review"

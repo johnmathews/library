@@ -64,6 +64,7 @@ class DocumentRef:
     document_date: date | None
     amount_total: str | None
     currency: str | None
+    review_status: str  # "verified" | "needs_review" | "unreviewed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -168,8 +169,15 @@ async def count_coverage(
 
 async def list_documents(
     session: AsyncSession, *, filters: DocumentFilters, limit: int = 50
-) -> list[DocumentRef]:
-    """Matching documents, newest first (unknown dates last)."""
+) -> Aggregated[DocumentRef]:
+    """Matching documents, newest first (unknown dates last), with coverage.
+
+    The over-limit drop is positional, not predicated: which documents fall off
+    depends on the ORDER BY, so there is no SQL condition to hand
+    ``count_coverage``. It is therefore computed here from ``matched`` and the
+    page size, and ``needs_review`` is counted over the returned page — the rows
+    the caller can actually see — rather than over the whole match.
+    """
     statement = (
         select(Document)
         .where(*filter_conditions(filters))
@@ -181,7 +189,7 @@ async def list_documents(
         .limit(limit)
     )
     documents = (await session.execute(statement)).scalars().all()
-    return [
+    refs = [
         DocumentRef(
             id=document.id,
             title=document.title,
@@ -191,13 +199,36 @@ async def list_documents(
             document_date=document.document_date,
             amount_total=str(document.amount_total) if document.amount_total is not None else None,
             currency=document.currency,
+            review_status=document.review_status.value,
         )
         for document in documents
     ]
+    matched = (
+        await session.execute(select(func.count(Document.id)).where(*filter_conditions(filters)))
+    ).scalar_one()
+    over_limit = max(0, int(matched) - len(refs))
+    return Aggregated(
+        rows=refs,
+        coverage=Coverage(
+            matched=int(matched),
+            included=len(refs),
+            excluded={"over_limit": over_limit} if over_limit else {},
+            needs_review=sum(
+                1 for document in documents if document.review_status is ReviewStatus.NEEDS_REVIEW
+            ),
+        ),
+    )
 
 
-async def distinct_senders(session: AsyncSession, *, filters: DocumentFilters) -> list[SenderGroup]:
-    """Distinct senders among matching documents, most documents first."""
+async def distinct_senders(
+    session: AsyncSession, *, filters: DocumentFilters
+) -> Aggregated[SenderGroup]:
+    """Distinct senders among matching documents, most documents first.
+
+    The join to ``Sender`` is inner, so a document whose sender never extracted
+    is absent from the breakdown entirely — reported as ``no_sender`` rather
+    than left for the reader to notice the counts do not add up.
+    """
     statement = (
         select(
             Sender.name,
@@ -210,28 +241,57 @@ async def distinct_senders(session: AsyncSession, *, filters: DocumentFilters) -
         .order_by(func.count(Document.id).desc(), Sender.name)
     )
     rows = (await session.execute(statement)).all()
-    return [
+    groups = [
         SenderGroup(sender=name, document_count=count, document_ids=sorted(ids)[:MAX_CITED_IDS])
         for name, count, ids in rows
     ]
+    coverage = await count_coverage(
+        session,
+        filters=filters,
+        include_condition=Document.sender_id.isnot(None),
+        exclusions={"no_sender": Document.sender_id.is_(None)},
+    )
+    return Aggregated(rows=groups, coverage=coverage)
 
 
 async def sum_amount(
     session: AsyncSession, *, filters: DocumentFilters, group_by: GroupBy | None = None
-) -> list[AmountGroup]:
-    """Sum ``amount_total`` over matching documents.
+) -> Aggregated[AmountGroup]:
+    """Sum ``amount_total`` over matching documents, with coverage.
 
     Always grouped by currency (amounts in different currencies cannot be
-    added); optionally also by sender or kind. Documents without an amount are
-    excluded.
+    added); optionally also by sender or kind. Three things drop documents from
+    the total, and all three are reported in ``coverage.excluded`` rather than
+    happening silently:
 
-    Quotes/estimates are **not** actual expenditure, so documents of kind
-    ``quote`` are excluded from spend totals unless the caller explicitly
-    filters for ``kind="quote"`` (e.g. "how much have my quotes come to?").
+    * ``no_amount`` — extraction found no total. The dominant case, and the one
+      that used to make a partial sum indistinguishable from a complete one.
+    * ``quote_not_spend`` — quotes/estimates are not actual expenditure, so kind
+      ``quote`` is excluded unless the caller explicitly filters for it (e.g.
+      "how much have my quotes come to?"). Correct, but surprising enough that
+      the answer should be able to say it happened.
+    * ``no_sender`` / ``no_kind`` — only when grouping by that column, whose
+      INNER JOIN drops documents that lack it.
     """
-    conditions = [*filter_conditions(filters), Document.amount_total.isnot(None)]
+    is_quote = select(1).where(Kind.id == Document.kind_id, Kind.slug == "quote").exists()
+    has_amount = Document.amount_total.isnot(None)
+
+    include: ColumnElement[bool] = has_amount
+    exclusions: dict[str, ColumnElement[bool]] = {"no_amount": Document.amount_total.is_(None)}
     if filters.kind_slug != "quote":
-        is_quote = select(1).where(Kind.id == Document.kind_id, Kind.slug == "quote").exists()
+        include = include & ~is_quote
+        # Conditioned on `has_amount` so an amountless quote is counted once,
+        # under `no_amount`, and the partition invariant holds.
+        exclusions["quote_not_spend"] = has_amount & is_quote
+    if group_by == "sender":
+        include = include & Document.sender_id.isnot(None)
+        exclusions["no_sender"] = has_amount & Document.sender_id.is_(None)
+    elif group_by == "kind":
+        include = include & Document.kind_id.isnot(None)
+        exclusions["no_kind"] = has_amount & Document.kind_id.is_(None)
+
+    conditions = [*filter_conditions(filters), has_amount]
+    if filters.kind_slug != "quote":
         conditions.append(~is_quote)
     key_column = None
     statement = select(
@@ -267,7 +327,10 @@ async def sum_amount(
                 document_ids=sorted(ids)[:MAX_CITED_IDS],
             )
         )
-    return groups
+    coverage = await count_coverage(
+        session, filters=filters, include_condition=include, exclusions=exclusions
+    )
+    return Aggregated(rows=groups, coverage=coverage)
 
 
 class QueryResult(TypedDict):
