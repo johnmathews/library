@@ -240,18 +240,23 @@ async def test_load_members_reports_amountless_and_non_dominant_drops(
         amount="200.00",
     )
     kind = (await session.execute(select(Kind).where(Kind.slug == "utility-bill"))).scalar_one()
-    session.add(
-        Document(
-            sha256=hashlib.sha256(b"lm4").hexdigest(),
-            mime_type="application/pdf",
-            source=DocumentSource.UPLOAD,
-            sender=alpha,
-            kind=kind,
-            document_date=date(2025, 3, 1),
-            amount_total=None,
-            currency=None,
+    # Two amountless docs (both in the dominant Alpha group) vs. one
+    # non-dominant-group doc (Beta): the counts land unequal (2 vs. 1) on
+    # purpose, so a positional swap of the two return values is caught by
+    # this test rather than passing silently.
+    for marker in ("lm4", "lm5"):
+        session.add(
+            Document(
+                sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                mime_type="application/pdf",
+                source=DocumentSource.UPLOAD,
+                sender=alpha,
+                kind=kind,
+                document_date=date(2025, 3, 1),
+                amount_total=None,
+                currency=None,
+            )
         )
-    )
     await session.commit()
 
     members, no_amount, other_group = await _load_members(
@@ -259,5 +264,5 @@ async def test_load_members_reports_amountless_and_non_dominant_drops(
     )
 
     assert [m.amount for m in members] == [Decimal("100.00"), Decimal("110.00")]
-    assert no_amount == 1
+    assert no_amount == 2
     assert other_group == 1
