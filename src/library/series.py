@@ -32,6 +32,7 @@ from library.models import (
     Kind,
     MemberOrigin,
     OverrideAction,
+    ReviewStatus,
     Sender,
     SeriesInsight,
     SeriesMembershipOverride,
@@ -286,6 +287,7 @@ class _Member:
     sender_id: int | None
     kind_id: int | None
     title: str | None
+    review_status: ReviewStatus
 
 
 @dataclass(frozen=True, slots=True)
@@ -348,6 +350,11 @@ class SeriesSummary:
     # Cached LLM prose summary of the series, or None when not yet generated.
     # A user description override (SeriesMetaOverride) replaces it when present.
     description: str | None
+    # Present for emergent series (``summarize_series``); None for authored
+    # series, whose narrowing rules differ and are not reported yet. Absent
+    # therefore means "not reported", never "nothing was dropped" — an empty
+    # `excluded` inside a present coverage is what means the latter.
+    coverage: SeriesCoverage | None = None
     # A user title override (SeriesMetaOverride); None when no override is set,
     # in which case the frontend falls back to the derived heading.
     title: str | None = None
@@ -424,6 +431,7 @@ async def _load_members(
             Document.sender_id,
             Document.kind_id,
             Document.title,
+            Document.review_status,
         )
         .outerjoin(Sender, Document.sender_id == Sender.id)
         .outerjoin(Kind, Document.kind_id == Kind.id)
@@ -446,9 +454,9 @@ async def _load_members(
     # Restrict to the single most-populous (sender_id, kind_id) group so a
     # loosely-filtered query (kind only) can't mix providers into one series.
     groups: dict[tuple[int | None, int | None], list[_Member]] = {}
-    for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
+    for did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status in rows:
         groups.setdefault((sid, kid), []).append(
-            _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title)
+            _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status)
         )
     if not groups:
         return [], no_amount, 0
@@ -534,6 +542,7 @@ async def _load_pinned_members(
             Document.sender_id,
             Document.kind_id,
             Document.title,
+            Document.review_status,
         )
         .outerjoin(Sender, Document.sender_id == Sender.id)
         .outerjoin(Kind, Document.kind_id == Kind.id)
@@ -545,7 +554,7 @@ async def _load_pinned_members(
     )
     rows = (await session.execute(statement)).all()
     members: list[_Member] = []
-    for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
+    for did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status in rows:
         converted = await _convert_into(session, amount, currency, target_currency, ddate)
         if converted is None:
             logger.warning(
@@ -556,7 +565,18 @@ async def _load_pinned_members(
             )
             continue
         members.append(
-            _Member(did, sname, kslug, ddate, _money(converted), target_currency, sid, kid, title)
+            _Member(
+                did,
+                sname,
+                kslug,
+                ddate,
+                _money(converted),
+                target_currency,
+                sid,
+                kid,
+                title,
+                review_status,
+            )
         )
     return members
 
@@ -580,7 +600,7 @@ async def _apply_overrides(
     return result
 
 
-def _insufficient(members: list[_Member]) -> SeriesSummary:
+def _insufficient(members: list[_Member], coverage: SeriesCoverage | None = None) -> SeriesSummary:
     head = members[0] if members else None
     return SeriesSummary(
         status="insufficient",
@@ -600,6 +620,7 @@ def _insufficient(members: list[_Member]) -> SeriesSummary:
         points=[],
         titles={},
         description=None,
+        coverage=coverage,
     )
 
 
@@ -670,6 +691,7 @@ def _summarize_members(
     mode: SeriesMode | None = None,
     auto_added_count: int = 0,
     origins: dict[int, MemberOrigin] | None = None,
+    coverage: SeriesCoverage | None = None,
 ) -> SeriesSummary:
     """Build a ``SeriesSummary`` from an already-resolved set of ``members``.
 
@@ -738,6 +760,7 @@ def _summarize_members(
         mode=mode,
         auto_added_count=auto_added_count,
         origins=origins or {},
+        coverage=coverage,
     )
 
 
@@ -751,9 +774,35 @@ async def summarize_series(
     reference_currency: str | None = None,
 ) -> SeriesSummary:
     """Detect the (sender, kind) series matching ``filters`` and summarise it."""
-    members = await _load_members(session, filters)
+    members, no_amount, other_group = await _load_members(session, filters)
+    matched = len(members) + no_amount + other_group
+
+    def _coverage(bucket: list[_Member], other_currency: int) -> SeriesCoverage:
+        """Assemble the block from this call's three narrowings.
+
+        ``matched`` is closed over: it is the pre-narrowing total, so the
+        partition holds regardless of which bucket won.
+        """
+        excluded = {
+            reason: count
+            for reason, count in (
+                ("no_amount", no_amount),
+                ("other_series_group", other_group),
+                ("other_currency", other_currency),
+            )
+            if count > 0
+        }
+        return SeriesCoverage(
+            matched=matched,
+            included=len(bucket),
+            excluded=excluded,
+            needs_review=sum(
+                1 for member in bucket if member.review_status is ReviewStatus.NEEDS_REVIEW
+            ),
+        )
+
     if len(members) < settings.series_min_documents:
-        return _insufficient(members)
+        return _insufficient(members, _coverage(members, 0))
 
     # Currency bucket: the requested/dominant currency.
     by_currency: dict[str | None, list[_Member]] = {}
@@ -769,6 +818,7 @@ async def summarize_series(
         currency = max(by_currency, key=lambda c: len(by_currency[c]))
     bucket = by_currency[currency]
     other_currencies = sorted(str(c) for c in by_currency if c != currency and c is not None)
+    other_currency = sum(len(group) for code, group in by_currency.items() if code != currency)
 
     # The series identity is the dominant natural group; all members share it.
     # Capture it before overrides so pins (foreign docs) can't shift the labels.
@@ -782,7 +832,7 @@ async def summarize_series(
     )
 
     if len(bucket) < settings.series_min_documents:
-        return _insufficient(bucket)
+        return _insufficient(bucket, _coverage(bucket, other_currency))
 
     head = series_head
     description = await load_series_description(session, head.sender_id, head.kind_id, currency)
@@ -805,6 +855,7 @@ async def summarize_series(
         reference_date=reference_date,
         description=description,
         title=title_override,
+        coverage=_coverage(bucket, other_currency),
     )
 
 
@@ -828,6 +879,7 @@ async def _load_authored_members(
             Document.sender_id,
             Document.kind_id,
             Document.title,
+            Document.review_status,
         )
         .join(AuthoredSeriesMember, AuthoredSeriesMember.document_id == Document.id)
         .outerjoin(Sender, Document.sender_id == Sender.id)
@@ -840,7 +892,7 @@ async def _load_authored_members(
     )
     rows = (await session.execute(statement)).all()
     members: list[_Member] = []
-    for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows:
+    for did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status in rows:
         converted = await _convert_into(session, amount, currency, target_currency, ddate)
         if converted is None:
             logger.warning(
@@ -852,7 +904,18 @@ async def _load_authored_members(
             )
             continue
         members.append(
-            _Member(did, sname, kslug, ddate, _money(converted), target_currency, sid, kid, title)
+            _Member(
+                did,
+                sname,
+                kslug,
+                ddate,
+                _money(converted),
+                target_currency,
+                sid,
+                kid,
+                title,
+                review_status,
+            )
         )
     return members
 
@@ -1075,6 +1138,7 @@ async def suggest_signature_matches(
             Document.sender_id,
             Document.kind_id,
             Document.title,
+            Document.review_status,
         )
         .outerjoin(Sender, Document.sender_id == Sender.id)
         .outerjoin(Kind, Document.kind_id == Kind.id)
@@ -1092,8 +1156,8 @@ async def suggest_signature_matches(
     )
     rows = (await session.execute(statement)).all()
     return [
-        _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title)
-        for did, sname, kslug, ddate, amount, currency, sid, kid, title in rows
+        _Member(did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status)
+        for did, sname, kslug, ddate, amount, currency, sid, kid, title, review_status in rows
     ]
 
 

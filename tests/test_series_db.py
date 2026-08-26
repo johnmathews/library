@@ -10,7 +10,7 @@ from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from library.config import Settings
-from library.models import Document, DocumentSource, Kind, Sender
+from library.models import Document, DocumentSource, Kind, ReviewStatus, Sender
 from library.search import DocumentFilters
 from library.series import _load_members, serialise_summary, summarize_series
 
@@ -266,3 +266,141 @@ async def test_load_members_reports_amountless_and_non_dominant_drops(
     assert [m.amount for m in members] == [Decimal("100.00"), Decimal("110.00")]
     assert no_amount == 2
     assert other_group == 1
+
+
+async def test_summarize_series_reports_all_three_drops(session: AsyncSession) -> None:
+    """The partition invariant, across every way a series narrows."""
+    alpha = await _sender(session, "AlphaEnergy")
+    beta = await _sender(session, "BetaEnergy")
+    for index, amount in enumerate(["100.00", "110.00", "120.00"]):
+        await seed(
+            session,
+            f"sc{index}",
+            sender_name=alpha.name,
+            kind_slug="utility-bill",
+            document_date=date(2025, 1, index + 1),
+            amount=amount,
+            currency="EUR",
+        )
+    await seed(
+        session,
+        "sc-usd",
+        sender_name=alpha.name,
+        kind_slug="utility-bill",
+        document_date=date(2025, 1, 9),
+        amount="90.00",
+        currency="USD",
+    )
+    await seed(
+        session,
+        "sc-beta",
+        sender_name=beta.name,
+        kind_slug="utility-bill",
+        document_date=date(2025, 1, 10),
+        amount="200.00",
+        currency="EUR",
+    )
+    # seed() requires an amount; an amountless doc must be built inline
+    # (the same pattern Task 1 used in test_load_members_reports_amountless_and_non_dominant_drops).
+    kind = (await session.execute(select(Kind).where(Kind.slug == "utility-bill"))).scalar_one()
+    session.add(
+        Document(
+            sha256=hashlib.sha256(b"sc-none").hexdigest(),
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            sender=alpha,
+            kind=kind,
+            document_date=date(2025, 1, 11),
+            amount_total=None,
+            currency=None,
+        )
+    )
+    await session.commit()
+
+    summary = await summarize_series(
+        session,
+        filters=DocumentFilters(kind_slug="utility-bill"),
+        settings=_settings(),
+    )
+
+    assert summary.coverage is not None
+    assert summary.coverage.matched == 6
+    assert summary.coverage.included == 3
+    assert summary.coverage.excluded == {
+        "no_amount": 1,
+        "other_series_group": 1,
+        "other_currency": 1,
+    }
+    assert (
+        summary.coverage.included + sum(summary.coverage.excluded.values())
+        == summary.coverage.matched
+    )
+
+
+async def test_summarize_series_coverage_flags_untrusted_members(
+    session: AsyncSession,
+) -> None:
+    """A distribution built partly on amounts the validator could not ground."""
+    alpha = await _sender(session, "AlphaEnergy")
+    ids = []
+    for index, amount in enumerate(["100.00", "110.00", "120.00"]):
+        ids.append(
+            await seed(
+                session,
+                f"cf{index}",
+                sender_name=alpha.name,
+                kind_slug="utility-bill",
+                document_date=date(2025, 1, index + 1),
+                amount=amount,
+                currency="EUR",
+            )
+        )
+    document = await session.get(Document, ids[0])
+    assert document is not None
+    document.review_status = ReviewStatus.NEEDS_REVIEW
+    await session.commit()
+
+    summary = await summarize_series(
+        session,
+        filters=DocumentFilters(kind_slug="utility-bill"),
+        settings=_settings(),
+    )
+
+    assert summary.coverage is not None
+    assert summary.coverage.needs_review == 1
+
+
+async def test_insufficient_series_still_reports_coverage(session: AsyncSession) -> None:
+    """The case where coverage matters MOST: too few documents to summarise, but
+    the caller cannot tell whether that is because the archive is thin or
+    because the series narrowed away most of what matched."""
+    alpha = await _sender(session, "AlphaEnergy")
+    beta = await _sender(session, "BetaEnergy")
+    await seed(
+        session,
+        "ins1",
+        sender_name=alpha.name,
+        kind_slug="utility-bill",
+        document_date=date(2025, 1, 1),
+        amount="100.00",
+        currency="EUR",
+    )
+    await seed(
+        session,
+        "ins2",
+        sender_name=beta.name,
+        kind_slug="utility-bill",
+        document_date=date(2025, 1, 2),
+        amount="200.00",
+        currency="EUR",
+    )
+
+    summary = await summarize_series(
+        session,
+        filters=DocumentFilters(kind_slug="utility-bill"),
+        settings=_settings(),
+    )
+
+    assert summary.status == "insufficient"
+    assert summary.coverage is not None
+    assert summary.coverage.matched == 2
