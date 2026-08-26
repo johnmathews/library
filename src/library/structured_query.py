@@ -14,7 +14,7 @@ two retrieval paths share one filter vocabulary.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 from decimal import Decimal
 from typing import Any, Literal, TypedDict
@@ -143,21 +143,52 @@ async def count_coverage(
     One ``SELECT`` with Postgres ``FILTER (WHERE ...)`` clauses rather than N+1
     counts: this runs on every structured tool call, so it must not multiply
     the query cost of asking a question.
+
+    ``filters.review_status`` gets special treatment: if it were left in the
+    conditions below, ``matched`` would already have every document of the
+    "wrong" trust state removed before the include/exclude gates ever ran —
+    so ``review_status="verified"`` could return ``{matched: 14, included: 14,
+    excluded: {}, needs_review: 0}``, the exact signature of "complete,
+    nothing flagged", while every flagged document was silently dropped from
+    the denominator. ``matched`` is therefore always computed against the
+    filters MINUS ``review_status`` (everything that met the *other*
+    filters), and the trust filter itself becomes the first exclusion reason,
+    ``filtered_review_status``. Because it is orthogonal to amount/quote/
+    sender/kind, it composes as the first gate in the include-chain: the
+    caller's own ``include_condition``/``exclusions`` are additionally gated
+    on "review_status matches", so a document that fails the trust filter is
+    counted there and nowhere else — the partition invariant survives.
     """
-    conditions = filter_conditions(filters)
+    conditions = filter_conditions(replace(filters, review_status=None))
+
+    review_status_ok: ColumnElement[bool] | None = None
+    if filters.review_status is not None:
+        review_status_ok = Document.review_status == filters.review_status
+
+    gated_include: ColumnElement[bool]
+    if review_status_ok is not None:
+        gated_include = review_status_ok & include_condition
+        gated_exclusions: dict[str, ColumnElement[bool]] = {
+            "filtered_review_status": ~review_status_ok,
+            **{name: review_status_ok & condition for name, condition in exclusions.items()},
+        }
+    else:
+        gated_include = include_condition
+        gated_exclusions = exclusions
+
     columns = [
         func.count(Document.id),
-        func.count(Document.id).filter(include_condition),
+        func.count(Document.id).filter(gated_include),
         func.count(Document.id).filter(
-            include_condition, Document.review_status == ReviewStatus.NEEDS_REVIEW
+            gated_include, Document.review_status == ReviewStatus.NEEDS_REVIEW
         ),
-        *(func.count(Document.id).filter(condition) for condition in exclusions.values()),
+        *(func.count(Document.id).filter(condition) for condition in gated_exclusions.values()),
     ]
     row = (await session.execute(select(*columns).where(*conditions))).one()
     matched, included, needs_review = int(row[0]), int(row[1]), int(row[2])
     excluded = {
         reason: int(count)
-        for reason, count in zip(exclusions, row[3:], strict=True)
+        for reason, count in zip(gated_exclusions, row[3:], strict=True)
         # A reason that dropped nothing is noise in the model's context and
         # would read as a caveat where there is none.
         if int(count) > 0
@@ -177,6 +208,12 @@ async def list_documents(
     ``count_coverage``. It is therefore computed here from ``matched`` and the
     page size, and ``needs_review`` is counted over the returned page — the rows
     the caller can actually see — rather than over the whole match.
+
+    ``filters.review_status`` gets the same treatment as in ``count_coverage``:
+    ``matched`` is computed against the filters MINUS ``review_status``, and the
+    trust filter's drop is reported as its own ``filtered_review_status``
+    exclusion rather than silently shrinking ``matched`` before ``over_limit``
+    is even computed.
     """
     statement = (
         select(Document)
@@ -203,16 +240,41 @@ async def list_documents(
         )
         for document in documents
     ]
-    matched = (
-        await session.execute(select(func.count(Document.id)).where(*filter_conditions(filters)))
-    ).scalar_one()
-    over_limit = max(0, int(matched) - len(refs))
+
+    baseline_conditions = filter_conditions(replace(filters, review_status=None))
+    if filters.review_status is not None:
+        review_status_ok = Document.review_status == filters.review_status
+        row = (
+            await session.execute(
+                select(
+                    func.count(Document.id),
+                    func.count(Document.id).filter(review_status_ok),
+                ).where(*baseline_conditions)
+            )
+        ).one()
+        matched, filtered_matched = int(row[0]), int(row[1])
+    else:
+        matched = int(
+            (
+                await session.execute(select(func.count(Document.id)).where(*baseline_conditions))
+            ).scalar_one()
+        )
+        filtered_matched = matched
+
+    filtered_out = matched - filtered_matched
+    over_limit = max(0, filtered_matched - len(refs))
+    excluded: dict[str, int] = {}
+    if filtered_out:
+        excluded["filtered_review_status"] = filtered_out
+    if over_limit:
+        excluded["over_limit"] = over_limit
+
     return Aggregated(
         rows=refs,
         coverage=Coverage(
-            matched=int(matched),
+            matched=matched,
             included=len(refs),
-            excluded={"over_limit": over_limit} if over_limit else {},
+            excluded=excluded,
             needs_review=sum(
                 1 for document in documents if document.review_status is ReviewStatus.NEEDS_REVIEW
             ),

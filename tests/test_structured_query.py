@@ -457,3 +457,132 @@ async def test_query_documents_result_carries_coverage(session: AsyncSession) ->
         "excluded": {"no_amount": 1},
         "needs_review": 0,
     }
+
+
+async def test_sum_amount_review_status_filter_does_not_shrink_matched(
+    session: AsyncSession,
+) -> None:
+    """A review_status filter must not silently shrink the denominator: a
+    caller asking for filters.review_status='verified' should see `matched`
+    count every document that met the OTHER filters (verified AND
+    needs_review alike), with the needs_review one reported as an explicit
+    `filtered_review_status` exclusion rather than vanishing before `matched`
+    is even computed."""
+    verified_id = await seed(
+        session, "rs-v1", kind_slug="utility-bill", amount="10.00", currency="EUR"
+    )
+    flagged_id = await seed(
+        session, "rs-v2", kind_slug="utility-bill", amount="20.00", currency="EUR"
+    )
+    document = await session.get(Document, flagged_id)
+    assert document is not None
+    document.review_status = ReviewStatus.NEEDS_REVIEW
+    await session.commit()
+    # verified_id defaults to ReviewStatus.UNREVIEWED or VERIFIED depending on
+    # the model default; pin it explicitly so the filter has a real target.
+    verified_document = await session.get(Document, verified_id)
+    assert verified_document is not None
+    verified_document.review_status = ReviewStatus.VERIFIED
+    await session.commit()
+
+    result = await sum_amount(
+        session,
+        filters=DocumentFilters(kind_slug="utility-bill", review_status=ReviewStatus.VERIFIED),
+    )
+
+    assert result.coverage.matched == 2
+    assert result.coverage.included == 1
+    assert result.coverage.excluded == {"filtered_review_status": 1}
+    assert result.coverage.needs_review == 0
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+    assert result.rows[0].total == "10.00"
+
+
+async def test_distinct_senders_review_status_filter_does_not_shrink_matched(
+    session: AsyncSession,
+) -> None:
+    """Same exposure as sum_amount: distinct_senders must not let a
+    review_status filter shrink `matched` without disclosing the drop."""
+    verified_id = await seed(session, "rs-d1", sender_name="Vattenfall", kind_slug="utility-bill")
+    flagged_id = await seed(session, "rs-d2", sender_name="Eneco", kind_slug="utility-bill")
+    document = await session.get(Document, flagged_id)
+    assert document is not None
+    document.review_status = ReviewStatus.NEEDS_REVIEW
+    await session.commit()
+    verified_document = await session.get(Document, verified_id)
+    assert verified_document is not None
+    verified_document.review_status = ReviewStatus.VERIFIED
+    await session.commit()
+
+    result = await distinct_senders(
+        session,
+        filters=DocumentFilters(kind_slug="utility-bill", review_status=ReviewStatus.VERIFIED),
+    )
+
+    assert result.coverage.matched == 2
+    assert result.coverage.included == 1
+    assert result.coverage.excluded == {"filtered_review_status": 1}
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+    assert [group.sender for group in result.rows] == ["Vattenfall"]
+
+
+async def test_list_documents_review_status_filter_does_not_shrink_matched(
+    session: AsyncSession,
+) -> None:
+    """list_documents has the same exposure: `matched` must count both the
+    verified and the flagged document, with the flagged one disclosed as
+    `filtered_review_status` rather than silently absent."""
+    verified_id = await seed(session, "rs-l1", kind_slug="receipt")
+    flagged_id = await seed(session, "rs-l2", kind_slug="receipt")
+    document = await session.get(Document, flagged_id)
+    assert document is not None
+    document.review_status = ReviewStatus.NEEDS_REVIEW
+    await session.commit()
+    verified_document = await session.get(Document, verified_id)
+    assert verified_document is not None
+    verified_document.review_status = ReviewStatus.VERIFIED
+    await session.commit()
+
+    result = await list_documents(
+        session,
+        filters=DocumentFilters(kind_slug="receipt", review_status=ReviewStatus.VERIFIED),
+    )
+
+    assert result.coverage.matched == 2
+    assert result.coverage.included == 1
+    assert result.coverage.excluded == {"filtered_review_status": 1}
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+    assert [ref.id for ref in result.rows] == [verified_id]
+
+
+async def test_sum_amount_quote_group_by_sender_partition_holds(
+    session: AsyncSession,
+) -> None:
+    """kind_slug='quote' combined with group_by='sender' is the exact branch
+    two reviewers had to verify by hand when the partition bug was fixed:
+    quotes are the subject of the query here, so they must NOT be excluded as
+    quote_not_spend, and the partition invariant must still hold."""
+    await seed(
+        session, "gq1", sender_name="Acme", kind_slug="quote", amount="100.00", currency="EUR"
+    )
+    await seed(
+        session, "gq2", sender_name="Acme", kind_slug="quote", amount="50.00", currency="EUR"
+    )
+    await seed(session, "gq3", kind_slug="quote", amount="25.00", currency="EUR")  # no sender
+
+    result = await sum_amount(
+        session, filters=DocumentFilters(kind_slug="quote"), group_by="sender"
+    )
+
+    assert "quote_not_spend" not in result.coverage.excluded
+    assert result.coverage.excluded == {"no_sender": 1}
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+    assert {(row.key, row.total) for row in result.rows} == {("Acme", "150.00")}
