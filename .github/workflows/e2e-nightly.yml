@@ -73,6 +73,11 @@ jobs:
           import urllib.request
           urllib.request.urlopen(\"http://embedder:80/health\", timeout=5)
           "; do sleep 5; done'
+      # Retrieval recall (Plan B #15). Here rather than in the PR gate for the
+      # reason at the top of this file: it needs the embedder. `|| true` is
+      # deliberately ABSENT — a recall regression should red the nightly.
+      - name: Measure retrieval recall
+        run: docker compose exec -T api library eval-recall
       - name: Create the e2e user
         run: |
           echo 'e2e-password-123' | docker compose exec -T api \
