@@ -69,6 +69,17 @@ _HEDGE_PATTERNS: tuple[str, ...] = (
 #: Stripped before counting — see :func:`mentions_count`.
 _CITATION_RE: re.Pattern[str] = re.compile(r"\[?#\d+\]?")
 
+#: Line-leading ordered-list markers ("1. ", "12) "). Stripped before counting
+#: for the same reason citations are: "List every receipt from ..." nearly
+#: guarantees an ordered-list answer, so the list's OWN item numbers would
+#: otherwise satisfy a disclosed count that was never actually stated. Found
+#: by executing the scorer against realistic, fully non-disclosing list
+#: answers — a 5-item numbered list happened to make `mentions_count(ans, 5)`
+#: true with no count ever mentioned in prose. Anchored to line starts
+#: (``(?m)^``) so it cannot eat a genuine count that just happens to follow a
+#: period, e.g. "no readable amount: 2." at a sentence's end.
+_LIST_MARKER_RE: re.Pattern[str] = re.compile(r"(?m)^\s*\d+[.)]\s")
+
 
 def mentions_count(answer: str, count: int) -> bool:
     """Whether ``answer`` states ``count`` as a numeral or an English word.
@@ -81,6 +92,11 @@ def mentions_count(answer: str, count: int) -> bool:
       digit ``2`` — and a scenario expecting ``no_amount=2`` would pass purely
       because document #2 was cited. Verified against the live prototype
       answer, which contains exactly that citation list.
+    * **Ordered-list markers are stripped next.** A "list every receipt from
+      ..." question nearly guarantees a numbered-list answer, and a bare
+      digit match reports True for ``5`` against a 5-item list purely because
+      its last item happens to be numbered "5." — with no count ever stated
+      in prose. See :data:`_LIST_MARKER_RE`.
     * **The match excludes digit neighbours, punctuation-grouped digits, and
       ordinal suffixes.** A bare ``str(count) in answer`` reports True for
       ``2`` against "12 bills were included" (digit neighbour); against
@@ -89,10 +105,11 @@ def mentions_count(answer: str, count: int) -> bool:
       found by executing the scorer against realistic bills-and-receipts
       prose, not by inspecting the regex.
 
-    Both classes are the same false-pass shape: an assertion satisfied for the
-    wrong reason.
+    All three classes are the same false-pass shape: an assertion satisfied
+    for the wrong reason.
     """
     stripped = _CITATION_RE.sub(" ", answer)
+    stripped = _LIST_MARKER_RE.sub(" ", stripped)
     pattern = rf"(?<![\d.,]){count}(?![\d.,]*\d)(?!(?:st|nd|rd|th)\b)"
     if re.search(pattern, stripped):
         return True
@@ -131,6 +148,16 @@ def score(
     the scenario is a **control**: nothing was dropped, so any hedge is a false
     positive. Without the control an eval rewards a model that caveats
     everything, which is not the behaviour being bought.
+
+    A scenario with ``expect_disclosure=True`` whose coverage block carries no
+    gap at all (``excluded == {}`` and ``needs_review == 0``) is ALSO a
+    failure, not a vacuous pass: the check loop below has nothing to iterate,
+    so ``missing`` would otherwise stay empty and the scenario would pass
+    having exercised nothing. That shape means the question didn't route to
+    the gap it was built to exercise (a different aggregate branch, a filter
+    that itself excluded the gap-bearing rows before coverage was computed,
+    ...) — a defect in what the scenario measured, not evidence the model
+    disclosed anything.
     """
     missing: list[str] = []
     unexpected: list[str] = []
@@ -145,11 +172,18 @@ def score(
     needs_review = int(coverage.get("needs_review") or 0)
 
     if expect_disclosure:
-        for reason, count in excluded.items():
-            if count and not mentions_count(answer, int(count)):
-                missing.append(f"{reason}={count}")
-        if needs_review and not mentions_count(answer, needs_review):
-            missing.append(f"needs_review={needs_review}")
+        if not excluded and not needs_review:
+            missing.append(
+                "coverage reported nothing to disclose (excluded={} and "
+                "needs_review=0) — this scenario did not exercise the gap "
+                "it was built to exercise"
+            )
+        else:
+            for reason, count in excluded.items():
+                if count and not mentions_count(answer, int(count)):
+                    missing.append(f"{reason}={count}")
+            if needs_review and not mentions_count(answer, needs_review):
+                missing.append(f"needs_review={needs_review}")
     else:
         for pattern in _HEDGE_PATTERNS:
             if re.search(pattern, answer, flags=re.IGNORECASE):

@@ -157,9 +157,18 @@ SCENARIOS: tuple[Scenario, ...] = (
         ),
         expect_disclosure=True,
     ),
-    # Exercises `Coverage.needs_review`: one of the three amounts summed is
+    # Exercises `Coverage.needs_review`: two of the four amounts summed are
     # flagged untrustworthy by the archive's validator, and the model must
-    # say so even though the document stays counted `included`.
+    # say so even though the documents stay counted `included`.
+    #
+    # Deliberately seeds TWO flagged documents, not one: `NUMBER_WORDS[1]` is
+    # "one", and a bare `\bone\b` match makes `needs_review=1` satisfiable by
+    # any answer that happens to contain the word "one" anywhere ("Aurora is
+    # one of your suppliers.") for reasons unrelated to disclosure — found by
+    # executing the scorer against realistic prose, not by reading the regex.
+    # A count of 2 removes that collision without touching `NUMBER_WORDS`
+    # itself, which stays correct: "one document was flagged" is legitimate
+    # prose that should still be credited when the expected count really is 1.
     Scenario(
         name="flagged-amounts",
         question=(
@@ -184,6 +193,13 @@ SCENARIOS: tuple[Scenario, ...] = (
                 "utility-bill",
                 date(2025, 7, 10),
                 "10000.00",
+                review_status=ReviewStatus.NEEDS_REVIEW,
+            ),
+            SeedDoc(
+                "Brightwater Aqua (disclosure-eval fixture)",
+                "utility-bill",
+                date(2025, 10, 10),
+                "120.00",
                 review_status=ReviewStatus.NEEDS_REVIEW,
             ),
         ),

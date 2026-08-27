@@ -66,6 +66,48 @@ def test_mentions_count_accepts_a_genuine_count_alongside_an_ordinal() -> None:
     assert mentions_count("2 bills, plus the 2nd was flagged", 2)
 
 
+def test_mentions_count_ignores_an_ordered_list_items_own_number() -> None:
+    """A markdown list's own item numbers are not a disclosed count. Found by
+    executing the scorer against a realistic, fully non-disclosing numbered
+    list — the previous regex let the trailing '5.' item marker satisfy
+    `mentions_count(ans, 5)` with no count ever stated in prose."""
+    assert not mentions_count("1. Receipt 55 …\n…\n5. Receipt 51 …", 5)
+    assert not mentions_count("Total EUR 360.00:\n1. Jan…\n2. Apr…\n3. Jul…", 2)
+
+
+def test_mentions_count_still_registers_a_genuine_count_in_a_list_bearing_answer() -> None:
+    """The list-marker strip must not blind the scorer to a real count that
+    happens to share the answer with a numbered list."""
+    assert mentions_count(
+        "1. Receipt A\n2. Receipt B\n\n2 more documents had no readable amount.", 2
+    )
+
+
+def test_mentions_count_list_marker_strip_still_accepts_known_safe_strings() -> None:
+    """Guards the review verified stay safe: none of these are ordered-list
+    markers and must not be affected by the new strip."""
+    assert not mentions_count("The amount was 12.50 today.", 5)
+    assert not mentions_count("Dated 2025-01-05.", 5)
+    assert not mentions_count("Receipt 55 was issued.", 5)
+    assert not mentions_count("Receipt 50 was issued.", 5)
+    assert not mentions_count("You spent EUR 10,175.00 in total.", 5)
+
+
+def test_score_fails_a_scenario_expecting_disclosure_but_with_nothing_to_disclose() -> None:
+    """FIX 1: a coverage block with excluded={} and needs_review=0 must FAIL
+    an `expect_disclosure=True` scenario, not vacuously pass it — the check
+    loop having nothing to iterate over means the scenario exercised nothing,
+    which is a defect in the scenario, not evidence of correct disclosure."""
+    verdict = score(
+        "x",
+        {"matched": 5, "included": 5, "excluded": {}, "needs_review": 0},
+        "You spent EUR 360.00.",
+        expect_disclosure=True,
+    )
+    assert not verdict.passed
+    assert verdict.missing != ()
+
+
 def test_score_passes_when_every_excluded_reason_count_is_disclosed() -> None:
     verdict = score(
         "utilities-no-amount",
@@ -231,12 +273,16 @@ def test_spend_excludes_quotes_seeds_amount_bearing_invoices_and_quotes() -> Non
     assert {d.sender_name for d in scenario.docs} == {"Ledger Movers (disclosure-eval fixture)"}
 
 
-def test_flagged_amounts_has_exactly_one_needs_review_document() -> None:
+def test_flagged_amounts_has_exactly_two_needs_review_documents() -> None:
+    """Pinned at two, not one: `NUMBER_WORDS[1]` is "one", so a
+    `needs_review=1` scenario is satisfied by any answer containing that
+    common English word for reasons unrelated to disclosure. Two removes the
+    collision (see the scenario's own docstring in disclosure_scenarios.py)."""
     from library.models import ReviewStatus
 
     scenario = _scenario("flagged-amounts")
     flagged = [d for d in scenario.docs if d.review_status is ReviewStatus.NEEDS_REVIEW]
-    assert len(flagged) == 1
+    assert len(flagged) == 2
     # Every document must carry an amount: `needs_review` is a count within
     # `included`, so an amountless flagged document would land in `no_amount`
     # instead and never contribute to the count this scenario is testing.
