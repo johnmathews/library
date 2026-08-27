@@ -1149,3 +1149,28 @@ def test_sweep_encrypted_apply_skips_collision(
     # The locked document is untouched (still the encrypted sha).
     rows = fetch_all(cli_data_dir, "SELECT sha256 FROM documents WHERE id = :id", id=document_id)
     assert rows == [(old_sha,)]
+
+
+def test_eval_recall_help_lists_ask_and_write_baseline() -> None:
+    result = runner.invoke(app, ["eval-recall", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "--only" in result.output
+    assert "--ask" in result.output
+    assert "--write-baseline" in result.output
+
+
+def test_eval_recall_ask_with_write_baseline_exits_without_seeding(
+    cli_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--ask and --write-baseline measure different things (Ask citations vs raw
+    retrieval); combining them must be refused before any seeding happens, not
+    merely before the baseline file is overwritten."""
+
+    async def _fail_if_called(session: object) -> dict[str, int]:
+        raise AssertionError("_seed_corpus must not run when the guard rejects the flags")
+
+    monkeypatch.setattr(cli_module, "_seed_corpus", _fail_if_called)
+
+    result = runner.invoke(app, ["eval-recall", "--ask", "--write-baseline"])
+    assert result.exit_code == 1, result.output
+    assert "--write-baseline records retrieval recall; drop --ask" in result.output

@@ -1455,6 +1455,11 @@ def _report_recall(verdicts: list[RecallVerdict], *, write_baseline: bool) -> No
 @app.command("eval-recall")
 def eval_recall(
     only: str | None = typer.Option(None, "--only", help="Run just this case by name."),
+    ask: bool = typer.Option(
+        False,
+        "--ask",
+        help="Drive the full Ask loop and score its citations, not raw retrieval.",
+    ),
     write_baseline: bool = typer.Option(
         False, "--write-baseline", help="Overwrite recall-baseline.json with this run."
     ),
@@ -1464,6 +1469,15 @@ def eval_recall(
     Seeds the synthetic corpus (``library.ask.recall_scenarios``), embeds it
     through the real pipeline, runs each case's question through
     ``semantic_search``, and scores recall@k.
+
+    ``--ask`` drives the real Ask loop instead of calling the retriever
+    directly, and scores the document ids the answer CITED. This is the only
+    layer that can show whether the model actually uses the filters (#5) and
+    depth (#7) the tool schema offers it — layer 1 calls the retriever with
+    fixed arguments and so cannot tell a schema the model exploits from one it
+    ignores. It needs Claude credentials, which is why it is a flag rather than
+    the default: without it this command runs anywhere an embedder is reachable,
+    CI included.
 
     **Nothing is committed**, structurally — see ``_run_rolled_back``.
 
@@ -1475,6 +1489,10 @@ def eval_recall(
 
     Exits non-zero if any case fails, so it can gate a release by hand.
     """
+    if write_baseline and ask:
+        typer.echo("error: --write-baseline records retrieval recall; drop --ask")
+        raise typer.Exit(code=1)
+
     settings = get_settings()
     typer.echo(
         f"WARNING: eval-recall seeds {len(CORPUS)} synthetic documents into "
@@ -1489,24 +1507,30 @@ def eval_recall(
 
     async def operation(session: AsyncSession) -> list[RecallVerdict]:
         ids_by_marker = await _seed_corpus(session)
+        client = AsyncAnthropic(api_key="unused")  # subscription backend never calls the API
         verdicts: list[RecallVerdict] = []
         for case in cases:
-            embedding = await embed_query(case.question, settings=settings)
-            hits = await semantic_search(
-                session,
-                query=case.question,
-                query_embedding=embedding,
-                filters=DocumentFilters(),
-                top_k=case.k,
-            )
-            verdicts.append(
-                score_recall(
-                    case.name,
-                    [ids_by_marker[marker] for marker in case.expected_markers],
-                    [hit.document.id for hit in hits],
-                    k=case.k,
+            expected = [ids_by_marker[marker] for marker in case.expected_markers]
+            if ask:
+                result = await run_ask(
+                    session,
+                    question=case.question,
+                    settings=settings,
+                    client=client,
+                    backend="subscription",
                 )
-            )
+                retrieved = [citation.document_id for citation in result.citations]
+            else:
+                embedding = await embed_query(case.question, settings=settings)
+                hits = await semantic_search(
+                    session,
+                    query=case.question,
+                    query_embedding=embedding,
+                    filters=DocumentFilters(),
+                    top_k=case.k,
+                )
+                retrieved = [hit.document.id for hit in hits]
+            verdicts.append(score_recall(case.name, expected, retrieved, k=case.k))
         return verdicts
 
     verdicts = _run_rolled_back(operation)
