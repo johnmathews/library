@@ -6,6 +6,7 @@ propose-then-confirm ``update_document_metadata`` tool in the Ask engine
 dispatch driven by a stubbed Anthropic client).
 """
 
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date
@@ -518,3 +519,99 @@ def _is_json_primitive(value: Any) -> bool:
     # Decimal and date are deliberately allowed: default=str renders them
     # correctly and readably ("12.00", "2026-01-02"), unlike an ORM object.
     return isinstance(value, Decimal | date)
+
+
+# --- tool_result history decoding: both backends' shapes -------------------
+#
+# The write gate (editable_ids / previewed_ids) is only as good as the history
+# it's read from. The `api` backend's tool_result.content is a single
+# JSON-encoded string. The `subscription` backend — the production default —
+# double-wraps it: content is a JSON-encoded LIST of SDK content blocks, whose
+# inner "text" holds the real payload. Before the fix, `_tool_result_payloads`
+# only undid one layer, so on the subscription backend both `_ids_from_history`
+# and `_previewed_ids_from_history` silently returned `set()`: previews worked,
+# but a confirmed write could never find its own preview, and a document
+# surfaced by a read tool in an earlier turn could never be edited.
+
+
+def _api_shaped_tool_result(tool_use_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """A tool_result block shaped as the `api` backend stores it (`_run_api_turn`):
+    content is `json.dumps(output, default=str)` directly — one level of JSON."""
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": json.dumps(payload),
+    }
+
+
+def _subscription_shaped_tool_result(tool_use_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """A tool_result block shaped as the `subscription` backend stores it
+    (`llm/subscription.py`): the SDK's tool result content is itself a list of
+    content blocks (`[{"type": "text", "text": ...}]`), and since that list
+    isn't a `str` it gets `json.dumps`-ed again on top — two levels of JSON."""
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": json.dumps([{"type": "text", "text": json.dumps(payload)}]),
+    }
+
+
+def test_history_decoding_finds_ids_in_api_shaped_history() -> None:
+    """Regression guard for the working path: the `api` backend's single-wrapped
+    shape must keep decoding correctly after the subscription-shape fix."""
+    document_id = 42
+    history = [
+        {
+            "role": "user",
+            "content": [
+                _api_shaped_tool_result("a1", {"document_id": document_id}),
+                _api_shaped_tool_result("a2", {"status": "preview", "document_id": document_id}),
+            ],
+        }
+    ]
+
+    assert ask_engine._ids_from_history(history) == {document_id}
+    assert ask_engine._previewed_ids_from_history(history) == {document_id}
+
+
+def test_history_decoding_finds_ids_in_subscription_shaped_history() -> None:
+    """The bug: on subscription-shaped (double-wrapped) history, both helpers
+    must still find the document id — this is what was silently broken in
+    production (both returned `set()` before the fix)."""
+    document_id = 42
+    history = [
+        {
+            "role": "user",
+            "content": [
+                _subscription_shaped_tool_result("s1", {"document_id": document_id}),
+                _subscription_shaped_tool_result(
+                    "s2", {"status": "preview", "document_id": document_id}
+                ),
+            ],
+        }
+    ]
+
+    assert ask_engine._ids_from_history(history) == {document_id}
+    assert ask_engine._previewed_ids_from_history(history) == {document_id}
+
+
+def test_history_decoding_tolerates_malformed_inner_text() -> None:
+    """A subscription-shaped block whose inner `text` is not valid JSON is
+    skipped, not raised — matching the outer decode's existing tolerance for
+    malformed history (`except (ValueError, TypeError): continue`)."""
+    history = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "s1",
+                    "content": json.dumps([{"type": "text", "text": "not valid json"}]),
+                }
+            ],
+        }
+    ]
+
+    assert list(ask_engine._tool_result_payloads(history)) == []
+    assert ask_engine._ids_from_history(history) == set()
+    assert ask_engine._previewed_ids_from_history(history) == set()

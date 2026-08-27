@@ -11,7 +11,9 @@ import hashlib
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import typer
 from anthropic import AsyncAnthropic
@@ -19,6 +21,9 @@ from sqlalchemy import BigInteger, Select, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from library.ask.disclosure_eval import DisclosureVerdict, score
+from library.ask.disclosure_scenarios import SCENARIOS, Scenario
+from library.ask.engine import _tool_result_payloads, run_ask
 from library.auth.passwords import hash_password
 from library.auth.service import revoke_all_credentials
 from library.config import get_settings
@@ -48,6 +53,7 @@ from library.models import (
     Document,
     DocumentChunk,
     DocumentPage,
+    DocumentSource,
     DocumentStatus,
     EvalRun,
     IngestionEvent,
@@ -1039,6 +1045,302 @@ def eval_extractions(
         fw = "-" if scores["flywheel_accuracy"] is None else f"{scores['flywheel_accuracy']:.0%}"
         jg = "-" if scores["judge_agreement"] is None else f"{scores['judge_agreement']:.0%}"
         typer.echo(f"{field:<18}{fw:>12}{jg:>12}{scores['n']:>6}")
+
+
+def _redact_database_url(url: str) -> str:
+    """``url`` with any embedded password blanked, safe to print to a terminal.
+
+    Deliberately NOT ``sqlalchemy.engine.make_url(url).render_as_string(
+    hide_password=True)``, despite that being the obvious "use the tested
+    library" fix for the regex this replaced. Verified by executing both
+    against ``postgresql+asyncpg://lib:p@ss@db/library`` (a password
+    containing an unencoded ``@``): SQLAlchemy's own URL parser
+    (``sqlalchemy.engine.url._parse_url``) uses a ``[^@]*`` password group in
+    its regex, which — exactly like the hand-rolled regex this function used
+    to use — stops at the FIRST unescaped ``@``, parsing password ``"p"`` and
+    host ``"ss@db"``. ``render_as_string(hide_password=True)`` then still
+    renders ``...lib:***@ss@db/library``, leaking the password's tail ``ss``
+    as part of what it thinks is the host — the exact bug this function
+    exists to fix, reproduced through the "fix".
+
+    ``urllib.parse.urlsplit`` does not have this problem: per RFC 3986 it
+    splits an authority's userinfo from its host at the LAST ``@``, so
+    ``rpartition("@")`` on the netloc always finds the real host boundary
+    regardless of how many literal ``@`` characters the password contains.
+    """
+    parts = urlsplit(url)
+    userinfo, sep, hostport = parts.netloc.rpartition("@")
+    if sep and ":" in userinfo:
+        user, _, _password = userinfo.partition(":")
+        userinfo = f"{user}:***"
+    return urlunsplit(parts._replace(netloc=f"{userinfo}{sep}{hostport}"))
+
+
+async def _seed_scenario(session: AsyncSession, scenario: Scenario) -> None:
+    """Seed one scenario's documents into ``session`` and flush — never commit.
+
+    Looks up each sender by name / each kind by slug rather than blindly
+    inserting, so a scenario re-run against the same (rolled-back-to) database
+    reuses rows instead of tripping ``Sender.name``'s unique constraint. Kinds
+    are never created here: they are seeded by migration, and a typo'd slug
+    should fail loudly (``scalar_one``) rather than silently invent a new kind.
+    """
+    senders: dict[str, Sender] = {}
+    kinds: dict[str, Kind] = {}
+    for index, seed_doc in enumerate(scenario.docs):
+        sender = senders.get(seed_doc.sender_name)
+        if sender is None:
+            sender = (
+                await session.execute(select(Sender).where(Sender.name == seed_doc.sender_name))
+            ).scalar_one_or_none()
+            if sender is None:
+                sender = Sender(name=seed_doc.sender_name)
+                session.add(sender)
+                await session.flush()
+            senders[seed_doc.sender_name] = sender
+
+        kind = kinds.get(seed_doc.kind_slug)
+        if kind is None:
+            kind = (
+                await session.execute(select(Kind).where(Kind.slug == seed_doc.kind_slug))
+            ).scalar_one()
+            kinds[seed_doc.kind_slug] = kind
+
+        marker = f"disclosure-eval:{scenario.name}:{index}"
+        session.add(
+            Document(
+                sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                mime_type="application/pdf",
+                source=DocumentSource.UPLOAD,
+                title=seed_doc.title,
+                sender=sender,
+                kind=kind,
+                document_date=seed_doc.document_date,
+                amount_total=Decimal(seed_doc.amount) if seed_doc.amount is not None else None,
+                currency=seed_doc.currency,
+                review_status=seed_doc.review_status,
+            )
+        )
+    await session.flush()
+
+
+def _coverage_from_turn_messages(turn_messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Every ``coverage`` block a ``tool_result`` handed the model this turn,
+    merged into one ``{"excluded": ..., "needs_review": ...}`` block.
+
+    Reuses ``ask.engine._tool_result_payloads`` to decode ``tool_result``
+    blocks rather than re-implementing the unwrap here: that helper already
+    handles both backends' shapes (the ``api`` backend's single JSON-encoded
+    ``content`` string, and the ``subscription`` backend's double-wrapped
+    ``content`` — a JSON-encoded list of SDK content blocks whose inner
+    ``text`` holds the real payload). A second hand-rolled copy of this logic
+    is exactly how the two drifted apart before (it only handled the ``api``
+    shape, so this eval always reported "no coverage block reached the
+    model" against the ``subscription`` backend it actually drives).
+
+    Deliberately does NOT recompute coverage from the seeded rows: the eval
+    must grade what the model was actually shown and did with it, not
+    re-derive the arithmetic and grade that against itself.
+
+    **Merged, not last-wins.** A turn may call more than one coverage-carrying
+    tool before answering — e.g. `sum_amount` (which reports a real gap) then
+    a follow-up `list` to enumerate matches (whose own coverage can be empty,
+    since `list`'s only exclusion reason is `over_limit`). Keeping only the
+    final block would grade the model against the emptier one and pass the
+    scenario vacuously even though an earlier tool result DID carry a gap.
+    Merging takes, for each `excluded` reason, the maximum count reported by
+    any coverage-carrying result this turn, and the maximum `needs_review`
+    likewise — so a gap surfaced by an earlier call is never silently
+    overwritten by a later, unrelated one. ``matched``/``included`` are
+    dropped from the merged result: they are not aggregable across different
+    tools' different aggregates, and ``library.ask.disclosure_eval.score``
+    only ever reads ``excluded`` and ``needs_review``.
+    """
+    excluded: dict[str, int] = {}
+    needs_review = 0
+    seen_any = False
+    for payload in _tool_result_payloads(turn_messages):
+        if not (isinstance(payload, dict) and isinstance(payload.get("coverage"), dict)):
+            continue
+        seen_any = True
+        coverage = payload["coverage"]
+        raw_excluded = coverage.get("excluded")
+        if isinstance(raw_excluded, dict):
+            for reason, count in raw_excluded.items():
+                try:
+                    count_int = int(count)
+                except (TypeError, ValueError):
+                    continue
+                if count_int > excluded.get(reason, 0):
+                    excluded[reason] = count_int
+        try:
+            needs_review_candidate = int(coverage.get("needs_review") or 0)
+        except (TypeError, ValueError):
+            needs_review_candidate = 0
+        needs_review = max(needs_review, needs_review_candidate)
+    if not seen_any:
+        return None
+    return {"excluded": excluded, "needs_review": needs_review}
+
+
+def _run_eval_disclosure[T](operation: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """Run ``operation`` inside an outer, connection-level transaction that is
+    unconditionally rolled back — the standard SQLAlchemy "external
+    transaction" pattern for tests, used here (unlike plain ``_run``) because
+    this command's session touches the CONFIGURED database, which may be the
+    real archive, by default.
+
+    ``engine.connect()`` + ``conn.begin()`` opens one transaction on the
+    connection; the session is then bound to that connection with
+    ``join_transaction_mode="create_savepoint"``, so every ``session.begin()``
+    the ORM does internally (autobegin, and each explicit
+    ``session.commit()``/``session.rollback()``) opens and closes a SAVEPOINT
+    nested inside that outer transaction instead of touching it. A stray
+    ``commit()`` anywhere in the call graph — the write tool's confirmation-
+    gated ``_run_update_document``, a future code path, a bug in this eval
+    itself — can therefore only release a savepoint; it cannot make the outer
+    transaction's writes visible to any other connection, and the ``finally``
+    below rolls that outer transaction back regardless of how ``operation``
+    returns. This makes "nothing is committed" a structural property of HOW
+    the session is bound, rather than resting solely on the per-scenario
+    ``session.rollback()`` in ``eval_disclosure`` — which stays in place
+    below as a second, independent safety net that also clears each
+    scenario's savepoint so one scenario's seeded rows can never bleed into
+    the next scenario's query results.
+    """
+
+    async def _execute() -> T:
+        engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                outer_transaction = await conn.begin()
+                try:
+                    async with AsyncSession(
+                        bind=conn,
+                        expire_on_commit=False,
+                        join_transaction_mode="create_savepoint",
+                    ) as session:
+                        return await operation(session)
+                finally:
+                    await outer_transaction.rollback()
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_execute())
+
+
+@app.command("eval-disclosure")
+def eval_disclosure(
+    only: str | None = typer.Option(None, "--only", help="Run just this scenario by name."),
+) -> None:
+    """Measure whether Ask's model discloses incomplete coverage.
+
+    Seeds synthetic scenarios (``library.ask.disclosure_scenarios``), drives
+    the real Ask loop against each with ``run_ask(..., backend="subscription")``,
+    and scores the answer with ``library.ask.disclosure_eval.score`` for
+    whether it owned up to the gaps its own ``coverage`` block reported. Every
+    existing test asserts only that the *instruction* is present in the system
+    prompt; this checks that behaviour actually follows it.
+
+    **Nothing is committed**, structurally. ``_run_eval_disclosure`` binds the
+    session to a connection already holding an outer transaction
+    (``join_transaction_mode="create_savepoint"``), so ANY ``commit()``
+    reachable from ``run_ask`` — in practice only the confirmation-gated write
+    tool, ``_run_update_document`` in ``ask/engine.py``, which refuses
+    ``confirmed=true`` unless the target document was *previewed* in an
+    EARLIER turn that a single fresh question can never satisfy (verified by
+    reading ``ask/engine.py``, not assumed) — can only release a SAVEPOINT,
+    never the outer transaction. That outer transaction is rolled back
+    unconditionally once every scenario has run. Each scenario's seeded
+    documents are additionally ``session.add``ed, ``flush``ed and rolled back
+    per-scenario on top of that, so the configured database is left exactly
+    as it was on success or failure alike, by two independent mechanisms.
+
+    Requires working Claude credentials — CI has none, which is why this is a
+    command rather than a test. Point ``LIBRARY_CLAUDE_CONFIG_DIR`` at a
+    directory with valid credentials (e.g. ``~/.claude``) when running
+    locally.
+
+    Exits non-zero if any scenario fails, so it can gate a release by hand.
+    """
+    settings = get_settings()
+    typer.echo(
+        f"WARNING: eval-disclosure seeds synthetic documents into "
+        f"{_redact_database_url(settings.database_url)} to drive live Ask questions. "
+        "Every seed is flushed then rolled back — nothing is committed."
+    )
+
+    scenarios = [s for s in SCENARIOS if only is None or s.name == only]
+    if not scenarios:
+        typer.echo(f"error: no scenario named {only!r}")
+        raise typer.Exit(code=1)
+
+    async def operation(
+        session: AsyncSession,
+    ) -> list[tuple[dict[str, Any] | None, DisclosureVerdict | None]]:
+        client = AsyncAnthropic(api_key="unused")  # subscription backend never calls the API
+        results: list[tuple[dict[str, Any] | None, DisclosureVerdict | None]] = []
+        for scenario in scenarios:
+            try:
+                await _seed_scenario(session, scenario)
+                result = await run_ask(
+                    session,
+                    question=scenario.question,
+                    settings=settings,
+                    client=client,
+                    backend="subscription",
+                )
+                coverage = _coverage_from_turn_messages(result.turn_messages)
+                if coverage is None:
+                    typer.echo(
+                        f"SKIP {scenario.name} — no coverage block reached the model "
+                        f"(tools used: {result.used_tools or ['none']})"
+                    )
+                    results.append((None, None))
+                    continue
+                verdict = score(
+                    scenario.name,
+                    coverage,
+                    result.answer,
+                    expect_disclosure=scenario.expect_disclosure,
+                )
+                results.append((coverage, verdict))
+            finally:
+                # Runs on success, failure, and exception alike: no scenario's
+                # synthetic documents may ever reach the configured database.
+                await session.rollback()
+        return results
+
+    results = _run_eval_disclosure(operation)
+
+    failures = 0
+    skipped = 0
+    for scenario, (coverage, verdict) in zip(scenarios, results, strict=True):
+        if verdict is None:
+            skipped += 1
+            continue
+        # Coverage prints on PASS as well as FAIL: a recorded "N passed" line
+        # is otherwise unauditable after the fact — nothing distinguishes "the
+        # model disclosed a real gap" from "there was nothing to disclose".
+        excluded = coverage.get("excluded", {}) if coverage else {}
+        needs_review = coverage.get("needs_review", 0) if coverage else 0
+        status = "PASS" if verdict.passed else "FAIL"
+        typer.echo(
+            f"{status} {scenario.name}  coverage: excluded={excluded} needs_review={needs_review}"
+        )
+        if not verdict.passed:
+            failures += 1
+            if verdict.missing:
+                typer.echo(f"  missing disclosure: {', '.join(verdict.missing)}")
+            if verdict.unexpected:
+                typer.echo(f"  unexpected hedge: {', '.join(verdict.unexpected)}")
+            typer.echo(f"  answer: {verdict.answer}")
+
+    typer.echo(
+        f"{len(scenarios) - failures - skipped} passed, {failures} failed, {skipped} skipped"
+    )
+    if failures:
+        raise typer.Exit(code=1)
 
 
 def main() -> None:

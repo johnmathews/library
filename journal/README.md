@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-156 entries.
+157 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## August 2026
 
+- **2026-08-27** — [Disclosure eval](260827-disclosure-eval.md)
 - **2026-08-26** — [Series comparisons report what they narrow away](260826-series-coverage.md)
 - **2026-08-26** — [Ask answer trustworthiness](260826-ask-answer-trustworthiness.md)
 - **2026-08-25** — [Ask learns who is asking and what the archive calls things](260825-ask-archive-context.md)
