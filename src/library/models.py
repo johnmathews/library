@@ -555,6 +555,15 @@ class DocumentChunk(Base):
     chunk_index: Mapped[int] = mapped_column(Integer)
     page_number: Mapped[int | None] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
+    #: The document-identity line prepended to ``text`` before embedding, so a
+    #: chunk retrieves on its sender/date/kind/title as well as its content.
+    #: Stored separately rather than baked into ``text`` because ``text`` is
+    #: also what Ask reads back as an excerpt: with three passages per document
+    #: and ten documents per search, a baked-in header would repeat the same
+    #: metadata up to thirty times per tool result, duplicating fields the
+    #: result rows already carry. NULL for chunks written before this column
+    #: existed, and for documents with no metadata at all.
+    context_header: Mapped[str | None] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     comment_id: Mapped[int | None] = mapped_column(

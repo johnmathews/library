@@ -13,6 +13,7 @@ handler commits explicitly). ``edited_by`` ("user" vs "ask") is recorded in
 the event detail so the source of every edit is auditable.
 """
 
+from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
@@ -251,6 +252,24 @@ async def apply_document_update(
             )
         )
     return edited
+
+
+#: Storage-level field names that appear in a chunk's ``context_header``
+#: (see ``jobs.compose_context_header``). An edit touching any of them makes
+#: every stored header for that document stale, so it must be re-embedded.
+#:
+#: The mixed naming is NOT a mistake and must not be "tidied": the list this is
+#: compared against is ``apply_document_update``'s return value, which maps
+#: ``sender``/``kind_slug`` through ``_EDITED_FIELD_NAMES`` to ``sender_id``/
+#: ``kind_id`` but appends plain scalar fields under their own names. Verified
+#: by execution: sender -> ['sender_id'], kind_slug -> ['kind_id'],
+#: title -> ['title'], document_date -> ['document_date'].
+HEADER_FIELDS: frozenset[str] = frozenset({"sender_id", "kind_id", "title", "document_date"})
+
+
+def header_fields_changed(edited: Sequence[str]) -> bool:
+    """Whether an ``apply_document_update`` result touched a header field."""
+    return bool(HEADER_FIELDS.intersection(edited))
 
 
 async def revalidate_after_edit(

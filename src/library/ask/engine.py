@@ -29,9 +29,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import LLMBackend, Settings
-from library.documents_service import apply_document_update, revalidate_after_edit
+from library.documents_service import (
+    apply_document_update,
+    header_fields_changed,
+    revalidate_after_edit,
+)
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
+from library.jobs import embed_document
 from library.llm import subscription
 from library.models import Document, DocumentComment, DocumentPage, ReviewStatus
 from library.schemas import DocumentUpdate
@@ -818,6 +823,10 @@ async def _run_update_document(
     # edit gets flagged) — same behaviour as the PATCH route (documents.py).
     await revalidate_after_edit(session, document, settings)
     await session.commit()
+    # Same reasoning as the PATCH route (api/documents.py): a header-field edit
+    # invalidates this document's stored chunk headers.
+    if header_fields_changed(edited):
+        await embed_document.defer_async(document_id=document_id)
     return {"status": "updated", "document_id": document_id, "updated_fields": edited}
 
 

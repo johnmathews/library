@@ -14,6 +14,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 import pytest
+from procrastinate.testing import InMemoryConnector
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -125,7 +126,9 @@ async def test_update_tool_preview_does_not_write(api_database_url: str) -> None
 
 
 @pytest.mark.asyncio
-async def test_update_tool_commit_writes_with_ask_provenance(api_database_url: str) -> None:
+async def test_update_tool_commit_writes_with_ask_provenance(
+    api_database_url: str, job_connector: InMemoryConnector
+) -> None:
     document_id = await _seed_document(api_database_url, "askw-commit", title="Original title")
 
     async with _open_session(api_database_url) as session:
@@ -193,7 +196,9 @@ async def test_update_tool_writes_matters(api_database_url: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_tool_revalidates_and_clears_finding(api_database_url: str) -> None:
+async def test_update_tool_revalidates_and_clears_finding(
+    api_database_url: str, job_connector: InMemoryConnector
+) -> None:
     """An Ask-confirmed edit recomputes validation just like the PATCH route, so
     fixing a flagged field clears its warning and review_status."""
     document_id = await _seed_document(
@@ -317,7 +322,7 @@ def _surfaced_history(document_id: int) -> list[dict[str, Any]]:
 
 @pytest.mark.asyncio
 async def test_engine_confirm_after_prior_turn_preview_writes(
-    api_database_url: str,
+    api_database_url: str, job_connector: InMemoryConnector
 ) -> None:
     """A confirmed write succeeds when a PRIOR turn previewed the document (the
     preview tool_result is in the replayed history). This is the real
