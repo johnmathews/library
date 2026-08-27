@@ -8,7 +8,6 @@ loop-bound connection.
 
 import asyncio
 import hashlib
-import json
 import re
 import sys
 from collections.abc import Awaitable, Callable
@@ -24,7 +23,7 @@ from sqlalchemy.pool import NullPool
 
 from library.ask.disclosure_eval import DisclosureVerdict, score
 from library.ask.disclosure_scenarios import SCENARIOS, Scenario
-from library.ask.engine import run_ask
+from library.ask.engine import _tool_result_payloads, run_ask
 from library.auth.passwords import hash_password
 from library.auth.service import revoke_all_credentials
 from library.config import get_settings
@@ -1104,9 +1103,16 @@ async def _seed_scenario(session: AsyncSession, scenario: Scenario) -> None:
 def _coverage_from_turn_messages(turn_messages: list[dict[str, Any]]) -> dict[str, Any] | None:
     """The last ``coverage`` block a ``tool_result`` handed the model this turn.
 
-    Decodes ``tool_result`` blocks the same way ``ask.engine._tool_result_payloads``
-    does (``content`` is a JSON-encoded string on both backends — verified by
-    reading ``ask/engine.py`` and ``llm/subscription.py``'s block translation).
+    Reuses ``ask.engine._tool_result_payloads`` to decode ``tool_result``
+    blocks rather than re-implementing the unwrap here: that helper already
+    handles both backends' shapes (the ``api`` backend's single JSON-encoded
+    ``content`` string, and the ``subscription`` backend's double-wrapped
+    ``content`` — a JSON-encoded list of SDK content blocks whose inner
+    ``text`` holds the real payload). A second hand-rolled copy of this logic
+    is exactly how the two drifted apart before (it only handled the ``api``
+    shape, so this eval always reported "no coverage block reached the
+    model" against the ``subscription`` backend it actually drives).
+
     Deliberately does NOT recompute coverage from the seeded rows: the eval
     must grade what the model was actually shown and did with it, not
     re-derive the arithmetic and grade that against itself. The LAST
@@ -1115,22 +1121,9 @@ def _coverage_from_turn_messages(turn_messages: list[dict[str, Any]]) -> dict[st
     the final answer.
     """
     coverage: dict[str, Any] | None = None
-    for message in turn_messages:
-        content = message.get("content")
-        if not isinstance(content, list):
-            continue
-        for block in content:
-            if not isinstance(block, dict) or block.get("type") != "tool_result":
-                continue
-            raw = block.get("content")
-            if not isinstance(raw, str):
-                continue
-            try:
-                payload = json.loads(raw)
-            except (ValueError, TypeError):
-                continue
-            if isinstance(payload, dict) and isinstance(payload.get("coverage"), dict):
-                coverage = payload["coverage"]
+    for payload in _tool_result_payloads(turn_messages):
+        if isinstance(payload, dict) and isinstance(payload.get("coverage"), dict):
+            coverage = payload["coverage"]
     return coverage
 
 
