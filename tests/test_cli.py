@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import hashlib
 import io
+import re
 import uuid
 from collections.abc import Iterator
 
@@ -1151,12 +1152,53 @@ def test_sweep_encrypted_apply_skips_collision(
     assert rows == [(old_sha,)]
 
 
-def test_eval_recall_help_lists_ask_and_write_baseline() -> None:
+# CSI sequences (colour/style) and OSC sequences (hyperlinks), which is
+# everything rich emits into help output.
+_ANSI = re.compile(r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
+
+
+def _unstyled(output: str) -> str:
+    """Strip ANSI escapes so an option name is one contiguous run of text.
+
+    Typer renders ``--help`` through rich, and rich's ``OptionHighlighter``
+    matches BOTH of its patterns on the same token: ``--only`` as an option and
+    ``-only`` as a short switch. The two spans overlap, so rich closes and
+    reopens a style between the hyphens and the rendered bytes read
+    ``-\x1b[...m-only``. A plain ``"--only" in output`` check therefore depends
+    on whether rich decided to style at all — which is a property of the
+    environment, not of the CLI.
+    """
+    return _ANSI.sub("", output)
+
+
+@pytest.mark.parametrize("styled", [False, True], ids=["plain", "styled"])
+def test_eval_recall_help_lists_ask_and_write_baseline(
+    monkeypatch: pytest.MonkeyPatch, styled: bool
+) -> None:
+    """``--help`` lists every flag under both of rich's rendering modes.
+
+    Asserted both ways deliberately. rich styles when it detects a terminal or
+    a CI environment, so the unstyled rendering is what a developer sees locally
+    and the styled one is what CI sees. Pinning only the local rendering is how
+    the original version of this test passed here and failed on CI.
+    """
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    monkeypatch.delenv("FORCE_COLOR", raising=False)
+    if styled:
+        monkeypatch.setenv("FORCE_COLOR", "1")
+    else:
+        monkeypatch.setenv("NO_COLOR", "1")
+
     result = runner.invoke(app, ["eval-recall", "--help"])
     assert result.exit_code == 0, result.output
-    assert "--only" in result.output
-    assert "--ask" in result.output
-    assert "--write-baseline" in result.output
+    # Guard the guard: if rich ever stops styling under FORCE_COLOR this test
+    # would silently degrade into two copies of the plain case.
+    assert ("\x1b[" in result.output) is styled, "rich did not honour the colour environment"
+
+    output = _unstyled(result.output)
+    assert "--only" in output
+    assert "--ask" in output
+    assert "--write-baseline" in output
 
 
 def test_eval_recall_ask_with_write_baseline_exits_without_seeding(
