@@ -344,6 +344,7 @@ All settings use the `LIBRARY_` env prefix (see `.env.example` /
 | `LIBRARY_EMBEDDING_CHUNK_OVERLAP` | `200` | Overlap carried between chunks. |
 | `LIBRARY_RETRIEVE_TOP_K` | `10` | Documents returned by hybrid retrieval. |
 | `LIBRARY_RETRIEVE_CHUNKS_PER_DOC` | `3` | Nearest passages per document folded into the Ask excerpt (best-first, `[…]`-joined); `1` = legacy single-chunk. Does not affect candidate ranking or citations. |
+| `LIBRARY_ASK_SEARCH_MAX_TOP_K` | `50` | Ceiling on the `top_k` Ask's `semantic_search` tool may request. Values above it are clamped rather than rejected; non-positive values clamp to `1`. |
 | `LIBRARY_ASK_MODEL` | `claude-opus-4-8` | Answer model. |
 | `LIBRARY_ASK_TITLE_MODEL` | `claude-haiku-4-5` | Cheap model that names a new conversation from its first Q&A exchange. One bounded call per new thread; failure is non-fatal (keeps the placeholder title). Must have a `MODEL_PRICING_USD_PER_MTOK` row. |
 | `LIBRARY_ASK_MAX_TOOL_TURNS` | `8` | Tool-use loop bound per turn. |

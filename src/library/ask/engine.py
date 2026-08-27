@@ -214,6 +214,15 @@ TOOLS: list[dict[str, Any]] = [
                     "description": "Natural-language description of what to find.",
                 },
                 **_FILTER_PROPERTIES,
+                "top_k": {
+                    "type": "integer",
+                    "description": (
+                        "How many documents to return. Defaults to 10; raise it "
+                        "for 'find every document that mentions X' questions. "
+                        "Values above the configured maximum are clamped, so "
+                        "asking for more than the archive allows is safe."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -523,12 +532,13 @@ async def _run_semantic_search(
         logger.warning("ask semantic_search embedding failed: %s", exc)
         return {"error": "semantic search is temporarily unavailable"}
     filters = _filters_from_args(args)
+    top_k = _top_k_arg(args.get("top_k"), settings)
     hits = await semantic_search(
         session,
         query=query,
         query_embedding=embedding,
         filters=filters,
-        top_k=settings.retrieve_top_k,
+        top_k=top_k,
         chunks_per_doc=settings.retrieve_chunks_per_doc,
     )
     reach = await search_reach(session, filters)
@@ -559,6 +569,31 @@ async def _run_semantic_search(
             "unembedded": reach.unembedded,
         },
     }
+
+
+def _top_k_arg(value: object, settings: Settings) -> int:
+    """A usable ``top_k`` from a tool argument, clamped into range.
+
+    The clamp is load-bearing, not defensive tidiness. ``semantic_search`` ends
+    in ``ranked[:top_k]``, so a NEGATIVE top_k slices from the end and silently
+    returns a near-arbitrary subset — measured against seven matching documents,
+    ``top_k=-1`` returns six hits and ``top_k=-3`` returns four, with no error
+    anywhere. A model that emits a negative value would get a quietly wrong
+    answer, so the floor of 1 is what stops that.
+
+    A non-integer degrades to the configured default rather than raising: the
+    schema's ``"type": "integer"`` steers the model but does not bind it, and a
+    hallucinated ``"ten"`` must not 500 inside the tool loop. This mirrors how
+    ``_review_status_arg`` treats an unrecognised enum value.
+    """
+    if value is None:
+        return settings.retrieve_top_k
+    try:
+        requested = int(str(value).strip())
+    except (TypeError, ValueError):
+        logger.info("ask: ignoring non-integer top_k %r", value)
+        return settings.retrieve_top_k
+    return max(1, min(requested, settings.ask_search_max_top_k))
 
 
 def _text_arg(value: object) -> str | None:

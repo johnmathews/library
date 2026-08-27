@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from library.ask import engine as engine_mod
-from library.ask.engine import TOOLS, _run_semantic_search
+from library.ask.engine import TOOLS, _run_semantic_search, _top_k_arg
 from library.config import get_settings
 from library.models import EMBEDDING_DIM, Document, DocumentChunk, DocumentSource, Kind
 from library.search import DocumentFilters, search_reach
@@ -87,6 +87,7 @@ def test_schema_offers_the_shared_filters_but_not_review_status() -> None:
     for name in ("kind", "sender_contains", "date_from", "date_to", "projects", "matters", "tags"):
         assert name in properties, name
     assert "review_status" not in properties
+    assert "top_k" in properties
     assert schema["required"] == ["query"]
 
 
@@ -119,3 +120,35 @@ async def test_filters_narrow_the_search_and_are_reported(
 
     unfiltered = await _run_semantic_search(session, get_settings(), {"query": "alpha"}, set(), {})
     assert unfiltered["coverage"]["matched"] == 5
+
+
+def test_top_k_is_clamped_into_range() -> None:
+    """Every row here was measured against the real retriever before being
+    written down. The negative rows are the ones that matter: without the
+    floor, `semantic_search`'s `ranked[:top_k]` slices from the END."""
+    settings = get_settings()
+    assert _top_k_arg(None, settings) == settings.retrieve_top_k
+    assert _top_k_arg(-3, settings) == 1
+    assert _top_k_arg(-1, settings) == 1
+    assert _top_k_arg(0, settings) == 1
+    assert _top_k_arg(1, settings) == 1
+    assert _top_k_arg(25, settings) == 25
+    assert _top_k_arg(1000, settings) == settings.ask_search_max_top_k
+    # The schema says integer, but a schema steers the model without binding it.
+    assert _top_k_arg("ten", settings) == settings.retrieve_top_k
+    assert _top_k_arg("7", settings) == 7
+
+
+async def test_negative_top_k_does_not_leak_a_near_complete_set(
+    session: AsyncSession, stub_embedder: None
+) -> None:
+    """Regression guard for the measured behaviour: before the clamp, this
+    returned six of seven documents."""
+    for n in range(7):
+        await seed(session, f"depth-{n}", chunks=(("alpha", vec(0)),))
+
+    result = await _run_semantic_search(
+        session, get_settings(), {"query": "alpha", "top_k": -1}, set(), {}
+    )
+    assert len(result["results"]) == 1
+    assert result["coverage"] == {"matched": 7, "returned": 1, "unembedded": 0}
