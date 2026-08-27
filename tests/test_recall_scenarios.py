@@ -20,7 +20,13 @@ pytestmark = pytest.mark.integration
 #: five of six cases expected a single document against only three or four
 #: distractors and so could not lose recall at k=10 at all. Chosen as a floor,
 #: not a target: growing the corpus is fine.
-MIN_CORPUS_SIZE = 80
+MIN_CORPUS_SIZE = 180
+
+#: The score a retriever that ranked at RANDOM would get on a case. It is the
+#: floor of that case's range, so the closer it sits to 1.0 the less the case can
+#: say. At 0.77 (a pool of 13 against a cut of 10) the corpus measured nothing;
+#: this ceiling keeps every case's pool several times its cut.
+MAX_BLIND_RECALL = 0.35
 
 
 def test_markers_are_unique() -> None:
@@ -88,10 +94,14 @@ def test_only_the_control_case_expects_a_single_document() -> None:
 def test_every_case_competes_against_more_documents_than_its_cut() -> None:
     """Each case needs more plausible candidates than its rank cut.
 
-    If a case's whole candidate pool fits inside k, every candidate is retrieved
-    and recall is 1.0 whatever the embedder does. "Plausible candidate" is
-    approximated as sharing a sender or a title with an expected document —
-    which is exactly how this corpus places its near-misses.
+    "Larger than k" is not enough, which the 2026-08-27 measurements showed the
+    expensive way: at a pool of 13 against a cut of 10, a retriever ranking at
+    RANDOM already scores 0.77, so the corpus scored 0.9028 and still could not
+    discriminate. The pool must be several times the cut before the difference
+    between good and bad retrieval shows up in the number.
+
+    "Plausible candidate" is approximated as sharing a sender or a title with an
+    expected document, which is exactly how this corpus places its near-misses.
     """
     by_marker = {doc.marker: doc for doc in CORPUS}
     for case in CASES:
@@ -101,7 +111,9 @@ def test_every_case_competes_against_more_documents_than_its_cut() -> None:
         senders = {doc.sender_name for doc in expected}
         titles = {doc.title for doc in expected}
         pool = {doc.marker for doc in CORPUS if doc.sender_name in senders or doc.title in titles}
-        assert len(pool) > case.k, (
-            f"{case.name}: {len(pool)} candidates for a cut of {case.k} — "
-            "the whole pool fits inside k, so recall cannot fall"
+        blind_recall = min(case.k, len(pool)) / len(pool)
+        assert blind_recall <= MAX_BLIND_RECALL, (
+            f"{case.name}: {len(pool)} candidates for a cut of {case.k}, so a "
+            f"retriever ranking at RANDOM already scores {blind_recall:.2f}. "
+            "The case has too little room to fall to measure anything."
         )
