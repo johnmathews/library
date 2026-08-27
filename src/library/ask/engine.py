@@ -16,7 +16,7 @@ import json
 import logging
 import re
 from collections.abc import Awaitable, Callable, Iterator
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from decimal import Decimal, InvalidOperation
 from typing import Any, Literal, cast
@@ -29,13 +29,18 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import LLMBackend, Settings
-from library.documents_service import apply_document_update, revalidate_after_edit
+from library.documents_service import (
+    apply_document_update,
+    header_fields_changed,
+    revalidate_after_edit,
+)
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
+from library.jobs import embed_document
 from library.llm import subscription
 from library.models import Document, DocumentComment, DocumentPage, ReviewStatus
 from library.schemas import DocumentUpdate
-from library.search import DocumentFilters, semantic_search
+from library.search import DocumentFilters, search_reach, semantic_search
 from library.series import serialise_summary, summarize_series
 from library.structured_query import CONCEPT_TO_KIND, query_documents
 
@@ -93,15 +98,19 @@ Rules:
 - Cite the document id(s) your answer relies on, inline like [#42]. If you
   cannot answer from the tool results, say so plainly and cite nothing — do
   not list the documents you looked at and rejected.
-- Some tool results carry a "coverage" block (query_documents and
-  compare_to_series). If `excluded` is non-empty, the rows do NOT account for
-  every matching document, and you MUST say so in your answer with the reason
-  and the count — e.g. "EUR 1,240 across 14 bills; 3 more matched but no
-  amount could be read from them". If `needs_review` is above zero, you
-  MUST also say so: those documents are included in the number but the
-  archive flagged their extracted metadata as unreliable. Never present a
-  partial total as if it were complete, and never silently drop the flagged
-  documents to make the caveat go away.
+- Some tool results carry a "coverage" block (query_documents,
+  compare_to_series, and semantic_search). If `excluded` is non-empty, the
+  rows do NOT account for every matching document, and you MUST say so in
+  your answer with the reason and the count — e.g. "EUR 1,240 across 14
+  bills; 3 more matched but no amount could be read from them". If
+  `needs_review` is above zero, you MUST also say so: those documents are
+  included in the number but the archive flagged their extracted metadata as
+  unreliable. Never present a partial total as if it were complete, and never
+  silently drop the flagged documents to make the caveat go away.
+  semantic_search's coverage instead carries `unembedded`: if it is above
+  zero, matching documents exist but are not in the search index, and you
+  MUST say your answer is incomplete for that technical reason — never
+  report this as the archive being silent on the topic.
 - Be concise and direct. Dutch terms may answer English questions and vice
   versa (e.g. "reiskostenvergoeding" = travel allowance).
 """
@@ -194,7 +203,17 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Hybrid full-text + semantic search over document contents. Returns "
             "the most relevant documents with a matching excerpt. Use for "
-            "questions about what documents say."
+            "questions about what documents say. Accepts the same metadata "
+            "filters as query_documents — scope the search whenever the question "
+            "names a sender, a kind or a date range, rather than searching the "
+            "whole archive and hoping. The result carries a `coverage` block: "
+            "`matched` is how many documents passed your filters, `returned` how "
+            "many came back, and `unembedded` how many matched documents have no "
+            "search index at all. Read it before concluding anything is absent — "
+            "`matched: 0` means your filters excluded everything (widen them and "
+            "retry), whereas `matched: 40, returned: 0` means those 40 documents "
+            "genuinely do not say this. A non-zero `unembedded` means the answer "
+            "is incomplete for a technical reason: say so. " + _kind_hint()
         ),
         "input_schema": {
             "type": "object",
@@ -202,7 +221,18 @@ TOOLS: list[dict[str, Any]] = [
                 "query": {
                     "type": "string",
                     "description": "Natural-language description of what to find.",
-                }
+                },
+                **_FILTER_PROPERTIES,
+                "top_k": {
+                    "type": "integer",
+                    "description": (
+                        "How many documents to return. Omit for the archive's "
+                        "configured default; raise it for 'find every document "
+                        "that mentions X' questions. Values above the configured "
+                        "maximum are clamped, so asking for more than the "
+                        "archive allows is safe."
+                    ),
+                },
             },
             "required": ["query"],
         },
@@ -511,13 +541,25 @@ async def _run_semantic_search(
     except EmbeddingError as exc:
         logger.warning("ask semantic_search embedding failed: %s", exc)
         return {"error": "semantic search is temporarily unavailable"}
+    # Reuse the shared helper (§8.2) rather than forking it, then strip
+    # `review_status`: the tool's schema does not offer that property (see
+    # `_REVIEW_STATUS_PROPERTY`'s comment), but `_filters_from_args` reads it
+    # from `args` unconditionally, so a model that emits it anyway would get a
+    # silently narrowed search this tool's coverage block cannot explain — it
+    # reports reach (`matched`/`returned`/`unembedded`), not exclusion
+    # reasons. Stripping here, rather than teaching the helper to omit it,
+    # keeps `_filters_from_args` one shared mapping for every caller.
+    filters = replace(_filters_from_args(args), review_status=None)
+    top_k = _top_k_arg(args.get("top_k"), settings)
     hits = await semantic_search(
         session,
         query=query,
         query_embedding=embedding,
-        top_k=settings.retrieve_top_k,
+        filters=filters,
+        top_k=top_k,
         chunks_per_doc=settings.retrieve_chunks_per_doc,
     )
+    reach = await search_reach(session, filters)
     rows = []
     for hit in hits:
         cited.add(hit.document.id)
@@ -537,7 +579,48 @@ async def _run_semantic_search(
                 ),
             }
         )
-    return {"results": rows}
+    return {
+        "results": rows,
+        "coverage": {
+            "matched": reach.matched,
+            "returned": len(rows),
+            "unembedded": reach.unembedded,
+        },
+    }
+
+
+def _top_k_arg(value: object, settings: Settings) -> int:
+    """A usable ``top_k`` from a tool argument, clamped into range.
+
+    The clamp is load-bearing, not defensive tidiness. ``semantic_search`` ends
+    in ``ranked[:top_k]``, so a NEGATIVE top_k slices from the end and silently
+    returns a near-arbitrary subset — measured against seven matching documents,
+    ``top_k=-1`` returns six hits and ``top_k=-3`` returns four, with no error
+    anywhere. A model that emits a negative value would get a quietly wrong
+    answer, so the floor of 1 is what stops that.
+
+    A non-integer degrades to the configured default rather than raising: the
+    schema's ``"type": "integer"`` steers the model but does not bind it, and a
+    hallucinated ``"ten"`` must not 500 inside the tool loop. This mirrors how
+    ``_review_status_arg`` treats an unrecognised enum value.
+
+    The missing-argument path (``value is None``) is clamped through the same
+    ``ask_search_max_top_k`` ceiling as an explicit value, not returned as-is.
+    ``settings.retrieve_top_k`` is an independently configured operator knob
+    (``LIBRARY_RETRIEVE_TOP_K``) with no relationship to the ceiling, so
+    without this an operator setting it above the ceiling would give the
+    model's default call MORE depth than an explicit ``top_k`` at the ceiling
+    is even allowed to ask for — the opposite of what a ceiling means.
+    """
+    if value is None:
+        requested = settings.retrieve_top_k
+    else:
+        try:
+            requested = int(str(value).strip())
+        except (TypeError, ValueError):
+            logger.info("ask: ignoring non-integer top_k %r", value)
+            requested = settings.retrieve_top_k
+    return max(1, min(requested, settings.ask_search_max_top_k))
 
 
 def _text_arg(value: object) -> str | None:
@@ -762,6 +845,10 @@ async def _run_update_document(
     # edit gets flagged) — same behaviour as the PATCH route (documents.py).
     await revalidate_after_edit(session, document, settings)
     await session.commit()
+    # Same reasoning as the PATCH route (api/documents.py): a header-field edit
+    # invalidates this document's stored chunk headers.
+    if header_fields_changed(edited):
+        await embed_document.defer_async(document_id=document_id)
     return {"status": "updated", "document_id": document_id, "updated_fields": edited}
 
 

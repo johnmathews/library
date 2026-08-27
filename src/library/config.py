@@ -139,6 +139,12 @@ class Settings(BaseSettings):
     # that crowd the cap are the table-heavy ones document view exists for.
     ask_max_answer_tokens: int = 8192
     ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.
+    # Ceiling on the `top_k` Ask's semantic_search tool may request. The model
+    # can raise depth for "find every document mentioning X", but not without
+    # bound: top_k also drives semantic_search's candidate pool
+    # (`max(top_k * 5, 50)`), and every returned document costs
+    # retrieve_chunks_per_doc passages of context.
+    ask_search_max_top_k: int = 50
 
     # --- OpenTelemetry (metrics only) --------------------------------------
     #

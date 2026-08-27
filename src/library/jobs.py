@@ -302,6 +302,31 @@ async def run_markdown(session: AsyncSession, document: Document) -> None:
     await maybe_repair_extraction(session, document, settings)
 
 
+def compose_context_header(document: Document) -> str:
+    """The document-identity line prepended to every chunk before embedding.
+
+    ``sender · date · kind · title``, omitting whatever the document lacks. A
+    chunk reading only ``Bedrag EUR 0,00`` otherwise carries no trace of who
+    sent it, when, or what it is, so a question naming any of those cannot
+    match it on meaning (finding #6).
+
+    Returns ``""`` for a document with none of the four — the caller must then
+    embed the bare text rather than a leading blank line.
+
+    Safe to read these attributes here: ``sender`` and ``kind`` are
+    ``lazy="selectin"`` and ``get_sessionmaker()`` sets ``expire_on_commit=
+    False``, so they survive the commits ``_record_embed_event`` performs.
+    Verified by execution, not assumed — do not "defensively" re-fetch.
+    """
+    parts = (
+        document.sender.name if document.sender else None,
+        document.document_date.isoformat() if document.document_date else None,
+        document.kind.slug if document.kind else None,
+        document.title,
+    )
+    return " · ".join(part for part in parts if part)
+
+
 async def _record_embed_event(
     session: AsyncSession, document: Document, event: str, detail: dict[str, object]
 ) -> None:
@@ -374,9 +399,13 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
         await _record_embed_event(session, document, "embedding_skipped", {"reason": "no_text"})
         return
 
+    # The header is embedded WITH each chunk but stored beside it, so retrieval
+    # matches on document identity while Ask's excerpt stays the raw passage.
+    context_header = compose_context_header(document)
     texts = [text for text, _ in chunk_records] + [text for text, _ in comment_records]
+    embed_inputs = [f"{context_header}\n\n{text}" if context_header else text for text in texts]
     try:
-        vectors = await embed_texts(texts, settings=settings)
+        vectors = await embed_texts(embed_inputs, settings=settings)
     except EmbeddingError as exc:
         await _record_embed_event(
             session, document, "embedding_failed", {"error": str(exc), "chunks": len(texts)}
@@ -396,6 +425,7 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
                 chunk_index=index,
                 page_number=page_number,
                 text=text,
+                context_header=context_header or None,
                 embedding=vector,
                 comment_id=None,
             )
@@ -409,6 +439,7 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
                 chunk_index=len(chunk_records) + offset,
                 page_number=None,
                 text=text,
+                context_header=context_header or None,
                 embedding=vector,
                 comment_id=comment_id,
             )

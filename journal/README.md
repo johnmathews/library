@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-157 entries.
+160 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,9 @@ CI checks it is current.
 
 ## August 2026
 
+- **2026-08-27** — [Retrieval reach](260827-retrieval-reach.md)
+- **2026-08-27** — [Retrieval reach — final fix wave](260827-retrieval-reach-fix-wave.md)
+- **2026-08-27** — [A CLI help test that only rich's colour decision could fail](260827-help-test-ansi-ci-divergence.md)
 - **2026-08-27** — [Disclosure eval](260827-disclosure-eval.md)
 - **2026-08-26** — [Series comparisons report what they narrow away](260826-series-coverage.md)
 - **2026-08-26** — [Ask answer trustworthiness](260826-ask-answer-trustworthiness.md)

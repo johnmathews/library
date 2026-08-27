@@ -4,6 +4,7 @@ import asyncio
 import datetime
 import hashlib
 import io
+import re
 import uuid
 from collections.abc import Iterator
 
@@ -1149,3 +1150,113 @@ def test_sweep_encrypted_apply_skips_collision(
     # The locked document is untouched (still the encrypted sha).
     rows = fetch_all(cli_data_dir, "SELECT sha256 FROM documents WHERE id = :id", id=document_id)
     assert rows == [(old_sha,)]
+
+
+# CSI sequences (colour/style) and OSC sequences (hyperlinks), which is
+# everything rich emits into help output.
+_ANSI = re.compile(r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
+
+
+def _unstyled(output: str) -> str:
+    """Strip ANSI escapes so an option name is one contiguous run of text.
+
+    Typer renders ``--help`` through rich, and rich's ``OptionHighlighter``
+    matches BOTH of its patterns on the same token: ``--only`` as an option and
+    ``-only`` as a short switch. The two spans overlap, so rich closes and
+    reopens a style between the hyphens and the rendered bytes read
+    ``-\x1b[...m-only``. A plain ``"--only" in output`` check therefore depends
+    on whether rich decided to style at all — which is a property of the
+    environment, not of the CLI.
+    """
+    return _ANSI.sub("", output)
+
+
+def test_unstyled_strips_the_escapes_rich_emits() -> None:
+    """`_unstyled` removes CSI styling and OSC hyperlinks, and nothing else."""
+    assert _unstyled("\x1b[1m--only\x1b[0m") == "--only"
+    assert _unstyled("-\x1b[36m-only\x1b[0m TEXT") == "--only TEXT"
+    assert _unstyled("\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\") == "link"
+    assert _unstyled("plain --only text") == "plain --only text"
+
+
+def test_eval_recall_help_lists_ask_and_write_baseline() -> None:
+    """``--help`` lists every flag, whatever rich decides about styling.
+
+    Asserted against de-styled text because rich's ``OptionHighlighter`` matches
+    both of its patterns on the same token — ``--only`` as a long option and
+    ``-only`` as a short switch — and the overlapping spans put an escape
+    sequence between the two hyphens when styling is on. Checking the raw output
+    for ``"--only"`` therefore tests rich's environment detection rather than the
+    CLI, which is how the first version of this test passed here and failed on CI.
+    """
+    result = runner.invoke(app, ["eval-recall", "--help"])
+    assert result.exit_code == 0, result.output
+    output = _unstyled(result.output)
+    assert "--only" in output
+    assert "--ask" in output
+    assert "--write-baseline" in output
+
+
+def test_eval_recall_help_lists_its_flags_when_rich_is_styling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same, with styling forced on — the rendering CI actually produces.
+
+    Deliberately one-directional. Forcing styling ON is reliable; forcing it OFF
+    is not, because ``NO_COLOR`` suppresses colour while rich still emits bold
+    and dim, so there is no portable way to demand escape-free output. This test
+    asserts styling happened and that the flags survive stripping; the test above
+    covers whatever the ambient environment does.
+    """
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    # rich refuses to style a dumb terminal even under FORCE_COLOR, and CI
+    # runners vary in what they set TERM to, so pin all three inputs rather
+    # than leaving the assertion below at the mercy of the ambient value.
+    monkeypatch.setenv("TERM", "xterm-256color")
+
+    result = runner.invoke(app, ["eval-recall", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "\x1b[" in result.output, "FORCE_COLOR did not make rich style its output"
+
+    output = _unstyled(result.output)
+    assert "--only" in output
+    assert "--ask" in output
+    assert "--write-baseline" in output
+
+
+def test_eval_recall_ask_with_write_baseline_exits_without_seeding(
+    cli_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--ask and --write-baseline measure different things (Ask citations vs raw
+    retrieval); combining them must be refused before any seeding happens, not
+    merely before the baseline file is overwritten."""
+
+    async def _fail_if_called(session: object) -> dict[str, int]:
+        raise AssertionError("_seed_corpus must not run when the guard rejects the flags")
+
+    monkeypatch.setattr(cli_module, "_seed_corpus", _fail_if_called)
+
+    result = runner.invoke(app, ["eval-recall", "--ask", "--write-baseline"])
+    assert result.exit_code == 1, result.output
+    assert "--write-baseline records retrieval recall; drop --ask" in result.output
+
+
+def test_eval_recall_only_with_write_baseline_exits_without_seeding(
+    cli_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--write-baseline writes ``{v.case: v.recall for v in verdicts}`` over
+    the FILTERED case list, so combining it with --only would silently
+    clobber every other case's recorded recall with nothing — must be
+    refused before any seeding happens, same as the --ask guard above."""
+
+    async def _fail_if_called(session: object) -> dict[str, int]:
+        raise AssertionError("_seed_corpus must not run when the guard rejects the flags")
+
+    monkeypatch.setattr(cli_module, "_seed_corpus", _fail_if_called)
+
+    result = runner.invoke(
+        app, ["eval-recall", "--only", "sender-named-bare-chunk", "--write-baseline"]
+    )
+    assert result.exit_code == 1, result.output
+    assert "--write-baseline must cover every case; drop --only" in result.output

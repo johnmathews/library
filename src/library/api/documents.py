@@ -19,9 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
-from library.documents_service import apply_document_update, revalidate_after_edit
+from library.documents_service import (
+    apply_document_update,
+    header_fields_changed,
+    revalidate_after_edit,
+)
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
-from library.jobs import extract_document
+from library.jobs import embed_document, extract_document
 from library.models import (
     Document,
     DocumentComment,
@@ -428,6 +432,12 @@ async def update_document(
     # this is what clears a fixed "implausible date" warning on save.
     await revalidate_after_edit(session, document, get_settings())
     await session.commit()
+    # A chunk's context_header embeds the sender/date/kind/title, so editing one
+    # makes every stored header for this document stale. Deferred only when a
+    # header field actually changed — a summary or tags edit must not wake the
+    # embedder. Mirrors how api/comments.py re-embeds on a comment write.
+    if header_fields_changed(edited):
+        await embed_document.defer_async(document_id=document.id)
     await _refresh_for_detail(session, document)
     return await _detail(session, document)
 
