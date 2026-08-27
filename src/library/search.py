@@ -23,7 +23,7 @@ from datetime import date
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import Select, case, cast, func, or_, select
+from sqlalchemy import Select, case, cast, exists, func, or_, select
 from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -426,6 +426,41 @@ async def _chunks_per_document(
     for document_id, text in (await session.execute(statement)).all():
         texts.setdefault(document_id, []).append(text)
     return texts
+
+
+@dataclass(frozen=True, slots=True)
+class SearchReach:
+    """How much of the archive a filtered content search could even see.
+
+    ``matched`` counts documents passing the caller's filters. ``unembedded``
+    counts how many of those have no chunks at all — they are invisible to the
+    vector retriever no matter what the query says, so a caller that reports
+    only ``matched`` cannot distinguish "the archive does not say this" from
+    "the documents exist but were never indexed" (finding #14).
+    """
+
+    matched: int
+    unembedded: int
+
+
+async def search_reach(session: AsyncSession, filters: DocumentFilters) -> SearchReach:
+    """Both counts in one round trip, via a conditional aggregate.
+
+    Same shape as ``structured_query.count_coverage``: ``count(*)`` for the
+    denominator and a ``FILTER``ed ``count(*)`` for the subset, so the two can
+    never disagree by being computed against different snapshots.
+    """
+    has_chunk = exists().where(DocumentChunk.document_id == Document.id)
+    statement = (
+        select(
+            func.count().label("matched"),
+            func.count().filter(~has_chunk).label("unembedded"),
+        )
+        .select_from(Document)
+        .where(*filter_conditions(filters))
+    )
+    row = (await session.execute(statement)).one()
+    return SearchReach(matched=int(row.matched), unembedded=int(row.unembedded))
 
 
 async def semantic_search(

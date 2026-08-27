@@ -35,7 +35,7 @@ from library.extraction.extractor import estimate_cost_usd
 from library.llm import subscription
 from library.models import Document, DocumentComment, DocumentPage, ReviewStatus
 from library.schemas import DocumentUpdate
-from library.search import DocumentFilters, semantic_search
+from library.search import DocumentFilters, search_reach, semantic_search
 from library.series import serialise_summary, summarize_series
 from library.structured_query import CONCEPT_TO_KIND, query_documents
 
@@ -194,7 +194,17 @@ TOOLS: list[dict[str, Any]] = [
         "description": (
             "Hybrid full-text + semantic search over document contents. Returns "
             "the most relevant documents with a matching excerpt. Use for "
-            "questions about what documents say."
+            "questions about what documents say. Accepts the same metadata "
+            "filters as query_documents — scope the search whenever the question "
+            "names a sender, a kind or a date range, rather than searching the "
+            "whole archive and hoping. The result carries a `coverage` block: "
+            "`matched` is how many documents passed your filters, `returned` how "
+            "many came back, and `unembedded` how many matched documents have no "
+            "search index at all. Read it before concluding anything is absent — "
+            "`matched: 0` means your filters excluded everything (widen them and "
+            "retry), whereas `matched: 40, returned: 0` means those 40 documents "
+            "genuinely do not say this. A non-zero `unembedded` means the answer "
+            "is incomplete for a technical reason: say so. " + _kind_hint()
         ),
         "input_schema": {
             "type": "object",
@@ -202,7 +212,8 @@ TOOLS: list[dict[str, Any]] = [
                 "query": {
                     "type": "string",
                     "description": "Natural-language description of what to find.",
-                }
+                },
+                **_FILTER_PROPERTIES,
             },
             "required": ["query"],
         },
@@ -511,13 +522,16 @@ async def _run_semantic_search(
     except EmbeddingError as exc:
         logger.warning("ask semantic_search embedding failed: %s", exc)
         return {"error": "semantic search is temporarily unavailable"}
+    filters = _filters_from_args(args)
     hits = await semantic_search(
         session,
         query=query,
         query_embedding=embedding,
+        filters=filters,
         top_k=settings.retrieve_top_k,
         chunks_per_doc=settings.retrieve_chunks_per_doc,
     )
+    reach = await search_reach(session, filters)
     rows = []
     for hit in hits:
         cited.add(hit.document.id)
@@ -537,7 +551,14 @@ async def _run_semantic_search(
                 ),
             }
         )
-    return {"results": rows}
+    return {
+        "results": rows,
+        "coverage": {
+            "matched": reach.matched,
+            "returned": len(rows),
+            "unembedded": reach.unembedded,
+        },
+    }
 
 
 def _text_arg(value: object) -> str | None:
