@@ -3,6 +3,11 @@ name = "library"
 version = "0.1.0"
 description = "Self-hosted document archive"
 readme = "README.md"
+# The support floor. The interpreter dev, CI and the image all actually use is
+# pinned in `.python-version` (3.13), matching the `python:3.13-slim-bookworm`
+# runtime in the Dockerfile. Without that pin `uv` resolves the newest
+# interpreter satisfying this range, which put CI on 3.14 while production ran
+# 3.13 — the gating suite was not running on the Python being shipped.
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
