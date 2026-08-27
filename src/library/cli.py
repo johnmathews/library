@@ -8,12 +8,12 @@ loop-bound connection.
 
 import asyncio
 import hashlib
-import re
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import typer
 from anthropic import AsyncAnthropic
@@ -1048,8 +1048,32 @@ def eval_extractions(
 
 
 def _redact_database_url(url: str) -> str:
-    """``url`` with any embedded password blanked, safe to print to a terminal."""
-    return re.sub(r"(://[^:/@]+:)[^@]*(@)", r"\1***\2", url)
+    """``url`` with any embedded password blanked, safe to print to a terminal.
+
+    Deliberately NOT ``sqlalchemy.engine.make_url(url).render_as_string(
+    hide_password=True)``, despite that being the obvious "use the tested
+    library" fix for the regex this replaced. Verified by executing both
+    against ``postgresql+asyncpg://lib:p@ss@db/library`` (a password
+    containing an unencoded ``@``): SQLAlchemy's own URL parser
+    (``sqlalchemy.engine.url._parse_url``) uses a ``[^@]*`` password group in
+    its regex, which — exactly like the hand-rolled regex this function used
+    to use — stops at the FIRST unescaped ``@``, parsing password ``"p"`` and
+    host ``"ss@db"``. ``render_as_string(hide_password=True)`` then still
+    renders ``...lib:***@ss@db/library``, leaking the password's tail ``ss``
+    as part of what it thinks is the host — the exact bug this function
+    exists to fix, reproduced through the "fix".
+
+    ``urllib.parse.urlsplit`` does not have this problem: per RFC 3986 it
+    splits an authority's userinfo from its host at the LAST ``@``, so
+    ``rpartition("@")`` on the netloc always finds the real host boundary
+    regardless of how many literal ``@`` characters the password contains.
+    """
+    parts = urlsplit(url)
+    userinfo, sep, hostport = parts.netloc.rpartition("@")
+    if sep and ":" in userinfo:
+        user, _, _password = userinfo.partition(":")
+        userinfo = f"{user}:***"
+    return urlunsplit(parts._replace(netloc=f"{userinfo}{sep}{hostport}"))
 
 
 async def _seed_scenario(session: AsyncSession, scenario: Scenario) -> None:
@@ -1101,7 +1125,8 @@ async def _seed_scenario(session: AsyncSession, scenario: Scenario) -> None:
 
 
 def _coverage_from_turn_messages(turn_messages: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """The last ``coverage`` block a ``tool_result`` handed the model this turn.
+    """Every ``coverage`` block a ``tool_result`` handed the model this turn,
+    merged into one ``{"excluded": ..., "needs_review": ...}`` block.
 
     Reuses ``ask.engine._tool_result_payloads`` to decode ``tool_result``
     blocks rather than re-implementing the unwrap here: that helper already
@@ -1115,16 +1140,93 @@ def _coverage_from_turn_messages(turn_messages: list[dict[str, Any]]) -> dict[st
 
     Deliberately does NOT recompute coverage from the seeded rows: the eval
     must grade what the model was actually shown and did with it, not
-    re-derive the arithmetic and grade that against itself. The LAST
-    coverage-carrying result is used because a turn may call more than one
-    tool before answering, and the final call is the one most likely behind
-    the final answer.
+    re-derive the arithmetic and grade that against itself.
+
+    **Merged, not last-wins.** A turn may call more than one coverage-carrying
+    tool before answering — e.g. `sum_amount` (which reports a real gap) then
+    a follow-up `list` to enumerate matches (whose own coverage can be empty,
+    since `list`'s only exclusion reason is `over_limit`). Keeping only the
+    final block would grade the model against the emptier one and pass the
+    scenario vacuously even though an earlier tool result DID carry a gap.
+    Merging takes, for each `excluded` reason, the maximum count reported by
+    any coverage-carrying result this turn, and the maximum `needs_review`
+    likewise — so a gap surfaced by an earlier call is never silently
+    overwritten by a later, unrelated one. ``matched``/``included`` are
+    dropped from the merged result: they are not aggregable across different
+    tools' different aggregates, and ``library.ask.disclosure_eval.score``
+    only ever reads ``excluded`` and ``needs_review``.
     """
-    coverage: dict[str, Any] | None = None
+    excluded: dict[str, int] = {}
+    needs_review = 0
+    seen_any = False
     for payload in _tool_result_payloads(turn_messages):
-        if isinstance(payload, dict) and isinstance(payload.get("coverage"), dict):
-            coverage = payload["coverage"]
-    return coverage
+        if not (isinstance(payload, dict) and isinstance(payload.get("coverage"), dict)):
+            continue
+        seen_any = True
+        coverage = payload["coverage"]
+        raw_excluded = coverage.get("excluded")
+        if isinstance(raw_excluded, dict):
+            for reason, count in raw_excluded.items():
+                try:
+                    count_int = int(count)
+                except (TypeError, ValueError):
+                    continue
+                if count_int > excluded.get(reason, 0):
+                    excluded[reason] = count_int
+        try:
+            needs_review_candidate = int(coverage.get("needs_review") or 0)
+        except (TypeError, ValueError):
+            needs_review_candidate = 0
+        needs_review = max(needs_review, needs_review_candidate)
+    if not seen_any:
+        return None
+    return {"excluded": excluded, "needs_review": needs_review}
+
+
+def _run_eval_disclosure[T](operation: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """Run ``operation`` inside an outer, connection-level transaction that is
+    unconditionally rolled back — the standard SQLAlchemy "external
+    transaction" pattern for tests, used here (unlike plain ``_run``) because
+    this command's session touches the CONFIGURED database, which may be the
+    real archive, by default.
+
+    ``engine.connect()`` + ``conn.begin()`` opens one transaction on the
+    connection; the session is then bound to that connection with
+    ``join_transaction_mode="create_savepoint"``, so every ``session.begin()``
+    the ORM does internally (autobegin, and each explicit
+    ``session.commit()``/``session.rollback()``) opens and closes a SAVEPOINT
+    nested inside that outer transaction instead of touching it. A stray
+    ``commit()`` anywhere in the call graph — the write tool's confirmation-
+    gated ``_run_update_document``, a future code path, a bug in this eval
+    itself — can therefore only release a savepoint; it cannot make the outer
+    transaction's writes visible to any other connection, and the ``finally``
+    below rolls that outer transaction back regardless of how ``operation``
+    returns. This makes "nothing is committed" a structural property of HOW
+    the session is bound, rather than resting solely on the per-scenario
+    ``session.rollback()`` in ``eval_disclosure`` — which stays in place
+    below as a second, independent safety net that also clears each
+    scenario's savepoint so one scenario's seeded rows can never bleed into
+    the next scenario's query results.
+    """
+
+    async def _execute() -> T:
+        engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                outer_transaction = await conn.begin()
+                try:
+                    async with AsyncSession(
+                        bind=conn,
+                        expire_on_commit=False,
+                        join_transaction_mode="create_savepoint",
+                    ) as session:
+                        return await operation(session)
+                finally:
+                    await outer_transaction.rollback()
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_execute())
 
 
 @app.command("eval-disclosure")
@@ -1140,17 +1242,19 @@ def eval_disclosure(
     existing test asserts only that the *instruction* is present in the system
     prompt; this checks that behaviour actually follows it.
 
-    **Nothing is committed.** Each scenario's documents are ``session.add``ed
-    and ``flush``ed inside one transaction, then rolled back in a ``finally`` —
-    the configured database is left exactly as it was, on success or failure
-    alike. Read-only questions never commit: the only ``commit()`` reachable
-    from ``run_ask`` is inside the confirmation-gated write tool
-    (``_run_update_document`` in ``ask/engine.py``), which refuses
+    **Nothing is committed**, structurally. ``_run_eval_disclosure`` binds the
+    session to a connection already holding an outer transaction
+    (``join_transaction_mode="create_savepoint"``), so ANY ``commit()``
+    reachable from ``run_ask`` — in practice only the confirmation-gated write
+    tool, ``_run_update_document`` in ``ask/engine.py``, which refuses
     ``confirmed=true`` unless the target document was *previewed* in an
-    EARLIER turn — and that set is seeded only from replayed thread history,
-    never from anything done in the current turn. A single fresh question
-    with no history cannot satisfy that, so the write tool cannot commit here
-    (verified by reading ``ask/engine.py``, not assumed).
+    EARLIER turn that a single fresh question can never satisfy (verified by
+    reading ``ask/engine.py``, not assumed) — can only release a SAVEPOINT,
+    never the outer transaction. That outer transaction is rolled back
+    unconditionally once every scenario has run. Each scenario's seeded
+    documents are additionally ``session.add``ed, ``flush``ed and rolled back
+    per-scenario on top of that, so the configured database is left exactly
+    as it was on success or failure alike, by two independent mechanisms.
 
     Requires working Claude credentials — CI has none, which is why this is a
     command rather than a test. Point ``LIBRARY_CLAUDE_CONFIG_DIR`` at a
@@ -1171,9 +1275,11 @@ def eval_disclosure(
         typer.echo(f"error: no scenario named {only!r}")
         raise typer.Exit(code=1)
 
-    async def operation(session: AsyncSession) -> list[DisclosureVerdict | None]:
+    async def operation(
+        session: AsyncSession,
+    ) -> list[tuple[dict[str, Any] | None, DisclosureVerdict | None]]:
         client = AsyncAnthropic(api_key="unused")  # subscription backend never calls the API
-        verdicts: list[DisclosureVerdict | None] = []
+        results: list[tuple[dict[str, Any] | None, DisclosureVerdict | None]] = []
         for scenario in scenarios:
             try:
                 await _seed_scenario(session, scenario)
@@ -1190,31 +1296,38 @@ def eval_disclosure(
                         f"SKIP {scenario.name} — no coverage block reached the model "
                         f"(tools used: {result.used_tools or ['none']})"
                     )
-                    verdicts.append(None)
+                    results.append((None, None))
                     continue
-                verdicts.append(
-                    score(
-                        scenario.name,
-                        coverage,
-                        result.answer,
-                        expect_disclosure=scenario.expect_disclosure,
-                    )
+                verdict = score(
+                    scenario.name,
+                    coverage,
+                    result.answer,
+                    expect_disclosure=scenario.expect_disclosure,
                 )
+                results.append((coverage, verdict))
             finally:
                 # Runs on success, failure, and exception alike: no scenario's
                 # synthetic documents may ever reach the configured database.
                 await session.rollback()
-        return verdicts
+        return results
 
-    verdicts = _run(operation)
+    results = _run_eval_disclosure(operation)
 
     failures = 0
     skipped = 0
-    for scenario, verdict in zip(scenarios, verdicts, strict=True):
+    for scenario, (coverage, verdict) in zip(scenarios, results, strict=True):
         if verdict is None:
             skipped += 1
             continue
-        typer.echo(f"{'PASS' if verdict.passed else 'FAIL'} {scenario.name}")
+        # Coverage prints on PASS as well as FAIL: a recorded "N passed" line
+        # is otherwise unauditable after the fact — nothing distinguishes "the
+        # model disclosed a real gap" from "there was nothing to disclose".
+        excluded = coverage.get("excluded", {}) if coverage else {}
+        needs_review = coverage.get("needs_review", 0) if coverage else 0
+        status = "PASS" if verdict.passed else "FAIL"
+        typer.echo(
+            f"{status} {scenario.name}  coverage: excluded={excluded} needs_review={needs_review}"
+        )
         if not verdict.passed:
             failures += 1
             if verdict.missing:

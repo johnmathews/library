@@ -103,6 +103,34 @@ def cli_database_url(api_database_url: str, monkeypatch: pytest.MonkeyPatch) -> 
     get_settings.cache_clear()
 
 
+def test_redact_database_url_blanks_a_present_password() -> None:
+    redacted = cli_module._redact_database_url(
+        "postgresql+asyncpg://library:secret@db:5432/library"
+    )
+    assert "secret" not in redacted
+    assert redacted == "postgresql+asyncpg://library:***@db:5432/library"
+
+
+def test_redact_database_url_tolerates_no_password() -> None:
+    redacted = cli_module._redact_database_url("postgresql+asyncpg://library@db:5432/library")
+    assert redacted == "postgresql+asyncpg://library@db:5432/library"
+
+
+def test_redact_database_url_does_not_leak_a_password_containing_an_unencoded_at() -> None:
+    """The regex this replaced anchored on the first unencoded '@', so a
+    password containing one leaked its own tail: 'lib:p@ss@db/library'
+    redacted to '...lib:***@ss@db/library'. `_redact_database_url` uses
+    `urlsplit`'s `rpartition("@")` (the LAST '@' in the netloc, per RFC 3986)
+    instead, so the whole password is blanked regardless of what characters
+    it contains. (`sqlalchemy.engine.make_url` was tried first and rejected:
+    its own URL parser has the identical "first @" bug, verified by executing
+    it against this exact string — see the function's docstring.)"""
+    redacted = cli_module._redact_database_url("postgresql+asyncpg://lib:p@ss@db/library")
+    assert "p@ss" not in redacted
+    assert "ss@db" not in redacted
+    assert redacted == "postgresql+asyncpg://lib:***@db/library"
+
+
 def unique_username() -> str:
     return f"cli-{uuid.uuid4().hex[:12]}"
 
