@@ -1462,11 +1462,49 @@ def eval_disclosure(
 RECALL_BASELINE_PATH: Path = Path(__file__).resolve().parents[2] / "recall-baseline.json"
 
 
-def _report_recall(verdicts: list[RecallVerdict], *, write_baseline: bool) -> None:
+#: A recorded baseline is only comparable to a run over a haystack of roughly the
+#: same size: every case scores against the WHOLE documents table, so the same
+#: corpus faces 259 competing archive documents on a populated instance and
+#: almost none on a fresh CI stack. Below this relative difference the drift is
+#: ordinary archive growth; above it, a delta says more about the haystack than
+#: about retrieval.
+BASELINE_ARCHIVE_TOLERANCE: float = 0.10
+
+
+def _warn_if_baseline_is_not_comparable(recorded: dict[str, Any], archive_documents: int) -> None:
+    """Say so when the baseline was measured against a different-sized archive."""
+    measured_against = recorded.get("measured_against")
+    if not isinstance(measured_against, dict):
+        typer.echo(
+            "note: the recorded baseline predates provenance, so the archive it was "
+            "measured against is unknown and the deltas below may not be comparable"
+        )
+        return
+
+    previous = measured_against.get("archive_documents")
+    if not isinstance(previous, int):
+        return
+
+    drift = abs(archive_documents - previous)
+    if drift > max(5, int(BASELINE_ARCHIVE_TOLERANCE * previous)):
+        typer.echo(
+            f"WARNING: baseline was measured against {previous} archive documents, "
+            f"this run against {archive_documents}. Every case scores over the whole "
+            "documents table, so the deltas below reflect the change in haystack as "
+            "much as any change in retrieval. Re-record the baseline here before "
+            "trusting them."
+        )
+
+
+def _report_recall(
+    verdicts: list[RecallVerdict], *, write_baseline: bool, archive_documents: int
+) -> None:
     """Print each case, the mean, and the delta against the recorded baseline."""
     baseline: dict[str, float] = {}
     if RECALL_BASELINE_PATH.exists():
-        baseline = json.loads(RECALL_BASELINE_PATH.read_text()).get("cases", {})
+        recorded = json.loads(RECALL_BASELINE_PATH.read_text())
+        baseline = recorded.get("cases", {})
+        _warn_if_baseline_is_not_comparable(recorded, archive_documents)
 
     failures = 0
     for verdict in verdicts:
@@ -1485,7 +1523,17 @@ def _report_recall(verdicts: list[RecallVerdict], *, write_baseline: bool) -> No
     if write_baseline:
         RECALL_BASELINE_PATH.write_text(
             json.dumps(
-                {"mean": mean, "cases": {v.case: v.recall for v in verdicts}},
+                {
+                    "mean": mean,
+                    "cases": {v.case: v.recall for v in verdicts},
+                    # Provenance, so a later reader can tell a real retrieval
+                    # delta from a change of haystack. Counts only: this file is
+                    # committed to a public repository.
+                    "measured_against": {
+                        "archive_documents": archive_documents,
+                        "corpus_documents": len(CORPUS),
+                    },
+                },
                 indent=2,
                 sort_keys=True,
             )
@@ -1556,7 +1604,12 @@ def eval_recall(
         typer.echo(f"error: no case named {only!r}")
         raise typer.Exit(code=1)
 
-    async def operation(session: AsyncSession) -> list[RecallVerdict]:
+    async def operation(session: AsyncSession) -> tuple[list[RecallVerdict], int]:
+        # Counted BEFORE seeding, so it is the real archive this ran against and
+        # not the archive plus the fixtures.
+        archive_documents = int(
+            (await session.execute(select(func.count()).select_from(Document))).scalar_one()
+        )
         ids_by_marker = await _seed_corpus(session)
         client = AsyncAnthropic(api_key="unused")  # subscription backend never calls the API
         verdicts: list[RecallVerdict] = []
@@ -1582,10 +1635,10 @@ def eval_recall(
                 )
                 retrieved = [hit.document.id for hit in hits]
             verdicts.append(score_recall(case.name, expected, retrieved, k=case.k))
-        return verdicts
+        return verdicts, archive_documents
 
-    verdicts = _run_rolled_back(operation)
-    _report_recall(verdicts, write_baseline=write_baseline)
+    verdicts, archive_documents = _run_rolled_back(operation)
+    _report_recall(verdicts, write_baseline=write_baseline, archive_documents=archive_documents)
 
 
 def main() -> None:

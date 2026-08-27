@@ -4,9 +4,11 @@ import asyncio
 import datetime
 import hashlib
 import io
+import json
 import re
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 
 import pikepdf
 import pytest
@@ -17,6 +19,8 @@ from sqlalchemy.pool import NullPool
 from typer.testing import CliRunner
 
 import library.cli as cli_module
+from library.ask.recall_eval import RecallVerdict, score_recall
+from library.ask.recall_scenarios import CORPUS
 from library.auth.passwords import verify_password
 from library.cli import app
 from library.config import get_settings
@@ -1260,3 +1264,84 @@ def test_eval_recall_only_with_write_baseline_exits_without_seeding(
     )
     assert result.exit_code == 1, result.output
     assert "--write-baseline must cover every case; drop --only" in result.output
+
+
+def _passing_verdict(case: str = "control-unique-term") -> RecallVerdict:
+    return score_recall(case, [1], [1], k=10)
+
+
+def test_report_recall_records_the_archive_it_measured_against(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The baseline carries the haystack size, not just the scores.
+
+    Every case scores over the whole documents table, so the same corpus is
+    much harder on a populated archive than on a fresh CI stack. Without this,
+    a delta between the two reads as a retrieval change.
+    """
+    baseline = tmp_path / "recall-baseline.json"
+    monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
+
+    cli_module._report_recall([_passing_verdict()], write_baseline=True, archive_documents=259)
+
+    recorded = json.loads(baseline.read_text())
+    assert recorded["measured_against"]["archive_documents"] == 259
+    assert recorded["measured_against"]["corpus_documents"] == len(CORPUS)
+    # Counts only — this file is committed to a public repository.
+    assert "database" not in recorded["measured_against"]
+    assert "@" not in baseline.read_text()
+
+
+def test_report_recall_warns_when_the_baseline_archive_differs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline = tmp_path / "recall-baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "mean": 1.0,
+                "cases": {"control-unique-term": 1.0},
+                "measured_against": {"archive_documents": 259, "corpus_documents": 90},
+            }
+        )
+    )
+    monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
+
+    cli_module._report_recall([_passing_verdict()], write_baseline=False, archive_documents=3)
+
+    output = capsys.readouterr().out
+    assert "WARNING: baseline was measured against 259 archive documents" in output
+    assert "this run against 3" in output
+
+
+def test_report_recall_is_quiet_when_the_archive_only_drifted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Ordinary archive growth must not cry wolf, or the warning gets ignored."""
+    baseline = tmp_path / "recall-baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "mean": 1.0,
+                "cases": {"control-unique-term": 1.0},
+                "measured_against": {"archive_documents": 259, "corpus_documents": 90},
+            }
+        )
+    )
+    monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
+
+    cli_module._report_recall([_passing_verdict()], write_baseline=False, archive_documents=272)
+
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_report_recall_notes_a_baseline_recorded_before_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline = tmp_path / "recall-baseline.json"
+    baseline.write_text(json.dumps({"mean": 1.0, "cases": {"control-unique-term": 1.0}}))
+    monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
+
+    cli_module._report_recall([_passing_verdict()], write_baseline=False, archive_documents=259)
+
+    assert "predates provenance" in capsys.readouterr().out

@@ -15,8 +15,12 @@ pytestmark = pytest.mark.integration
 
 #: Below this the haystack stops discriminating: with ten retrieval slots and a
 #: corpus of thirty, "retrieved" and "exists" converge and recall@10 is near 1.0
-#: for everything. Chosen as a floor, not a target — growing the corpus is fine.
-MIN_CORPUS_SIZE = 45
+#: for everything. Raised from 45 to 80 after the first real baseline came out at
+#: mean 0.917 — above the 0.90 ceiling docs/ask.md holds this corpus to — because
+#: five of six cases expected a single document against only three or four
+#: distractors and so could not lose recall at k=10 at all. Chosen as a floor,
+#: not a target: growing the corpus is fine.
+MIN_CORPUS_SIZE = 80
 
 
 def test_markers_are_unique() -> None:
@@ -62,3 +66,42 @@ def test_breadth_case_is_unreachable_at_the_shipped_top_k() -> None:
     breadth = next(c for c in CASES if c.name == "breadth-many-mentions")
     assert len(breadth.expected_markers) > get_settings().retrieve_top_k
     assert breadth.k >= len(breadth.expected_markers)
+
+
+def test_only_the_control_case_expects_a_single_document() -> None:
+    """A single expected document at k=10 has almost no resolution.
+
+    It scores 1.0 unless ten documents outrank it, which no cluster in this
+    corpus is meant to achieve. Multi-target cases lose recall gradually, which
+    is what makes a delta readable. `control-unique-term` is exempt by design:
+    it is the canary, and it is supposed to sit at 1.00.
+    """
+    for case in CASES:
+        if case.name == "control-unique-term":
+            assert len(case.expected_markers) == 1
+            continue
+        assert len(case.expected_markers) >= 2, (
+            f"{case.name} expects one document at k={case.k}; it cannot lose recall"
+        )
+
+
+def test_every_case_competes_against_more_documents_than_its_cut() -> None:
+    """Each case needs more plausible candidates than its rank cut.
+
+    If a case's whole candidate pool fits inside k, every candidate is retrieved
+    and recall is 1.0 whatever the embedder does. "Plausible candidate" is
+    approximated as sharing a sender or a title with an expected document —
+    which is exactly how this corpus places its near-misses.
+    """
+    by_marker = {doc.marker: doc for doc in CORPUS}
+    for case in CASES:
+        if case.name == "control-unique-term":
+            continue
+        expected = [by_marker[marker] for marker in case.expected_markers]
+        senders = {doc.sender_name for doc in expected}
+        titles = {doc.title for doc in expected}
+        pool = {doc.marker for doc in CORPUS if doc.sender_name in senders or doc.title in titles}
+        assert len(pool) > case.k, (
+            f"{case.name}: {len(pool)} candidates for a cut of {case.k} — "
+            "the whole pool fits inside k, so recall cannot fall"
+        )
