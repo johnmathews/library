@@ -8,10 +8,12 @@ loop-bound connection.
 
 import asyncio
 import hashlib
+import json
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from urllib.parse import urlsplit, urlunsplit
 
@@ -24,9 +26,12 @@ from sqlalchemy.pool import NullPool
 from library.ask.disclosure_eval import DisclosureVerdict, score
 from library.ask.disclosure_scenarios import SCENARIOS, Scenario
 from library.ask.engine import _tool_result_payloads, run_ask
+from library.ask.recall_eval import RecallVerdict, score_recall
+from library.ask.recall_scenarios import CASES, CORPUS
 from library.auth.passwords import hash_password
 from library.auth.service import revoke_all_credentials
 from library.config import get_settings
+from library.embedding.client import embed_query
 from library.extraction.apply import get_or_create_user_recipient
 from library.extraction.eval import (
     combine,
@@ -48,6 +53,7 @@ from library.jobs import (
     job_app,
     markdown_document,
     process_document,
+    run_embed,
 )
 from library.models import (
     Document,
@@ -62,6 +68,7 @@ from library.models import (
     User,
 )
 from library.pdf_unlock import PdfLockedError, unlock_pdf
+from library.search import DocumentFilters, semantic_search
 from library.storage import path_for, remove, store
 
 app: typer.Typer = typer.Typer(
@@ -1124,6 +1131,67 @@ async def _seed_scenario(session: AsyncSession, scenario: Scenario) -> None:
     await session.flush()
 
 
+async def _seed_corpus(session: AsyncSession) -> dict[str, int]:
+    """Seed the recall corpus and embed it; return marker -> document id.
+
+    Embeds through ``jobs.run_embed`` rather than inserting chunks directly, so
+    the eval measures the pipeline that actually runs in production — chunking
+    rules, comment handling, and (once Plan B Task 7 lands) the contextual
+    header. A hand-rolled insert here would quietly stop measuring #6 the moment
+    it shipped, which is the one thing this eval exists to measure.
+
+    Flushes but never commits: the caller runs inside ``_run_rolled_back``.
+    ``run_embed`` calls ``session.commit()`` internally to record its ingestion
+    event; under that binding a commit can only release a SAVEPOINT.
+    """
+    senders: dict[str, Sender] = {}
+    kinds: dict[str, Kind] = {}
+    ids_by_marker: dict[str, int] = {}
+
+    for doc in CORPUS:
+        sender = senders.get(doc.sender_name)
+        if sender is None:
+            sender = (
+                await session.execute(select(Sender).where(Sender.name == doc.sender_name))
+            ).scalar_one_or_none()
+            if sender is None:
+                sender = Sender(name=doc.sender_name)
+                session.add(sender)
+                await session.flush()
+            senders[doc.sender_name] = sender
+
+        kind = kinds.get(doc.kind_slug)
+        if kind is None:
+            kind = (
+                await session.execute(select(Kind).where(Kind.slug == doc.kind_slug))
+            ).scalar_one()
+            kinds[doc.kind_slug] = kind
+
+        marker = f"recall-eval:{doc.marker}"
+        document = Document(
+            sha256=hashlib.sha256(marker.encode()).hexdigest(),
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            title=doc.title,
+            sender=sender,
+            kind=kind,
+            document_date=doc.document_date,
+            ocr_text=doc.body,
+        )
+        session.add(document)
+        await session.flush()
+        ids_by_marker[doc.marker] = document.id
+
+    await session.flush()
+    for doc in CORPUS:
+        seeded_document = await session.get(Document, ids_by_marker[doc.marker])
+        if seeded_document is None:  # pragma: no cover - just flushed it
+            raise RuntimeError(f"seeded document for {doc.marker} vanished")
+        await run_embed(session, seeded_document)
+
+    return ids_by_marker
+
+
 def _coverage_from_turn_messages(turn_messages: list[dict[str, Any]]) -> dict[str, Any] | None:
     """Every ``coverage`` block a ``tool_result`` handed the model this turn,
     merged into one ``{"excluded": ..., "needs_review": ...}`` block.
@@ -1183,7 +1251,7 @@ def _coverage_from_turn_messages(turn_messages: list[dict[str, Any]]) -> dict[st
     return {"excluded": excluded, "needs_review": needs_review}
 
 
-def _run_eval_disclosure[T](operation: Callable[[AsyncSession], Awaitable[T]]) -> T:
+def _run_rolled_back[T](operation: Callable[[AsyncSession], Awaitable[T]]) -> T:
     """Run ``operation`` inside an outer, connection-level transaction that is
     unconditionally rolled back — the standard SQLAlchemy "external
     transaction" pattern for tests, used here (unlike plain ``_run``) because
@@ -1203,7 +1271,7 @@ def _run_eval_disclosure[T](operation: Callable[[AsyncSession], Awaitable[T]]) -
     below rolls that outer transaction back regardless of how ``operation``
     returns. This makes "nothing is committed" a structural property of HOW
     the session is bound, rather than resting solely on the per-scenario
-    ``session.rollback()`` in ``eval_disclosure`` — which stays in place
+    ``session.rollback()`` in the eval commands — which stays in place
     below as a second, independent safety net that also clears each
     scenario's savepoint so one scenario's seeded rows can never bleed into
     the next scenario's query results.
@@ -1242,7 +1310,7 @@ def eval_disclosure(
     existing test asserts only that the *instruction* is present in the system
     prompt; this checks that behaviour actually follows it.
 
-    **Nothing is committed**, structurally. ``_run_eval_disclosure`` binds the
+    **Nothing is committed**, structurally. ``_run_rolled_back`` binds the
     session to a connection already holding an outer transaction
     (``join_transaction_mode="create_savepoint"``), so ANY ``commit()``
     reachable from ``run_ask`` — in practice only the confirmation-gated write
@@ -1311,7 +1379,7 @@ def eval_disclosure(
                 await session.rollback()
         return results
 
-    results = _run_eval_disclosure(operation)
+    results = _run_rolled_back(operation)
 
     failures = 0
     skipped = 0
@@ -1341,6 +1409,108 @@ def eval_disclosure(
     )
     if failures:
         raise typer.Exit(code=1)
+
+
+#: Where the last recorded run is kept, so a retrieval change is a measured
+#: delta rather than a recollection. Repo root, not `docs/`: it is machine-
+#: written data, and `scripts/check_docs.py` scans `docs/` for prose.
+RECALL_BASELINE_PATH: Path = Path(__file__).resolve().parents[2] / "recall-baseline.json"
+
+
+def _report_recall(verdicts: list[RecallVerdict], *, write_baseline: bool) -> None:
+    """Print each case, the mean, and the delta against the recorded baseline."""
+    baseline: dict[str, float] = {}
+    if RECALL_BASELINE_PATH.exists():
+        baseline = json.loads(RECALL_BASELINE_PATH.read_text()).get("cases", {})
+
+    failures = 0
+    for verdict in verdicts:
+        status = "PASS" if verdict.passed else "FAIL"
+        previous = baseline.get(verdict.case)
+        delta = "" if previous is None else f"  ({verdict.recall - previous:+.2f} vs baseline)"
+        typer.echo(f"{status} {verdict.case}  recall@{verdict.k}={verdict.recall:.2f}{delta}")
+        if not verdict.passed:
+            failures += 1
+            typer.echo(f"  missed document ids: {list(verdict.missed)}")
+            typer.echo(f"  retrieved instead:   {list(verdict.retrieved)}")
+
+    mean = sum(v.recall for v in verdicts) / len(verdicts) if verdicts else 0.0
+    typer.echo(f"{len(verdicts) - failures} passed, {failures} failed, mean recall {mean:.3f}")
+
+    if write_baseline:
+        RECALL_BASELINE_PATH.write_text(
+            json.dumps(
+                {"mean": mean, "cases": {v.case: v.recall for v in verdicts}},
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        typer.echo(f"wrote baseline to {RECALL_BASELINE_PATH}")
+
+    if failures:
+        raise typer.Exit(code=1)
+
+
+@app.command("eval-recall")
+def eval_recall(
+    only: str | None = typer.Option(None, "--only", help="Run just this case by name."),
+    write_baseline: bool = typer.Option(
+        False, "--write-baseline", help="Overwrite recall-baseline.json with this run."
+    ),
+) -> None:
+    """Measure whether retrieval reaches the documents that answer a question.
+
+    Seeds the synthetic corpus (``library.ask.recall_scenarios``), embeds it
+    through the real pipeline, runs each case's question through
+    ``semantic_search``, and scores recall@k.
+
+    **Nothing is committed**, structurally — see ``_run_rolled_back``.
+
+    Requires a reachable bge-m3 sidecar (``LIBRARY_EMBEDDING_SERVICE_URL``); it
+    does NOT require Claude credentials, which is why it can run in CI while
+    ``eval-disclosure`` cannot. Note TEI publishes no arm64 image, so this does
+    not run on an Apple Silicon laptop — use the deployed host or the nightly
+    workflow.
+
+    Exits non-zero if any case fails, so it can gate a release by hand.
+    """
+    settings = get_settings()
+    typer.echo(
+        f"WARNING: eval-recall seeds {len(CORPUS)} synthetic documents into "
+        f"{_redact_database_url(settings.database_url)} and embeds them. "
+        "Every seed is flushed then rolled back — nothing is committed."
+    )
+
+    cases = [case for case in CASES if only is None or case.name == only]
+    if not cases:
+        typer.echo(f"error: no case named {only!r}")
+        raise typer.Exit(code=1)
+
+    async def operation(session: AsyncSession) -> list[RecallVerdict]:
+        ids_by_marker = await _seed_corpus(session)
+        verdicts: list[RecallVerdict] = []
+        for case in cases:
+            embedding = await embed_query(case.question, settings=settings)
+            hits = await semantic_search(
+                session,
+                query=case.question,
+                query_embedding=embedding,
+                filters=DocumentFilters(),
+                top_k=case.k,
+            )
+            verdicts.append(
+                score_recall(
+                    case.name,
+                    [ids_by_marker[marker] for marker in case.expected_markers],
+                    [hit.document.id for hit in hits],
+                    k=case.k,
+                )
+            )
+        return verdicts
+
+    verdicts = _run_rolled_back(operation)
+    _report_recall(verdicts, write_baseline=write_baseline)
 
 
 def main() -> None:
