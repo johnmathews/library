@@ -1,6 +1,9 @@
 """Unit tests for the disclosure scorer (no DB, no network — runs in CI)."""
 
+import inspect
+
 from library.ask.disclosure_eval import DisclosureVerdict, mentions_count, score
+from library.ask.disclosure_scenarios import Scenario
 
 
 def test_mentions_count_accepts_a_numeral() -> None:
@@ -160,3 +163,130 @@ def test_score_tolerates_a_malformed_excluded_block() -> None:
         expect_disclosure=True,
     )
     assert verdict.missing == ("needs_review=1",)
+
+
+# ----------------------------------------------------------------------------
+# Scenario data (library.ask.disclosure_scenarios) — pure, so testable in CI
+# even though the live command that drives them needs credentials it doesn't.
+# ----------------------------------------------------------------------------
+
+
+def test_scenarios_cover_both_polarities() -> None:
+    """At least one control scenario, or the eval only rewards hedging."""
+    from library.ask.disclosure_scenarios import SCENARIOS
+
+    assert any(s.expect_disclosure for s in SCENARIOS)
+    assert any(not s.expect_disclosure for s in SCENARIOS)
+
+
+def test_scenario_names_are_unique() -> None:
+    from library.ask.disclosure_scenarios import SCENARIOS
+
+    names = [s.name for s in SCENARIOS]
+    assert len(names) == len(set(names))
+
+
+def test_every_scenario_seeds_documents_and_asks_something() -> None:
+    from library.ask.disclosure_scenarios import SCENARIOS
+
+    for scenario in SCENARIOS:
+        assert scenario.docs, f"{scenario.name} seeds nothing"
+        assert scenario.question.strip(), f"{scenario.name} asks nothing"
+
+
+def _scenario(name: str) -> Scenario:
+    from library.ask.disclosure_scenarios import SCENARIOS
+
+    for scenario in SCENARIOS:
+        if scenario.name == name:
+            return scenario
+    raise AssertionError(f"no scenario named {name!r}")
+
+
+def test_utilities_no_amount_seeds_the_split_the_scenario_name_promises() -> None:
+    """A test that just checks 'docs is non-empty' pins nothing about THIS
+    scenario's shape; the split (3 with an amount, 2 without) is exactly what
+    makes `no_amount=2` the expected disclosure."""
+    scenario = _scenario("utilities-no-amount")
+    with_amount = [d for d in scenario.docs if d.amount is not None]
+    without_amount = [d for d in scenario.docs if d.amount is None]
+    assert len(with_amount) == 3
+    assert len(without_amount) == 2
+    # One sender, one kind — otherwise a sender/kind filter could itself
+    # change which documents are 'matched', muddying what's being tested.
+    assert {d.sender_name for d in scenario.docs} == {"Aurora Utilities (disclosure-eval fixture)"}
+    assert {d.kind_slug for d in scenario.docs} == {"utility-bill"}
+
+
+def test_spend_excludes_quotes_seeds_amount_bearing_invoices_and_quotes() -> None:
+    """`quote_not_spend` only fires for quotes that themselves carry an
+    amount — an amountless quote would be counted under `no_amount` instead,
+    silently testing the wrong exclusion reason."""
+    scenario = _scenario("spend-excludes-quotes")
+    invoices = [d for d in scenario.docs if d.kind_slug == "invoice"]
+    quotes = [d for d in scenario.docs if d.kind_slug == "quote"]
+    assert len(invoices) == 2
+    assert len(quotes) == 3
+    assert all(d.amount is not None for d in scenario.docs)
+    assert {d.sender_name for d in scenario.docs} == {"Ledger Movers (disclosure-eval fixture)"}
+
+
+def test_flagged_amounts_has_exactly_one_needs_review_document() -> None:
+    from library.models import ReviewStatus
+
+    scenario = _scenario("flagged-amounts")
+    flagged = [d for d in scenario.docs if d.review_status is ReviewStatus.NEEDS_REVIEW]
+    assert len(flagged) == 1
+    # Every document must carry an amount: `needs_review` is a count within
+    # `included`, so an amountless flagged document would land in `no_amount`
+    # instead and never contribute to the count this scenario is testing.
+    assert all(d.amount is not None for d in scenario.docs)
+
+
+def test_list_truncation_seeds_more_documents_than_the_real_query_limit() -> None:
+    """Pinned against the actual production default, not a copy of it — if
+    `structured_query.query_documents`'s `limit` default ever changes, this
+    scenario must still seed enough documents to overflow it."""
+    from library.structured_query import query_documents
+
+    real_default_limit = inspect.signature(query_documents).parameters["limit"].default
+    scenario = _scenario("list-truncation")
+    assert len(scenario.docs) > real_default_limit
+    assert all(d.amount is not None for d in scenario.docs), (
+        "an amountless document here would also be dropped for no_amount, "
+        "muddying which reason the truncation is attributed to"
+    )
+
+
+def test_series_other_currency_seeds_a_dominant_and_a_minority_currency_bucket() -> None:
+    """The dominant currency bucket must meet `series_min_documents` (else the
+    series is 'insufficient data' rather than a real comparison), and the
+    minority bucket is what `other_currency` should report as dropped."""
+    from library.config import get_settings
+
+    scenario = _scenario("series-other-currency")
+    by_currency: dict[str | None, int] = {}
+    for doc in scenario.docs:
+        by_currency[doc.currency] = by_currency.get(doc.currency, 0) + 1
+    assert sorted(by_currency.values(), reverse=True) == [3, 2]
+    dominant_count = max(by_currency.values())
+    assert dominant_count >= get_settings().series_min_documents
+    # One sender, one kind: otherwise the currency split could be attributed
+    # to `other_series_group` instead of `other_currency`.
+    assert len({d.sender_name for d in scenario.docs}) == 1
+    assert len({d.kind_slug for d in scenario.docs}) == 1
+
+
+def test_complete_no_gaps_is_a_genuine_control_with_nothing_to_disclose() -> None:
+    """A control scenario that itself has a gap (a missing amount, a flagged
+    document, a second currency) would make `expect_disclosure=False` wrong,
+    not the model. This pins that the control really has nothing to hide."""
+    from library.models import ReviewStatus
+
+    scenario = _scenario("complete-no-gaps")
+    assert scenario.expect_disclosure is False
+    assert all(d.amount is not None for d in scenario.docs)
+    assert all(d.review_status is not ReviewStatus.NEEDS_REVIEW for d in scenario.docs)
+    assert len({d.currency for d in scenario.docs}) == 1
+    assert len({d.kind_slug for d in scenario.docs}) == 1
+    assert len({d.sender_name for d in scenario.docs}) == 1

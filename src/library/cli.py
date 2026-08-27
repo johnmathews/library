@@ -8,9 +8,12 @@ loop-bound connection.
 
 import asyncio
 import hashlib
+import json
+import re
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from decimal import Decimal
 from typing import Any
 
 import typer
@@ -19,6 +22,9 @@ from sqlalchemy import BigInteger, Select, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from library.ask.disclosure_eval import DisclosureVerdict, score
+from library.ask.disclosure_scenarios import SCENARIOS, Scenario
+from library.ask.engine import run_ask
 from library.auth.passwords import hash_password
 from library.auth.service import revoke_all_credentials
 from library.config import get_settings
@@ -48,6 +54,7 @@ from library.models import (
     Document,
     DocumentChunk,
     DocumentPage,
+    DocumentSource,
     DocumentStatus,
     EvalRun,
     IngestionEvent,
@@ -1039,6 +1046,195 @@ def eval_extractions(
         fw = "-" if scores["flywheel_accuracy"] is None else f"{scores['flywheel_accuracy']:.0%}"
         jg = "-" if scores["judge_agreement"] is None else f"{scores['judge_agreement']:.0%}"
         typer.echo(f"{field:<18}{fw:>12}{jg:>12}{scores['n']:>6}")
+
+
+def _redact_database_url(url: str) -> str:
+    """``url`` with any embedded password blanked, safe to print to a terminal."""
+    return re.sub(r"(://[^:/@]+:)[^@]*(@)", r"\1***\2", url)
+
+
+async def _seed_scenario(session: AsyncSession, scenario: Scenario) -> None:
+    """Seed one scenario's documents into ``session`` and flush — never commit.
+
+    Looks up each sender by name / each kind by slug rather than blindly
+    inserting, so a scenario re-run against the same (rolled-back-to) database
+    reuses rows instead of tripping ``Sender.name``'s unique constraint. Kinds
+    are never created here: they are seeded by migration, and a typo'd slug
+    should fail loudly (``scalar_one``) rather than silently invent a new kind.
+    """
+    senders: dict[str, Sender] = {}
+    kinds: dict[str, Kind] = {}
+    for index, seed_doc in enumerate(scenario.docs):
+        sender = senders.get(seed_doc.sender_name)
+        if sender is None:
+            sender = (
+                await session.execute(select(Sender).where(Sender.name == seed_doc.sender_name))
+            ).scalar_one_or_none()
+            if sender is None:
+                sender = Sender(name=seed_doc.sender_name)
+                session.add(sender)
+                await session.flush()
+            senders[seed_doc.sender_name] = sender
+
+        kind = kinds.get(seed_doc.kind_slug)
+        if kind is None:
+            kind = (
+                await session.execute(select(Kind).where(Kind.slug == seed_doc.kind_slug))
+            ).scalar_one()
+            kinds[seed_doc.kind_slug] = kind
+
+        marker = f"disclosure-eval:{scenario.name}:{index}"
+        session.add(
+            Document(
+                sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                mime_type="application/pdf",
+                source=DocumentSource.UPLOAD,
+                title=seed_doc.title,
+                sender=sender,
+                kind=kind,
+                document_date=seed_doc.document_date,
+                amount_total=Decimal(seed_doc.amount) if seed_doc.amount is not None else None,
+                currency=seed_doc.currency,
+                review_status=seed_doc.review_status,
+            )
+        )
+    await session.flush()
+
+
+def _coverage_from_turn_messages(turn_messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """The last ``coverage`` block a ``tool_result`` handed the model this turn.
+
+    Decodes ``tool_result`` blocks the same way ``ask.engine._tool_result_payloads``
+    does (``content`` is a JSON-encoded string on both backends — verified by
+    reading ``ask/engine.py`` and ``llm/subscription.py``'s block translation).
+    Deliberately does NOT recompute coverage from the seeded rows: the eval
+    must grade what the model was actually shown and did with it, not
+    re-derive the arithmetic and grade that against itself. The LAST
+    coverage-carrying result is used because a turn may call more than one
+    tool before answering, and the final call is the one most likely behind
+    the final answer.
+    """
+    coverage: dict[str, Any] | None = None
+    for message in turn_messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for block in content:
+            if not isinstance(block, dict) or block.get("type") != "tool_result":
+                continue
+            raw = block.get("content")
+            if not isinstance(raw, str):
+                continue
+            try:
+                payload = json.loads(raw)
+            except (ValueError, TypeError):
+                continue
+            if isinstance(payload, dict) and isinstance(payload.get("coverage"), dict):
+                coverage = payload["coverage"]
+    return coverage
+
+
+@app.command("eval-disclosure")
+def eval_disclosure(
+    only: str | None = typer.Option(None, "--only", help="Run just this scenario by name."),
+) -> None:
+    """Measure whether Ask's model discloses incomplete coverage.
+
+    Seeds synthetic scenarios (``library.ask.disclosure_scenarios``), drives
+    the real Ask loop against each with ``run_ask(..., backend="subscription")``,
+    and scores the answer with ``library.ask.disclosure_eval.score`` for
+    whether it owned up to the gaps its own ``coverage`` block reported. Every
+    existing test asserts only that the *instruction* is present in the system
+    prompt; this checks that behaviour actually follows it.
+
+    **Nothing is committed.** Each scenario's documents are ``session.add``ed
+    and ``flush``ed inside one transaction, then rolled back in a ``finally`` —
+    the configured database is left exactly as it was, on success or failure
+    alike. Read-only questions never commit: the only ``commit()`` reachable
+    from ``run_ask`` is inside the confirmation-gated write tool
+    (``_run_update_document`` in ``ask/engine.py``), which refuses
+    ``confirmed=true`` unless the target document was *previewed* in an
+    EARLIER turn — and that set is seeded only from replayed thread history,
+    never from anything done in the current turn. A single fresh question
+    with no history cannot satisfy that, so the write tool cannot commit here
+    (verified by reading ``ask/engine.py``, not assumed).
+
+    Requires working Claude credentials — CI has none, which is why this is a
+    command rather than a test. Point ``LIBRARY_CLAUDE_CONFIG_DIR`` at a
+    directory with valid credentials (e.g. ``~/.claude``) when running
+    locally.
+
+    Exits non-zero if any scenario fails, so it can gate a release by hand.
+    """
+    settings = get_settings()
+    typer.echo(
+        f"WARNING: eval-disclosure seeds synthetic documents into "
+        f"{_redact_database_url(settings.database_url)} to drive live Ask questions. "
+        "Every seed is flushed then rolled back — nothing is committed."
+    )
+
+    scenarios = [s for s in SCENARIOS if only is None or s.name == only]
+    if not scenarios:
+        typer.echo(f"error: no scenario named {only!r}")
+        raise typer.Exit(code=1)
+
+    async def operation(session: AsyncSession) -> list[DisclosureVerdict | None]:
+        client = AsyncAnthropic(api_key="unused")  # subscription backend never calls the API
+        verdicts: list[DisclosureVerdict | None] = []
+        for scenario in scenarios:
+            try:
+                await _seed_scenario(session, scenario)
+                result = await run_ask(
+                    session,
+                    question=scenario.question,
+                    settings=settings,
+                    client=client,
+                    backend="subscription",
+                )
+                coverage = _coverage_from_turn_messages(result.turn_messages)
+                if coverage is None:
+                    typer.echo(
+                        f"SKIP {scenario.name} — no coverage block reached the model "
+                        f"(tools used: {result.used_tools or ['none']})"
+                    )
+                    verdicts.append(None)
+                    continue
+                verdicts.append(
+                    score(
+                        scenario.name,
+                        coverage,
+                        result.answer,
+                        expect_disclosure=scenario.expect_disclosure,
+                    )
+                )
+            finally:
+                # Runs on success, failure, and exception alike: no scenario's
+                # synthetic documents may ever reach the configured database.
+                await session.rollback()
+        return verdicts
+
+    verdicts = _run(operation)
+
+    failures = 0
+    skipped = 0
+    for scenario, verdict in zip(scenarios, verdicts, strict=True):
+        if verdict is None:
+            skipped += 1
+            continue
+        typer.echo(f"{'PASS' if verdict.passed else 'FAIL'} {scenario.name}")
+        if not verdict.passed:
+            failures += 1
+            if verdict.missing:
+                typer.echo(f"  missing disclosure: {', '.join(verdict.missing)}")
+            if verdict.unexpected:
+                typer.echo(f"  unexpected hedge: {', '.join(verdict.unexpected)}")
+            typer.echo(f"  answer: {verdict.answer}")
+
+    typer.echo(
+        f"{len(scenarios) - failures - skipped} passed, {failures} failed, {skipped} skipped"
+    )
+    if failures:
+        raise typer.Exit(code=1)
 
 
 def main() -> None:
