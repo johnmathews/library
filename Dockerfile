@@ -84,6 +84,13 @@ ENV LIBRARY_GIT_SHA=$GIT_SHA
 # a real summary (or a null-pct placeholder) so the published image ships one.
 COPY --chown=app:app pyproject.toml coverage-summar[y].json /app/
 
+# The recorded retrieval-recall baseline, read by `library eval-recall` at
+# RECALL_BASELINE_PATH (`Path(__file__).parents[2]` → /app here). Without it the
+# command runs but prints no delta against the last recorded run, which is the
+# whole point of having recorded one. Same bracket-glob trick as above so a
+# checkout with no baseline yet still builds.
+COPY --chown=app:app recall-baselin[e].json /app/
+
 # The markdown docs the admin Architecture view renders read-only at runtime
 # (Settings.docs_dir default `docs` → /app/docs). Top-level *.md only — the
 # heavy docs/ subtrees are kept out of the build context by .dockerignore.

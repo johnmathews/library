@@ -501,6 +501,18 @@ jobs:
               | sort -u)" = healthy ]; do sleep 3; done'
       - name: SPA shell is served at /
         run: curl -fsS http://localhost:8000/ | grep -q '<div id="app">'
+      # The recorded recall baseline has to be IN the image, not merely in the
+      # repository: `library eval-recall` reads it from RECALL_BASELINE_PATH
+      # (/app here) and silently reports no delta when it is missing. It was
+      # missing for exactly that reason once — committed, deployed, and absent
+      # from the running container — so this asserts the COPY rather than
+      # trusting it.
+      - name: The recall baseline shipped in the image
+        run: |
+          docker compose exec -T api test -f /app/recall-baseline.json
+          docker compose exec -T api python -c \
+            "import json; d=json.load(open('/app/recall-baseline.json')); \
+             assert d['cases'] and 'archive_documents' in d['measured_against'], d"
       - name: Create a user
         run: |
           echo 'smoke-password-123' | docker compose exec -T api \
