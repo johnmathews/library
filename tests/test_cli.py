@@ -1174,3 +1174,23 @@ def test_eval_recall_ask_with_write_baseline_exits_without_seeding(
     result = runner.invoke(app, ["eval-recall", "--ask", "--write-baseline"])
     assert result.exit_code == 1, result.output
     assert "--write-baseline records retrieval recall; drop --ask" in result.output
+
+
+def test_eval_recall_only_with_write_baseline_exits_without_seeding(
+    cli_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--write-baseline writes ``{v.case: v.recall for v in verdicts}`` over
+    the FILTERED case list, so combining it with --only would silently
+    clobber every other case's recorded recall with nothing — must be
+    refused before any seeding happens, same as the --ask guard above."""
+
+    async def _fail_if_called(session: object) -> dict[str, int]:
+        raise AssertionError("_seed_corpus must not run when the guard rejects the flags")
+
+    monkeypatch.setattr(cli_module, "_seed_corpus", _fail_if_called)
+
+    result = runner.invoke(
+        app, ["eval-recall", "--only", "sender-named-bare-chunk", "--write-baseline"]
+    )
+    assert result.exit_code == 1, result.output
+    assert "--write-baseline must cover every case; drop --only" in result.output

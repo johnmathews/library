@@ -72,13 +72,27 @@ def test_editing_a_non_header_field_defers_nothing(
     assert _embed_jobs(api_database_url, doc_id) == []
 
 
-def test_a_patch_that_changes_nothing_defers_nothing(
-    api_client: TestClient, api_database_url: str
-) -> None:
+def test_an_empty_patch_defers_nothing(api_client: TestClient, api_database_url: str) -> None:
     doc_id = seed_document(api_database_url, "hdr-noop")
     response = api_client.patch(f"/api/documents/{doc_id}", json={})
     assert response.status_code == 200, response.text
     assert _embed_jobs(api_database_url, doc_id) == []
+
+
+def test_a_same_value_patch_still_defers_a_reembed(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Known-and-accepted, not a regression: ``PATCH`` with a header field set
+    to its CURRENT value still counts as "changed" and still defers a
+    re-embed. ``apply_document_update``'s semantics are deliberately not being
+    tightened here to distinguish a same-value write from a real change — this
+    test only documents the behaviour so a future reader does not mistake it
+    for a bug."""
+    doc_id = seed_document(api_database_url, "hdr-samevalue", sender_name="Same Name BV")
+    assert _embed_jobs(api_database_url, doc_id) == []
+    response = api_client.patch(f"/api/documents/{doc_id}", json={"sender": "Same Name BV"})
+    assert response.status_code == 200, response.text
+    assert len(_embed_jobs(api_database_url, doc_id)) == 1
 
 
 # ---- composition + storage ----

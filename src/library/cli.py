@@ -1189,6 +1189,51 @@ async def _seed_corpus(session: AsyncSession) -> dict[str, int]:
             raise RuntimeError(f"seeded document for {doc.marker} vanished")
         await run_embed(session, seeded_document)
 
+    # Post-condition: ``run_embed`` is fail-open by design (a disabled or
+    # unreachable embedder is recorded as an ``IngestionEvent`` and swallowed,
+    # never raised — see its docstring). Left unchecked, a seed that embedded
+    # nothing still "succeeds": every case's ``semantic_search`` call then
+    # falls back to the FTS leg of RRF alone and prints plausible-looking
+    # per-case numbers that are not measuring retrieval recall at all. The
+    # corpus guarantees exactly one chunk per document, so "every seeded
+    # document has at least one chunk" is the right — and cheap — assertion.
+    seeded_ids = list(ids_by_marker.values())
+    chunk_count_rows = (
+        await session.execute(
+            select(DocumentChunk.document_id, func.count())
+            .where(DocumentChunk.document_id.in_(seeded_ids))
+            .group_by(DocumentChunk.document_id)
+        )
+    ).all()
+    # NOT `dict(result.tuples())`: `Result` (and its `.tuples()`, which just
+    # returns `self`) exposes a `.keys()` method, so the plain `dict()`
+    # builtin takes that as a signal to use the MAPPING protocol — calling
+    # `result[key]` for each column name — rather than iterating (key, value)
+    # pairs, and raises exactly this `TypeError`. `.all()` first materialises
+    # plain `Row` objects with no `.keys()` of their own, so the comprehension
+    # below iterates pairs as intended. Verified by execution: the `dict(...
+    # .tuples())` form failed every seed-corpus test with this exact error.
+    counts_by_document_id: dict[int, int] = {  # noqa: C416 -- dict() rejects Row's tuple typing
+        document_id: count for document_id, count in chunk_count_rows
+    }
+    unembedded_markers = [
+        marker
+        for marker, document_id in ids_by_marker.items()
+        if not counts_by_document_id.get(document_id)
+    ]
+    if unembedded_markers:
+        raise RuntimeError(
+            f"_seed_corpus: {len(unembedded_markers)} of {len(ids_by_marker)} seeded "
+            f"documents produced no chunks after run_embed "
+            f"({', '.join(unembedded_markers[:5])}"
+            f"{', ...' if len(unembedded_markers) > 5 else ''}). run_embed is fail-open, "
+            "so this almost always means the embedder is disabled "
+            "(LIBRARY_EMBEDDING_ENABLED=false) or unreachable — check settings and "
+            "IngestionEvent rows before assuming the corpus or the retriever is at fault. "
+            "Left unraised, eval-recall would silently score the FTS leg of RRF alone and "
+            "report it as retrieval recall."
+        )
+
     return ids_by_marker
 
 
@@ -1491,6 +1536,12 @@ def eval_recall(
     """
     if write_baseline and ask:
         typer.echo("error: --write-baseline records retrieval recall; drop --ask")
+        raise typer.Exit(code=1)
+    if write_baseline and only is not None:
+        typer.echo(
+            "error: --write-baseline must cover every case; drop --only "
+            "(a filtered run would silently clobber the other cases' recorded recall)"
+        )
         raise typer.Exit(code=1)
 
     settings = get_settings()

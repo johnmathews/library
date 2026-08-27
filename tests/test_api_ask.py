@@ -1601,6 +1601,20 @@ def test_query_documents_tool_description_explains_coverage() -> None:
     assert "excluded" in tool["description"]
 
 
+def test_ask_system_prompt_names_semantic_search_as_a_coverage_tool() -> None:
+    """Task 4 gave semantic_search its own `coverage` block (`unembedded`), but
+    the prompt used to name only query_documents and compare_to_series as
+    coverage-carrying tools — so the strongest surface actively implied
+    semantic_search carried none. Pin both halves: the tool is named, and the
+    `unembedded` obligation is stated as a MUST, not left to the (weaker)
+    tool-description surface alone."""
+    from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
+
+    assert "semantic_search" in ASK_SYSTEM_PROMPT_TEMPLATE.split("Rules:")[1]
+    assert "unembedded" in ASK_SYSTEM_PROMPT_TEMPLATE
+    assert "MUST say your answer is incomplete" in ASK_SYSTEM_PROMPT_TEMPLATE
+
+
 def test_ask_system_prompt_pins_the_disclosure_obligation_as_a_MUST() -> None:
     """The other coverage/needs_review/excluded assertions are pure vocabulary
     containment checks: 'you MUST say so' could be reworded to 'you may

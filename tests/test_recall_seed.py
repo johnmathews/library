@@ -60,6 +60,22 @@ async def test_seed_corpus_maps_every_marker_to_an_id(
     assert len(set(ids_by_marker.values())) == len(CORPUS), "ids must be distinct"
 
 
+async def test_seed_corpus_raises_when_embedding_is_disabled(
+    session: AsyncSession, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """``run_embed`` is fail-open: a disabled embedder records an
+    ``embedding_skipped`` ``IngestionEvent`` and returns without raising, so a
+    seed that embedded nothing would otherwise look like success. Verified by
+    execution before this fix existed: with the embedder disabled, seeding ran
+    to completion, created zero chunks, and raised nothing — this pins the
+    fix, not just documents the symptom."""
+    monkeypatch.setenv("LIBRARY_EMBEDDING_ENABLED", "false")
+    get_settings.cache_clear()
+
+    with pytest.raises(RuntimeError, match="produced no chunks"):
+        await _seed_corpus(session)
+
+
 async def test_seed_corpus_produces_exactly_one_chunk_per_document(
     session: AsyncSession, fake_embedder: None
 ) -> None:

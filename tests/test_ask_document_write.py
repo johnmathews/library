@@ -392,6 +392,152 @@ async def test_engine_confirm_after_prior_turn_preview_writes(
 
 
 @pytest.mark.asyncio
+async def test_engine_confirmed_header_field_edit_defers_a_reembed(
+    api_database_url: str, job_connector: InMemoryConnector
+) -> None:
+    """The Ask write tool's re-embed hook (``ask/engine.py``, beside the
+    ``header_fields_changed`` check after ``session.commit()``): editing a
+    header field (``title``) through a confirmed ``update_document_metadata``
+    call must defer exactly one ``embed_document`` job for the edited
+    document, same as the PATCH route (``test_editing_a_header_field_defers_a_
+    reembed`` in ``tests/test_chunk_context_header.py``). That route's hook is
+    covered by a test; this one, proven by mutation, was not — deleting the
+    two-line hook in ``ask/engine.py`` left the whole suite green."""
+    document_id = await _seed_document(api_database_url, "askw-engine-reembed", title="Old")
+
+    history = _surfaced_history(document_id)
+    history += [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "p1", "name": "update_document_metadata", "input": {}}
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "p1",
+                    "content": f'{{"status": "preview", "document_id": {document_id}}}',
+                }
+            ],
+        },
+    ]
+
+    client = _FakeAnthropic(
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="update_document_metadata",
+                        input={"document_id": document_id, "title": "New", "confirmed": True},
+                        id="w1",
+                    )
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"Updated [#{document_id}].")],
+                usage=_Usage(6, 3),
+            ),
+        ]
+    )
+
+    settings = get_settings()
+    async with _open_session(api_database_url) as session:
+        await run_ask(
+            session,
+            question="yes, do it",
+            settings=settings,
+            client=cast(Any, client),
+            history_messages=history,
+        )
+
+    embed_jobs = [
+        job
+        for job in job_connector.jobs.values()
+        if job["task_name"] == "library.jobs.embed_document"
+        and job["args"] == {"document_id": document_id}
+    ]
+    assert len(embed_jobs) == 1
+
+
+@pytest.mark.asyncio
+async def test_engine_confirmed_non_header_field_edit_defers_nothing(
+    api_database_url: str, job_connector: InMemoryConnector
+) -> None:
+    """Companion to the test above: a confirmed edit that touches no header
+    field (``summary``) must defer no ``embed_document`` job at all."""
+    document_id = await _seed_document(api_database_url, "askw-engine-noembed", title="Old")
+
+    history = _surfaced_history(document_id)
+    history += [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "p1", "name": "update_document_metadata", "input": {}}
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "p1",
+                    "content": f'{{"status": "preview", "document_id": {document_id}}}',
+                }
+            ],
+        },
+    ]
+
+    client = _FakeAnthropic(
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="update_document_metadata",
+                        input={
+                            "document_id": document_id,
+                            "summary": "New summary",
+                            "confirmed": True,
+                        },
+                        id="w1",
+                    )
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"Updated [#{document_id}].")],
+                usage=_Usage(6, 3),
+            ),
+        ]
+    )
+
+    settings = get_settings()
+    async with _open_session(api_database_url) as session:
+        await run_ask(
+            session,
+            question="yes, do it",
+            settings=settings,
+            client=cast(Any, client),
+            history_messages=history,
+        )
+
+    embed_jobs = [
+        job
+        for job in job_connector.jobs.values()
+        if job["task_name"] == "library.jobs.embed_document"
+        and job["args"] == {"document_id": document_id}
+    ]
+    assert embed_jobs == []
+
+
+@pytest.mark.asyncio
 async def test_engine_same_turn_preview_then_confirm_is_refused(
     api_database_url: str,
 ) -> None:

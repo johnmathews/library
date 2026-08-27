@@ -11,7 +11,14 @@ from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engin
 from library.ask import engine as engine_mod
 from library.ask.engine import TOOLS, _run_semantic_search, _top_k_arg
 from library.config import get_settings
-from library.models import EMBEDDING_DIM, Document, DocumentChunk, DocumentSource, Kind
+from library.models import (
+    EMBEDDING_DIM,
+    Document,
+    DocumentChunk,
+    DocumentSource,
+    Kind,
+    ReviewStatus,
+)
 from library.search import DocumentFilters, search_reach
 
 pytestmark = pytest.mark.integration
@@ -91,6 +98,32 @@ def test_schema_offers_the_shared_filters_but_not_review_status() -> None:
     assert schema["required"] == ["query"]
 
 
+async def test_review_status_is_not_honoured_even_if_the_model_sends_it(
+    session: AsyncSession, stub_embedder: None
+) -> None:
+    """`semantic_search`'s schema does not declare `review_status` (see the
+    test above), but `_filters_from_args` reads it from `args` regardless — a
+    model emitting it anyway must not get a silently narrowed search this
+    tool's coverage block cannot explain. Seed one NEEDS_REVIEW and one
+    UNREVIEWED document; a `review_status: "unreviewed"` argument must not
+    exclude the NEEDS_REVIEW one."""
+    needs_review_id = await seed(session, "filter-rs-needs-review", chunks=(("alpha", vec(0)),))
+    document = await session.get(Document, needs_review_id)
+    assert document is not None
+    document.review_status = ReviewStatus.NEEDS_REVIEW
+    await session.commit()
+    await seed(session, "filter-rs-unreviewed", chunks=(("alpha", vec(0)),))
+
+    result = await _run_semantic_search(
+        session,
+        get_settings(),
+        {"query": "alpha", "review_status": "unreviewed"},
+        set(),
+        {},
+    )
+    assert result["coverage"]["matched"] == 2
+
+
 async def test_search_reach_counts_matched_and_unembedded(session: AsyncSession) -> None:
     """One round trip, two counts. `unembedded` is what distinguishes
     'the archive is silent' from 'these documents were never indexed'."""
@@ -137,6 +170,16 @@ def test_top_k_is_clamped_into_range() -> None:
     # The schema says integer, but a schema steers the model without binding it.
     assert _top_k_arg("ten", settings) == settings.retrieve_top_k
     assert _top_k_arg("7", settings) == 7
+
+
+def test_top_k_default_path_is_clamped_through_the_same_ceiling() -> None:
+    """`retrieve_top_k` (an independent operator knob, `LIBRARY_RETRIEVE_TOP_K`)
+    and `ask_search_max_top_k` (the ceiling) can be configured inconsistently.
+    Before this fix, `value is None` returned `settings.retrieve_top_k`
+    unclamped — so a misconfigured default could exceed the ceiling an
+    explicit `top_k` is held to, which defeats the point of a ceiling."""
+    settings = get_settings().model_copy(update={"retrieve_top_k": 100, "ask_search_max_top_k": 50})
+    assert _top_k_arg(None, settings) == 50
 
 
 async def test_negative_top_k_does_not_leak_a_near_complete_set(
