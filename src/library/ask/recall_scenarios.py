@@ -93,7 +93,10 @@ def _sender(name: str) -> str:
 # adjacent years, all of which discuss repayment in similar language. Unscoped,
 # the right year has to win on content alone.
 
-_MORTGAGE: tuple[RecallDoc, ...] = (
+#: The three documents that actually STATE early-repayment terms. Everything
+#: else from this sender talks around the subject without setting out the terms,
+#: which is what makes the case a retrieval problem rather than a keyword one.
+_MORTGAGE_ANSWERS: tuple[RecallDoc, ...] = (
     RecallDoc(
         marker="mortgage-2019-contract",
         sender_name=_sender("Meridian Mortgages"),
@@ -142,199 +145,237 @@ _MORTGAGE: tuple[RecallDoc, ...] = (
             "property or on the expiry of the fixed period."
         ),
     ),
-    RecallDoc(
-        marker="mortgage-2017-offer",
-        sender_name=_sender("Meridian Mortgages"),
-        kind_slug="contract",
-        document_date=date(2017, 2, 3),
-        title="Mortgage offer — provisional terms",
-        body=(
-            "This provisional offer sets out indicative terms only and does not "
-            "constitute an agreement. Early repayment conditions will be stated "
-            "in full in the final agreement. The indicative fixed period is ten "
-            "years and the indicative rate is held for ninety days from the date "
-            "of this letter."
-        ),
+)
+
+#: Near-miss correspondence from the same sender. Each mentions repaying, the
+#: balance or the agreement, and none states the terms. Cycled over years so the
+#: pool is several times the ten-slot cut: at a pool of thirteen a retriever
+#: that ranked at RANDOM would already score 0.77, which is why the first
+#: hardening pass failed to move the number (see the 2026-08-27 journal).
+_MORTGAGE_ROUTINE: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "annual-statement",
+        "letter",
+        "Annual mortgage statement",
+        "Your statement for the year is enclosed, showing the opening balance, the "
+        "payments received, the interest applied and the closing balance. If you "
+        "are considering repaying early, contact us for a redemption figure.",
     ),
-    RecallDoc(
-        marker="mortgage-2018-illustration",
-        sender_name=_sender("Meridian Mortgages"),
-        kind_slug="letter",
-        document_date=date(2018, 11, 20),
-        title="Illustration of borrowing costs",
-        body=(
-            "This illustration shows what the borrowing would cost under the "
-            "product discussed. It explains in general terms that repaying "
-            "early may result in a compensation charge, and that the amount of "
-            "any such charge depends on the terms of the agreement eventually "
-            "entered into. It states no figures for that charge and creates no "
-            "obligation on either party."
-        ),
+    (
+        "overpayment",
+        "letter",
+        "Overpayment received",
+        "We have applied the overpayment you sent to the outstanding balance. It "
+        "fell within the annual allowance described in your agreement, so no "
+        "compensation charge applies. The term has shortened accordingly.",
     ),
-    RecallDoc(
-        marker="mortgage-2021-statement",
-        sender_name=_sender("Meridian Mortgages"),
-        kind_slug="letter",
-        document_date=date(2021, 1, 9),
-        title="Annual mortgage statement",
-        body=(
-            "Your statement for the year is enclosed. It shows the opening "
-            "balance, the payments received, the interest applied and the "
-            "closing balance. Where an overpayment has been made within the "
-            "annual allowance it is shown separately. If you are considering "
-            "repaying early, contact us for a redemption figure."
-        ),
+    (
+        "redemption-quote",
+        "letter",
+        "Redemption figure",
+        "The figure below is valid for thirty days and assumes repayment in full "
+        "on the date shown. It comprises the balance, interest to that date, an "
+        "administration fee and a compensation charge calculated under your "
+        "agreement. This letter quotes the figure; it does not restate the terms.",
     ),
-    RecallDoc(
-        marker="mortgage-2022-overpayment",
-        sender_name=_sender("Meridian Mortgages"),
-        kind_slug="letter",
-        document_date=date(2022, 5, 30),
-        title="Overpayment received",
-        body=(
-            "We have applied the overpayment you sent to the outstanding "
-            "balance. The amount fell within the annual allowance described in "
-            "your agreement, so no compensation charge has been applied. Your "
-            "monthly payment is unchanged; the term has shortened accordingly."
-        ),
+    (
+        "porting",
+        "letter",
+        "Moving your mortgage to a new property",
+        "If you move and take this mortgage with you, the product and its "
+        "remaining fixed period may be carried across. Where the new borrowing is "
+        "smaller the reduction is treated as a repayment and may attract a charge.",
     ),
-    RecallDoc(
-        marker="mortgage-2023-redemption-quote",
-        sender_name=_sender("Meridian Mortgages"),
-        kind_slug="letter",
-        document_date=date(2023, 2, 14),
-        title="Redemption figure",
-        body=(
-            "The figure quoted below is valid for thirty days and assumes "
-            "repayment in full on the date shown. It comprises the outstanding "
-            "balance, interest to the repayment date, an administration fee, "
-            "and a compensation charge calculated under the terms of your "
-            "agreement. This letter quotes the figure; it does not restate the "
-            "terms under which the charge arises."
-        ),
+    (
+        "arrears",
+        "letter",
+        "Missed payment",
+        "One monthly payment has not reached us. Please pay as soon as possible to "
+        "avoid arrears being recorded. If your circumstances have changed, contact "
+        "us to discuss a temporary reduction or an extension of the term.",
     ),
-    RecallDoc(
-        marker="mortgage-2023-porting",
-        sender_name=_sender("Meridian Mortgages"),
-        kind_slug="letter",
-        document_date=date(2023, 6, 5),
-        title="Moving your mortgage to a new property",
-        body=(
-            "If you move and take this mortgage with you, the existing product "
-            "and its remaining fixed period may be carried across. Where the "
-            "new borrowing is smaller, the reduction is treated as a repayment "
-            "and may attract a charge. Where it is larger, the additional "
-            "amount is a separate product on its own terms."
-        ),
+    (
+        "direct-debit",
+        "letter",
+        "Change to your direct debit",
+        "The amount collected each month is changing because the interest rate "
+        "applied to your balance has changed. No action is needed; the new amount "
+        "will be taken on the usual date.",
     ),
-    RecallDoc(
-        marker="mortgage-2020-arrears",
-        sender_name=_sender("Meridian Mortgages"),
-        kind_slug="letter",
-        document_date=date(2020, 2, 11),
-        title="Missed payment",
-        body=(
-            "One monthly payment has not reached us. Please make the payment as "
-            "soon as possible to avoid arrears being recorded. If your "
-            "circumstances have changed, contact us to discuss options, which "
-            "may include a temporary reduction in payments or an extension of "
-            "the term."
-        ),
+    (
+        "rate-review",
+        "letter",
+        "Your fixed period is ending",
+        "The fixed period on your product ends shortly. Unless you choose a new "
+        "product the balance will move to the variable rate. Repaying at or after "
+        "the end of the fixed period carries no charge.",
     ),
-    RecallDoc(
-        marker="mortgage-2019-insurance",
-        sender_name=_sender("Meridian Mortgages"),
-        kind_slug="letter",
-        document_date=date(2019, 6, 14),
-        title="Buildings insurance requirement",
-        body=(
-            "The agreement requires buildings insurance to be maintained for "
-            "the full reinstatement value throughout the term. Evidence of "
-            "cover must be provided on request. Failure to maintain cover is a "
-            "breach of the agreement and may entitle us to arrange insurance "
-            "and recover the cost from you."
-        ),
+    (
+        "insurance",
+        "letter",
+        "Buildings insurance requirement",
+        "The agreement requires buildings insurance for the full reinstatement "
+        "value throughout the term. Evidence of cover must be provided on request. "
+        "Failure to maintain cover is a breach of the agreement.",
     ),
-    RecallDoc(
-        marker="mortgage-2024-completion",
-        sender_name=_sender("Meridian Mortgages"),
-        kind_slug="letter",
-        document_date=date(2024, 3, 28),
-        title="Your new product has started",
-        body=(
-            "The new product recorded in your remortgage paperwork has now "
-            "taken effect. Your first payment under it is due on the date "
-            "shown. The previous product has been closed and any charge arising "
-            "on its closure has already been accounted for in the completion "
-            "statement."
-        ),
+    (
+        "illustration",
+        "letter",
+        "Illustration of borrowing costs",
+        "This illustration shows what the borrowing would cost under the product "
+        "discussed. It explains in general terms that repaying early may result in "
+        "a compensation charge, without stating any figure for it.",
     ),
-    RecallDoc(
-        marker="mortgage-2022-annual",
-        sender_name=_sender("Meridian Mortgages"),
-        kind_slug="letter",
-        document_date=date(2022, 1, 11),
-        title="Annual mortgage statement",
-        body=(
-            "Your statement for the year is enclosed. Interest was applied "
-            "monthly at the contract rate. The closing balance reflects all "
-            "payments received up to the statement date. Keep this document "
-            "with your records; it is not a redemption figure and cannot be "
-            "used to repay the loan."
-        ),
+    (
+        "offer",
+        "contract",
+        "Mortgage offer — provisional terms",
+        "This provisional offer sets out indicative terms only and does not "
+        "constitute an agreement. Early repayment conditions will be stated in "
+        "full in the final agreement.",
     ),
+    (
+        "consent-to-let",
+        "letter",
+        "Consent to let",
+        "We agree to the property being let for a period of twelve months. The "
+        "agreement continues on its existing terms and the balance is unaffected. "
+        "Consent must be renewed if the letting continues beyond that period.",
+    ),
+    (
+        "valuation",
+        "letter",
+        "Valuation for lending purposes",
+        "A valuation has been carried out for lending purposes only. It is not a "
+        "survey and no opinion is offered on the condition of the property. The "
+        "figure is used to set the ratio of the loan to the value.",
+    ),
+    (
+        "complaint",
+        "letter",
+        "Response to your complaint",
+        "Thank you for your complaint about the time taken to answer your call. We "
+        "have upheld it and applied a credit to your account. This does not change "
+        "the balance outstanding or the terms of the agreement.",
+    ),
+    (
+        "payment-holiday",
+        "letter",
+        "Payment deferral agreed",
+        "We have agreed to defer three monthly payments. Interest continues to be "
+        "charged on the balance during the deferral and the deferred amounts are "
+        "added to what you owe. The term is extended to absorb them.",
+    ),
+    (
+        "product-transfer",
+        "letter",
+        "Your new product has started",
+        "The product recorded in your paperwork has taken effect. Your first "
+        "payment under it is due on the date shown. Any charge arising on closing "
+        "the previous product has been accounted for in the completion statement.",
+    ),
+    (
+        "address-change",
+        "letter",
+        "Change of correspondence address",
+        "We have updated the address we write to. Statements and notices about the "
+        "balance will be sent there from now on. The property charged under the "
+        "agreement is unchanged.",
+    ),
+    (
+        "term-extension",
+        "letter",
+        "Extension of the mortgage term",
+        "The term has been extended, which reduces the monthly payment and "
+        "increases the total interest paid over the life of the loan. The product "
+        "and its remaining fixed period are unchanged.",
+    ),
+    (
+        "fee-notice",
+        "invoice",
+        "Administration fee",
+        "A fee has been applied for producing the documentation you requested. It "
+        "is charged separately from the balance and is payable within thirty days. "
+        "It is not a charge arising from repaying the loan.",
+    ),
+    (
+        "interest-notice",
+        "letter",
+        "How interest is applied",
+        "Interest is calculated daily on the balance and applied monthly. Payments "
+        "received are credited on the day they reach us, which is why a payment "
+        "made earlier in the month reduces the interest charged for that month.",
+    ),
+    (
+        "credit-report",
+        "letter",
+        "What we report about your account",
+        "We share the status of the account with credit reference agencies each "
+        "month, including the balance and whether payments were made on time. "
+        "Repaying the loan is reported as a settled account.",
+    ),
+)
+
+_MORTGAGE: tuple[RecallDoc, ...] = _MORTGAGE_ANSWERS + tuple(
+    RecallDoc(
+        marker=f"mortgage-{slug}-{year}",
+        sender_name=_sender("Meridian Mortgages"),
+        kind_slug=kind,
+        document_date=date(year, 1 + (index * 5) % 12, 1 + (index * 7) % 28),
+        title=title,
+        body=body,
+    )
+    for index, (slug, kind, title, body) in enumerate(_MORTGAGE_ROUTINE)
+    for year in (2018 + index % 3, 2021 + index % 3)
 )
 
 
 # --- Case 3: a sender named in the question, absent from the text ----------------
 #
-# THE case for #6. Thirteen annual statements whose bodies are figures blocks
-# naming neither their sender nor their year, all titled identically. Content
-# alone cannot separate a Northwind statement from a Clearbrook one, because the
-# distinguishing facts live only in metadata. Three of the thirteen are the
-# expected answer, so the case has room to lose recall rather than being a
-# single document that either appears in ten slots or does not.
+# THE case for #6. Forty identically titled annual statements whose bodies are
+# figures blocks naming neither sender nor year. Content cannot distinguish a
+# Northwind statement from any other, because the distinguishing facts live only
+# in metadata. Three of the forty are the answer, and a blind retriever scores
+# 0.25 at k=10, so the case has real room to move.
 
-_BARE_FIGURE_STATEMENTS: tuple[tuple[str, int, int, str], ...] = (
-    ("Northwind Energy", 2024, 11, "412,80 | 360,00 | 52,80 | 18422 | 21067"),
-    ("Northwind Energy", 2023, 11, "388,15 | 372,00 | 16,15 | 15980 | 18422"),
-    ("Northwind Energy", 2022, 10, "351,40 | 348,00 | 3,40 | 13655 | 15980"),
-    ("Clearbrook Water", 2024, 10, "214,60 | 198,00 | 16,60 | 4471 | 4712"),
-    ("Clearbrook Water", 2023, 10, "205,90 | 204,00 | 1,90 | 4238 | 4471"),
-    ("Clearbrook Water", 2022, 9, "197,25 | 180,00 | 17,25 | 4011 | 4238"),
-    ("Ironbridge Gas", 2024, 12, "509,10 | 480,00 | 29,10 | 22840 | 26115"),
-    ("Ironbridge Gas", 2023, 12, "477,55 | 468,00 | 9,55 | 19702 | 22840"),
-    ("Ironbridge Gas", 2022, 11, "441,00 | 432,00 | 9,00 | 16833 | 19702"),
-    ("Cavendish Power", 2024, 9, "298,45 | 288,00 | 10,45 | 9120 | 10344"),
-    ("Cavendish Power", 2023, 9, "281,70 | 276,00 | 5,70 | 8015 | 9120"),
-    ("Cavendish Power", 2022, 8, "266,30 | 252,00 | 14,30 | 7002 | 8015"),
-    ("Cavendish Power", 2021, 8, "251,05 | 240,00 | 11,05 | 6120 | 7002"),
+_BARE_FIGURE_SENDERS: tuple[tuple[str, int], ...] = (
+    ("Northwind Energy", 3),
+    ("Clearbrook Water", 6),
+    ("Ironbridge Gas", 6),
+    ("Cavendish Power", 6),
+    ("Thistledown Utilities", 5),
+    ("Marlow Energy", 5),
+    ("Kingsway Water", 5),
+    ("Ravensmere Power", 4),
 )
 
 
-def _bare_figures_body(figures: str) -> str:
-    """Render one statement as a figures block that names nothing."""
-    total, instalments, balance, start, finish = figures.split(" | ")
+def _bare_figures_body(seed: int) -> str:
+    """A figures block that names neither its sender nor its year."""
+    total = 180 + (seed * 37) % 420
+    instalments = total - (seed * 11) % 40
+    start = 4000 + (seed * 913) % 20000
     return (
-        f"Period total                 {total}\n"
-        f"Instalments received         {instalments}\n"
-        f"Balance due                   {balance}\n"
+        f"Period total                 {total},{(seed * 7) % 100:02d}\n"
+        f"Instalments received         {instalments},00\n"
+        f"Balance due                   {total - instalments},{(seed * 7) % 100:02d}\n"
         f"Meter reading start          {start}\n"
-        f"Meter reading end            {finish}\n"
+        f"Meter reading end            {start + 900 + (seed * 53) % 2400}\n"
         "Standing charge included in the period total."
     )
 
 
 _BARE_FIGURES: tuple[RecallDoc, ...] = tuple(
     RecallDoc(
-        marker=f"bare-{sender.split()[0].lower()}-{year}",
+        marker=f"bare-{sender.split()[0].lower()}-{2019 + offset}",
         sender_name=_sender(sender),
         kind_slug="utility-bill",
-        document_date=date(year, month, 4 + index % 20),
+        document_date=date(2019 + offset, 8 + (index + offset) % 5, 1 + (index * 3 + offset) % 27),
         title="Annual statement",
-        body=_bare_figures_body(figures),
+        body=_bare_figures_body(index * 13 + offset),
     )
-    for index, (sender, year, month, figures) in enumerate(_BARE_FIGURE_STATEMENTS)
+    for index, (sender, count) in enumerate(_BARE_FIGURE_SENDERS)
+    for offset in range(count)
 )
 
 
@@ -344,7 +385,9 @@ _BARE_FIGURES: tuple[RecallDoc, ...] = tuple(
 # of which mention the warranty. Two of them ARE warranties. The cluster is
 # larger than the ten-slot cut so the case can lose recall.
 
-_BOILER: tuple[RecallDoc, ...] = (
+#: The two documents that ARE warranties. Everything else from this installer
+#: mentions the warranty without being one.
+_BOILER_ANSWERS: tuple[RecallDoc, ...] = (
     RecallDoc(
         marker="boiler-warranty",
         sender_name=_sender("Halden Heating"),
@@ -354,10 +397,10 @@ _BOILER: tuple[RecallDoc, ...] = (
         body=(
             "This certificate warrants the appliance against defects in "
             "manufacture for seven years from the date of commissioning, "
-            "provided an annual service is carried out by a registered "
-            "engineer and recorded in the service log. The warranty covers "
-            "parts and labour for the heat exchanger and the main circuit "
-            "board, and parts only for the pump and the diverter valve."
+            "provided an annual service is carried out by a registered engineer "
+            "and recorded in the service log. It covers parts and labour for "
+            "the heat exchanger and the main circuit board, and parts only for "
+            "the pump and the diverter valve."
         ),
     ),
     RecallDoc(
@@ -370,150 +413,178 @@ _BOILER: tuple[RecallDoc, ...] = (
             "This certificate extends cover on the appliance for a further "
             "three years from the expiry of the original term, on the same "
             "conditions. Cover remains conditional on an annual service by a "
-            "registered engineer. The extension covers parts and labour for "
-            "the heat exchanger and parts only for all other components."
+            "registered engineer. It covers parts and labour for the heat "
+            "exchanger and parts only for all other components."
         ),
     ),
+)
+
+#: Near-miss paperwork about the same appliance from the same installer. Nearly
+#: every one mentions the warranty; none is one.
+_BOILER_ROUTINE: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "invoice",
+        "invoice",
+        "Boiler supply and installation",
+        "Supply and installation of a condensing combination boiler, including a "
+        "magnetic system filter and a full system flush. The warranty certificate "
+        "is issued separately on commissioning and registration.",
+    ),
+    (
+        "quote",
+        "quote",
+        "Quotation for a replacement boiler",
+        "Estimate for removing the existing appliance and installing a condensing "
+        "combination boiler. The price includes commissioning and registration, "
+        "which is what activates the manufacturer warranty.",
+    ),
+    (
+        "manual",
+        "manual",
+        "Boiler user instructions",
+        "How to set the timer, adjust the flow temperature and repressurise the "
+        "system. Servicing must be carried out annually by a registered engineer; "
+        "failure to do so will invalidate the warranty supplied.",
+    ),
+    (
+        "thermostat",
+        "manual",
+        "Programmable thermostat instructions",
+        "Pairing, scheduling and holiday mode for the wireless thermostat supplied "
+        "with the installation. The thermostat carries its own two year warranty "
+        "from its manufacturer, separate from the cover on the appliance.",
+    ),
+    (
+        "registration",
+        "letter",
+        "Appliance registered",
+        "The appliance has been registered with the manufacturer and the competent "
+        "persons scheme. Registration is what brings the warranty into force. Your "
+        "certificate has been issued separately.",
+    ),
+    (
+        "flue",
+        "certificate",
+        "Flue and combustion check",
+        "Combustion analysis was carried out and the readings recorded fall within "
+        "the manufacturer tolerance. This record is required evidence should a "
+        "warranty claim be made on the heat exchanger.",
+    ),
+    (
+        "service-due",
+        "letter",
+        "Annual service due",
+        "Your appliance is due its annual service. Booking it keeps the warranty "
+        "valid; a lapse of more than twelve months between services ends cover "
+        "even where the appliance has not failed.",
+    ),
+    (
+        "service-record",
+        "certificate",
+        "Annual service record",
+        "The annual service was carried out and the appliance left in working "
+        "order. The service log has been updated, which preserves the cover held "
+        "on the appliance. No remedial work was required.",
+    ),
+    (
+        "parts",
+        "receipt",
+        "Replacement expansion vessel",
+        "Supply of a replacement expansion vessel and fitting during the annual "
+        "visit. This part falls outside the parts and labour cover on the "
+        "appliance and is charged separately.",
+    ),
+    (
+        "noise",
+        "letter",
+        "Response to your enquiry about a noise",
+        "The engineer found no fault on inspection and the reading taken was "
+        "within tolerance. No claim has been made against the cover on the "
+        "appliance and it remains in force.",
+    ),
+    (
+        "pressure",
+        "letter",
+        "Losing pressure",
+        "A slow loss of pressure is usually a small leak on the system rather than "
+        "a fault in the appliance. Leaks on pipework are not covered by the "
+        "warranty on the appliance itself.",
+    ),
+    (
+        "filter",
+        "invoice",
+        "System filter clean",
+        "The magnetic filter was removed, cleaned and refitted, and inhibitor was "
+        "topped up. Keeping the system clean is a condition of the cover held on "
+        "the appliance.",
+    ),
+    (
+        "radiator",
+        "invoice",
+        "Radiator replacement",
+        "One radiator was replaced and the system rebalanced. Radiators are not "
+        "part of the appliance and carry no cover under its warranty.",
+    ),
+    (
+        "gas-safety",
+        "certificate",
+        "Gas safety record",
+        "All appliances at the property were checked and found safe. This record "
+        "is separate from the service that maintains the appliance warranty, "
+        "though both were carried out on the same visit.",
+    ),
+    (
+        "callout",
+        "invoice",
+        "Emergency call-out",
+        "Attendance outside normal hours to restart the appliance after a "
+        "lock-out. The call-out fee applies regardless of the cover held, which "
+        "meets the cost of parts and labour only.",
+    ),
+    (
+        "water-quality",
+        "letter",
+        "System water test",
+        "A sample of the system water was tested and the inhibitor level was low. "
+        "Correcting it protects the heat exchanger, which is the component the "
+        "warranty covers for the longest period.",
+    ),
+    (
+        "controls",
+        "invoice",
+        "Zone valve replacement",
+        "A failed zone valve was replaced. The valve is part of the heating system "
+        "rather than the appliance and is therefore outside the appliance cover.",
+    ),
+    (
+        "survey",
+        "letter",
+        "Pre-installation survey",
+        "The survey confirms the flue route, the gas supply and the position of "
+        "the appliance. The installation must follow it for the manufacturer "
+        "warranty to be valid.",
+    ),
+    (
+        "handover",
+        "letter",
+        "Handover notes",
+        "The system was demonstrated and the paperwork handed over, including the "
+        "benchmark record, the user instructions and the warranty certificate. "
+        "Keep them together with the service log.",
+    ),
+)
+
+_BOILER: tuple[RecallDoc, ...] = _BOILER_ANSWERS + tuple(
     RecallDoc(
-        marker="boiler-invoice",
+        marker=f"boiler-{slug}-{year}",
         sender_name=_sender("Halden Heating"),
-        kind_slug="invoice",
-        document_date=date(2022, 4, 18),
-        title="Boiler supply and installation",
-        body=(
-            "Supply and installation of a condensing combination boiler, "
-            "including a magnetic system filter, a new pressure relief "
-            "discharge and a full system flush. The warranty certificate is "
-            "issued separately on commissioning and registration."
-        ),
-    ),
-    RecallDoc(
-        marker="boiler-quote",
-        sender_name=_sender("Halden Heating"),
-        kind_slug="quote",
-        document_date=date(2022, 3, 2),
-        title="Quotation for a replacement boiler",
-        body=(
-            "Estimate for removing the existing appliance and installing a "
-            "condensing combination boiler. The price includes commissioning "
-            "and registration, which is what activates the manufacturer "
-            "warranty. The estimate is valid for sixty days."
-        ),
-    ),
-    RecallDoc(
-        marker="boiler-manual",
-        sender_name=_sender("Halden Heating"),
-        kind_slug="manual",
-        document_date=date(2022, 4, 18),
-        title="Boiler user instructions",
-        body=(
-            "These instructions describe how to set the timer, adjust the flow "
-            "temperature and repressurise the system. Servicing must be carried "
-            "out annually by a registered engineer; failure to do so will "
-            "invalidate the warranty supplied with the appliance."
-        ),
-    ),
-    RecallDoc(
-        marker="boiler-thermostat-manual",
-        sender_name=_sender("Halden Heating"),
-        kind_slug="manual",
-        document_date=date(2022, 4, 19),
-        title="Programmable thermostat instructions",
-        body=(
-            "Pairing, scheduling and holiday mode for the wireless thermostat "
-            "supplied with the installation. The thermostat carries its own two "
-            "year warranty from the manufacturer, which is separate from the "
-            "cover held on the appliance itself."
-        ),
-    ),
-    RecallDoc(
-        marker="boiler-registration",
-        sender_name=_sender("Halden Heating"),
-        kind_slug="letter",
-        document_date=date(2022, 4, 25),
-        title="Appliance registered",
-        body=(
-            "The appliance has been registered with the manufacturer and with "
-            "the competent persons scheme. Registration is what brings the "
-            "warranty into force. Your certificate has been issued separately "
-            "and should be kept with the installation paperwork."
-        ),
-    ),
-    RecallDoc(
-        marker="boiler-flue-certificate",
-        sender_name=_sender("Halden Heating"),
-        kind_slug="certificate",
-        document_date=date(2022, 4, 18),
-        title="Flue and combustion check",
-        body=(
-            "Combustion analysis was carried out at commissioning and the "
-            "readings recorded below fall within the manufacturer tolerance. "
-            "This record is required evidence should a warranty claim be made "
-            "on the heat exchanger."
-        ),
-    ),
-    RecallDoc(
-        marker="boiler-service-letter",
-        sender_name=_sender("Halden Heating"),
-        kind_slug="letter",
-        document_date=date(2023, 4, 2),
-        title="Annual service due",
-        body=(
-            "Your appliance is due its annual service. Booking the service "
-            "keeps the warranty valid; a lapse of more than twelve months "
-            "between services will end cover even where the appliance has not "
-            "failed. Call or reply to arrange a visit."
-        ),
-    ),
-    RecallDoc(
-        marker="boiler-service-2023",
-        sender_name=_sender("Halden Heating"),
-        kind_slug="certificate",
-        document_date=date(2023, 5, 11),
-        title="Annual service record",
-        body=(
-            "The annual service was carried out and the appliance left in "
-            "working order. The service log has been updated, which preserves "
-            "the cover held on the appliance. No remedial work was required."
-        ),
-    ),
-    RecallDoc(
-        marker="boiler-service-2024",
-        sender_name=_sender("Halden Heating"),
-        kind_slug="certificate",
-        document_date=date(2024, 5, 8),
-        title="Annual service record",
-        body=(
-            "The annual service was carried out. The expansion vessel was "
-            "recharged and the system pressure reset. The service log has been "
-            "updated so that cover on the appliance continues uninterrupted."
-        ),
-    ),
-    RecallDoc(
-        marker="boiler-parts-receipt",
-        sender_name=_sender("Halden Heating"),
-        kind_slug="receipt",
-        document_date=date(2024, 5, 8),
-        title="Replacement expansion vessel",
-        body=(
-            "Supply of a replacement expansion vessel and fitting during the "
-            "annual visit. This part is outside the parts and labour cover held "
-            "on the appliance and is therefore charged separately."
-        ),
-    ),
-    RecallDoc(
-        marker="boiler-complaint",
-        sender_name=_sender("Halden Heating"),
-        kind_slug="letter",
-        document_date=date(2023, 9, 19),
-        title="Response to your enquiry about a noise",
-        body=(
-            "Thank you for reporting the noise from the appliance. The engineer "
-            "found no fault on inspection and the reading taken was within "
-            "tolerance. No claim has been made against the cover held on the "
-            "appliance and it remains in force."
-        ),
-    ),
+        kind_slug=kind,
+        document_date=date(year, 1 + (index * 5) % 12, 1 + (index * 3) % 28),
+        title=title,
+        body=body,
+    )
+    for index, (slug, kind, title, body) in enumerate(_BOILER_ROUTINE)
+    for year in (2022 + index % 2, 2024 + index % 2)
 )
 
 
@@ -642,48 +713,57 @@ _SOLAR: tuple[RecallDoc, ...] = tuple(
 )
 
 
-# --- Case 5: the same term across years ----------------------------------------
+# --- Case 5: a year that exists only in metadata ---------------------------------
 #
-# Exercises #5's date filters. Four near-identical parking notices; only the
-# issue year separates them, and their bodies deliberately do not state it.
+# Forty identically titled notices from one sender whose bodies deliberately
+# never state their year. Content alone cannot separate them, so only a metadata
+# filter or a contextual header can. Three fall in the year asked about.
 
-#: Thirteen notices whose bodies deliberately never state their year, so content
-#: alone cannot separate them. Three fall in 2022, which is more than a single
-#: document that either lands inside ten slots or does not, and the cluster as a
-#: whole is larger than the cut so the case has room to lose recall.
-_PARKING_NOTICES: tuple[tuple[str, int, int, int, str], ...] = (
-    ("a", 2020, 3, 4, "a controlled zone without a valid permit displayed"),
-    ("a", 2021, 9, 17, "a controlled zone without a valid permit displayed"),
-    ("b", 2021, 11, 2, "a residents bay while displaying an expired permit"),
-    ("a", 2022, 9, 17, "a controlled zone without a valid permit displayed"),
-    ("b", 2022, 4, 26, "a loading bay outside the permitted loading hours"),
-    ("c", 2022, 12, 8, "a marked disabled bay without a valid badge on display"),
-    ("a", 2023, 9, 17, "a controlled zone without a valid permit displayed"),
-    ("b", 2023, 2, 13, "a suspended bay signed as out of use for works"),
-    ("c", 2023, 7, 30, "a footway where waiting is prohibited at any time"),
-    ("a", 2024, 9, 17, "a controlled zone without a valid permit displayed"),
-    ("b", 2024, 1, 22, "a bay reserved for permit holders of another zone"),
-    ("c", 2024, 6, 9, "a single yellow line during the restricted period"),
-    ("d", 2024, 10, 15, "a school entrance marking during the restricted period"),
+_PARKING_CONTRAVENTIONS: tuple[str, ...] = (
+    "a controlled zone without a valid permit displayed",
+    "a residents bay while displaying an expired permit",
+    "a loading bay outside the permitted loading hours",
+    "a marked disabled bay without a valid badge on display",
+    "a suspended bay signed as out of use for works",
+    "a footway where waiting is prohibited at any time",
+    "a bay reserved for permit holders of another zone",
+    "a single yellow line during the restricted period",
+    "a school entrance marking during the restricted period",
+    "a taxi rank during its hours of operation",
+    "a bus stop clearway during its hours of operation",
+    "a pedestrian crossing zig-zag marking",
+)
+
+#: (year, how many notices that year). 2022 is deliberately the sparse year, so
+#: the case expects three documents out of a pool of forty.
+_PARKING_YEARS: tuple[tuple[int, int], ...] = (
+    (2019, 7),
+    (2020, 7),
+    (2021, 7),
+    (2022, 3),
+    (2023, 8),
+    (2024, 8),
 )
 
 _PARKING: tuple[RecallDoc, ...] = tuple(
     RecallDoc(
-        marker=f"parking-{year}{suffix}",
+        marker=f"parking-{year}{chr(ord('a') + nth)}",
         sender_name=_sender("Civic Parking Office"),
         kind_slug="parking-ticket",
-        document_date=date(year, month, day),
+        document_date=date(year, 1 + (nth * 5) % 12, 1 + (nth * 9) % 27),
         title="Penalty charge notice",
         body=(
             "A penalty charge notice has been issued in respect of the vehicle "
-            f"described below, which was observed parked in {contravention}. "
+            "described below, which was observed parked in "
+            f"{_PARKING_CONTRAVENTIONS[(nth + year) % len(_PARKING_CONTRAVENTIONS)]}. "
             "The reduced amount applies if paid within fourteen days of the "
             "date of service. Representations may be made in writing to the "
             "address shown, and an appeal to the independent adjudicator "
             "follows only after a notice of rejection has been issued."
         ),
     )
-    for suffix, year, month, day, contravention in _PARKING_NOTICES
+    for year, count in _PARKING_YEARS
+    for nth in range(count)
 )
 
 
@@ -809,9 +889,9 @@ CASES: tuple[RecallCase, ...] = (
         name="sender-named-bare-chunk",
         question="What has Northwind Energy billed me for?",
         expected_markers=(
-            "bare-northwind-2024",
-            "bare-northwind-2023",
-            "bare-northwind-2022",
+            "bare-northwind-2019",
+            "bare-northwind-2020",
+            "bare-northwind-2021",
         ),
         why=(
             "THE case for #6. Thirteen identically titled annual statements "
