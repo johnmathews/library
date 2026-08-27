@@ -1171,29 +1171,53 @@ def _unstyled(output: str) -> str:
     return _ANSI.sub("", output)
 
 
-@pytest.mark.parametrize("styled", [False, True], ids=["plain", "styled"])
-def test_eval_recall_help_lists_ask_and_write_baseline(
-    monkeypatch: pytest.MonkeyPatch, styled: bool
-) -> None:
-    """``--help`` lists every flag under both of rich's rendering modes.
+def test_unstyled_strips_the_escapes_rich_emits() -> None:
+    """`_unstyled` removes CSI styling and OSC hyperlinks, and nothing else."""
+    assert _unstyled("\x1b[1m--only\x1b[0m") == "--only"
+    assert _unstyled("-\x1b[36m-only\x1b[0m TEXT") == "--only TEXT"
+    assert _unstyled("\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\") == "link"
+    assert _unstyled("plain --only text") == "plain --only text"
 
-    Asserted both ways deliberately. rich styles when it detects a terminal or
-    a CI environment, so the unstyled rendering is what a developer sees locally
-    and the styled one is what CI sees. Pinning only the local rendering is how
-    the original version of this test passed here and failed on CI.
+
+def test_eval_recall_help_lists_ask_and_write_baseline() -> None:
+    """``--help`` lists every flag, whatever rich decides about styling.
+
+    Asserted against de-styled text because rich's ``OptionHighlighter`` matches
+    both of its patterns on the same token — ``--only`` as a long option and
+    ``-only`` as a short switch — and the overlapping spans put an escape
+    sequence between the two hyphens when styling is on. Checking the raw output
+    for ``"--only"`` therefore tests rich's environment detection rather than the
+    CLI, which is how the first version of this test passed here and failed on CI.
     """
+    result = runner.invoke(app, ["eval-recall", "--help"])
+    assert result.exit_code == 0, result.output
+    output = _unstyled(result.output)
+    assert "--only" in output
+    assert "--ask" in output
+    assert "--write-baseline" in output
+
+
+def test_eval_recall_help_lists_its_flags_when_rich_is_styling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same, with styling forced on — the rendering CI actually produces.
+
+    Deliberately one-directional. Forcing styling ON is reliable; forcing it OFF
+    is not, because ``NO_COLOR`` suppresses colour while rich still emits bold
+    and dim, so there is no portable way to demand escape-free output. This test
+    asserts styling happened and that the flags survive stripping; the test above
+    covers whatever the ambient environment does.
+    """
+    monkeypatch.setenv("FORCE_COLOR", "1")
     monkeypatch.delenv("NO_COLOR", raising=False)
-    monkeypatch.delenv("FORCE_COLOR", raising=False)
-    if styled:
-        monkeypatch.setenv("FORCE_COLOR", "1")
-    else:
-        monkeypatch.setenv("NO_COLOR", "1")
+    # rich refuses to style a dumb terminal even under FORCE_COLOR, and CI
+    # runners vary in what they set TERM to, so pin all three inputs rather
+    # than leaving the assertion below at the mercy of the ambient value.
+    monkeypatch.setenv("TERM", "xterm-256color")
 
     result = runner.invoke(app, ["eval-recall", "--help"])
     assert result.exit_code == 0, result.output
-    # Guard the guard: if rich ever stops styling under FORCE_COLOR this test
-    # would silently degrade into two copies of the plain case.
-    assert ("\x1b[" in result.output) is styled, "rich did not honour the colour environment"
+    assert "\x1b[" in result.output, "FORCE_COLOR did not make rich style its output"
 
     output = _unstyled(result.output)
     assert "--only" in output

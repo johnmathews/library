@@ -44,15 +44,41 @@ the code. `FORCE_COLOR=1` reproduced it locally on the first try.
 
 ## The fix
 
-`_unstyled()` strips CSI and OSC escapes, and the test is parametrised over
-both of rich's rendering modes — `NO_COLOR=1` and `FORCE_COLOR=1` — so the CI
-rendering is exercised on a developer's machine. It also asserts that the
-environment was actually honoured (`("\x1b[" in output) is styled`), so the
-styled case cannot quietly decay into a second copy of the plain case if rich
-ever changes how it decides.
+`_unstyled()` strips CSI and OSC escapes, and the assertions run against that
+rather than the raw bytes. Two tests cover it: one under the ambient
+environment, whatever the machine happens to do, and one with styling forced on
+so the CI rendering is exercised on a developer's machine. A third test pins
+`_unstyled` itself against known styled samples, so the helper cannot rot
+silently.
 
-Verified by mutation: restoring the original un-stripped assertion fails the
-`[styled]` case with CI's exact message while `[plain]` still passes.
+Verified by mutation: restoring the original un-stripped assertion fails with
+CI's exact message under forced styling, and passes without it.
+
+## The second CI failure, and what it taught
+
+The first attempt at this fix parametrised the test over "styling off" and
+"styling on" and asserted that rich had honoured the requested mode. That went
+red on CI too, on the *off* case:
+
+    assert ("\x1b[" in result.output) is styled
+    E   assert (... '\x1b[1m ...') is False
+
+`NO_COLOR` suppresses **colour**, not styling — rich still emits bold and dim,
+which is exactly what CI's output carried. There is no portable way to demand
+escape-free output, so the "styling off" direction was dropped: the ambient
+test now makes no claim about how rich rendered.
+
+Forcing styling *on* turned out to need care as well. `FORCE_COLOR=1` alone is
+not enough, because rich refuses to style a dumb terminal — with `TERM=dumb` in
+the ambient environment the forced case failed locally. The test now pins
+`FORCE_COLOR`, `NO_COLOR` and `TERM` together, and was re-checked under five
+ambient combinations (`FORCE_COLOR=1`, `NO_COLOR=1`, `TERM=dumb`, `CI=true`,
+and `TERM=dumb NO_COLOR=1`) before being pushed.
+
+The pattern in both failures is the same one that caused the original bug: an
+assertion about *rendered* output smuggles in a claim about the environment.
+The fix is to assert on the de-styled text and to pin every environment input a
+test does depend on — not to guess which one CI happens to set.
 
 ## Worth remembering
 
