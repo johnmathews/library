@@ -1,0 +1,15 @@
+{
+  "cases": {
+    "breadth-many-mentions": 0.3333333333333333,
+    "contract-clause": 1.0,
+    "control-unique-term": 1.0,
+    "date-scoped": 1.0,
+    "kind-scoped": 1.0,
+    "sender-named-bare-chunk": 1.0
+  },
+  "mean": 0.8888888888888888,
+  "measured_against": {
+    "archive_documents": 259,
+    "corpus_documents": 201
+  }
+}

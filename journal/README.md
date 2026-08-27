@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-163 entries.
+164 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -19,6 +19,7 @@ CI checks it is current.
 - **2026-08-27** — [CI was testing on a Python production doesn't run](260827-pin-python-313.md)
 - **2026-08-27** — [A CLI help test that only rich's colour decision could fail](260827-help-test-ansi-ci-divergence.md)
 - **2026-08-27** — [The recall corpus failed its own acceptance criterion](260827-harden-recall-corpus.md)
+- **2026-08-27** — [The first recall baseline, and the first evidence for #6](260827-first-recall-baseline.md)
 - **2026-08-27** — [Disclosure eval](260827-disclosure-eval.md)
 - **2026-08-26** — [Series comparisons report what they narrow away](260826-series-coverage.md)
 - **2026-08-26** — [Ask answer trustworthiness](260826-ask-answer-trustworthiness.md)
