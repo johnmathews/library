@@ -1,6 +1,8 @@
 # Ask & semantic pipeline: quality review
 
-**Status:** design, awaiting review (2026-08-26)
+**Status:** active (2026-08-27). Plan A shipped (#96, #97, #98) and the
+disclosure half of #15 with it; Plan B designed in §8 and not yet built;
+Plans C and D not started.
 
 ## 1. Problem
 
@@ -168,12 +170,12 @@ Per group, the shippable outcome:
 
 | Plan | Findings | Ships |
 |------|----------|-------|
-| A — answer trustworthiness | #1, #2, #3, #11 | Coverage + trust reporting on every structured result; honest citations |
-| B — retrieval reach | #5, #6, #7, #15 | Filters on `semantic_search`, contextual chunk headers, tunable depth, recall eval |
+| A — answer trustworthiness ✅ | #1, #2, #3, #11, #15 (disclosure) | Coverage + trust reporting on every structured result; honest citations; `library eval-disclosure` |
+| B — retrieval reach | #5, #6, #7, #15 (recall) | Filters on `semantic_search`, contextual chunk headers, tunable depth, recall eval |
 | C — extraction depth | #4, #8 | Period/usage fields + scoped backfill; second-look extraction on the markdown layer |
 | D — UX & operability | #9, #10, #12, #13, #14 | SSE progress, tool-call transparency, matter reclassify route, index-health surface |
 
-A is first: it has the smallest diffs, the highest correctness payoff, and it
+A was first: it had the smallest diffs, the highest correctness payoff, and it
 establishes the tool-result shape (`Coverage`) that B extends.
 
 ## 6. Key design decision (Plan A): one uniform `Coverage` object
@@ -212,3 +214,218 @@ citation for any relied-upon document, which narrows but does not close this.
 Closing it deterministically would mean distinguishing authoritative aggregate
 results from mere retrieval candidates, which is deferred until #15's eval set
 can show whether it matters.
+
+## 8. Key design decisions (Plan B)
+
+Added 2026-08-27, after Plan A shipped. Section 6 records Plan A's one load-
+bearing decision; this records Plan B's, on the same terms. Every claim marked
+**(executed)** is the output of a throwaway probe run against the test Postgres
+before it was written here — see §8.7 for why that qualifier exists at all.
+
+### 8.1 Build order: the eval is built first, #6 last
+
+#6 is the only irreversible step in this plan — a contextual header changes what
+every chunk embeds, so adopting it means re-embedding the whole corpus. #15
+exists precisely so that call can be made on evidence. The order is therefore:
+
+1. #15 layer 1 (retrieval recall) — records a baseline against today's retrieval
+2. #5 + #7 — tool-schema only, no re-embed
+3. #15 layer 2 (Ask-loop recall) — now has filters and `top_k` to observe
+4. #6 — measured against the layer 1 baseline
+
+#6 is not gated in the sense of "cancel it if the number does not move"; it is
+gated in the sense that the number will exist and be recorded either way.
+
+### 8.2 #5 reuses `_filters_from_args`; `review_status` stays out
+
+`ask/engine.py` already has `_filters_from_args`, shared by `query_documents`
+and `compare_to_series`, which maps the tool-schema names (`kind`, `tags`,
+`projects`) onto `DocumentFilters`' storage names (`kind_slug`, `tag_slugs`,
+`project_slugs`). `semantic_search` calls the same helper rather than growing a
+second mapping that can drift from it.
+
+`_REVIEW_STATUS_PROPERTY` is deliberately **not** added to `semantic_search`.
+The rationale already written beside that dict holds unchanged: a filter is only
+offered to a tool that can *report what the filter removed*. `semantic_search`'s
+coverage block (§8.3) reports reach, not exclusion reasons, so it could honour a
+`review_status` filter but not explain it.
+
+### 8.3 `semantic_search` returns reach, and reports `unembedded` separately
+
+The result grows a coverage block beside `results`:
+
+```
+{"matched": int, "returned": int, "unembedded": int}
+```
+
+`matched` counts documents passing the caller's filters, `returned` how many
+came back (so the model can see `top_k` truncated), and `unembedded` how many of
+`matched` have no chunks at all.
+
+Both counts come from one round trip, the same conditional-aggregate shape
+`count_coverage` uses in `structured_query.py`:
+
+```python
+has_chunk = exists().where(DocumentChunk.document_id == Document.id)
+select(
+    func.count().label("matched"),
+    func.count().filter(~has_chunk).label("unembedded"),
+).select_from(Document).where(*filter_conditions(filters))
+```
+
+**(executed)** against the test database: five seeded documents matching the
+filter, two of them chunkless, returns `matched=5 unembedded=2`.
+
+`unembedded` is not in the original #5 and is worth justifying. A probe seeding
+two filter-matching documents, only one of which had chunks, returned
+**(executed)** `matched=2, hits=1`. So `matched` on its own conflates three
+situations the model must respond to differently:
+
+- the filter was too narrow (`matched` small) — widen it and retry
+- the archive is genuinely silent (`matched` large, `unembedded` zero, no hits)
+  — say so
+- the documents exist but are not indexed (`unembedded` non-zero) — the answer
+  is incomplete for an operational reason, not an archival one
+
+That third case is finding #14 (failed embeddings are invisible) surfacing
+inside #5. Reporting it here does not fix #14 — the operator still has no UI for
+it — but it stops Ask from confidently reporting an indexing gap as an absence.
+
+### 8.4 #7 exposes `top_k` only, and the clamp is load-bearing
+
+`top_k` is offered; `chunks_per_doc` is not. One knob is one thing for the model
+to get right, and "find every document mentioning X" is a breadth problem.
+A new `ask_search_max_top_k: int = 50` setting caps it, so the ceiling is
+configurable and documented rather than a literal.
+
+The clamp is **not** defensive tidiness. `semantic_search` ends in
+`ranked[:top_k]`, so a negative `top_k` slices from the end and silently returns
+a near-arbitrary subset. Measured **(executed)** against seven matching
+documents:
+
+| `top_k` | hits returned |
+|---------|---------------|
+| `-3`    | **4**         |
+| `-1`    | **6**         |
+| `0`     | 0             |
+| `1`     | 1             |
+| `1000`  | 7             |
+
+A model that emits `top_k: -1` today gets six results and no error. The
+implementation clamps to `max(1, min(int(top_k), ask_search_max_top_k))` and the
+test asserts every row of that table.
+
+`chunks_per_doc` needs no such guard — `semantic_search` gates the multi-passage
+path on `if chunks_per_doc > 1`, so `-1` and `0` both degrade to one passage
+**(executed)**. This is recorded so a later change to that guard is understood
+to be removing a protection, not tightening one.
+
+### 8.5 #6 stores the header in its own column, and re-embeds on metadata edit
+
+**Storage.** A new nullable `document_chunks.context_header` column (migration
+0031). `run_embed` composes `sender · date · kind · title` (omitting fields the
+document lacks), embeds `header + "\n\n" + text`, and stores the header there
+while `text` keeps the raw passage.
+
+The alternative — prepending the header to `text` — was rejected because `text`
+is not only what gets embedded, it is also what Ask *reads*: **(executed)**
+confirms `SemanticHit.chunk_text` and `chunk_texts` return the stored `text`
+verbatim. With `retrieve_chunks_per_doc = 3` and `top_k = 10`, a baked-in header
+would repeat the same sender/date/kind up to thirty times per tool result,
+duplicating fields the result rows already carry as structured values. The
+separate column also makes the embedded text auditable: a bad retrieval can be
+diagnosed against the header that was actually embedded rather than one
+re-derived from current metadata and assumed to match.
+
+Comment chunks receive the same document header. Their own `User comment
+(date):` framing stays in `text` — the two are complementary, not competing.
+
+**Staleness.** A header embedded at ingest goes stale when metadata changes
+later. Ingest itself is safe: `EMBED` is the last pipeline stage, after
+`MARKDOWN` and its repair pass, so a freshly ingested document's header sees
+final metadata. The exposure is later edits.
+
+`apply_document_update` returns the list of changed storage-level field names
+and has exactly two call sites (`api/documents.py` and `ask/engine.py`), both
+already followed by `revalidate_after_edit`. A re-embed is enqueued from beside
+that call, and **only** when the changed set intersects the header fields
+(`sender_id`, `document_date`, `kind_id`, `title`). A `summary`, `tags` or
+`projects` edit therefore never touches the embedder. `api/comments.py` is the
+existing precedent for "an edit defers `embed_document`".
+
+The honest cost: Ask's own confirmation-gated write tool can now enqueue an
+embed mid-conversation. That is the intended behaviour — an agent that corrects
+a sender should not leave the index describing the old one — but it is new
+coupling between the write path and a network sidecar, and the sidecar being
+down must remain non-fatal, exactly as `run_embed` already treats it.
+
+Rollout uses the existing `library backfill-embeddings --include-existing`. No
+new command. Chunks written before the migration carry a NULL header until that
+runs; §1.10 of `docs/ask.md` records this.
+
+### 8.6 #15 is two layers over a synthetic corpus
+
+The two layers measure different things and have different dependencies, which
+is why they are two:
+
+- **Layer 1 — retrieval recall.** Calls `library.search.semantic_search`
+  directly and scores recall@k. Needs the bge-m3 embedder; needs **no Claude
+  credentials**. Deterministic, so it can attribute a change to #6.
+- **Layer 2 — Ask-loop recall.** Drives `run_ask` and scores
+  `AskResult.citations` against the expected document ids. Needs Claude
+  credentials. This is the only layer that can show whether the model
+  *actually uses* the filters and `top_k` that #5 and #7 add — a schema the
+  model ignores is indistinguishable from no schema at layer 1.
+
+Scoring against `citations` rather than the answer prose is deliberate:
+`AskCitation` already carries `document_id`, so layer 2 needs none of the
+heuristic text-screening `disclosure_eval.mentions_count` required, and it
+incidentally exercises Plan A's #11 fix.
+
+**The corpus is synthetic**, authored in this repository. The real golden corpus
+was considered and rejected on two grounds: fifteen documents is too thin a
+haystack for recall@10 to discriminate, and the question→expected-id mapping
+would have to live in the private repo, splitting the eval across two
+repositories. Synthetic documents keep the whole eval readable in the public
+repo with no secret, matching how `disclosure_scenarios.py` already works, and
+carry a `(recall-eval fixture)` sender suffix for the same reasons.
+
+Synthetic text brings one serious risk, and it is the risk that decides whether
+this eval is worth building: **text that is too easy makes recall@10 trivially
+1.0 and measures nothing.** Mitigations are part of the deliverable, not
+afterthoughts — each case ships with near-miss distractors (same kind, same
+sender, adjacent dates, overlapping vocabulary) over a haystack of roughly
+40–60 documents. And the eval carries an acceptance criterion on *itself*: if
+baseline recall@10 comes out at or above 0.9, the scenarios are too easy and are
+made harder before anything downstream is built. An eval with no headroom to
+fall cannot show #6 helping.
+
+**Where it runs.** `library eval-recall`, reusing the outer-transaction binding
+`eval-disclosure` already established so nothing is committed, plus a step in
+`e2e-nightly.yml` after the embedder-warm wait. That workflow's own header
+already argues this class of check — embedder-dependent, not fully
+deterministic — belongs nightly and must not gate merges. It is also the only
+place with a warm embedder that runs on its own: TEI publishes no arm64 image,
+so an Apple Silicon laptop cannot host one, and a command nobody remembers to
+run is the `E2E_SMART_GROUPS` failure repeated. A committed baseline value makes
+#6's effect a diff rather than a recollection.
+
+`recall_eval.py` is pure and stdlib-only, like `disclosure_eval.py`, so its
+scoring is unit-tested in CI with no embedder and no credentials. It inherits
+`disclosure_eval.score`'s hard-won guard: a case with an empty expected set must
+**fail**, not vacuously pass having exercised nothing.
+
+### 8.7 On the **(executed)** qualifier
+
+Across the two Plan A branches, twelve defects originated in the plan documents
+and none in the implementations; the parts prototyped against the real test
+database before being written down landed clean both times. Every factual claim
+above about how shipped code behaves was therefore produced by running a
+throwaway probe, not by reading. The probes were deleted once their output was
+recorded here.
+
+Three of the decisions above exist *only* because a probe contradicted what
+reading suggested: `unembedded` (§8.3), the negative-`top_k` clamp (§8.4), and
+the confirmation that a separate header column needs no change to `search.py`
+(§8.5). Implementers and reviewers of Plan B should treat this section as
+fallible in the same way and verify against shipped code.
