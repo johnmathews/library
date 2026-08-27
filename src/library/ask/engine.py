@@ -882,8 +882,43 @@ def _collect_document_ids(value: Any, ids: set[int]) -> None:
             _collect_document_ids(item, ids)
 
 
+def _is_content_block_list(value: Any) -> bool:
+    """True if ``value`` is a non-empty list of ``{"type": "text", "text": str}``
+    content blocks — the shape the ``subscription`` backend's SDK wraps a tool
+    result in before it gets re-encoded as the outer ``tool_result`` string."""
+    return (
+        bool(value)
+        and isinstance(value, list)
+        and all(
+            isinstance(item, dict)
+            and item.get("type") == "text"
+            and isinstance(item.get("text"), str)
+            for item in value
+        )
+    )
+
+
 def _tool_result_payloads(history: list[dict[str, Any]]) -> Iterator[Any]:
-    """Yield each decoded ``tool_result`` payload from replayed prior turns."""
+    """Yield each decoded ``tool_result`` payload from replayed prior turns.
+
+    The two backends shape a ``tool_result`` block's ``content`` string
+    differently:
+
+    - ``api`` backend (``_run_api_turn``): ``content`` is
+      ``json.dumps(output, default=str)`` directly — one level of JSON.
+    - ``subscription`` backend (``llm/subscription.py``): the SDK's tool
+      result content is itself a list of content blocks
+      (``[{"type": "text", "text": ...}]``), and since that list isn't a
+      ``str`` it gets ``json.dumps``-ed *again* — two levels of JSON, with the
+      real payload sitting inside the inner block's ``text``.
+
+    Decode the outer JSON once, as before. If what comes back is a list of
+    text content blocks, decode each block's ``text`` and yield those
+    payloads instead of the block list itself; otherwise yield the decoded
+    value as-is (the ``api`` shape). A malformed inner ``text`` is skipped
+    rather than raised, matching the outer decode's existing tolerance for
+    malformed history.
+    """
     for message in history:
         content = message.get("content")
         if not isinstance(content, list):
@@ -895,9 +930,17 @@ def _tool_result_payloads(history: list[dict[str, Any]]) -> Iterator[Any]:
             if not isinstance(raw, str):
                 continue
             try:
-                yield json.loads(raw)
+                decoded = json.loads(raw)
             except (ValueError, TypeError):
                 continue
+            if _is_content_block_list(decoded):
+                for inner_block in decoded:
+                    try:
+                        yield json.loads(inner_block["text"])
+                    except (ValueError, TypeError):
+                        continue
+            else:
+                yield decoded
 
 
 def _ids_from_history(history: list[dict[str, Any]]) -> set[int]:
