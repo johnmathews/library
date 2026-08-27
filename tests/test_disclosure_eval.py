@@ -30,6 +30,39 @@ def test_mentions_count_ignores_inline_citations() -> None:
     assert mentions_count("Across 3 bills [#1, #2, #3]. 2 more had no readable amount.", 2)
 
 
+def test_mentions_count_rejects_a_comma_grouped_amount() -> None:
+    """A false pass found by execution: the leading digit of a thousands-
+    grouped amount is not a disclosed count."""
+    assert not mentions_count("You spent EUR 2,500.00 in total.", 2)
+    assert not mentions_count("EUR 1,234.00 total", 1)
+
+
+def test_mentions_count_rejects_a_decimal_amount_digit() -> None:
+    """Same false-pass class as the comma case, for a plain decimal amount:
+    neither digit of '360.00' is a standalone count of 3 or 6."""
+    assert not mentions_count("You spent EUR 360.00 in total.", 3)
+    assert not mentions_count("You spent EUR 360.00 in total.", 6)
+
+
+def test_mentions_count_rejects_an_ordinal_suffix() -> None:
+    """'2nd' is an ordinal, not a count of 2 — another false pass found by
+    execution against realistic prose."""
+    assert not mentions_count("This is the 2nd invoice this month.", 2)
+    assert not mentions_count("the 3rd and 2nd bills", 2)
+
+
+def test_mentions_count_accepts_a_sentence_final_count() -> None:
+    """A count at the very end of a sentence, followed only by punctuation,
+    must still register — the comma/decimal guard must not overreach."""
+    assert mentions_count("no readable amount: 2.", 2)
+
+
+def test_mentions_count_accepts_a_genuine_count_alongside_an_ordinal() -> None:
+    """An ordinal elsewhere in the sentence must not blind the scorer to a
+    real, separate count."""
+    assert mentions_count("2 bills, plus the 2nd was flagged", 2)
+
+
 def test_score_passes_when_every_excluded_reason_count_is_disclosed() -> None:
     verdict = score(
         "utilities-no-amount",
@@ -100,3 +133,30 @@ def test_score_passes_a_clean_complete_answer() -> None:
     )
     assert verdict.passed
     assert isinstance(verdict, DisclosureVerdict)
+
+
+def test_score_passes_ordinary_prose_mentioning_documents_in_a_control() -> None:
+    """'Some documents' is ordinary descriptive English, not a hedge. A
+    correct, complete control answer must not fail just for using it."""
+    verdict = score(
+        "complete",
+        {"matched": 3, "included": 3, "excluded": {}, "needs_review": 0},
+        "Some documents in this set are utility bills and some are insurance "
+        "statements; all 3 are fully accounted for.",
+        expect_disclosure=False,
+    )
+    assert verdict.passed
+    assert verdict.unexpected == ()
+
+
+def test_score_tolerates_a_malformed_excluded_block() -> None:
+    """A coverage block that violates its own shape contract (excluded as a
+    list, not a dict) must not crash the scorer -- it degrades to treating
+    the block as having nothing to disclose from `excluded`."""
+    verdict = score(
+        "malformed",
+        {"matched": 2, "included": 2, "excluded": ["no_amount"], "needs_review": 1},
+        "You spent EUR 50.00 across 2 bills.",
+        expect_disclosure=True,
+    )
+    assert verdict.missing == ("needs_review=1",)
