@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-08-27 (series coverage: `GET /api/documents/{id}/series` (§1.13), `GET /api/charts` and `GET /api/charts/{series_id}` (§1.14) now carry a top-level `coverage` block — `matched`/`included`/`excluded`/`needs_review` — on every emergent `status:"ok"` result and on §1.13's own `status:"insufficient"` result once `summarize_series` has actually run; it is **absent** (the key omitted, not `null`) for an authored (user-curated) series and for §1.13's bespoke no-sender/kind short circuit, and a present block with an empty `excluded` means nothing was dropped, which is not the same claim as absent. See [ask.md §1.2/§1.7](ask.md) for the full design). Earlier (2026-08-25, Ask profile: new `PUT /api/settings/ask-profile` and the `ask_profile` key on the resolved preference set, §1.10.11; the Ask tools' new recipient/project/matter/tag filters are prompt-side, documented in [ask.md §1.2](ask.md). Earlier (2026-08-20, LLM backend selection: new `GET /api/settings/llm-backends` and admin-only `PUT`/`DELETE /api/settings/llm-backends/{surface}`, §1.10.8–1.10.10; `POST /api/ask` now answers **503** with the fix when the subscription backend cannot authenticate, §1.11). Earlier: 2026-08-12 (documentation verification sweep: documented `DELETE /api/admin/users/{id}` and the Smart Groups create/exclusion contract; corrected the `status` enum, the login/`me` and preferences shapes, the coverage and note-edit claims, and the `ts_rank` normalisation). Earlier (2026-07-17, business matters: business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
-**Last verified:** 2026-08-27 — method: read §1.13/§1.14 in full and diffed the new `coverage` field (JSON examples + field lists) against `serialise_summary`, `SeriesCoverage`, `summarize_series`, and the three call sites that emit it (`src/library/api/documents.py:399`, `src/library/api/charts.py:169,280`) in `src/library/series.py` and `src/library/api/*.py`; also checked `get_document_series`'s bespoke no-sender/kind short-circuit dict, which the docs now note omits `coverage` entirely. Ran `uv run python scripts/check_docs.py` and `uv run python scripts/build_journal_index.py --check` (both clean) after the edit; did not run the backend test suite against this file's claims, so that remains the controller's job. Note: this same pass also threaded a resolved `currency`/`other_currencies` through the post-bucketing `"insufficient"` path in `src/library/series.py` (previously hardcoded `null`/`[]` there); §1.13's own `"insufficient"` example predates that and predates this coverage feature, documents neither field, and was not rewritten here — out of scope for this pass, left as a known pre-existing gap. The rest carries forward its previous verification: 2026-08-25 — method: the new §1.10.11 wire shape, status codes and the `ask_profile` read-model key checked against `src/library/api/settings.py` and `src/library/schemas.py`, covered by executed tests (`tests/test_settings_api.py`, eight new cases incl. the 422, the garbage-blob fallback and the read-side clip) in a full backend run. The rest carries forward its previous verification: 2026-08-20 — method: the new §1.10.8–1.10.10 wire shapes and status codes checked against `src/library/api/settings.py` and `src/library/schemas.py`, and the §1.11 503 against `src/library/api/ask.py`; both covered by executed tests (`tests/test_llm_backends.py`, `tests/test_api_ask.py`) in a full run of 1632 passing. The rest of the document is unchanged since its previous verification, whose method was: 2026-08-12 — method: enumerated every `@router` decorator under `src/library/` and diffed it against the documented surface in both directions, then checked each endpoint's parameters, request/response fields, status codes and auth rules against `src/library/api/**`, `schemas.py`, `config.py` and `app.py`, all read in full; nothing was executed.
+**Status:** active. **Last updated:** 2026-08-28 (facet vocabulary: new §1.23 — the controlled facet CRUD surface (`/api/facets`), document labels (`/api/documents/{id}/labels`), and the suggestion queue (`/api/facet-suggestions`), including the `merge` route's `dry_run` and the `422`-on-out-of-vocabulary-value on `PUT .../labels`; repeatable `?facet=key:value` document filter, AND-composing, §1.3.1/§1.23.4; new endpoint-summary rows, §1.1. See [facets.md](facets.md) for the vocabulary design). Earlier (2026-08-27, series coverage: `GET /api/documents/{id}/series` (§1.13), `GET /api/charts` and `GET /api/charts/{series_id}` (§1.14) now carry a top-level `coverage` block — `matched`/`included`/`excluded`/`needs_review` — on every emergent `status:"ok"` result and on §1.13's own `status:"insufficient"` result once `summarize_series` has actually run; it is **absent** (the key omitted, not `null`) for an authored (user-curated) series and for §1.13's bespoke no-sender/kind short circuit, and a present block with an empty `excluded` means nothing was dropped, which is not the same claim as absent. See [ask.md §1.2/§1.7](ask.md) for the full design). Earlier (2026-08-25, Ask profile: new `PUT /api/settings/ask-profile` and the `ask_profile` key on the resolved preference set, §1.10.11; the Ask tools' new recipient/project/matter/tag filters are prompt-side, documented in [ask.md §1.2](ask.md). Earlier (2026-08-20, LLM backend selection: new `GET /api/settings/llm-backends` and admin-only `PUT`/`DELETE /api/settings/llm-backends/{surface}`, §1.10.8–1.10.10; `POST /api/ask` now answers **503** with the fix when the subscription backend cannot authenticate, §1.11). Earlier: 2026-08-12 (documentation verification sweep: documented `DELETE /api/admin/users/{id}` and the Smart Groups create/exclusion contract; corrected the `status` enum, the login/`me` and preferences shapes, the coverage and note-edit claims, and the `ts_rank` normalisation). Earlier (2026-07-17, business matters: business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Last verified:** 2026-08-28 — method: read `src/library/api/facets.py` in full and diffed every route, status code and request/response shape in new §1.23 against it; read `src/library/facets/vocabulary.py` for the exception→status mapping (`UnknownFacetError`→404, `UnknownValueError`→422 on the labels PUT / 404 elsewhere, `ValueInUseError`→409); read the `facet` query-param parsing and its two 422 branches in `src/library/api/documents.py` and the filter's EXISTS-subquery construction in `src/library/search.py` for §1.3.1/§1.23.4; cross-checked every claim against the executed assertions in `tests/test_api_facets.py` and `tests/test_facet_search.py` (both read in full; not re-executed for this pass, which touched no application code — `uv run pytest tests/test_check_docs.py -q` was run for the docs gate itself). Ran `uv run python scripts/check_docs.py` and `uv run python scripts/build_journal_index.py --check` after the edit. The rest carries forward its previous verification: 2026-08-27 — method: read §1.13/§1.14 in full and diffed the new `coverage` field (JSON examples + field lists) against `serialise_summary`, `SeriesCoverage`, `summarize_series`, and the three call sites that emit it (`src/library/api/documents.py:399`, `src/library/api/charts.py:169,280`) in `src/library/series.py` and `src/library/api/*.py`; also checked `get_document_series`'s bespoke no-sender/kind short-circuit dict, which the docs now note omits `coverage` entirely. Ran `uv run python scripts/check_docs.py` and `uv run python scripts/build_journal_index.py --check` (both clean) after the edit; did not run the backend test suite against this file's claims, so that remains the controller's job. Note: this same pass also threaded a resolved `currency`/`other_currencies` through the post-bucketing `"insufficient"` path in `src/library/series.py` (previously hardcoded `null`/`[]` there); §1.13's own `"insufficient"` example predates that and predates this coverage feature, documents neither field, and was not rewritten here — out of scope for this pass, left as a known pre-existing gap. The rest carries forward its previous verification: 2026-08-25 — method: the new §1.10.11 wire shape, status codes and the `ask_profile` read-model key checked against `src/library/api/settings.py` and `src/library/schemas.py`, covered by executed tests (`tests/test_settings_api.py`, eight new cases incl. the 422, the garbage-blob fallback and the read-side clip) in a full backend run. The rest carries forward its previous verification: 2026-08-20 — method: the new §1.10.8–1.10.10 wire shapes and status codes checked against `src/library/api/settings.py` and `src/library/schemas.py`, and the §1.11 503 against `src/library/api/ask.py`; both covered by executed tests (`tests/test_llm_backends.py`, `tests/test_api_ask.py`) in a full run of 1632 passing. The rest of the document is unchanged since its previous verification, whose method was: 2026-08-12 — method: enumerated every `@router` decorator under `src/library/` and diffed it against the documented surface in both directions, then checked each endpoint's parameters, request/response fields, status codes and auth rules against `src/library/api/**`, `schemas.py`, `config.py` and `app.py`, all read in full; nothing was executed.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -85,6 +85,18 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/matters/{slug}` | Matter detail |
 | PATCH  | `/api/matters/{slug}` | Edit a matter (name/hint/archived) (admin only) |
 | DELETE | `/api/matters/{slug}` | Delete a matter (memberships cascade) (admin only) |
+| GET    | `/api/facets` | The whole facet vocabulary: facets, values, aliases |
+| POST   | `/api/facets` | Create a facet |
+| POST   | `/api/facets/{facet_key}/values` | Add a value to a facet |
+| PATCH  | `/api/facets/{facet_key}/values/{value_key}` | Rename a value's display label (free) |
+| POST   | `/api/facets/{facet_key}/values/{value_key}/aliases` | Add an alias to a value |
+| POST   | `/api/facets/{facet_key}/values/{value_key}/merge` | Fold one value into another; `dry_run` previews without writing |
+| DELETE | `/api/facets/{facet_key}/values/{value_key}` | Delete an unused value (`409` if in use) |
+| GET    | `/api/documents/{id}/labels` | This document's facet labels |
+| PUT    | `/api/documents/{id}/labels` | Set or clear facet labels (`422` on an out-of-vocabulary value) |
+| GET    | `/api/facet-suggestions` | Pending values the labeller wanted but could not use |
+| POST   | `/api/facet-suggestions/{id}/accept` | Create the suggested value and label the document with it |
+| POST   | `/api/facet-suggestions/{id}/dismiss` | Reject a suggestion |
 | GET    | `/api/jobs` | Recent background jobs (enriched with document state); filter by `task_name`/`document_id` |
 | GET    | `/api/jobs/task-names` | Distinct task names (for the task-type filter) |
 | GET    | `/api/events` | Live document-pipeline events (Server-Sent Events) |
@@ -153,6 +165,7 @@ ingestion semantics are documented in [ingestion.md](ingestion.md).
 | `tag` | string, repeatable | Tag slug; repeating the parameter ANDs them (`?tag=energie&tag=wonen` requires both) |
 | `project` | string, repeatable | Project slug; repeating the parameter **ORs** them (`?project=a&project=b` returns documents in *either*) — unlike `tag`, which ANDs. A document rarely belongs to several projects, so intersection would usually return nothing |
 | `matter` | string, repeatable | Business-matter slug; repeating the parameter **ORs** them (`?matter=a&matter=b` returns documents in *either*) — like `project`, and unlike `tag` which ANDs. A document belongs to any number of matters, so OR is the useful default |
+| `facet` | string, repeatable | `key:value` facet-label filter (§1.23.4); repeating the parameter with different keys **ANDs** them (a document holds at most one value per facet). `422` if malformed, or if the same key is repeated with two different values |
 | `language` | enum | `nld` / `eng` / `mixed` / `unknown` |
 | `status` | enum | `received` / `ocr` / `extract` / `markdown` / `embed` / `indexed` / `failed` |
 | `date_from`, `date_to` | date | Inclusive bounds on `document_date` |
@@ -1894,3 +1907,89 @@ returns an array of them):
 
 `document_count` is the number of non-deleted documents in the matter. Auth +
 CSRF apply exactly as elsewhere (§1.9).
+
+## 1.23 Facets — `/api/facets`, `/api/documents/{id}/labels`, `/api/facet-suggestions`
+
+The controlled facet vocabulary (`library.api.facets`) and the labels
+documents carry against it. See [facets.md](facets.md) for what a facet is,
+why it replaced free-form tags, the shipped vocabulary, and the cost of each
+edit; this section is the wire contract only.
+
+A facet is one closed dimension (`category`, `scope`, `cost_type`, …); a
+document holds **at most one value per facet**. The vocabulary is a
+**closed set**: nothing below ever creates a value implicitly by naming
+one — `POST /api/facet-suggestions/{id}/accept` (§1.23.3) is the only route
+that widens it.
+
+| Method | Path | Notes |
+|--------|------|-------|
+| GET | `/api/facets` | The whole vocabulary: every facet, its values, and each value's aliases. |
+| POST | `/api/facets` | Create a facet. Body `{key, label, ordinal?}`. `201`; `409` if the key already exists. |
+| POST | `/api/facets/{facet_key}/values` | Add a value to a facet. Body `{key, label}`. `201`; `404` unknown facet; `409` if the value key already exists in that facet. |
+| PATCH | `/api/facets/{facet_key}/values/{value_key}` | Rename a value's display label. Body `{label}`. Free — labels reference the value's id, not its text. `404` unknown facet/value. |
+| POST | `/api/facets/{facet_key}/values/{value_key}/aliases` | Add an alias (a surface form the labeller and search also recognise). Body `{alias}`. `404` unknown facet/value. |
+| POST | `/api/facets/{facet_key}/values/{value_key}/merge` | Fold this value into another. Body `{into, dry_run?}`. `404` unknown facet/value (either side). |
+| DELETE | `/api/facets/{facet_key}/values/{value_key}` | Delete an unused value. `204`; `404` unknown facet/value; `409` if any document still carries it. |
+| GET | `/api/documents/{id}/labels` | This document's labels: `{"labels": {facet_key: value_key, ...}}`. Facets the document has no value for are simply absent from the map. |
+| PUT | `/api/documents/{id}/labels` | Set or clear labels. Body `{"labels": {facet_key: value_key_or_null, ...}}`; `null` clears that facet. Returns the document's full label map (as GET). `404` unknown facet key; **`422`** if a value key is not in that facet's vocabulary — the closed set holds at the API boundary, not only in the labeller. |
+| GET | `/api/facet-suggestions` | Up to 100 pending suggestions (oldest first): `{id, facet, suggested_label, reason, document_id}` — values the labeller wanted but the vocabulary did not contain (§1.23.3). |
+| POST | `/api/facet-suggestions/{id}/accept` | Create the suggested value and apply it to the originating document in one call. Returns `{facet, value}`. `404` unknown suggestion; `409` if the label key derived from the suggestion (lower-cased, spaces to hyphens) already exists in that facet. |
+| POST | `/api/facet-suggestions/{id}/dismiss` | Reject a suggestion without creating anything. Returns `{"state": "dismissed"}`. `404` unknown suggestion. |
+
+### 1.23.1 Merge, and its `dry_run`
+
+`POST /api/facets/{facet_key}/values/{value_key}/merge` folds `value_key`
+into `into`: every document label pointing at `value_key` is repointed at
+`into`, and `value_key` survives only as an alias of `into` (so a document
+still using the old wording is still recognised). With `dry_run: true`, the
+route runs the same count the real merge would move and returns
+`{"moved": N}` **without changing anything** — the source value, its labels
+and its own aliases are all untouched — so a caller can preview the size of a
+merge before committing to it.
+
+### 1.23.2 Vocabulary object shapes
+
+```json
+{
+  "facets": [
+    {
+      "key": "category", "label": "Category", "ordinal": 0,
+      "values": [
+        {
+          "key": "vehicle-service", "label": "Vehicle service",
+          "parent_id": null,
+          "aliases": ["auto repair", "car service", "oil change"]
+        }
+      ]
+    }
+  ]
+}
+```
+
+`parent_id` is always `null` today — reserved for a facet to gain a second
+level as a data change rather than a migration (see [facets.md](facets.md)
+§7). Value and facet `key`s are restricted to `^[a-z0-9_-]+$`, 1–64
+characters; labels are free text up to 255 characters.
+
+### 1.23.3 Suggestions
+
+The labeller never invents a vocabulary value. When it wants one that is not
+in the vocabulary it returns `unknown` for that facet plus a suggested label,
+which is queued as a pending row (`facet_value_suggestions`) rather than
+entered directly. `GET /api/facet-suggestions` lists the pending queue;
+`accept` creates the value (deriving its key from the suggested label) and
+labels the document that prompted it in the same call; `dismiss` rejects the
+suggestion, leaving the vocabulary and the document's labels unchanged.
+
+### 1.23.4 Filtering documents by facet
+
+`GET /api/documents` accepts a repeatable `?facet=key:value` parameter
+(§1.3.1): `?facet=category:energy&facet=scope:business` requires **both**.
+Two different facet keys AND-compose (a document must match every one given);
+the same key repeated with the **same** value is accepted (a no-op
+duplicate); the same key repeated with **two different values** is `422` —
+a document can only ever hold one value per facet, so that combination could
+never match anything. A malformed pair (missing the `:`, an empty key, or an
+empty value) is also `422`. A facet or value that does not exist in the
+vocabulary is not an error — the filter is a plain equality match, so it
+narrows results to nothing rather than being rejected.

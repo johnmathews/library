@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-08-26 (§1.6 module map: added `src/library/structured_query.py` — it crossed the 400-line module-map floor on the `feat/ask-answer-trustworthiness` branch, which added the `Coverage`/`Aggregated` machinery). Earlier (2026-08-20, §1.6 module map: added `src/library/llm/`, the subscription LLM backend — Agent SDK adapter + OAuth refresh; and §1.3 data model: `instance_settings`, migration 0030, the runtime override layer behind the LLM backend switch; see `llm-backends.md`). Earlier (2026-08-12, documentation verification sweep): §1.5.1 now names the two genuinely per-user resources — Ask threads and saved views — instead of claiming no ownership anywhere; Inter is CDN-loaded, not self-hosted; corrected the module-map gap wording). Earlier (2026-07-17, business matters: business matters: the `matters`/`document_matters` collection (migration 0028) and the separate best-effort matter-classification pass after extract; §1.2 step 3, §1.3). Earlier (2026-07-15, data model: `email_selection_traces`, the per-email skip audit, migration 0027). Earlier (2026-07-06): authorization model §1.5.1: shared library, no per-user ownership — deliberate. Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
-**Last verified:** 2026-08-26 — method: added the `src/library/structured_query.py` row to §1.6's module map (`wc -l` confirms 407 lines, past the 400-line `MODULE_MAP_LINE_FLOOR`) and ran `scripts/check_docs.py`, which now passes with zero violations. This was a single-row addition only — nothing else in the document was re-checked this pass; the rest carries forward the 2026-08-20 verification below unchanged. That verification's method was: re-derived §1.6's module map from `ls src/library/` and confirmed the new `src/library/llm/` row against the package on disk (`oauth.py`, `subscription.py`, `backends.py`), and the §1.3 `instance_settings` entry against `models.py` and `migrations/versions/0030_instance_settings.py` and its link target `docs/llm-backends.md`. The rest of the document is unchanged since the 2026-08-12 sweep, whose method was: checked §1.6's module map against `wc -l` of every module and the floor rule in `scripts/check_docs.py`, the pipeline order against `_NEXT_STATUS` and each stage hook in `jobs.py`, the §1.3 table against `__tablename__` in `models.py` plus `migrations/versions/`, the §1.5 claims against every `/api` router's owner-scoping, and each model id against `config.py`.
+**Status:** active. **Last updated:** 2026-08-28 (new §1.3.1 Facet labels: `facets`/`facet_values`/`facet_value_aliases`/`document_labels`/`facet_value_suggestions`, migration 0032 — the composite primary key that enforces at most one value per facet, and the composite foreign key that stops a label pointing at another facet's value; see [facets.md](facets.md). Also corrected §1.6's `src/library/facets/` row from "Facet labeling" to "Facet labelling" for spelling consistency with the rest of this feature's prose). Earlier (2026-08-26, §1.6 module map: added `src/library/structured_query.py` — it crossed the 400-line module-map floor on the `feat/ask-answer-trustworthiness` branch, which added the `Coverage`/`Aggregated` machinery). Earlier (2026-08-20, §1.6 module map: added `src/library/llm/`, the subscription LLM backend — Agent SDK adapter + OAuth refresh; and §1.3 data model: `instance_settings`, migration 0030, the runtime override layer behind the LLM backend switch; see `llm-backends.md`). Earlier (2026-08-12, documentation verification sweep): §1.5.1 now names the two genuinely per-user resources — Ask threads and saved views — instead of claiming no ownership anywhere; Inter is CDN-loaded, not self-hosted; corrected the module-map gap wording). Earlier (2026-07-17, business matters: business matters: the `matters`/`document_matters` collection (migration 0028) and the separate best-effort matter-classification pass after extract; §1.2 step 3, §1.3). Earlier (2026-07-15, data model: `email_selection_traces`, the per-email skip audit, migration 0027). Earlier (2026-07-06): authorization model §1.5.1: shared library, no per-user ownership — deliberate. Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
+**Last verified:** 2026-08-28 — method: read `src/library/models.py`'s `Facet`/`FacetValue`/`FacetValueAlias`/`DocumentLabel`/`FacetValueSuggestion` classes and `migrations/versions/0032_facet_vocabulary.py` in full to confirm the new §1.3.1 prose (the `document_labels` composite primary key `(document_id, facet_id)`, the composite foreign key `(facet_value_id, facet_id)` referencing `facet_values(id, facet_id)`, and the redundant `UNIQUE (id, facet_id)` on `facet_values` that backs it) against the actual table definitions; confirmed `src/library/facets/` still exists as a package and reads "Facet labelling" (not "labeling") in §1.6. Ran `uv run python scripts/check_docs.py`, clean. The rest carries forward the 2026-08-26 verification below unchanged: method was: added the `src/library/structured_query.py` row to §1.6's module map (`wc -l` confirms 407 lines, past the 400-line `MODULE_MAP_LINE_FLOOR`) and ran `scripts/check_docs.py`, which now passes with zero violations. This was a single-row addition only — nothing else in the document was re-checked this pass; the rest carries forward the 2026-08-20 verification below unchanged. That verification's method was: re-derived §1.6's module map from `ls src/library/` and confirmed the new `src/library/llm/` row against the package on disk (`oauth.py`, `subscription.py`, `backends.py`), and the §1.3 `instance_settings` entry against `models.py` and `migrations/versions/0030_instance_settings.py` and its link target `docs/llm-backends.md`. The rest of the document is unchanged since the 2026-08-12 sweep, whose method was: checked §1.6's module map against `wc -l` of every module and the floor rule in `scripts/check_docs.py`, the pipeline order against `_NEXT_STATUS` and each stage hook in `jobs.py`, the §1.3 table against `__tablename__` in `models.py` plus `migrations/versions/`, the §1.5 claims against every `/api` router's owner-scoping, and each model id against `config.py`.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -189,6 +189,26 @@ re-derivable artifact.
   classifier reads. Also soft-archivable via `archived_at`; documents survive a
   matter delete. Populated automatically (see §1.2 step 3) but hand-editable.
 
+### 1.3.1 Facet labels
+
+`facets` / `facet_values` / `facet_value_aliases` / `document_labels` /
+`facet_value_suggestions` — the controlled label vocabulary that replaced 771
+drifted free-form tags (migration 0032; module `src/library/facets/`, §1.6;
+full design in [facets.md](facets.md)). A facet (`category`, `scope`,
+`cost_type`, …) is a closed set of values; **labels live on the document**,
+one row per `(document_id, facet_id)` in `document_labels`.
+
+That composite **primary key** — `(document_id, facet_id)` — is what
+guarantees at most one value per facet per document: a second `INSERT` for a
+facet the document already has a value for is a primary-key conflict, not a
+second row, so the labelling code upserts rather than needing an application-
+level check. A composite **foreign key** on `document_labels(facet_value_id,
+facet_id)` referencing `facet_values(id, facet_id)` — backed by a redundant
+`UNIQUE (id, facet_id)` on `facet_values` — is what stops a label pointing at
+another facet's value: without it, nothing in the schema would prevent a row
+claiming facet `scope` while its `facet_value_id` actually names a `category`
+value, which would silently corrupt any `GROUP BY` over labels.
+
 **Derived artifacts** (rebuildable from the original):
 
 - `document_pages` — per-page markdown renderings, PK `(document_id, page_number)`.
@@ -342,7 +362,7 @@ top-level modules.
 | `src/library/auth/` | Argon2 passwords, cookie sessions, bearer API tokens. |
 | `src/library/embedding/` | Local embedding (bge-m3 via a text-embeddings-inference sidecar). |
 | `src/library/extraction/` | Claude metadata extraction: schema, extractor, pricing, and pipeline glue. |
-| `src/library/facets/` | Facet labeling: vocabulary management and LLM-driven label proposals. |
+| `src/library/facets/` | Facet labelling: vocabulary management and LLM-driven label proposals. |
 | `src/library/importer/` | paperless-ngx importer: REST client, payload mapper, batch runner. |
 | `src/library/llm/` | The subscription LLM backend: Claude Agent SDK adapter and OAuth credential refresh. See [`llm-backends.md`](llm-backends.md). |
 | `src/library/markdown/` | Vision-model page-to-markdown conversion and its storage. |

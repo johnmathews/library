@@ -1,7 +1,7 @@
 # Documentation
 
-**Status:** active. **Last updated:** 2026-08-21 (indexed the new `observability.md`). Earlier (2026-08-20): indexed the new `llm-backends.md`. Earlier (2026-08-12, documentation verification sweep): corrected the `frontend.md` one-liner, which claimed PWA coverage the document did not have.
-**Last verified:** 2026-08-21 — method: confirmed the new `observability.md` row resolves on disk and that its description matches that document's headings, and re-derived the gated set from `GATED_GLOBS`/`EXCLUDED_DIRS` in `scripts/check_docs.py` to confirm the index still covers it in both directions. The rest of the index is unchanged since the 2026-08-12 sweep, whose method was: resolved every markdown link and directory link on disk, derived the gated set and diffed it against the index in both directions, and checked each description against its target's headings.
+**Status:** active. **Last updated:** 2026-08-28 (indexed the new `facets.md` — the controlled facet vocabulary). Earlier (2026-08-21): indexed the new `observability.md`. Earlier (2026-08-20): indexed the new `llm-backends.md`. Earlier (2026-08-12, documentation verification sweep): corrected the `frontend.md` one-liner, which claimed PWA coverage the document did not have.
+**Last verified:** 2026-08-28 — method: confirmed `facets.md` resolves on disk and that its index description matches that document's section headings, and re-derived the gated set from `GATED_GLOBS`/`EXCLUDED_DIRS` in `scripts/check_docs.py` to confirm the index still covers it in both directions. The rest of the index is unchanged since the 2026-08-21 verification, whose method was: confirmed the new `observability.md` row resolves on disk and that its description matches that document's headings, and re-derived the gated set from `GATED_GLOBS`/`EXCLUDED_DIRS` in `scripts/check_docs.py` to confirm the index still covers it in both directions. The rest of the index is unchanged since the 2026-08-12 sweep, whose method was: resolved every markdown link and directory link on disk, derived the gated set and diffed it against the index in both directions, and checked each description against its target's headings.
 
 Reference documentation for Library — a self-hosted document archive (FastAPI
 backend + Vue 3 SPA, Postgres/pgvector, OCR ingestion, an MCP server, and an
@@ -32,6 +32,7 @@ New to the codebase? Read in this order:
 | [`admin.md`](admin.md) | The admin role and admin views: users, taxonomy (senders/kinds/recipients), currencies, FX rates, business matters. |
 | [`jobs-and-notifications.md`](jobs-and-notifications.md) | Background jobs, the Jobs view, live SSE toasts, and Pushover notifications. |
 | [`smart-groups.md`](smart-groups.md) | Smart Groups: semantic authored series — the membership scorer, the three flows, mixed currency, and the LLM's one narrow role. |
+| [`facets.md`](facets.md) | The controlled facet vocabulary that replaced free-form tags: what a facet is, the shipped vocabulary, the closed-set rule and suggestion queue, vocabulary CRUD and its costs, `library label-archive`/`library recipients`, and the REST surface. |
 | [`migration.md`](migration.md) | Migrating an existing archive from paperless-ngx. |
 | [`roadmap.md`](roadmap.md) | Deferred work and forward-looking notes. |
 
