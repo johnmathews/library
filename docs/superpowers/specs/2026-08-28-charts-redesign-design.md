@@ -215,10 +215,59 @@ inheritance rule has exactly one place to be tested.
 
 ```
 spend_facts (view)
-  document_id | line_id? | date | amount | currency
-  amount_kind | reference | payment_key
-  <one column per facet>
+  document_id | line_id? | payment_id | is_canonical
+  sender_id | date | amount | currency
+  amount_kind | reference
+  labels  jsonb    -- {"category":"accountancy","scope":"business",...}
 ```
+
+**Labels are one `jsonb` column, not one column per facet.** Facets are created
+and deleted at runtime, so a view with a fixed column per facet would need
+regenerating on every vocabulary edit. A rule reads
+`labels->>'category' = 'accountancy'` and a split axis is
+`GROUP BY labels->>'scope'`; a GIN index on `labels` serves both. This replaces
+an earlier draft of this section that specified one column per facet — it does
+not survive contact with §7.5's CRUD.
+
+**Canonical document within a merged payment.** When two documents are one
+payment (§8.3) only one may contribute its money, or the merge would not have
+removed the double count. The canonical one is chosen as: a **line-bearing
+document wins** (otherwise merging an itemised invoice with its receipt would
+discard the split), then `payment_made` over `payment_due`, then lowest id.
+`spend_facts.is_canonical` carries the result and every chart sum filters on it.
+
+### 5.2 Prototype results
+
+The schema, both views and the merge rules of §8.3 were built and executed
+against PostgreSQL 17 before this spec was finalised, using shaped fixtures that
+mirror every ambiguous case in the live archive. Recorded here because §13
+requires it and because two findings above came out of it rather than out of
+reasoning.
+
+Verified green:
+
+| check | result |
+| --- | --- |
+| R1 / R2 / R3 fire on the pairs they should, and only those | 5 merges, correct rule each |
+| two same-amount purchases four days apart, both `payment_made` | kept separate |
+| four same-amount invoices, one same-day pair | only that pair merged |
+| VETO: same sender, date and amount, differing references | kept separate |
+| label inheritance across a split document | inherited facet kept, overridden facet replaced |
+| total invariant across split axes | identical under no split, by `scope`, by `sender` |
+| double-count | merged pair contributes once, not twice |
+| footer | `coverage_limit` and uncategorised money both reported |
+
+Verified to reject:
+
+| attempted | rejected by |
+| --- | --- |
+| two values of one facet on one document | primary key |
+| label whose `facet_id` disagrees with its value | composite foreign key |
+| lines that do not sum to `amount_total` | constraint trigger |
+| deleting a facet value still in use | foreign key |
+
+`SPLIT` and `MERGE` overrides were confirmed to un-merge an automatic pair and
+to join a pair no rule merges, respectively.
 
 ## 6. Data model
 
@@ -249,6 +298,14 @@ Notes on three columns that are load-bearing:
 - **`facet_value_aliases`** lets one value be recognised by several surface
   forms — a vehicle by its registration plate, its marque, and the mojibake
   spelling of that marque. Aliases feed the labelling prompt and search.
+- **A label's `facet_id` must agree with its value's facet.** `facet_values`
+  carries a redundant `UNIQUE (id, facet_id)` so the label tables can hold a
+  composite foreign key on `(facet_value_id, facet_id)`. Without it, a row can
+  claim facet `scope` while pointing at a `category` value, and the `GROUP BY`
+  invariant silently breaks.
+- **`sum(lines) = amount_total`** is a `DEFERRABLE INITIALLY DEFERRED`
+  constraint trigger, so a multi-row split inserts as one transaction rather
+  than failing on the first line.
 
 Documents gain `amount_kind` and `reference` (§8).
 
