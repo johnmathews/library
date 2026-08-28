@@ -29,6 +29,7 @@ from library.extraction.validation import (
     findings_to_payload,
     validate,
 )
+from library.facets.apply import label_and_apply
 from library.models import (
     Document,
     DocumentLanguage,
@@ -607,6 +608,16 @@ async def apply_extraction(
         await _apply_validation(session, document, settings)
     except Exception:  # validation is best-effort; never fail the document
         logger.exception("validation failed for document %s", document.id)
+
+    # Label the document against the controlled facet vocabulary. Best-effort
+    # and self-contained, exactly like the validation step above: a missing
+    # API key or an unparseable response leaves the document unlabelled and
+    # visible in the review queue, never fails the ingest.
+    try:
+        await label_and_apply(session, settings, document.id)
+    except Exception:  # labelling is best-effort; never fail the document
+        logger.exception("facet labelling failed for document %s", document.id)
+
     await _record_event(
         session,
         document,

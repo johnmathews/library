@@ -537,6 +537,39 @@ def backfill_summaries(
     typer.echo(f"queued extraction for {count} document(s)")
 
 
+@app.command("label-archive")
+def label_archive(
+    limit: int = typer.Option(0, "--limit", help="Stop after this many documents (0 = all)."),
+    only: int = typer.Option(0, "--only", help="Label just this document id."),
+    relabel: bool = typer.Option(
+        False, "--relabel", help="Also re-label documents that already carry labels."
+    ),
+) -> None:
+    """Seed the facet vocabulary if needed, then label documents that lack labels."""
+    from library.facets.apply import label_and_apply
+    from library.facets.backfill import run_backfill
+    from library.facets.seed import seed_vocabulary
+
+    settings = get_settings()
+
+    async def _operation(session: AsyncSession) -> tuple[int, int]:
+        created = await seed_vocabulary(session)
+        await session.commit()
+        if created:
+            typer.echo(f"seeded {created} facet values")
+        if only:
+            outcome = await label_and_apply(session, settings, only)
+            if outcome is None:
+                return 0, 1
+            await session.commit()
+            typer.echo(f"document {only}: {outcome.applied}")
+            return 1, 0
+        return await run_backfill(session, settings, relabel=relabel, limit=limit or None)
+
+    labelled, skipped = _run(_operation)
+    typer.echo(f"labelled {labelled}, skipped {skipped}")
+
+
 @app.command("sweep-matters")
 def sweep_matters(
     limit: int | None = typer.Option(

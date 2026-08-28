@@ -35,6 +35,7 @@ from library.extraction.extractor import (
     ExtractionOutcome,
 )
 from library.extraction.schema import ExtractedMetadata
+from library.facets.apply import LabellingOutcome
 from library.jobs import advance_pipeline, extract_document, job_app
 from library.models import (
     Document,
@@ -240,6 +241,88 @@ async def test_dutch_invoice_outcome_populates_metadata(
     assert completed[0]["model"] == "claude-haiku-4-5"
     assert completed[0]["cost_usd"] == pytest.approx(0.002)
     assert completed[0]["input_tokens"] == 1_000
+
+
+async def test_apply_extraction_calls_the_facet_labeller(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The success path hands the freshly-persisted document to the labeller.
+
+    ``conftest._facet_labelling_disabled_by_default`` makes this a no-op for
+    every other test in the suite; here we monkeypatch it back to a stub (the
+    same technique ``patch_extract`` uses for ``extract``) to prove
+    ``apply_extraction`` actually calls it, with the document's own id, after
+    the extracted fields have already been written.
+    """
+    calls: list[int] = []
+
+    async def fake_label_and_apply(
+        session: AsyncSession,
+        settings: Settings,
+        document_id: int,
+        *,
+        client: Any = None,
+        backend: str = "api",
+    ) -> LabellingOutcome:
+        # The document must already carry its extracted fields by the time the
+        # labeller runs, or it would be labelling on stale/empty data.
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.title == "Energierekening mei 2026"
+        calls.append(document_id)
+        return LabellingOutcome(
+            document_id=document_id, applied={"category": "invoice"}, unknown=(), suggested=()
+        )
+
+    monkeypatch.setattr(apply_module, "label_and_apply", fake_label_and_apply)
+    patch_extract(monkeypatch, make_outcome(make_metadata()))
+    document_id = await make_document(session_factory, "apply-facet-hook")
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    assert calls == [document_id]
+
+
+async def test_facet_labelling_failure_never_fails_the_document(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A labelling error is logged and swallowed; extraction still completes.
+
+    Mirrors ``test_extraction_failure_still_reaches_indexed`` but for the
+    facet-labelling hook: an unparseable model response or a transient API
+    error must leave the document unlabelled and visible in the review queue,
+    never fail the ingest.
+    """
+
+    async def broken_label_and_apply(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("facet labeller is unreachable")
+
+    monkeypatch.setattr(apply_module, "label_and_apply", broken_label_and_apply)
+    patch_extract(monkeypatch, make_outcome(make_metadata()))
+    document_id = await make_document(session_factory, "apply-facet-hook-failure")
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        # The extracted fields still landed — the labelling failure did not
+        # roll anything back or otherwise disturb the success path.
+        assert document.title == "Energierekening mei 2026"
+
+    events = await get_events(session_factory, document_id)
+    completed = [detail for event, detail in events if event == "extraction_completed"]
+    assert len(completed) == 1
 
 
 async def test_sender_upsert_is_case_insensitive(
