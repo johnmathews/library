@@ -1,18 +1,28 @@
 """Turning proposals into rows: what is applied, what is withheld, what is queued."""
 
 import asyncio
+import hashlib
 import uuid
 from collections.abc import Awaitable, Callable
+from decimal import Decimal
 
 import pytest
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from library.facets.apply import apply_proposals
+from library.config import get_settings
+from library.facets.apply import apply_proposals, document_fields, label_and_apply
 from library.facets.labeller import LabelProposal
 from library.facets.vocabulary import create_facet, create_value, document_labels
-from library.models import FacetValueSuggestion
+from library.models import (
+    Document,
+    DocumentSource,
+    DocumentStatus,
+    FacetValueSuggestion,
+    Kind,
+    Sender,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -118,3 +128,100 @@ def test_applying_twice_is_idempotent(api_database_url: str, seeded_document_id:
         )
     )
     assert len(list(rows.scalars())) == 1
+
+
+def test_label_and_apply_returns_none_for_a_missing_document(api_database_url: str) -> None:
+    """A quiet skip, not an error — a backfill must not die on a stale id."""
+    settings = get_settings()
+    outcome = asyncio.run(
+        _run(api_database_url, lambda s: label_and_apply(s, settings, 999_999_999))
+    )
+    assert outcome is None
+
+
+def test_label_and_apply_returns_none_when_no_model_is_configured(
+    api_database_url: str, seeded_document_id: int
+) -> None:
+    """No API key is a skip, mirroring series_insight.describe_series."""
+    settings = get_settings().model_copy(update={"anthropic_api_key": None})
+    outcome = asyncio.run(
+        _run(api_database_url, lambda s: label_and_apply(s, settings, seeded_document_id))
+    )
+    assert outcome is None
+
+
+def test_document_fields_maps_every_column_to_the_right_attribute(api_database_url: str) -> None:
+    """Guards the select-tuple order. A swap here produces no error, only wrong
+    facts fed to the model, so nothing else would catch it."""
+
+    async def _seed(session: AsyncSession) -> int:
+        sender = Sender(name=f"FieldsVendor-{uuid.uuid4().hex[:8]}")
+        session.add(sender)
+        await session.flush()
+        kind = (await session.execute(select(Kind).limit(1))).scalar_one()
+        marker = f"fields:{uuid.uuid4()}"
+        doc = Document(
+            sha256=hashlib.sha256(marker.encode()).hexdigest(),
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            status=DocumentStatus.INDEXED,
+            title="A distinctive title",
+            summary="A distinctive summary.",
+            sender_id=sender.id,
+            kind_id=kind.id,
+            amount_total=Decimal("12.34"),
+            currency="EUR",
+            ocr_text="Distinctive body text.",
+        )
+        session.add(doc)
+        await session.flush()
+        return doc.id
+
+    document_id = asyncio.run(_run(api_database_url, _seed))
+    fields = asyncio.run(_run(api_database_url, lambda s: document_fields(s, document_id)))
+    assert fields is not None
+    assert fields.title == "A distinctive title"
+    assert fields.summary == "A distinctive summary."
+    assert fields.sender is not None and fields.sender.startswith("FieldsVendor-")
+    assert fields.kind is not None
+    assert fields.amount == "12.34"
+    assert fields.currency == "EUR"
+    assert fields.excerpt == "Distinctive body text."
+
+
+def test_document_fields_returns_none_for_a_missing_document(api_database_url: str) -> None:
+    result = asyncio.run(_run(api_database_url, lambda s: document_fields(s, 999_999_999)))
+    assert result is None
+
+
+def test_a_proposal_can_be_both_applied_and_suggested(
+    api_database_url: str, seeded_document_id: int
+) -> None:
+    """Recording a suggestion must not short-circuit the label decision."""
+    key = _setup(api_database_url)
+    proposals = [LabelProposal(key, "alpha", 0.9, "confident", "telecoms")]
+    outcome = asyncio.run(
+        _run(
+            api_database_url,
+            lambda s: apply_proposals(s, seeded_document_id, proposals, min_confidence=0.6),
+        )
+    )
+    assert outcome.applied == {key: "alpha"}
+    assert outcome.suggested == ((key, "telecoms"),)
+
+
+def test_a_value_missing_from_the_vocabulary_is_unknown_not_a_crash(
+    api_database_url: str, seeded_document_id: int
+) -> None:
+    """set_document_label raises UnknownValueError when the vocabulary changed
+    between parsing and writing. A run over the archive must not die on it."""
+    key = _setup(api_database_url)
+    proposals = [LabelProposal(key, "vanished", 0.99, "was valid at parse time", None)]
+    outcome = asyncio.run(
+        _run(
+            api_database_url,
+            lambda s: apply_proposals(s, seeded_document_id, proposals, min_confidence=0.6),
+        )
+    )
+    assert outcome.applied == {}
+    assert key in outcome.unknown
