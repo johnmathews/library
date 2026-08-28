@@ -580,28 +580,40 @@ def recipients_command(
     """Inspect and consolidate duplicate recipient rows."""
     from library.facets.recipients import duplicate_recipient_groups, merge_recipients
 
-    async def _operation(session: AsyncSession) -> str:
+    async def _operation(session: AsyncSession) -> str | None:
         if merge:
             keep_raw, _, drops_raw = merge.partition(":")
             if not drops_raw:
                 return "error: expected KEEP_ID:DROP_ID[,DROP_ID...]"
-            moved = await merge_recipients(
-                session, int(keep_raw), [int(part) for part in drops_raw.split(",")]
-            )
+            try:
+                keep_id = int(keep_raw)
+                drop_ids = [int(part) for part in drops_raw.split(",")]
+            except ValueError:
+                return "error: KEEP_ID and DROP_ID must be integers"
+            try:
+                moved = await merge_recipients(session, keep_id, drop_ids)
+            except ValueError as exc:
+                return f"error: {exc}"
             await session.commit()
             return f"moved {moved} documents"
-        groups = await duplicate_recipient_groups(session)
-        if not groups:
-            return "no duplicate recipients"
-        lines = []
-        for key, members in groups:
-            rendered = ", ".join(f"{rid}={name!r} ({n} docs)" for rid, name, n in members)
-            lines.append(f"{key}: {rendered}")
-        return "\n".join(lines)
+        if list_duplicates:
+            groups = await duplicate_recipient_groups(session)
+            if not groups:
+                return "no duplicate recipients"
+            lines = []
+            for key, members in groups:
+                rendered = ", ".join(f"{rid}={name!r} ({n} docs)" for rid, name, n in members)
+                lines.append(f"{key}: {rendered}")
+            return "\n".join(lines)
+        return None
 
-    typer.echo(_run(_operation))
-    if not list_duplicates and not merge:
+    result = _run(_operation)
+    if result is None:
         typer.echo("(pass --list or --merge)")
+        return
+    typer.echo(result)
+    if result.startswith("error:"):
+        raise typer.Exit(code=1)
 
 
 @app.command("sweep-matters")
