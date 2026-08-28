@@ -1,8 +1,11 @@
 """Facet vocabulary and document-label endpoints.
 
 The closed-set rule is enforced here as well as in the labeller: a PUT naming a
-value that does not exist is a 422, never an implicit create. Authentication is
-enforced at include level in app.py, like every other router.
+value that does not exist is a 422, never an implicit create. The only endpoint
+that widens the vocabulary is ``accept_suggestion``, and it is guarded the same
+way ``create_facet``/``create_value`` are: a duplicate key is a 409, not an
+unhandled ``IntegrityError``. Authentication is enforced at include level in
+app.py, like every other router.
 """
 
 from typing import Annotated
@@ -10,6 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.db import get_session
@@ -103,8 +107,15 @@ async def list_facets(session: Annotated[AsyncSession, Depends(get_session)]) ->
 async def create_facet(
     body: FacetCreate, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> dict[str, str]:
-    await vocabulary.create_facet(session, body.key, body.label, body.ordinal)
-    await session.commit()
+    try:
+        await vocabulary.create_facet(session, body.key, body.label, body.ordinal)
+        await session.commit()
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"facet already exists: {body.key!r}",
+        ) from exc
     return {"key": body.key}
 
 
@@ -118,9 +129,15 @@ async def create_value(
 ) -> dict[str, str]:
     try:
         await vocabulary.create_value(session, facet_key, body.key, body.label)
+        await session.commit()
     except UnknownFacetError as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown facet") from exc
-    await session.commit()
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown facet") from exc
+    except IntegrityError as exc:
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{facet_key}={body.key} already exists",
+        ) from exc
     return {"key": body.key}
 
 
@@ -134,7 +151,9 @@ async def rename_value(
     try:
         await vocabulary.rename_value(session, facet_key, value_key, body.label)
     except (UnknownFacetError, UnknownValueError) as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown facet value") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown facet value"
+        ) from exc
     await session.commit()
     return {"label": body.label}
 
@@ -149,7 +168,9 @@ async def add_alias(
     try:
         await vocabulary.add_alias(session, facet_key, value_key, body.alias)
     except (UnknownFacetError, UnknownValueError) as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown facet value") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown facet value"
+        ) from exc
     await session.commit()
     return {"alias": body.alias}
 
@@ -167,7 +188,9 @@ async def merge_value(
             return {"moved": moved}
         moved = await vocabulary.merge_values(session, facet_key, value_key, body.into)
     except (UnknownFacetError, UnknownValueError) as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown facet value") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown facet value"
+        ) from exc
     await session.commit()
     return {"moved": moved}
 
@@ -183,9 +206,11 @@ async def delete_value(
     try:
         await vocabulary.delete_value(session, facet_key, value_key)
     except (UnknownFacetError, UnknownValueError) as exc:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown facet value") from exc
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="Unknown facet value"
+        ) from exc
     except ValueInUseError as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     await session.commit()
 
 
@@ -206,11 +231,13 @@ async def put_labels(
         try:
             await vocabulary.set_document_label(session, document_id, facet_key, value_key)
         except UnknownFacetError as exc:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, f"Unknown facet: {facet_key}") from exc
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND, detail=f"Unknown facet: {facet_key}"
+            ) from exc
         except UnknownValueError as exc:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"{facet_key}={value_key} is not in the vocabulary",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"{facet_key}={value_key} is not in the vocabulary",
             ) from exc
     await session.commit()
     return {"labels": await vocabulary.document_labels(session, document_id)}
@@ -253,13 +280,24 @@ async def accept_suggestion(
         )
     ).one_or_none()
     if row is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown suggestion")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown suggestion")
     suggestion, facet_key = row
     value_key = suggestion.suggested_label.strip().lower().replace(" ", "-")
     vocab = {f.key: f for f in await vocabulary.load_vocabulary(session)}
     if vocab[facet_key].value(value_key) is not None:
-        raise HTTPException(status.HTTP_409_CONFLICT, f"{facet_key}={value_key} already exists")
-    await vocabulary.create_value(session, facet_key, value_key, suggestion.suggested_label)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=f"{facet_key}={value_key} already exists"
+        )
+    try:
+        await vocabulary.create_value(session, facet_key, value_key, suggestion.suggested_label)
+    except IntegrityError as exc:
+        # The pre-check above closes the common case; this closes the race
+        # (two accepts for the same derived key landing concurrently) that a
+        # pre-check alone cannot.
+        await session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=f"{facet_key}={value_key} already exists"
+        ) from exc
     await vocabulary.set_document_label(session, suggestion.document_id, facet_key, value_key)
     suggestion.state = "accepted"
     await session.commit()
@@ -272,7 +310,7 @@ async def dismiss_suggestion(
 ) -> dict[str, str]:
     suggestion = await session.get(FacetValueSuggestion, suggestion_id)
     if suggestion is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown suggestion")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown suggestion")
     suggestion.state = "dismissed"
     await session.commit()
     return {"state": "dismissed"}
