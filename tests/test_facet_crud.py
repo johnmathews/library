@@ -97,3 +97,23 @@ def test_an_alias_is_visible_on_the_value(api_database_url: str) -> None:
     asyncio.run(_run(api_database_url, _work))
     facets = {f.key: f for f in asyncio.run(_run(api_database_url, load_vocabulary))}
     assert "a-plate-or-misspelling" in facets[key].value("alpha").aliases
+
+
+def test_merge_survives_two_values_that_share_an_alias(api_database_url: str) -> None:
+    """facet_value_aliases' PK is (facet_value_id, alias), and a merge changes
+    facet_value_id — so a shared alias collides. Reachable whenever the two
+    values are similar enough to be worth merging."""
+    key = _facet_key()
+
+    async def _work(session: AsyncSession) -> int:
+        await create_facet(session, key, "Crud")
+        await create_value(session, key, "alpha", "Alpha")
+        await create_value(session, key, "beta", "Beta")
+        await add_alias(session, key, "alpha", "shared-term")
+        await add_alias(session, key, "beta", "shared-term")
+        return await merge_values(session, key, "alpha", "beta")
+
+    asyncio.run(_run(api_database_url, _work))
+    facets = {f.key: f for f in asyncio.run(_run(api_database_url, load_vocabulary))}
+    assert facets[key].value("alpha") is None
+    assert "shared-term" in facets[key].value("beta").aliases

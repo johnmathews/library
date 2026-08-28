@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import delete, func, literal, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -209,11 +209,22 @@ async def merge_values(session: AsyncSession, facet_key: str, from_key: str, int
         .values(facet_value_id=into_id, alias=from_key)
         .on_conflict_do_nothing()
     )
+    # Re-point the old value's aliases onto the target. Copy-then-delete rather
+    # than UPDATE: facet_value_aliases' primary key is (facet_value_id, alias),
+    # and the two values may already share an alias — which is likeliest for
+    # exactly the pairs a user wants to merge. ON CONFLICT DO NOTHING keeps the
+    # target's existing row in that case.
     await session.execute(
-        update(FacetValueAlias)
-        .where(FacetValueAlias.facet_value_id == from_id)
-        .values(facet_value_id=into_id)
+        pg_insert(FacetValueAlias)
+        .from_select(
+            ["facet_value_id", "alias"],
+            select(literal(into_id), FacetValueAlias.alias).where(
+                FacetValueAlias.facet_value_id == from_id
+            ),
+        )
+        .on_conflict_do_nothing()
     )
+    await session.execute(delete(FacetValueAlias).where(FacetValueAlias.facet_value_id == from_id))
     await session.execute(delete(FacetValue).where(FacetValue.id == from_id))
     return int(moved)
 
