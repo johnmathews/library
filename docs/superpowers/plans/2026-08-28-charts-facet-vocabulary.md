@@ -474,6 +474,7 @@ Create `tests/test_facet_vocabulary.py`:
 
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -508,7 +509,7 @@ async def _seed_vocab(database_url: str, facet_key: str) -> None:
         await engine.dispose()
 
 
-async def _with_session[T](database_url: str, work) -> T:
+async def _with_session[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
     engine = create_async_engine(database_url, poolclass=NullPool)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -1075,6 +1076,7 @@ Create `tests/test_facet_crud.py`:
 
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -1096,7 +1098,7 @@ from library.facets.vocabulary import (
 pytestmark = pytest.mark.integration
 
 
-async def _run[T](database_url: str, work) -> T:
+async def _run[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
     engine = create_async_engine(database_url, poolclass=NullPool)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -1703,6 +1705,7 @@ Create `tests/test_facet_apply.py`:
 
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 
 import pytest
 from sqlalchemy import select
@@ -1717,7 +1720,7 @@ from library.models import FacetValueSuggestion
 pytestmark = pytest.mark.integration
 
 
-async def _run[T](database_url: str, work) -> T:
+async def _run[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
     engine = create_async_engine(database_url, poolclass=NullPool)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -2023,6 +2026,7 @@ Create `tests/test_facet_backfill.py`:
 
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -2034,7 +2038,7 @@ from library.facets.vocabulary import create_facet, create_value, set_document_l
 pytestmark = pytest.mark.integration
 
 
-async def _run[T](database_url: str, work) -> T:
+async def _run[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
     engine = create_async_engine(database_url, poolclass=NullPool)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -3369,6 +3373,7 @@ Create `tests/test_recipient_merge.py`:
 import asyncio
 import hashlib
 import uuid
+from collections.abc import Awaitable, Callable
 
 import pytest
 from sqlalchemy import select
@@ -3381,7 +3386,7 @@ from library.models import Document, DocumentSource, DocumentStatus, Recipient
 pytestmark = pytest.mark.integration
 
 
-async def _run[T](database_url: str, work) -> T:
+async def _run[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
     engine = create_async_engine(database_url, poolclass=NullPool)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:

@@ -77,6 +77,7 @@ Create `tests/test_money_schema.py`:
 import asyncio
 import hashlib
 import uuid
+from collections.abc import Awaitable, Callable
 
 import pytest
 from sqlalchemy import select
@@ -95,7 +96,7 @@ from library.models import (
 pytestmark = pytest.mark.integration
 
 
-async def _run[T](database_url: str, work) -> T:
+async def _run[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
     engine = create_async_engine(database_url, poolclass=NullPool)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -576,6 +577,7 @@ Create `tests/test_money_backfill.py`:
 import asyncio
 import hashlib
 import uuid
+from collections.abc import Awaitable, Callable
 from decimal import Decimal
 
 import pytest
@@ -588,7 +590,7 @@ from library.money.backfill import documents_needing_amount_kind
 pytestmark = pytest.mark.integration
 
 
-async def _run[T](database_url: str, work) -> T:
+async def _run[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
     engine = create_async_engine(database_url, poolclass=NullPool)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
@@ -943,6 +945,7 @@ MERGE (an invoice and the receipt that settled it).
 import asyncio
 import hashlib
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import date
 from decimal import Decimal
 
@@ -956,7 +959,7 @@ from library.money.payments import add_override, payment_group
 pytestmark = pytest.mark.integration
 
 
-async def _run[T](database_url: str, work) -> T:
+async def _run[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
     engine = create_async_engine(database_url, poolclass=NullPool)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
