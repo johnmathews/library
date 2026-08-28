@@ -34,8 +34,8 @@ async def documents_needing_labels(
 
 async def run_backfill(
     session: AsyncSession, settings: Settings, *, relabel: bool, limit: int | None
-) -> tuple[int, int]:
-    """Label each selected document. Returns ``(labelled, skipped)``.
+) -> tuple[int, int, int]:
+    """Label each selected document. Returns ``(labelled, empty, skipped)``.
 
     Each document commits on its own so a failure part-way leaves the work
     already done in place; the command is re-runnable by design.
@@ -46,9 +46,16 @@ async def run_backfill(
     rest of the run with it — every later commit would raise
     InFailedSqlTransaction. Rolling back to the savepoint discards only that
     document's writes; it is counted as skipped and the run continues.
+
+    ``empty`` counts a document that ran to completion without error but had
+    nothing applied — every proposal below the confidence floor, or (the
+    production incident this guards against) a wholly unparseable model
+    response. Previously that case was counted as ``labelled`` alongside real
+    successes, so a total labelling failure across a run still printed
+    ``labelled 5, skipped 0``.
     """
     ids = await documents_needing_labels(session, relabel=relabel, limit=limit)
-    labelled = skipped = 0
+    labelled = empty = skipped = 0
     for document_id in ids:
         try:
             async with session.begin_nested():
@@ -61,5 +68,14 @@ async def run_backfill(
             skipped += 1
             continue
         await session.commit()
+        if not outcome.applied:
+            logger.warning(
+                "facet labelling applied nothing for document %s (unknown=%r, suggested=%r)",
+                document_id,
+                outcome.unknown,
+                outcome.suggested,
+            )
+            empty += 1
+            continue
         labelled += 1
-    return labelled, skipped
+    return labelled, empty, skipped

@@ -108,11 +108,13 @@ def test_one_documents_database_error_does_not_abort_the_run(
             # Stands in for the StringDataRightTruncation an over-long
             # suggested_label produced: any statement-level error will do.
             await session.execute(text("SELECT 1 / 0"))
-        return LabellingOutcome(document_id=document_id, applied={}, unknown=(), suggested=())
+        return LabellingOutcome(
+            document_id=document_id, applied={"category": "alpha"}, unknown=(), suggested=()
+        )
 
     monkeypatch.setattr(backfill_module, "label_and_apply", stub)
     settings = get_settings()
-    labelled, skipped = asyncio.run(
+    labelled, empty, skipped = asyncio.run(
         _run(
             api_database_url,
             lambda s: run_backfill(s, settings, relabel=False, limit=None),
@@ -120,4 +122,39 @@ def test_one_documents_database_error_does_not_abort_the_run(
     )
     assert seen == ids, "the run stopped at the failing document"
     assert skipped == 1
+    assert empty == 0
     assert labelled == len(ids) - 1
+
+
+def test_a_document_with_nothing_applied_counts_as_empty_not_labelled(
+    api_database_url: str, seeded_document_id: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The production incident: every document logged an unparseable payload
+    and applied nothing, yet the run reported ``labelled 5, skipped 0``. A
+    document that ran without error but produced zero applied labels must be
+    counted distinctly, not folded into ``labelled``.
+    """
+
+    async def stub(
+        session: AsyncSession,
+        settings: Settings,
+        document_id: int,
+        *,
+        client: object = None,
+        backend: str = "api",
+    ) -> LabellingOutcome:
+        return LabellingOutcome(
+            document_id=document_id, applied={}, unknown=("category",), suggested=()
+        )
+
+    monkeypatch.setattr(backfill_module, "label_and_apply", stub)
+    settings = get_settings()
+    labelled, empty, skipped = asyncio.run(
+        _run(
+            api_database_url,
+            lambda s: run_backfill(s, settings, relabel=False, limit=None),
+        )
+    )
+    assert labelled == 0
+    assert empty == 1
+    assert skipped == 0
