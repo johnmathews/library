@@ -213,6 +213,10 @@ async def list_documents(
         list[str] | None,
         Query(description="Matter slug; repeat the parameter for OR (documents in any of them)."),
     ] = None,
+    facet: Annotated[
+        list[str] | None,
+        Query(description="Repeatable `facet=key:value` filter; AND-composes."),
+    ] = None,
     language: Annotated[DocumentLanguage | None, Query()] = None,
     status_filter: Annotated[DocumentStatus | None, Query(alias="status")] = None,
     review_status: Annotated[ReviewStatus | None, Query()] = None,
@@ -240,6 +244,16 @@ async def list_documents(
     newest first, unknown dates last, then created_at). With `q`, by search rank
     (`sort`/`direction` are ignored).
     """
+    parsed_facets: dict[str, str] = {}
+    for pair in facet or []:
+        key, separator, value = pair.partition(":")
+        if not separator or not key or not value:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY,
+                f"facet must be 'key:value', got {pair!r}",
+            )
+        parsed_facets[key] = value
+
     query = build_document_query(
         q,
         DocumentFilters(
@@ -249,6 +263,7 @@ async def list_documents(
             tag_slugs=tuple(tag or []),
             project_slugs=tuple(project or []),
             matter_slugs=tuple(matter or []),
+            facets=parsed_facets,
             language=language,
             status=status_filter,
             review_status=review_status,
