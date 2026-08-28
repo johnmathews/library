@@ -278,8 +278,9 @@ implementation; the CRUD in §7.5 exists so revision is cheap.
 | `cost_type` | subscription, usage, one-off | yes |
 | `vehicle` | one value per vehicle | yes |
 | `property` | one value per address owned | yes |
+| `person` | one value per household member | yes |
 
-Roughly 30 values across 5 facets, replacing 771 tags.
+Roughly 35 values across 6 facets, replacing 771 tags.
 
 Two judgement calls recorded:
 
@@ -290,10 +291,25 @@ Two judgement calls recorded:
   can: total cost of ownership per vehicle, across servicing, charging,
   insurance and tax. Its values carry registration plates as aliases.
 
+- **`person` is a facet despite `recipients` existing**, which §7.1 requires
+  justifying. `recipient` records who a document was *addressed to*; `person`
+  records *whose cost it is*. They diverge in practice: on the live archive one
+  household member is the recipient of 162 documents spanning household,
+  business and another member's vehicle costs, while the second member is the
+  recipient of only 6 documents but is named by tags 9 times. The lookup also
+  holds third parties who are not household members at all. `person` is
+  orthogonal to `scope` — a business cost is still attributable to someone.
+
 `property` covers addresses owned. Place names that denote a workplace or a
 correspondence origin are **not** property values and are dropped — a
 distinction the tag list cannot make and the document can, which is §7.1 in
 miniature.
+
+**Related cleanup, in scope for layer A.** The `recipients` table has the same
+drift as the tags: five separate rows spelling one person's name five ways,
+covering 210 documents between them, plus two rows for one company.
+The alias mechanism of §6 solves this identically, so recipient consolidation
+rides along with the facet work rather than becoming separate follow-up.
 
 ### 7.3 The labelling pass
 
@@ -635,9 +651,7 @@ Standing constraints:
    hierarchy is a data change rather than a migration (§6).
 2. **Does `property` earn its keep?** It survives only if the addresses are ones
    the owner holds. Low cost either way; deletable via §7.5.
-3. **Is a `person` facet wanted?** Existing tags name individuals, and "whose
-   expense" is orthogonal to `scope`. Deferred until a question needs it.
-4. **Line extraction scope.** Default: extraction proposes spend lines **only
+3. **Line extraction scope.** Default: extraction proposes spend lines **only
    when a document's items cross a facet boundary** — a mixed-scope invoice, or
    one carrying both a subscription and a usage charge. Proposing lines for
    every itemised document is more uniform but produces far more rows to review
