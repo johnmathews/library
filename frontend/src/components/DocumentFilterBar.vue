@@ -10,7 +10,7 @@
  * `clear()` to drop every filter. Changing any filter resets to page 1, so the
  * emitted query never carries a page. Taxonomy names come from the shared cache.
  */
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { MatterOption } from '@/api/matters'
 import type { LocationQueryRaw } from 'vue-router'
 import { AppCheckboxes, AppDateInput, FilterPill } from '@/components/app'
@@ -21,6 +21,8 @@ import {
   type DocumentLanguage,
   type DocumentStatus,
 } from '@/api/documents'
+import { fetchFacets, type FacetRef } from '@/api/facets'
+import FacetFilterBar from '@/components/facets/FacetFilterBar.vue'
 import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { buildDocumentQuery, type AppliedFilters } from '@/utils/documentQuery'
 
@@ -30,10 +32,39 @@ const props = defineProps<{ applied: AppliedFilters }>()
 const emit = defineEmits<{
   apply: [LocationQueryRaw, { replace?: boolean }?]
   clear: []
+  'update:facets': [Record<string, string>]
 }>()
 
 const { kinds, senders, recipients, tags, projects, matters, ensureLoaded } = useTaxonomyOptions()
 void ensureLoaded()
+
+// --- Facet filters (controlled vocabulary, docs/facets.md) ----------------
+//
+// Unlike the taxonomy filters above, facet selection is not carried in the
+// URL query (§10 of the facet-vocabulary plan keeps this local); it is held
+// here and emitted upward via `update:facets` for the parent to fold into the
+// document-list request. "Clear all" resets it alongside the URL-driven
+// filters.
+const facets = ref<FacetRef[]>([])
+onMounted(async () => {
+  try {
+    facets.value = await fetchFacets()
+  } catch {
+    // Best-effort: the facet bar just renders no selects when this fails.
+  }
+})
+
+const facetSelection = ref<Record<string, string>>({})
+watch(
+  facetSelection,
+  (next) => emit('update:facets', next),
+  { deep: true },
+)
+
+function clearAll(): void {
+  facetSelection.value = {}
+  emit('clear')
+}
 
 // Which pill popover is open (only one at a time); null = all closed.
 const openPill = ref<string | null>(null)
@@ -619,6 +650,14 @@ const statusOptions = DOCUMENT_STATUSES
       </button>
     </div>
 
+    <!-- Facet filters (controlled vocabulary): one select per facet that has
+         values, in the mosaic `items-end gap-3` field-row pattern (§5,
+         docs/frontend-view-principles.md). Not carried in the URL — see the
+         `facetSelection` comment above. -->
+    <div class="mt-2">
+      <FacetFilterBar v-model="facetSelection" :facets="facets" />
+    </div>
+
     <!-- Active-filter chips -->
     <div v-if="chips.length" class="mt-3 flex flex-wrap items-center gap-2" data-testid="filter-chips">
       <span
@@ -642,7 +681,7 @@ const statusOptions = DOCUMENT_STATUSES
         type="button"
         data-testid="filter-clear-all"
         class="text-xs text-gray-500 underline hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-        @click="emit('clear')"
+        @click="clearAll"
       >
         Clear all
       </button>

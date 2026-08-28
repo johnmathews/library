@@ -163,6 +163,13 @@ const showAttentionRow = computed(() => showReviewButton.value || heldEmails.cou
 let abortController: AbortController | null = null
 let generation = 0
 
+// Facet filters (controlled vocabulary): unlike every other filter here, this
+// is NOT parsed from the URL — DocumentFilterBar owns it as local state and
+// emits it up via `update:facets`. Folded into `buildFilters` below and
+// watched (alongside `applied`) so a facet change refetches like any other
+// filter change.
+const facetSelection = ref<Record<string, string>>({})
+
 /** Build the API filters for the current applied state at a given window. */
 function buildFilters(
   state: typeof applied.value,
@@ -179,6 +186,7 @@ function buildFilters(
     project: state.projects.length ? state.projects : undefined,
     matter: state.matters.length ? state.matters : undefined,
     tag: state.tags.length ? state.tags : undefined,
+    facet: Object.keys(facetSelection.value).length ? facetSelection.value : undefined,
     language: (state.language || undefined) as DocumentLanguage | undefined,
     status: (state.status || undefined) as DocumentListItem['status'] | undefined,
     review_status: (state.review || undefined) as DocumentListItem['review_status'] | undefined,
@@ -219,8 +227,8 @@ async function loadMore(): Promise<void> {
 }
 
 watch(
-  applied,
-  async (state) => {
+  [applied, facetSelection],
+  async ([state]) => {
     abortController?.abort()
     abortController = new AbortController()
     const gen = ++generation
@@ -465,7 +473,12 @@ function toggleSortDirection(): void {
 
   <PageHeader title="Documents" title-id="dashboard-title" />
 
-  <DocumentFilterBar :applied="applied" @apply="applyFilterQuery" @clear="clearFilters" />
+  <DocumentFilterBar
+    :applied="applied"
+    @apply="applyFilterQuery"
+    @clear="clearFilters"
+    @update:facets="facetSelection = $event"
+  />
 
   <div v-if="showAttentionRow" class="flex flex-col sm:flex-row sm:items-center gap-2 mb-4">
     <button
