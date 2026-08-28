@@ -176,7 +176,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: tests that need Docker (ephemeral Postgres via testcontainers)",
-    "slow_ocr: real OCR engine runs (tesseract/ocrmypdf binaries, RapidOCR model download)",
+    "slow_ocr: real OCR engine runs (tesseract/ocrmypdf binaries, the vendored RapidOCR ONNX weights)",
     "golden_extraction: characterisation of extraction over the real corpus, replayed from cassettes (no API key, no DB)",
 ]
 filterwarnings = [

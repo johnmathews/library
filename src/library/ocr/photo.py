@@ -5,11 +5,12 @@ covering at least ``MIN_PAGE_AREA_FRACTION`` of the frame) -> 4-point
 perspective transform when a page is found -> CLAHE contrast enhancement.
 
 Recognition: RapidOCR with the PP-OCRv5 ``latin`` recognition model (one
-model covers Dutch and English) on ONNX Runtime. Models are downloaded and
-cached by rapidocr on first engine construction, hence the lazy cached
-``get_engine()``. Boxes are sorted by (top-y, left-x) for reading order;
-the document confidence is the mean of per-box scores scaled to 0-100 to
-match Tesseract's scale.
+model covers Dutch and English) on ONNX Runtime. The weights are vendored in
+``models/ocr/`` and selected by ``library.ocr.weights`` — nothing is fetched
+at run time. ``get_engine()`` stays lazy and cached because constructing the
+engine still loads ~13 MB into three ONNX Runtime sessions. Boxes are sorted
+by (top-y, left-x) for reading order; the document confidence is the mean of
+per-box scores scaled to 0-100 to match Tesseract's scale.
 
 This path never produces a searchable PDF (``searchable_pdf=None``).
 """
@@ -24,6 +25,7 @@ import cv2
 import numpy as np
 import pypdfium2 as pdfium
 
+from library.ocr import weights
 from library.ocr.base import OcrResult
 from library.ocr.raster import render_page
 
@@ -39,43 +41,22 @@ RASTER_DPI: int = 300
 
 @lru_cache(maxsize=1)
 def get_engine() -> "RapidOCR":
-    """The shared RapidOCR engine (lazy: first construction downloads models).
+    """The shared RapidOCR engine, built from the vendored weights.
 
-    Every axis that selects a model file is pinned explicitly, including the
-    ones whose value equals today's rapidocr default. rapidocr resolves a
-    model from the (engine_type, ocr_version, lang_type, model_type) tuple per
-    stage and raises ``ValueError("Invalid OCR configuration.")`` when the
-    combination has no entry in its model list. Inheriting any axis from the
-    library's defaults means a rapidocr release can repoint or break our
-    pipeline without us changing a line: 3.9.x moved the Det/Rec defaults from
-    ``mobile``/PP-OCRv4 to ``small``/PP-OCRv6, and because ``Det.model_type``
-    was left implicit while ``Det.ocr_version`` was pinned to PP-OCRv5, the
-    resulting PP-OCRv5-det-``small`` pair does not exist and every photo OCR
-    call raised. Pin all four per stage; a bump then fails loudly at the pin,
-    which is a diff we can read, rather than silently selecting a model we
-    never chose.
+    Lazy and cached for cost, not for network: ``library.ocr.weights`` points
+    rapidocr at the checked-in ``models/ocr/``, so construction loads three
+    ONNX Runtime sessions off local disk and never reaches modelscope. The
+    pins themselves, and why every axis is pinned, live in that module.
+
+    A weight file missing from ``MODEL_DIR`` makes rapidocr try to download it
+    — the pre-#109 behaviour, kept as the last-resort fallback rather than a
+    hard error, since a fetch that succeeds is better than an ingest that
+    fails. That gap is not meant to be reached silently: ``/healthz`` reports
+    it as degraded and ``compose-smoke`` asserts the files shipped.
     """
-    from rapidocr import EngineType, LangCls, LangDet, LangRec, ModelType, OCRVersion, RapidOCR
+    from rapidocr import RapidOCR
 
-    return RapidOCR(
-        params={
-            # Det/Cls are language-agnostic layout stages — the "ch" models are
-            # the only detection weights shipped for PP-OCRv5 and are what the
-            # latin recognition model is meant to be paired with.
-            "Det.engine_type": EngineType.ONNXRUNTIME,
-            "Det.ocr_version": OCRVersion.PPOCRV5,
-            "Det.lang_type": LangDet.CH,
-            "Det.model_type": ModelType.MOBILE,
-            "Cls.engine_type": EngineType.ONNXRUNTIME,
-            "Cls.ocr_version": OCRVersion.PPOCRV4,
-            "Cls.lang_type": LangCls.CH,
-            "Cls.model_type": ModelType.MOBILE,
-            "Rec.engine_type": EngineType.ONNXRUNTIME,
-            "Rec.lang_type": LangRec.LATIN,
-            "Rec.ocr_version": OCRVersion.PPOCRV5,
-            "Rec.model_type": ModelType.MOBILE,
-        }
-    )
+    return RapidOCR(params=weights.engine_params())
 
 
 def ocr_image(image_path: Path) -> OcrResult:

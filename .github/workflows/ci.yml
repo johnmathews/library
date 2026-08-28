@@ -513,6 +513,20 @@ jobs:
           docker compose exec -T api python -c \
             "import json; d=json.load(open('/app/recall-baseline.json')); \
              assert d['cases'] and 'archive_documents' in d['measured_against'], d"
+      # Same reasoning as the recall baseline above, for the photo OCR weights:
+      # committing them to models/ocr/ ships nothing without the Dockerfile
+      # COPY. Checked in the WORKER as well as the api, because the worker is
+      # the process that actually runs OCR — the api would report a healthy
+      # deploy while every photo ingest failed. --check verifies SHA256s, not
+      # just presence, so a truncated layer is caught too.
+      - name: The pinned OCR weights shipped in the image
+        run: |
+          docker compose exec -T api python -m scripts.fetch_ocr_models --check
+          docker compose exec -T worker python -m scripts.fetch_ocr_models --check
+      - name: /healthz reports the OCR weights present
+        run: |
+          curl -fsS http://localhost:8000/healthz \
+            | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["ocr_models"] == "ok", d'
       - name: Create a user
         run: |
           echo 'smoke-password-123' | docker compose exec -T api \

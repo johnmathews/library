@@ -2,16 +2,23 @@
 """Fail when a real-engine OCR test skipped instead of running.
 
 The `slow_ocr` tests are the only coverage the OCR pipeline has over the actual
-binaries and models, and both guards in `tests/test_ocr_real.py` skip rather
-than fail when their engine is genuinely unavailable — correct for a laptop with
-no tesseract installed, and a hole in CI, where the whole point of the job is
-that those engines ran. A skip is reported as success by pytest, so a
-permanently broken engine reads as a green build for as long as nobody looks at
-the skip list.
+binaries and models, and the Tesseract guard in `tests/test_ocr_real.py` skips
+rather than fails when its binaries are absent — correct for a laptop with no
+tesseract installed, and a hole in CI, where the whole point of the job is that
+those engines ran. A skip is reported as success by pytest, so a permanently
+broken engine reads as a green build for as long as nobody looks at the skip
+list.
 
-This closes that: CI installs the tesseract stack and has network for the
-RapidOCR model hub, so in CI neither guard has any legitimate reason to fire.
-Any skip whose reason mentions a required engine is an error here.
+This closes that: CI installs the tesseract stack, and the RapidOCR weights
+are vendored in `models/ocr/` rather than downloaded, so in CI neither engine
+has any legitimate reason to be unavailable. Any skip whose reason mentions a
+required engine is an error here.
+
+`rapidocr` stays in the required list even though its guard no longer has a
+skip branch at all (GH #109 removed it along with the download). The list says
+what CI must exercise, not what can currently evade it — a future change that
+reintroduces a skip should meet this, not slip past a list that was pruned to
+match the implementation of the day.
 
 Matching is on the skip *reason*, not on the test id, so it keeps working when
 tests are renamed or moved, and it catches a new test that borrows the same
@@ -32,7 +39,8 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 # Engines the CI backend job provisions, and therefore must actually exercise.
-# tesseract/gs/unpaper come from the apt step; rapidocr downloads its weights.
+# tesseract/gs/unpaper come from the apt step; rapidocr's weights are committed
+# to the repository (models/ocr/) and so arrive with the checkout.
 DEFAULT_REQUIRED_ENGINES = ("rapidocr", "tesseract")
 
 

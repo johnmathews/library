@@ -1,7 +1,7 @@
 # Deploy runbook
 
 **Status:** active. **Last updated:** 2026-08-13 (§1.2: the `main` ruleset does require `ci-gate` — the claim that branch protection was not yet pointed at it was written before the ruleset existed; documented the `check_mypy.py` ratchet as the second `typecheck` step, now guarding an empty quarantine). Earlier: 2026-08-12, 2026-07-27. **Supersedes:** none.
-**Last verified:** 2026-08-13 — method: partial, scoped to §1.2. Re-read the "what green means" paragraph against `ci.yml` and `scripts/ci_gate.sh`, and checked the branch-protection claim against the live `main` ruleset via `gh api repos/johnmathews/library/rulesets` (active since 2026-07-28; requires `ci-gate`, blocks deletion and non-fast-forward, `bypass_actors: []`). The deploy-script flags and the end-to-end run remain as verified on 2026-08-12 and were not re-executed.
+**Last verified:** 2026-08-28 — method: partial, scoped to §1.3 step 4. Added the /healthz body check to match the new block in `scripts/deploy.sh` (verified with `bash -n`, and the two grep patterns proven against a real compact `/healthz` payload). §1.2 and the deploy-script flags carry forward the 2026-08-13 verification below, whose method was: method: partial, scoped to §1.2. Re-read the "what green means" paragraph against `ci.yml` and `scripts/ci_gate.sh`, and checked the branch-protection claim against the live `main` ruleset via `gh api repos/johnmathews/library/rulesets` (active since 2026-07-28; requires `ci-gate`, blocks deletion and non-fast-forward, `bypass_actors: []`). The deploy-script flags and the end-to-end run remain as verified on 2026-08-12 and were not re-executed.
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh
 
 How to ship a merged change to the live `paperless` LXC. This is the focused
@@ -85,7 +85,11 @@ then verifies:
    transactionally, then exits. The script reads its exit code and **aborts if
    it is non-zero** (web/worker would otherwise run against an un-migrated DB).
 3. **`library-webserver` + `library-worker`** are recreated on the new image.
-4. **`GET /healthz`** must return OK.
+4. **`GET /healthz`** must return OK, and its **body** is then read: a
+   missing OCR model weight (`ocr_models: "missing"`) **aborts** — the image
+   did not ship `models/ocr/`, and photo OCR would fail one document at a time
+   with everything else green (GH #109). Any other `status: "degraded"` is
+   reported but not fatal. See deployment.md §1.4.2.
 5. Prints the running images and the prod Alembic head.
 
 Service names on the live host are `library-*` (the repo's compose file uses

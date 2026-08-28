@@ -334,6 +334,27 @@ def create_app() -> FastAPI:
             payload["claude_credentials_detail"] = detail
             if status != "healthy":
                 payload["status"] = "degraded"
+        # The photo OCR weights (GH #109). They ship in the image under
+        # models/ocr/, but a file read at run time from inside the image needs
+        # a Dockerfile COPY to actually be there, and this is the class of
+        # absence that otherwise stays invisible: photo.get_engine() is lazy
+        # and lru_cached, so a deploy with no weights passes every healthcheck
+        # and only fails on the first JPEG/PNG/HEIC someone uploads, hours
+        # later, one document at a time. Report it at deploy time instead.
+        #
+        # Existence only, never checksums — ~13 MB of hashing does not belong
+        # on an unauthenticated endpoint polled every 10 seconds by the
+        # container healthcheck. `scripts/fetch_ocr_models.py --check` is the
+        # checksum-verifying counterpart, and compose-smoke runs it.
+        from library.ocr.weights import missing_models
+
+        missing = missing_models()
+        payload["ocr_models"] = "missing" if missing else "ok"
+        if missing:
+            payload["ocr_models_detail"] = "not found: " + ", ".join(
+                str(model.path) for model in missing
+            )
+            payload["status"] = "degraded"
         return payload
 
     # MCP server (W13): bearer-token-authenticated tools at /mcp/ — see
