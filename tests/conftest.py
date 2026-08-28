@@ -380,3 +380,37 @@ async def _fetch_all(database_url: str, query: str, **params: object) -> list[tu
 def fetch_all(database_url: str, query: str, **params: object) -> list[tuple[object, ...]]:
     """Run a query against the given database from sync test code."""
     return asyncio.run(_fetch_all(database_url, query, **params))
+
+
+@pytest.fixture
+def seeded_document_id(api_database_url: str) -> int:
+    """One indexed document, for tests that only need a valid documents.id."""
+    import asyncio
+    import hashlib
+    import uuid as _uuid
+
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from library.models import Document, DocumentSource, DocumentStatus
+
+    async def _seed() -> int:
+        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                marker = f"facet-fixture:{_uuid.uuid4()}"
+                doc = Document(
+                    sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    status=DocumentStatus.INDEXED,
+                    title=marker,
+                )
+                session.add(doc)
+                await session.flush()
+                await session.commit()
+                return doc.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_seed())

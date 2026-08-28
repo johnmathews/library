@@ -34,6 +34,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     MetaData,
@@ -307,6 +308,97 @@ document_tags: Table = Table(
     ),
     Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
 )
+
+
+class Facet(Base):
+    """A named label dimension. A document carries at most one value per facet."""
+
+    __tablename__ = "facets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), unique=True)
+    label: Mapped[str] = mapped_column(String(255))
+    ordinal: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+
+
+class FacetValue(Base):
+    """One allowed value of a facet.
+
+    ``parent_id`` is unused at ship; it exists so a flat facet can gain a second
+    level as a data change rather than a migration. The redundant
+    ``UNIQUE (id, facet_id)`` is what lets label tables hold a composite foreign
+    key and so cannot point at another facet's value.
+    """
+
+    __tablename__ = "facet_values"
+    __table_args__ = (
+        UniqueConstraint("facet_id", "key", name="facet_values_facet_key"),
+        UniqueConstraint("id", "facet_id", name="facet_values_id_facet"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    facet_id: Mapped[int] = mapped_column(ForeignKey("facets.id", ondelete="RESTRICT"))
+    key: Mapped[str] = mapped_column(String(64))
+    label: Mapped[str] = mapped_column(String(255))
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("facet_values.id", ondelete="RESTRICT"), nullable=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+
+
+class FacetValueAlias(Base):
+    """A surface form that resolves to a value: a plate, a marque, a misspelling."""
+
+    __tablename__ = "facet_value_aliases"
+
+    facet_value_id: Mapped[int] = mapped_column(
+        ForeignKey("facet_values.id", ondelete="CASCADE"), primary_key=True
+    )
+    alias: Mapped[str] = mapped_column(String(255), primary_key=True)
+
+
+class DocumentLabel(Base):
+    """One document's value for one facet. The PK enforces at-most-one."""
+
+    __tablename__ = "document_labels"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["facet_value_id", "facet_id"],
+            ["facet_values.id", "facet_values.facet_id"],
+            name="document_labels_value_facet",
+        ),
+    )
+
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    facet_id: Mapped[int] = mapped_column(
+        ForeignKey("facets.id", ondelete="RESTRICT"), primary_key=True
+    )
+    facet_value_id: Mapped[int] = mapped_column(Integer)
+
+
+class FacetValueSuggestion(Base):
+    """A value the labeller wanted but the closed vocabulary does not contain.
+
+    Queued for approval rather than created. This is the mechanism that keeps
+    the vocabulary closed while still letting it grow deliberately.
+    """
+
+    __tablename__ = "facet_value_suggestions"
+    __table_args__ = (
+        UniqueConstraint(
+            "facet_id", "document_id", "suggested_label", name="facet_value_suggestions_unique"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    facet_id: Mapped[int] = mapped_column(ForeignKey("facets.id", ondelete="CASCADE"))
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"))
+    suggested_label: Mapped[str] = mapped_column(String(255))
+    reason: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Project(Base):
