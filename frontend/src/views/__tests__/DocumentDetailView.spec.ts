@@ -2011,6 +2011,46 @@ describe('DocumentDetailView', () => {
       expect(w.find('#edit-title').exists()).toBe(false)
       expect(rowValue(w, 'title')).toBe('Doc B')
     })
+
+    it('a drop landing past the real cards degrades safely, even though the non-draggable FacetEditor sibling inflates the DOM index Sortable would report', async () => {
+      // FacetEditor renders as a real DOM child of #document-metadata-column,
+      // the same element the metadata-column Sortable instance is bound to
+      // (see the comment at its mount point in DocumentDetailView.vue). It
+      // has no [data-card-drag-handle], so Sortable never lets it be the
+      // *dragged* item — but Sortable still counts it as an ordinary sibling
+      // when computing evt.newIndex for an actual card drag. For this
+      // (non-note) document the rendered/present left column is exactly:
+      // metadata-content, metadata-parties, metadata-financial,
+      // metadata-system, comments, actions, history (7 cards) — plus the
+      // FacetEditor sibling makes 8 real DOM children. A drop positioned
+      // after everything therefore reports newIndex 8, one past what the
+      // 7-card present list alone would suggest.
+      const layout = useDocumentLayout()
+      layout.resetLayout()
+      const w = await mountView() // default (non-note) doc
+      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await flushPromises()
+
+      const onEnd = cardColumnOnEnd()
+      const evt = {
+        from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
+        to: { dataset: { col: 'left' } },
+        item: {},
+        oldIndex: 4, // 'comments' — 5th present card (0-based index 4)
+        newIndex: 8, // inflated by the uncounted FacetEditor sibling
+      } as unknown as Sortable.SortableEvent
+      onEnd(evt)
+      await flushPromises()
+
+      // Safe degradation: presentIndexToFullIndex's out-of-range branch
+      // (presentIndex >= present.length) treats any overshoot — 7 or 8 or
+      // 99 — identically, as "append at the very end". No crash, no
+      // duplicate, no dropped card; 'comments' simply lands after 'history'.
+      expect(layout.cardColumns.value.left.filter((id) => id === 'comments')).toHaveLength(1)
+      expect(layout.cardColumns.value.left.at(-1)).toBe('comments')
+      expect(new Set(layout.cardColumns.value.left)).toEqual(new Set(DEFAULT_CARD_COLUMNS.left))
+      expect(layout.cardColumns.value.right).toEqual(DEFAULT_CARD_COLUMNS.right)
+    })
   })
 
   // --- ActionDock (Ask + lifted metadata Edit/Done) ----------------------------

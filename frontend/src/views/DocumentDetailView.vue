@@ -1531,7 +1531,23 @@ watch(
              non-draggable card alongside the reorderable metadata tiles above.
              It isn't part of that drag/reorder set (useDocumentLayout's
              persisted card-columns model) since a facet label is a distinct
-             concept from the per-field Details metadata those tiles edit. -->
+             concept from the per-field Details metadata those tiles edit.
+
+             IMPORTANT — SortableJS coupling: this element is a REAL DOM CHILD
+             of `#document-metadata-column`, the exact element `metadataColumnEl`
+             binds a live Sortable instance to (see `buildSortables` above). It
+             is excluded from being dragged ONLY because it carries no
+             `[data-card-drag-handle]` (Sortable's configured `handle`) — it is
+             still counted as an ordinary sibling when Sortable computes
+             `evt.newIndex` for an actual card drag, so a drop positioned at or
+             after this card inflates that index by one relative to the
+             `metadataCards` present-card list. `presentIndexToFullIndex`'s
+             out-of-range branch (`presentIndex >= present.length` → append at
+             the end) is what makes that inflation harmless today; if this
+             card's markup ever moves to BEFORE the `v-for` (or another
+             non-card sibling is added here), re-check that index math — see
+             the "layout customisation" describe block in
+             DocumentDetailView.spec.ts for a test pinning this degradation. -->
         <FacetEditor
           :document-id="doc.id"
           :facets="facets"
