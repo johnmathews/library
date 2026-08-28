@@ -552,7 +552,7 @@ def label_archive(
 
     settings = get_settings()
 
-    async def _operation(session: AsyncSession) -> tuple[int, int]:
+    async def _operation(session: AsyncSession) -> tuple[int, int, int]:
         created = await seed_vocabulary(session)
         await session.commit()
         if created:
@@ -560,14 +560,16 @@ def label_archive(
         if only:
             outcome = await label_and_apply(session, settings, only)
             if outcome is None:
-                return 0, 1
+                return 0, 0, 1
             await session.commit()
             typer.echo(f"document {only}: {outcome.applied}")
-            return 1, 0
+            if not outcome.applied:
+                return 0, 1, 0
+            return 1, 0, 0
         return await run_backfill(session, settings, relabel=relabel, limit=limit or None)
 
-    labelled, skipped = _run(_operation)
-    typer.echo(f"labelled {labelled}, skipped {skipped}")
+    labelled, empty, skipped = _run(_operation)
+    typer.echo(f"labelled {labelled}, empty {empty}, skipped {skipped}")
 
 
 @app.command("recipients")

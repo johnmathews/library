@@ -1,11 +1,19 @@
 """Prompt construction and closed-set parsing. No network, no database."""
 
 import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
+import pytest
+
+from library.config import Settings
 from library.facets.labeller import (
     MAX_SUGGESTED_LABEL_CHARS,
     DocumentFields,
+    LabelParseError,
+    LabelResponse,
     build_labelling_prompt,
+    label_document,
     parse_label_response,
 )
 from library.facets.vocabulary import VocabularyFacet, VocabularyValue
@@ -216,3 +224,161 @@ def test_an_over_long_out_of_vocabulary_value_is_clamped_too() -> None:
     proposal = parse_label_response(payload, VOCAB)[0]
     assert proposal.value_key is None
     assert proposal.suggested_label == "q" * MAX_SUGGESTED_LABEL_CHARS
+
+
+# --- Envelope tolerance (parse_label_response never sees bare JSON from a
+# real model — see library.facets.labeller.label_document's docstring). ---
+
+
+def test_a_fenced_payload_with_a_json_language_tag_is_parsed() -> None:
+    payload = (
+        "```json\n"
+        + json.dumps(
+            {"labels": [{"facet": "category", "value": "energy", "confidence": 0.9, "reason": "x"}]}
+        )
+        + "\n```"
+    )
+    proposals = parse_label_response(payload, VOCAB)
+    assert len(proposals) == 1
+    assert proposals[0].value_key == "energy"
+
+
+def test_a_fenced_payload_without_a_language_tag_is_parsed() -> None:
+    payload = (
+        "```\n"
+        + json.dumps(
+            {"labels": [{"facet": "category", "value": "energy", "confidence": 0.9, "reason": "x"}]}
+        )
+        + "\n```"
+    )
+    proposals = parse_label_response(payload, VOCAB)
+    assert len(proposals) == 1
+    assert proposals[0].value_key == "energy"
+
+
+def test_leading_prose_before_the_json_object_is_stripped() -> None:
+    payload = "Sure, here is the labelling:\n" + json.dumps(
+        {"labels": [{"facet": "category", "value": "energy", "confidence": 0.9, "reason": "x"}]}
+    )
+    proposals = parse_label_response(payload, VOCAB)
+    assert len(proposals) == 1
+    assert proposals[0].value_key == "energy"
+
+
+def test_still_garbage_after_stripping_yields_no_proposals() -> None:
+    """The fence gets stripped; what remains is still not JSON."""
+    assert parse_label_response("```\nnot json at all\n```", VOCAB) == []
+
+
+# Verbatim capture of a real ``claude-haiku-4-5`` response (via the API
+# backend, before the structured-output fix): the model was instructed to
+# "Return ONLY a JSON object ... with no prose or code fences" and wrapped its
+# otherwise-correct JSON in a ```json fence anyway. `json.loads` on this text
+# raises immediately, which is exactly what made
+# `library label-archive --limit 5` log "facet labeller returned an
+# unparseable payload" for every document while still reporting
+# `labelled 5, skipped 0` (fixed separately in the backfill accounting).
+REAL_HAIKU_FENCED_PAYLOAD: str = (
+    "```json\n"
+    "{\n"
+    '  "labels": [\n'
+    "    {\n"
+    '      "facet": "category",\n'
+    '      "value": "energy",\n'
+    '      "confidence": 0.95,\n'
+    '      "reason": "a recurring utility charge",\n'
+    '      "suggest": null\n'
+    "    },\n"
+    "    {\n"
+    '      "facet": "scope",\n'
+    '      "value": "household",\n'
+    '      "confidence": 0.8,\n'
+    '      "reason": "billed to the home account, not a business expense",\n'
+    '      "suggest": null\n'
+    "    },\n"
+    "    {\n"
+    '      "facet": "urgency",\n'
+    '      "value": null,\n'
+    '      "confidence": 0.3,\n'
+    '      "reason": "no explicit deadline stated in the excerpt",\n'
+    '      "suggest": "no-deadline"\n'
+    "    }\n"
+    "  ]\n"
+    "}\n"
+    "```"
+)
+
+REAL_HAIKU_VOCAB: tuple[VocabularyFacet, ...] = (
+    VocabularyFacet(
+        id=1,
+        key="category",
+        label="Category",
+        ordinal=0,
+        values=(VocabularyValue(id=10, key="energy", label="Energy", parent_id=None, aliases=()),),
+    ),
+    VocabularyFacet(
+        id=2,
+        key="scope",
+        label="Scope",
+        ordinal=1,
+        values=(
+            VocabularyValue(id=20, key="household", label="Household", parent_id=None, aliases=()),
+        ),
+    ),
+    VocabularyFacet(id=3, key="urgency", label="Urgency", ordinal=2, values=()),
+)
+
+
+def test_the_exact_captured_haiku_fenced_payload_yields_three_proposals() -> None:
+    """Feeds `parse_label_response` real model output, not a hand-written
+    JSON string — every prior test in this module (and the ones above) only
+    ever exercised the shape we assumed the model would return, which is
+    exactly the seam that let this ship broken."""
+    proposals = parse_label_response(REAL_HAIKU_FENCED_PAYLOAD, REAL_HAIKU_VOCAB)
+    assert len(proposals) == 3
+    assert proposals[0].facet_key == "category"
+    assert proposals[0].value_key == "energy"
+    assert proposals[1].facet_key == "scope"
+    assert proposals[1].value_key == "household"
+    assert proposals[2].facet_key == "urgency"
+    assert proposals[2].value_key is None
+    assert proposals[2].suggested_label == "no-deadline"
+
+
+# --- label_document wiring: messages.parse(), not messages.create(). ---
+
+
+def _make_parse_client(parsed_output: LabelResponse | None) -> SimpleNamespace:
+    response = SimpleNamespace(
+        parsed_output=parsed_output,
+        usage=SimpleNamespace(input_tokens=111, output_tokens=22),
+    )
+    return SimpleNamespace(messages=SimpleNamespace(parse=AsyncMock(return_value=response)))
+
+
+async def test_label_document_calls_messages_parse_with_the_label_response_schema() -> None:
+    parsed = LabelResponse.model_validate(
+        {"labels": [{"facet": "category", "value": "energy", "confidence": 0.9, "reason": "x"}]}
+    )
+    client = _make_parse_client(parsed)
+    settings = Settings(anthropic_api_key="test-key")
+
+    result = await label_document(settings, VOCAB, FIELDS, client=client)
+
+    assert result is not None
+    proposals, input_tokens, output_tokens = result
+    assert client.messages.parse.await_count == 1
+    call = client.messages.parse.await_args
+    assert call.kwargs["output_format"] is LabelResponse
+    assert proposals[0].value_key == "energy"
+    assert (input_tokens, output_tokens) == (111, 22)
+
+
+async def test_label_document_raises_when_structured_output_is_empty() -> None:
+    """Mirrors ``library.extraction.extractor``'s ``_attempt``: a ``None``
+    ``parsed_output`` is a hard failure, not a silently-empty result."""
+    client = _make_parse_client(None)
+    settings = Settings(anthropic_api_key="test-key")
+
+    with pytest.raises(LabelParseError):
+        await label_document(settings, VOCAB, FIELDS, client=client)
