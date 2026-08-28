@@ -249,8 +249,17 @@ async def list_documents(
         key, separator, value = pair.partition(":")
         if not separator or not key or not value:
             raise HTTPException(
-                status.HTTP_422_UNPROCESSABLE_ENTITY,
-                f"facet must be 'key:value', got {pair!r}",
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"facet must be 'key:value', got {pair!r}",
+            )
+        if key in parsed_facets and parsed_facets[key] != value:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"facet {key!r} given twice with different values "
+                    f"({parsed_facets[key]!r}, {value!r}); a document holds at "
+                    "most one value per facet"
+                ),
             )
         parsed_facets[key] = value
 
