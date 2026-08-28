@@ -18,6 +18,7 @@ from library.api import (
     comments,
     documents,
     events,
+    facets,
     held_emails,
     jobs,
     matters,
@@ -257,6 +258,7 @@ def create_app() -> FastAPI:
     api_router.include_router(comments.router)
     api_router.include_router(charts.router)
     api_router.include_router(series.router)
+    api_router.include_router(facets.router)
     api_router.include_router(taxonomy.router)
     api_router.include_router(projects.router)
     api_router.include_router(matters.router)

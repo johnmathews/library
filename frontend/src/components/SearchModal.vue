@@ -143,6 +143,7 @@ function onSubmit(): void {
     projects: current.projects, // preserved — modal doesn't manage it
     matters: resolvedMatters,
     tags: resolvedTags,
+    facets: current.facets, // preserved — modal doesn't manage it
     language: draft.language,
     status: current.status, // preserved — modal doesn't manage it
     dateFrom: draft.dateFrom ?? '',

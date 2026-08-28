@@ -195,6 +195,11 @@ class Settings(BaseSettings):
     # any other consumer of the same credentials) during an ingest burst.
     series_insight_llm_backend: LLMBackend = "api"
     series_min_documents: int = 3  # min members before stats are reported
+    # Facet vocabulary labelling (see library.facets.labeller). Below this, a
+    # label is stored as `unknown` and queued for review rather than applied. A
+    # confidently wrong label silently moves money between charts, so the
+    # default is deliberately cautious.
+    facet_label_min_confidence: float = 0.6
     series_typical_pct: float = 0.10  # half-width of the "typical" band vs median
     series_flat_pct: float = 0.05  # |first→last change| at/below which trend is flat
     # Authored-series auto-continue (propose-for-review). A newly-indexed

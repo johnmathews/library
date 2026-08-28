@@ -24,6 +24,7 @@ from library.auth.deps import CSRF_COOKIE, CSRF_HEADER
 from library.auth.passwords import hash_password
 from library.config import get_settings
 from library.db import get_session
+from library.extraction import apply as extraction_apply_module
 from library.jobs import job_app, procrastinate_conninfo
 from library.models import Base, User
 
@@ -62,6 +63,31 @@ def _embedding_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> Iterator[
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _facet_labelling_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep the suite hermetic: the ingest facet-labelling hook is a no-op by default.
+
+    ``apply_extraction``'s success path calls ``label_and_apply``, which reaches
+    the Anthropic API. Several extraction tests build a ``Settings`` with a
+    *fake* API key (``anthropic_api_key="test-key"``, see
+    ``test_extraction_apply.py::settings``) so ``extract`` itself can be
+    monkeypatched — but that same fake key is enough for ``label_and_apply`` to
+    open a real connection to api.anthropic.com and get a 401 back. The broad
+    ``except Exception`` in the hook swallows that, so tests still pass, but the
+    suite is no longer hermetic and now depends on network access. Default the
+    hook to a no-op here, the same way embeddings are defaulted off above; a
+    test exercising the hook itself monkeypatches
+    ``library.extraction.apply.label_and_apply`` back to a stub (see
+    ``test_extraction_apply.py::test_apply_extraction_calls_the_facet_labeller``).
+    """
+
+    async def _noop_label_and_apply(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(extraction_apply_module, "label_and_apply", _noop_label_and_apply)
+    yield
 
 
 @dataclass(frozen=True)
@@ -380,3 +406,37 @@ async def _fetch_all(database_url: str, query: str, **params: object) -> list[tu
 def fetch_all(database_url: str, query: str, **params: object) -> list[tuple[object, ...]]:
     """Run a query against the given database from sync test code."""
     return asyncio.run(_fetch_all(database_url, query, **params))
+
+
+@pytest.fixture
+def seeded_document_id(api_database_url: str) -> int:
+    """One indexed document, for tests that only need a valid documents.id."""
+    import asyncio
+    import hashlib
+    import uuid as _uuid
+
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from library.models import Document, DocumentSource, DocumentStatus
+
+    async def _seed() -> int:
+        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                marker = f"facet-fixture:{_uuid.uuid4()}"
+                doc = Document(
+                    sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    status=DocumentStatus.INDEXED,
+                    title=marker,
+                )
+                session.add(doc)
+                await session.flush()
+                await session.commit()
+                return doc.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_seed())

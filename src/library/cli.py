@@ -537,6 +537,85 @@ def backfill_summaries(
     typer.echo(f"queued extraction for {count} document(s)")
 
 
+@app.command("label-archive")
+def label_archive(
+    limit: int = typer.Option(0, "--limit", help="Stop after this many documents (0 = all)."),
+    only: int = typer.Option(0, "--only", help="Label just this document id."),
+    relabel: bool = typer.Option(
+        False, "--relabel", help="Also re-label documents that already carry labels."
+    ),
+) -> None:
+    """Seed the facet vocabulary if needed, then label documents that lack labels."""
+    from library.facets.apply import label_and_apply
+    from library.facets.backfill import run_backfill
+    from library.facets.seed import seed_vocabulary
+
+    settings = get_settings()
+
+    async def _operation(session: AsyncSession) -> tuple[int, int]:
+        created = await seed_vocabulary(session)
+        await session.commit()
+        if created:
+            typer.echo(f"seeded {created} facet values")
+        if only:
+            outcome = await label_and_apply(session, settings, only)
+            if outcome is None:
+                return 0, 1
+            await session.commit()
+            typer.echo(f"document {only}: {outcome.applied}")
+            return 1, 0
+        return await run_backfill(session, settings, relabel=relabel, limit=limit or None)
+
+    labelled, skipped = _run(_operation)
+    typer.echo(f"labelled {labelled}, skipped {skipped}")
+
+
+@app.command("recipients")
+def recipients_command(
+    list_duplicates: bool = typer.Option(False, "--list", help="Show duplicate groups."),
+    merge: str = typer.Option(
+        "", "--merge", help="KEEP_ID:DROP_ID[,DROP_ID...] — repoint and delete."
+    ),
+) -> None:
+    """Inspect and consolidate duplicate recipient rows."""
+    from library.facets.recipients import duplicate_recipient_groups, merge_recipients
+
+    async def _operation(session: AsyncSession) -> str | None:
+        if merge:
+            keep_raw, _, drops_raw = merge.partition(":")
+            if not drops_raw:
+                return "error: expected KEEP_ID:DROP_ID[,DROP_ID...]"
+            try:
+                keep_id = int(keep_raw)
+                drop_ids = [int(part) for part in drops_raw.split(",")]
+            except ValueError:
+                return "error: KEEP_ID and DROP_ID must be integers"
+            try:
+                moved = await merge_recipients(session, keep_id, drop_ids)
+            except ValueError as exc:
+                return f"error: {exc}"
+            await session.commit()
+            return f"moved {moved} documents"
+        if list_duplicates:
+            groups = await duplicate_recipient_groups(session)
+            if not groups:
+                return "no duplicate recipients"
+            lines = []
+            for key, members in groups:
+                rendered = ", ".join(f"{rid}={name!r} ({n} docs)" for rid, name, n in members)
+                lines.append(f"{key}: {rendered}")
+            return "\n".join(lines)
+        return None
+
+    result = _run(_operation)
+    if result is None:
+        typer.echo("(pass --list or --merge)")
+        return
+    typer.echo(result)
+    if result.startswith("error:"):
+        raise typer.Exit(code=1)
+
+
 @app.command("sweep-matters")
 def sweep_matters(
     limit: int | None = typer.Option(

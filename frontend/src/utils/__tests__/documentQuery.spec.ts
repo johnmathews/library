@@ -18,6 +18,7 @@ const EMPTY: AppliedFilters = {
   projects: [],
   matters: [],
   tags: [],
+  facets: {},
   language: '',
   status: '',
   dateFrom: '',
@@ -52,6 +53,7 @@ describe('parseDocumentQuery', () => {
       projects: [],
       matters: [],
       tags: [],
+      facets: {},
       language: 'nld',
       status: 'indexed',
       dateFrom: '2026-05-01',
@@ -131,6 +133,33 @@ describe('parseDocumentQuery', () => {
   it('treats a bare null query param as empty string', () => {
     expect(parseDocumentQuery({ status: null }).status).toBe('')
   })
+
+  it('parses a single facet=key:value into the facets record', () => {
+    expect(parseDocumentQuery({ facet: 'category:software' }).facets).toEqual({
+      category: 'software',
+    })
+  })
+
+  it('parses repeated facet params into one record, AND-composing across keys', () => {
+    expect(
+      parseDocumentQuery({ facet: ['category:software', 'vehicle:sedan'] }).facets,
+    ).toEqual({ category: 'software', vehicle: 'sedan' })
+  })
+
+  it('drops a malformed facet entry (no colon, or an empty key/value) rather than throwing', () => {
+    expect(parseDocumentQuery({ facet: 'nocolon' }).facets).toEqual({})
+    expect(parseDocumentQuery({ facet: ':novalue' }).facets).toEqual({})
+    expect(parseDocumentQuery({ facet: 'novalue:' }).facets).toEqual({})
+    expect(
+      parseDocumentQuery({ facet: ['nocolon', 'category:software'] }).facets,
+    ).toEqual({ category: 'software' })
+  })
+
+  it('ignores null values in repeated facet params', () => {
+    expect(parseDocumentQuery({ facet: [null, 'category:software'] }).facets).toEqual({
+      category: 'software',
+    })
+  })
 })
 
 describe('buildDocumentQuery', () => {
@@ -143,6 +172,7 @@ describe('buildDocumentQuery', () => {
       projects: ['house-purchase', 'taxes'],
       matters: ['acme-merger', 'estate'],
       tags: ['energie', 'wonen'],
+      facets: { category: 'software', vehicle: 'sedan' },
       language: 'nld',
       status: 'indexed',
       dateFrom: '2026-05-01',
@@ -160,6 +190,7 @@ describe('buildDocumentQuery', () => {
       project: ['house-purchase', 'taxes'],
       matter: ['acme-merger', 'estate'],
       tag: ['energie', 'wonen'],
+      facet: ['category:software', 'vehicle:sedan'],
       language: 'nld',
       status: 'indexed',
       date_from: '2026-05-01',
@@ -184,6 +215,23 @@ describe('buildDocumentQuery', () => {
   it('accepts a page override (used when changing a filter resets to page 1)', () => {
     expect(buildDocumentQuery({ ...EMPTY, q: 'x', page: 5 }, 1)).toEqual({ q: 'x' })
   })
+
+  it('serialises the facets record as repeated facet=key:value entries', () => {
+    expect(
+      buildDocumentQuery({ ...EMPTY, facets: { category: 'software', vehicle: 'sedan' } }),
+    ).toEqual({ facet: ['category:software', 'vehicle:sedan'] })
+  })
+
+  it('omits the facet param entirely once the facets record is empty (clearing, not `facet=`)', () => {
+    expect(buildDocumentQuery({ ...EMPTY, facets: {} })).toEqual({})
+  })
+
+  it('parse⇄build is symmetric for facets', () => {
+    const applied = parseDocumentQuery({ facet: ['category:software', 'vehicle:sedan'] })
+    expect(buildDocumentQuery(applied)).toEqual({
+      facet: ['category:software', 'vehicle:sedan'],
+    })
+  })
 })
 
 describe('hasActiveFilters', () => {
@@ -197,6 +245,7 @@ describe('hasActiveFilters', () => {
     expect(hasActiveFilters({ ...EMPTY, status: 'failed' })).toBe(true)
     expect(hasActiveFilters({ ...EMPTY, page: 5 })).toBe(false)
     expect(hasActiveFilters({ ...EMPTY, review: 'verified' })).toBe(true)
+    expect(hasActiveFilters({ ...EMPTY, facets: { category: 'software' } })).toBe(true)
   })
 
   it('does NOT treat a non-default sort/direction as an active filter', () => {

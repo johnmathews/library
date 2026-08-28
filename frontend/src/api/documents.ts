@@ -7,6 +7,7 @@
  */
 
 import { ApiError, apiFetch, getCookie, CSRF_COOKIE, CSRF_HEADER } from './client'
+import { facetQueryParams } from './facets'
 
 export type DocumentLanguage = 'nld' | 'eng' | 'mixed' | 'unknown'
 export type DocumentStatus = 'received' | 'ocr' | 'extract' | 'indexed' | 'failed'
@@ -188,6 +189,8 @@ export interface DocumentFilters {
   matter?: string[]
   /** Repeatable: every slug must match (AND). */
   tag?: string[]
+  /** `facet=key:value`; every entry must match (AND) — see docs/facets.md. */
+  facet?: Record<string, string>
   language?: DocumentLanguage
   status?: DocumentStatus
   date_from?: string
@@ -291,18 +294,20 @@ export const DOCUMENT_STATUSES: readonly { value: DocumentStatus; text: string }
 
 /**
  * Serialise filters to a query string. Built by hand (not apiFetch's
- * `query` option) because `tag`, `project` and `matter` repeat: ?tag=a&tag=b
- * ANDs both; ?project=a&project=b and ?matter=a&matter=b OR both.
+ * `query` option) because `tag`, `project`, `matter` and `facet` repeat:
+ * ?tag=a&tag=b ANDs both; ?project=a&project=b and ?matter=a&matter=b OR
+ * both; ?facet=k:v&facet=k2:v2 ANDs across keys (docs/facets.md).
  */
 export function documentQueryString(filters: DocumentFilters): string {
   const params = new URLSearchParams()
-  const { tag, project, matter, ...scalars } = filters
+  const { tag, project, matter, facet, ...scalars } = filters
   for (const [key, value] of Object.entries(scalars)) {
     if (value !== undefined && value !== '') params.set(key, String(value))
   }
   for (const slug of tag ?? []) params.append('tag', slug)
   for (const slug of project ?? []) params.append('project', slug)
   for (const slug of matter ?? []) params.append('matter', slug)
+  for (const [key, value] of facetQueryParams(facet ?? {})) params.append(key, value)
   return params.toString()
 }
 

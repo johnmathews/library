@@ -35,6 +35,7 @@ from library.models import (
     DocumentStatus,
     IngestionEvent,
     Kind,
+    Recipient,
     ReviewStatus,
 )
 from library.storage import path_for, store
@@ -1345,3 +1346,98 @@ def test_report_recall_notes_a_baseline_recorded_before_provenance(
     cli_module._report_recall([_passing_verdict()], write_baseline=False, archive_documents=259)
 
     assert "predates provenance" in capsys.readouterr().out
+
+
+def _seed_recipient_with_document(
+    database_url: str, name: str, *, user_id: int | None = None
+) -> tuple[int, int]:
+    """Insert a recipient (optionally user-linked) and one document addressed to it.
+
+    Returns ``(recipient_id, document_id)``.
+    """
+
+    async def _insert() -> tuple[int, int]:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                recipient = Recipient(name=name, user_id=user_id)
+                session.add(recipient)
+                await session.flush()
+                document = Document(
+                    sha256=uuid.uuid4().hex * 2,
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    status=DocumentStatus.INDEXED,
+                    recipient_id=recipient.id,
+                    title=f"recipient-cli:{name}:{uuid.uuid4()}",
+                )
+                session.add(document)
+                await session.commit()
+                return recipient.id, document.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_insert())
+
+
+def test_recipients_merge_moves_documents_via_cli(cli_database_url: str) -> None:
+    tag = uuid.uuid4().hex[:6].upper()
+    keep, keep_doc = _seed_recipient_with_document(cli_database_url, f"{tag} A")
+    drop, drop_doc = _seed_recipient_with_document(cli_database_url, f"{tag} B")
+
+    result = runner.invoke(app, ["recipients", "--merge", f"{keep}:{drop}"])
+    assert result.exit_code == 0, result.output
+    assert "moved 1 documents" in result.output
+
+    rows = fetch_all(
+        cli_database_url,
+        "SELECT recipient_id FROM documents WHERE id IN (:a, :b)",
+        a=keep_doc,
+        b=drop_doc,
+    )
+    assert rows == [(keep,), (keep,)]
+    assert fetch_all(cli_database_url, "SELECT 1 FROM recipients WHERE id = :d", d=drop) == []
+
+
+def test_recipients_merge_malformed_argument_errors_cleanly(cli_database_url: str) -> None:
+    result = runner.invoke(app, ["recipients", "--merge", "not-an-int:also-not"])
+    assert result.exit_code != 0
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "error:" in result.output
+
+
+def test_recipients_merge_missing_drops_errors_cleanly(cli_database_url: str) -> None:
+    result = runner.invoke(app, ["recipients", "--merge", "1"])
+    assert result.exit_code != 0
+    assert "KEEP_ID:DROP_ID" in result.output
+
+
+def test_recipients_merge_conflicting_user_links_errors_and_exits_nonzero(
+    cli_database_url: str,
+) -> None:
+    user_a = create_user(cli_database_url)
+    user_b = create_user(cli_database_url)
+    tag = uuid.uuid4().hex[:6].upper()
+    keep, _ = _seed_recipient_with_document(cli_database_url, f"{tag} A", user_id=user_a.id)
+    drop, _ = _seed_recipient_with_document(cli_database_url, f"{tag} B", user_id=user_b.id)
+
+    result = runner.invoke(app, ["recipients", "--merge", f"{keep}:{drop}"])
+    assert result.exit_code != 0
+    assert "error:" in result.output
+    assert fetch_all(cli_database_url, "SELECT 1 FROM recipients WHERE id = :d", d=drop) == [(1,)]
+
+
+def test_recipients_list_shows_duplicate_groups(cli_database_url: str) -> None:
+    tag = uuid.uuid4().hex[:6].upper()
+    _seed_recipient_with_document(cli_database_url, f"{tag} Smith")
+    _seed_recipient_with_document(cli_database_url, f"{tag}. Smith")
+
+    result = runner.invoke(app, ["recipients", "--list"])
+    assert result.exit_code == 0, result.output
+    assert tag.lower() in result.output.lower()
+
+
+def test_recipients_no_flags_prints_hint_only(cli_database_url: str) -> None:
+    result = runner.invoke(app, ["recipients"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "(pass --list or --merge)"

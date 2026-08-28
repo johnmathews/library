@@ -9,6 +9,9 @@
  * `tag` repeats in the URL (?tag=a&tag=b) and ANDs — hence `tags: string[]`.
  * `project` also repeats (?project=a&project=b) but ORs (documents in any) —
  * hence `projects: string[]`. `matter` repeats and ORs the same way.
+ * `facet` repeats too (?facet=category:software&facet=vehicle:sedan) and ANDs
+ * across keys — the same `key:value` form the API takes (docs/facets.md) —
+ * hence `facets: Record<string, string>`.
  */
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
 
@@ -34,6 +37,7 @@ export interface AppliedFilters {
   projects: string[]
   matters: string[]
   tags: string[]
+  facets: Record<string, string>
   language: string
   status: string
   dateFrom: string
@@ -55,6 +59,24 @@ function asString(value: LocationQuery[string] | undefined): string {
 function asStringArray(value: LocationQuery[string] | undefined): string[] {
   if (Array.isArray(value)) return value.filter((v): v is string => typeof v === 'string')
   return typeof value === 'string' ? [value] : []
+}
+
+/**
+ * Parse repeated `facet=key:value` entries into a `{ key: value }` record —
+ * the inverse of `buildDocumentQuery`'s serialisation. Splits on the FIRST
+ * colon (facet keys/values are plain slugs, never containing one). An entry
+ * with no colon, an empty key, or an empty value is dropped rather than
+ * throwing — a malformed/hand-edited URL degrades to "that facet is unset",
+ * matching how every other filter here tolerates garbage input.
+ */
+function asFacetRecord(value: LocationQuery[string] | undefined): Record<string, string> {
+  const result: Record<string, string> = {}
+  for (const entry of asStringArray(value)) {
+    const sep = entry.indexOf(':')
+    if (sep <= 0 || sep === entry.length - 1) continue
+    result[entry.slice(0, sep)] = entry.slice(sep + 1)
+  }
+  return result
 }
 
 /** Coerce a query value to one of `allowed`, else `fallback`. */
@@ -90,6 +112,7 @@ export function parseDocumentQuery(
     projects: asStringArray(query.project),
     matters: asStringArray(query.matter),
     tags: asStringArray(query.tag),
+    facets: asFacetRecord(query.facet),
     language: asString(query.language),
     status: asString(query.status),
     dateFrom: asString(query.date_from),
@@ -117,6 +140,8 @@ export function buildDocumentQuery(
   if (applied.projects.length) query.project = [...applied.projects]
   if (applied.matters.length) query.matter = [...applied.matters]
   if (applied.tags.length) query.tag = [...applied.tags]
+  const facetEntries = Object.entries(applied.facets)
+  if (facetEntries.length) query.facet = facetEntries.map(([key, value]) => `${key}:${value}`)
   if (applied.language) query.language = applied.language
   if (applied.status) query.status = applied.status
   if (applied.dateFrom) query.date_from = applied.dateFrom
@@ -139,6 +164,7 @@ export function hasActiveFilters(applied: AppliedFilters): boolean {
       applied.projects.length ||
       applied.matters.length ||
       applied.tags.length ||
+      Object.keys(applied.facets).length ||
       applied.language ||
       applied.status ||
       applied.dateFrom ||

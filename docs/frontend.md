@@ -1,7 +1,7 @@
 # Frontend
 
-**Status:** active. **Last updated:** 2026-08-25 (Settings gains an **Ask** tab — the free-text "About you" notes Ask reads with every question; §1.3 `SettingsView`, `auth.askProfile`). Earlier (2026-08-22): `/matters` and `/projects` gain a one-sentence `PageHeader` lede explaining what each feature is for. Earlier the same day: `PageHeader` gains a `#controls` slot: `/charts`, `/jobs` and `/matters` render one header toolbar instead of an actions row above a filter row, merged on a **container** query so the same viewport merges or stacks depending on the sidebar; `/jobs`' filter bar rebuilt to the §5 label recipe). Earlier the same day: §1.5 `AskView`: correct two clauses left stale by the app-bar title move. Earlier the same day: the page title moves into `AppHeader`; `PageHeader` keeps only the lede + actions and renders nothing for a bare title. Also: the Ask composer is one flat full-width bar — the nested pill is gone). Earlier (2026-08-20): Settings gains an **LLM backend** tab — the instance-wide metered-API vs Claude-subscription choice per surface, admin-editable, read-only for everyone else; §1.3 `SettingsView`; badges colour-coded via AppBadge's `colour` prop, and the override badge reworded from "Overridden (deployed default: …)" to "Changed here" with the reset button naming its target value). Earlier: 2026-08-13 (the `index.html` sidebar seed now mirrors the store's full key precedence, so §1.2's note about it reading only the legacy key no longer applies; earlier, 2026-08-12: nightly Smart Groups heartbeat §1.7.0 and the Playwright-not-jsdom layout rule §1.7.3; earlier the same day, documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical).
-**Last verified:** 2026-08-25 — method: partial re-verification, scoped to the new Ask-tab sentence in the `SettingsView` row, read against `SettingsView.vue`, `stores/auth.ts` and `api/settings.ts` and covered by executed unit tests (`SettingsView.spec.ts` Ask-tab cases, `auth.spec.ts`, `api/__tests__/settings.spec.ts`) in a full frontend run; `vue-tsc` and eslint clean. Not screenshotted — it is a form, not a geometry claim. The rest carries forward its previous verification: 2026-08-22 — method: partial re-verification, scoped to the new `#controls` paragraph plus a wrap-up audit of the `JobsView` and `MattersListView` rows and the layout-spec list. Those three are **code-derived** claims and were checked by reading the shipped `JobsView.vue` / `MattersListView.vue` and `ls`-ing `frontend/e2e/` — which found and fixed a stale `AppSelect` claim on the jobs task filter, a missing `header-toolbar.spec.ts` in the spec enumeration, and an unmentioned matters archived toggle. The `#controls` paragraph is a **geometry** claim, so measured in the real stack (docker compose + the Vite dev server + Playwright) rather than read off class lists: the 1280px merge/stack split across sidebar states was measured directly (`#app-page` 1024px expanded → stacked, 1200px collapsed → merged), and the container-vs-viewport claim was confirmed by swapping `@5xl:` for `lg:` and watching `e2e/header-toolbar.spec.ts` go red. Backed by 1102 frontend unit tests and the full e2e suite (127 executed, all passing). The `AskView` §1.5 clauses carry forward their own 2026-08-22 verification: scoped to the `AskView` row's two mobile clauses, re-read against `AskView.vue` and `ConversationSidebar.vue` (the `max-lg:hidden` is on the view's `PageHeader` and on the rail's "New conversation" button; the mobile list bar's own `<h1>` is gone). Cross-checked against the 375px Ask-list screenshot taken from the running stack earlier the same day, which shows the app bar carrying "Ask" and the list screen carrying only the ＋. Earlier on 2026-08-22 the `AppHeader` section and the §1.5 composer sentence were verified against real-stack screenshots at 1440px light/dark and 375px, backed by 1099 frontend unit tests and the full e2e suite (123 executed, all passing). The rest of the document carries forward its 2026-08-20 verification: the `SettingsView` LLM-backend prose checked against `SettingsView.vue` and `frontend/src/api/settings.ts`, covered by `src/views/__tests__/SettingsLlmBackend.spec.ts` (10 tests, two confirmed to fail against the `variant` version).
+**Status:** active. **Last updated:** 2026-08-28 (documented the facet vocabulary UI, which had no mention here: a new "Facet filter bar" subsection for `FacetFilterBar.vue` (AND-composed selects, facets with no values omitted, URL/saved-view persistence, its own "Clear facets" button, no active-filter chip) and a new "Facet editor" subsection for `FacetEditor.vue` (every facet including empty ones rendered disabled, only changed facets sent, a cleared facet sent as explicit `null`, and its exclusion from the drag-reorder card-columns system flagged as a known limitation rather than intentional design). See `docs/facets.md` for the vocabulary itself. Earlier (2026-08-25): Settings gains an **Ask** tab — the free-text "About you" notes Ask reads with every question; §1.3 `SettingsView`, `auth.askProfile`). Earlier (2026-08-22): `/matters` and `/projects` gain a one-sentence `PageHeader` lede explaining what each feature is for. Earlier the same day: `PageHeader` gains a `#controls` slot: `/charts`, `/jobs` and `/matters` render one header toolbar instead of an actions row above a filter row, merged on a **container** query so the same viewport merges or stacks depending on the sidebar; `/jobs`' filter bar rebuilt to the §5 label recipe). Earlier the same day: §1.5 `AskView`: correct two clauses left stale by the app-bar title move. Earlier the same day: the page title moves into `AppHeader`; `PageHeader` keeps only the lede + actions and renders nothing for a bare title. Also: the Ask composer is one flat full-width bar — the nested pill is gone). Earlier (2026-08-20): Settings gains an **LLM backend** tab — the instance-wide metered-API vs Claude-subscription choice per surface, admin-editable, read-only for everyone else; §1.3 `SettingsView`; badges colour-coded via AppBadge's `colour` prop, and the override badge reworded from "Overridden (deployed default: …)" to "Changed here" with the reset button naming its target value). Earlier: 2026-08-13 (the `index.html` sidebar seed now mirrors the store's full key precedence, so §1.2's note about it reading only the legacy key no longer applies; earlier, 2026-08-12: nightly Smart Groups heartbeat §1.7.0 and the Playwright-not-jsdom layout rule §1.7.3; earlier the same day, documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical).
+**Last verified:** 2026-08-28 — method: read `src/components/facets/FacetFilterBar.vue` and `src/components/facets/FacetEditor.vue` in full; read their wiring in `src/components/DocumentFilterBar.vue` (the `facets`/`onFacetChange` block and the template around `[data-testid="facet-filter-bar"]`, confirmed facet selections carry no chip in the `chips` computed) and `src/views/DocumentDetailView.vue` (the `FacetEditor` mount and its surrounding SortableJS-coupling comment in the metadata column template); read `src/utils/documentQuery.ts`'s `facet` parse/serialise pair for the URL persistence claim. Not re-verified against `docs/roadmap.md` — the drag-reorder exclusion is not currently tracked there; this document states it as a known limitation without claiming a tracking location. No frontend tests were executed for this pass (docs-only change; `FacetFilterBar.spec.ts` and `FacetEditor.spec.ts` were read, not re-run). The rest carries forward its previous verification: 2026-08-25 — method: partial re-verification, scoped to the new Ask-tab sentence in the `SettingsView` row, read against `SettingsView.vue`, `stores/auth.ts` and `api/settings.ts` and covered by executed unit tests (`SettingsView.spec.ts` Ask-tab cases, `auth.spec.ts`, `api/__tests__/settings.spec.ts`) in a full frontend run; `vue-tsc` and eslint clean. Not screenshotted — it is a form, not a geometry claim. The rest carries forward its previous verification: 2026-08-22 — method: partial re-verification, scoped to the new `#controls` paragraph plus a wrap-up audit of the `JobsView` and `MattersListView` rows and the layout-spec list. Those three are **code-derived** claims and were checked by reading the shipped `JobsView.vue` / `MattersListView.vue` and `ls`-ing `frontend/e2e/` — which found and fixed a stale `AppSelect` claim on the jobs task filter, a missing `header-toolbar.spec.ts` in the spec enumeration, and an unmentioned matters archived toggle. The `#controls` paragraph is a **geometry** claim, so measured in the real stack (docker compose + the Vite dev server + Playwright) rather than read off class lists: the 1280px merge/stack split across sidebar states was measured directly (`#app-page` 1024px expanded → stacked, 1200px collapsed → merged), and the container-vs-viewport claim was confirmed by swapping `@5xl:` for `lg:` and watching `e2e/header-toolbar.spec.ts` go red. Backed by 1102 frontend unit tests and the full e2e suite (127 executed, all passing). The `AskView` §1.5 clauses carry forward their own 2026-08-22 verification: scoped to the `AskView` row's two mobile clauses, re-read against `AskView.vue` and `ConversationSidebar.vue` (the `max-lg:hidden` is on the view's `PageHeader` and on the rail's "New conversation" button; the mobile list bar's own `<h1>` is gone). Cross-checked against the 375px Ask-list screenshot taken from the running stack earlier the same day, which shows the app bar carrying "Ask" and the list screen carrying only the ＋. Earlier on 2026-08-22 the `AppHeader` section and the §1.5 composer sentence were verified against real-stack screenshots at 1440px light/dark and 375px, backed by 1099 frontend unit tests and the full e2e suite (123 executed, all passing). The rest of the document carries forward its 2026-08-20 verification: the `SettingsView` LLM-backend prose checked against `SettingsView.vue` and `frontend/src/api/settings.ts`, covered by `src/views/__tests__/SettingsLlmBackend.spec.ts` (10 tests, two confirmed to fail against the `variant` version).
 
 The Library web UI: a Vue 3 single-page app styled with the **Mosaic** design
 language (Cruip) — Tailwind 4, the Inter typeface, a violet accent, soft
@@ -442,6 +442,38 @@ in sync automatically.
   to `AppliedFilters`; the `DOCUMENT_STATUSES` options array lives in
   `src/api/documents.ts`.
 
+### Facet filter bar (`src/components/facets/FacetFilterBar.vue`)
+
+One `<select>` per facet, rendered by `DocumentFilterBar` directly below its
+business-matter quick-filter row and above its active-filter chips,
+following the same mosaic field-row pattern as everywhere else in this bar
+(`.filter-label` + `.form-select`, `items-end gap-3` —
+`docs/frontend-view-principles.md` §5). The controlled vocabulary itself
+(what a facet is, the shipped values, the closed-set rule) is
+`docs/facets.md`; this only documents the component.
+
+- **Facets with no values render nothing.** The shipped `vehicle`, `property`
+  and `person` facets ship empty (`docs/facets.md` §2), and `FacetFilterBar`
+  filters them out (`usable`, `facet.values.length > 0`) rather than showing an
+  empty, unusable select — an empty select is worse than an absent one.
+- **AND-composition.** Each facet is its own `<select data-facet-select>`
+  (`[data-testid="facet-select-<key>"]`); picking a value for one facet and a
+  value for another narrows by both, matching the API's `?facet=key:value`
+  AND semantics (`docs/api.md` §1.23.4). A facet's own select is single-value,
+  so there is no way to pick two values of the same facet from this bar.
+- **URL- and saved-view-driven, like every other filter.** `DocumentFilterBar`
+  fetches the vocabulary once (`GET /api/facets`, best-effort — the bar just
+  renders no selects if that call fails) and carries the *selection* in
+  `applied.facets` / `?facet=key:value` (repeatable, one pair per facet) via
+  `src/utils/documentQuery.ts`, exactly the mechanism tags/projects/matters
+  use — so it survives refresh, back/forward, and "Save view" without any
+  facet-specific persistence code.
+- **Its own "Clear facets" button** (`[data-testid="facet-clear"]`, shown only
+  when a facet is selected) clears every facet selection at once. Facet
+  selections do **not** appear as removable chips in the bar's shared
+  active-filter-chips row — clearing one facet at a time means reopening that
+  facet's select and choosing "Any".
+
 ### Dashboard sort control (`DocumentListView.vue`)
 
 A mosaic sort control sits in the results-count row: a field `<select>`
@@ -608,6 +640,40 @@ card is migrated once on load (`migrateMetadataCard`) by expanding it **in
 place** into the five `metadata-*` tiles, so a user who moved the Details card
 keeps its position rather than having the new tiles appended at the column's end.
 Covered by `DocumentDetailView.spec.ts` and `useDocumentLayout.spec.ts`.
+
+### Facet editor (`src/components/facets/FacetEditor.vue`)
+
+The controlled-vocabulary label editor for one document (`docs/facets.md`;
+`[data-testid="facet-editor"]`, `#document-facets-card`), rendered as its own
+card in the metadata column, after the reorderable metadata tiles.
+`DocumentDetailView` loads the vocabulary (`GET /api/facets`, best-effort —
+the editor just renders no facets if it fails) and the document's own labels
+(`GET /api/documents/{id}/labels`) once and hands both down as props.
+
+- **Renders EVERY facet, including ones with no values yet**, as a disabled
+  select (`[data-testid="facet-edit-<key>"]`, `disabled` when
+  `facet.values.length === 0`) with a "No values yet" hint underneath. This is
+  deliberately the **opposite** of the filter bar above, which omits an empty
+  facet entirely: there an empty select would just be noise, but here the
+  owner needs to **see** that a facet such as `vehicle` exists before they can
+  ask for a value to be added to it.
+- **Only changed facets are sent.** A `dirty` computed diffs the in-progress
+  draft against the last-saved label map and sends just the facets that
+  differ; a facet the user clears is sent as an explicit `null` (never
+  omitted) so `PUT /api/documents/{id}/labels` removes that label rather than
+  leaving the previous value in place (`docs/api.md` §1.23). The **Save
+  labels** button (`[data-testid="facet-save"]`) is disabled while saving or
+  while nothing is dirty; a failed save leaves the draft in place (never
+  silently discarded) and shows an inline error
+  (`[data-testid="facet-error"]`).
+- **Not part of the drag-reorder system.** The card sits as a fixed sibling
+  in `#document-metadata-column`, after the reorderable `metadataCards` list,
+  but it is not one of `useDocumentLayout`'s persisted `cardColumns` — it
+  carries no `[data-card-drag-handle]`, so it never gets a drag handle and
+  cannot be moved or hidden in **Edit layout** mode the way the section tiles
+  above it can. This is a **known limitation**, not an intentional design
+  choice — a facet-labels card is exactly the kind of section a user would
+  reasonably expect to reorder alongside the others.
 
 ### Dashboard card-fields picker (`DashboardFieldsMenu.vue` / `DashboardFieldsEditor.vue`)
 

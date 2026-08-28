@@ -123,6 +123,19 @@ const RECIPIENTS = [
 ]
 const PROJECTS = [{ slug: 'house-purchase', name: 'House purchase', document_count: 4 }]
 
+// The controlled facet vocabulary (docs/facets.md): one facet with values, one
+// shipped empty (mirrors production's `vehicle`/`property`/`person`) so the
+// disabled-select behaviour is exercised through the real mounted view.
+const FACETS_VOCAB = [
+  {
+    key: 'category',
+    label: 'Category',
+    ordinal: 0,
+    values: [{ key: 'utility', label: 'Utility', parent_id: null, aliases: [] }],
+  },
+  { key: 'vehicle', label: 'Vehicle', ordinal: 1, values: [] },
+]
+
 const Stub = { template: '<div />' }
 
 /** Minimal IntersectionObserver stand-in: jsdom has none. Captures the
@@ -203,6 +216,9 @@ describe('DocumentDetailView', () => {
   /** Ordered ids the documents-list endpoint returns for prev/next; tests
    * mutate this. Default puts the current doc (12) between 8 and 20. */
   let neighborsList: { id: number }[]
+  /** This document's current facet labels; tests mutate this, and the PUT
+   * handler below mutates it too so a save round-trips like the real API. */
+  let documentLabels: Record<string, string>
 
   beforeEach(async () => {
     // useDocumentLayout is a module singleton — reset its persisted state and
@@ -223,6 +239,7 @@ describe('DocumentDetailView', () => {
     markdownResponse = () =>
       jsonResponse({ page_count: 1, pages: [{ page_number: 1, markdown: '# Invoice\n\nTotal: €123.45' }] } satisfies DocumentMarkdownResponse)
     neighborsList = [{ id: 8 }, { id: 12 }, { id: 20 }]
+    documentLabels = {}
     capturedSortables.length = 0
     FakeIntersectionObserver.instances = []
     vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
@@ -269,6 +286,22 @@ describe('DocumentDetailView', () => {
       }
       if (path === '/api/documents/12/markdown' && method === 'GET') {
         return Promise.resolve(markdownResponse())
+      }
+      if (path === '/api/facets' && method === 'GET') {
+        return Promise.resolve(jsonResponse({ facets: FACETS_VOCAB }))
+      }
+      if (path === '/api/documents/12/labels' && method === 'GET') {
+        return Promise.resolve(jsonResponse({ labels: documentLabels }))
+      }
+      if (path === '/api/documents/12/labels' && method === 'PUT') {
+        const putBody = JSON.parse(String(init?.body ?? '{}')) as {
+          labels: Record<string, string | null>
+        }
+        for (const [key, value] of Object.entries(putBody.labels)) {
+          if (value === null) delete documentLabels[key]
+          else documentLabels[key] = value
+        }
+        return Promise.resolve(jsonResponse({ labels: documentLabels }))
       }
       return Promise.resolve(jsonResponse({ detail: `unexpected ${method} ${url}` }, 500))
     })
@@ -1978,6 +2011,46 @@ describe('DocumentDetailView', () => {
       expect(w.find('#edit-title').exists()).toBe(false)
       expect(rowValue(w, 'title')).toBe('Doc B')
     })
+
+    it('a drop landing past the real cards degrades safely, even though the non-draggable FacetEditor sibling inflates the DOM index Sortable would report', async () => {
+      // FacetEditor renders as a real DOM child of #document-metadata-column,
+      // the same element the metadata-column Sortable instance is bound to
+      // (see the comment at its mount point in DocumentDetailView.vue). It
+      // has no [data-card-drag-handle], so Sortable never lets it be the
+      // *dragged* item — but Sortable still counts it as an ordinary sibling
+      // when computing evt.newIndex for an actual card drag. For this
+      // (non-note) document the rendered/present left column is exactly:
+      // metadata-content, metadata-parties, metadata-financial,
+      // metadata-system, comments, actions, history (7 cards) — plus the
+      // FacetEditor sibling makes 8 real DOM children. A drop positioned
+      // after everything therefore reports newIndex 8, one past what the
+      // 7-card present list alone would suggest.
+      const layout = useDocumentLayout()
+      layout.resetLayout()
+      const w = await mountView() // default (non-note) doc
+      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await flushPromises()
+
+      const onEnd = cardColumnOnEnd()
+      const evt = {
+        from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
+        to: { dataset: { col: 'left' } },
+        item: {},
+        oldIndex: 4, // 'comments' — 5th present card (0-based index 4)
+        newIndex: 8, // inflated by the uncounted FacetEditor sibling
+      } as unknown as Sortable.SortableEvent
+      onEnd(evt)
+      await flushPromises()
+
+      // Safe degradation: presentIndexToFullIndex's out-of-range branch
+      // (presentIndex >= present.length) treats any overshoot — 7 or 8 or
+      // 99 — identically, as "append at the very end". No crash, no
+      // duplicate, no dropped card; 'comments' simply lands after 'history'.
+      expect(layout.cardColumns.value.left.filter((id) => id === 'comments')).toHaveLength(1)
+      expect(layout.cardColumns.value.left.at(-1)).toBe('comments')
+      expect(new Set(layout.cardColumns.value.left)).toEqual(new Set(DEFAULT_CARD_COLUMNS.left))
+      expect(layout.cardColumns.value.right).toEqual(DEFAULT_CARD_COLUMNS.right)
+    })
   })
 
   // --- ActionDock (Ask + lifted metadata Edit/Done) ----------------------------
@@ -2159,6 +2232,48 @@ describe('DocumentDetailView', () => {
       const w = await mountView()
 
       expect(w.find('[data-testid="preview-download-original"]').exists()).toBe(false)
+    })
+  })
+
+  describe('facet editor (docs/facets.md)', () => {
+    it('mounts in the metadata column, fetches the vocabulary + this document\'s labels, and saves an edit end-to-end', async () => {
+      documentLabels = { category: 'utility' }
+      const w = await mountView()
+
+      // Mounted for real inside the metadata column, not just in isolation.
+      const metadataColumn = w.find('#document-metadata-column')
+      expect(metadataColumn.exists()).toBe(true)
+      const editor = metadataColumn.find('[data-testid="facet-editor"]')
+      expect(editor.exists()).toBe(true)
+
+      // The GET /api/documents/12/labels response hydrated the select with
+      // this document's current label.
+      const categorySelect = editor.get('[data-testid="facet-edit-category"]')
+      expect((categorySelect.element as HTMLSelectElement).value).toBe('utility')
+      // The empty `vehicle` facet still renders, disabled, with its hint —
+      // proving the view really is fetching the full vocabulary (not just
+      // whichever facets this document happens to have labels for).
+      const vehicleSelect = editor.get('[data-testid="facet-edit-vehicle"]')
+      expect(vehicleSelect.attributes('disabled')).toBeDefined()
+      expect(editor.text()).toContain('No values yet')
+
+      // Clearing the label and saving PUTs an explicit null and re-renders
+      // from the server's response (the select drops back to "—").
+      await categorySelect.setValue('')
+      await editor.get('[data-testid="facet-save"]').trigger('click')
+      await flushPromises()
+
+      const putCall = fetchMock.mock.calls.find(
+        (call) =>
+          String(call[0]) === '/api/documents/12/labels' &&
+          (call[1] as RequestInit | undefined)?.method === 'PUT',
+      )
+      expect(putCall).toBeTruthy()
+      expect(JSON.parse(String((putCall![1] as RequestInit).body))).toEqual({
+        labels: { category: null },
+      })
+      expect((categorySelect.element as HTMLSelectElement).value).toBe('')
+      expect(editor.find('[data-testid="facet-error"]').exists()).toBe(false)
     })
   })
 })
