@@ -337,7 +337,10 @@ implementation; the CRUD in §7.5 exists so revision is cheap.
 | `property` | one value per address owned | yes |
 | `person` | one value per household member | yes |
 
-Roughly 35 values across 6 facets, replacing 771 tags.
+Roughly 20 values ship across the three impersonal facets, replacing 771 tags.
+`vehicle`, `property` and `person` ship as facets with **no values**: theirs name
+real vehicles, addresses and people, which must not enter a public repository, so
+they are created at runtime.
 
 Two judgement calls recorded:
 
