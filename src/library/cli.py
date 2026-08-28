@@ -570,6 +570,40 @@ def label_archive(
     typer.echo(f"labelled {labelled}, skipped {skipped}")
 
 
+@app.command("recipients")
+def recipients_command(
+    list_duplicates: bool = typer.Option(False, "--list", help="Show duplicate groups."),
+    merge: str = typer.Option(
+        "", "--merge", help="KEEP_ID:DROP_ID[,DROP_ID...] — repoint and delete."
+    ),
+) -> None:
+    """Inspect and consolidate duplicate recipient rows."""
+    from library.facets.recipients import duplicate_recipient_groups, merge_recipients
+
+    async def _operation(session: AsyncSession) -> str:
+        if merge:
+            keep_raw, _, drops_raw = merge.partition(":")
+            if not drops_raw:
+                return "error: expected KEEP_ID:DROP_ID[,DROP_ID...]"
+            moved = await merge_recipients(
+                session, int(keep_raw), [int(part) for part in drops_raw.split(",")]
+            )
+            await session.commit()
+            return f"moved {moved} documents"
+        groups = await duplicate_recipient_groups(session)
+        if not groups:
+            return "no duplicate recipients"
+        lines = []
+        for key, members in groups:
+            rendered = ", ".join(f"{rid}={name!r} ({n} docs)" for rid, name, n in members)
+            lines.append(f"{key}: {rendered}")
+        return "\n".join(lines)
+
+    typer.echo(_run(_operation))
+    if not list_duplicates and not merge:
+        typer.echo("(pass --list or --merge)")
+
+
 @app.command("sweep-matters")
 def sweep_matters(
     limit: int | None = typer.Option(
