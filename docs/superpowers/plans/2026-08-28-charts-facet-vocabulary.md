@@ -1582,7 +1582,12 @@ def parse_label_response(
     for entry in entries:
         if not isinstance(entry, dict):
             continue
-        facet = by_key.get(entry.get("facet"))
+        facet_key = entry.get("facet")
+        if not isinstance(facet_key, str):
+            # A non-string facet cannot name a facet, and would raise
+            # TypeError as an unhashable dict key. Discard the entry.
+            continue
+        facet = by_key.get(facet_key)
         if facet is None:
             continue  # an invented facet is discarded outright
         raw_value = entry.get("value")
@@ -1603,13 +1608,14 @@ def parse_label_response(
             confidence = float(entry.get("confidence", 0.0))
         except (TypeError, ValueError):
             confidence = 0.0
+        reason = entry.get("reason")
         proposals.append(
             LabelProposal(
                 facet_key=facet.key,
                 value_key=resolved,
                 confidence=min(1.0, max(0.0, confidence)),
-                reason=str(entry.get("reason") or ""),
-                suggested_label=str(suggested) if suggested else None,
+                reason=reason if isinstance(reason, str) else "",
+                suggested_label=suggested if isinstance(suggested, str) else None,
             )
         )
     return proposals
