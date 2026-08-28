@@ -1054,10 +1054,10 @@ git commit -m "feat(facets): the shipped seed vocabulary"
   - `async delete_value(session, facet_key: str, key: str) -> None` — raises `ValueInUseError`
   - `ValueInUseError(ValueError)`
 
-The one non-obvious case: merging repoints every `document_labels` row from the
-old value to the new one, but a document already carrying the target value would
-collide with the composite primary key. Those rows are deleted rather than
-repointed — the document already has the right label.
+Merging repoints every `document_labels` row from the old value to the new one.
+No primary-key conflict is possible: the key is `(document_id, facet_id)` and a
+merge changes only `facet_value_id`, which is not part of it. Do **not** add
+collision handling here — it would be unreachable code.
 
 **Splitting a value is deliberately not an operation here.** Spec §7.5 lists it,
 and it is achieved by composing what this task provides: `create_value` for the
@@ -1147,39 +1147,6 @@ def test_merge_repoints_labels_and_keeps_the_old_key_as_an_alias(
     assert "alpha" in facets[key].value("beta").aliases
 
 
-def test_merge_survives_a_document_that_already_holds_the_target_value(
-    api_database_url: str, seeded_document_id: int
-) -> None:
-    """The colliding row is dropped, not repointed: the document is already right.
-
-    Without this the merge violates document_labels' composite primary key.
-    """
-    key = _facet_key()
-
-    async def _work(session: AsyncSession) -> int:
-        await create_facet(session, key, "Crud")
-        await create_value(session, key, "alpha", "Alpha")
-        await create_value(session, key, "beta", "Beta")
-        await set_document_label(session, seeded_document_id, key, "beta")
-        # a second document also labelled alpha would move; this one collides
-        await session.execute(
-            __import__("sqlalchemy").text(
-                "INSERT INTO document_labels (document_id, facet_id, facet_value_id) "
-                "SELECT :d, f.id, v.id FROM facets f JOIN facet_values v ON v.facet_id = f.id "
-                "WHERE f.key = :k AND v.key = 'alpha' "
-                "ON CONFLICT (document_id, facet_id) DO NOTHING"
-            ),
-            {"d": seeded_document_id, "k": key},
-        )
-        return await merge_values(session, key, "alpha", "beta")
-
-    asyncio.run(_run(api_database_url, _work))
-    labels = asyncio.run(
-        _run(api_database_url, lambda s: document_labels(s, seeded_document_id))
-    )
-    assert labels[key] == "beta"
-
-
 def test_deleting_a_value_in_use_is_refused(
     api_database_url: str, seeded_document_id: int
 ) -> None:
@@ -1264,27 +1231,14 @@ async def add_alias(session: AsyncSession, facet_key: str, key: str, alias: str)
 async def merge_values(session: AsyncSession, facet_key: str, from_key: str, into_key: str) -> int:
     """Fold ``from_key`` into ``into_key``. Returns the number of labels moved.
 
-    A document already carrying ``into_key`` would collide with
-    ``document_labels``' composite primary key, so its ``from_key`` row is
-    deleted rather than repointed — the document already has the right label.
+    No primary-key conflict is possible: the key is ``(document_id, facet_id)``
+    and this changes only ``facet_value_id``, which is not part of it.
     ``from_key`` survives as an alias of the target so a future labelling pass
     still recognises the old surface form.
     """
     facet_id, from_id = await _resolve(session, facet_key, from_key)
     _, into_id = await _resolve(session, facet_key, into_key)
 
-    colliding = (
-        select(DocumentLabel.document_id)
-        .where(DocumentLabel.facet_id == facet_id, DocumentLabel.facet_value_id == into_id)
-        .scalar_subquery()
-    )
-    await session.execute(
-        delete(DocumentLabel).where(
-            DocumentLabel.facet_id == facet_id,
-            DocumentLabel.facet_value_id == from_id,
-            DocumentLabel.document_id.in_(colliding),
-        )
-    )
     moved = (
         await session.execute(
             update(DocumentLabel)
@@ -1331,16 +1285,9 @@ Add the new names to `src/library/facets/__init__.py`'s import list and `__all__
 - [ ] **Step 4: Run the tests to verify they pass**
 
 Run: `uv run pytest tests/test_facet_crud.py -v`
-Expected: 5 passed.
+Expected: 4 passed.
 
-- [ ] **Step 5: Prove the collision test actually guards something**
-
-Temporarily delete the `delete(DocumentLabel)...colliding` block from `merge_values`, re-run
-`uv run pytest tests/test_facet_crud.py::test_merge_survives_a_document_that_already_holds_the_target_value -v`,
-and confirm it now FAILS with a unique-violation `IntegrityError`. Restore the block.
-A test that passes with and without the code it covers is not a test.
-
-- [ ] **Step 6: Format and commit**
+- [ ] **Step 5: Format and commit**
 
 ```bash
 uv run ruff format src/library/facets/ tests/test_facet_crud.py
@@ -2658,6 +2605,11 @@ async def accept_suggestion(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Unknown suggestion")
     suggestion, facet_key = row
     value_key = suggestion.suggested_label.strip().lower().replace(" ", "-")
+    vocab = {f.key: f for f in await vocabulary.load_vocabulary(session)}
+    if vocab[facet_key].value(value_key) is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, f"{facet_key}={value_key} already exists"
+        )
     await vocabulary.create_value(session, facet_key, value_key, suggestion.suggested_label)
     await vocabulary.set_document_label(session, suggestion.document_id, facet_key, value_key)
     suggestion.state = "accepted"
@@ -3667,18 +3619,20 @@ import { test, expect } from '@playwright/test'
  */
 test('a facet can be created, applied to a document, and filtered on', async ({
   page,
-  request,
 }) => {
   const key = `e2e${Date.now().toString(36)}`
 
-  const facet = await request.post('/api/facets', { data: { key, label: 'E2E' } })
+  // page.request, not the standalone `request` fixture: only the page context
+  // carries the authenticated session cookie. Every existing spec does this.
+  await page.goto('/documents')
+  const facet = await page.request.post('/api/facets', { data: { key, label: 'E2E' } })
   expect(facet.ok()).toBeTruthy()
-  const value = await request.post(`/api/facets/${key}/values`, {
+  const value = await page.request.post(`/api/facets/${key}/values`, {
     data: { key: 'alpha', label: 'Alpha' },
   })
   expect(value.ok()).toBeTruthy()
 
-  await page.goto('/documents')
+  await page.reload()
   const firstCard = page.locator('[data-testid="doc-card"]').first()
   await expect(firstCard).toBeVisible()
   await firstCard.click()
