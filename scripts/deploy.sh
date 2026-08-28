@@ -195,6 +195,42 @@ deploy() {
     exit 1
   fi
 
+  # A 200 is not the whole story: /healthz stays 200 while reporting
+  # `status: "degraded"`, because the app IS serving. Read the body too, or a
+  # deploy that broke something the app only needs later passes this gate.
+  #
+  # The OCR weights are the case that motivated it (GH #109): they are read
+  # lazily, on the first photo/PNG/HEIC/gate-retried scan, so an image missing
+  # them deploys entirely green and then fails one document at a time, hours
+  # later. That one is fatal here — a weightless image is a broken image and
+  # the answer is a rollback, not a shrug. Credential degradation is only
+  # reported: it needs a human, but it is not a reason to reject the build
+  # that just deployed.
+  bold "Health detail:"
+  local health_body
+  # Prints the response body verbatim (compact JSON, no spaces after the
+  # colons) — one python statement, so the quoting stays as simple as the
+  # probe above.
+  health_body="$(remote "docker compose exec -T $WEB_SVC python -c \
+      \"import urllib.request; print(urllib.request.urlopen('http://localhost:8000/healthz').read().decode())\"" \
+      2>/dev/null)" || health_body=""
+  if [[ -z "$health_body" ]]; then
+    err "  could not read the /healthz body — skipping the degraded-status check."
+  else
+    echo "  $health_body"
+    if grep -q '"ocr_models": *"missing"' <<<"$health_body"; then
+      err "OCR model weights are MISSING from the running image."
+      err "Photo OCR (JPEG/PNG/HEIC, and any scan that falls through the"
+      err "confidence gate) will fail per-document. The image did not ship"
+      err "models/ocr/ — roll back (docs/runbooks/deploy.md) and rebuild."
+      exit 1
+    fi
+    if grep -q '"status": *"degraded"' <<<"$health_body"; then
+      err "  /healthz reports status=degraded — see the fields above."
+      err "  Not fatal: the app is serving. See docs/deployment.md §1.4.2."
+    fi
+  fi
+
   echo
   show_status
   echo
