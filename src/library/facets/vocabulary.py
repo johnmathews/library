@@ -3,8 +3,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any, cast
 
-from sqlalchemy import delete, func, literal, select, update
+from sqlalchemy import CursorResult, delete, func, literal, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -61,14 +62,14 @@ async def load_vocabulary(session: AsyncSession) -> tuple[VocabularyFacet, ...]:
         aliases.setdefault(row.facet_value_id, []).append(row.alias)
 
     by_facet: dict[int, list[VocabularyValue]] = {}
-    for row in value_rows:
-        by_facet.setdefault(row.facet_id, []).append(
+    for value in value_rows:
+        by_facet.setdefault(value.facet_id, []).append(
             VocabularyValue(
-                id=row.id,
-                key=row.key,
-                label=row.label,
-                parent_id=row.parent_id,
-                aliases=tuple(sorted(aliases.get(row.id, ()))),
+                id=value.id,
+                key=value.key,
+                label=value.label,
+                parent_id=value.parent_id,
+                aliases=tuple(sorted(aliases.get(value.id, ()))),
             )
         )
     return tuple(
@@ -114,7 +115,7 @@ async def document_labels(session: AsyncSession, document_id: int) -> dict[str, 
         .join(FacetValue, FacetValue.id == DocumentLabel.facet_value_id)
         .where(DocumentLabel.document_id == document_id)
     )
-    return dict(rows.all())
+    return dict(rows.tuples().all())
 
 
 async def set_document_label(
@@ -212,12 +213,16 @@ async def merge_values(session: AsyncSession, facet_key: str, from_key: str, int
     if from_id == into_id:
         raise MergeIntoSelfError(f"{facet_key}={from_key} cannot be merged into itself")
 
-    moved = (
+    # `AsyncSession.execute` is typed as returning `Result`, which has no
+    # `rowcount`; this is a plain UPDATE, so the runtime object is a
+    # `CursorResult`. Narrowed rather than ignored so the attribute stays checked.
+    moved = cast(
+        CursorResult[Any],
         await session.execute(
             update(DocumentLabel)
             .where(DocumentLabel.facet_id == facet_id, DocumentLabel.facet_value_id == from_id)
             .values(facet_value_id=into_id)
-        )
+        ),
     ).rowcount
 
     await session.execute(

@@ -22,8 +22,9 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from typing import Any, cast
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import CursorResult, delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.models import Document, Recipient
@@ -83,11 +84,15 @@ async def merge_recipients(session: AsyncSession, keep_id: int, drop_ids: Sequen
         return 0
 
     linked = (
-        await session.execute(
-            select(Recipient.id, Recipient.user_id).where(Recipient.id.in_([keep_id, *targets]))
+        (
+            await session.execute(
+                select(Recipient.id, Recipient.user_id).where(Recipient.id.in_([keep_id, *targets]))
+            )
         )
-    ).all()
-    user_id_by_recipient = dict(linked)
+        .tuples()
+        .all()
+    )
+    user_id_by_recipient: dict[int, int | None] = dict(linked)
     keep_user_id = user_id_by_recipient.get(keep_id)
     drop_links = {
         recipient_id: user_id
@@ -115,10 +120,14 @@ async def merge_recipients(session: AsyncSession, keep_id: int, drop_ids: Sequen
                 update(Recipient).where(Recipient.id == keep_id).values(user_id=transfer_user_id)
             )
 
-    moved = (
+    # `AsyncSession.execute` is typed as returning `Result`, which has no
+    # `rowcount`; this is a plain UPDATE, so the runtime object is a
+    # `CursorResult`. Narrowed rather than ignored so the attribute stays checked.
+    moved = cast(
+        CursorResult[Any],
         await session.execute(
             update(Document).where(Document.recipient_id.in_(targets)).values(recipient_id=keep_id)
-        )
+        ),
     ).rowcount
     await session.execute(delete(Recipient).where(Recipient.id.in_(targets)))
     return int(moved)
