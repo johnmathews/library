@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -142,3 +142,93 @@ async def set_document_label(
         )
     )
     await session.execute(statement)
+
+
+class ValueInUseError(ValueError):
+    """Raised when deleting a facet value that documents still carry."""
+
+
+async def create_facet(session: AsyncSession, key: str, label: str, ordinal: int = 0) -> int:
+    facet = Facet(key=key, label=label, ordinal=ordinal)
+    session.add(facet)
+    await session.flush()
+    return facet.id
+
+
+async def create_value(session: AsyncSession, facet_key: str, key: str, label: str) -> int:
+    facet_id, _ = await _resolve(session, facet_key, None)
+    ordinal = (
+        await session.execute(
+            select(func.coalesce(func.max(FacetValue.ordinal), -1) + 1).where(
+                FacetValue.facet_id == facet_id
+            )
+        )
+    ).scalar_one()
+    value = FacetValue(facet_id=facet_id, key=key, label=label, ordinal=ordinal)
+    session.add(value)
+    await session.flush()
+    return value.id
+
+
+async def rename_value(session: AsyncSession, facet_key: str, key: str, label: str) -> None:
+    """Change a value's display label. Free: labels reference the id, not the text."""
+    _, value_id = await _resolve(session, facet_key, key)
+    await session.execute(update(FacetValue).where(FacetValue.id == value_id).values(label=label))
+
+
+async def add_alias(session: AsyncSession, facet_key: str, key: str, alias: str) -> None:
+    _, value_id = await _resolve(session, facet_key, key)
+    await session.execute(
+        pg_insert(FacetValueAlias)
+        .values(facet_value_id=value_id, alias=alias)
+        .on_conflict_do_nothing()
+    )
+
+
+async def merge_values(session: AsyncSession, facet_key: str, from_key: str, into_key: str) -> int:
+    """Fold ``from_key`` into ``into_key``. Returns the number of labels moved.
+
+    No primary-key conflict is possible: the key is ``(document_id, facet_id)``
+    and this changes only ``facet_value_id``, which is not part of it.
+    ``from_key`` survives as an alias of the target so a future labelling pass
+    still recognises the old surface form.
+    """
+    facet_id, from_id = await _resolve(session, facet_key, from_key)
+    _, into_id = await _resolve(session, facet_key, into_key)
+
+    moved = (
+        await session.execute(
+            update(DocumentLabel)
+            .where(DocumentLabel.facet_id == facet_id, DocumentLabel.facet_value_id == from_id)
+            .values(facet_value_id=into_id)
+        )
+    ).rowcount
+
+    await session.execute(
+        pg_insert(FacetValueAlias)
+        .values(facet_value_id=into_id, alias=from_key)
+        .on_conflict_do_nothing()
+    )
+    await session.execute(
+        update(FacetValueAlias)
+        .where(FacetValueAlias.facet_value_id == from_id)
+        .values(facet_value_id=into_id)
+    )
+    await session.execute(delete(FacetValue).where(FacetValue.id == from_id))
+    return int(moved)
+
+
+async def delete_value(session: AsyncSession, facet_key: str, key: str) -> None:
+    """Remove an unused value. Refuses while any document still carries it."""
+    facet_id, value_id = await _resolve(session, facet_key, key)
+    in_use = (
+        await session.execute(
+            select(func.count())
+            .select_from(DocumentLabel)
+            .where(DocumentLabel.facet_id == facet_id, DocumentLabel.facet_value_id == value_id)
+        )
+    ).scalar_one()
+    if in_use:
+        raise ValueInUseError(f"{facet_key}={key} is on {in_use} documents")
+    await session.execute(delete(FacetValueAlias).where(FacetValueAlias.facet_value_id == value_id))
+    await session.execute(delete(FacetValue).where(FacetValue.id == value_id))
