@@ -134,3 +134,38 @@ def test_confidence_is_clamped_into_zero_one() -> None:
         {"labels": [{"facet": "scope", "value": "business", "confidence": 4.2, "reason": "x"}]}
     )
     assert parse_label_response(payload, VOCAB)[0].confidence == 1.0
+
+
+def test_a_list_valued_facet_does_not_raise() -> None:
+    """The model can return any JSON shape. A whole labelling run must not die
+    because one entry's `facet` was not a string."""
+    payload = json.dumps(
+        {"labels": [{"facet": ["nested"], "value": "software", "confidence": 1.0, "reason": "r"}]}
+    )
+    assert parse_label_response(payload, VOCAB) == []
+
+
+def test_an_object_valued_facet_does_not_raise() -> None:
+    payload = json.dumps(
+        {"labels": [{"facet": {"a": 1}, "value": "software", "confidence": 1.0, "reason": "r"}]}
+    )
+    assert parse_label_response(payload, VOCAB) == []
+
+
+def test_a_non_string_reason_or_suggestion_is_discarded_not_stringified() -> None:
+    payload = json.dumps(
+        {
+            "labels": [
+                {
+                    "facet": "category",
+                    "value": "software",
+                    "confidence": 0.9,
+                    "reason": ["not", "a", "string"],
+                    "suggest": {"nope": 1},
+                }
+            ]
+        }
+    )
+    proposal = parse_label_response(payload, VOCAB)[0]
+    assert proposal.reason == ""
+    assert proposal.suggested_label is None
