@@ -342,6 +342,7 @@ top-level modules.
 | `src/library/auth/` | Argon2 passwords, cookie sessions, bearer API tokens. |
 | `src/library/embedding/` | Local embedding (bge-m3 via a text-embeddings-inference sidecar). |
 | `src/library/extraction/` | Claude metadata extraction: schema, extractor, pricing, and pipeline glue. |
+| `src/library/facets/` | Facet labeling: vocabulary management and LLM-driven label proposals. |
 | `src/library/importer/` | paperless-ngx importer: REST client, payload mapper, batch runner. |
 | `src/library/llm/` | The subscription LLM backend: Claude Agent SDK adapter and OAuth credential refresh. See [`llm-backends.md`](llm-backends.md). |
 | `src/library/markdown/` | Vision-model page-to-markdown conversion and its storage. |
