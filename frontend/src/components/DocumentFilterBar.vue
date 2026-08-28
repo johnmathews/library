@@ -32,7 +32,6 @@ const props = defineProps<{ applied: AppliedFilters }>()
 const emit = defineEmits<{
   apply: [LocationQueryRaw, { replace?: boolean }?]
   clear: []
-  'update:facets': [Record<string, string>]
 }>()
 
 const { kinds, senders, recipients, tags, projects, matters, ensureLoaded } = useTaxonomyOptions()
@@ -40,11 +39,11 @@ void ensureLoaded()
 
 // --- Facet filters (controlled vocabulary, docs/facets.md) ----------------
 //
-// Unlike the taxonomy filters above, facet selection is not carried in the
-// URL query (§10 of the facet-vocabulary plan keeps this local); it is held
-// here and emitted upward via `update:facets` for the parent to fold into the
-// document-list request. "Clear all" resets it alongside the URL-driven
-// filters.
+// Unlike the fetch above (which loads the *vocabulary*, not a selection), the
+// active facet *selection* is carried in the URL exactly like every other
+// filter here — `applied.facets` / `emitWith({ facets: ... })` — so it
+// survives refresh, back/forward and "Save view" the same way tags/projects/
+// matters do. `onFacetChange` is the FacetFilterBar → emitWith adapter.
 const facets = ref<FacetRef[]>([])
 onMounted(async () => {
   try {
@@ -54,16 +53,8 @@ onMounted(async () => {
   }
 })
 
-const facetSelection = ref<Record<string, string>>({})
-watch(
-  facetSelection,
-  (next) => emit('update:facets', next),
-  { deep: true },
-)
-
-function clearAll(): void {
-  facetSelection.value = {}
-  emit('clear')
+function onFacetChange(next: Record<string, string>): void {
+  emitWith({ facets: next })
 }
 
 // Which pill popover is open (only one at a time); null = all closed.
@@ -652,10 +643,10 @@ const statusOptions = DOCUMENT_STATUSES
 
     <!-- Facet filters (controlled vocabulary): one select per facet that has
          values, in the mosaic `items-end gap-3` field-row pattern (§5,
-         docs/frontend-view-principles.md). Not carried in the URL — see the
-         `facetSelection` comment above. -->
+         docs/frontend-view-principles.md). URL-driven like every other filter
+         here — see the `onFacetChange` comment above. -->
     <div class="mt-2">
-      <FacetFilterBar v-model="facetSelection" :facets="facets" />
+      <FacetFilterBar :model-value="applied.facets" :facets="facets" @update:modelValue="onFacetChange" />
     </div>
 
     <!-- Active-filter chips -->
@@ -681,7 +672,7 @@ const statusOptions = DOCUMENT_STATUSES
         type="button"
         data-testid="filter-clear-all"
         class="text-xs text-gray-500 underline hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-        @click="clearAll"
+        @click="emit('clear')"
       >
         Clear all
       </button>

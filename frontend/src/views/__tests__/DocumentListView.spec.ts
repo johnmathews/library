@@ -75,6 +75,20 @@ const RECIPIENTS = [{ id: 5, name: 'John', document_count: 7 }]
 const TAGS = [{ slug: 'energie', name: 'Energie', document_count: 2 }]
 const PROJECTS = [{ slug: 'house-purchase', name: 'House purchase', document_count: 4 }]
 const MATTERS = [{ slug: 'acme-merger', name: 'Acme merger', document_count: 6 }]
+const FACETS = {
+  facets: [
+    {
+      key: 'category',
+      label: 'Category',
+      ordinal: 0,
+      values: [
+        { key: 'software', label: 'Software', parent_id: null, aliases: [] },
+        { key: 'energy', label: 'Energy', parent_id: null, aliases: [] },
+      ],
+    },
+    { key: 'vehicle', label: 'Vehicle', ordinal: 1, values: [] },
+  ],
+}
 
 const Stub = { template: '<div />' }
 
@@ -111,6 +125,7 @@ describe('DocumentListView', () => {
       if (url === '/api/tags') return Promise.resolve(jsonResponse(TAGS))
       if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
       if (url === '/api/matters') return Promise.resolve(jsonResponse(MATTERS))
+      if (url === '/api/facets') return Promise.resolve(jsonResponse(FACETS))
       if (url.startsWith('/api/settings')) {
         // Echo the persisted field list back (server-cleaned shape).
         const body = init?.body ? JSON.parse(String(init.body)) : {}
@@ -532,6 +547,64 @@ describe('DocumentListView', () => {
     expect(useFlashStore().message).toBe('View saved')
   })
 
+  it("a saved view's captured filter_state includes the active facet selection", async () => {
+    await router.push('/?kind=invoice&facet=category:software')
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    await flushPromises() // GET /api/facets
+
+    await w.find('[data-testid="save-view-menu"]').trigger('click')
+    await flushPromises()
+    await w.find('[data-testid="save-view-name"]').setValue('Software invoices')
+    await w.find('[data-testid="save-view-panel"] form').trigger('submit')
+    await flushPromises()
+
+    const post = fetchMock.mock.calls.find(
+      (call) => String(call[0]) === '/api/saved-views' && (call[1] as RequestInit)?.method === 'POST',
+    )
+    expect(post).toBeTruthy()
+    expect(JSON.parse(String((post![1] as RequestInit).body))).toEqual({
+      name: 'Software invoices',
+      filter_state: { kind: 'invoice', facet: ['category:software'] },
+      pinned: false,
+    })
+  })
+
+  it("re-applying a saved view whose filter_state carries a facet restores it (selects + request)", async () => {
+    listResponse = () => jsonResponse(listBody([makeItem()]))
+    const w = await mountView()
+    const savedViews = useSavedViewsStore()
+    savedViews.views = [
+      {
+        id: 4,
+        name: 'Software invoices',
+        filter_state: { kind: 'invoice', facet: ['category:software'] },
+        pinned: false,
+        sort_order: 0,
+        created_at: '2026-07-01T00:00:00Z',
+        updated_at: '2026-07-01T00:00:00Z',
+      },
+    ]
+    savedViews.loaded = true
+    await w.find('[data-testid="save-view-menu"]').trigger('click')
+    await flushPromises()
+    await w.find('[data-testid="apply-view-4"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query).toEqual({
+      kind: 'invoice',
+      facet: ['category:software'],
+    })
+    expect(
+      (w.get('[data-testid="facet-select-category"]').element as HTMLSelectElement).value,
+    ).toBe('software')
+    const listCall = documentUrls().at(-1)
+    expect(listCall).toBeDefined()
+    expect(new URLSearchParams(listCall!.split('?')[1]).getAll('facet')).toEqual([
+      'category:software',
+    ])
+  })
+
   it('quick-applies an existing saved view from the popover, navigating home with its query', async () => {
     listResponse = () => jsonResponse(listBody([makeItem()]))
     const w = await mountView()
@@ -878,6 +951,35 @@ describe('DocumentListView', () => {
     expect(params.getAll('matter')).toEqual(['acme-merger', 'estate'])
   })
 
+  it('applies a facet already in the route query to both the select and the outgoing document request', async () => {
+    await router.push('/?facet=category:software')
+    const w = await mountView()
+    await flushPromises() // GET /api/facets resolves after the initial mount
+
+    // The select shows the right value...
+    const select = w.get('[data-testid="facet-select-category"]')
+    expect((select.element as HTMLSelectElement).value).toBe('software')
+
+    // ...and the document request was made with it.
+    const listCall = documentUrls().at(-1)
+    expect(listCall).toBeDefined()
+    const params = new URLSearchParams(listCall!.split('?')[1])
+    expect(params.getAll('facet')).toEqual(['category:software'])
+  })
+
+  it('applies two facets from the route query, AND-composed in the request', async () => {
+    await router.push('/?facet=category:software&facet=vehicle:sedan')
+    await mountView()
+    await flushPromises()
+
+    const listCall = documentUrls().at(-1)
+    expect(listCall).toBeDefined()
+    const params = new URLSearchParams(listCall!.split('?')[1])
+    // vehicle ships with no values in the fetched vocabulary, so its select
+    // does not render — but the URL-driven value still reaches the request.
+    expect(params.getAll('facet').sort()).toEqual(['category:software', 'vehicle:sedan'])
+  })
+
   it('renders snippets via renderSnippet: <b> kept, script neutralised', async () => {
     listResponse = () =>
       jsonResponse(
@@ -1076,6 +1178,56 @@ describe('DocumentListView', () => {
     bar.vm.$emit('clear')
     await flushPromises()
     expect(router.currentRoute.value.query).toEqual({})
+  })
+
+  it('selecting a facet value on the real filter bar updates the URL query and the request', async () => {
+    const w = await mountView()
+    await flushPromises() // GET /api/facets
+
+    await w.get('[data-testid="facet-select-category"]').setValue('software')
+    await flushPromises()
+
+    expect(router.currentRoute.value.query).toEqual({ facet: ['category:software'] })
+    const listCall = documentUrls().at(-1)
+    expect(listCall).toBeDefined()
+    expect(new URLSearchParams(listCall!.split('?')[1]).getAll('facet')).toEqual([
+      'category:software',
+    ])
+
+    // Choosing the blank option removes the param entirely rather than
+    // leaving `facet=` behind.
+    await w.get('[data-testid="facet-select-category"]').setValue('')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({})
+    expect(documentUrls().at(-1)).not.toContain('facet=')
+  })
+
+  it("a facet selection survives back/forward navigation like the page's other filters", async () => {
+    const w = await mountView()
+    await flushPromises()
+
+    await w.get('[data-testid="facet-select-category"]').setValue('software')
+    await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ facet: ['category:software'] })
+
+    await router.push('/?kind=invoice') // a second, unrelated navigation
+    await flushPromises()
+
+    await router.back()
+    await flushPromises()
+    // A real back-navigation re-parses the stored URL string, so a single
+    // repeated-param value comes back as a scalar rather than a one-element
+    // array (unlike a direct object `router.push`) — `parseDocumentQuery`
+    // already handles both shapes via `asStringArray`.
+    expect(router.currentRoute.value.query).toEqual({ facet: 'category:software' })
+    expect((w.get('[data-testid="facet-select-category"]').element as HTMLSelectElement).value).toBe(
+      'software',
+    )
+    const listCall = documentUrls().at(-1)
+    expect(listCall).toBeDefined()
+    expect(new URLSearchParams(listCall!.split('?')[1]).getAll('facet')).toEqual([
+      'category:software',
+    ])
   })
 
   it('uses router.replace when the bar requests a replace (debounced typing)', async () => {
