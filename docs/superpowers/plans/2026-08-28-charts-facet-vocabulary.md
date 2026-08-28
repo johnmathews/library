@@ -2810,21 +2810,33 @@ and in `filter_conditions`, append one `EXISTS` per requested facet:
 
 ```python
     for facet_key, value_key in filters.facets.items():
+        # Aliased per iteration: two facet filters produce two EXISTS clauses
+        # over the same three tables, and unaliased references would collide.
+        label = aliased(DocumentLabel)
+        facet = aliased(Facet)
+        value = aliased(FacetValue)
         conditions.append(
-            exists().where(
-                DocumentLabel.document_id == Document.id,
-                DocumentLabel.facet_id == select(Facet.id)
-                .where(Facet.key == facet_key)
-                .scalar_subquery(),
-                DocumentLabel.facet_value_id == select(FacetValue.id)
-                .join(Facet, Facet.id == FacetValue.facet_id)
-                .where(Facet.key == facet_key, FacetValue.key == value_key)
-                .scalar_subquery(),
+            select(literal(1))
+            .select_from(label)
+            .join(facet, facet.id == label.facet_id)
+            .join(value, value.id == label.facet_value_id)
+            .where(
+                label.document_id == Document.id,
+                facet.key == facet_key,
+                value.key == value_key,
             )
+            .exists()
         )
 ```
 
-Add `Mapping` to the `typing`/`collections.abc` imports, `exists` to the SQLAlchemy imports, and `DocumentLabel`, `Facet`, `FacetValue` to the models import.
+Add `Mapping` to the `collections.abc` imports, `aliased` (from `sqlalchemy.orm`) and `literal` to the SQLAlchemy imports, and `DocumentLabel`, `Facet`, `FacetValue` to the models import.
+
+**This filter shape is verified.** It was executed against PostgreSQL 17 before this
+plan step was finalised, confirming all four behaviours: a single facet narrows to
+the documents carrying that value; two different facets AND-compose to their
+intersection; two values of the SAME facet return nothing (structurally, since a
+document holds at most one value per facet); and an unknown facet key returns
+nothing rather than erroring.
 
 - [ ] **Step 4: Accept the query parameter**
 
