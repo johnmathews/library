@@ -27,6 +27,11 @@ logger = logging.getLogger(__name__)
 
 MAX_LABEL_TOKENS: int = 600
 MAX_EXCERPT_CHARS: int = 2000
+# ``facet_value_suggestions.suggested_label`` is VARCHAR(255). Anything longer
+# reaches the insert as a statement-level Postgres error, which aborts whatever
+# transaction the labeller was invited into (ingest, or a backfill run), so the
+# clamp belongs here — at the boundary where the model's text becomes our data.
+MAX_SUGGESTED_LABEL_CHARS: int = 255
 
 LABELLER_SYSTEM_PROMPT: str = """\
 You assign labels to a household document for "Library", a self-hosted family
@@ -144,13 +149,17 @@ def parse_label_response(
             confidence = 0.0
         raw_reason = entry.get("reason")
         reason = raw_reason if isinstance(raw_reason, str) else ""
+        # Truncate rather than discard: an over-long suggestion is still
+        # evidence of what the model wanted, and a human reads it before it can
+        # ever widen the vocabulary.
+        clamped = suggested[:MAX_SUGGESTED_LABEL_CHARS] if suggested else None
         proposals.append(
             LabelProposal(
                 facet_key=facet.key,
                 value_key=resolved,
                 confidence=min(1.0, max(0.0, confidence)),
                 reason=reason,
-                suggested_label=suggested if suggested else None,
+                suggested_label=clamped or None,
             )
         )
     return proposals

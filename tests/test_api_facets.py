@@ -1,8 +1,11 @@
 """The facet REST surface, exercised through the app."""
 
 import asyncio
+import hashlib
+import re
 import uuid
 from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
@@ -10,7 +13,14 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from library.models import Facet, FacetValueSuggestion
+from library.api.facets import KEY_MAX_LENGTH, KEY_PATTERN
+from library.models import (
+    Document,
+    DocumentSource,
+    DocumentStatus,
+    Facet,
+    FacetValueSuggestion,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -67,6 +77,26 @@ def _seed_suggestion(
         await session.flush()
         await session.commit()
         return suggestion.id
+
+    return _run(api_database_url, _op)
+
+
+def _seed_deleted_document(api_database_url: str) -> int:
+    """A soft-deleted document, to prove labels are refused for trashed rows."""
+
+    async def _op(session: AsyncSession) -> int:
+        marker = f"facets-deleted:{uuid.uuid4()}"
+        document = Document(
+            sha256=hashlib.sha256(marker.encode()).hexdigest(),
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            status=DocumentStatus.INDEXED,
+            deleted_at=datetime.now(UTC),
+        )
+        session.add(document)
+        await session.flush()
+        await session.commit()
+        return document.id
 
     return _run(api_database_url, _op)
 
@@ -243,3 +273,122 @@ def test_creating_a_duplicate_value_key_is_409(api_client: TestClient) -> None:
         f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha Duplicate"}
     )
     assert response.status_code == 409, response.text
+
+
+def test_merging_a_value_into_itself_is_409_and_destroys_nothing(api_client: TestClient) -> None:
+    """A self-merge is a mistake, not an intent.
+
+    Unguarded it returned ``200 {"moved": 0}`` while the copy-then-delete
+    re-pointed the value's aliases onto its own id, deleted them, and deleted
+    the value — a silent data loss behind a success code.
+    """
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+    api_client.post(f"/api/facets/{key}/values/alpha/aliases", json={"alias": "first letter"})
+
+    response = api_client.post(f"/api/facets/{key}/values/alpha/merge", json={"into": "alpha"})
+    assert response.status_code == 409, response.text
+
+    facet = next(f for f in api_client.get("/api/facets").json()["facets"] if f["key"] == key)
+    value = next(v for v in facet["values"] if v["key"] == "alpha")
+    assert value["aliases"] == ["first letter"]
+
+
+def test_merging_an_in_use_value_into_itself_is_409_not_500(
+    api_client: TestClient, seeded_document_id: int
+) -> None:
+    """With the value in use the same path raised an uncaught IntegrityError."""
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+    api_client.put(f"/api/documents/{seeded_document_id}/labels", json={"labels": {key: "alpha"}})
+
+    response = api_client.post(f"/api/facets/{key}/values/alpha/merge", json={"into": "alpha"})
+    assert response.status_code == 409, response.text
+    assert (
+        api_client.get(f"/api/documents/{seeded_document_id}/labels").json()["labels"][key]
+        == "alpha"
+    )
+
+
+def test_a_dry_run_merge_into_an_unknown_value_is_404(api_client: TestClient) -> None:
+    """The dry run resolves both sides, so it fails on everything the merge would."""
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+    response = api_client.post(
+        f"/api/facets/{key}/values/alpha/merge", json={"into": "nonexistent", "dry_run": True}
+    )
+    assert response.status_code == 404, response.text
+
+
+def test_a_dry_run_merge_into_itself_is_409(api_client: TestClient) -> None:
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+    response = api_client.post(
+        f"/api/facets/{key}/values/alpha/merge", json={"into": "alpha", "dry_run": True}
+    )
+    assert response.status_code == 409, response.text
+
+
+def test_accepting_a_punctuation_heavy_suggestion_derives_a_contract_shaped_key(
+    api_client: TestClient, api_database_url: str, seeded_document_id: int
+) -> None:
+    """``accept`` is the only route that widens the vocabulary, so the key it
+    derives must satisfy the same ``^[a-z0-9_-]+$`` contract POST enforces."""
+    key = _make_facet(api_client)
+    suggestion_id = _seed_suggestion(
+        api_database_url, key, seeded_document_id, "EV charging (home)!"
+    )
+    response = api_client.post(f"/api/facet-suggestions/{suggestion_id}/accept")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"facet": key, "value": "ev-charging-home"}
+    assert re.fullmatch(KEY_PATTERN, response.json()["value"])
+    # The label keeps the human wording; only the key is sanitised.
+    facet = next(f for f in api_client.get("/api/facets").json()["facets"] if f["key"] == key)
+    value = next(v for v in facet["values"] if v["key"] == "ev-charging-home")
+    assert value["label"] == "EV charging (home)!"
+
+
+def test_accepting_an_over_long_suggestion_truncates_the_key_rather_than_500ing(
+    api_client: TestClient, api_database_url: str, seeded_document_id: int
+) -> None:
+    """``facet_values.key`` is VARCHAR(64); over-long raised DBAPIError — which
+    is not IntegrityError, so the 409 handler missed it and it became a 500."""
+    label = "Vehicle " * 30  # 240 characters, far past the 64-character key limit
+    key = _make_facet(api_client)
+    suggestion_id = _seed_suggestion(api_database_url, key, seeded_document_id, label)
+    response = api_client.post(f"/api/facet-suggestions/{suggestion_id}/accept")
+    assert response.status_code == 200, response.text
+    derived = response.json()["value"]
+    assert len(derived) <= KEY_MAX_LENGTH
+    assert re.fullmatch(KEY_PATTERN, derived)
+
+
+def test_accepting_a_suggestion_with_no_usable_characters_is_422(
+    api_client: TestClient, api_database_url: str, seeded_document_id: int
+) -> None:
+    key = _make_facet(api_client)
+    suggestion_id = _seed_suggestion(api_database_url, key, seeded_document_id, "!!! ??? ***")
+    response = api_client.post(f"/api/facet-suggestions/{suggestion_id}/accept")
+    assert response.status_code == 422, response.text
+    assert "!!! ??? ***" in response.json()["detail"]
+
+
+def test_putting_labels_on_an_unknown_document_is_404(api_client: TestClient) -> None:
+    """Every sibling document router 404s; the FK violation was a 500."""
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+    response = api_client.put("/api/documents/999999999/labels", json={"labels": {key: "alpha"}})
+    assert response.status_code == 404, response.text
+
+
+def test_putting_labels_on_a_deleted_document_is_404(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A trashed document must not gain labels."""
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+    document_id = _seed_deleted_document(api_database_url)
+    response = api_client.put(
+        f"/api/documents/{document_id}/labels", json={"labels": {key: "alpha"}}
+    )
+    assert response.status_code == 404, response.text

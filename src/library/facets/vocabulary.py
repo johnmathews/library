@@ -148,6 +148,16 @@ class ValueInUseError(ValueError):
     """Raised when deleting a facet value that documents still carry."""
 
 
+class MergeIntoSelfError(ValueError):
+    """Raised when a merge names the same value on both sides.
+
+    Not a no-op: without the guard the copy-then-delete below re-points the
+    value's aliases onto its own id, deletes them, and then deletes the row —
+    silently destroying the value and every alias it had (or, if any document
+    carries it, failing the FK check as an unhandled IntegrityError).
+    """
+
+
 async def create_facet(session: AsyncSession, key: str, label: str, ordinal: int = 0) -> int:
     facet = Facet(key=key, label=label, ordinal=ordinal)
     session.add(facet)
@@ -192,9 +202,15 @@ async def merge_values(session: AsyncSession, facet_key: str, from_key: str, int
     and this changes only ``facet_value_id``, which is not part of it.
     ``from_key`` survives as an alias of the target so a future labelling pass
     still recognises the old surface form.
+
+    Raises ``MergeIntoSelfError`` when both sides name the same value: it is a
+    caller mistake, and the copy-then-delete below would otherwise delete the
+    value and its aliases outright.
     """
     facet_id, from_id = await _resolve(session, facet_key, from_key)
     _, into_id = await _resolve(session, facet_key, into_key)
+    if from_id == into_id:
+        raise MergeIntoSelfError(f"{facet_key}={from_key} cannot be merged into itself")
 
     moved = (
         await session.execute(

@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 from procrastinate.testing import InMemoryConnector
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -42,6 +42,8 @@ from library.models import (
     DocumentLanguage,
     DocumentSource,
     DocumentStatus,
+    Facet,
+    FacetValueSuggestion,
     IngestionEvent,
     Recipient,
     Sender,
@@ -295,14 +297,37 @@ async def test_facet_labelling_failure_never_fails_the_document(
 ) -> None:
     """A labelling error is logged and swallowed; extraction still completes.
 
-    Mirrors ``test_extraction_failure_still_reaches_indexed`` but for the
-    facet-labelling hook: an unparseable model response or a transient API
-    error must leave the document unlabelled and visible in the review queue,
-    never fail the ingest.
+    The failure injected here is a **database** error, not a ``RuntimeError``:
+    an over-long ``suggested_label`` (the column is VARCHAR(255)) is the way
+    this hook actually breaks in production, and it is the only kind of failure
+    that tests the guard. A pure-Python exception never touches the
+    transaction, so a try/except alone passes it whether or not the transaction
+    survives; a statement-level Postgres error aborts the transaction, and the
+    very next statement — ``_record_event``, which is also what commits — then
+    raises InFailedSqlTransaction and the extracted metadata is lost.
     """
+    facet_key = f"c1-{uuid.uuid4().hex[:8]}"
 
-    async def broken_label_and_apply(*args: object, **kwargs: object) -> None:
-        raise RuntimeError("facet labeller is unreachable")
+    async def broken_label_and_apply(
+        session: AsyncSession,
+        settings: Settings,
+        document_id: int,
+        *,
+        client: Any = None,
+        backend: str = "api",
+    ) -> None:
+        facet = Facet(key=facet_key, label="C1")
+        session.add(facet)
+        await session.flush()
+        await session.execute(
+            insert(FacetValueSuggestion).values(
+                facet_id=facet.id,
+                document_id=document_id,
+                suggested_label="x" * 400,  # VARCHAR(255): StringDataRightTruncation
+                reason="an over-long suggestion the model returned",
+                state="pending",
+            )
+        )
 
     monkeypatch.setattr(apply_module, "label_and_apply", broken_label_and_apply)
     patch_extract(monkeypatch, make_outcome(make_metadata()))
@@ -319,6 +344,11 @@ async def test_facet_labelling_failure_never_fails_the_document(
         # The extracted fields still landed — the labelling failure did not
         # roll anything back or otherwise disturb the success path.
         assert document.title == "Energierekening mei 2026"
+        # The savepoint rolled back the labelling's own writes, and only those.
+        facet_id = (
+            await session.execute(select(Facet.id).where(Facet.key == facet_key))
+        ).scalar_one_or_none()
+        assert facet_id is None
 
     events = await get_events(session_factory, document_id)
     completed = [detail for event, detail in events if event == "extraction_completed"]

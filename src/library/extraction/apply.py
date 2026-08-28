@@ -613,8 +613,16 @@ async def apply_extraction(
     # and self-contained, exactly like the validation step above: a missing
     # API key or an unparseable response leaves the document unlabelled and
     # visible in the review queue, never fails the ingest.
+    #
+    # The SAVEPOINT is what makes "best-effort" true for a *database* failure
+    # as well as a Python one. A statement-level Postgres error aborts the
+    # whole transaction, so without it the next statement — ``_record_event``,
+    # which is also what commits — would raise InFailedSqlTransaction and lose
+    # the extracted metadata. Rolling back to the savepoint discards only the
+    # labelling's own writes and leaves the outer transaction usable.
     try:
-        await label_and_apply(session, settings, document.id)
+        async with session.begin_nested():
+            await label_and_apply(session, settings, document.id)
     except Exception:  # labelling is best-effort; never fail the document
         logger.exception("facet labelling failed for document %s", document.id)
 

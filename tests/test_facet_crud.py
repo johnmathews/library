@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from library.facets.vocabulary import (
+    MergeIntoSelfError,
     ValueInUseError,
     add_alias,
     create_facet,
@@ -117,3 +118,27 @@ def test_merge_survives_two_values_that_share_an_alias(api_database_url: str) ->
     facets = {f.key: f for f in asyncio.run(_run(api_database_url, load_vocabulary))}
     assert facets[key].value("alpha") is None
     assert "shared-term" in facets[key].value("beta").aliases
+
+
+def test_merging_a_value_into_itself_is_refused(api_database_url: str) -> None:
+    """The guard lives here, not only in the router: the copy-then-delete would
+    re-point the value's aliases onto its own id and then delete the row."""
+    key = _facet_key()
+
+    async def _work(session: AsyncSession) -> None:
+        await create_facet(session, key, "Crud")
+        await create_value(session, key, "alpha", "Alpha")
+        await add_alias(session, key, "alpha", "first")
+
+    asyncio.run(_run(api_database_url, _work))
+
+    async def _merge(session: AsyncSession) -> None:
+        await merge_values(session, key, "alpha", "alpha")
+
+    with pytest.raises(MergeIntoSelfError):
+        asyncio.run(_run(api_database_url, _merge))
+
+    facets = {f.key: f for f in asyncio.run(_run(api_database_url, load_vocabulary))}
+    value = facets[key].value("alpha")
+    assert value is not None
+    assert value.aliases == ("first",)

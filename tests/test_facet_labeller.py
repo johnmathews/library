@@ -3,6 +3,7 @@
 import json
 
 from library.facets.labeller import (
+    MAX_SUGGESTED_LABEL_CHARS,
     DocumentFields,
     build_labelling_prompt,
     parse_label_response,
@@ -169,3 +170,49 @@ def test_a_non_string_reason_or_suggestion_is_discarded_not_stringified() -> Non
     proposal = parse_label_response(payload, VOCAB)[0]
     assert proposal.reason == ""
     assert proposal.suggested_label is None
+
+
+def test_an_over_long_suggestion_is_clamped_to_the_column_width() -> None:
+    """``facet_value_suggestions.suggested_label`` is VARCHAR(255).
+
+    Nothing between the model and the insert clamps it, so an over-long
+    suggestion reaches Postgres as a StringDataRightTruncation — a
+    statement-level error that aborts whatever transaction the labeller was
+    invited into. Truncate rather than discard: the text is still evidence.
+    """
+    payload = json.dumps(
+        {
+            "labels": [
+                {
+                    "facet": "category",
+                    "value": None,
+                    "confidence": 0.9,
+                    "reason": "a facet value we do not have",
+                    "suggest": "z" * 400,
+                }
+            ]
+        }
+    )
+    proposal = parse_label_response(payload, VOCAB)[0]
+    assert proposal.suggested_label is not None
+    assert len(proposal.suggested_label) == MAX_SUGGESTED_LABEL_CHARS
+    assert proposal.suggested_label == "z" * MAX_SUGGESTED_LABEL_CHARS
+
+
+def test_an_over_long_out_of_vocabulary_value_is_clamped_too() -> None:
+    """The same clamp must cover the value-becomes-a-suggestion fallback."""
+    payload = json.dumps(
+        {
+            "labels": [
+                {
+                    "facet": "category",
+                    "value": "q" * 400,
+                    "confidence": 0.9,
+                    "reason": "invented",
+                }
+            ]
+        }
+    )
+    proposal = parse_label_response(payload, VOCAB)[0]
+    assert proposal.value_key is None
+    assert proposal.suggested_label == "q" * MAX_SUGGESTED_LABEL_CHARS

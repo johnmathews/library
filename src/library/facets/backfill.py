@@ -39,11 +39,24 @@ async def run_backfill(
 
     Each document commits on its own so a failure part-way leaves the work
     already done in place; the command is re-runnable by design.
+
+    Each document is also labelled inside a SAVEPOINT, which is what makes that
+    promise hold for a *database* failure. A statement-level Postgres error
+    aborts the whole transaction, so without it one bad document would take the
+    rest of the run with it — every later commit would raise
+    InFailedSqlTransaction. Rolling back to the savepoint discards only that
+    document's writes; it is counted as skipped and the run continues.
     """
     ids = await documents_needing_labels(session, relabel=relabel, limit=limit)
     labelled = skipped = 0
     for document_id in ids:
-        outcome = await label_and_apply(session, settings, document_id)
+        try:
+            async with session.begin_nested():
+                outcome = await label_and_apply(session, settings, document_id)
+        except Exception:  # one document must never abort the archive run
+            logger.exception("facet labelling failed for document %s", document_id)
+            skipped += 1
+            continue
         if outcome is None:
             skipped += 1
             continue

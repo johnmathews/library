@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 import uuid
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
@@ -13,8 +14,17 @@ from sqlalchemy.pool import NullPool
 
 from library.config import get_settings
 from library.facets.apply import apply_proposals, document_fields, label_and_apply
-from library.facets.labeller import LabelProposal
-from library.facets.vocabulary import create_facet, create_value, document_labels
+from library.facets.labeller import (
+    MAX_SUGGESTED_LABEL_CHARS,
+    LabelProposal,
+    parse_label_response,
+)
+from library.facets.vocabulary import (
+    VocabularyFacet,
+    create_facet,
+    create_value,
+    document_labels,
+)
 from library.models import (
     Document,
     DocumentSource,
@@ -225,3 +235,47 @@ def test_a_value_missing_from_the_vocabulary_is_unknown_not_a_crash(
     )
     assert outcome.applied == {}
     assert key in outcome.unknown
+
+
+def test_an_over_long_suggestion_is_stored_rather_than_raising(
+    api_database_url: str, seeded_document_id: int
+) -> None:
+    """End to end for the clamp: 400 characters in, a stored 255-character row out.
+
+    Unclamped this insert is a StringDataRightTruncation, which aborts the
+    caller's transaction — the ingest hook's, or a whole ``run_backfill`` pass.
+    """
+    key = _setup(api_database_url)
+    payload = json.dumps(
+        {
+            "labels": [
+                {
+                    "facet": key,
+                    "value": None,
+                    "confidence": 0.9,
+                    "reason": "a value the vocabulary does not have",
+                    "suggest": "z" * 400,
+                }
+            ]
+        }
+    )
+    vocab = (VocabularyFacet(id=0, key=key, label="Apply", ordinal=0, values=()),)
+    proposals = parse_label_response(payload, vocab)
+    outcome = asyncio.run(
+        _run(
+            api_database_url,
+            lambda s: apply_proposals(s, seeded_document_id, proposals, min_confidence=0.6),
+        )
+    )
+    assert outcome.suggested == ((key, "z" * MAX_SUGGESTED_LABEL_CHARS),)
+    rows = asyncio.run(
+        _run(
+            api_database_url,
+            lambda s: s.execute(
+                select(FacetValueSuggestion.suggested_label).where(
+                    FacetValueSuggestion.document_id == seeded_document_id
+                )
+            ),
+        )
+    )
+    assert [len(label) for label in rows.scalars()] == [MAX_SUGGESTED_LABEL_CHARS]

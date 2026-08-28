@@ -96,7 +96,9 @@ test('a facet can be created, applied to a document, and filtered on', async ({
 
   // Filter the document list by the new facet value. The key is unique to
   // this run, so exactly one document — the one just labelled — can match.
-  await page.goto('/documents')
+  // The dashboard is '/' — there is no '/documents' route (see
+  // src/router/index.ts; only '/documents/:id' exists) and no catch-all.
+  await page.goto('/')
   await page.getByTestId(`facet-select-${key}`).selectOption('alpha')
   await expect(page.locator('[data-testid="doc-card"]')).toHaveCount(1)
 

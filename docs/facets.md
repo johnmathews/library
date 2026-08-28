@@ -1,7 +1,7 @@
 # Facet vocabulary
 
 **Status:** active. **Last updated:** 2026-08-28 (initial version: the closed-set facet vocabulary that replaces free-form tags for the axes charts and search need — `category`, `scope`, `cost_type`, plus `vehicle`/`property`/`person`, which ship empty. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §6–7.5, plan: [superpowers/plans/2026-08-28-charts-facet-vocabulary.md](superpowers/plans/2026-08-28-charts-facet-vocabulary.md)).
-**Last verified:** 2026-08-28 — method: read every module in `src/library/facets/` (`vocabulary.py`, `seed.py`, `labeller.py`, `apply.py`, `backfill.py`, `recipients.py`) and `src/library/api/facets.py` in full; the `Facet`/`FacetValue`/`FacetValueAlias`/`DocumentLabel`/`FacetValueSuggestion` models and the `document_labels`/`facet_values` constraints in `src/library/models.py`; the `facet` query parameter and its 422 paths in `src/library/api/documents.py` and `src/library/search.py`; the `label-archive` and `recipients` commands in `src/library/cli.py`; and the wire-behaviour assertions in `tests/test_api_facets.py`, `tests/test_facet_search.py`, `tests/test_facet_crud.py` and `tests/test_facet_backfill.py`. No tests were executed as part of writing this document; a full `uv run pytest -q` run is recorded in the journal entry for this work.
+**Last verified:** 2026-08-28 — method: re-verified after a fix wave. §3 now describes the sanitisation `accept` applies to the key it derives and its 422, and §4 the 409 on merging a value into itself — both diffed against `derive_value_key`/`accept_suggestion` in `src/library/api/facets.py` and `merge_values` in `src/library/facets/vocabulary.py`, and covered by executed assertions in `tests/test_api_facets.py` and `tests/test_facet_crud.py`. §5's `--only` sentence is corrected (it bypasses the relabel skip-check entirely; `--relabel`/`--limit` do nothing alongside it) against `label_archive` in `src/library/cli.py`, and carries a new warning that `PATCH /api/admin/recipients/{id}` with `merge=true` (`rename_recipient` in `src/library/taxonomy.py`, read in full) drops the losing recipient's `user_id` link — an unfixed follow-up, not a claim about this branch's CLI path. Original method: read every module in `src/library/facets/` (`vocabulary.py`, `seed.py`, `labeller.py`, `apply.py`, `backfill.py`, `recipients.py`) and `src/library/api/facets.py` in full; the `Facet`/`FacetValue`/`FacetValueAlias`/`DocumentLabel`/`FacetValueSuggestion` models and the `document_labels`/`facet_values` constraints in `src/library/models.py`; the `facet` query parameter and its 422 paths in `src/library/api/documents.py` and `src/library/search.py`; the `label-archive` and `recipients` commands in `src/library/cli.py`; and the wire-behaviour assertions in `tests/test_api_facets.py`, `tests/test_facet_search.py`, `tests/test_facet_crud.py` and `tests/test_facet_backfill.py`. No tests were executed as part of writing this document; a full `uv run pytest -q` run is recorded in the journal entry for this work.
 
 ## 1. What a facet is, and why it is not a tag
 
@@ -88,11 +88,17 @@ facet, and the three-way split is the point:
   `(facet, document, suggested_label)`.
 
 `POST /api/facet-suggestions/{id}/accept` is the **only** sanctioned path
-that widens the vocabulary. It derives a value key from the suggested label
-(lower-cased, spaces to hyphens), creates the value, and labels the
-originating document with it in the same call — and answers `409` if that
-derived key already exists, whether checked ahead of the insert or caught as
-a race between two concurrent accepts. `POST
+that widens the vocabulary. It derives a value key from the suggested label,
+creates the value, and labels the originating document with it in the same
+call — and answers `409` if that derived key already exists, whether checked
+ahead of the insert or caught as a race between two concurrent accepts.
+Because this is the only route that widens the set, the derived key is held
+to the same contract `POST /api/facets/{key}/values` enforces: lower-cased,
+spaces to hyphens, anything outside `[a-z0-9_-]` dropped, runs of `-`/`_`
+collapsed, trimmed to 64 characters (`"EV charging (home)!"` →
+`ev-charging-home`); the label itself is stored unchanged as the value's
+display text. A label leaving nothing usable is a `422`, not a value with an
+unusable key. `POST
 /api/facet-suggestions/{id}/dismiss` rejects a suggestion without creating
 anything. Every other write path in `src/library/facets/vocabulary.py`
 refuses to create a value implicitly: naming a value that is not already in
@@ -120,7 +126,10 @@ plus folding the merged-away value's aliases onto the survivor, so it costs
 one query regardless of how many documents carry the value — `POST
 /api/facets/{key}/values/{value}/merge` also accepts `dry_run: true`, which
 runs the same count the real merge would move and returns it without writing
-anything, so an owner can preview a merge before committing to it.
+anything, so an owner can preview a merge before committing to it. Merging a
+value into itself is refused with a `409` (real run and dry run alike): the
+fold is a copy-then-delete, so with both sides equal it would delete the
+value and every alias it had.
 
 Split has no dedicated call because there is nothing mechanical to do: the
 system does not know which of the new two values each existing document
@@ -140,8 +149,10 @@ documents to label: without `--relabel`, a document carrying **any** existing
 label is skipped, which is what makes the command safe to re-run — after
 adding a facet or a value, re-running it only reaches documents that have
 never been touched. `--relabel` reconsiders every document against the
-current vocabulary, `--only` restricts to one document id (also honouring
-`--relabel`), and `--limit` caps how many documents a run touches.
+current vocabulary, and `--limit` caps how many documents a run touches.
+`--only <id>` is a separate path: it labels exactly that document, always,
+bypassing the skip-check above — so `--relabel` and `--limit` have no effect
+alongside it.
 
 Each document commits on its own, so a run interrupted partway through
 leaves everything already labelled in place — the command is safe to
@@ -165,7 +176,12 @@ exactly one unambiguous link exists among the ids being merged, and refuses —
 naming the conflicting recipient ids, moving nothing — when the keep id and
 the drop ids disagree about which user is linked. This is a distinct, CLI-only
 bulk tool; the interactive per-recipient rename/merge admins do day to day is
-still `PATCH /api/admin/recipients/{id}` (see [admin.md](admin.md)).
+still `PATCH /api/admin/recipients/{id}` (see [admin.md](admin.md)) — but
+**prefer `library recipients --merge` for anything carrying a `user_id`
+link**: `PATCH .../recipients/{id}` with `merge=true`
+(`library.taxonomy.rename_recipient`) has the `user_id`-loss bug the CLI path
+fixes — it deletes the losing recipient without transferring the link and
+without refusing on a conflict. Tracked as a follow-up; unchanged here.
 
 ## 6. REST surface
 

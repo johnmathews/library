@@ -8,6 +8,7 @@ unhandled ``IntegrityError``. Authentication is enforced at include level in
 app.py, like every other router.
 """
 
+import re
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -19,16 +20,40 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.db import get_session
 from library.facets import vocabulary
 from library.facets.vocabulary import (
+    MergeIntoSelfError,
     UnknownFacetError,
     UnknownValueError,
     ValueInUseError,
 )
-from library.models import Facet, FacetValueSuggestion
+from library.models import Document, Facet, FacetValueSuggestion
 
 router: APIRouter = APIRouter(tags=["facets"])
 
-Key = Annotated[str, StringConstraints(min_length=1, max_length=64, pattern=r"^[a-z0-9_-]+$")]
+KEY_PATTERN: str = r"^[a-z0-9_-]+$"
+KEY_MAX_LENGTH: int = 64
+Key = Annotated[
+    str, StringConstraints(min_length=1, max_length=KEY_MAX_LENGTH, pattern=KEY_PATTERN)
+]
 Label = Annotated[str, StringConstraints(min_length=1, max_length=255)]
+
+_DISALLOWED = re.compile(r"[^a-z0-9_-]+")
+_REPEATED_SEPARATORS = re.compile(r"([_-])\1+")
+
+
+def derive_value_key(label: str) -> str:
+    """Turn a free-text suggested label into a key meeting the ``Key`` contract.
+
+    ``accept_suggestion`` is the one route that widens the vocabulary, so key
+    hygiene matters most here: a raw ``label.lower().replace(" ", "-")`` happily
+    produces ``ev-charging-(home)!`` — which no other route would accept — and a
+    label over 64 characters reaches Postgres as a ``DBAPIError`` (not an
+    ``IntegrityError``), surfacing as a 500. Returns ``""`` when nothing usable
+    is left, which the caller answers with a 422.
+    """
+    key = label.strip().lower().replace(" ", "-")
+    key = _DISALLOWED.sub("", key)
+    key = _REPEATED_SEPARATORS.sub(r"\1", key)
+    return key.strip("-_")[:KEY_MAX_LENGTH].strip("-_")
 
 
 class ValueOut(BaseModel):
@@ -185,8 +210,19 @@ async def merge_value(
     try:
         if body.dry_run:
             moved = await vocabulary.count_labels(session, facet_key, value_key)
+            # Resolve `into` here too, so a dry run answers 404 for an unknown
+            # target exactly as the real merge does — a dry run whose only job
+            # is to preview a merge must fail on anything the merge would.
+            await vocabulary.count_labels(session, facet_key, body.into)
+            if value_key == body.into:
+                raise MergeIntoSelfError(value_key)
             return {"moved": moved}
         moved = await vocabulary.merge_values(session, facet_key, value_key, body.into)
+    except MergeIntoSelfError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"{facet_key}={value_key} cannot be merged into itself",
+        ) from exc
     except (UnknownFacetError, UnknownValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Unknown facet value"
@@ -227,6 +263,16 @@ async def put_labels(
     body: LabelsBody,
     session: Annotated[AsyncSession, Depends(get_session)],
 ) -> dict[str, dict[str, str]]:
+    # Without this the FK violation surfaces as an unhandled IntegrityError
+    # (a 500). A trashed document is treated as absent: labels must not be
+    # written onto something the user has deleted.
+    exists = (
+        await session.execute(
+            select(Document.id).where(Document.id == document_id, Document.deleted_at.is_(None))
+        )
+    ).scalar_one_or_none()
+    if exists is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown document")
     for facet_key, value_key in body.labels.items():
         try:
             await vocabulary.set_document_label(session, document_id, facet_key, value_key)
@@ -282,7 +328,15 @@ async def accept_suggestion(
     if row is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Unknown suggestion")
     suggestion, facet_key = row
-    value_key = suggestion.suggested_label.strip().lower().replace(" ", "-")
+    value_key = derive_value_key(suggestion.suggested_label)
+    if not value_key:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=(
+                f"no value key can be derived from {suggestion.suggested_label!r}: "
+                "nothing matching [a-z0-9_-] remains"
+            ),
+        )
     vocab = {f.key: f for f in await vocabulary.load_vocabulary(session)}
     if vocab[facet_key].value(value_key) is not None:
         raise HTTPException(

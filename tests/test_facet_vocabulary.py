@@ -2,6 +2,7 @@
 
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -36,7 +37,7 @@ async def _seed_vocab(database_url: str, facet_key: str) -> None:
         await engine.dispose()
 
 
-async def _with_session[T](database_url: str, work) -> T:
+async def _with_session[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
     engine = create_async_engine(database_url, poolclass=NullPool)
     try:
         async with AsyncSession(engine, expire_on_commit=False) as session:
