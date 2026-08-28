@@ -39,6 +39,7 @@ import {
   type DocumentDetail,
   type DocumentMarkdownResponse,
 } from '@/api/documents'
+import { fetchDocumentLabels, fetchFacets, type FacetRef } from '@/api/facets'
 import { ApiError } from '@/api/client'
 import { useJobsStore } from '@/stores/jobs'
 import { useAuthStore } from '@/stores/auth'
@@ -51,6 +52,7 @@ import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
 import NoteEditorPanel from '@/components/NoteEditorPanel.vue'
 import DocumentMetadataEditor from '@/components/DocumentMetadataEditor.vue'
+import FacetEditor from '@/components/facets/FacetEditor.vue'
 import DocumentComments from '@/components/DocumentComments.vue'
 import ActionDock from '@/components/ActionDock.vue'
 import { useDocumentLayout, HERO_FIELD_LABELS } from '@/composables/useDocumentLayout'
@@ -81,6 +83,34 @@ let unmounted = false
 onBeforeUnmount(() => {
   unmounted = true
 })
+
+// --- Facets (controlled vocabulary label editor, docs/facets.md) ------------
+//
+// The vocabulary itself (facet keys + their value sets) doesn't vary per
+// document, so it's fetched once on mount, mirroring how DocumentFilterBar
+// loads it (best-effort: FacetEditor just renders no facets if this fails).
+// This document's current labels are per-document, so they're (re)loaded
+// alongside the detail fetch in the route watcher below.
+
+const facets = ref<FacetRef[]>([])
+const facetLabels = ref<Record<string, string>>({})
+
+onMounted(async () => {
+  try {
+    facets.value = await fetchFacets()
+  } catch {
+    // Best-effort: FacetEditor renders no facets when this fails.
+  }
+})
+
+async function loadFacetLabels(id: number): Promise<void> {
+  try {
+    facetLabels.value = await fetchDocumentLabels(id)
+  } catch {
+    // Best-effort: FacetEditor falls back to an empty label map.
+    facetLabels.value = {}
+  }
+}
 
 // --- Trash banner (soft-deleted documents) -----------------------------------
 //
@@ -799,6 +829,7 @@ watch(
     markdownData.value = null
     markdownLoading.value = false
     markdownError.value = false
+    facetLabels.value = {}
     // The edit-mode flags are module singletons (shared with ActionDock),
     // and this view is reused across in-queue Prev/Next navigation
     // (the RouterView in App.vue is unkeyed, so no unmount happens). Reset
@@ -828,6 +859,7 @@ watch(
     }
     // Fetch the rendered text eagerly so the reader is ready without a reveal.
     await loadMarkdown(numericId)
+    await loadFacetLabels(numericId)
   },
   { immediate: true },
 )
@@ -1494,6 +1526,18 @@ watch(
         >
           <ReuseCard :card-id="cardId" />
         </div>
+
+        <!-- Facet labels (controlled vocabulary, docs/facets.md): a fixed,
+             non-draggable card alongside the reorderable metadata tiles above.
+             It isn't part of that drag/reorder set (useDocumentLayout's
+             persisted card-columns model) since a facet label is a distinct
+             concept from the per-field Details metadata those tiles edit. -->
+        <FacetEditor
+          :document-id="doc.id"
+          :facets="facets"
+          :labels="facetLabels"
+          @saved="facetLabels = $event"
+        />
       </div>
     </div>
 
