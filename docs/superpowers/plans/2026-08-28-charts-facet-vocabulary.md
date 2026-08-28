@@ -3683,8 +3683,11 @@ test('a facet can be created, applied to a document, and filtered on', async ({
 
 Run: `cd frontend && npx playwright test e2e/facets.spec.ts`
 
-The config declares **five** projects (chromium, mobile-webkit, tablet-webkit,
-firefox, webkit), and `baseURL` comes from `E2E_BASE_URL` — the stack is started
+The config declares five projects, but firefox and webkit are pinned to
+`pdf-preview.spec.ts` by `testMatch`, so THIS spec collects on exactly three:
+chromium, mobile-webkit and tablet-webkit. Confirm with
+`npx playwright test --list e2e/facets.spec.ts` rather than counting projects in
+the config. `baseURL` comes from `E2E_BASE_URL` — the stack is started
 externally, not by a `webServer` block, so this needs a running backend and a
 built frontend. A failure only on mobile-webkit or tablet-webkit is a layout
 assertion that leaked in, not a real regression.
