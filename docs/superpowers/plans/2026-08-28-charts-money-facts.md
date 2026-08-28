@@ -20,6 +20,9 @@
 - `uv` for all dependency management; `pytest` for tests.
 - **Do not add a new `*_model` setting.** Every `*_model` setting requires a matching row in `MODEL_PRICING_USD_PER_MTOK` (`src/library/extraction/pricing.py`) or the app refuses to boot. This plan reuses `settings.extraction_model`.
 - CI runs `ruff check` **and** `ruff format --check` over the **whole repository including `migrations/`**.
+- **CI also runs `uv run mypy`, and it is a required gate.** Every task's definition of done must include it. Plan 1 shipped 12 type errors that passed fourteen task reviews and a whole-branch review, purely because no gate ran the type checker — no amount of review catches a check nobody runs. Note that ruff and mypy can disagree on the same line: `dict(rows.all())` satisfies ruff's `C416` but mypy rejects it, while a dict comprehension does the reverse; `result.tuples().all()` satisfies both. For `.rowcount` on a `session.execute()` result, follow the existing `cast(CursorResult[Any], ...)` pattern in `src/library/currencies.py`. Never add a `# type: ignore` or a mypy quarantine entry — this repo did deliberate work to clear its quarantine.
+- **Adding a `Settings` field requires a matching entry in `.env.example`**, enforced by `tests/test_config.py::test_env_example_documents_every_setting`.
+- **Adding a new package or module under `src/library/` requires a module-map entry in `docs/architecture.md`**, enforced by `tests/test_check_docs.py::TestModuleMap`. Plan 1 went red on this for six tasks before anyone noticed.
 - `GET /api/documents` rejects `limit > 100` with a 422.
 - Integration tests share one session-scoped Postgres and list endpoints default to 25 rows. Scope every list assertion by a unique marker, never by absolute counts.
 - Frontend e2e runs on chromium@1280, mobile-webkit@375, tablet-webkit@656.
