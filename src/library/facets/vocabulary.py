@@ -229,6 +229,23 @@ async def merge_values(session: AsyncSession, facet_key: str, from_key: str, int
     return int(moved)
 
 
+async def count_labels(session: AsyncSession, facet_key: str, value_key: str) -> int:
+    """How many documents carry this value. The 'diff' a dry-run merge reports."""
+    facet_id, value_id = await _resolve(session, facet_key, value_key)
+    return int(
+        (
+            await session.execute(
+                select(func.count())
+                .select_from(DocumentLabel)
+                .where(
+                    DocumentLabel.facet_id == facet_id,
+                    DocumentLabel.facet_value_id == value_id,
+                )
+            )
+        ).scalar_one()
+    )
+
+
 async def delete_value(session: AsyncSession, facet_key: str, key: str) -> None:
     """Remove an unused value. Refuses while any document still carries it."""
     facet_id, value_id = await _resolve(session, facet_key, key)
