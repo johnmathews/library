@@ -66,6 +66,11 @@ SEED_VOCABULARY: tuple[SeedFacet, ...] = (
             ),
             SeedValue("energy", "Energy", ("electricity", "gas", "utilities", "utility bill")),
             SeedValue(
+                "water",
+                "Water",
+                ("sewerage", "water board", "waterschap", "drinking water", "water rates"),
+            ),
+            SeedValue(
                 "housing", "Housing", ("property maintenance", "real estate", "installation")
             ),
             SeedValue("parking", "Parking", ("parking session",)),
