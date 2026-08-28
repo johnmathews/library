@@ -3682,8 +3682,18 @@ test('a facet can be created, applied to a document, and filtered on', async ({
 - [ ] **Step 2: Run it on every project**
 
 Run: `cd frontend && npx playwright test e2e/facets.spec.ts`
-Expected: 3 passes — one per project. A failure only on mobile-webkit or
-tablet-webkit is a layout assertion that leaked in, not a real regression.
+
+The config declares **five** projects (chromium, mobile-webkit, tablet-webkit,
+firefox, webkit), and `baseURL` comes from `E2E_BASE_URL` — the stack is started
+externally, not by a `webServer` block, so this needs a running backend and a
+built frontend. A failure only on mobile-webkit or tablet-webkit is a layout
+assertion that leaked in, not a real regression.
+
+**`playwright test` exits 0 when every test SKIPS**, and offers no
+`--fail-on-skip` — which is why CI runs `npm run test:e2e:ci`, chaining
+`scripts/assert-e2e-ran.mjs` to prove something actually executed. If you cannot
+bring up a stack locally, do NOT report a pass: say plainly that the spec was
+written but not executed, and let CI be the first real run.
 
 - [ ] **Step 3: Commit**
 
