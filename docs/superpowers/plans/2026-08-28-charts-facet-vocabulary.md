@@ -2193,8 +2193,12 @@ def label_archive(
 
 - [ ] **Step 5: Hook new documents at ingest**
 
-In `src/library/extraction/apply.py`, at the end of `_apply_outcome`'s success path
-(after `_apply_validation` is called), add:
+In `src/library/extraction/apply.py`, inside **`apply_extraction`** — NOT
+`_apply_outcome`, which has no `settings` parameter and never validates. Place it
+immediately after the `_apply_validation` try/except block and **before
+`_record_event`**: `_record_event` is what calls `session.commit()`, so labels
+written before it ride the same transaction, whereas anything written after it
+would sit uncommitted. Add:
 
 ```python
     # Label the document against the controlled vocabulary. Best-effort and
