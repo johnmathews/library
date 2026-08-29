@@ -15,7 +15,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import LLMBackend, Settings
-from library.extraction.schema import normalize_amount_kind
+from library.extraction.schema import MAX_REFERENCE_CHARS, normalize_amount_kind
 from library.llm import subscription
 from library.models import AmountKind, Document, Kind, Sender
 
@@ -74,10 +74,14 @@ def _parse(payload: str) -> tuple[str | None, str | None]:
         logger.warning("amount classifier returned unparseable JSON")
         return None, None
     reference = parsed.get("reference")
-    return (
-        normalize_amount_kind(parsed.get("amount_kind")),
-        str(reference).strip() or None if reference else None,
-    )
+    stripped = str(reference).strip() or None if reference else None
+    # Clamped here too (schema.py clamps the ingest path already): this
+    # function parses raw model JSON directly rather than going through
+    # ExtractedMetadata, so it must not rely on that other path staying in
+    # sync. Document.reference is String(128); an unclamped value raises a
+    # DataError at commit rather than a validation error here.
+    clamped = stripped[:MAX_REFERENCE_CHARS] if stripped else stripped
+    return normalize_amount_kind(parsed.get("amount_kind")), clamped
 
 
 async def classify_amount(
@@ -138,12 +142,76 @@ async def classify_amount(
         return await _call(owned)
 
 
+async def _classify_one(session: AsyncSession, settings: Settings, document_id: int) -> str | None:
+    """Classify one document. Returns ``"classified"``, ``"empty"``, or None.
+
+    None covers every way a document turns out not to be classifiable at
+    all: its row vanished between selection and lookup, the classification
+    call could not even be attempted (no client and no API key configured),
+    or it vanished again between the call returning and the write. This
+    function does not catch exceptions itself — a network error from
+    ``classify_amount`` or a database error from writing the row is left to
+    propagate to the caller's savepoint guard.
+    """
+    row = (
+        await session.execute(
+            select(
+                Document.title,
+                Sender.name,
+                Kind.slug,
+                Document.amount_total,
+                Document.currency,
+                Document.ocr_text,
+            )
+            .outerjoin(Sender, Sender.id == Document.sender_id)
+            .outerjoin(Kind, Kind.id == Document.kind_id)
+            .where(Document.id == document_id)
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    title, sender, kind, amount, currency, excerpt = row
+    result = await classify_amount(
+        settings,
+        title=title,
+        sender=sender,
+        kind=kind,
+        amount=str(amount) if amount is not None else None,
+        currency=currency,
+        excerpt=excerpt,
+    )
+    if result is None:
+        return None
+    kind_value, reference, _in_tokens, _out_tokens = result
+    if kind_value is None:
+        # Left NULL deliberately: not summable, and still in the queue.
+        return "empty"
+    document = await session.get(Document, document_id)
+    if document is None:
+        return None
+    document.amount_kind = AmountKind(kind_value)
+    if reference and not document.reference:
+        document.reference = reference
+    return "classified"
+
+
 async def run_amount_backfill(
     session: AsyncSession, settings: Settings, *, limit: int | None
 ) -> tuple[int, int, int]:
     """Classify each selected document. Returns ``(classified, empty, skipped)``.
 
     Commits per document so a part-way failure keeps the work already done.
+
+    Each document is also classified inside a SAVEPOINT, which is what makes
+    that promise hold against both a network failure (``classify_amount``
+    calls the Anthropic API live, and any ``APIError``/``RateLimitError``/
+    timeout would otherwise propagate straight out of the loop and abort the
+    whole ~258-document run) and a database failure (an over-long
+    ``reference`` raising ``DataError`` at flush — belt-and-braces here,
+    since ``reference`` is also clamped where it is created, in
+    ``_parse`` and in ``ExtractedMetadata``). Rolling back to the savepoint
+    discards only that document's writes; it is counted as skipped and the
+    run continues.
 
     ``classified`` counts a document the model gave a usable kind for, and
     which was written to ``amount_kind``.
@@ -159,55 +227,26 @@ async def run_amount_backfill(
     anything at all.
 
     ``skipped`` counts a document that could not be classified at all: it
-    vanished between selection and lookup, or the classification call could
-    not even be attempted (no client and no API key configured).
+    vanished between selection and lookup, the classification call could not
+    even be attempted (no client and no API key configured), or classifying
+    it raised — most likely a network error talking to the model.
     """
     ids = await documents_needing_amount_kind(session, limit=limit)
     classified = empty = skipped = 0
     for document_id in ids:
-        row = (
-            await session.execute(
-                select(
-                    Document.title,
-                    Sender.name,
-                    Kind.slug,
-                    Document.amount_total,
-                    Document.currency,
-                    Document.ocr_text,
-                )
-                .outerjoin(Sender, Sender.id == Document.sender_id)
-                .outerjoin(Kind, Kind.id == Document.kind_id)
-                .where(Document.id == document_id)
-            )
-        ).one_or_none()
-        if row is None:
+        try:
+            async with session.begin_nested():
+                outcome = await _classify_one(session, settings, document_id)
+        except Exception:  # one document must never abort the archive run
+            logger.exception("amount classification failed for document %s", document_id)
             skipped += 1
             continue
-        title, sender, kind, amount, currency, excerpt = row
-        result = await classify_amount(
-            settings,
-            title=title,
-            sender=sender,
-            kind=kind,
-            amount=str(amount) if amount is not None else None,
-            currency=currency,
-            excerpt=excerpt,
-        )
-        if result is None:
+        if outcome is None:
             skipped += 1
             continue
-        kind_value, reference, _in_tokens, _out_tokens = result
-        if kind_value is None:
-            # Left NULL deliberately: not summable, and still in the queue.
+        await session.commit()
+        if outcome == "empty":
             empty += 1
             continue
-        document = await session.get(Document, document_id)
-        if document is None:
-            skipped += 1
-            continue
-        document.amount_kind = AmountKind(kind_value)
-        if reference and not document.reference:
-            document.reference = reference
-        await session.commit()
         classified += 1
     return classified, empty, skipped

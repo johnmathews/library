@@ -1,6 +1,6 @@
 """The extractor's two new money fields, and how apply persists them."""
 
-from library.extraction.schema import ExtractedMetadata, normalize_amount_kind
+from library.extraction.schema import MAX_REFERENCE_CHARS, ExtractedMetadata, normalize_amount_kind
 
 
 def test_the_seven_kinds_are_accepted() -> None:
@@ -36,6 +36,19 @@ def test_a_blank_reference_normalises_to_none() -> None:
 def test_a_reference_is_kept_verbatim_apart_from_trimming() -> None:
     result = ExtractedMetadata.model_validate(_minimal_payload(reference=" INV-77/A "))
     assert result.reference == "INV-77/A"
+
+
+def test_an_over_long_reference_is_truncated_not_dropped() -> None:
+    """Document.reference is String(128); an unclamped value raises a
+    DataError at commit rather than a validation error here, which is
+    exactly the failure class this project has already shipped once (as an
+    unclamped suggested_label in the facets labeller).
+    """
+    long_reference = "R" * 300
+    result = ExtractedMetadata.model_validate(_minimal_payload(reference=long_reference))
+    assert result.reference is not None
+    assert len(result.reference) == MAX_REFERENCE_CHARS
+    assert result.reference == long_reference[:MAX_REFERENCE_CHARS]
 
 
 def _minimal_payload(**overrides: object) -> dict[str, object]:

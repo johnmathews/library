@@ -131,6 +131,13 @@ def normalize_amount_kind(value: str | None) -> str | None:
     return candidate if candidate in AMOUNT_KINDS else None
 
 
+# Mirrors ``library.models.Document.reference``'s column width
+# (``String(128)``). Truncating here, at the point the value is created,
+# keeps both the ingest path and the amount backfill safe without either
+# needing to know the column's width itself.
+MAX_REFERENCE_CHARS: int = 128
+
+
 class ExtractedMetadata(BaseModel):
     """Structured metadata Claude extracts from one document."""
 
@@ -274,6 +281,20 @@ class ExtractedMetadata(BaseModel):
         if value is not None and not value.strip():
             return None
         return value.strip() if value else value
+
+    @field_validator("reference", mode="after")
+    @classmethod
+    def _clamp_reference(cls, value: str | None) -> str | None:
+        """Truncate rather than discard an over-long reference.
+
+        A truncated reference is still useful evidence for matching an
+        invoice to its receipt, whereas dropping it loses the link
+        entirely. ``Document.reference`` is ``String(128)``; an unclamped
+        value from the model raises a ``DataError`` at commit time,
+        destroying the whole extraction — this keeps the value safe at the
+        point it is created, before any caller can write it to that column.
+        """
+        return value[:MAX_REFERENCE_CHARS] if value else value
 
     @field_validator("amount_kind", mode="after")
     @classmethod
