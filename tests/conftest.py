@@ -779,3 +779,107 @@ async def seeded(document: DocumentFactory) -> Sequence[Document]:
             sender=services,
         ),
     ]
+
+
+class _StubMessages:
+    """The ``client.messages`` namespace, recording which method was called."""
+
+    def __init__(self, stub: "StubAnthropic") -> None:
+        self._stub = stub
+
+    async def parse(self, **kwargs: Any) -> Any:
+        self._stub.record("parse", kwargs)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            parsed_output=self._stub.parsed_output(),
+            usage=SimpleNamespace(input_tokens=101, output_tokens=17),
+        )
+
+    async def create(self, **kwargs: Any) -> Any:
+        """Deliberately usable.
+
+        A stub whose ``create`` raised would make
+        ``test_the_backend_uses_messages_parse_not_messages_create`` pass for the
+        wrong reason: the mutant would die on the exception rather than on the
+        assertion. This returns a well-formed message so a
+        ``create`` + ``json.loads`` implementation passes every *behavioural*
+        test — which is exactly what happened in GH #108 and #116 — and only the
+        call-shape assertion catches it.
+        """
+        self._stub.record("create", kwargs)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=self._stub.payload_json())],
+            usage=SimpleNamespace(input_tokens=101, output_tokens=17),
+        )
+
+
+class StubAnthropic:
+    """Stands in for ``AsyncAnthropic`` in ``library.charts.draft``.
+
+    Is both the *class* (called with ``api_key=``), the async context manager it
+    yields, and the client — so the production path under test is the real one,
+    including its API-key branch. ``used`` is the point of the whole fixture: it
+    records which ``messages`` method the implementation invoked.
+    """
+
+    def __init__(self) -> None:
+        self.used: str | None = None
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.messages = _StubMessages(self)
+        self._payload: dict[str, Any] | None = None
+
+    # -- test-facing ---------------------------------------------------------
+    def returns(self, *, rule: Mapping[str, Any], proposed_split: str | None = None) -> None:
+        """Set the rule the stubbed model will draft."""
+        self._payload = {**dict(rule), "split": proposed_split}
+
+    # -- client-facing -------------------------------------------------------
+    def __call__(self, **kwargs: Any) -> "StubAnthropic":
+        return self
+
+    async def __aenter__(self) -> "StubAnthropic":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    def record(self, method: str, kwargs: dict[str, Any]) -> None:
+        self.used = method
+        self.calls.append((method, kwargs))
+
+    def _require_payload(self) -> dict[str, Any]:
+        if self._payload is None:
+            raise RuntimeError("stub_anthropic.returns(...) was never called")
+        return self._payload
+
+    def payload_json(self) -> str:
+        import json as _json
+
+        return _json.dumps(self._require_payload())
+
+    def parsed_output(self) -> Any:
+        from library.charts.draft import DraftedRule
+
+        return DraftedRule.model_validate(self._require_payload())
+
+
+@pytest.fixture
+def stub_anthropic(monkeypatch: pytest.MonkeyPatch) -> StubAnthropic:
+    """A stubbed Anthropic client for ``library.charts.draft``.
+
+    Patched over the module's ``AsyncAnthropic`` name (not passed in as an
+    argument) so the test drives ``draft_rule``'s real two-argument signature,
+    and over ``get_settings`` so the key branch is satisfied without an env var.
+    """
+    from library.charts import draft as draft_module
+    from library.config import Settings
+
+    stub = StubAnthropic()
+    monkeypatch.setattr(draft_module, "AsyncAnthropic", stub)
+    monkeypatch.setattr(
+        draft_module, "get_settings", lambda: Settings(anthropic_api_key="stub-key")
+    )
+    return stub
