@@ -1,7 +1,7 @@
 # Facet vocabulary
 
-**Status:** active. **Last updated:** 2026-08-28 (initial version: the closed-set facet vocabulary that replaces free-form tags for the axes charts and search need — `category`, `scope`, `cost_type`, plus `vehicle`/`property`/`person`, which ship empty. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §6–7.5, plan: [superpowers/plans/2026-08-28-charts-facet-vocabulary.md](superpowers/plans/2026-08-28-charts-facet-vocabulary.md)).
-**Last verified:** 2026-08-28 — method: re-verified after a fix wave. §3 now describes the sanitisation `accept` applies to the key it derives and its 422, and §4 the 409 on merging a value into itself — both diffed against `derive_value_key`/`accept_suggestion` in `src/library/api/facets.py` and `merge_values` in `src/library/facets/vocabulary.py`, and covered by executed assertions in `tests/test_api_facets.py` and `tests/test_facet_crud.py`. §5's `--only` sentence is corrected (it bypasses the relabel skip-check entirely; `--relabel`/`--limit` do nothing alongside it) against `label_archive` in `src/library/cli.py`, and carries a new warning that `PATCH /api/admin/recipients/{id}` with `merge=true` (`rename_recipient` in `src/library/taxonomy.py`, read in full) drops the losing recipient's `user_id` link — an unfixed follow-up, not a claim about this branch's CLI path. Original method: read every module in `src/library/facets/` (`vocabulary.py`, `seed.py`, `labeller.py`, `apply.py`, `backfill.py`, `recipients.py`) and `src/library/api/facets.py` in full; the `Facet`/`FacetValue`/`FacetValueAlias`/`DocumentLabel`/`FacetValueSuggestion` models and the `document_labels`/`facet_values` constraints in `src/library/models.py`; the `facet` query parameter and its 422 paths in `src/library/api/documents.py` and `src/library/search.py`; the `label-archive` and `recipients` commands in `src/library/cli.py`; and the wire-behaviour assertions in `tests/test_api_facets.py`, `tests/test_facet_search.py`, `tests/test_facet_crud.py` and `tests/test_facet_backfill.py`. No tests were executed as part of writing this document; a full `uv run pytest -q` run is recorded in the journal entry for this work.
+**Status:** active. **Last updated:** 2026-08-29 (the `category` facet grew 4 values — `vehicle-purchase`, `dining`, `employment`, `equipment-certification` — after a full labelling run over 258 real documents left 8 uncategorised and the model's own suggestion queue named all four; §3's description of value/alias matching corrected to say casefolded (case-insensitive), not exact-match, since `parse_label_response` now casefolds — and corrected again same day after a review caught the first correction overclaiming accent-insensitivity too: casefold does not strip diacritics, so `Škoda` and `Skoda` still do not match one another.) Earlier (2026-08-28): (initial version: the closed-set facet vocabulary that replaces free-form tags for the axes charts and search need — `category`, `scope`, `cost_type`, plus `vehicle`/`property`/`person`, which ship empty. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §6–7.5, plan: [superpowers/plans/2026-08-28-charts-facet-vocabulary.md](superpowers/plans/2026-08-28-charts-facet-vocabulary.md)).
+**Last verified:** 2026-08-29 — method: diffed the new `category` row (19 values, order and keys) and §3's matching description against `SEED_VOCABULARY` in `src/library/facets/seed.py` and `parse_label_response` in `src/library/facets/labeller.py` — the four new keys/labels/aliases match `seed.py` exactly. §3's matching prose was re-checked a second time same day after a review caught it overclaiming accent-insensitivity: confirmed by executing `'Skoda'.casefold() == 'Škoda'.casefold()` (`False`) and `'SKODA'.casefold() == 'Škoda'.casefold()` (`False`) that `str.casefold()` folds case only, not diacritics, so the doc now says case-insensitive and gives a same-script (`Skoda`/`SKODA`/`skoda`) example rather than a cross-accent one; covered by executed assertions in `tests/test_facet_labeller.py` (`test_an_alias_resolves_regardless_of_case_including_non_ascii_letters`, `test_a_value_key_differing_only_in_case_resolves`, `test_casefold_does_not_fold_diacritics`) and `tests/test_facet_seed.py`. Earlier (2026-08-28) — method: re-verified after a fix wave. §3 now describes the sanitisation `accept` applies to the key it derives and its 422, and §4 the 409 on merging a value into itself — both diffed against `derive_value_key`/`accept_suggestion` in `src/library/api/facets.py` and `merge_values` in `src/library/facets/vocabulary.py`, and covered by executed assertions in `tests/test_api_facets.py` and `tests/test_facet_crud.py`. §5's `--only` sentence is corrected (it bypasses the relabel skip-check entirely; `--relabel`/`--limit` do nothing alongside it) against `label_archive` in `src/library/cli.py`, and carries a new warning that `PATCH /api/admin/recipients/{id}` with `merge=true` (`rename_recipient` in `src/library/taxonomy.py`, read in full) drops the losing recipient's `user_id` link — an unfixed follow-up, not a claim about this branch's CLI path. Original method: read every module in `src/library/facets/` (`vocabulary.py`, `seed.py`, `labeller.py`, `apply.py`, `backfill.py`, `recipients.py`) and `src/library/api/facets.py` in full; the `Facet`/`FacetValue`/`FacetValueAlias`/`DocumentLabel`/`FacetValueSuggestion` models and the `document_labels`/`facet_values` constraints in `src/library/models.py`; the `facet` query parameter and its 422 paths in `src/library/api/documents.py` and `src/library/search.py`; the `label-archive` and `recipients` commands in `src/library/cli.py`; and the wire-behaviour assertions in `tests/test_api_facets.py`, `tests/test_facet_search.py`, `tests/test_facet_crud.py` and `tests/test_facet_backfill.py`. No tests were executed as part of writing this document; a full `uv run pytest -q` run is recorded in the journal entry for this work.
 
 ## 1. What a facet is, and why it is not a tag
 
@@ -38,7 +38,7 @@ never touches a value an owner has since renamed.
 
 | facet | values |
 | --- | --- |
-| `category` | 15 values: accountancy, tax, vehicle-service, ev-charging, insurance, healthcare, software, energy, water, housing, parking, fines, pension, banking, travel |
+| `category` | 19 values: accountancy, tax, vehicle-service, ev-charging, insurance, healthcare, software, energy, water, housing, parking, fines, pension, banking, travel, vehicle-purchase, dining, employment, equipment-certification |
 | `scope` | business, personal |
 | `cost_type` | subscription, usage, one-off |
 | `vehicle` | *(ships with no values)* |
@@ -69,10 +69,19 @@ The labeller (`library.facets.labeller`) sends the model the full vocabulary
 — every facet, every value, every alias — inside the prompt and asks for at
 most one value per facet, by key, plus a confidence and a short reason. The
 model is never shown a way to invent a value: `parse_label_response` looks up
-whatever the model returns against the facet's known values and aliases, and
-anything that is not an exact match becomes `value: null` plus a *suggested
-label* rather than a fabricated key. That mapping is pure — no model call —
-so the closed-set guarantee is unit-tested without one.
+whatever the model returns against the facet's known values and aliases,
+case-insensitively (casefolded, so `Skoda`, `SKODA` and `skoda` all resolve
+to a value keyed `skoda` without needing a separate alias per casing
+variant — only the comparison folds case, never the stored key/alias/label
+text itself). Casefolding does not fold diacritics: `Škoda` is a distinct
+string from `Skoda` under this comparison, so a value whose canonical
+spelling carries an accent (a real `vehicle` value, e.g. a marque like
+`Škoda` — §2 covers why those values are never committed here) still needs
+its unaccented spelling listed as a separate alias if the model might emit
+it, alongside its casing variants. Anything that still matches nothing
+becomes `value: null` plus a *suggested label* rather than a fabricated key.
+That mapping is pure — no model call — so the closed-set guarantee is
+unit-tested without one.
 
 `library.facets.apply.apply_proposals` (the only module in this package that
 both calls the model and writes to the database) then does three things per

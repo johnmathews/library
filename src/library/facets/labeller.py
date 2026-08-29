@@ -193,9 +193,24 @@ def parse_label_response(
         raw_value = entry.get("value")
         resolved: str | None = None
         if isinstance(raw_value, str):
-            match = facet.value(raw_value)
+            # Casefolded, not `.lower()`'d: the vocabulary genuinely contains
+            # non-ASCII keys' display forms and aliases (``Škoda``, ``Citroën``),
+            # and the model echoes them back in whatever casing it likes
+            # (``Skoda``, ``SKODA``, ``škoda``...). Only the *matching* is
+            # case-insensitive — the stored key/alias text is never touched, and
+            # a value that matches nothing still falls through to `unknown` plus
+            # a suggestion, so the closed-set guarantee is unaffected.
+            folded_value = raw_value.casefold()
+            match = next((v for v in facet.values if v.key.casefold() == folded_value), None)
             if match is None:
-                match = next((v for v in facet.values if raw_value in v.aliases), None)
+                match = next(
+                    (
+                        v
+                        for v in facet.values
+                        if any(a.casefold() == folded_value for a in v.aliases)
+                    ),
+                    None,
+                )
             resolved = match.key if match is not None else None
         raw_suggest = entry.get("suggest")
         suggested = raw_suggest if isinstance(raw_suggest, str) else None

@@ -78,6 +78,22 @@ SEED_VOCABULARY: tuple[SeedFacet, ...] = (
             SeedValue("pension", "Pension", ("retirement", "portfolio")),
             SeedValue("banking", "Banking", ("bank charges", "money transfer")),
             SeedValue("travel", "Travel", ("accommodation", "booking", "camping")),
+            SeedValue(
+                "vehicle-purchase",
+                "Vehicle purchase",
+                ("purchase agreement", "vehicle sale", "trade-in", "used car"),
+            ),
+            SeedValue("dining", "Dining", ("restaurant", "cafe", "takeaway", "meal")),
+            SeedValue(
+                "employment",
+                "Employment",
+                ("employment contract", "payroll", "salary", "employer"),
+            ),
+            SeedValue(
+                "equipment-certification",
+                "Equipment certification",
+                ("inspection certificate", "equipment inspection", "certification"),
+            ),
         ),
     ),
     SeedFacet(
