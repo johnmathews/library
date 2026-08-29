@@ -271,6 +271,26 @@ Verified to reject:
 `SPLIT` and `MERGE` overrides were confirmed to un-merge an automatic pair and
 to join a pair no rule merges, respectively.
 
+**Re-run 2026-08-29.** None of the SQL above was preserved, so `spend_facts`
+and the §8.3 sign guard were rebuilt and executed against the same Postgres 17
+before plan 3 was written — §13 requires it, and a claim that a prototype once
+passed is not a prototype. Thirteen cases pass, and each was **mutation-checked**:
+the view was deliberately broken and the tests confirmed red, because a test
+that cannot fail proves nothing. Four things came out of it that reasoning had
+not:
+
+| finding | consequence |
+| --- | --- |
+| `(amount_kind = 'payment_made') DESC` ranks an **undecided** document first — Postgres sorts NULLs first under `DESC` | the canonical-document tie-break needs `COALESCE(..., false)`; without it a merged payment is represented by a document whose kind is never summed. Confirmed red under mutation |
+| `amount_kind` has **no `CHECK` constraint** — `create_constraint` defaults to `False` | recorded in §8.1.1; `'not_a_real_kind'` inserts successfully today |
+| R2 **does** merge a credit note with the invoice whose reference it quotes, 90 days apart | the sign guard must sit above the rules, not beside them (§8.3). Confirmed red under mutation |
+| `spend_facts` depends on `payments` | a migration that rewrites `payment_edges` must drop and recreate `spend_facts`, or it fails with `DependentObjectsStillExist` |
+
+The `deleted_at IS NULL` filter inside the view is **redundant** — the join to
+`payments` already excludes deleted documents — and mutation-checking proved it:
+removing it changed no result. It stays as defence, but the guarantee comes from
+the join, so the join is what must not be optimised away.
+
 ## 6. Data model
 
 ```
@@ -470,9 +490,20 @@ complementarity to pair an invoice with its receipt (§8.3). The mirror of that
 the archive contains no instance of it and R1 and R2 already cover its common
 shapes. The residual gap is recorded as a known limit in §8.3.
 
-**Migration.** The enum is declared `native_enum=False`, i.e. a `VARCHAR` with a
-`CHECK` constraint, so adding a value is a constraint swap rather than an
-`ALTER TYPE`. The vocabulary is declared in three places kept in sync by
+**Migration.** `amount_kind` has **no database constraint at all**, which was
+found by executing against Postgres rather than by reading the migration.
+`sa.Enum(..., native_enum=False)` under SQLAlchemy 2.0 defaults
+`create_constraint=False`, so migration `0033` produced a bare `varchar(16)`:
+`INSERT ... amount_kind = 'not_a_real_kind'` is accepted today. Adding `refund`
+therefore needs no `ALTER TYPE` and no constraint swap — only the Python-side
+lists.
+
+`0034` should nonetheless **add** the `CHECK`. `amount_kind` is now load-bearing
+twice over — it decides what enters a total and, via §8.3, what may merge — and
+§6 already argues that an invariant a `GROUP BY` depends on belongs in the
+database rather than in a convention. The existing rows all satisfy it.
+
+The vocabulary is declared in three places kept in sync by
 `tests/test_money_schema.py` — `models.AmountKind`,
 `extraction/schema.AMOUNT_KINDS`, and the migration's own list — and both
 classifier prompts (`extraction/schema.py`'s field description and
