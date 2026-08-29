@@ -54,6 +54,34 @@ class DuplicatesOut(BaseModel):
     groups: list[DuplicateGroup]
 
 
+async def _require_both_exist(session: AsyncSession, doc_a: int, doc_b: int) -> None:
+    """Both ends of an override must be real, live documents.
+
+    Without this, a typo'd id reaches ``add_override``'s FK as an uncaught
+    ``IntegrityError`` (a 500). These endpoints are the only way to correct
+    payment identity, so a routine operator mistake must get a 404, not a
+    crash. A soft-deleted document is treated as absent, same as everywhere
+    else in this API.
+    """
+    found = (
+        (
+            await session.execute(
+                select(Document.id).where(
+                    Document.id.in_((doc_a, doc_b)), Document.deleted_at.is_(None)
+                )
+            )
+        )
+        .scalars()
+        .all()
+    )
+    missing = {doc_a, doc_b} - set(found)
+    if missing:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"unknown document(s): {sorted(missing)}",
+        )
+
+
 async def _payment_body(session: AsyncSession, document_id: int) -> PaymentOut:
     payment_id = await payment_id_for(session, document_id)
     if payment_id is None:
@@ -98,6 +126,7 @@ async def get_payment(
 async def merge_payment(
     body: OverrideRequest, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> PaymentOut:
+    await _require_both_exist(session, body.doc_a, body.doc_b)
     await add_override(session, "MERGE", body.doc_a, body.doc_b)
     await session.commit()
     return await _payment_body(session, body.doc_a)
@@ -107,6 +136,7 @@ async def merge_payment(
 async def split_payment(
     body: OverrideRequest, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> PaymentOut:
+    await _require_both_exist(session, body.doc_a, body.doc_b)
     await add_override(session, "SPLIT", body.doc_a, body.doc_b)
     await session.commit()
     return await _payment_body(session, body.doc_a)

@@ -99,7 +99,11 @@ WHERE rule IS NOT NULL
     SELECT 1 FROM payment_overrides o
     WHERE o.kind='SPLIT' AND o.doc_a=ruled.a AND o.doc_b=ruled.b)
 UNION
-SELECT doc_a, doc_b, 'OVERRIDE' FROM payment_overrides WHERE kind='MERGE'
+SELECT o.doc_a, o.doc_b, 'OVERRIDE'
+FROM payment_overrides o
+JOIN documents da ON da.id = o.doc_a
+JOIN documents db ON db.id = o.doc_b
+WHERE o.kind='MERGE' AND da.deleted_at IS NULL AND db.deleted_at IS NULL
 """)
     op.execute("""
 CREATE VIEW payments AS

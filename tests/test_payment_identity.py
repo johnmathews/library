@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from library.models import AmountKind, Document, DocumentSource, DocumentStatus, Sender
-from library.money.payments import add_override, collapse_counts, payment_group
+from library.money.payments import add_override, collapse_counts, payment_group, payment_id_for
 
 pytestmark = pytest.mark.integration
 
@@ -252,6 +252,51 @@ def test_a_deleted_partner_leaves_the_survivor_alone(api_database_url: str) -> N
 
     asyncio.run(_run(api_database_url, _delete))
     assert _group(api_database_url, a) == [a]
+
+
+def test_a_deleted_override_partner_does_not_corrupt_the_survivors_payment_id(
+    api_database_url: str,
+) -> None:
+    """The override-specific version of the case above.
+
+    Unlike a rule edge (R1/R2/R3), which is only ever derived by joining two
+    LIVE documents, the ``payment_edges`` override union previously had no
+    ``deleted_at`` filter. A trashed document stayed reachable as a `member`
+    in the ``payments`` view's recursive closure and could still win
+    ``min(member)`` — so the LIVE survivor's ``payment_id`` became an id that
+    no longer exists anywhere else in the API (`payment_id_for` on that id
+    itself would 404). These two documents are seeded so that NO automatic
+    rule connects them (different amounts, same kind — R1/R2/R3 all miss);
+    the only edge between them is the MERGE override, isolating exactly the
+    behaviour the view fix targets.
+    """
+    a, b = _pair(
+        api_database_url,
+        [
+            ("2026-06-01", "55.00", AmountKind.PAYMENT_DUE, None),
+            ("2026-06-01", "91.00", AmountKind.PAYMENT_DUE, None),
+        ],
+    )
+    asyncio.run(_run(api_database_url, lambda s: add_override(s, "MERGE", a, b)))
+    assert _group(api_database_url, a) == sorted([a, b])
+
+    victim, survivor = sorted([a, b])
+
+    async def _delete(session: AsyncSession) -> None:
+        from datetime import UTC, datetime
+
+        document = await session.get(Document, victim)
+        assert document is not None
+        document.deleted_at = datetime.now(UTC)
+
+    asyncio.run(_run(api_database_url, _delete))
+
+    # The survivor must be alone in its OWN payment, not carrying the
+    # deleted document's id — `payment_id_for(survivor)` must equal
+    # `survivor`, and its group must contain nothing else.
+    survivor_payment_id = asyncio.run(_run(api_database_url, lambda s: payment_id_for(s, survivor)))
+    assert survivor_payment_id == survivor
+    assert _group(api_database_url, survivor) == [survivor]
 
 
 def test_collapse_counts_reports_payments_and_documents(api_database_url: str) -> None:

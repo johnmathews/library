@@ -31,6 +31,15 @@ def test_an_override_on_one_document_is_rejected(api_client: TestClient) -> None
     assert api_client.post("/api/payments/merge", json={"doc_a": 5, "doc_b": 5}).status_code == 422
 
 
+def test_merge_with_an_unknown_document_is_a_404_not_a_500(
+    api_client: TestClient, seeded_document_id: int
+) -> None:
+    resp = api_client.post(
+        "/api/payments/merge", json={"doc_a": seeded_document_id, "doc_b": 99999999}
+    )
+    assert resp.status_code == 404
+
+
 def test_an_unknown_document_is_a_404(api_client: TestClient) -> None:
     assert api_client.get("/api/documents/99999999/payment").status_code == 404
 
