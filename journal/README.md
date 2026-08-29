@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-170 entries.
+171 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## August 2026
 
+- **2026-08-30** — [The chart engine meets the live archive](260830-chart-engine.md)
 - **2026-08-29** — [Amount semantics and payment identity](260829-money-facts.md)
 - **2026-08-29** — [What the archive said when we finally asked it](260829-first-live-amount-backfill.md)
 - **2026-08-29** — [The amount classifier could not read its own answers](260829-amount-classifier-fence.md)
