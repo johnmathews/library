@@ -1913,7 +1913,15 @@ work in either direction, and the complementarity insight that resolved it.
 
 - [ ] **Step 4: Link and commit**
 
+Two docs gates exist and they check different things — run BOTH:
+`uv run pytest tests/test_check_docs.py -q` (module map) and
+`uv run python scripts/check_docs.py --max-violations 0` (staleness, which is what
+CI's `docs-stamps` job runs). A doc you edit today while its stamp still reads an
+earlier verification date passes the first and fails the second. This caught the
+previous plan twice.
+
 ```bash
+uv run python scripts/check_docs.py --max-violations 0
 make check-docs
 git add docs/ journal/
 git commit -m "docs(money): document amount semantics and payment identity"
