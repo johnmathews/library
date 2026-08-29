@@ -11,12 +11,14 @@ import json
 import logging
 
 from anthropic import AsyncAnthropic
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import LLMBackend, Settings
 from library.extraction.schema import MAX_REFERENCE_CHARS, normalize_amount_kind
 from library.llm import subscription
+from library.llm.envelope import strip_json_envelope
 from library.models import AmountKind, Document, Kind, Sender
 
 logger = logging.getLogger(__name__)
@@ -67,9 +69,36 @@ async def documents_needing_amount_kind(session: AsyncSession, *, limit: int | N
     return list((await session.execute(statement)).scalars())
 
 
+class AmountClassification(BaseModel):
+    """Structured-output schema for the amount classifier.
+
+    Deliberately permissive: ``amount_kind`` is a bare string rather than an
+    enum so a model naming a value outside the vocabulary still returns
+    *something* and :func:`normalize_amount_kind` decides, exactly as it does
+    for the free-text backend. Constraining it here would turn an unrecognised
+    kind into a schema failure and lose the reference alongside it.
+    """
+
+    amount_kind: str | None = None
+    reference: str | None = None
+
+
+class AmountParseError(Exception):
+    """The amount classifier's structured-output call returned nothing parseable."""
+
+
 def _parse(payload: str) -> tuple[str | None, str | None]:
+    """Map a raw model payload onto ``(amount_kind, reference)``.
+
+    Never raises: an unparseable payload yields ``(None, None)``, which leaves
+    the document undecided and still in the backfill queue rather than failing
+    the whole run. Tolerates a markdown fence or surrounding prose — see
+    :func:`~library.llm.envelope.strip_json_envelope` — which is belt-and-braces
+    alongside the structured-output call in :func:`classify_amount` and the only
+    protection the subscription backend (free text, no ``messages.parse``) gets.
+    """
     try:
-        parsed = json.loads(payload)
+        parsed = json.loads(strip_json_envelope(payload))
     except json.JSONDecodeError:
         logger.warning("amount classifier returned unparseable JSON")
         return None, None
@@ -102,6 +131,17 @@ async def classify_amount(
     and no client supplied). A completed call that could not classify the
     amount still returns a tuple — with ``amount_kind`` set to ``None`` — so
     callers can tell "did not run" apart from "ran but stayed unsure".
+
+    The API backend uses ``client.messages.parse()`` with
+    :class:`AmountClassification`, not a free-text call the caller parses. The
+    system prompt asks for bare JSON, but asking is not enough: the first live
+    run of this backfill logged "amount classifier returned unparseable JSON"
+    for every one of five documents, because the model wrapped its otherwise
+    correct JSON in a ```` ```json ```` fence. The facet labeller had already
+    hit the identical failure (GH #108) — this is the same fix. The
+    subscription backend returns free text and cannot use ``parse()``, so it
+    still goes through :func:`_parse` directly, which is why that function
+    strips an envelope before decoding.
     """
     prompt = "\n".join(
         [
@@ -124,14 +164,17 @@ async def classify_amount(
         return kind_value, reference, result.usage.input_tokens, result.usage.output_tokens
 
     async def _call(anthropic: AsyncAnthropic) -> tuple[str | None, str | None, int, int]:
-        response = await anthropic.messages.create(
+        response = await anthropic.messages.parse(
             model=settings.extraction_model,
             max_tokens=MAX_AMOUNT_TOKENS,
             system=AMOUNT_SYSTEM_PROMPT,
             messages=[{"role": "user", "content": prompt}],
+            output_format=AmountClassification,
         )
-        text = "".join(block.text for block in response.content if block.type == "text").strip()
-        kind_value, reference = _parse(text)
+        parsed = response.parsed_output
+        if parsed is None:
+            raise AmountParseError(f"{settings.extraction_model} returned no parseable output")
+        kind_value, reference = _parse(parsed.model_dump_json())
         return kind_value, reference, response.usage.input_tokens, response.usage.output_tokens
 
     if client is not None:

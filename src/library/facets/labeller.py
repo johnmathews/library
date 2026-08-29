@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 from collections.abc import Sequence
 from dataclasses import dataclass
 
@@ -24,6 +23,7 @@ from pydantic import BaseModel, Field
 from library.config import LLMBackend, Settings
 from library.facets.vocabulary import VocabularyFacet
 from library.llm import subscription
+from library.llm.envelope import strip_json_envelope
 
 logger = logging.getLogger(__name__)
 
@@ -131,33 +131,6 @@ def build_labelling_prompt(vocabulary: Sequence[VocabularyFacet], fields: Docume
     return "\n".join(lines)
 
 
-# Matches a fenced code block wrapping the whole payload, with or without a
-# ``json`` language tag: ```json\n{...}\n``` or ```\n{...}\n```.
-_FENCE_RE = re.compile(r"^```(?:json)?\s*\n?(.*?)\n?```$", re.DOTALL)
-
-
-def _strip_envelope(payload: str) -> str:
-    """Best-effort unwrap of a markdown fence and/or surrounding prose.
-
-    The model is instructed to return bare JSON, but a real captured response
-    from ``claude-haiku-4-5`` wrapped it in a ```` ```json ```` fence anyway
-    (the production incident this guards against). This also handles a bare
-    ``` fence and leading/trailing prose around the outermost JSON object.
-    Never raises and never guarantees valid JSON — ``json.loads`` in
-    :func:`parse_label_response` is the actual validity check; this only
-    improves the odds it succeeds.
-    """
-    text = payload.strip()
-    fence_match = _FENCE_RE.match(text)
-    if fence_match:
-        text = fence_match.group(1).strip()
-    start = text.find("{")
-    end = text.rfind("}")
-    if start != -1 and end != -1 and end > start:
-        text = text[start : end + 1]
-    return text
-
-
 def parse_label_response(
     payload: str, vocabulary: Sequence[VocabularyFacet]
 ) -> list[LabelProposal]:
@@ -166,12 +139,12 @@ def parse_label_response(
     Never raises: a malformed response yields no proposals, which leaves the
     document unlabelled and visible in the review queue rather than failing the
     whole labelling run. Tolerates a markdown-fenced payload or surrounding
-    prose (see :func:`_strip_envelope`) — belt-and-braces alongside the
+    prose (see :func:`~library.llm.envelope.strip_json_envelope`) — belt-and-braces alongside the
     structured-output call in :func:`label_document`, and the only path the
     subscription backend (free text, no ``messages.parse``) gets.
     """
     try:
-        parsed = json.loads(_strip_envelope(payload))
+        parsed = json.loads(strip_json_envelope(payload))
         entries = parsed["labels"]
     except (json.JSONDecodeError, KeyError, TypeError):
         logger.warning("facet labeller returned an unparseable payload")
