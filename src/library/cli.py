@@ -618,6 +618,22 @@ def recipients_command(
         raise typer.Exit(code=1)
 
 
+@app.command("backfill-amounts")
+def backfill_amounts(
+    limit: int = typer.Option(0, "--limit", help="Stop after this many documents (0 = all)."),
+) -> None:
+    """Decide amount_kind (and capture reference) for documents that lack it."""
+    from library.money.backfill import run_amount_backfill
+
+    settings = get_settings()
+
+    async def _operation(session: AsyncSession) -> tuple[int, int, int]:
+        return await run_amount_backfill(session, settings, limit=limit or None)
+
+    classified, empty, skipped = _run(_operation)
+    typer.echo(f"classified {classified}, empty {empty}, skipped {skipped}")
+
+
 @app.command("sweep-matters")
 def sweep_matters(
     limit: int | None = typer.Option(

@@ -23,6 +23,7 @@ from library.api import (
     jobs,
     matters,
     notes,
+    payments,
     projects,
     saved_views,
     series,
@@ -255,6 +256,7 @@ def create_app() -> FastAPI:
     )
     api_router.include_router(documents.router)
     api_router.include_router(notes.router)
+    api_router.include_router(payments.router)
     api_router.include_router(comments.router)
     api_router.include_router(charts.router)
     api_router.include_router(series.router)

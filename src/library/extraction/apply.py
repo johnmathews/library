@@ -31,6 +31,7 @@ from library.extraction.validation import (
 )
 from library.facets.apply import label_and_apply
 from library.models import (
+    AmountKind,
     Document,
     DocumentLanguage,
     IngestionEvent,
@@ -363,6 +364,8 @@ async def _apply_outcome(
         "expiry_date": metadata.expiry_date,
         "amount_total": Decimal(metadata.amount_total) if metadata.amount_total else None,
         "currency": metadata.currency,
+        "amount_kind": AmountKind(metadata.amount_kind) if metadata.amount_kind else None,
+        "reference": metadata.reference,
     }
     for field, value in scalar_values.items():
         if settable(field, value):

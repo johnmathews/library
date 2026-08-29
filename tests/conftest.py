@@ -440,3 +440,57 @@ def seeded_document_id(api_database_url: str) -> int:
             await engine.dispose()
 
     return asyncio.run(_seed())
+
+
+@pytest.fixture
+def payment_pair(api_database_url: str) -> tuple[int, int]:
+    """Two documents the R1 rule merges into one payment: same sender, date,
+    amount and currency, with complementary amount kinds."""
+    import asyncio
+    import hashlib
+    import uuid as _uuid
+    from datetime import date
+    from decimal import Decimal
+
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from library.models import (
+        AmountKind,
+        Document,
+        DocumentSource,
+        DocumentStatus,
+        Sender,
+    )
+
+    async def _seed() -> tuple[int, int]:
+        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                sender = Sender(name=f"PayVendor-{_uuid.uuid4().hex[:8]}")
+                session.add(sender)
+                await session.flush()
+                ids: list[int] = []
+                for kind in (AmountKind.PAYMENT_DUE, AmountKind.PAYMENT_MADE):
+                    marker = f"paypair:{_uuid.uuid4()}"
+                    doc = Document(
+                        sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                        mime_type="application/pdf",
+                        source=DocumentSource.UPLOAD,
+                        status=DocumentStatus.INDEXED,
+                        title=marker,
+                        sender_id=sender.id,
+                        document_date=date(2026, 8, 4),
+                        amount_total=Decimal("48.00"),
+                        currency="EUR",
+                        amount_kind=kind,
+                    )
+                    session.add(doc)
+                    await session.flush()
+                    ids.append(doc.id)
+                await session.commit()
+                return ids[0], ids[1]
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_seed())
