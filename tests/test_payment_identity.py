@@ -18,7 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from library.models import AmountKind, Document, DocumentSource, DocumentStatus, Sender
-from library.money.payments import add_override, payment_group
+from library.money.payments import add_override, collapse_counts, payment_group
 
 pytestmark = pytest.mark.integration
 
@@ -252,3 +252,32 @@ def test_a_deleted_partner_leaves_the_survivor_alone(api_database_url: str) -> N
 
     asyncio.run(_run(api_database_url, _delete))
     assert _group(api_database_url, a) == [a]
+
+
+def test_collapse_counts_reports_payments_and_documents(api_database_url: str) -> None:
+    """A merged pair plus a standalone document: 2 payments from 3 documents."""
+    a, b, standalone = _pair(
+        api_database_url,
+        [
+            ("2026-06-15", "22.00", AmountKind.PAYMENT_DUE, None),
+            ("2026-06-15", "22.00", AmountKind.PAYMENT_MADE, None),
+            ("2026-06-16", "77.00", AmountKind.PAYMENT_DUE, None),
+        ],
+    )
+    assert _group(api_database_url, a) == sorted([a, b])
+    assert _group(api_database_url, standalone) == [standalone]
+
+    async def _work(session: AsyncSession) -> tuple[int, int]:
+        return await collapse_counts(session, [a, b, standalone])
+
+    payments, documents = asyncio.run(_run(api_database_url, _work))
+    assert (payments, documents) == (2, 3)
+
+
+def test_collapse_counts_of_no_documents_is_zero_without_a_query(
+    api_database_url: str,
+) -> None:
+    async def _work(session: AsyncSession) -> tuple[int, int]:
+        return await collapse_counts(session, [])
+
+    assert asyncio.run(_run(api_database_url, _work)) == (0, 0)
