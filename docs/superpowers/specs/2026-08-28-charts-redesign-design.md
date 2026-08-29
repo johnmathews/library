@@ -227,9 +227,22 @@ spend_facts (view)
 and deleted at runtime, so a view with a fixed column per facet would need
 regenerating on every vocabulary edit. A rule reads
 `labels->>'category' = 'accountancy'` and a split axis is
-`GROUP BY labels->>'scope'`; a GIN index on `labels` serves both. This replaces
-an earlier draft of this section that specified one column per facet — it does
-not survive contact with §7.5's CRUD.
+`GROUP BY labels->>'scope'`. This replaces an earlier draft of this section that
+specified one column per facet — it does not survive contact with §7.5's CRUD.
+
+**Corrected 2026-08-29 by execution: there is no GIN index on `labels`, and
+there cannot be one.** An earlier draft of this paragraph said "a GIN index on
+`labels` serves both". `labels` is computed by `jsonb_object_agg` *inside the
+view*, so there is no stored column to index, and Postgres rejects
+`CREATE INDEX` on a view outright. What the aggregation costs was then measured
+rather than assumed (the plan's Task 3, recorded in `charts.md` §12): a
+sequential scan on `line_labels` does appear at 1,800 rows, but at 36,000 rows
+the planner reads the table through `pk_line_labels` — whose leading column is
+already `line_id` — with no new index present (`cost=0.29..2077.65`, 97.96 ms),
+and adding `ix_line_labels_line` moves that to 97.70 ms in exchange for 728 kB
+and a B-tree write on every insert. The index was measured and **declined**. The
+correction is not "index the joins some other way": the primary keys already
+cover them.
 
 **Canonical document within a merged payment.** When two documents are one
 payment (§8.3) only one may contribute its money, or the merge would not have
@@ -286,10 +299,24 @@ not:
 | R2 **does** merge a credit note with the invoice whose reference it quotes, 90 days apart | the sign guard must sit above the rules, not beside them (§8.3). Confirmed red under mutation |
 | `spend_facts` depends on `payments` | a migration that rewrites `payment_edges` must drop and recreate `spend_facts`, or it fails with `DependentObjectsStillExist` |
 
-The `deleted_at IS NULL` filter inside the view is **redundant** — the join to
-`payments` already excludes deleted documents — and mutation-checking proved it:
-removing it changed no result. It stays as defence, but the guarantee comes from
-the join, so the join is what must not be optimised away.
+**Corrected 2026-08-29 by execution.** An earlier draft of this paragraph said
+the `deleted_at IS NULL` filter inside the view is redundant because "the join
+to `payments` already excludes deleted documents", and concluded that "the
+guarantee comes from the join, so the join is what must not be optimised away".
+The first half is right and the conclusion is wrong. Removing the filter alone
+changed no result — but removing the *join* alone did not redden the
+deleted-twin test either; five **merge** tests went red instead. `payments`
+seeds its recursion from `documents WHERE deleted_at IS NULL`, and every
+`payment_edges` arm filters `deleted_at` on both endpoints, so **the filter and
+the join each independently exclude deleted documents. Neither is "the
+guarantee"** — they are mutually redundant for deletion, and only removing both
+readmits a deleted twin.
+
+What the join is indispensable for is payment **identity**. Without it there is
+no `payment_id` to partition by, `row_number() OVER (PARTITION BY payment_id)`
+degenerates to one partition per document, every merged payment silently
+un-merges, and the double count of §2.4 comes straight back. That is a stronger
+reason to keep the join than the one this section originally gave.
 
 ## 6. Data model
 
