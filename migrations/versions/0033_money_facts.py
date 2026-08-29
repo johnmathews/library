@@ -70,9 +70,52 @@ def upgrade() -> None:
         sa.CheckConstraint("doc_a < doc_b", name="payment_overrides_ordered"),
         sa.UniqueConstraint("kind", "doc_a", "doc_b", name="payment_overrides_unique"),
     )
+    op.execute("""
+CREATE VIEW payment_edges AS
+WITH pairs AS (
+  SELECT a.id AS a, b.id AS b, a.reference ra, b.reference rb,
+         a.amount_kind ka, b.amount_kind kb,
+         (a.document_date = b.document_date) AS same_day,
+         abs(a.document_date - b.document_date) AS gap
+  FROM documents a JOIN documents b
+    ON a.id < b.id
+   AND a.sender_id = b.sender_id
+   AND a.currency IS NOT DISTINCT FROM b.currency
+   AND a.amount_total = b.amount_total
+  WHERE a.deleted_at IS NULL AND b.deleted_at IS NULL
+    AND a.amount_total IS NOT NULL AND a.sender_id IS NOT NULL
+), ruled AS (
+  SELECT a, b, CASE
+    WHEN ra IS NOT NULL AND rb IS NOT NULL AND ra <> rb THEN NULL
+    WHEN ra IS NOT NULL AND ra = rb                     THEN 'R2'
+    WHEN same_day                                       THEN 'R1'
+    WHEN gap <= 60 AND ((ka='payment_due' AND kb='payment_made')
+                     OR (ka='payment_made' AND kb='payment_due')) THEN 'R3'
+    ELSE NULL END AS rule
+  FROM pairs)
+SELECT a, b, rule FROM ruled
+WHERE rule IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM payment_overrides o
+    WHERE o.kind='SPLIT' AND o.doc_a=ruled.a AND o.doc_b=ruled.b)
+UNION
+SELECT doc_a, doc_b, 'OVERRIDE' FROM payment_overrides WHERE kind='MERGE'
+""")
+    op.execute("""
+CREATE VIEW payments AS
+WITH RECURSIVE bidir AS (
+  SELECT a, b FROM payment_edges UNION SELECT b, a FROM payment_edges),
+reach(doc, member) AS (
+  SELECT id, id FROM documents WHERE deleted_at IS NULL
+  UNION
+  SELECT r.doc, e.b FROM reach r JOIN bidir e ON e.a = r.member)
+SELECT doc AS document_id, min(member) AS payment_id FROM reach GROUP BY doc
+""")
 
 
 def downgrade() -> None:
+    op.execute("DROP VIEW IF EXISTS payments")
+    op.execute("DROP VIEW IF EXISTS payment_edges")
     op.drop_table("payment_overrides")
     op.drop_index("ix_documents_reference", table_name="documents")
     op.drop_column("documents", "reference")
