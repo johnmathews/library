@@ -21,6 +21,7 @@ from library.charts.footer import chart_footer
 from library.charts.query import chart_series
 from library.charts.rule import Clause, Rule
 from library.models import AMOUNT_SIGN, AmountKind, Grain
+from library.spend_lines import LineInput, replace_lines
 
 #: Invented vendor name. Nothing here corresponds to a real sender or amount.
 VENDOR = "Corvus Test Assurance"
@@ -176,6 +177,54 @@ async def test_an_undecided_amount_kind_is_reported_as_unclassified(session, doc
     # footer rather than as a document waiting to be classified.
     assert footer.unclassified.amount_kind == "unclassified"
     assert footer.excluded == []
+
+
+@pytest.mark.asyncio
+async def test_one_line_of_a_split_document_is_counted_and_the_other_is_the_gap(
+    session, document, facets
+) -> None:
+    """§9.4's label gap, per **line** rather than per document.
+
+    Every other case in this file is a whole document that is either in the
+    total or in a footer bucket. A spend-line split is the one shape where a
+    single document is in both at once — 60.00 counted, 40.00 reported as
+    missing a label the rule asks for — and nothing exercised it.
+
+    It is also the shape behind the two documented overlaps (the API's
+    `UnconvertibleOut.documents` upper bound, and the note that
+    `Series.documents` and a footer group's `documents` are not additive): both
+    are stated in docstrings, and this is the fixture that makes them real. The
+    counts here are deliberately asserted as 1 and 1 over **one** document.
+    """
+    row = await document(
+        amount_total=Decimal("100.00"),
+        amount_kind="payment_made",
+        document_date=date(2026, 4, 1),
+    )
+    await replace_lines(
+        session,
+        row.id,
+        [
+            LineInput(amount=Decimal("60.00"), labels={"scope": "business"}),
+            LineInput(amount=Decimal("40.00")),
+        ],
+    )
+    await session.commit()
+
+    rule = Rule(all=[Clause(facet="scope", op="in", values=["business"])])
+    series = await chart_series(
+        session, rule, grain=Grain.MONTH, split=None, currency="EUR", since=None, until=None
+    )
+    footer = await chart_footer(
+        session, rule, currency="EUR", since=None, until=None, facets_in_rule={"scope"}
+    )
+    assert series.total == Decimal("60.00")
+    assert series.documents == 1
+    assert footer.uncategorised is not None
+    assert (footer.uncategorised.amount, footer.uncategorised.documents) == (Decimal("40.00"), 1)
+    # Nothing fell between the two: the whole 100.00 is in the total or the gap.
+    assert series.total + footer.uncategorised.amount == Decimal("100.00")
+    assert footer.unaccounted is None
 
 
 @pytest.mark.asyncio

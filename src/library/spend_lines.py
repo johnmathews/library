@@ -18,6 +18,7 @@ from decimal import Decimal
 
 from pydantic import BaseModel
 from sqlalchemy import delete, select
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.models import Document, Facet, FacetValue, LineLabel, SpendLine
@@ -28,9 +29,53 @@ from library.models import Document, Facet, FacetValue, LineLabel, SpendLine
 #: `33.333` sum to `100.000` in Python while the stored rows sum to `99.99`.
 AMOUNT_SCALE = 2
 
+#: SQLSTATE of a plpgsql ``RAISE`` — and, in this schema, of nothing else:
+#: migration 0035's pair of sum triggers hold the only ``RAISE EXCEPTION`` in
+#: any migration. **Observed, not assumed**: under asyncpg the trigger arrives
+#: as ``sqlalchemy.exc.DBAPIError`` with ``exc.orig.sqlstate == "P0001"``, while
+#: a deferred unique violation at the same commit arrives as ``IntegrityError``
+#: with ``"23505"`` — which is exactly the error a broad ``except DBAPIError``
+#: would have mislabelled as an unbalanced allocation.
+ALLOCATION_TRIGGER_SQLSTATE = "P0001"
+
 
 class AllocationError(ValueError):
     """The proposed lines do not form a valid allocation."""
+
+
+async def commit_allocation(session: AsyncSession, *, refusal: str) -> None:
+    """Commit, turning the sum triggers' refusal into ``AllocationError``.
+
+    0035's triggers are ``DEFERRABLE INITIALLY DEFERRED`` and fire at COMMIT,
+    so they surface here rather than at the statement that broke the invariant
+    — and under asyncpg they arrive as a bare ``DBAPIError`` rather than an
+    ``IntegrityError``. Uncaught, that is a 500 on a refusal the caller can
+    both understand and act on.
+
+    Shared, because the triggers are a *pair*: one on ``spend_lines`` and one
+    on ``documents``, so the allocation invariant is broken from the amount
+    side as easily as from the line side. Every writer of ``amount_total``
+    that commits has to translate this, and only the allocation routes used to.
+
+    **Only that one refusal.** ``DBAPIError`` is also every deadlock, lock
+    timeout, dropped connection and foreign-key violation; reporting those as
+    an allocation problem would give the caller a wrong diagnosis and hide a
+    real defect behind a plausible message, never reaching a 5xx. So the
+    SQLSTATE is checked and anything else is re-raised untouched.
+
+    ``refusal`` is the caller's own wording, because only the caller knows
+    which side of the invariant it was writing — "the lines do not sum to the
+    total" and "the amount no longer matches the lines" are the same trigger
+    and different advice. Postgres' raw text is never echoed into it: the
+    diagnosis is ours, the trigger's payload is not the client's business.
+    """
+    try:
+        await session.commit()
+    except DBAPIError as exc:
+        await session.rollback()
+        if getattr(exc.orig, "sqlstate", None) != ALLOCATION_TRIGGER_SQLSTATE:
+            raise
+        raise AllocationError(refusal) from exc
 
 
 class LineInput(BaseModel):

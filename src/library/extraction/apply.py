@@ -38,6 +38,7 @@ from library.models import (
     Kind,
     Recipient,
     Sender,
+    SpendLine,
     Tag,
     User,
 )
@@ -275,6 +276,29 @@ async def _record_event(
     await session.commit()
 
 
+async def _amount_is_allocated(session: AsyncSession, document: Document) -> bool:
+    """Does this document's amount carry a manual spend-line allocation?
+
+    Spend lines are the owner's own division of ``amount_total`` and must sum
+    to it exactly; migration 0035's mirror trigger on ``documents`` enforces
+    that at COMMIT. So a re-extraction that moved the amount would either
+    orphan the allocation or — with the trigger in place — abort the commit
+    that also writes the ``extraction_completed`` event, failing the whole
+    document over a field it had no business changing.
+
+    Treated exactly like ``extra["user_edited_fields"]``: a human statement
+    about the amount outranks a re-read of the page. A 400 is meaningless in a
+    background job, and letting the job die would discard the rest of a good
+    extraction, so the amount is left alone and the skip is *reported* — in
+    ``extra["extraction"]["skipped_fields"]`` and in the log — never silently
+    passed over. The owner corrects it by clearing the lines, which is the same
+    instruction ``PATCH /api/documents/{id}`` gives them.
+    """
+    return (
+        await session.execute(select(SpendLine.id).where(SpendLine.document_id == document.id))
+    ).first() is not None
+
+
 async def _apply_outcome(
     session: AsyncSession, document: Document, outcome: ExtractionOutcome
 ) -> list[str]:
@@ -283,6 +307,11 @@ async def _apply_outcome(
     Skips any field listed in ``extra["user_edited_fields"]`` (user edits
     win over re-extraction) and never nulls out existing data with a None
     extraction value.
+
+    ``amount_total`` is skipped for a document with spend lines, for the same
+    reason and one stronger: an allocation is the owner's own arithmetic over
+    the amount, migration 0035's mirror trigger refuses to let a write orphan
+    it, and here there is nobody to tell. See :func:`_amount_is_allocated`.
     """
     metadata = outcome.metadata
     user_edited = set(document.extra.get("user_edited_fields", []))
@@ -367,10 +396,27 @@ async def _apply_outcome(
         "amount_kind": AmountKind(metadata.amount_kind) if metadata.amount_kind else None,
         "reference": metadata.reference,
     }
+    skipped_fields: list[str] = []
     for field, value in scalar_values.items():
-        if settable(field, value):
-            setattr(document, field, value)
-            fields_set.append(field)
+        if not settable(field, value):
+            continue
+        # Ordered so the extra query runs only when the amount would really
+        # move: an unchanged (or unextracted) amount cannot orphan anything.
+        if (
+            field == "amount_total"
+            and value != document.amount_total
+            and await _amount_is_allocated(session, document)
+        ):
+            skipped_fields.append(field)
+            logger.warning(
+                "extraction left amount_total alone on document %s: it is allocated "
+                "across spend lines summing to %s",
+                document.id,
+                document.amount_total,
+            )
+            continue
+        setattr(document, field, value)
+        fields_set.append(field)
 
     if metadata.language != "unknown" and "language" not in user_edited:
         document.language = DocumentLanguage(metadata.language)
@@ -402,6 +448,10 @@ async def _apply_outcome(
             "escalated": outcome.escalated,
             "input_mode": outcome.input_mode,
             "fields_set": fields_set,
+            # Present only when something was withheld, so the ordinary stamp is
+            # unchanged and a skip is visible in the document's own record
+            # rather than only in a log line nobody reads.
+            **({"skipped_fields": skipped_fields} if skipped_fields else {}),
             "reasoning_note": metadata.reasoning_note,
             "addressee_raw": metadata.addressee_raw,
             "signer_raw": metadata.signer_raw,

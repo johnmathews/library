@@ -17,10 +17,11 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import text
 
-from library.charts.query import Series, chart_cell, chart_series
+from library.charts.query import Series, chart_cell, chart_series, period_start
 from library.charts.rule import Clause, Rule
 from library.fx import convert_amount
 from library.models import Grain
+from library.spend_lines import LineInput, replace_lines
 
 #: Invented vendor names. Two documents merge into one payment only when their
 #: `sender_id` matches, so a test that wants a merge passes the same name twice.
@@ -135,10 +136,12 @@ async def test_february_buckets_by_calendar_month_not_by_thirty_days(session, do
     [
         # 2026-02-01 is a Sunday and 2026-02-28 a Saturday, so they fall in
         # different ISO weeks (Monday-based) but the same month, quarter and
-        # year — one fixture discriminates all four grains.
-        (Grain.WEEK, [date(2026, 1, 26), date(2026, 2, 23)]),
-        (Grain.MONTH, [date(2026, 2, 1)]),
-        (Grain.QUARTER, [date(2026, 1, 1)]),
+        # year. The May document is what separates QUARTER from YEAR: with only
+        # the February pair both grains expect `[2026-01-01]`, so a transposition
+        # between exactly those two would have stayed green.
+        (Grain.WEEK, [date(2026, 1, 26), date(2026, 2, 23), date(2026, 5, 11)]),
+        (Grain.MONTH, [date(2026, 2, 1), date(2026, 5, 1)]),
+        (Grain.QUARTER, [date(2026, 1, 1), date(2026, 4, 1)]),
         (Grain.YEAR, [date(2026, 1, 1)]),
     ],
 )
@@ -146,7 +149,7 @@ async def test_february_buckets_by_calendar_month_not_by_thirty_days(session, do
 async def test_every_grain_buckets_by_its_own_calendar_unit(
     session, document, grain, periods
 ) -> None:
-    """All four grains, not just MONTH.
+    """All four grains, not just MONTH, and no two of them agreeing.
 
     The grain reaches `date_trunc` as a bound parameter, so a transposed
     mapping (WEEK meaning "month") would misbucket every week, quarter and
@@ -162,11 +165,96 @@ async def test_every_grain_buckets_by_its_own_calendar_unit(
         amount_kind="payment_made",
         document_date=date(2026, 2, 28),
     )
+    await document(
+        amount_total=Decimal("5.00"),
+        amount_kind="payment_made",
+        document_date=date(2026, 5, 15),
+    )
     series = await chart_series(
         session, Rule(), grain=grain, split=None, currency="EUR", since=None, until=None
     )
     assert [cell.period for cell in series.cells] == periods
-    assert series.total == Decimal("30.00")
+    assert series.total == Decimal("35.00")
+
+
+@pytest.mark.parametrize("grain", list(Grain))
+@pytest.mark.asyncio
+async def test_the_boundary_the_api_validates_is_the_bucket_the_chart_drew(
+    session, document, grain
+) -> None:
+    """`period_start` and the chart's own `period` column are one expression.
+
+    The API refuses a `period` that is not a bucket boundary. If it computed
+    that boundary from a second definition — the Python `date_trunc` this
+    replaced — the two could disagree, and the visible failure would be a 422
+    on a cell the chart had just drawn. Asserted by comparison against the
+    engine rather than against a literal, for all four grains, so a divergence
+    in either expression is caught rather than a wrong constant.
+    """
+    day = date(2026, 5, 15)
+    await document(amount_total=Decimal("10.00"), amount_kind="payment_made", document_date=day)
+    series = await chart_series(
+        session, Rule(), grain=grain, split=None, currency="EUR", since=None, until=None
+    )
+    assert [cell.period for cell in series.cells] == [await period_start(session, grain, day)]
+
+
+@pytest.mark.asyncio
+async def test_a_split_document_fills_two_buckets_and_one_total(session, document, facets) -> None:
+    """The feature the branch is *for*, through the engine rather than the view.
+
+    One 100.00 document allocated 60/40 across two `scope` values. Every other
+    split-invariance test in this file uses unsplit documents, so the seam
+    between `spend_lines` and `chart_series` — the one place a document's money
+    is divided before it is bucketed — was traced and never executed.
+
+    The three assertions are the three things that can go wrong independently:
+    the parts land in the buckets their *lines* name, they still add to the
+    document's own amount under every axis, and the document is one payment —
+    not two — however many pieces it was cut into.
+    """
+    row = await document(
+        amount_total=Decimal("100.00"),
+        amount_kind="payment_made",
+        labels={"category": "software"},
+    )
+    await replace_lines(
+        session,
+        row.id,
+        [
+            LineInput(amount=Decimal("60.00"), labels={"scope": "business"}),
+            LineInput(amount=Decimal("40.00"), labels={"scope": "personal"}),
+        ],
+    )
+    await session.commit()
+
+    async def series(split: str | None) -> Series:
+        return await chart_series(
+            session, Rule(), grain=Grain.MONTH, split=split, currency="EUR", since=None, until=None
+        )
+
+    by_scope = await series("scope")
+    assert sorted((cell.split_value or "", cell.total) for cell in by_scope.cells) == [
+        ("business", Decimal("60.00")),
+        ("personal", Decimal("40.00")),
+    ]
+    assert by_scope.total == Decimal("100.00")
+
+    flat = await series(None)
+    assert [(cell.split_value, cell.total) for cell in flat.cells] == [(None, Decimal("100.00"))]
+
+    # The lines carry no `category` of their own, so both inherit the
+    # document's — a split that dropped inheritance would show 0.00 here while
+    # every assertion above still passed.
+    by_category = await series("category")
+    assert [(cell.split_value, cell.total) for cell in by_category.cells] == [
+        ("software", Decimal("100.00"))
+    ]
+
+    for answer in (by_scope, flat, by_category):
+        assert answer.total == Decimal("100.00")
+        assert answer.payments == 1, "one document is one payment however many lines it has"
+        assert answer.documents == 1
 
 
 @pytest.mark.asyncio

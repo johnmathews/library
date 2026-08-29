@@ -68,6 +68,7 @@ from library.search import (
     build_document_query,
 )
 from library.series import serialise_summary, summarize_series
+from library.spend_lines import AllocationError, commit_allocation
 from library.storage import derived_path, path_for
 from library.storage import remove as remove_stored_files
 from library.thumbnails import THUMBNAIL_NAME
@@ -432,6 +433,7 @@ async def get_document_series(
     response_model=DocumentDetail,
     summary="Edit document metadata",
     responses={
+        400: {"description": "The new amount would orphan the document's spend lines"},
         404: {"description": "Unknown or deleted document"},
         422: {"description": "Unknown kind slug or invalid field value"},
     },
@@ -455,7 +457,23 @@ async def update_document(
     # re-run the deterministic rules and update review_status before committing —
     # this is what clears a fixed "implausible date" warning on save.
     await revalidate_after_edit(session, document, get_settings())
-    await session.commit()
+    # Committed through the allocation helper, not `session.commit()`. Editing
+    # ``amount_total`` on a document whose spend lines are allocated against the
+    # old amount is refused by migration 0035's mirror trigger, at COMMIT and as
+    # a bare ``DBAPIError`` — a 500 telling the owner nothing about what stopped
+    # the edit or how to proceed. The refusal itself is deliberate (an amount
+    # that no longer matches its lines makes every chart total for the document
+    # quietly wrong); being unable to explain it was not.
+    try:
+        await commit_allocation(
+            session,
+            refusal=(
+                "this document's amount is allocated across spend lines that sum to "
+                "the old amount; clear or replace its spend lines before changing it"
+            ),
+        )
+    except AllocationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     # A chunk's context_header embeds the sender/date/kind/title, so editing one
     # makes every stored header for this document stale. Deferred only when a
     # header field actually changed — a summary or tags edit must not wake the

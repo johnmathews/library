@@ -34,14 +34,14 @@ Four things this module is responsible for that nothing underneath it can be:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import select
-from sqlalchemy.exc import DBAPIError, IntegrityError
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.charts.draft import MAX_QUESTION_CHARS, DraftError, draft_rule
@@ -53,12 +53,19 @@ from library.charts.query import (
     Unconvertible,
     chart_cell,
     chart_series,
+    period_start,
 )
 from library.charts.rule import Rule, RuleError, rule_predicate
 from library.db import get_session
 from library.facets.vocabulary import VocabularyFacet, load_vocabulary
 from library.models import Chart, Document, Facet, FacetValue, Grain, LineLabel, SpendLine
-from library.spend_lines import AllocationError, LineInput, clear_lines, replace_lines
+from library.spend_lines import (
+    AllocationError,
+    LineInput,
+    clear_lines,
+    commit_allocation,
+    replace_lines,
+)
 
 router: APIRouter = APIRouter(tags=["spending"])
 
@@ -75,15 +82,6 @@ _CENTS = Decimal("0.01")
 #: that returns a paragraph is telling us something is wrong, not naming a facet.
 MAX_UNKNOWN_TERMS = 20
 MAX_TERM_CHARS = 120
-
-#: SQLSTATE of a plpgsql `RAISE` — and, in this schema, of nothing else:
-#: migration 0035's pair of sum triggers hold the only `RAISE EXCEPTION` in any
-#: migration. **Observed, not assumed**: under asyncpg the trigger arrives as
-#: `sqlalchemy.exc.DBAPIError` with `exc.orig.sqlstate == "P0001"`, while a
-#: deferred unique violation at the same commit arrives as `IntegrityError`
-#: with `"23505"` — which is exactly the error a broad `except DBAPIError`
-#: would have mislabelled as an unbalanced allocation.
-RAISE_EXCEPTION_SQLSTATE = "P0001"
 
 
 def _money(value: Decimal) -> Decimal:
@@ -470,18 +468,6 @@ def _validate_split(split: str | None, vocabulary: tuple[VocabularyFacet, ...]) 
         )
 
 
-def _period_start(grain: Grain, day: date) -> date:
-    """The bucket boundary Postgres' `date_trunc(grain, ...)` would produce."""
-    if grain is Grain.WEEK:
-        # `date_trunc('week')` is ISO: the bucket starts on Monday.
-        return day - timedelta(days=day.weekday())
-    if grain is Grain.MONTH:
-        return day.replace(day=1)
-    if grain is Grain.QUARTER:
-        return date(day.year, 3 * ((day.month - 1) // 3) + 1, 1)
-    return date(day.year, 1, 1)
-
-
 async def _resolve_query(
     session: AsyncSession,
     chart: Chart,
@@ -813,7 +799,7 @@ async def chart_cell_data(
     query = await _resolve_query(
         session, chart, grain=grain, split=split, currency=currency, since=since, until=until
     )
-    start = _period_start(query.grain, period)
+    start = await period_start(session, query.grain, period)
     if start != period:
         # Never `[]`. `chart_cell` filters `date_trunc(grain, date) = period`,
         # so a mid-bucket period matches nothing — and an empty panel under a
@@ -974,32 +960,18 @@ async def _allocation_body(session: AsyncSession, document: Document) -> Allocat
 
 
 async def _commit_allocation(session: AsyncSession) -> None:
-    """Commit an allocation, translating the sum trigger's refusal into a 400.
+    """Commit an allocation, translating the sum triggers' refusal into a 400.
 
-    `replace_lines` flushes and never commits, and migration 0035's sum triggers
-    are `DEFERRABLE INITIALLY DEFERRED` — so they fire *here*, at the caller's
-    commit, and arrive under asyncpg as a bare `DBAPIError` rather than an
-    `IntegrityError`. Uncaught, an unbalanced allocation is a 500 where the
-    owner deserves the named 400 the Python pre-check gives them.
-
-    **Only that one refusal.** `DBAPIError` is also every deadlock, lock
-    timeout, dropped connection and foreign-key violation; reporting those as
-    "the lines do not sum" would give the owner a client error with a wrong
-    diagnosis and would hide a real defect — a broken label write — behind a
-    plausible message, never reaching a 5xx. So the SQLSTATE is checked and
-    anything else is re-raised. Postgres' raw text is not echoed back: the
-    diagnosis is ours, the trigger's payload is not the client's business.
+    The SQLSTATE check and the re-raise of everything else live in
+    `spend_lines.commit_allocation`, because the same pair of triggers refuses
+    an `amount_total` edit from `api/documents.py` — one definition, two
+    writers, so neither can drift into answering a 500 where the other answers
+    a named 400.
     """
     try:
-        await session.commit()
-    except DBAPIError as exc:
-        await session.rollback()
-        if getattr(exc.orig, "sqlstate", None) != RAISE_EXCEPTION_SQLSTATE:
-            raise
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="the spend lines do not sum to the document total",
-        ) from exc
+        await commit_allocation(session, refusal="the spend lines do not sum to the document total")
+    except AllocationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/documents/{document_id}/spend-lines", summary="A document's allocation")

@@ -47,6 +47,7 @@ from library.models import (
     IngestionEvent,
     Recipient,
     Sender,
+    SpendLine,
     Tag,
     User,
 )
@@ -243,6 +244,74 @@ async def test_dutch_invoice_outcome_populates_metadata(
     assert completed[0]["model"] == "claude-haiku-4-5"
     assert completed[0]["cost_usd"] == pytest.approx(0.002)
     assert completed[0]["input_tokens"] == 1_000
+
+
+async def test_an_allocated_amount_survives_re_extraction_and_the_skip_is_reported(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spend lines outrank a re-read of the page, and the skip is on the record.
+
+    Migration 0035's mirror trigger refuses an ``amount_total`` write that would
+    orphan an allocation. On the API path that becomes a named 400; here there
+    is nobody to tell, and the refusal would arrive at the commit that writes
+    ``extraction_completed`` — failing the whole document, and losing a good
+    extraction, over one field it had no business changing.
+
+    So the amount is treated exactly like a user-edited field: left alone. The
+    part that is not optional is that it is *reported* — silence here would be
+    the same defect in a different costume — hence ``skipped_fields``.
+    """
+    patch_extract(monkeypatch, make_outcome(make_metadata(amount_total="123.45")))
+    document_id = await make_document(
+        session_factory, "apply-allocated-amount", amount_total=Decimal("100.00")
+    )
+    async with session_factory() as session:
+        session.add(SpendLine(document_id=document_id, amount=Decimal("100.00")))
+        await session.commit()
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.amount_total == Decimal("100.00"), "the allocation's amount stood"
+        extraction = document.extra["extraction"]
+        assert extraction["skipped_fields"] == ["amount_total"]
+        assert "amount_total" not in extraction["fields_set"]
+        # The rest of the extraction still landed — the point of skipping the
+        # one field rather than letting the job die on it.
+        assert document.title == "Energierekening mei 2026"
+
+    events = await get_events(session_factory, document_id)
+    assert [event for event, _ in events] == ["extraction_completed"]
+
+
+async def test_an_unallocated_amount_is_still_overwritten_and_nothing_is_reported(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The control. A skip that fired for every document would satisfy the test
+    above while quietly stopping re-extraction from ever correcting an amount."""
+    patch_extract(monkeypatch, make_outcome(make_metadata(amount_total="123.45")))
+    document_id = await make_document(
+        session_factory, "apply-unallocated-amount", amount_total=Decimal("100.00")
+    )
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.amount_total == Decimal("123.45")
+        assert "skipped_fields" not in document.extra["extraction"]
 
 
 async def test_apply_extraction_calls_the_facet_labeller(

@@ -34,6 +34,7 @@ from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from library.api.documents import update_document
 from library.api.spending import _commit_allocation
 from library.facets.vocabulary import create_facet, create_value, set_document_label
 from library.models import (
@@ -45,6 +46,7 @@ from library.models import (
     FxRate,
     SpendLine,
 )
+from library.schemas import DocumentUpdate
 from tests.conftest import DocumentFactory, StubAnthropic
 
 pytestmark = pytest.mark.integration
@@ -532,16 +534,54 @@ def test_a_malformed_currency_is_a_422_not_an_empty_looking_chart(
     )
 
 
+@pytest.mark.parametrize(
+    ("grain", "boundary"),
+    [
+        # 2026-03-15 is a Sunday, so its ISO week began on the 9th; the four
+        # boundaries are all different, and the message has to name the one
+        # belonging to the grain that was asked for.
+        ("week", "2026-03-09"),
+        ("month", "2026-03-01"),
+        ("quarter", "2026-01-01"),
+        ("year", "2026-01-01"),
+    ],
+)
 def test_a_period_off_the_grain_boundary_is_a_422_naming_the_right_one(
-    api_client: TestClient,
+    api_client: TestClient, grain: str, boundary: str
 ) -> None:
-    """`chart_cell` filters `date_trunc(grain, date) = period`, so a mid-month
+    """`chart_cell` filters `date_trunc(grain, date) = period`, so a mid-bucket
     period matches nothing — and an empty panel under a non-empty bar reads as
-    "you spent nothing here"."""
-    chart_id = _save_chart(api_client, "api-period", {"all": []})
-    response = api_client.get(f"/api/spending/{chart_id}/cell?period=2026-03-15&grain=month")
+    "you spent nothing here".
+
+    All four grains: the boundary comes from `charts.query.period_start`, which
+    asks Postgres, and a single-grain test would leave three of the four
+    answers unexercised.
+    """
+    chart_id = _save_chart(api_client, f"api-period-{grain}", {"all": []})
+    response = api_client.get(f"/api/spending/{chart_id}/cell?period=2026-03-15&grain={grain}")
     assert response.status_code == 422
-    assert "2026-03-01" in response.text
+    assert boundary in response.text
+    assert grain in response.text
+
+
+@pytest.mark.parametrize(
+    ("grain", "boundary"),
+    [
+        ("week", "2026-03-09"),
+        ("month", "2026-03-01"),
+        ("quarter", "2026-01-01"),
+        ("year", "2026-01-01"),
+    ],
+)
+def test_a_period_on_the_grain_boundary_is_accepted(
+    api_client: TestClient, grain: str, boundary: str
+) -> None:
+    """The other half of the check: a boundary the chart really draws must not
+    be refused. A validator that answered 422 for everything would satisfy the
+    test above on its own."""
+    chart_id = _save_chart(api_client, f"api-period-ok-{grain}", {"all": []})
+    response = api_client.get(f"/api/spending/{chart_id}/cell?period={boundary}&grain={grain}")
+    assert response.status_code == 200, response.text
 
 
 def test_a_cell_of_an_unsplit_chart_opens_its_unlabelled_bucket(
@@ -707,6 +747,155 @@ def test_an_allocation_on_a_missing_document_is_a_404(api_client: TestClient) ->
         ).status_code
         == 404
     )
+
+
+def test_a_split_documents_parts_reach_the_api_as_two_cells_of_one_total(
+    api_client: TestClient, api_database_url: str, api_document_id: int
+) -> None:
+    """The branch's headline shape, end to end: allocate, then chart.
+
+    `replace_lines` was reachable from the API and `chart_series` was reachable
+    from the API, and nothing asked whether an allocation actually arrives in
+    the chart. Split by `scope` the 100.00 document is two cells; unsplit it is
+    one; either way it is one payment from one document.
+    """
+    _seed_vocabulary(api_database_url, "scope", ("business", "personal"))
+    allocated = api_client.put(
+        f"/api/documents/{api_document_id}/spend-lines",
+        json={
+            "lines": [
+                {"amount": "60.00", "labels": {"scope": "business"}},
+                {"amount": "40.00", "labels": {"scope": "personal"}},
+            ]
+        },
+    )
+    assert allocated.status_code == 200, allocated.text
+
+    chart_id = _save_chart(api_client, "api-split-lines", {"all": []}, default_split="scope")
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+    assert sorted((cell["split_value"], cell["total"]) for cell in body["cells"]) == [
+        ("business", "60.00"),
+        ("personal", "40.00"),
+    ]
+    assert body["total"] == "100.00"
+    assert (body["payments"], body["documents"]) == (1, 1)
+
+    # `split=` (the empty string) is how a client asks for no axis at all.
+    flat = api_client.get(f"/api/spending/{chart_id}/data?split=").json()
+    assert [(cell["split_value"], cell["total"]) for cell in flat["cells"]] == [(None, "100.00")]
+    assert flat["total"] == body["total"]
+    assert (flat["payments"], flat["documents"]) == (1, 1)
+
+
+def test_a_split_document_can_be_counted_twice_in_the_unconvertible_documents(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`UnconvertibleOut.documents` is an upper bound — here is the one shape.
+
+    A rateless document split across two lines, one matching the rule (reported
+    by `query.py`, which lists rows that would have entered the total) and one
+    missing the rule's label (reported by `footer.py`). The API merges the two
+    lists by currency, and the same document is behind both — so `documents`
+    reads 2 over one document, which the model's docstring states and nothing
+    exercised. Pinned so the bound cannot quietly become an *under*statement,
+    which is the direction that would matter.
+    """
+    _seed_vocabulary(api_database_url, "scope", ("business", "personal"))
+    document_id = _seed_document(
+        api_database_url,
+        amount="100.00",
+        kind=AmountKind.PAYMENT_MADE,
+        currency=UNCONVERTIBLE_CURRENCY,
+    )
+    allocated = api_client.put(
+        f"/api/documents/{document_id}/spend-lines",
+        json={
+            "lines": [
+                {"amount": "60.00", "labels": {"scope": "business"}},
+                {"amount": "40.00"},
+            ]
+        },
+    )
+    assert allocated.status_code == 200, allocated.text
+    chart_id = _save_chart(
+        api_client,
+        "api-split-unconvertible",
+        {"all": [{"facet": "scope", "op": "in", "values": ["business"]}]},
+    )
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+    assert body["total"] == "0.00", "nothing convertible reached the total"
+    unconvertible = body["footer"]["unconvertible"]
+    assert [(row["currency"], row["amount"]) for row in unconvertible] == [
+        (UNCONVERTIBLE_CURRENCY, "100.00")
+    ]
+    # One document, counted once by each list. An upper bound, never a miss.
+    assert unconvertible[0]["documents"] == 2
+
+
+def test_an_amount_edit_that_would_orphan_an_allocation_is_a_400_naming_it(
+    api_client: TestClient, api_document_id: int
+) -> None:
+    """The other side of 0035's mirror trigger.
+
+    The refusal is deliberate — an amount that no longer matches its lines
+    makes every chart total for the document quietly wrong — but until the
+    shared commit helper it reached the owner as an unexplained 500 from
+    `PATCH /api/documents/{id}`, on a path with no allocation vocabulary at all.
+    """
+    api_client.put(
+        f"/api/documents/{api_document_id}/spend-lines",
+        json={"lines": [{"amount": "60.00"}, {"amount": "40.00"}]},
+    )
+    response = api_client.patch(
+        f"/api/documents/{api_document_id}", json={"amount_total": "200.00"}
+    )
+    assert response.status_code == 400, response.text
+    detail = response.json()["detail"]
+    assert "spend lines" in detail
+    # The owner is told what to do, and Postgres' own text is not echoed back.
+    assert "clear or replace" in detail
+    assert "P0001" not in detail and "spend_lines_sum" not in detail
+    # And the edit did not take.
+    assert api_client.get(f"/api/documents/{api_document_id}").json()["amount_total"] == "100.00"
+
+
+def test_an_amount_edit_on_an_unallocated_document_is_untouched(
+    api_client: TestClient, api_document_id: int
+) -> None:
+    """The guard must not refuse the ordinary edit it now wraps."""
+    response = api_client.patch(
+        f"/api/documents/{api_document_id}", json={"amount_total": "200.00"}
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["amount_total"] == "200.00"
+
+
+async def test_a_database_error_on_the_document_edit_path_is_not_a_400(
+    session: AsyncSession, document: DocumentFactory
+) -> None:
+    """The narrowing has to hold on the new path too.
+
+    Provoked the same honest way as the allocation route's own case: a deferred
+    UNIQUE fails at exactly the commit `update_document` performs, with SQLSTATE
+    `23505` rather than plpgsql's `P0001`. It must propagate — nothing in
+    `src/library/` registers an exception handler, so a `DBAPIError` out of a
+    route is a 5xx, which is where a deadlock or a dropped connection belongs.
+    Reporting it as "your spend lines" would be a wrong diagnosis under a status
+    code that says the owner caused it.
+    """
+    row = await document(amount_total="100.00", amount_kind=AmountKind.PAYMENT_MADE)
+    await session.execute(
+        text(
+            "CREATE TEMPORARY TABLE document_edit_probe (id int, "
+            "CONSTRAINT document_edit_probe_unique UNIQUE (id) DEFERRABLE INITIALLY DEFERRED) "
+            "ON COMMIT DROP"
+        )
+    )
+    await session.execute(text("INSERT INTO document_edit_probe VALUES (1), (1)"))
+    with pytest.raises(DBAPIError) as caught:
+        await update_document(row.id, DocumentUpdate(amount_total=Decimal("200.00")), session)
+    assert getattr(caught.value.orig, "sqlstate", None) == "23505"
+    await session.rollback()
 
 
 async def test_the_deferred_sum_trigger_arrives_as_a_400_not_a_500(

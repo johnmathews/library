@@ -541,6 +541,11 @@ async def session(api_database_url: str) -> AsyncIterator[AsyncSession]:
     test using this fixture leaves nothing behind. ``expire_on_commit=False``
     matches the app's own session factory, so an ORM object read after a commit
     does not go looking for a fresh connection.
+
+    **Do not copy a local ``session`` fixture from another test file.** Six-plus
+    files define their own over ``migrated_database_url``, which is *not*
+    truncated between tests; copying one shadows this fixture and silently
+    leaves rows behind for every later test in the run.
     """
     engine = create_async_engine(api_database_url, poolclass=NullPool)
     try:

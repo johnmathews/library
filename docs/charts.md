@@ -212,9 +212,15 @@ restate the enum, and a transposed entry (`WEEK: "month"`) would misbucket every
 week, quarter and year chart while passing every test that exercised only
 months. `date_trunc('week', ...)` is ISO — buckets start on Monday.
 
-The bucket expression itself is written **once** (`_PERIOD_EXPR`), because it is
-both a selected column and, for the drill-through, a filter. Two copies is how
-the panel comes to open a bucket the chart never drew.
+The bucket expression itself is written **once**
+(`_PERIOD_EXPR_TEMPLATE`, over whichever day expression is substituted for it),
+because it is three things at once: a selected column, the drill-through's
+filter, and — through `charts.query.period_start` — the boundary the API
+validates a requested `period` against. Two copies is how the panel comes to
+open a bucket the chart never drew, or the API comes to refuse one it did. The
+boundary is therefore asked of Postgres rather than recomputed in Python: a
+second, correct-looking definition of the bucket in another language is exactly
+what dropping the grain lookup table removed.
 
 ## 5. Currency: each amount converts at its own date
 
@@ -391,7 +397,8 @@ Two details:
 - A `period` that is not the grain's boundary is a **422 naming the correct
   boundary**, not an empty list. `date_trunc(grain, date) = period` matches
   nothing mid-bucket, and an empty panel under a non-empty bar reads as "you
-  spent nothing here".
+  spent nothing here". The boundary comes from `period_start`, i.e. from the
+  same expression the chart bucketed with (§4).
 
 Each payment lists **every live document in its group, canonical or not**. Only
 the canonical row carried the money in, so `CellPayment.total` comes from that
@@ -495,6 +502,34 @@ than two decimal places is **rejected**, not quantised — `33.333` three times
 sums to `100.000` in Python while the stored `Numeric(14,2)` rows sum to `99.99`
 — because rounding the owner's numbers without saying so is exactly the silence
 this feature exists to remove.
+
+### 10.1 What the mirror trigger's refusal looks like to each writer
+
+The trigger fires at `COMMIT`, so it is the *committer* that has to explain it,
+not the statement that broke the invariant. `spend_lines.commit_allocation` is
+that one place: it checks SQLSTATE `P0001` — plpgsql's `RAISE`, and in this
+schema nothing else — turns it into `AllocationError` carrying the caller's own
+wording, and **re-raises everything else untouched**, so a deadlock, a lock
+timeout or a foreign-key violation still reaches a 5xx instead of being reported
+as an allocation problem the owner caused.
+
+The writers of `amount_total` answer differently, because a refusal only helps
+if the person reading it can act on it:
+
+| writer | answer |
+|---|---|
+| `PUT`/`DELETE /api/documents/{id}/spend-lines` | 400, "the spend lines do not sum to the document total" |
+| `PATCH /api/documents/{id}` | 400, naming the allocation and saying to clear or replace the lines first |
+| re-extraction (`extraction/apply.py`) | the write is **skipped**, and reported in `extra["extraction"]["skipped_fields"]` |
+| the importer (`importer/runner.py`) | nothing to do — it writes only when `amount_total IS NULL`, and an allocated document has one |
+
+Extraction skips rather than fails because a 400 has no reader in a background
+job: raising would abort the same commit that records `extraction_completed` and
+discard an otherwise good extraction over one field. An allocation is the
+owner's own arithmetic over the amount, so it outranks a re-read of the page for
+exactly the reason `extra["user_edited_fields"]` does — but the skip is written
+onto the document rather than passed over, because an amount quietly left behind
+is the silence this feature exists to remove.
 
 ## 11. The API
 
@@ -639,6 +674,11 @@ Add it later in one line if a real workload ever says otherwise.
   ([money-facts.md](money-facts.md) §5.1).
 - **Two `in` clauses on one facet** are ANDed into a permanently empty chart,
   since a document takes at most one value per facet. The draft filter does not
-  collapse them.
+  collapse them. **The footer cannot explain it either.** Its `uncategorised`
+  arm is scoped by `WHERE ((rule) OR unlabelled)`, and a rule no labelled row
+  can satisfy leaves only the unlabelled rows admitted — so every labelled
+  document is absent from the total *and* from the accounting under it. That is
+  §12's "indistinguishable from you spent nothing", reached through the draft
+  path: the one shape where the footer's own guarantee does not apply.
 - **Extraction does not propose spend lines yet.** `SpendLineOrigin.EXTRACTED`
   exists in the enum, but every line shipped today is `manual`.

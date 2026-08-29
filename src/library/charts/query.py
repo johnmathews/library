@@ -39,6 +39,22 @@ _SPLIT_NONE = "CAST(NULL AS text)"
 _SPLIT_SENDER = "CAST(sf.sender_id AS text)"
 _SPLIT_FACET = "sf.labels->>:split"
 
+#: The time bucket, written once, over whichever day expression is substituted
+#: for `{day}`. It is a selected column, a drill-through filter, and — through
+#: `period_start` — the boundary the API validates a requested period against.
+#: All three have to be the same expression or the panel opens a bucket the
+#: chart never drew, or the API refuses a period the chart did draw. Editing one
+#: of several copies is the whole failure mode; hence a template rather than a
+#: rule written out again in another language.
+_PERIOD_EXPR_TEMPLATE = "CAST(date_trunc(:grain, CAST({day} AS timestamp)) AS date)"
+
+_PERIOD_EXPR = _PERIOD_EXPR_TEMPLATE.format(day="sf.date")
+
+#: `date_trunc` applied to one day, with no `spend_facts` row in sight. Asked of
+#: Postgres rather than reimplemented in Python: a second definition of the
+#: bucket — even a correct one — is the thing `_GRAIN_SQL`'s deletion removed.
+_PERIOD_OF_DAY_SQL = f"SELECT {_PERIOD_EXPR_TEMPLATE.format(day='CAST(:day AS date)')} AS period"
+
 # Rows, not sums: conversion is per row and per date, so the aggregation
 # happens in Python after each amount has been converted at its own date.
 #
@@ -57,12 +73,6 @@ _SPLIT_FACET = "sf.labels->>:split"
 # silently: the panel would list payments that do not add up to the bar the
 # owner clicked, and nothing would go red. `chart_cell` narrows this query, it
 # never restates it.
-#: The time bucket, written once. It is both a selected column and — for the
-#: drill-through — a filter, and the two have to be the same expression or the
-#: panel opens a bucket the chart never drew. Editing one of two copies is the
-#: whole failure mode.
-_PERIOD_EXPR = "CAST(date_trunc(:grain, CAST(sf.date AS timestamp)) AS date)"
-
 _ROWS_SQL = """
 SELECT {period_expr} AS period,
        {split_expr}  AS split_value,
@@ -258,6 +268,25 @@ class Series(BaseModel):
     payments: int
     documents: int
     unconvertible: list[Unconvertible]
+
+
+async def period_start(session: AsyncSession, grain: Grain, day: date) -> date:
+    """The bucket `day` falls in at `grain` — Postgres' answer, not ours.
+
+    The API needs this to refuse a `period` that is not a bucket boundary: a
+    mid-bucket period matches no row, and an empty panel under a non-empty bar
+    reads as "you spent nothing here" (§12). Computing it in Python would put a
+    second definition of the time bucket next to `_PERIOD_EXPR_TEMPLATE`, in
+    another language, where a disagreement between them shows up as a 422 on a
+    period the chart itself drew — the drift `_GRAIN_SQL`'s deletion removed
+    from the grain, reintroduced through the boundary. One round trip against
+    the same expression is the cheaper guarantee.
+    """
+    row = (
+        await session.execute(text(_PERIOD_OF_DAY_SQL), {"grain": grain.value, "day": day})
+    ).one()
+    start: date = row.period
+    return start
 
 
 async def chart_series(
