@@ -3,7 +3,7 @@
 import asyncio
 import hashlib
 import uuid
-from collections.abc import AsyncIterator, Iterator, Mapping
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
@@ -17,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from procrastinate import PsycopgConnector
 from procrastinate.testing import InMemoryConnector
-from sqlalchemy import select, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
@@ -36,6 +36,7 @@ from library.models import (
     Document,
     DocumentSource,
     DocumentStatus,
+    FxRate,
     Sender,
     User,
 )
@@ -644,3 +645,137 @@ async def document(session: AsyncSession, facets: dict[str, tuple[str, ...]]) ->
         return row
 
     return _make
+
+
+class FxRateFactory(Protocol):
+    """Signature of the `fx_rates` fixture. See its docstring for the direction."""
+
+    async def __call__(self, rows: Sequence[tuple[str | date, str, str | Decimal]]) -> None: ...
+
+
+@pytest.fixture
+async def fx_rates(session: AsyncSession) -> AsyncIterator[FxRateFactory]:
+    """Write reference FX rows for a test, and take exactly those out again.
+
+    ``fx_rates`` is in ``_SEEDED_TABLES``: migration 0015 fills it with a yearly
+    snapshot and the autouse truncation deliberately leaves the table alone. So
+    a test adding rows must remove its own, or it silently changes every later
+    test's conversions. Only the ids inserted here are deleted; the seeded
+    snapshot is never touched, and a collision with a seeded ``(currency,
+    as_of)`` raises on insert rather than overwriting it.
+
+    **Direction.** ``rate_to_base`` is the value of ONE UNIT of ``currency`` in
+    USD (``library.fx``: base = USD, USD itself is 1.0 in code and not stored).
+    So ``("2026-04-01", "GBP", "1.20")`` means GBP 1 buys USD 1.20, and GBP 100
+    converts to USD 120. ``test_the_fixture_writes_usd_per_unit_not_the_inverse``
+    pins that so a flipped fixture cannot quietly make a conversion test pass.
+    """
+    inserted: list[int] = []
+
+    async def _add(rows: Sequence[tuple[str | date, str, str | Decimal]]) -> None:
+        for as_of, currency, rate in rows:
+            row = FxRate(
+                currency=currency,
+                as_of=date.fromisoformat(as_of) if isinstance(as_of, str) else as_of,
+                rate_to_base=Decimal(rate),
+            )
+            session.add(row)
+            await session.flush()
+            inserted.append(row.id)
+        await session.commit()
+
+    yield _add
+    if inserted:
+        # Unconditional: a test body that left the session in a failed
+        # transaction would make the DELETE raise `PendingRollbackError`, and
+        # because `fx_rates` is never truncated the inserted rates would then
+        # survive into every later test in the run.
+        await session.rollback()
+        await session.execute(delete(FxRate).where(FxRate.id.in_(inserted)))
+        await session.commit()
+
+
+#: Invented vendors for the `seeded` corpus. Distinct senders are what make
+#: `split="sender"` a non-trivial axis; none of these names is real.
+SEEDED_SENDERS: tuple[str, str, str] = (
+    "Cygnus Test Software",
+    "Draco Test Services",
+    "Eridanus Test Supplies",
+)
+
+
+@pytest.fixture
+async def seeded(document: DocumentFactory) -> Sequence[Document]:
+    """A small corpus that varies across `category`, `scope` AND `sender`.
+
+    Shaped for the split-invariance property (spec §9.2), which is asserted by
+    comparing series to each other rather than against a literal — so the
+    fixture has to be able to *break* that comparison if the split were applied
+    as a filter. It therefore contains, deliberately:
+
+    * a document unlabelled for every facet and with no sender, which a
+      filtering split would drop from all three axes;
+    * a document labelled for `category` but not `scope`, which a filtering
+      split would drop from one axis only — so the three axes disagree rather
+      than all being wrong together;
+    * a refund, which must lower a bucket rather than vanish;
+    * a non-contributing kind (a coverage ceiling), large enough that its
+      accidental inclusion is unmissable;
+    * two months, so the time axis has more than one bucket.
+
+    Everything is EUR, so a chart drawn in EUR converts one-to-one and the
+    invariance under test is not entangled with FX.
+    """
+    software, services, supplies = SEEDED_SENDERS
+    return [
+        await document(
+            amount_total=Decimal("120.00"),
+            amount_kind=AmountKind.PAYMENT_MADE,
+            document_date=date(2026, 3, 4),
+            labels={"category": "software", "scope": "business"},
+            sender=software,
+        ),
+        await document(
+            amount_total=Decimal("60.00"),
+            amount_kind=AmountKind.PAYMENT_MADE,
+            document_date=date(2026, 3, 20),
+            labels={"category": "supplies", "scope": "personal"},
+            sender=supplies,
+        ),
+        await document(
+            amount_total=Decimal("80.00"),
+            amount_kind=AmountKind.PAYMENT_MADE,
+            document_date=date(2026, 4, 2),
+            labels={"category": "services", "scope": "personal"},
+            sender=services,
+        ),
+        await document(
+            amount_total=Decimal("45.50"),
+            amount_kind=AmountKind.PAYMENT_DUE,
+            document_date=date(2026, 4, 10),
+            # Labelled for `category` only: unlabelled for `scope`.
+            labels={"category": "software"},
+            sender=software,
+        ),
+        await document(
+            amount_total=Decimal("15.00"),
+            amount_kind=AmountKind.REFUND,
+            document_date=date(2026, 4, 20),
+            labels={"category": "services", "scope": "personal"},
+            sender=services,
+        ),
+        # Unlabelled entirely, and no sender: NULL on all three axes.
+        await document(
+            amount_total=Decimal("30.00"),
+            amount_kind=AmountKind.PAYMENT_MADE,
+            document_date=date(2026, 4, 18),
+        ),
+        # Never summed, whatever the split.
+        await document(
+            amount_total=Decimal("9000.00"),
+            amount_kind=AmountKind.COVERAGE_LIMIT,
+            document_date=date(2026, 4, 22),
+            labels={"category": "accountancy", "scope": "business"},
+            sender=services,
+        ),
+    ]
