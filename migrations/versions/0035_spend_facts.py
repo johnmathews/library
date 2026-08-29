@@ -3,8 +3,8 @@
 Revision ID: 0035
 Revises: 0034
 
-Tables and the sum-invariant triggers. The `spend_facts` view is added to this
-same revision by the next step of the chart engine.
+Tables, the sum-invariant triggers, and the `spend_facts` view — the one
+relation every chart query reads (spec §5.1).
 
 `sum(lines.amount) = documents.amount_total` is enforced from BOTH sides, by
 one function bound to two constraint triggers. Enforcing it only on
@@ -84,6 +84,85 @@ FOR EACH ROW EXECUTE FUNCTION spend_lines_sum_matches()
 """
 
 
+# `spend_facts` is the one relation every chart reads (spec §5.1). It unions
+# unsplit documents — synthesising a row from `amount_total` — with the lines of
+# split documents, so no COALESCE branch is scattered through query code and
+# label inheritance has exactly one place to be tested.
+#
+# ONE statement, so one op.execute (see the note above the trigger calls).
+_SPEND_FACTS = """
+CREATE VIEW spend_facts AS
+WITH doc_labels AS (
+  SELECT dl.document_id, jsonb_object_agg(f.key, fv.key) AS labels
+  FROM document_labels dl
+  JOIN facets f ON f.id = dl.facet_id
+  JOIN facet_values fv ON fv.id = dl.facet_value_id
+  GROUP BY dl.document_id
+),
+line_lbls AS (
+  SELECT ll.line_id, jsonb_object_agg(f.key, fv.key) AS labels
+  FROM line_labels ll
+  JOIN facets f ON f.id = ll.facet_id
+  JOIN facet_values fv ON fv.id = ll.facet_value_id
+  GROUP BY ll.line_id
+),
+-- The join to `payments` is what supplies the payment grouping, and it also
+-- excludes deleted documents: `payments` builds its reachability from
+-- `documents WHERE deleted_at IS NULL`, so a deleted document has no row there
+-- at all. The `deleted_at IS NULL` filter below is defence in depth — with the
+-- join present, removing it changes no result (proved by mutation). Neither is
+-- free to remove on its own account: with the join weakened to a LEFT JOIN the
+-- filter is the only thing keeping a deleted twin out of the ranking, and with
+-- the filter removed the join is. Removing BOTH readmits a deleted document,
+-- which the deleted-twin test catches red.
+eligible AS (
+  SELECT d.id, d.sender_id, d.document_date, d.amount_total, d.currency,
+         d.amount_kind, d.reference, p.payment_id,
+         EXISTS (SELECT 1 FROM spend_lines sl WHERE sl.document_id = d.id) AS has_lines
+  FROM documents d
+  JOIN payments p ON p.document_id = d.id
+  WHERE d.deleted_at IS NULL AND d.amount_total IS NOT NULL
+),
+-- Exactly one document per payment contributes its money, or the merge would
+-- not have removed the double count. A line-bearing document wins first, or
+-- merging an itemised invoice with its receipt would discard the split.
+--
+-- COALESCE(..., false) is load-bearing: `amount_kind = 'payment_made'` is
+-- NULL for an undecided document and Postgres sorts NULLs FIRST under DESC,
+-- so without it an undecided document becomes canonical and the payment is
+-- represented by a kind that is never summed. Confirmed by mutation.
+ranked AS (
+  SELECT e.*, row_number() OVER (
+           PARTITION BY e.payment_id
+           ORDER BY e.has_lines DESC,
+                    COALESCE(e.amount_kind = 'payment_made', false) DESC,
+                    e.id ASC
+         ) = 1 AS is_canonical
+  FROM eligible e
+)
+SELECT r.id AS document_id, NULL::bigint AS line_id, r.payment_id, r.is_canonical,
+       r.sender_id, r.document_date AS date, r.amount_total AS amount, r.currency,
+       r.amount_kind, r.reference,
+       COALESCE(dl.labels, '{}'::jsonb) AS labels
+FROM ranked r
+LEFT JOIN doc_labels dl ON dl.document_id = r.id
+WHERE NOT r.has_lines
+UNION ALL
+-- `||` on jsonb takes the RIGHT operand on a key collision, which is exactly
+-- the inheritance rule: a line overrides the facets it names and inherits
+-- the rest from its document.
+SELECT r.id, sl.id, r.payment_id, r.is_canonical,
+       r.sender_id, r.document_date, sl.amount, r.currency,
+       r.amount_kind, r.reference,
+       COALESCE(dl.labels, '{}'::jsonb) || COALESCE(ll.labels, '{}'::jsonb)
+FROM ranked r
+JOIN spend_lines sl ON sl.document_id = r.id
+LEFT JOIN doc_labels dl ON dl.document_id = r.id
+LEFT JOIN line_lbls ll ON ll.line_id = sl.id
+WHERE r.has_lines
+"""
+
+
 def upgrade() -> None:
     op.create_table(
         "spend_lines",
@@ -129,9 +208,13 @@ def upgrade() -> None:
     op.execute(_SUM_FUNCTION)
     op.execute(_LINES_TRIGGER)
     op.execute(_DOCUMENTS_TRIGGER)
+    op.execute(_SPEND_FACTS)
 
 
 def downgrade() -> None:
+    # First: `spend_facts` depends on `spend_lines`, `line_labels` and the
+    # `payments` view, so it has to come down before any of them.
+    op.execute("DROP VIEW IF EXISTS spend_facts")
     op.execute("DROP TRIGGER IF EXISTS documents_total_matches_lines_trigger ON documents")
     op.execute("DROP TRIGGER IF EXISTS spend_lines_sum_matches_trigger ON spend_lines")
     op.execute("DROP FUNCTION IF EXISTS spend_lines_sum_matches()")

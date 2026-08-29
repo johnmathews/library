@@ -727,7 +727,8 @@ BEGIN
   SELECT amount_total INTO doc_total FROM documents WHERE id = doc_id;
   SELECT COALESCE(sum(amount), 0) INTO line_total
     FROM spend_lines WHERE document_id = doc_id;
-  IF line_total <> 0 AND line_total IS DISTINCT FROM doc_total THEN
+  IF EXISTS (SELECT 1 FROM spend_lines WHERE document_id = doc_id)
+     AND line_total IS DISTINCT FROM doc_total THEN
     RAISE EXCEPTION
       'spend lines for document % sum to % but the document total is %',
       doc_id, line_total, doc_total;
@@ -751,9 +752,9 @@ def downgrade() -> None:
     op.drop_table("spend_lines")
 ```
 
-Note `line_total <> 0` — a fully cleared allocation is legal and must not fire the check. Test `test_clearing_lines_leaves_the_document_unsplit` is what proves this clause; without it, `clear_lines` raises.
+Note the `EXISTS` — a fully cleared allocation is legal and must not fire the check. Test `test_clearing_lines_leaves_the_document_unsplit` is what proves this clause; without it, `clear_lines` raises. **This is a correction to an earlier draft of this plan, which tested `line_total <> 0`.** That clause tested the *sum* when it meant *"there are no lines"*: a document legitimately allocated across lines summing to zero (`0.00` split `[0.00, 0.00]`, or `[50.00, -50.00]`) would then let its `amount_total` be corrected to anything at all, and the allocation would be silently orphaned. `EXISTS` says what is meant. Migration 0035 as shipped also binds this same function to a second constraint trigger on `documents`, so the invariant is kept from both sides.
 
-**Executed against Postgres 17 before this plan was written.** Three things it settled: the whole block goes through one `op.execute` (splitting it on `;` breaks the `$$`-quoted body); `text()` does **not** mis-parse the `:=` in `doc_id bigint := COALESCE(...)` as a bind parameter, so no escaping is needed; and the trigger raises as `psycopg.errors.RaiseException`, surfacing through SQLAlchemy as **`ProgrammingError`** — not `InternalError`. Any test asserting on the exception type must use that, and note the app runs asyncpg rather than psycopg, so prefer asserting on `AllocationError` from the Python pre-check and let the trigger be the backstop it is.
+**Executed against Postgres 17 before this plan was written, and corrected by Task 2's own execution.** Three things settled: (1) the block does **not** go through one `op.execute` — Alembic runs over **asyncpg** here (`migrations/env.py`), which prepares every statement, so a multi-statement string fails with `cannot insert multiple commands into a prepared statement`. Task 2 hit exactly that and split it into one `op.execute` per statement; the `$$`-quoted body is itself a single statement and survives the split intact. (2) `text()` does **not** mis-parse the `:=` in `doc_id bigint := COALESCE(...)` as a bind parameter, so no escaping is needed. (3) Under asyncpg a plpgsql `RAISE EXCEPTION` surfaces as a bare `sqlalchemy.exc.DBAPIError`, **not** the `ProgrammingError` psycopg produces for the same raise — an earlier draft of this paragraph asserted the psycopg behaviour, which this repo never sees. Prefer asserting on `AllocationError` from the Python pre-check and let the trigger be the backstop it is; a composite-FK violation, by contrast, does map, and arrives as `IntegrityError`.
 
 - [ ] **Step 5: Write the write path**
 
