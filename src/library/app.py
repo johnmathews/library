@@ -28,6 +28,7 @@ from library.api import (
     saved_views,
     series,
     settings,
+    spending,
     taxonomy,
 )
 from library.auth.deps import csrf_protect, current_user, require_admin
@@ -257,6 +258,7 @@ def create_app() -> FastAPI:
     api_router.include_router(documents.router)
     api_router.include_router(notes.router)
     api_router.include_router(payments.router)
+    api_router.include_router(spending.router)
     api_router.include_router(comments.router)
     api_router.include_router(charts.router)
     api_router.include_router(series.router)
