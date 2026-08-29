@@ -1344,6 +1344,6 @@ class PaymentOverride(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     kind: Mapped[str] = mapped_column(String(8))
-    doc_a: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"))
-    doc_b: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"))
+    doc_a: Mapped[int] = mapped_column(BigInteger, ForeignKey("documents.id", ondelete="CASCADE"))
+    doc_b: Mapped[int] = mapped_column(BigInteger, ForeignKey("documents.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

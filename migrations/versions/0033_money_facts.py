@@ -52,10 +52,16 @@ def upgrade() -> None:
         sa.Column("id", sa.Integer(), primary_key=True),
         sa.Column("kind", sa.String(8), nullable=False),
         sa.Column(
-            "doc_a", sa.Integer(), sa.ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+            "doc_a",
+            sa.BigInteger(),
+            sa.ForeignKey("documents.id", ondelete="CASCADE"),
+            nullable=False,
         ),
         sa.Column(
-            "doc_b", sa.Integer(), sa.ForeignKey("documents.id", ondelete="CASCADE"), nullable=False
+            "doc_b",
+            sa.BigInteger(),
+            sa.ForeignKey("documents.id", ondelete="CASCADE"),
+            nullable=False,
         ),
         sa.Column(
             "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
