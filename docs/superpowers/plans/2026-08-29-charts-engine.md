@@ -52,7 +52,7 @@
 - `src/library/charts/footer.py` — the §9.4 accounting: what the rule touched but the total did not.
 - `src/library/charts/draft.py` — question text -> proposed rule, via `messages.parse`.
 - `src/library/spend_lines.py` — the write path for manual allocation.
-- `src/library/api/spending.py` — the seven routes.
+- `src/library/api/spending.py` — the ten routes.
 - `tests/test_spend_facts.py`, `tests/test_chart_rule.py`, `tests/test_chart_query.py`, `tests/test_chart_footer.py`, `tests/test_chart_draft.py`, `tests/test_spend_lines.py`, `tests/test_api_spending.py`.
 - `docs/charts.md`, `journal/260829-chart-engine.md`.
 
@@ -717,17 +717,30 @@ def upgrade() -> None:
     # DEFERRABLE INITIALLY DEFERRED: a two-line split inserts as one
     # transaction. An immediate check fails on the first row, because that
     # row alone never equals the document total.
+    #
+    # One statement per op.execute (see the paragraph below): Alembic runs
+    # over asyncpg here, which prepares every statement.
     op.execute("""
 CREATE FUNCTION spend_lines_sum_matches() RETURNS trigger AS $$
 DECLARE
   doc_total numeric(14,2);
   line_total numeric(14,2);
-  doc_id bigint := COALESCE(NEW.document_id, OLD.document_id);
+  doc_id bigint;
 BEGIN
+  -- One function, two tables. `NEW.document_id` does not exist on `documents`
+  -- and `NEW.id` means different things on the two, so the document id is
+  -- resolved by branching on TG_TABLE_NAME. On DELETE `NEW` is a NULL record,
+  -- so the COALESCE falls through to OLD rather than raising.
+  IF TG_TABLE_NAME = 'documents' THEN
+    doc_id := COALESCE(NEW.id, OLD.id);
+  ELSE
+    doc_id := COALESCE(NEW.document_id, OLD.document_id);
+  END IF;
   SELECT amount_total INTO doc_total FROM documents WHERE id = doc_id;
   SELECT COALESCE(sum(amount), 0) INTO line_total
     FROM spend_lines WHERE document_id = doc_id;
-  IF line_total <> 0 AND line_total IS DISTINCT FROM doc_total THEN
+  IF EXISTS (SELECT 1 FROM spend_lines WHERE document_id = doc_id)
+     AND line_total IS DISTINCT FROM doc_total THEN
     RAISE EXCEPTION
       'spend lines for document % sum to % but the document total is %',
       doc_id, line_total, doc_total;
@@ -735,15 +748,27 @@ BEGIN
   RETURN NULL;
 END;
 $$ LANGUAGE plpgsql;
-
+""")
+    op.execute("""
 CREATE CONSTRAINT TRIGGER spend_lines_sum_matches_trigger
 AFTER INSERT OR UPDATE OR DELETE ON spend_lines
 DEFERRABLE INITIALLY DEFERRED
-FOR EACH ROW EXECUTE FUNCTION spend_lines_sum_matches();
+FOR EACH ROW EXECUTE FUNCTION spend_lines_sum_matches()
+""")
+    # The mirror. `documents.amount_total` is writable from PATCH
+    # /api/documents/{id}, re-extraction and the importer, so without this
+    # trigger correcting the total out from under an allocation succeeds and
+    # every chart total for that document is quietly wrong.
+    op.execute("""
+CREATE CONSTRAINT TRIGGER documents_total_matches_lines_trigger
+AFTER UPDATE OF amount_total ON documents
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW EXECUTE FUNCTION spend_lines_sum_matches()
 """)
 
 
 def downgrade() -> None:
+    op.execute("DROP TRIGGER IF EXISTS documents_total_matches_lines_trigger ON documents")
     op.execute("DROP TRIGGER IF EXISTS spend_lines_sum_matches_trigger ON spend_lines")
     op.execute("DROP FUNCTION IF EXISTS spend_lines_sum_matches()")
     op.drop_table("line_labels")
@@ -751,9 +776,9 @@ def downgrade() -> None:
     op.drop_table("spend_lines")
 ```
 
-Note `line_total <> 0` — a fully cleared allocation is legal and must not fire the check. Test `test_clearing_lines_leaves_the_document_unsplit` is what proves this clause; without it, `clear_lines` raises.
+Note the `EXISTS` — a fully cleared allocation is legal and must not fire the check. Test `test_clearing_lines_leaves_the_document_unsplit` is what proves this clause; without it, `clear_lines` raises. **This is a correction to an earlier draft of this plan, which tested `line_total <> 0`.** That clause tested the *sum* when it meant *"there are no lines"*: a document legitimately allocated across lines summing to zero (`0.00` split `[0.00, 0.00]`, or `[50.00, -50.00]`) would then let its `amount_total` be corrected to anything at all, and the allocation would be silently orphaned. `EXISTS` says what is meant. **The block above is the shipped 0035, corrected in Task 11 from an earlier draft of this plan that showed a single-table body (`doc_id bigint := COALESCE(NEW.document_id, OLD.document_id)`) and only the `spend_lines` trigger.** That body raises the moment the function is bound to `documents`, because `NEW.document_id` does not exist there — so the earlier draft would not have survived being re-copied. The shipped function branches on `TG_TABLE_NAME`, both triggers are created, and `downgrade()` drops both.
 
-**Executed against Postgres 17 before this plan was written.** Three things it settled: the whole block goes through one `op.execute` (splitting it on `;` breaks the `$$`-quoted body); `text()` does **not** mis-parse the `:=` in `doc_id bigint := COALESCE(...)` as a bind parameter, so no escaping is needed; and the trigger raises as `psycopg.errors.RaiseException`, surfacing through SQLAlchemy as **`ProgrammingError`** — not `InternalError`. Any test asserting on the exception type must use that, and note the app runs asyncpg rather than psycopg, so prefer asserting on `AllocationError` from the Python pre-check and let the trigger be the backstop it is.
+**Executed against Postgres 17 before this plan was written, and corrected by Task 2's own execution.** Three things settled: (1) the block does **not** go through one `op.execute` — Alembic runs over **asyncpg** here (`migrations/env.py`), which prepares every statement, so a multi-statement string fails with `cannot insert multiple commands into a prepared statement`. Task 2 hit exactly that and split it into one `op.execute` per statement; the `$$`-quoted body is itself a single statement and survives the split intact. (2) `text()` does **not** mis-parse the `:=` in `doc_id bigint := COALESCE(...)` as a bind parameter, so no escaping is needed. (3) Under asyncpg a plpgsql `RAISE EXCEPTION` surfaces as a bare `sqlalchemy.exc.DBAPIError`, **not** the `ProgrammingError` psycopg produces for the same raise — an earlier draft of this paragraph asserted the psycopg behaviour, which this repo never sees. Prefer asserting on `AllocationError` from the Python pre-check and let the trigger be the backstop it is; a composite-FK violation, by contrast, does map, and arrives as `IntegrityError`.
 
 - [ ] **Step 5: Write the write path**
 
@@ -1510,7 +1535,7 @@ Spec §9.2 and §9.3. Two orthogonal axes over `spend_facts`, with date-aware cu
 - Produces:
   - `class Cell(BaseModel): period: date; split_value: str | None; total: Decimal; payments: int`
   - `class Series(BaseModel): cells: list[Cell]; total: Decimal; payments: int; documents: int; unconvertible: list[Unconvertible]`
-  - `class Unconvertible(BaseModel): currency: str; amount: Decimal; documents: int`
+  - `class Unconvertible(BaseModel): currency: str | None; amount: Decimal; documents: int` — **corrected in Task 11**; an earlier draft of this plan declared `currency: str`. `documents.currency` is nullable and `amount_currency_coupling` is a *warn*, not a block, so an amount-bearing, dated, summable document with no currency at all is a permitted live state. Under the non-optional type it raises — a `ValidationError`, or a `TypeError` from `sorted()` mixing `str` and `None` — which is a 500 on every chart route whose range contains one such document. A dead page, not a wrong number. `amount` is *signed* for the rows this module reports (§9.3), and sorts `None` last.
   - `async def chart_series(session, rule: Rule, *, grain: Grain, split: str | None, currency: str, since: date | None, until: date | None) -> Series`
 
 **Two things that are easy to get wrong.**
@@ -1731,15 +1756,11 @@ from library.charts.rule import Rule, rule_predicate
 from library.fx import convert_amount
 from library.models import AMOUNT_SIGN, AmountKind, Grain
 
-#: `date_trunc` takes the grain name directly, so the enum's values are the
-#: SQL argument. Bound as a parameter, never interpolated.
-_GRAIN_SQL: dict[Grain, str] = {
-    Grain.WEEK: "week",
-    Grain.MONTH: "month",
-    Grain.QUARTER: "quarter",
-    Grain.YEAR: "year",
-}
+# `date_trunc` takes the grain name directly, so `Grain`'s own values ARE the
+# SQL argument: `params["grain"] = grain.value`, bound, never interpolated.
 ```
+
+**Corrected in Task 11: there is no `_GRAIN_SQL` table.** An earlier draft of this plan put a `dict[Grain, str]` here mapping each member to its own value. It can only restate the enum, and a transposed entry (`Grain.WEEK: "month"`) would misbucket every week, quarter and year chart while passing every test that exercises only `MONTH` — which was all of them. Task 6 deleted the table and binds `grain.value` directly, so the transposition is unrepresentable rather than merely untested, and `test_every_grain_buckets_by_its_own_calendar_unit` parametrises all four grains.
 
 The query selects **rows, not sums**, because conversion is per row and per date:
 
@@ -1958,7 +1979,7 @@ Spec §9.5. Every number reaches its source documents in two clicks, so a correc
 
 **Interfaces:**
 - Produces:
-  - `class CellDocument(BaseModel): id: int; title: str | None; date: date | None; amount: Decimal; currency: str; amount_kind: str | None; reference: str | None; is_canonical: bool`
+  - `class CellDocument(BaseModel): id: int; title: str | None; date: date | None; amount: Decimal | None; currency: str | None; amount_kind: str | None; reference: str | None; is_canonical: bool` — **corrected in Task 11**; an earlier draft of this plan declared `amount` and `currency` non-optional. The `OVERRIDE` arm of `payment_edges` reads `payment_overrides` directly and carries none of the rule arms' `amount_total IS NOT NULL` precondition, so a hand-made `MERGE` can pull an amountless document into a group — and that is precisely the merge this panel exists to expose. Non-optional types would 500 on it.
   - `class CellPayment(BaseModel): payment_id: int; total: Decimal; documents: list[CellDocument]`
   - `async def chart_cell(session, rule, *, grain, split, split_value, period, currency, since, until) -> list[CellPayment]`
 
@@ -2161,7 +2182,7 @@ PUT    /api/documents/{id}/spend-lines    replace it
 DELETE /api/documents/{id}/spend-lines    clear it
 ```
 
-Nine routes, not seven: spec §9.6 lists the chart resource only, and the three spend-line routes are §8.4's write path, which has no other home.
+Ten routes, not seven: spec §9.6 lists the chart resource only, and the three spend-line routes are §8.4's write path, which has no other home. **Corrected in Task 11 — the list below has always had ten lines, while an earlier draft of this sentence said nine and then seven; `grep -c '@router\.' src/library/api/spending.py` returns 10.** The implementation was never wrong; the count in the prose was.
 
 - [ ] **Step 1: Write the failing tests**
 

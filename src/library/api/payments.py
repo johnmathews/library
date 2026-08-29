@@ -14,7 +14,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.db import get_session
-from library.models import Document
+from library.models import AmountKind, Document
 from library.money.payments import add_override, payment_group, payment_id_for
 
 router: APIRouter = APIRouter(tags=["payments"])
@@ -82,6 +82,27 @@ async def _require_both_exist(session: AsyncSession, doc_a: int, doc_b: int) -> 
         )
 
 
+async def _refuse_mixed_sign(session: AsyncSession, doc_a: int, doc_b: int) -> None:
+    """A payment group must have one sign (spec §8.3).
+
+    The rules cannot merge across signs; without this an override could, and
+    a group holding both +X and -X has no defined contribution to a total.
+    """
+    rows = (
+        (await session.execute(select(Document.amount_kind).where(Document.id.in_((doc_a, doc_b)))))
+        .scalars()
+        .all()
+    )
+    # A set of two booleans has two members only when the signs differ.
+    # `_require_both_exist` has already guaranteed there are exactly two rows.
+    signs = {kind == AmountKind.REFUND for kind in rows}
+    if len(signs) > 1:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Cannot merge a refund with a non-refund: a payment group must have one sign.",
+        )
+
+
 async def _payment_body(session: AsyncSession, document_id: int) -> PaymentOut:
     payment_id = await payment_id_for(session, document_id)
     if payment_id is None:
@@ -127,6 +148,7 @@ async def merge_payment(
     body: OverrideRequest, session: Annotated[AsyncSession, Depends(get_session)]
 ) -> PaymentOut:
     await _require_both_exist(session, body.doc_a, body.doc_b)
+    await _refuse_mixed_sign(session, body.doc_a, body.doc_b)
     await add_override(session, "MERGE", body.doc_a, body.doc_b)
     await session.commit()
     return await _payment_body(session, body.doc_a)

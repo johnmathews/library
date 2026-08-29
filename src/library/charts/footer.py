@@ -1,0 +1,301 @@
+"""The accounting for everything a chart's rule touched but its total did not.
+
+Spec §9.4, and the most important module in the feature: *a document the model
+failed to label matches no rule, so without this it disappears from every chart
+with no way to notice.* Reporting that money inside the chart whose date and
+currency window contains it turns the archive's worst failure mode into a
+visible task.
+
+**Separate from `query.py` on purpose.** It answers the opposite question — what
+the total *missed* — and mixing the two is how "nothing is excluded silently"
+quietly stops being true: a refactor of the sum has no reason to keep the
+accounting correct, and no test notices.
+
+**The categories are a partition, and that is the whole design.** One SQL
+statement classifies every row the chart touched into exactly one bucket, so a
+row cannot be counted twice and — the failure this module exists to prevent —
+cannot fall between two `WHERE` clauses that were each written correctly. The
+buckets:
+
+| bucket | what it is | reported as |
+| --- | --- | --- |
+| `counted` | in the total already | — (`query.py`'s job) |
+| `netted_refund` | in the total, and lowering it (§9.4) | `netted_refunds` |
+| `excluded` | a kind that never enters a total | `excluded` |
+| `unclassified` | `amount_kind IS NULL` — *not yet decided* (§8.1.1) | `unclassified` |
+| `undated` | summable, but no date to bucket it by | `undated` |
+| `uncategorised` | summable, unlabelled for a facet the rule names | `uncategorised` |
+| `outside` | dated outside the chart's window | — not this chart's claim |
+| `unaccounted` | the `ELSE`: a shape nobody predicted | `unaccounted` |
+
+A row labelled for a *different* value never reaches the `CASE` at all — the
+outer `WHERE` admits only rows the rule matches or that are missing one of its
+labels — so it is a different chart's business, not an unaccounted one.
+
+`unaccounted` is reported rather than filtered out, and that is the difference
+between a safety net and a decoration. It is unreachable today (the outer
+`WHERE` guarantees that arm 5's rule or arm 6's unlabelled test fires, and a
+NULL rule with a FALSE unlabelled test keeps the row out of `classified`
+entirely), which is exactly why no test would catch it being dropped — so the
+`ELSE` must surface, in its own group, under its own name. Calling it
+`uncategorised` would misdescribe the one row that gets there: by definition
+nobody predicted it.
+
+`unclassified` is the category the brief did not have. A document with an amount
+and no `amount_kind` is summed by nothing, and `excluded` filters `NOT NULL`
+while the other three require a summable kind — so before this bucket existed it
+appeared *nowhere*, which is precisely what §9.4 forbids, on the one class of
+document the live archive has most of.
+
+**Touched, not merely matching.** The rows considered are those the rule matches
+*or* that are missing a label for a facet the rule names. Restricting to matches
+alone would hide every unlabelled row behind the very label it is missing, which
+is the gap; widening to the whole archive would make every chart report money
+belonging to a different question (see `uncategorised` in §9.4 and the test for
+a labelled document outside the rule).
+
+**Signs.** A summable amount is accounted signed, through `AMOUNT_SIGN`, so a
+refund lowers what it is part of exactly as it lowers the total. A kind that
+never enters a total has no sign, so `excluded` and `unclassified` report
+magnitudes. `netted_refunds` is a positive magnitude with its count, because
+§9.4 renders it in the header block beside the total it is already inside.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from datetime import date
+from decimal import Decimal
+
+from pydantic import BaseModel
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from library.charts.query import Unconvertible
+from library.charts.rule import Rule, rule_predicate
+from library.fx import convert_amount
+from library.models import AMOUNT_SIGN, SUMMABLE_AMOUNT_KINDS, AmountKind
+
+#: Rendered in place of the SQL NULL for an undecided `amount_kind`. A literal
+#: `null` in a footer reads as a bug in the footer rather than as a document
+#: waiting to be classified.
+UNCLASSIFIED = "unclassified"
+
+#: `ExcludedGroup.amount_kind` for the groups that are not about one kind: the
+#: field names the group's reason, which is what the renderer prints.
+UNDATED = "undated"
+UNCATEGORISED = "uncategorised"
+UNACCOUNTED = "unaccounted"
+
+# One statement, one CASE, one bucket per row.
+#
+# `CAST(x AS type)`, never the `::type` shorthand: `text()` parses `:name`
+# itself, so `:since::date` leaves the parameter unbound.
+#
+# Branch order is load-bearing:
+#
+# * `outside` first, but only for rows that *have* a date. An undated row can
+#   sit in no window at all, so no window may drop it — that is the one bound
+#   this module ignores, and it looks like a bug to anyone reading quickly.
+# * kind before rule, so a coverage limit is reported as excluded rather than
+#   competing with the label branches.
+# * rule before `uncategorised`, so an unlabelled row that a `not_in` rule
+#   *already counted* (see `rule.py`: NULL satisfies the negation) is not also
+#   reported as a gap the chart did not have.
+#
+# `is_canonical` matches `query.py`: a merged pair contributes one row, so the
+# footer never reports the same money twice under two documents.
+_CLASSIFY_SQL = """
+WITH classified AS (
+  SELECT sf.document_id, sf.amount, sf.currency, sf.date, sf.amount_kind,
+         CASE
+           WHEN sf.date IS NOT NULL AND NOT (
+                    (CAST(:since AS date) IS NULL OR sf.date >= CAST(:since AS date))
+                AND (CAST(:until AS date) IS NULL OR sf.date <= CAST(:until AS date))
+                ) THEN 'outside'
+           WHEN sf.amount_kind IS NULL THEN 'unclassified'
+           WHEN NOT (sf.amount_kind = ANY(:summable)) THEN 'excluded'
+           WHEN sf.date IS NULL THEN 'undated'
+           WHEN ({rule}) THEN
+                CASE WHEN sf.amount_kind = :refund THEN 'netted_refund' ELSE 'counted' END
+           WHEN {unlabelled} THEN 'uncategorised'
+           ELSE 'unaccounted'
+         END AS bucket
+  FROM spend_facts sf
+  WHERE sf.is_canonical AND (({rule}) OR {unlabelled})
+)
+SELECT document_id, amount, currency, date, amount_kind, bucket
+FROM classified
+-- Only the two buckets the chart legitimately does not owe an account for are
+-- dropped here. Every other bucket — including one this module does not know
+-- the name of — reaches Python and is reported.
+WHERE bucket NOT IN ('counted', 'outside')
+"""
+
+#: True for a row missing a label for any facet the rule names. `?&` asks
+#: whether jsonb holds *all* of a `text[]`; the explicit CAST is what tells
+#: Postgres the bind is that array rather than leaving it to inference.
+_UNLABELLED = "NOT (sf.labels ?& CAST(:facets AS text[]))"
+
+#: A rule naming no facet cannot have a label gap, so nothing is unlabelled
+#: with respect to it — and `?&` against an empty array is true for every row,
+#: which would make the fragment above false anyway. Written out so the empty
+#: case never depends on that.
+_NEVER_UNLABELLED = "FALSE"
+
+
+class ExcludedGroup(BaseModel):
+    """Money the total did not count, and why.
+
+    `amount_kind` is the reason, not always a kind: `"unclassified"`,
+    `"undated"` and `"uncategorised"` name their group. `documents` counts the
+    canonical documents behind `amount` and must be shown beside it — a payment
+    and an equal refund net to `amount == 0.00, documents == 2`, which reads as
+    "nothing missing" while two documents are unrepresented.
+    """
+
+    amount_kind: str
+    amount: Decimal
+    documents: int
+
+
+class Footer(BaseModel):
+    """What the chart's total did not count (§9.4).
+
+    `netted_refunds` is *in* the total and is reported here only so the header
+    can say so; the groups below are not, and together with the total they
+    account for every row the rule touched — `unaccounted` last, so that the
+    accounting stays complete even for a shape this module does not know.
+    """
+
+    netted_refunds: Decimal
+    refund_count: int
+    excluded: list[ExcludedGroup]
+    unclassified: ExcludedGroup | None
+    uncategorised: ExcludedGroup | None
+    undated: ExcludedGroup | None
+    #: Money that reached the `CASE`'s `ELSE`. Always `None` today; if it is
+    #: ever not, the classification has a hole and this is the money in it.
+    unaccounted: ExcludedGroup | None
+    unconvertible: list[Unconvertible]
+
+
+@dataclass
+class _Group:
+    """A running amount and the documents behind it."""
+
+    amount: Decimal = Decimal(0)
+    documents: set[int] = field(default_factory=set)
+
+    def add(self, amount: Decimal, document_id: int) -> None:
+        self.amount += amount
+        self.documents.add(document_id)
+
+    def rendered(self, amount_kind: str) -> ExcludedGroup | None:
+        """`None` when nothing landed here — an empty group is not a report."""
+        if not self.documents:
+            return None
+        return ExcludedGroup(
+            amount_kind=amount_kind, amount=self.amount, documents=len(self.documents)
+        )
+
+
+async def chart_footer(
+    session: AsyncSession,
+    rule: Rule,
+    *,
+    currency: str,
+    since: date | None,
+    until: date | None,
+    facets_in_rule: set[str],
+) -> Footer:
+    """Account for everything `rule` touched that the total did not count.
+
+    `facets_in_rule` is given rather than derived (the caller knows which
+    clauses it kept); an empty set means the rule asks about everything, and a
+    rule that asks about everything cannot have a label gap, so `uncategorised`
+    is `None`.
+
+    Every amount converts at its own document's date, exactly as the total does
+    (§9.3). An amount with no usable rate — including one carrying no currency
+    at all — joins `unconvertible` rather than being counted at 1:1. Rows that
+    *would have* entered the total are left to `query.py`, which already
+    reports them: Task 10 merges the two lists by currency, and reporting a row
+    in both would double it.
+    """
+    fragment, params = rule_predicate(rule)
+    unlabelled = _UNLABELLED if facets_in_rule else _NEVER_UNLABELLED
+    params["facets"] = sorted(facets_in_rule)
+    params["summable"] = sorted(kind.value for kind in SUMMABLE_AMOUNT_KINDS)
+    params["refund"] = AmountKind.REFUND.value
+    params["since"] = since
+    params["until"] = until
+    statement = text(_CLASSIFY_SQL.format(rule=fragment, unlabelled=unlabelled))
+    rows = (await session.execute(statement, params)).all()
+
+    excluded: dict[str, _Group] = {}
+    unclassified, uncategorised, undated = _Group(), _Group(), _Group()
+    unaccounted = _Group()
+    refunds = _Group()
+    # Keyed by `str | None`: a row with no currency at all belongs here too.
+    missing: dict[str | None, _Group] = {}
+
+    for row in rows:
+        converted = await convert_amount(session, row.amount, row.currency, currency, row.date)
+        if row.bucket == "netted_refund":
+            # A refund the total could not convert is not in the total, so it
+            # was not netted off anything — and `query.py` has already reported
+            # it. Counting it here would inflate the header and double the
+            # merged unconvertible line.
+            if converted is not None:
+                refunds.add(converted, row.document_id)
+            continue
+        # A summable amount enters signed, so a refund lowers what it is part
+        # of; a kind that never enters a total has no sign and is accounted as
+        # the magnitude it is.
+        kind = AmountKind(row.amount_kind) if row.amount_kind is not None else None
+        sign = 1 if kind is None else AMOUNT_SIGN.get(kind, 1)
+        if converted is None:
+            # Reported, never dropped and never counted 1:1 (§9.3). The sign
+            # convention is the one the group would have used, so the merge in
+            # Task 10 stays coherent.
+            missing.setdefault(row.currency, _Group()).add(sign * row.amount, row.document_id)
+            continue
+        signed = sign * converted
+        if row.bucket == "excluded":
+            excluded.setdefault(row.amount_kind, _Group()).add(signed, row.document_id)
+        elif row.bucket == "unclassified":
+            unclassified.add(signed, row.document_id)
+        elif row.bucket == "undated":
+            undated.add(signed, row.document_id)
+        elif row.bucket == UNCATEGORISED:
+            uncategorised.add(signed, row.document_id)
+        else:
+            # Named buckets only above, so an unforeseen one lands here and is
+            # reported. A trailing `else: uncategorised.add(...)` would have
+            # relabelled it as a gap the chart understood.
+            unaccounted.add(signed, row.document_id)
+
+    return Footer(
+        netted_refunds=refunds.amount,
+        refund_count=len(refunds.documents),
+        # Sorted by kind: a footer whose lines reorder between two identical
+        # requests reads as the archive having changed.
+        excluded=[
+            ExcludedGroup(amount_kind=kind, amount=group.amount, documents=len(group.documents))
+            for kind, group in sorted(excluded.items())
+        ],
+        unclassified=unclassified.rendered(UNCLASSIFIED),
+        uncategorised=uncategorised.rendered(UNCATEGORISED),
+        undated=undated.rendered(UNDATED),
+        unaccounted=unaccounted.rendered(UNACCOUNTED),
+        unconvertible=[
+            Unconvertible(currency=code, amount=group.amount, documents=len(group.documents))
+            # None last: a currency code cannot be compared with None, so a
+            # bare `sorted` raises as soon as an amount with no currency meets
+            # one with an unknown code (`query.py` sorts the same way).
+            for code, group in sorted(
+                missing.items(), key=lambda item: (item[0] is None, item[0] or "")
+            )
+        ],
+    )

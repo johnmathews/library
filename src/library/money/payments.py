@@ -6,6 +6,7 @@ module is the read API over those views, plus the one write: an override row.
 
 The rules, in the order the view applies them:
 
+  SIGN  a refund never pairs with a non-refund      -> above every rule
   VETO  both documents carry a reference and they differ -> never merge
   R2    same sender, same non-null reference             -> merge at any date gap
   R1    same sender, date, amount, currency              -> merge

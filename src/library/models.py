@@ -18,8 +18,10 @@ Design notes
 """
 
 import enum
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
+from types import MappingProxyType
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -153,24 +155,46 @@ class MemberOrigin(enum.StrEnum):
 class AmountKind(enum.StrEnum):
     """What a document's ``amount_total`` actually is.
 
-    Only ``PAYMENT_DUE``, ``PAYMENT_MADE`` and ``ASSESSMENT`` are ever summed
-    into a spending total. The rest exist so that a coverage ceiling, an opening
+    ``amount_total`` is always a magnitude. The sign of a document's
+    contribution to a spending total is a property of what the number
+    *means*, so it is carried here and nowhere else — see ``AMOUNT_SIGN``.
+    The non-contributing values exist so that a coverage ceiling, an opening
     balance, a quote or a nil-return confirmation can be recorded faithfully
-    without contaminating one.
+    without contaminating a total.
     """
 
     PAYMENT_DUE = "payment_due"
     PAYMENT_MADE = "payment_made"
     ASSESSMENT = "assessment"
+    REFUND = "refund"
     COVERAGE_LIMIT = "coverage_limit"
     BALANCE = "balance"
     ESTIMATE = "estimate"
     NONE = "none"
 
 
-SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(
-    {AmountKind.PAYMENT_DUE, AmountKind.PAYMENT_MADE, AmountKind.ASSESSMENT}
+#: How each contributing kind enters a spending total. A kind absent from this
+#: map never enters one, so "summable" and "signed" are the same predicate and
+#: cannot drift apart. A refund is the only negative: money returned, or an
+#: amount owed cancelled.
+AMOUNT_SIGN: Mapping[AmountKind, int] = MappingProxyType(
+    {
+        AmountKind.PAYMENT_DUE: 1,
+        AmountKind.PAYMENT_MADE: 1,
+        AmountKind.ASSESSMENT: 1,
+        AmountKind.REFUND: -1,
+    }
 )
+
+SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(AMOUNT_SIGN)
+
+
+class SpendLineOrigin(enum.StrEnum):
+    """Where a line came from. Only ``MANUAL`` is produced today; extraction
+    proposing lines is deferred (spec §14, open question 3)."""
+
+    EXTRACTED = "extracted"
+    MANUAL = "manual"
 
 
 class HeldEmailStatus(enum.StrEnum):
@@ -184,6 +208,15 @@ class HeldEmailStatus(enum.StrEnum):
     HELD = "held"
     INGESTED = "ingested"
     DISMISSED = "dismissed"
+
+
+class Grain(enum.StrEnum):
+    """The time bucket a chart's x-axis uses (spec §9.2)."""
+
+    WEEK = "week"
+    MONTH = "month"
+    QUARTER = "quarter"
+    YEAR = "year"
 
 
 class Base(DeclarativeBase):
@@ -395,6 +428,62 @@ class DocumentLabel(Base):
 
     document_id: Mapped[int] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    facet_id: Mapped[int] = mapped_column(
+        ForeignKey("facets.id", ondelete="RESTRICT"), primary_key=True
+    )
+    facet_value_id: Mapped[int] = mapped_column(Integer)
+
+
+class SpendLine(Base):
+    """One part of a document's amount, when the money divides.
+
+    A document has either no lines at all — the common case, and the one
+    ``spend_facts`` synthesises a row for — or a complete set summing to
+    ``amount_total``. There is no partial state; the sum is enforced by a pair
+    of deferred constraint triggers (migration 0035) rather than by application
+    code, and from both sides: editing ``documents.amount_total`` out from under
+    an allocation is refused just as an unbalanced line set is.
+    """
+
+    __tablename__ = "spend_lines"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    origin: Mapped[SpendLineOrigin] = mapped_column(
+        Enum(
+            SpendLineOrigin,
+            name="spend_line_origin",
+            native_enum=False,
+            length=16,
+            # Without this SQLAlchemy persists the member *name* ("MANUAL"),
+            # which the migration's `origin IN ('extracted','manual')` CHECK
+            # rejects. Same treatment as every other enum column here.
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        default=SpendLineOrigin.MANUAL,
+        server_default=SpendLineOrigin.MANUAL.value,
+    )
+
+
+class LineLabel(Base):
+    """One line's value for one facet. Overrides the document's, if any."""
+
+    __tablename__ = "line_labels"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["facet_value_id", "facet_id"],
+            ["facet_values.id", "facet_values.facet_id"],
+            name="line_labels_value_facet",
+        ),
+    )
+
+    line_id: Mapped[int] = mapped_column(
+        ForeignKey("spend_lines.id", ondelete="CASCADE"), primary_key=True
     )
     facet_id: Mapped[int] = mapped_column(
         ForeignKey("facets.id", ondelete="RESTRICT"), primary_key=True
@@ -1347,3 +1436,41 @@ class PaymentOverride(Base):
     doc_a: Mapped[int] = mapped_column(BigInteger, ForeignKey("documents.id", ondelete="CASCADE"))
     doc_b: Mapped[int] = mapped_column(BigInteger, ForeignKey("documents.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Chart(Base):
+    """A saved question over ``spend_facts``.
+
+    ``rule`` is a serialised :class:`library.charts.rule.Rule`. The two axes
+    are independent by design: ``default_grain`` and ``default_split`` are
+    only starting positions, and changing either at request time never alters
+    the total (spec §9.2).
+    """
+
+    __tablename__ = "charts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    question_text: Mapped[str] = mapped_column(Text)
+    rule: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    default_grain: Mapped[Grain] = mapped_column(
+        Enum(
+            Grain,
+            name="chart_grain",
+            native_enum=False,
+            length=16,
+            # Without this SQLAlchemy persists the member *name* ("MONTH"),
+            # which the migration's `default_grain IN ('week',...)` CHECK
+            # rejects. Same treatment as every other enum column here.
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        default=Grain.MONTH,
+        server_default=Grain.MONTH.value,
+    )
+    default_split: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    display_currency: Mapped[str] = mapped_column(String(3))
+    ordinal: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

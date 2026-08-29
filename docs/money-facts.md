@@ -1,8 +1,8 @@
 # Money facts and payment identity
 
-**Status:** active. **Last updated:** 2026-08-29 (new §6.1: the amount classifier now uses `client.messages.parse()` with an `AmountClassification` schema — the first live `backfill-amounts` run against the real archive classified 0 of 5 documents because the model returned its JSON inside a ```json fence, the identical failure the facet labeller hit in GH #108; the envelope-stripping fallback for the free-text subscription backend is now shared as `src/library/llm/envelope.py`. Earlier the same day — fix round 3: R3's mutual-nearest test is now **directional** — a payment follows the thing it pays, so every candidate receipt dated on or after its invoice outranks every one dated before it, and distance decides only within those groups. §4.1 is rewritten around that and now names the four CTEs (`sym` keyed `(due, made)`, `best_due`, `best_made`, `mutual`); the round-2 claims that "the cross-cycle edge is never drawn" and that "nothing that previously merged stops merging" were both **untrue** and are gone — the unsigned ranking they described tied on a 1st/16th cadence (twelve cycles collapsed to nine payments) and picked the wrong pair across a short February, and two shapes do stop merging under the new rule. `sym` now also excludes VETO'd pairs, so a document whose reference conflicts can no longer hold a neighbour's nearest slot. §5 gains a fourth known limit — a systematically reversed cadence pairs off by one cycle, measured as four payments from three, and the trade against the alternative ranking is stated; §4.2 now names the test that pins the 60-day bound on both sides; §7's identical-timestamp tie-break is now labelled defensive, because no API call path can produce a tie. Earlier the same day — fix round 2: §4's rule table and §4.1 now document R3's **mutual-nearest** requirement, which closes a real defect — a recurring same-amount charge documented as invoice-then-receipt chained across billing cycles, collapsing three cycles into one payment of six documents; §4.2's dateless-document bullet now names the `sym` CTE that carries R3's 60-day test, since the `pairs` CTE's `gap` column no longer feeds any rule; §7 now describes override resolution as **latest-wins in both directions** (a tie falls to `SPLIT`, and re-recording a correction refreshes its timestamp) — previously "record the opposite kind" held only for split-then-merge, because a `SPLIT` recorded after a `MERGE` did nothing at all; new §5.1 discloses that the design spec's promised `amount_kind` validation and review queue were never built, so an undecided kind is safe but invisible and uncorrectable by hand; §8 notes the payment panel is not mounted on a soft-deleted document. Earlier the same day — fix round 1: §4's rule table now lists the evaluation order the `payment_edges` `CASE` expression actually uses — VETO, R2, R1, R3, not R1-before-R2 — and states that every rule also requires the same `amount_total`/currency baseline from the `pairs` CTE, not just R1/R3; §4.1 now says explicitly that R3 needs *both* complementarity and the 60-day bound, neither alone being sufficient; §5 now lists a third known-limit shape — a complementary pair with no shared reference more than 60 days apart — and no longer describes what a spending total would do with an unmerged pair, since no spending-total query exists in this codebase yet. Earlier the same day: initial version — `amount_kind`, `reference`, the `payment_edges`/`payments` SQL views, `payment_overrides`, the `/api/payments/*` REST surface, and `library backfill-amounts`. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §8.1–8.3, plan: [superpowers/plans/2026-08-28-charts-money-facts.md](superpowers/plans/2026-08-28-charts-money-facts.md)).
-**Last verified:** 2026-08-29 — method: for §6.1, read `classify_amount` and `_parse` in `src/library/money/backfill.py` and `strip_json_envelope` in `src/library/llm/envelope.py` after the change, and confirmed the `messages.create` call is gone (`grep -c 'messages.create' src/library/money/backfill.py` → 0). The failing-run quote is the verbatim stderr of `library backfill-amounts --limit 5` executed against the production archive on the deployed 0033 image, not a reconstruction. All four new cases in `tests/test_money_backfill.py` were observed FAILING against the shipped code before the fix — including the call-shape test, which failed with "the API backend must use messages.parse, not messages.create" rather than an import error — and pass after it. Earlier the same day — method: re-read the `payment_edges` view in `migrations/versions/0033_money_facts.py` line-by-line after the directional rewrite (the `(due, made)`-keyed `sym`, its `CASE`-based `rank` with the 1000 offset, its VETO exclusion, `best_due`/`best_made`, and the rank-equality join in `mutual`) and diffed §4's R3 row, §4.1, §4.2 and §5 against it clause by clause; re-read `add_override` in `src/library/money/payments.py` and both routes in `src/library/api/payments.py` to confirm §7's tie-break really is unreachable (each route writes one override row then commits, and `created_at` defaults to the transaction timestamp) before calling it defensive. Every claim in §4.1 and §5's fourth bullet is covered by an executed assertion in `tests/test_payment_identity.py`: ten new cases (tied 1st/16th cadence over twelve months, Jan–Apr across a short February, the VETO'd neighbour, a reference-less prepayment, backward-only-when-no-forward, one invoice against two receipts, an unpaid invoice beside a later cycle, an equidistant receipt, the day-60/day-61 boundary, and the reversed-cadence limit), seven of which were observed FAILING against the previous view before the fix and all of which pass after it. Full backend suite run green in this pass (1969 passed, 7 skipped). Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: re-read the rewritten `payment_edges` view in `migrations/versions/0033_money_facts.py` line-by-line (the new `sym`/`best`/`mutual` CTEs, R3's `m.a IS NOT NULL` arm, and the `created_at`-comparing `NOT EXISTS` on the `MERGE` union arm) and `add_override`'s `on_conflict_do_update` in `src/library/money/payments.py`, and diffed §4/§4.2/§7 against both; re-read `src/library/api/payments.py` for §8's status codes. Every rule and override claim here is covered by an executed assertion in `tests/test_payment_identity.py` and `tests/test_api_payments.py`, both run green in this pass, including three new cases: the monthly-subscription chain (observed failing before the fix as one group of six), merge-then-split (observed failing before the fix as an unchanged merged pair), and merge/split/merge. §5.1's claims were checked by grep rather than assumed: `amount_kind` appears nowhere in `src/library/schemas.py` or `src/library/api/documents.py` (no PATCH path), nowhere in `src/library/extraction/validation.py` (no validation rule, so no review finding), and the quoted spec sentence was read at `docs/superpowers/specs/2026-08-28-charts-redesign-design.md` §8.3. Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: re-read the `payment_edges` view's `CASE` expression in `migrations/versions/0033_money_facts.py` line-by-line to confirm the evaluation order (VETO, then `ra=rb` → R2, then `same_day` → R1, then the `gap<=60 AND` complementary-kind test → R3) and that the `pairs` CTE's join (`a.amount_total = b.amount_total AND a.currency IS NOT DISTINCT FROM b.currency AND a.sender_id = b.sender_id`) is the shared precondition every rule sits on top of; cross-checked the same order against `src/library/money/payments.py`'s module docstring, which states it identically. Confirmed `SUMMABLE_AMOUNT_KINDS` (`src/library/models.py`) is unreferenced anywhere under `src/` (`grep -rn SUMMABLE_AMOUNT_KINDS src/` matches only its own definition), i.e. no spending-total query exists yet, before rewriting §5 to stop asserting what such a total would do. Confirmed no `Vendor`-style invented sender name appears anywhere in this document (only the generic word "sender"). Earlier the same day — method: read `src/library/models.py` (`AmountKind`, `SUMMABLE_AMOUNT_KINDS`, the `Document.amount_kind`/`reference` columns, `PaymentOverride`) and `migrations/versions/0033_money_facts.py` (the `payment_edges`/`payments` views) in full; read `src/library/money/payments.py` and `src/library/money/backfill.py` in full, including `AMOUNT_SYSTEM_PROMPT` and the exact `classified`/`empty`/`skipped` accounting in `run_amount_backfill`; read `src/library/api/payments.py` for the four routes' status codes; read `src/library/extraction/schema.py` for `normalize_amount_kind` and `MAX_REFERENCE_CHARS`. Every rule claim below is covered by an executed assertion in `tests/test_payment_identity.py` (VETO, R1–R3, the dateless/currency-less pairing cases, the un-backfilled-`amount_kind` non-merge, the soft-delete cases, both override directions) and `tests/test_money_backfill.py`/`tests/test_api_payments.py`; not re-run as part of writing this document (a full suite run is recorded in the journal entry for this work).
-**Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, src/library/llm/envelope.py
+**Status:** active. **Last updated:** 2026-08-29 (the `refund` kind ships: §2 now lists **eight** values with a **sign** column and explains why `amount_total` stays a magnitude while `AMOUNT_SIGN` carries the sign — `SUMMABLE_AMOUNT_KINDS` is now derived from that map rather than declared beside it — and records the `CHECK` constraint migration 0034 finally put on the column, together with the one place the cross-checking stops (neither classifier prompt is compared by any test). §4 gains the **sign precondition**, written into the `pairs` CTE above every rule because R2 is otherwise the strongest evidence and a credit note quotes the reference of the invoice it reverses; the live `payment_edges` definition is 0034's, not 0033's. §5 gains **two** known limits — a credit note and a separate refund receipt netting a refund off twice, and the mixed-sign override hole, where a human MERGE of two undecided documents followed by a `backfill-amounts` run that classifies one as `refund` produces a group the guard never sees. §5's closing paragraph no longer says this repository has no spending-total query: `library.charts.query` is one, so an unmerged invoice/receipt pair now demonstrably double-counts rather than hypothetically. §5.1 is retitled and updated — the chart footer's `unclassified` group is a real, if window-scoped, surface for the undecided backlog. See the new [charts.md](charts.md). Earlier the same daynew §6.1: the amount classifier now uses `client.messages.parse()` with an `AmountClassification` schema — the first live `backfill-amounts` run against the real archive classified 0 of 5 documents because the model returned its JSON inside a ```json fence, the identical failure the facet labeller hit in GH #108; the envelope-stripping fallback for the free-text subscription backend is now shared as `src/library/llm/envelope.py`. Earlier the same day — fix round 3: R3's mutual-nearest test is now **directional** — a payment follows the thing it pays, so every candidate receipt dated on or after its invoice outranks every one dated before it, and distance decides only within those groups. §4.1 is rewritten around that and now names the four CTEs (`sym` keyed `(due, made)`, `best_due`, `best_made`, `mutual`); the round-2 claims that "the cross-cycle edge is never drawn" and that "nothing that previously merged stops merging" were both **untrue** and are gone — the unsigned ranking they described tied on a 1st/16th cadence (twelve cycles collapsed to nine payments) and picked the wrong pair across a short February, and two shapes do stop merging under the new rule. `sym` now also excludes VETO'd pairs, so a document whose reference conflicts can no longer hold a neighbour's nearest slot. §5 gains a fourth known limit — a systematically reversed cadence pairs off by one cycle, measured as four payments from three, and the trade against the alternative ranking is stated; §4.2 now names the test that pins the 60-day bound on both sides; §7's identical-timestamp tie-break is now labelled defensive, because no API call path can produce a tie. Earlier the same day — fix round 2: §4's rule table and §4.1 now document R3's **mutual-nearest** requirement, which closes a real defect — a recurring same-amount charge documented as invoice-then-receipt chained across billing cycles, collapsing three cycles into one payment of six documents; §4.2's dateless-document bullet now names the `sym` CTE that carries R3's 60-day test, since the `pairs` CTE's `gap` column no longer feeds any rule; §7 now describes override resolution as **latest-wins in both directions** (a tie falls to `SPLIT`, and re-recording a correction refreshes its timestamp) — previously "record the opposite kind" held only for split-then-merge, because a `SPLIT` recorded after a `MERGE` did nothing at all; new §5.1 discloses that the design spec's promised `amount_kind` validation and review queue were never built, so an undecided kind is safe but invisible and uncorrectable by hand; §8 notes the payment panel is not mounted on a soft-deleted document. Earlier the same day — fix round 1: §4's rule table now lists the evaluation order the `payment_edges` `CASE` expression actually uses — VETO, R2, R1, R3, not R1-before-R2 — and states that every rule also requires the same `amount_total`/currency baseline from the `pairs` CTE, not just R1/R3; §4.1 now says explicitly that R3 needs *both* complementarity and the 60-day bound, neither alone being sufficient; §5 now lists a third known-limit shape — a complementary pair with no shared reference more than 60 days apart — and no longer describes what a spending total would do with an unmerged pair, since no spending-total query exists in this codebase yet. Earlier the same day: initial version — `amount_kind`, `reference`, the `payment_edges`/`payments` SQL views, `payment_overrides`, the `/api/payments/*` REST surface, and `library backfill-amounts`. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §8.1–8.3, plan: [superpowers/plans/2026-08-28-charts-money-facts.md](superpowers/plans/2026-08-28-charts-money-facts.md)).
+**Last verified:** 2026-08-29 — method: re-read `AmountKind`/`AMOUNT_SIGN`/`SUMMABLE_AMOUNT_KINDS` in `src/library/models.py` and `migrations/versions/0034_refund_amount_kind.py` in full (the `_AMOUNT_KINDS` tuple, the `ck_documents_amount_kind` CHECK, and `_SIGN_GUARD`'s placement inside the `pairs` CTE join above the WHERE), and diffed §2 and §4 against both clause by clause; read every test in `tests/test_money_schema.py` to state exactly which copies of the vocabulary are compared and which are not (the two classifier prompts are not); read `_refuse_mixed_sign` in `src/library/api/payments.py` and confirmed the OVERRIDE arm of `payment_edges` in 0034 does not pass through `pairs`, which is what makes §5's mixed-sign limit real rather than theoretical; confirmed `SUMMABLE_AMOUNT_KINDS` is now consumed by `src/library/charts/query.py` and `src/library/charts/footer.py` (`grep -rn SUMMABLE_AMOUNT_KINDS src/`), which is what makes the old "no spending-total query yet" paragraph false. Both docs gates run green in this pass. No code was changed in this pass; the behaviour described was shipped by the charts-engine branch and is covered by executed assertions in `tests/test_money_schema.py`, `tests/test_payment_identity.py` and `tests/test_api_payments.py`. Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: for §6.1, read `classify_amount` and `_parse` in `src/library/money/backfill.py` and `strip_json_envelope` in `src/library/llm/envelope.py` after the change, and confirmed the `messages.create` call is gone (`grep -c 'messages.create' src/library/money/backfill.py` → 0). The failing-run quote is the verbatim stderr of `library backfill-amounts --limit 5` executed against the production archive on the deployed 0033 image, not a reconstruction. All four new cases in `tests/test_money_backfill.py` were observed FAILING against the shipped code before the fix — including the call-shape test, which failed with "the API backend must use messages.parse, not messages.create" rather than an import error — and pass after it. Earlier the same day — method: re-read the `payment_edges` view in `migrations/versions/0033_money_facts.py` line-by-line after the directional rewrite (the `(due, made)`-keyed `sym`, its `CASE`-based `rank` with the 1000 offset, its VETO exclusion, `best_due`/`best_made`, and the rank-equality join in `mutual`) and diffed §4's R3 row, §4.1, §4.2 and §5 against it clause by clause; re-read `add_override` in `src/library/money/payments.py` and both routes in `src/library/api/payments.py` to confirm §7's tie-break really is unreachable (each route writes one override row then commits, and `created_at` defaults to the transaction timestamp) before calling it defensive. Every claim in §4.1 and §5's fourth bullet is covered by an executed assertion in `tests/test_payment_identity.py`: ten new cases (tied 1st/16th cadence over twelve months, Jan–Apr across a short February, the VETO'd neighbour, a reference-less prepayment, backward-only-when-no-forward, one invoice against two receipts, an unpaid invoice beside a later cycle, an equidistant receipt, the day-60/day-61 boundary, and the reversed-cadence limit), seven of which were observed FAILING against the previous view before the fix and all of which pass after it. Full backend suite run green in this pass (1969 passed, 7 skipped). Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: re-read the rewritten `payment_edges` view in `migrations/versions/0033_money_facts.py` line-by-line (the new `sym`/`best`/`mutual` CTEs, R3's `m.a IS NOT NULL` arm, and the `created_at`-comparing `NOT EXISTS` on the `MERGE` union arm) and `add_override`'s `on_conflict_do_update` in `src/library/money/payments.py`, and diffed §4/§4.2/§7 against both; re-read `src/library/api/payments.py` for §8's status codes. Every rule and override claim here is covered by an executed assertion in `tests/test_payment_identity.py` and `tests/test_api_payments.py`, both run green in this pass, including three new cases: the monthly-subscription chain (observed failing before the fix as one group of six), merge-then-split (observed failing before the fix as an unchanged merged pair), and merge/split/merge. §5.1's claims were checked by grep rather than assumed: `amount_kind` appears nowhere in `src/library/schemas.py` or `src/library/api/documents.py` (no PATCH path), nowhere in `src/library/extraction/validation.py` (no validation rule, so no review finding), and the quoted spec sentence was read at `docs/superpowers/specs/2026-08-28-charts-redesign-design.md` §8.3. Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: re-read the `payment_edges` view's `CASE` expression in `migrations/versions/0033_money_facts.py` line-by-line to confirm the evaluation order (VETO, then `ra=rb` → R2, then `same_day` → R1, then the `gap<=60 AND` complementary-kind test → R3) and that the `pairs` CTE's join (`a.amount_total = b.amount_total AND a.currency IS NOT DISTINCT FROM b.currency AND a.sender_id = b.sender_id`) is the shared precondition every rule sits on top of; cross-checked the same order against `src/library/money/payments.py`'s module docstring, which states it identically. Confirmed `SUMMABLE_AMOUNT_KINDS` (`src/library/models.py`) is unreferenced anywhere under `src/` (`grep -rn SUMMABLE_AMOUNT_KINDS src/` matches only its own definition), i.e. no spending-total query exists yet, before rewriting §5 to stop asserting what such a total would do. Confirmed no `Vendor`-style invented sender name appears anywhere in this document (only the generic word "sender"). Earlier the same day — method: read `src/library/models.py` (`AmountKind`, `SUMMABLE_AMOUNT_KINDS`, the `Document.amount_kind`/`reference` columns, `PaymentOverride`) and `migrations/versions/0033_money_facts.py` (the `payment_edges`/`payments` views) in full; read `src/library/money/payments.py` and `src/library/money/backfill.py` in full, including `AMOUNT_SYSTEM_PROMPT` and the exact `classified`/`empty`/`skipped` accounting in `run_amount_backfill`; read `src/library/api/payments.py` for the four routes' status codes; read `src/library/extraction/schema.py` for `normalize_amount_kind` and `MAX_REFERENCE_CHARS`. Every rule claim below is covered by an executed assertion in `tests/test_payment_identity.py` (VETO, R1–R3, the dateless/currency-less pairing cases, the un-backfilled-`amount_kind` non-merge, the soft-delete cases, both override directions) and `tests/test_money_backfill.py`/`tests/test_api_payments.py`; not re-run as part of writing this document (a full suite run is recorded in the journal entry for this work).
+**Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py, migrations/versions/0034_refund_amount_kind.py, src/library/llm/envelope.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
 > reference number below is invented.
@@ -25,21 +25,60 @@ amount. Summed naively, one payment counts twice. **Payment identity**
 
 ## 2. `amount_kind`
 
-Seven values, declared in `AmountKind` (`src/library/models.py`):
+Eight values, declared in `AmountKind` (`src/library/models.py`):
 
-| value | meaning | summed? |
+| value | meaning | sign |
 | --- | --- | --- |
-| `payment_due` | an invoice or bill the household owes | yes |
-| `payment_made` | a receipt or confirmation that money was paid | yes |
-| `assessment` | a tax or levy demand | yes |
-| `coverage_limit` | an insurance sum insured or maximum payout — not money paid | no |
-| `balance` | an account or statement position | no |
-| `estimate` | a quote or indicative price, not yet owed | no |
-| `none` | the amount is incidental, or zero because nothing is due | no |
+| `payment_due` | an invoice or bill the household owes | **+1** |
+| `payment_made` | a receipt or confirmation that money was paid | **+1** |
+| `assessment` | a tax or levy demand | **+1** |
+| `refund` | money returned, or an amount owed cancelled — a credit note, a refund receipt, a reversal | **−1** |
+| `coverage_limit` | an insurance sum insured or maximum payout — not money paid | — |
+| `balance` | an account or statement position | — |
+| `estimate` | a quote or indicative price, not yet owed | — |
+| `none` | the amount is incidental, or zero because nothing is due | — |
 
-Only `payment_due`, `payment_made` and `assessment` are ever summed into a
-spending total — `SUMMABLE_AMOUNT_KINDS` in `src/library/models.py` is the
-single source of truth for which three.
+**`amount_total` is always a magnitude.** Whether a document *adds to* or
+*subtracts from* a spending total is a property of what its number means, so the
+sign is carried by `amount_kind` and nowhere else. A refund recorded as a
+`payment_made` with a negative `amount_total` was rejected for two reasons that
+are both about silence: nothing guards that column's sign (there is no `CHECK`
+on it, and `normalize_amount_string` admits a leading `-`), so a sign error
+would be invisible; and every payment rule joins on `amount_total` *equality*,
+which a negated amount would quietly stop satisfying, so an invoice and its own
+receipt would stop merging with no error anywhere.
+
+The declaration is therefore a signed map, and the older frozenset derives from
+it rather than restating it:
+
+```python
+AMOUNT_SIGN: Mapping[AmountKind, int] = MappingProxyType({
+    AmountKind.PAYMENT_DUE: 1,
+    AmountKind.PAYMENT_MADE: 1,
+    AmountKind.ASSESSMENT: 1,
+    AmountKind.REFUND: -1,
+})
+SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(AMOUNT_SIGN)
+```
+
+"Summable" and "signed" are the same predicate: a kind that contributes has a
+sign, a kind that does not is absent from the map, and the two lists cannot
+drift apart because there is only one. A spending total is
+`sum(AMOUNT_SIGN[kind] * amount)` over the rows a rule resolved — see
+[charts.md](charts.md).
+
+Since migration `0034` the column also carries a `CHECK` listing these eight
+values. It had none before: `sa.Enum(..., native_enum=False)` under SQLAlchemy 2
+defaults `create_constraint=False`, so `0033` produced a bare `varchar(16)` that
+accepted `'not_a_real_kind'`. `tests/test_money_schema.py` compares three copies
+of the vocabulary against each other — `models.AmountKind`,
+`extraction/schema.AMOUNT_KINDS` and `0034`'s own `_AMOUNT_KINDS` — and, on the
+sign, compares `AMOUNT_SIGN` against the kind literal the migration's sign guard
+(§4) hardcodes. Note where that stops: the two classifier prompts
+(`extraction/schema.py`'s field description and `money/backfill.py`'s
+`AMOUNT_SYSTEM_PROMPT`) also enumerate the values in prose and **no test
+compares them**, so a value added without touching both prompts is simply never
+proposed by the model.
 
 `amount_kind` is **nullable**, and the NULL case is deliberate: it means "not
 yet decided", not "carries no money". `none` is the value for the latter —
@@ -72,7 +111,9 @@ database as a write failure.
 
 Two documents describe one payment when one of three automatic rules fires
 and the veto does not. All of this lives in the `payment_edges` SQL view
-(`migrations/versions/0033_money_facts.py`), not in Python, so any future
+(introduced in `migrations/versions/0033_money_facts.py` and **recreated in
+full, with the sign guard, by `0034_refund_amount_kind.py` — 0034 is the live
+definition**), not in Python, so any future
 consumer — a chart query, a report — can join payment identity without
 reimplementing it. `src/library/money/payments.py` is the read API over the
 view plus the one write path (an override row).
@@ -82,13 +123,37 @@ the same sender, the same `amount_total` and the same currency — that
 precondition is enforced once, in the view's `pairs` CTE join, rather than
 repeated inside each rule's own condition. What differs between the three
 rules is the *additional* evidence each one demands on top of that shared
-baseline. The view's `CASE` expression evaluates them in a fixed order —
+baseline.
+
+Above all of that sits one further **precondition**: a pair is only ever
+considered when both documents sit on the **same side of zero**. It is written
+into the same `pairs` CTE join, above every rule rather than beside them:
+
+```sql
+AND (a.amount_kind IS DISTINCT FROM 'refund') = (b.amount_kind IS DISTINCT FROM 'refund')
+```
+
+It has to sit above R2 specifically, because R2 is otherwise the *strongest*
+evidence in the table: a credit note quotes the `reference` of the invoice it
+reverses, so R2 would merge them at any date gap. Verified against Postgres —
+without the guard, a credit note and its invoice 90 days apart do merge.
+Merging a `+X` with a `−X` erases both from every total; leaving them as two
+payments nets them to zero, which is the right answer. A NULL `amount_kind`
+counts as not-a-refund, so a NULL never merges with a refund — the cautious
+direction, and a NULL contributes nothing to a total anyway.
+
+The API refuses a manual `MERGE` across opposite signs with a **400**
+(`_refuse_mixed_sign`, `src/library/api/payments.py`), so the invariant the
+chart engine relies on — **every payment group has one well-defined sign** —
+holds on the write path too. §5 records the one door that is still open.
+
+The view's `CASE` expression then evaluates the rules in a fixed order —
 **VETO, then R2, then R1, then R3** — because more than one could otherwise
 fire on the same pair, and this order is what decides which one wins
-(`src/library/money/payments.py`'s module docstring documents the same
-order):
+(`src/library/money/payments.py`'s module docstring documents the same order,
+with `SIGN` above them all):
 
-| rule | additional condition (on top of same sender, amount, currency) | date reach |
+| rule | additional condition (on top of same sender, amount, currency, and the same sign) | date reach |
 | --- | --- | --- |
 | VETO | both documents carry a `reference`, and the two differ | beats every rule below, even a same-day amount match |
 | R2 | same non-null `reference` | **any** gap |
@@ -225,8 +290,10 @@ is its own id, not the deleted document's.
 
 ## 5. Known limits
 
-Four shapes are not handled correctly by the rules here. The first three are
-simply not merged; the fourth is merged into the wrong groups:
+Six shapes are not handled correctly here. The first three are simply not
+merged; the fourth is merged into the wrong groups; the fifth nets a refund off
+twice; the sixth is the one way a payment group can still end up holding two
+signs:
 
 - **A partial payment.** One invoice for 300.00 settled by two receipts of
   150.00 each does not match on `amount_total`, so R1/R3 never fire between
@@ -251,6 +318,32 @@ simply not merged; the fourth is merged into the wrong groups:
   represents. `test_a_systematically_reversed_cadence_pairs_off_by_one_cycle`
   (`tests/test_payment_identity.py`) asserts that outcome so the limit is
   pinned rather than merely described.
+- **A credit note and a separate refund receipt, netted off twice.** There is
+  one `refund` value, not two, so the mirror of the invoice/receipt pair — a
+  credit note and a later refund receipt for the same amount — is two `refund`
+  documents rather than a complementary pair. R3 cannot pair them, because
+  complementarity is defined only over `payment_due` ↔ `payment_made`. R1
+  pairs them when they fall on the same day and R2 when they share a
+  `reference`; on different dates with no shared reference they stay separate
+  and the refund is subtracted from a total twice. Splitting `refund` in two is
+  what would close it, and the day the archive contains such a pair is the day
+  to do it — a vocabulary addition, not a redesign. Recorded in the design spec
+  §8.3 as well.
+- **The mixed-sign override hole.** The sign precondition (§4) lives in the
+  `pairs` CTE, and the `OVERRIDE` arm of `payment_edges` reads
+  `payment_overrides` directly — it never passes through `pairs`, so the guard
+  does not constrain it. `_refuse_mixed_sign` closes the *write* path, and it
+  is the only path that exists today, but it checks the two documents as they
+  are **at the moment of the merge**: a person can merge two documents whose
+  `amount_kind` is still NULL, and a later `backfill-amounts` run can then
+  classify one of them as `refund` — producing a payment group holding both a
+  refund and a non-refund, which the guard never sees. Such a group has no
+  well-defined sign, and only the canonical document's sign reaches a total.
+  This is a **stated limit, not an oversight**: applying the guard to the
+  `OVERRIDE` arm would silently undo a human's explicit correction, which is
+  worse than reporting a group that needs looking at. There is no automatic
+  detection for it yet; the check is a query over `payments` joined to
+  `documents.amount_kind`, run after a backfill.
 
 None of the first three is merged, and none is vetoed — the documents simply
 remain separate payments as far as this layer is concerned, with no
@@ -261,18 +354,21 @@ The fourth was a deliberate trade, not an oversight. The obvious alternative
 tried and measured: it fixes the reversed cadence and re-breaks the short
 February, which is the more common shape by far, because the archive's normal
 order is invoice-then-payment. Forward-preference is the correct side of that
-trade, and this is the price of it. This repository has no spending-total query
-yet (`SUMMABLE_AMOUNT_KINDS` in `src/library/models.py` declares which
-`amount_kind` values *would* be summed, but nothing in `src/` sums them), so
-what a future total would do with these shapes is not yet settled behaviour
-— it is a gap to design for, not a claim to make here. Naively, the invoice
-(`payment_due`, summable) and the settling receipt(s) (`payment_made`, also
-summable) would both enter such a total independently, which would more
-likely **double-count** the underlying spend than omit it. There is no
-proposed-merge review surface for any of these shapes yet; today the only
-correction path is the manual `merge` override (§7).
+trade, and this is the price of it.
 
-### 5.1 An undecided `amount_kind` is safe, but invisible
+There **is** a spending total now — `library.charts.query` sums
+`AMOUNT_SIGN[kind] * amount` over the canonical row of each payment
+([charts.md](charts.md)) — so what it does with these shapes is settled
+behaviour rather than a hypothetical. An unmerged invoice and its settling
+receipt are two payments, both summable, and both enter the total
+independently: the underlying spend is **double-counted**, not omitted. The
+chart footer does not report this, and cannot: two unmerged documents are two
+ordinary counted payments, indistinguishable from two genuine ones. That is why
+this section exists. There is still no proposed-merge review surface for any of
+these shapes; today the only correction path is the manual `merge` override
+(§7), reached from the payment panel on a document's detail page (§8).
+
+### 5.1 An undecided `amount_kind` is safe, and only partly visible
 
 The design spec (`superpowers/specs/2026-08-28-charts-redesign-design.md`
 §8.3) says `amount_kind` "gets its own extraction validation and enters the
@@ -282,18 +378,25 @@ of it is easy to mistake for the whole story:
 
 - **Safe.** An unsure answer becomes NULL, and NULL is never summed (§2). The
   failure mode is under-reporting, never a wrong number.
-- **Invisible.** Nothing surfaces *how many* documents still lack a decided
-  kind. `backfill-amounts` reports an `empty` count for the documents one run
-  touched (§6), but there is no review queue, no needs-review flag, and no
-  count anywhere in the API or the UI for the standing backlog.
+- **Partly visible now.** Every chart's footer carries an `unclassified` group
+  — the money and the document count with an amount and an undecided kind, in
+  that chart's date and currency window ([charts.md](charts.md) §7). That is a
+  real reporting surface and it is where the backlog is most likely to be
+  noticed. It is not a *complete* one: it is scoped to a chart's window and to
+  what its rule touched, so a document outside every chart's range is still
+  counted nowhere. `backfill-amounts` reports an `empty` count for the
+  documents one run touched (§6), but there is still no review queue, no
+  needs-review flag, and no archive-wide count in the API or the UI.
 - **Uncorrectable by hand.** There is no way for a person to set or fix a
   document's `amount_kind` — not in `PATCH /api/documents/{id}`, not on the
   detail page. A wrong kind can only be changed by another backfill run, and
   a backfill deliberately skips any document that already has one.
 
-So a document the model was unsure about is quietly absent from every future
-total with nothing pointing at it. Closing this needs a review surface and an
-edit path; both are a later layer, and neither is claimed here.
+So a document the model was unsure about is absent from every total, and now
+says so in the footer of any chart whose window contains it — but nothing lists
+the backlog as a whole and nothing lets a person fix one by hand. Closing the
+rest needs an archive-wide review surface and an edit path; both are a later
+layer, and neither is claimed here.
 
 ## 6. `library backfill-amounts`
 

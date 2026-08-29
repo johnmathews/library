@@ -34,6 +34,7 @@ Answer with one of exactly these values:
   payment_due     an invoice or bill the reader owes
   payment_made    a receipt or confirmation that money was paid
   assessment      a tax or levy demand
+  refund          money returned, or an amount owed cancelled
   coverage_limit  an insurance sum insured or maximum payout — NOT money paid
   balance         an account or statement position
   estimate        a quote or indicative price, not yet owed
