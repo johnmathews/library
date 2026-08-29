@@ -27,6 +27,7 @@ from sqlalchemy import (
     CHAR,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Computed,
     Date,
@@ -147,6 +148,29 @@ class MemberOrigin(enum.StrEnum):
     MANUAL = "manual"
     ACCEPTED_SUGGESTION = "accepted_suggestion"
     AUTO = "auto"
+
+
+class AmountKind(enum.StrEnum):
+    """What a document's ``amount_total`` actually is.
+
+    Only ``PAYMENT_DUE``, ``PAYMENT_MADE`` and ``ASSESSMENT`` are ever summed
+    into a spending total. The rest exist so that a coverage ceiling, an opening
+    balance, a quote or a nil-return confirmation can be recorded faithfully
+    without contaminating one.
+    """
+
+    PAYMENT_DUE = "payment_due"
+    PAYMENT_MADE = "payment_made"
+    ASSESSMENT = "assessment"
+    COVERAGE_LIMIT = "coverage_limit"
+    BALANCE = "balance"
+    ESTIMATE = "estimate"
+    NONE = "none"
+
+
+SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(
+    {AmountKind.PAYMENT_DUE, AmountKind.PAYMENT_MADE, AmountKind.ASSESSMENT}
+)
 
 
 class HeldEmailStatus(enum.StrEnum):
@@ -524,6 +548,21 @@ class Document(Base):
         server_default=DocumentLanguage.UNKNOWN.value,
     )
     amount_total: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # What amount_total means. NULL = not yet decided; consumers treat NULL as
+    # not summable, so an un-backfilled archive under-reports rather than over-.
+    amount_kind: Mapped[AmountKind | None] = mapped_column(
+        Enum(
+            AmountKind,
+            name="amount_kind",
+            native_enum=False,
+            length=16,
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        nullable=True,
+    )
+    # The document's own invoice / order / booking number. The only evidence
+    # that pairs an invoice with its receipt across an arbitrary date gap.
+    reference: Mapped[str | None] = mapped_column(String(128), nullable=True)
     currency: Mapped[str | None] = mapped_column(CHAR(3))
     due_date: Mapped[date | None] = mapped_column(Date)
     expiry_date: Mapped[date | None] = mapped_column(Date)
@@ -1286,3 +1325,25 @@ class InstanceSetting(Base):
     updated_by_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+
+
+class PaymentOverride(Base):
+    """A human correction to the derived payment identity.
+
+    ``MERGE`` joins two documents the rules kept apart; ``SPLIT`` separates two
+    the rules joined. ``doc_a < doc_b`` is enforced by a check constraint so a
+    pair has one canonical representation.
+    """
+
+    __tablename__ = "payment_overrides"
+    __table_args__ = (
+        CheckConstraint("kind IN ('MERGE','SPLIT')", name="payment_overrides_kind"),
+        CheckConstraint("doc_a < doc_b", name="payment_overrides_ordered"),
+        UniqueConstraint("kind", "doc_a", "doc_b", name="payment_overrides_unique"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(8))
+    doc_a: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"))
+    doc_b: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
