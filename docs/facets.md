@@ -38,7 +38,7 @@ never touches a value an owner has since renamed.
 
 | facet | values |
 | --- | --- |
-| `category` | 15 values: accountancy, tax, vehicle-service, ev-charging, insurance, healthcare, software, energy, water, housing, parking, fines, pension, banking, travel |
+| `category` | 19 values: accountancy, tax, vehicle-service, ev-charging, insurance, healthcare, software, energy, water, housing, parking, fines, pension, banking, travel, vehicle-purchase, dining, employment, equipment-certification |
 | `scope` | business, personal |
 | `cost_type` | subscription, usage, one-off |
 | `vehicle` | *(ships with no values)* |

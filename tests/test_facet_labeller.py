@@ -138,6 +138,45 @@ def test_malformed_json_yields_no_proposals_rather_than_raising() -> None:
     assert parse_label_response("not json at all", VOCAB) == []
 
 
+# A `vehicle` value's key is always plain ASCII (the `Key` contract enforced at
+# every write path is `[a-z0-9_-]+`), but its display label and aliases are
+# free text and can be genuinely non-ASCII, mixed case, or both — e.g. a real
+# "Škoda" vehicle value. The model echoes back whatever casing it likes
+# ("Skoda", "SKODA", "škoda"...), so matching must casefold rather than compare
+# verbatim.
+VEHICLE_VOCAB: tuple[VocabularyFacet, ...] = (
+    VocabularyFacet(
+        id=1,
+        key="vehicle",
+        label="Vehicle",
+        ordinal=0,
+        values=(
+            VocabularyValue(id=30, key="skoda", label="Škoda", parent_id=None, aliases=("Škoda",)),
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize("raw_value", ["Škoda", "ŠKODA", "škoda"])
+def test_an_alias_resolves_regardless_of_case_or_accent_folding(raw_value: str) -> None:
+    """`Škoda`, `ŠKODA` and `škoda` must all resolve via the alias stored as
+    `Škoda`, without needing a hand-enumerated alias per casing variant."""
+    payload = json.dumps(
+        {"labels": [{"facet": "vehicle", "value": raw_value, "confidence": 0.9, "reason": "x"}]}
+    )
+    proposals = parse_label_response(payload, VEHICLE_VOCAB)
+    assert proposals[0].value_key == "skoda"
+
+
+def test_a_value_key_differing_only_in_case_resolves() -> None:
+    """The model naming the value key itself, but capitalised, must still match."""
+    payload = json.dumps(
+        {"labels": [{"facet": "vehicle", "value": "Skoda", "confidence": 0.9, "reason": "x"}]}
+    )
+    proposals = parse_label_response(payload, VEHICLE_VOCAB)
+    assert proposals[0].value_key == "skoda"
+
+
 def test_confidence_is_clamped_into_zero_one() -> None:
     payload = json.dumps(
         {"labels": [{"facet": "scope", "value": "business", "confidence": 4.2, "reason": "x"}]}
