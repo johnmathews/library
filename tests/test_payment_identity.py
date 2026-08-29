@@ -124,7 +124,10 @@ def test_a_monthly_subscription_does_not_chain_across_billing_cycles(
 
     R3 pairs only MUTUAL NEAREST complementary partners, which is what keeps
     each cycle to itself: the 3rd's nearest invoice is its own cycle's 1st
-    (2 days), never the next cycle's (29 days).
+    (2 days), never the next cycle's (29 days). The two neighbours are not
+    equally close here, which is why this fixture alone does not settle the
+    question — see the tied-gap and short-February cases below, which it
+    could not distinguish and an unsigned nearest-gap ranking got wrong.
     """
     jan_due, jan_made, feb_due, feb_made, mar_due, mar_made = _pair(
         api_database_url,
@@ -140,6 +143,250 @@ def test_a_monthly_subscription_does_not_chain_across_billing_cycles(
     assert _group(api_database_url, jan_due) == sorted([jan_due, jan_made])
     assert _group(api_database_url, feb_due) == sorted([feb_due, feb_made])
     assert _group(api_database_url, mar_due) == sorted([mar_due, mar_made])
+
+
+def test_a_tied_gap_cadence_does_not_chain_across_cycles(api_database_url: str) -> None:
+    """A charge invoiced on the 1st and paid on the 16th, twelve months running.
+
+    This is the shape a nearest-partner rule ranked by *unsigned* gap cannot
+    separate. In a 30-day month the receipt sits 15 days after its own invoice
+    and exactly 15 days before the next month's, so both candidates tie for
+    "nearest" and a mutual-nearest test admits the cross-cycle edge as readily
+    as the real one. The recursive closure then welds neighbouring cycles
+    together: twelve cycles came back as nine payments, four of them groups of
+    four documents.
+
+    R3 ranks by *direction* instead — a payment follows the thing it pays, so
+    every forward candidate outranks every backward one — and the receipt on
+    the 16th can only ever choose the invoice behind it.
+    """
+    ids = _pair(
+        api_database_url,
+        [
+            (f"2026-{month:02d}-{day:02d}", "9.99", kind, None)
+            for month in range(1, 13)
+            for day, kind in ((1, AmountKind.PAYMENT_DUE), (16, AmountKind.PAYMENT_MADE))
+        ],
+    )
+    for cycle in range(12):
+        due, made = ids[cycle * 2], ids[cycle * 2 + 1]
+        assert _group(api_database_url, due) == sorted([due, made])
+
+
+def test_a_short_february_pairs_each_invoice_with_its_own_receipt(
+    api_database_url: str,
+) -> None:
+    """February is 28 days long, and that alone used to move a pairing.
+
+    On the same 1st/16th cadence, February's receipt is 15 days after its own
+    invoice but only 13 days before *March's* invoice — so a rule that picks
+    the smallest unsigned gap pairs February's receipt with March's invoice
+    and leaves February's invoice unpaid. Forward-preference removes the
+    question: a receipt never looks at an invoice dated after it while one
+    dated before it is in reach.
+    """
+    ids = _pair(
+        api_database_url,
+        [
+            (f"2026-{month:02d}-{day:02d}", "41.50", kind, None)
+            for month in range(1, 5)
+            for day, kind in ((1, AmountKind.PAYMENT_DUE), (16, AmountKind.PAYMENT_MADE))
+        ],
+    )
+    for cycle in range(4):
+        due, made = ids[cycle * 2], ids[cycle * 2 + 1]
+        assert _group(api_database_url, due) == sorted([due, made])
+
+
+def test_a_vetoed_neighbour_does_not_steal_the_nearest_slot(api_database_url: str) -> None:
+    """A conflicting reference must remove a candidate, not just its edge.
+
+    The middle document here is one day from the invoice and carries a
+    reference that contradicts it, so the VETO means the two can never merge.
+    But the nearest-partner ranking is computed separately from the rule
+    `CASE`, so unless it applies the veto too, the vetoed receipt still wins
+    the invoice's "nearest" slot and suppresses the merge with the receipt
+    four days out, which nothing forbids. The invoice ends up unpaired for a
+    reason that has nothing to do with it.
+    """
+    invoice, conflicting, genuine = _pair(
+        api_database_url,
+        [
+            ("2026-01-01", "62.00", AmountKind.PAYMENT_DUE, "INV-1"),
+            ("2026-01-02", "62.00", AmountKind.PAYMENT_MADE, "INV-9"),
+            ("2026-01-05", "62.00", AmountKind.PAYMENT_MADE, None),
+        ],
+    )
+    assert _group(api_database_url, invoice) == sorted([invoice, genuine])
+    assert _group(api_database_url, conflicting) == [conflicting]
+
+
+def test_a_prepayment_with_no_reference_still_merges(api_database_url: str) -> None:
+    """Money paid before the invoice arrives is still one payment.
+
+    Forward-preference is a preference, not a filter: when a receipt has no
+    invoice behind it, the one in front of it is still its nearest partner and
+    still merges. Only a receipt with a genuine choice prefers the invoice it
+    follows.
+    """
+    made, due = _pair(
+        api_database_url,
+        [
+            ("2026-01-01", "128.00", AmountKind.PAYMENT_MADE, None),
+            ("2026-01-05", "128.00", AmountKind.PAYMENT_DUE, None),
+        ],
+    )
+    assert _group(api_database_url, made) == sorted([made, due])
+
+
+def test_a_backward_match_is_only_used_when_no_forward_one_exists(
+    api_database_url: str,
+) -> None:
+    """The invoice has a receipt on each side and takes the later one.
+
+    The earlier receipt is nine days back, the later one ten days on, so an
+    unsigned ranking would take the prepayment. Direction is worth more than
+    a day: the invoice pairs forward, and the stray receipt — which now has no
+    invoice behind it and none in front either, its only candidate having been
+    claimed — stands alone.
+    """
+    early, due, late = _pair(
+        api_database_url,
+        [
+            ("2026-01-01", "17.00", AmountKind.PAYMENT_MADE, None),
+            ("2026-01-10", "17.00", AmountKind.PAYMENT_DUE, None),
+            ("2026-01-20", "17.00", AmountKind.PAYMENT_MADE, None),
+        ],
+    )
+    assert _group(api_database_url, due) == sorted([due, late])
+    assert _group(api_database_url, early) == [early]
+
+
+def test_one_invoice_is_not_claimed_by_two_receipts(api_database_url: str) -> None:
+    """Mutual-nearest keeps a single invoice to a single receipt.
+
+    Both receipts are complementary to the invoice and both are inside the
+    window, but only the one the invoice also chooses gets the edge. Without
+    mutuality the closure would join all three into one payment of two
+    unrelated receipts.
+    """
+    due, before, after = _pair(
+        api_database_url,
+        [
+            ("2026-01-03", "24.00", AmountKind.PAYMENT_DUE, None),
+            ("2026-01-01", "24.00", AmountKind.PAYMENT_MADE, None),
+            ("2026-01-05", "24.00", AmountKind.PAYMENT_MADE, None),
+        ],
+    )
+    assert _group(api_database_url, due) == sorted([due, after])
+    assert _group(api_database_url, before) == [before]
+
+
+def test_an_unpaid_invoice_does_not_steal_a_later_cycles_receipt(
+    api_database_url: str,
+) -> None:
+    """An invoice that was never paid must not absorb the next one's receipt.
+
+    January's invoice is the only candidate 33 days behind February's receipt,
+    and February's own invoice is two days behind it. Forward-preference alone
+    does not decide this — both are forward — so the ranking has to be by
+    distance *among* forward candidates. The unpaid invoice stays unpaid,
+    which is the honest answer, and February's late receipt keeps to itself.
+    """
+    january, february, paid, stray = _pair(
+        api_database_url,
+        [
+            ("2026-01-01", "88.00", AmountKind.PAYMENT_DUE, None),
+            ("2026-02-01", "88.00", AmountKind.PAYMENT_DUE, None),
+            ("2026-02-03", "88.00", AmountKind.PAYMENT_MADE, None),
+            ("2026-02-28", "88.00", AmountKind.PAYMENT_MADE, None),
+        ],
+    )
+    assert _group(api_database_url, february) == sorted([february, paid])
+    assert _group(api_database_url, january) == [january]
+    assert _group(api_database_url, stray) == [stray]
+
+
+def test_a_receipt_equidistant_between_two_invoices_pairs_with_the_earlier(
+    api_database_url: str,
+) -> None:
+    """Ten days from each invoice, and the tie is broken by direction.
+
+    The receipt settles the invoice it follows, not the one that has not been
+    issued yet, and the later invoice is left unpaid rather than being handed
+    a receipt that predates it.
+    """
+    first, made, second = _pair(
+        api_database_url,
+        [
+            ("2026-01-01", "310.00", AmountKind.PAYMENT_DUE, None),
+            ("2026-01-11", "310.00", AmountKind.PAYMENT_MADE, None),
+            ("2026-01-21", "310.00", AmountKind.PAYMENT_DUE, None),
+        ],
+    )
+    assert _group(api_database_url, first) == sorted([first, made])
+    assert _group(api_database_url, second) == [second]
+
+
+def test_r3_reaches_sixty_days_and_no_further(api_database_url: str) -> None:
+    """R3's bound, at both sides of it. This is the view's only date window,
+    and it lives in the `sym` CTE (`abs(m.document_date - d.document_date)
+    <= 60`), which is what §4.2 of docs/money-facts.md points at."""
+    due_60, made_60 = _pair(
+        api_database_url,
+        [
+            ("2026-01-01", "410.00", AmountKind.PAYMENT_DUE, None),
+            ("2026-03-02", "410.00", AmountKind.PAYMENT_MADE, None),
+        ],
+    )
+    assert _group(api_database_url, due_60) == sorted([due_60, made_60])
+
+    due_61, made_61 = _pair(
+        api_database_url,
+        [
+            ("2026-01-01", "411.00", AmountKind.PAYMENT_DUE, None),
+            ("2026-03-03", "411.00", AmountKind.PAYMENT_MADE, None),
+        ],
+    )
+    assert _group(api_database_url, due_61) == [due_61]
+    assert _group(api_database_url, made_61) == [made_61]
+
+
+def test_a_systematically_reversed_cadence_pairs_off_by_one_cycle(
+    api_database_url: str,
+) -> None:
+    """The one shape forward-preference gets wrong, pinned rather than hidden.
+
+    A charge taken on the 1st and *invoiced* on the 5th reverses the archive's
+    normal order. Every receipt then has an invoice 27 days behind it (the
+    previous cycle's) and its own 4 days ahead, and forward-preference picks
+    the one behind — so the cycles pair off by one, the first receipt and the
+    last invoice are left unpaired, and three cycles come back as four
+    payments.
+
+    The consequence is an overcount of one payment across a run of this
+    cadence, not a collapse: no group is wrong about how much money it holds,
+    and each still holds exactly one invoice and one receipt. Ranking by
+    magnitude with direction only as a tie-break fixes this shape and
+    re-breaks the short-February one above, which is the worse trade because
+    invoice-then-payment is the archive's normal order. See
+    docs/money-facts.md §5.
+    """
+    jan_made, jan_due, feb_made, feb_due, mar_made, mar_due = _pair(
+        api_database_url,
+        [
+            ("2026-01-01", "7.25", AmountKind.PAYMENT_MADE, None),
+            ("2026-01-05", "7.25", AmountKind.PAYMENT_DUE, None),
+            ("2026-02-01", "7.25", AmountKind.PAYMENT_MADE, None),
+            ("2026-02-05", "7.25", AmountKind.PAYMENT_DUE, None),
+            ("2026-03-01", "7.25", AmountKind.PAYMENT_MADE, None),
+            ("2026-03-05", "7.25", AmountKind.PAYMENT_DUE, None),
+        ],
+    )
+    assert _group(api_database_url, jan_made) == [jan_made]
+    assert _group(api_database_url, jan_due) == sorted([jan_due, feb_made])
+    assert _group(api_database_url, feb_due) == sorted([feb_due, mar_made])
+    assert _group(api_database_url, mar_due) == [mar_due]
 
 
 def test_two_real_purchases_four_days_apart_stay_separate(api_database_url: str) -> None:

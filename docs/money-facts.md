@@ -1,7 +1,7 @@
 # Money facts and payment identity
 
-**Status:** active. **Last updated:** 2026-08-29 (fix round 2: §4's rule table and §4.1 now document R3's **mutual-nearest** requirement, which closes a real defect — a recurring same-amount charge documented as invoice-then-receipt chained across billing cycles, collapsing three cycles into one payment of six documents; §4.2's dateless-document bullet now names the `sym` CTE that carries R3's 60-day test, since the `pairs` CTE's `gap` column no longer feeds any rule; §7 now describes override resolution as **latest-wins in both directions** (a tie falls to `SPLIT`, and re-recording a correction refreshes its timestamp) — previously "record the opposite kind" held only for split-then-merge, because a `SPLIT` recorded after a `MERGE` did nothing at all; new §5.1 discloses that the design spec's promised `amount_kind` validation and review queue were never built, so an undecided kind is safe but invisible and uncorrectable by hand; §8 notes the payment panel is not mounted on a soft-deleted document. Earlier the same day — fix round 1: §4's rule table now lists the evaluation order the `payment_edges` `CASE` expression actually uses — VETO, R2, R1, R3, not R1-before-R2 — and states that every rule also requires the same `amount_total`/currency baseline from the `pairs` CTE, not just R1/R3; §4.1 now says explicitly that R3 needs *both* complementarity and the 60-day bound, neither alone being sufficient; §5 now lists a third known-limit shape — a complementary pair with no shared reference more than 60 days apart — and no longer describes what a spending total would do with an unmerged pair, since no spending-total query exists in this codebase yet. Earlier the same day: initial version — `amount_kind`, `reference`, the `payment_edges`/`payments` SQL views, `payment_overrides`, the `/api/payments/*` REST surface, and `library backfill-amounts`. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §8.1–8.3, plan: [superpowers/plans/2026-08-28-charts-money-facts.md](superpowers/plans/2026-08-28-charts-money-facts.md)).
-**Last verified:** 2026-08-29 — method: re-read the rewritten `payment_edges` view in `migrations/versions/0033_money_facts.py` line-by-line (the new `sym`/`best`/`mutual` CTEs, R3's `m.a IS NOT NULL` arm, and the `created_at`-comparing `NOT EXISTS` on the `MERGE` union arm) and `add_override`'s `on_conflict_do_update` in `src/library/money/payments.py`, and diffed §4/§4.2/§7 against both; re-read `src/library/api/payments.py` for §8's status codes. Every rule and override claim here is covered by an executed assertion in `tests/test_payment_identity.py` and `tests/test_api_payments.py`, both run green in this pass, including three new cases: the monthly-subscription chain (observed failing before the fix as one group of six), merge-then-split (observed failing before the fix as an unchanged merged pair), and merge/split/merge. §5.1's claims were checked by grep rather than assumed: `amount_kind` appears nowhere in `src/library/schemas.py` or `src/library/api/documents.py` (no PATCH path), nowhere in `src/library/extraction/validation.py` (no validation rule, so no review finding), and the quoted spec sentence was read at `docs/superpowers/specs/2026-08-28-charts-redesign-design.md` §8.3. Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: re-read the `payment_edges` view's `CASE` expression in `migrations/versions/0033_money_facts.py` line-by-line to confirm the evaluation order (VETO, then `ra=rb` → R2, then `same_day` → R1, then the `gap<=60 AND` complementary-kind test → R3) and that the `pairs` CTE's join (`a.amount_total = b.amount_total AND a.currency IS NOT DISTINCT FROM b.currency AND a.sender_id = b.sender_id`) is the shared precondition every rule sits on top of; cross-checked the same order against `src/library/money/payments.py`'s module docstring, which states it identically. Confirmed `SUMMABLE_AMOUNT_KINDS` (`src/library/models.py`) is unreferenced anywhere under `src/` (`grep -rn SUMMABLE_AMOUNT_KINDS src/` matches only its own definition), i.e. no spending-total query exists yet, before rewriting §5 to stop asserting what such a total would do. Confirmed no `Vendor`-style invented sender name appears anywhere in this document (only the generic word "sender"). Earlier the same day — method: read `src/library/models.py` (`AmountKind`, `SUMMABLE_AMOUNT_KINDS`, the `Document.amount_kind`/`reference` columns, `PaymentOverride`) and `migrations/versions/0033_money_facts.py` (the `payment_edges`/`payments` views) in full; read `src/library/money/payments.py` and `src/library/money/backfill.py` in full, including `AMOUNT_SYSTEM_PROMPT` and the exact `classified`/`empty`/`skipped` accounting in `run_amount_backfill`; read `src/library/api/payments.py` for the four routes' status codes; read `src/library/extraction/schema.py` for `normalize_amount_kind` and `MAX_REFERENCE_CHARS`. Every rule claim below is covered by an executed assertion in `tests/test_payment_identity.py` (VETO, R1–R3, the dateless/currency-less pairing cases, the un-backfilled-`amount_kind` non-merge, the soft-delete cases, both override directions) and `tests/test_money_backfill.py`/`tests/test_api_payments.py`; not re-run as part of writing this document (a full suite run is recorded in the journal entry for this work).
+**Status:** active. **Last updated:** 2026-08-29 (fix round 3: R3's mutual-nearest test is now **directional** — a payment follows the thing it pays, so every candidate receipt dated on or after its invoice outranks every one dated before it, and distance decides only within those groups. §4.1 is rewritten around that and now names the four CTEs (`sym` keyed `(due, made)`, `best_due`, `best_made`, `mutual`); the round-2 claims that "the cross-cycle edge is never drawn" and that "nothing that previously merged stops merging" were both **untrue** and are gone — the unsigned ranking they described tied on a 1st/16th cadence (twelve cycles collapsed to nine payments) and picked the wrong pair across a short February, and two shapes do stop merging under the new rule. `sym` now also excludes VETO'd pairs, so a document whose reference conflicts can no longer hold a neighbour's nearest slot. §5 gains a fourth known limit — a systematically reversed cadence pairs off by one cycle, measured as four payments from three, and the trade against the alternative ranking is stated; §4.2 now names the test that pins the 60-day bound on both sides; §7's identical-timestamp tie-break is now labelled defensive, because no API call path can produce a tie. Earlier the same day — fix round 2: §4's rule table and §4.1 now document R3's **mutual-nearest** requirement, which closes a real defect — a recurring same-amount charge documented as invoice-then-receipt chained across billing cycles, collapsing three cycles into one payment of six documents; §4.2's dateless-document bullet now names the `sym` CTE that carries R3's 60-day test, since the `pairs` CTE's `gap` column no longer feeds any rule; §7 now describes override resolution as **latest-wins in both directions** (a tie falls to `SPLIT`, and re-recording a correction refreshes its timestamp) — previously "record the opposite kind" held only for split-then-merge, because a `SPLIT` recorded after a `MERGE` did nothing at all; new §5.1 discloses that the design spec's promised `amount_kind` validation and review queue were never built, so an undecided kind is safe but invisible and uncorrectable by hand; §8 notes the payment panel is not mounted on a soft-deleted document. Earlier the same day — fix round 1: §4's rule table now lists the evaluation order the `payment_edges` `CASE` expression actually uses — VETO, R2, R1, R3, not R1-before-R2 — and states that every rule also requires the same `amount_total`/currency baseline from the `pairs` CTE, not just R1/R3; §4.1 now says explicitly that R3 needs *both* complementarity and the 60-day bound, neither alone being sufficient; §5 now lists a third known-limit shape — a complementary pair with no shared reference more than 60 days apart — and no longer describes what a spending total would do with an unmerged pair, since no spending-total query exists in this codebase yet. Earlier the same day: initial version — `amount_kind`, `reference`, the `payment_edges`/`payments` SQL views, `payment_overrides`, the `/api/payments/*` REST surface, and `library backfill-amounts`. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §8.1–8.3, plan: [superpowers/plans/2026-08-28-charts-money-facts.md](superpowers/plans/2026-08-28-charts-money-facts.md)).
+**Last verified:** 2026-08-29 — method: re-read the `payment_edges` view in `migrations/versions/0033_money_facts.py` line-by-line after the directional rewrite (the `(due, made)`-keyed `sym`, its `CASE`-based `rank` with the 1000 offset, its VETO exclusion, `best_due`/`best_made`, and the rank-equality join in `mutual`) and diffed §4's R3 row, §4.1, §4.2 and §5 against it clause by clause; re-read `add_override` in `src/library/money/payments.py` and both routes in `src/library/api/payments.py` to confirm §7's tie-break really is unreachable (each route writes one override row then commits, and `created_at` defaults to the transaction timestamp) before calling it defensive. Every claim in §4.1 and §5's fourth bullet is covered by an executed assertion in `tests/test_payment_identity.py`: ten new cases (tied 1st/16th cadence over twelve months, Jan–Apr across a short February, the VETO'd neighbour, a reference-less prepayment, backward-only-when-no-forward, one invoice against two receipts, an unpaid invoice beside a later cycle, an equidistant receipt, the day-60/day-61 boundary, and the reversed-cadence limit), seven of which were observed FAILING against the previous view before the fix and all of which pass after it. Full backend suite run green in this pass (1969 passed, 7 skipped). Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: re-read the rewritten `payment_edges` view in `migrations/versions/0033_money_facts.py` line-by-line (the new `sym`/`best`/`mutual` CTEs, R3's `m.a IS NOT NULL` arm, and the `created_at`-comparing `NOT EXISTS` on the `MERGE` union arm) and `add_override`'s `on_conflict_do_update` in `src/library/money/payments.py`, and diffed §4/§4.2/§7 against both; re-read `src/library/api/payments.py` for §8's status codes. Every rule and override claim here is covered by an executed assertion in `tests/test_payment_identity.py` and `tests/test_api_payments.py`, both run green in this pass, including three new cases: the monthly-subscription chain (observed failing before the fix as one group of six), merge-then-split (observed failing before the fix as an unchanged merged pair), and merge/split/merge. §5.1's claims were checked by grep rather than assumed: `amount_kind` appears nowhere in `src/library/schemas.py` or `src/library/api/documents.py` (no PATCH path), nowhere in `src/library/extraction/validation.py` (no validation rule, so no review finding), and the quoted spec sentence was read at `docs/superpowers/specs/2026-08-28-charts-redesign-design.md` §8.3. Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: re-read the `payment_edges` view's `CASE` expression in `migrations/versions/0033_money_facts.py` line-by-line to confirm the evaluation order (VETO, then `ra=rb` → R2, then `same_day` → R1, then the `gap<=60 AND` complementary-kind test → R3) and that the `pairs` CTE's join (`a.amount_total = b.amount_total AND a.currency IS NOT DISTINCT FROM b.currency AND a.sender_id = b.sender_id`) is the shared precondition every rule sits on top of; cross-checked the same order against `src/library/money/payments.py`'s module docstring, which states it identically. Confirmed `SUMMABLE_AMOUNT_KINDS` (`src/library/models.py`) is unreferenced anywhere under `src/` (`grep -rn SUMMABLE_AMOUNT_KINDS src/` matches only its own definition), i.e. no spending-total query exists yet, before rewriting §5 to stop asserting what such a total would do. Confirmed no `Vendor`-style invented sender name appears anywhere in this document (only the generic word "sender"). Earlier the same day — method: read `src/library/models.py` (`AmountKind`, `SUMMABLE_AMOUNT_KINDS`, the `Document.amount_kind`/`reference` columns, `PaymentOverride`) and `migrations/versions/0033_money_facts.py` (the `payment_edges`/`payments` views) in full; read `src/library/money/payments.py` and `src/library/money/backfill.py` in full, including `AMOUNT_SYSTEM_PROMPT` and the exact `classified`/`empty`/`skipped` accounting in `run_amount_backfill`; read `src/library/api/payments.py` for the four routes' status codes; read `src/library/extraction/schema.py` for `normalize_amount_kind` and `MAX_REFERENCE_CHARS`. Every rule claim below is covered by an executed assertion in `tests/test_payment_identity.py` (VETO, R1–R3, the dateless/currency-less pairing cases, the un-backfilled-`amount_kind` non-merge, the soft-delete cases, both override directions) and `tests/test_money_backfill.py`/`tests/test_api_payments.py`; not re-run as part of writing this document (a full suite run is recorded in the journal entry for this work).
 **Covers:** src/library/money/, src/library/api/payments.py, migrations/versions/0033_money_facts.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
@@ -93,7 +93,7 @@ order):
 | VETO | both documents carry a `reference`, and the two differ | beats every rule below, even a same-day amount match |
 | R2 | same non-null `reference` | **any** gap |
 | R1 | same `document_date` | same day only |
-| R3 | **complementary** `amount_kind` (`payment_due` paired with `payment_made`), **and** each document is the other's *nearest* complementary partner | ≤ 60 days — complementarity, the bound and mutual-nearest are all required; no one of them alone is sufficient |
+| R3 | **complementary** `amount_kind` (`payment_due` paired with `payment_made`), **and** each document is the other's *nearest* complementary partner, where “nearest” prefers a receipt dated **on or after** its invoice (§4.1) | ≤ 60 days — complementarity, the bound and mutual-nearest are all required; no one of them alone is sufficient |
 
 R4 does not exist as an automatic rule. Two documents that share a sender,
 amount and currency but neither match on `reference` nor on complementary
@@ -145,14 +145,42 @@ those edges transitively (it is a recursive view over `payment_edges`), a
 whole subscription history collapses into one payment — three cycles of one charge became a single group of six documents.
 
 The view answers this by asking each document which complementary partner is
-*closest*, and drawing the edge only where that choice is mutual. Three CTEs
-do it: `sym` is the symmetric set of candidate complementary pairs within the
-bound, `best` is each document's smallest gap to any of them, and `mutual`
-keeps the pairs where each document is the other's nearest. The receipt on the
-3rd pairs with its own cycle's invoice (2 days), never the next cycle's (29
-days), so the cross-cycle edge is never drawn. Nothing that previously merged
-stops merging: a genuine invoice/receipt pair with no competing candidate is
-trivially each other's nearest.
+*closest*, and drawing the edge only where that choice is mutual. But
+"closest" cannot mean the smallest **unsigned** gap, because the two
+candidates are often equally close or the wrong one is closer:
+
+- On a 1st/16th cadence the receipt is 15 days after its own invoice and, in
+  a 30-day month, exactly 15 days before the next one. The two tie, both
+  survive as "nearest", and the cross-cycle edge is drawn after all. Twelve
+  months of that cadence came back as **nine** payments rather than twelve,
+  four of them groups of four documents.
+- February is 28 days long, so February's receipt on the 16th is 13 days from
+  **March's** invoice against 15 from its own. The wrong pair wins outright
+  and February's invoice is left unpaid.
+
+**The domain is not symmetric: a payment follows the thing it pays.** So
+"nearest" is directional. Four CTEs implement it. `sym` holds candidate
+`(payment_due, payment_made)` pairs within the bound — keyed by kind, not a
+symmetric self-join, so a direction can be expressed at all — and ranks each
+by `made_date - due_date` when the receipt is on or after the invoice, and by
+`1000 + (due_date - made_date)` when it is before. The offset is larger than
+the 60-day window, so **every** forward candidate outranks **every** backward
+one, and distance decides only within each group. `best_due` and `best_made`
+take each document's minimum rank, and `mutual` keeps the pairs where the two
+minima agree.
+
+`sym` also drops VETO'd pairs (both references present and different). A
+document that can never merge with its neighbour must not hold that
+neighbour's nearest slot: an invoice one day from a receipt whose reference
+contradicts it would otherwise be left unpaired, suppressing a legitimate
+merge with a receipt four days out that nothing forbids.
+
+Two pairings the unsigned rule drew are no longer drawn, and both are correct
+to drop: a receipt equidistant between two invoices now takes the one it
+follows rather than the one it precedes, and an invoice with a receipt on each
+side takes the later one even when the earlier is a day closer. A backward match is still
+used wherever no forward one exists, which is what keeps a genuine prepayment
+merging. One shape is genuinely worse under this rule — see §5.
 
 ### 4.2 Null-safety, and why it is load-bearing
 
@@ -165,8 +193,11 @@ Two details in the view exist specifically so that missing data fails toward
   currency-less pair from every rule. `IS NOT DISTINCT FROM` treats "both
   NULL" as a match, so two documents with no currency on record can still
   pair.
-- **`abs(a.document_date - b.document_date) <= 60`** (R3's date-gap test,
-  in the `sym` CTE that feeds it) evaluates to NULL, not true, when either
+- **`abs(m.document_date - d.document_date) <= 60`** (R3's date-gap test,
+  in the `sym` CTE that feeds it — the only date window in the view, pinned
+  on both sides of the boundary by
+  `test_r3_reaches_sixty_days_and_no_further` in
+  `tests/test_payment_identity.py`) evaluates to NULL, not true, when either
   document has no `document_date` — so R3 can never fire for a dateless
   document, which also keeps it out of `mutual` entirely. **R2 is the only rule that can pair one**, because it
   depends on `reference` matching, not on a date comparison at all. A
@@ -194,7 +225,8 @@ is its own id, not the deleted document's.
 
 ## 5. Known limits
 
-Three shapes are not handled by any rule here:
+Four shapes are not handled correctly by the rules here. The first three are
+simply not merged; the fourth is merged into the wrong groups:
 
 - **A partial payment.** One invoice for 300.00 settled by two receipts of
   150.00 each does not match on `amount_total`, so R1/R3 never fire between
@@ -207,10 +239,29 @@ Three shapes are not handled by any rule here:
   apart.** An invoice and its receipt that settle late, and carry no
   `reference` either extractor could read, satisfy R3's complementarity test
   but not its 60-day bound, and satisfy no other rule (§4.1).
+- **A systematically reversed cadence.** A recurring charge taken on the 1st
+  and *invoiced* on the 5th, month after month, is the one shape R3's
+  forward-preference (§4.1) gets wrong. Every receipt has the previous
+  cycle's invoice 27 days behind it and its own 4 days ahead, and forward
+  beats near, so the cycles pair off by one. **Measured on three cycles: four
+  payments instead of three**, with the first receipt and the last invoice
+  each left alone. The consequence is an overcount of one payment across a
+  run of this cadence, not a collapse — every group still holds exactly one
+  invoice and one receipt, and no group is wrong about how much money it
+  represents. `test_a_systematically_reversed_cadence_pairs_off_by_one_cycle`
+  (`tests/test_payment_identity.py`) asserts that outcome so the limit is
+  pinned rather than merely described.
 
-None of these three is merged, and none is vetoed — the documents simply
+None of the first three is merged, and none is vetoed — the documents simply
 remain separate payments as far as this layer is concerned, with no
-`payment_id` connecting them. This repository has no spending-total query
+`payment_id` connecting them.
+
+The fourth was a deliberate trade, not an oversight. The obvious alternative
+— ranking by unsigned distance and using direction only as a tie-break — was
+tried and measured: it fixes the reversed cadence and re-breaks the short
+February, which is the more common shape by far, because the archive's normal
+order is invoice-then-payment. Forward-preference is the correct side of that
+trade, and this is the price of it. This repository has no spending-total query
 yet (`SUMMABLE_AMOUNT_KINDS` in `src/library/models.py` declares which
 `amount_kind` values *would* be summed, but nothing in `src/` sums them), so
 what a future total would do with these shapes is not yet settled behaviour
@@ -308,9 +359,15 @@ recent of the two wins**, in either order:
 - A `MERGE` adds an edge the rules never would have found on their own, and
   it is kept only while no `SPLIT` on the same pair is at least as recent.
   That is how a `MERGE` undoes a `SPLIT`.
-- Identical timestamps fall to the `SPLIT`. Not merging is the safe
-  direction: two documents wrongly left apart under-report, two wrongly
-  joined lose one of them from every total.
+- Identical timestamps fall to the `SPLIT`. This tie-break is **defensive**,
+  not a path the API can reach: `created_at` defaults to `now()`, which is
+  the transaction timestamp, and each of the two callers
+  (`src/library/api/payments.py`'s `merge_payment` and `split_payment`)
+  writes exactly one override row and commits, so two corrections on one pair
+  are always in different transactions with different timestamps. It exists
+  for whatever writes both in one transaction later. Not merging is the safe
+  direction if that ever happens: two documents wrongly left apart
+  under-report, two wrongly joined lose one of them from every total.
 
 Repeating a correction that is already recorded is a no-op in effect, not a
 conflict — but it does refresh that row's `created_at`, which is what makes

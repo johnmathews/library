@@ -176,3 +176,71 @@ agree across all three places they are declared (`models.AmountKind`,
 `extraction/schema.AMOUNT_KINDS`, and the migration's `_AMOUNT_KINDS`), since
 drift silently NULLs a valid kind in one direction and blows up an extraction
 in the other.
+
+## Second fix wave: "nearest" had to mean *forward*, not *closest*
+
+The mutual-nearest R3 above ranked candidates by `abs(gap)`. Its test used a
+2-day intra-cycle gap against a 29-day inter-cycle one — maximally
+asymmetric — so the fixture could not show what a re-review found three ways:
+
+- **Ties still chained.** A charge invoiced on the 1st and paid on the 16th
+  makes both gaps 15 days in a 30-day month. `min(gap)` ties, both candidates
+  survive as "nearest", and the cross-cycle edge is admitted after all.
+  Twelve months of that cadence returned **9 payments where the truth is 12**,
+  including four groups of four documents.
+- **A short February merged the wrong pair.** February's receipt on the 16th
+  is 13 days from March's invoice against 15 from its own, so February's
+  receipt paired with March's invoice and February's invoice was orphaned —
+  a pair that merged *before* the first fix wave.
+- **A vetoed neighbour stole the nearest slot.** The ranking applied none of
+  the rule `CASE`'s precedence, so a document whose reference contradicted its
+  neighbour's still consumed that neighbour's only slot and suppressed a
+  legitimate merge with a document nothing forbade.
+
+The root cause was treating a directional domain as symmetric. **A payment
+follows the thing it pays.** The candidate set is now keyed `(payment_due,
+payment_made)` rather than being a symmetric self-join, so a direction can be
+expressed at all, and each candidate is ranked `made - due` when the receipt
+is on or after its invoice and `1000 + (due - made)` when it is before. The
+offset exceeds the 60-day window, so every forward candidate outranks every
+backward one and distance only decides within each group. A backward match is
+still used where no forward one exists, which is what keeps a genuine
+prepayment merging. The candidate set also excludes vetoed pairs now.
+
+**The trade this makes, stated rather than buried.** A *systematically*
+reversed cadence — charged on the 1st, invoiced on the 5th, every month —
+pairs off by one cycle, because each receipt prefers the previous month's
+invoice 27 days behind it over its own 4 days ahead. Measured on three cycles:
+four groups instead of three, with the first receipt and the last invoice left
+alone. That is an overcount of one payment across a run, not a collapse; every
+group still holds one invoice and one receipt. The alternative — rank by
+magnitude, use direction only as a tie-break — was tried and measured too: it
+fixes the reversed cadence and re-breaks the short February, which is the far
+more common shape, because the archive's normal order is invoice-then-payment.
+Forward-preference is the right side of that trade, so the limit is documented
+in [`docs/money-facts.md`](../docs/money-facts.md) §5 **and asserted by a
+test**, so it stays a known price rather than becoming a surprise.
+
+Ten cases went into `tests/test_payment_identity.py`; seven were watched
+failing against the old view first. The three that already passed (a
+reference-less prepayment, an unpaid invoice beside a later cycle, and the
+day-60/day-61 boundary) are pins on behaviour the rewrite had to preserve, and
+the 60-day bound now has the explicit boundary test that §4.2 of the doc
+points at.
+
+**Two documentation claims the code contradicted** were removed in the same
+pass, both written in the first fix wave: "so the cross-cycle edge is never
+drawn" (it was — that is defect one above) and "Nothing that previously merged
+stops merging" (two shapes do, both correctly). `docs/api.md` §1.24's "is a
+no-op, not a conflict" also stopped being precise when `add_override` moved to
+`on_conflict_do_update`: repeating an override is not a conflict and does not
+change the resulting group, but it *does* refresh the row's timestamp, which
+is exactly the mechanism that lets a third correction land. And the
+identical-timestamp tie-break is now labelled **defensive**: `created_at` is
+the transaction timestamp and each of the two callers writes one row and
+commits, so no request sequence can reach it.
+
+The lesson worth keeping: **a fixture that cannot fail proves nothing.** The
+2-day/29-day gap made mutual-nearest look correct because it never asked the
+rule the question it gets wrong. The adversarial cases — a tie, a 28-day
+month, a vetoed neighbour — are where the rule actually lives.

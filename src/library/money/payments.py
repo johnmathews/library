@@ -25,6 +25,16 @@ every complementary pair inside the window would link cycle to cycle and the
 recursive closure would collapse a whole subscription history into one
 payment.
 
+"Nearest" is DIRECTIONAL, because the domain is: a payment follows the thing
+it pays. Every candidate receipt dated on or after its invoice outranks every
+candidate dated before it, and distance decides only within those two groups.
+Unsigned distance is not enough on its own — a 1st/16th cadence ties at 15
+days each way, and a short February makes the next cycle's invoice the closer
+one — and a receipt whose reference contradicts an invoice's is left out of
+the ranking entirely, so it cannot hold a slot it could never use. The cost is
+one shape: a systematically reversed cadence (charged, then invoiced days
+later) pairs off by one cycle. See docs/money-facts.md §5.
+
 Human corrections beat the rules, and the LATEST correction on a pair wins:
 a SPLIT suppresses the rule-derived edge outright, and a MERGE recorded after
 it re-adds an explicit one (see ``add_override``).
