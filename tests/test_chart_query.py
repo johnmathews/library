@@ -17,7 +17,7 @@ from decimal import Decimal
 import pytest
 from sqlalchemy import text
 
-from library.charts.query import Series, chart_series
+from library.charts.query import Series, chart_cell, chart_series
 from library.charts.rule import Clause, Rule
 from library.fx import convert_amount
 from library.models import Grain
@@ -441,3 +441,361 @@ async def test_a_rule_restricts_the_rows_it_names(session, document, facets) -> 
         until=None,
     )
     assert series.total == Decimal("10.00")
+
+
+@pytest.mark.asyncio
+async def test_a_cell_lists_its_payments_with_every_document_in_the_group(
+    session, document
+) -> None:
+    """Including the NON-canonical one. The drill-through is where a wrong
+    merge is noticed and split, so hiding the other half of a merged pair
+    hides the only evidence the merge was wrong (§9.5).
+
+    `sender=` is named on both documents or they never merge at all: the
+    fixture defaults it to None and every payment rule requires a non-NULL
+    matching `sender_id`, so without it this test would assert `documents == 2`
+    against two *unmerged* documents and prove nothing.
+    """
+    await document(
+        amount_total=Decimal("60.00"),
+        amount_kind="payment_due",
+        document_date=date(2026, 4, 1),
+        title="doc-due",
+        sender=VENDOR,
+    )
+    await document(
+        amount_total=Decimal("60.00"),
+        amount_kind="payment_made",
+        document_date=date(2026, 4, 1),
+        title="doc-made",
+        sender=VENDOR,
+    )
+    merged = await session.execute(text("SELECT count(DISTINCT payment_id) FROM payments"))
+    assert merged.scalar_one() == 1
+
+    payments = await chart_cell(
+        session,
+        Rule(),
+        grain=Grain.MONTH,
+        split=None,
+        split_value=None,
+        period=date(2026, 4, 1),
+        currency="EUR",
+        since=None,
+        until=None,
+    )
+    assert len(payments) == 1
+    # 60, not 120: the total is the canonical row's alone, or the merged pair
+    # would be counted twice and the panel would contradict the bar.
+    assert payments[0].total == Decimal("60.00")
+    assert len(payments[0].documents) == 2
+    assert sum(d.is_canonical for d in payments[0].documents) == 1
+    assert {d.title for d in payments[0].documents} == {"doc-due", "doc-made"}
+
+
+@pytest.mark.asyncio
+async def test_a_cells_payments_sum_to_the_cell_shown_in_the_chart(
+    session, seeded, document
+) -> None:
+    """The property that makes drill-through trustworthy. Asserted by
+    comparison against `chart_series`, so it cannot pass by coincidence.
+
+    Run over three sets of arguments, because `chart_cell` takes five inputs
+    that can each be dropped independently and a single all-defaults pass
+    exercises none of them: the second pass carries a `since`/`until` window
+    that cuts INSIDE a drilled bucket, the third a non-empty rule and a
+    non-MONTH grain. A window that only cut between buckets would prove
+    nothing — the period narrowing already excludes those rows — so the extra
+    documents below straddle the bounds inside April.
+
+    `seeded` alone does not discriminate on the kind filter either. Its only
+    non-summable document (a coverage ceiling) is labelled `accountancy`, a
+    category no *summable* row carries — so it produces no cell of its own,
+    the loop never drills that bucket, and `chart_cell` dropping the
+    `amount_kind = ANY(:summable)` filter passes unnoticed (confirmed by
+    mutation: 22 passed). The two ceilings added here sit in buckets the
+    series really draws — one labelled, one unlabelled, so both arms of the
+    split match are covered — and make the same mutation fail.
+    """
+    # Non-summable, inside buckets the series draws: guards the kind filter.
+    await document(
+        amount_total=Decimal("9500.00"),
+        amount_kind="coverage_limit",
+        document_date=date(2026, 4, 5),
+        labels={"category": "services"},
+    )
+    await document(
+        amount_total=Decimal("8200.00"),
+        amount_kind="coverage_limit",
+        document_date=date(2026, 4, 6),
+        labels={},
+    )
+    # Summable, same month and same `services` bucket as one of `seeded`'s
+    # rows but on either side of the window used in pass 2: guards `since`
+    # and `until` separately.
+    await document(
+        amount_total=Decimal("11.00"),
+        amount_kind="payment_made",
+        document_date=date(2026, 4, 3),
+        labels={"category": "services"},
+    )
+    await document(
+        amount_total=Decimal("13.00"),
+        amount_kind="payment_made",
+        document_date=date(2026, 4, 28),
+        labels={"category": "services"},
+    )
+
+    async def _drill(
+        rule: Rule,
+        *,
+        grain: Grain,
+        split: str,
+        since: date | None,
+        until: date | None,
+    ) -> None:
+        series = await chart_series(
+            session, rule, grain=grain, split=split, currency="EUR", since=since, until=until
+        )
+        # Assert the shape rather than trusting it: a one-cell series, or one
+        # with no unlabelled bucket, would make the loop below near-vacuous.
+        assert len(series.cells) > 1
+        assert None in {cell.split_value for cell in series.cells}
+        for cell in series.cells:
+            payments = await chart_cell(
+                session,
+                rule,
+                grain=grain,
+                split=split,
+                split_value=cell.split_value,
+                period=cell.period,
+                currency="EUR",
+                since=since,
+                until=until,
+            )
+            where = f"{grain.value} {cell.period}/{cell.split_value}"
+            assert payments, f"cell {where} drilled through to nothing"
+            assert sum(p.total for p in payments) == cell.total, where
+            # The payment *set* matches too, not just its sum: a cell whose
+            # payments were right in total but wrong in membership would
+            # still be a broken panel.
+            assert len(payments) == cell.payments, where
+
+    # 1. Everything: no rule, no window, the default grain.
+    await _drill(Rule(), grain=Grain.MONTH, split="category", since=None, until=None)
+    # 2. A window cutting inside April's bucket at BOTH ends. Dropping `since`
+    #    readmits the 04-02 and 04-03 rows to the `services` cell; dropping
+    #    `until` readmits the 04-28 one.
+    await _drill(
+        Rule(),
+        grain=Grain.MONTH,
+        split="category",
+        since=date(2026, 4, 6),
+        until=date(2026, 4, 25),
+    )
+    # 3. A non-empty rule and a non-MONTH grain, on a different split axis.
+    #    Dropping the rule floods the Q2 `scope IS NULL` bucket, which holds
+    #    four summable rows of which only one is `software`.
+    await _drill(
+        Rule(all=[Clause(facet="category", op="in", values=["software"])]),
+        grain=Grain.QUARTER,
+        split="scope",
+        since=None,
+        until=None,
+    )
+
+
+@pytest.mark.asyncio
+async def test_the_null_split_bucket_is_reachable(session, document, facets) -> None:
+    """`split_value=None` must select the unlabelled rows, not every row.
+    `= NULL` is never true in SQL — this needs `IS NOT DISTINCT FROM`."""
+    await document(
+        amount_total=Decimal("5.00"),
+        amount_kind="payment_made",
+        document_date=date(2026, 4, 1),
+        labels={},
+    )
+    await document(
+        amount_total=Decimal("7.00"),
+        amount_kind="payment_made",
+        document_date=date(2026, 4, 1),
+        labels={"category": "services"},
+    )
+    payments = await chart_cell(
+        session,
+        Rule(),
+        grain=Grain.MONTH,
+        split="category",
+        split_value=None,
+        period=date(2026, 4, 1),
+        currency="EUR",
+        since=None,
+        until=None,
+    )
+    # Both bounds matter: `=` empties the bucket, and a narrowing dropped
+    # altogether returns 12.00 — the labelled row as well.
+    assert sum(p.total for p in payments) == Decimal("5.00")
+    assert len(payments) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_cell_skips_an_unconvertible_row_exactly_as_the_chart_did(
+    session, document, fx_rates
+) -> None:
+    """§9.3: never dropped, never counted 1:1 — and never counted *here*.
+
+    The chart could not put this money in the cell, so the panel must not
+    either; the footer is where it is accounted for. A payment whose every row
+    is unconvertible is therefore absent from the drill-through, because it was
+    absent from the bar. Asserted against `chart_series` so the two cannot
+    disagree.
+    """
+    await fx_rates([("2026-04-01", "USD", "1.00")])
+    await document(
+        amount_total=Decimal("100.00"),
+        currency="USD",
+        amount_kind="payment_made",
+        document_date=date(2026, 4, 2),
+    )
+    await document(
+        amount_total=Decimal("40.00"),
+        currency="ZZZ",
+        amount_kind="payment_made",
+        document_date=date(2026, 4, 3),
+    )
+    series = await chart_series(
+        session, Rule(), grain=Grain.MONTH, split=None, currency="USD", since=None, until=None
+    )
+    assert [(u.currency, u.amount) for u in series.unconvertible] == [("ZZZ", Decimal("40.00"))]
+
+    payments = await chart_cell(
+        session,
+        Rule(),
+        grain=Grain.MONTH,
+        split=None,
+        split_value=None,
+        period=date(2026, 4, 1),
+        currency="USD",
+        since=None,
+        until=None,
+    )
+    assert len(payments) == 1
+    assert sum(p.total for p in payments) == series.cells[0].total == Decimal("100.00")
+
+
+@pytest.mark.asyncio
+async def test_a_cell_converts_each_amount_at_its_own_date_not_the_periods(
+    session, document, fx_rates
+) -> None:
+    """§9.3, in the drill path. Two rates inside one month.
+
+    Every other drill test is single-currency, and `convert_amount`
+    short-circuits when the currencies match — so the conversion *date* is
+    never read and `chart_cell` converting at the bucket's date instead of the
+    document's stays green through all of them. It is a wrong number, not an
+    error: the panel would quietly disagree with the bar. Asserted against
+    `chart_series` so the two cannot drift apart.
+    """
+    await fx_rates(
+        [
+            ("2026-04-01", "USD", "1.00"),
+            ("2026-04-01", "GBP", "1.20"),
+            ("2026-04-20", "GBP", "1.50"),
+        ]
+    )
+    await document(
+        amount_total=Decimal("100.00"),
+        currency="GBP",
+        amount_kind="payment_made",
+        document_date=date(2026, 4, 2),
+    )
+    await document(
+        amount_total=Decimal("100.00"),
+        currency="GBP",
+        amount_kind="payment_made",
+        document_date=date(2026, 4, 25),
+    )
+    series = await chart_series(
+        session, Rule(), grain=Grain.MONTH, split=None, currency="USD", since=None, until=None
+    )
+    payments = await chart_cell(
+        session,
+        Rule(),
+        grain=Grain.MONTH,
+        split=None,
+        split_value=None,
+        period=date(2026, 4, 1),
+        currency="USD",
+        since=None,
+        until=None,
+    )
+    # 270, not 240: converting both rows at the period's own date (2026-04-01,
+    # rate 1.20) is the mutation this test exists to redden.
+    assert sum(p.total for p in payments) == series.cells[0].total == Decimal("270.00")
+
+
+@pytest.mark.asyncio
+async def test_a_hand_merged_document_with_no_amount_is_listed_rather_than_crashing(
+    session, document
+) -> None:
+    """A manual MERGE is the merge most likely to be wrong, and §9.5 says the
+    panel is where it is noticed and split.
+
+    The rule arms of `payment_edges` all require `amount_total IS NOT NULL` and
+    equal amounts, but the OVERRIDE arm requires only two live documents — so a
+    hand-merged document may carry no amount and no currency, and 0035's
+    `eligible` CTE then gives it no `spend_facts` row at all. Two things are
+    pinned here, both load-bearing and both invisible otherwise:
+
+    * the document list is read from `payments`, not from `spend_facts`, or
+      this document would be silently absent — the panel would show a merge of
+      one, which is precisely the evidence the owner needs;
+    * `CellDocument.amount` and `.currency` are optional. Tidied back to the
+      brief's non-optional `Decimal` / `str`, this raises `ValidationError` and
+      drilling the cell answers 500 rather than a wrong number.
+    """
+    priced = await document(
+        amount_total=Decimal("42.00"),
+        amount_kind="payment_made",
+        document_date=date(2026, 4, 1),
+        title="doc-priced",
+    )
+    unpriced = await document(
+        amount_total=None,
+        currency=None,
+        amount_kind=None,
+        document_date=date(2026, 4, 1),
+        title="doc-unpriced",
+    )
+    low, high = sorted((priced.id, unpriced.id))
+    await session.execute(
+        text("INSERT INTO payment_overrides (kind, doc_a, doc_b) VALUES ('MERGE', :low, :high)"),
+        {"low": low, "high": high},
+    )
+    await session.commit()
+    merged = await session.execute(text("SELECT count(DISTINCT payment_id) FROM payments"))
+    assert merged.scalar_one() == 1
+
+    payments = await chart_cell(
+        session,
+        Rule(),
+        grain=Grain.MONTH,
+        split=None,
+        split_value=None,
+        period=date(2026, 4, 1),
+        currency="EUR",
+        since=None,
+        until=None,
+    )
+    assert len(payments) == 1
+    # The amountless document carried no money, so the cell is unchanged.
+    assert payments[0].total == Decimal("42.00")
+    listed = {d.title: d for d in payments[0].documents}
+    assert set(listed) == {"doc-priced", "doc-unpriced"}
+    assert listed["doc-priced"].is_canonical is True
+    assert listed["doc-priced"].amount == Decimal("42.00")
+    # No `spend_facts` row at all, so no canonicality — and nothing to show
+    # but the fact of the merge, which is the point.
+    assert listed["doc-unpriced"].is_canonical is False
+    assert listed["doc-unpriced"].amount is None
+    assert listed["doc-unpriced"].currency is None
