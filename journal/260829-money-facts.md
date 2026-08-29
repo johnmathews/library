@@ -107,8 +107,8 @@ amounts and asserts the collapse (or non-collapse) directly against the
 - `amount_kind` (seven values, three summable) and `reference` on
   `documents`; `payment_overrides` for human corrections
   (migration `0033_money_facts.py`).
-- The `payment_edges`/`payment_overrides` SQL views computing payment
-  identity from the four rules above.
+- The `payment_edges` and `payments` SQL views computing payment identity
+  from the four rules above, over the `payment_overrides` table.
 - `library backfill-amounts` to classify `amount_kind` on documents
   extracted before the field existed, reporting `classified`/`empty`/
   `skipped` as three separate counts rather than folding an unsure model
@@ -129,3 +129,50 @@ another does not match either. Neither silently merges nor silently
 double-counts — both simply stay as separate, un-collapsed documents. There
 is no proposed-merge review surface for these two shapes yet; today the only
 correction path is the manual `merge`/`split` override.
+
+The design spec also promised `amount_kind` its own extraction validation and
+a review queue when the model is unsure. Neither was built: an unsure answer
+becomes NULL, which is safe (NULL is never summed) but invisible — nothing
+counts the documents still lacking a kind, and nothing lets a person set or
+correct one by hand. Written up as a gap in
+[`docs/money-facts.md`](../docs/money-facts.md) §5.1 rather than left to be
+discovered.
+
+## Fix wave: two ways payment identity was wrong
+
+A whole-branch review found two defects in the SQL, both of which reproduced
+on PostgreSQL before being fixed and both now pinned by a test that was
+watched failing first.
+
+**R3 chained across billing cycles.** A recurring charge documented as
+invoice-then-receipt puts every cycle's receipt within 60 days of the *next*
+cycle's invoice, and the two are complementary — so R3 fired on the
+cross-cycle pair as readily as on the real one, and the recursive closure
+merged the lot. Three monthly cycles of one charge collapsed into a single
+payment of six documents. R3 now pairs only **mutual nearest** complementary
+partners: the receipt on the 3rd pairs with its own cycle's invoice two days
+earlier, never the next cycle's 29 days later. The bug was dormant only
+because `amount_kind` is NULL everywhere until `backfill-amounts` runs.
+
+**A `SPLIT` could not undo a `MERGE`.** The `NOT EXISTS ... kind='SPLIT'`
+guard sat on the rule-derived arm of `payment_edges` only, so a `SPLIT`
+recorded after a `MERGE` left the override edge standing: "Not the same
+payment" answered 200 and changed nothing, on the branch's only correction
+surface.
+
+The obvious fix — copy the same unconditional guard onto the `MERGE` arm —
+was wrong in the other direction, and the existing split-then-merge test
+caught it immediately: it makes a `SPLIT` win forever, so nothing can undo
+one. Overrides are now resolved by **recency**: the more recently recorded of
+the pair's `MERGE`/`SPLIT` rows decides, a tie falls to `SPLIT` (not merging
+is the safe direction), and re-recording a correction refreshes its timestamp
+so the third correction on a pair lands too. Both directions, and the
+merge/split/merge sequence, now have tests.
+
+Also in the wave: the payment panel is no longer mounted on a soft-deleted
+document (its endpoint 404s by design, which put a red load-failure alert on
+every Recently Deleted page); one test now asserts the seven amount kinds
+agree across all three places they are declared (`models.AmountKind`,
+`extraction/schema.AMOUNT_KINDS`, and the migration's `_AMOUNT_KINDS`), since
+drift silently NULLs a valid kind in one direction and blows up an extraction
+in the other.

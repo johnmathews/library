@@ -10,12 +10,24 @@ The rules, in the order the view applies them:
   R2    same sender, same non-null reference             -> merge at any date gap
   R1    same sender, date, amount, currency              -> merge
   R3    same sender, amount, currency; complementary
-        amount_kind (due <-> made); gap <= 60 days       -> merge
+        amount_kind (due <-> made); gap <= 60 days; and
+        each is the other's NEAREST such partner         -> merge
 
 R3's complementarity requirement is what makes date-tolerant merging safe: an
 invoice and its receipt are never the same kind of amount, while two genuinely
 separate purchases of the same value always are. No date tolerance alone can
 separate those cases.
+
+Mutual-nearest is what keeps R3 from chaining. A recurring charge documented
+as invoice-then-receipt puts every cycle's receipt within 60 days of the NEXT
+cycle's invoice, and those two are complementary too — so an R3 that fired on
+every complementary pair inside the window would link cycle to cycle and the
+recursive closure would collapse a whole subscription history into one
+payment.
+
+Human corrections beat the rules, and the LATEST correction on a pair wins:
+a SPLIT suppresses the rule-derived edge outright, and a MERGE recorded after
+it re-adds an explicit one (see ``add_override``).
 """
 
 from __future__ import annotations
@@ -23,7 +35,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Literal
 
-from sqlalchemy import text
+from sqlalchemy import func, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -59,14 +71,27 @@ async def payment_group(session: AsyncSession, document_id: int) -> list[int]:
 
 async def add_override(session: AsyncSession, kind: OverrideKind, doc_a: int, doc_b: int) -> None:
     """Record a human correction. Orders the pair — ``doc_a < doc_b`` is a check
-    constraint, so an unordered insert would be rejected."""
+    constraint, so an unordered insert would be rejected.
+
+    Re-recording a correction that already exists refreshes its ``created_at``
+    rather than doing nothing. A pair can carry both a MERGE and a SPLIT row
+    (the unique constraint is on the ``(kind, doc_a, doc_b)`` triple), and the
+    ``payment_edges`` view resolves that by timestamp — the later correction
+    wins. Leaving the timestamp untouched would make the *third* correction on
+    a pair a silent no-op: merge, split, merge again would keep the pair split
+    because the second MERGE would still carry the first one's timestamp. The
+    outcome of repeating a correction with no opposite one in between is
+    unchanged, which is the sense in which it stays idempotent.
+    """
     if doc_a == doc_b:
         raise ValueError("an override needs two distinct documents")
     low, high = (doc_a, doc_b) if doc_a < doc_b else (doc_b, doc_a)
     await session.execute(
         pg_insert(PaymentOverride)
         .values(kind=kind, doc_a=low, doc_b=high)
-        .on_conflict_do_nothing(constraint="payment_overrides_unique")
+        .on_conflict_do_update(
+            constraint="payment_overrides_unique", set_={"created_at": func.now()}
+        )
     )
 
 

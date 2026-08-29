@@ -107,6 +107,41 @@ def test_r3_complementary_kinds_within_sixty_days_merge(api_database_url: str) -
     assert _group(api_database_url, a) == sorted([a, b])
 
 
+def test_a_monthly_subscription_does_not_chain_across_billing_cycles(
+    api_database_url: str,
+) -> None:
+    """Three cycles of one recurring charge stay three payments, not one.
+
+    A subscription bills the same amount from the same sender every month, and
+    each cycle arrives as an invoice and, days later, a receipt. Every one of
+    those documents is complementary to every document of the *neighbouring*
+    cycle as well as to its own partner, and the gaps between cycles are far
+    inside R3's 60-day bound: a receipt on the 3rd is 29 days from the next
+    month's invoice on the 1st. An R3 that fires on every complementary pair
+    within the window therefore chains cycle to cycle, and the recursive
+    closure in the ``payments`` view collapses the whole subscription history
+    into a single payment of six documents.
+
+    R3 pairs only MUTUAL NEAREST complementary partners, which is what keeps
+    each cycle to itself: the 3rd's nearest invoice is its own cycle's 1st
+    (2 days), never the next cycle's (29 days).
+    """
+    jan_due, jan_made, feb_due, feb_made, mar_due, mar_made = _pair(
+        api_database_url,
+        [
+            ("2026-01-01", "9.99", AmountKind.PAYMENT_DUE, None),
+            ("2026-01-03", "9.99", AmountKind.PAYMENT_MADE, None),
+            ("2026-02-01", "9.99", AmountKind.PAYMENT_DUE, None),
+            ("2026-02-03", "9.99", AmountKind.PAYMENT_MADE, None),
+            ("2026-03-01", "9.99", AmountKind.PAYMENT_DUE, None),
+            ("2026-03-03", "9.99", AmountKind.PAYMENT_MADE, None),
+        ],
+    )
+    assert _group(api_database_url, jan_due) == sorted([jan_due, jan_made])
+    assert _group(api_database_url, feb_due) == sorted([feb_due, feb_made])
+    assert _group(api_database_url, mar_due) == sorted([mar_due, mar_made])
+
+
 def test_two_real_purchases_four_days_apart_stay_separate(api_database_url: str) -> None:
     """Both are payment_made, so R3 cannot fire. This is why complementarity,
     not a date window, is what makes date-tolerant merging safe."""
@@ -215,6 +250,35 @@ def test_a_merge_override_joins_a_pair_no_rule_merges(api_database_url: str) -> 
             ("2026-07-07", "14.37", AmountKind.PAYMENT_MADE, None),
         ],
     )
+    asyncio.run(_run(api_database_url, lambda s: add_override(s, "MERGE", a, b)))
+    assert _group(api_database_url, a) == sorted([a, b])
+
+
+def test_the_latest_correction_on_a_pair_wins_in_both_directions(
+    api_database_url: str,
+) -> None:
+    """A pair carries both a MERGE and a SPLIT row (the unique constraint is on
+    the ``(kind, doc_a, doc_b)`` triple), so which one applies is decided by
+    ``created_at``. Every correction after the first has to land, including the
+    third: a guard that let a SPLIT win unconditionally would make a MERGE
+    unable to undo one, and an override insert that left ``created_at`` alone
+    when the row already existed would make the third correction a no-op.
+    """
+    a, b = _pair(
+        api_database_url,
+        [
+            ("2026-08-04", "48.00", AmountKind.PAYMENT_DUE, None),
+            ("2026-08-04", "48.00", AmountKind.PAYMENT_MADE, None),
+        ],
+    )
+    # Each correction is its own transaction, as it is over HTTP: now() is the
+    # transaction timestamp, so recording them in one would tie every row.
+    asyncio.run(_run(api_database_url, lambda s: add_override(s, "MERGE", a, b)))
+    assert _group(api_database_url, a) == sorted([a, b])
+
+    asyncio.run(_run(api_database_url, lambda s: add_override(s, "SPLIT", a, b)))
+    assert _group(api_database_url, a) == [a]
+
     asyncio.run(_run(api_database_url, lambda s: add_override(s, "MERGE", a, b)))
     assert _group(api_database_url, a) == sorted([a, b])
 

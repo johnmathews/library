@@ -27,6 +27,25 @@ def test_split_then_merge_round_trips(
     assert sorted(d["id"] for d in merge.json()["documents"]) == sorted([a, b])
 
 
+def test_merge_then_split_round_trips(
+    api_client: TestClient, payment_pair: tuple[int, int]
+) -> None:
+    """The other direction of the round trip above, and the one the UI needs.
+
+    "Not the same payment" is the branch's only correction surface. A `SPLIT`
+    recorded *after* a `MERGE` has to win, or the button answers 200 and the
+    panel re-renders with the pair still merged — a silent no-op.
+    """
+    a, b = payment_pair
+    merge = api_client.post("/api/payments/merge", json={"doc_a": a, "doc_b": b})
+    assert merge.status_code == 200
+    assert sorted(d["id"] for d in merge.json()["documents"]) == sorted([a, b])
+
+    split = api_client.post("/api/payments/split", json={"doc_a": a, "doc_b": b})
+    assert split.status_code == 200
+    assert [d["id"] for d in split.json()["documents"]] == [a]
+
+
 def test_an_override_on_one_document_is_rejected(api_client: TestClient) -> None:
     assert api_client.post("/api/payments/merge", json={"doc_a": 5, "doc_b": 5}).status_code == 422
 

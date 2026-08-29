@@ -318,6 +318,10 @@ describe('DocumentDetailView', () => {
         return Promise.resolve(jsonResponse({ labels: documentLabels }))
       }
       if (path === '/api/documents/12/payment' && method === 'GET') {
+        // As the real endpoint does: a soft-deleted document has no payment
+        // group to return. The view must therefore not ask for one — see the
+        // trash describe block below.
+        if (detail.deleted_at) return Promise.resolve(jsonResponse({ detail: 'Not found' }, 404))
         return Promise.resolve(jsonResponse({ payment_id: 900, documents: paymentDocuments }))
       }
       if (url === '/api/payments/split' && method === 'POST') {
@@ -2163,6 +2167,22 @@ describe('DocumentDetailView', () => {
       expect(w.text()).not.toContain('Document not found')
       // The soft-delete link is hidden (it would 404 on an already-deleted doc).
       expect(w.find('[data-testid="delete-link"]').exists()).toBe(false)
+    })
+
+    it('shows no payment panel or payment error on a trashed document', async () => {
+      // Regression: the metadata column mounted PaymentGroup unconditionally,
+      // but /api/documents/{id}/payment 404s a deleted document — so every
+      // document opened from Recently Deleted carried a red "Could not load
+      // this payment" alert. The fix is to not ask, not to soften the error.
+      detail = makeDetail({ deleted_at: '2026-07-01T09:00:00Z' })
+      const w = await mountView()
+
+      expect(w.find('[data-testid="payment-error"]').exists()).toBe(false)
+      expect(w.find('[data-testid="payment-group"]').exists()).toBe(false)
+      const paymentCalls = fetchMock.mock.calls.filter((call) =>
+        String(call[0]).startsWith('/api/documents/12/payment'),
+      )
+      expect(paymentCalls).toHaveLength(0)
     })
 
     it('has no trash banner for a live document', async () => {

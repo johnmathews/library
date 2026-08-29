@@ -2,6 +2,8 @@
 
 import asyncio
 import hashlib
+import importlib.util
+import pathlib
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -11,6 +13,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from library.extraction.schema import AMOUNT_KINDS
 from library.models import (
     AmountKind,
     Document,
@@ -20,6 +23,37 @@ from library.models import (
 )
 
 pytestmark = pytest.mark.integration
+
+
+def _migration_amount_kinds() -> tuple[str, ...]:
+    """``_AMOUNT_KINDS`` as migration 0033 actually declares it.
+
+    Loaded from the file rather than copied here: a copy would be a fourth
+    place to drift. The module name starts with a digit, so it cannot be
+    imported by name.
+    """
+    path = pathlib.Path(__file__).resolve().parents[1] / "migrations/versions/0033_money_facts.py"
+    spec = importlib.util.spec_from_file_location("money_facts_migration", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    kinds: tuple[str, ...] = module._AMOUNT_KINDS
+    return kinds
+
+
+def test_the_three_copies_of_the_amount_kinds_agree() -> None:
+    """The seven kinds exist in three places and nothing else compares them.
+
+    Drift is dangerous in both directions. A kind the migration's enum accepts
+    but ``AMOUNT_KINDS`` omits is silently normalised to NULL and disappears;
+    a kind ``AMOUNT_KINDS`` accepts but the enum rejects makes
+    ``AmountKind(metadata.amount_kind)`` in ``extraction/apply.py`` raise
+    *outside* the facet savepoint, destroying the whole extraction rather than
+    one field.
+    """
+    from_enum = tuple(kind.value for kind in AmountKind)
+    assert from_enum == AMOUNT_KINDS
+    assert from_enum == _migration_amount_kinds()
 
 
 async def _run[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T:

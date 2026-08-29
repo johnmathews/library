@@ -1563,8 +1563,16 @@ watch(
              Unlike FacetEditor it often renders NOTHING at all (no root
              element) when this document isn't part of a collapsed payment,
              which only shrinks the sibling count SortableJS sees — the
-             out-of-range append behaviour documented above still holds. -->
-        <PaymentGroup :document-id="doc.id" />
+             out-of-range append behaviour documented above still holds.
+
+             `!isDeleted` because a trashed document opens read-only here (the
+             detail fetch carries `include_deleted`), but
+             `GET /api/documents/{id}/payment` deliberately 404s a deleted
+             document — so mounting this on a trashed document put a red
+             "Could not load this payment" alert on every Recently Deleted
+             page. PaymentGroup is right to surface a load failure; it just
+             must not be asked a question the API refuses to answer. -->
+        <PaymentGroup v-if="!isDeleted" :document-id="doc.id" />
       </div>
     </div>
 

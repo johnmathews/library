@@ -82,11 +82,11 @@ def test_a_classification_error_does_not_abort_the_run(
     api_database_url: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     """A live network error (or a DataError from an over-long reference)
-    from one document must not take the rest of the ~258-document run with
-    it. Without the per-document SAVEPOINT guard in ``run_amount_backfill``,
-    an exception raised while classifying one document propagates straight
-    out of the loop and the second, later-inserted document is never
-    reached at all.
+    from one document must not take the rest of the run — every amount-bearing
+    document that still has no ``amount_kind`` — with it. Without the
+    per-document SAVEPOINT guard in ``run_amount_backfill``, an exception
+    raised while classifying one document propagates straight out of the loop
+    and the second, later-inserted document is never reached at all.
     """
 
     async def _seed_two(session: AsyncSession) -> list[tuple[int, str]]:

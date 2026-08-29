@@ -206,7 +206,9 @@ async def run_amount_backfill(
     that promise hold against both a network failure (``classify_amount``
     calls the Anthropic API live, and any ``APIError``/``RateLimitError``/
     timeout would otherwise propagate straight out of the loop and abort the
-    whole ~258-document run) and a database failure (an over-long
+    whole run — every amount-bearing document that still has no
+    ``amount_kind``, which is what ``documents_needing_amount_kind`` selects)
+    and a database failure (an over-long
     ``reference`` raising ``DataError`` at flush — belt-and-braces here,
     since ``reference`` is also clamped where it is created, in
     ``_parse`` and in ``ExtractedMetadata``). Rolling back to the savepoint
