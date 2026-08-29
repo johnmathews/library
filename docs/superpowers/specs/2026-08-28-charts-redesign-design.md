@@ -1,6 +1,8 @@
 # Charts: spending questions over faceted documents
 
-**Status:** design, awaiting review (2026-08-28)
+**Status:** design, awaiting review (2026-08-28). §8.1.1, the sign
+precondition in §8.3 and the footer treatment in §9.4 were added on 2026-08-29
+to settle issue #117 before the chart engine was planned.
 
 Replaces the emergent-series `/charts` feature entirely. Nothing from the current
 implementation is migrated.
@@ -416,18 +418,73 @@ facet or value rather than approximating.
 
 Added to the extraction schema and to `documents`. Declares what a number means:
 
-| value | summed? |
-| --- | --- |
-| `payment_due` | yes |
-| `payment_made` | yes |
-| `assessment` | yes |
-| `coverage_limit` | no |
-| `balance` | no |
-| `estimate` | no |
-| `none` | no |
+| value | meaning | contributes |
+| --- | --- | --- |
+| `payment_due` | an invoice or bill the household owes | **+1** |
+| `payment_made` | a receipt or confirmation that money was paid | **+1** |
+| `assessment` | a tax or levy demand | **+1** |
+| `refund` | money returned, or an amount owed cancelled | **−1** |
+| `coverage_limit` | an insurance sum insured or maximum payout | no |
+| `balance` | an account or statement position | no |
+| `estimate` | a quote or indicative price, not yet owed | no |
+| `none` | the amount is incidental, or zero because nothing is due | no |
 
 This is the gate that stops an insurance coverage ceiling from ever entering a
 spending total (§2.2).
+
+`amount_kind` is nullable, and NULL means *not yet decided*, not *carries no
+money* — `none` is the value for the latter. A NULL is treated exactly like a
+non-contributing kind, so an archive that has not been fully classified
+**under-reports** rather than over-reports.
+
+### 8.1.1 Sign lives in the kind, not in the number
+
+Resolves issue #117. `amount_total` is **always a magnitude**: the sign of a
+document's contribution to a total is a property of what the number *means*, and
+is therefore carried by `amount_kind` alone. Classifying a refund as
+`payment_made` with a negative `amount_total` was rejected — nothing guards that
+column's sign today (no CHECK constraint, and `normalize_amount_string` admits a
+leading `-`), so a sign error would be invisible, and the payment rules join on
+`amount_total` equality, which a negated amount would silently stop satisfying.
+
+The declaration is a signed map, and the existing frozenset derives from it so
+there is one source of truth rather than two that can disagree:
+
+```python
+AMOUNT_SIGN: Mapping[AmountKind, int] = MappingProxyType({
+    AmountKind.PAYMENT_DUE: 1,
+    AmountKind.PAYMENT_MADE: 1,
+    AmountKind.ASSESSMENT: 1,
+    AmountKind.REFUND: -1,
+})
+SUMMABLE_AMOUNT_KINDS = frozenset(AMOUNT_SIGN)   # derived; name retained
+```
+
+A total is `SUM(AMOUNT_SIGN[kind] * amount_total)` over the payments a rule
+resolved (§9.2). "Summable" and "signed" are the same predicate: a kind that
+contributes has a sign, and a kind that does not is absent from the map.
+
+**One value, not two.** `payment_due`/`payment_made` are split because R3 needs
+complementarity to pair an invoice with its receipt (§8.3). The mirror of that
+— a credit note followed by a separate refund receipt — is *not* split, because
+the archive contains no instance of it and R1 and R2 already cover its common
+shapes. The residual gap is recorded as a known limit in §8.3.
+
+**Migration.** The enum is declared `native_enum=False`, i.e. a `VARCHAR` with a
+`CHECK` constraint, so adding a value is a constraint swap rather than an
+`ALTER TYPE`. The vocabulary is declared in three places kept in sync by
+`tests/test_money_schema.py` — `models.AmountKind`,
+`extraction/schema.AMOUNT_KINDS`, and the migration's own list — and both
+classifier prompts (`extraction/schema.py`'s field description and
+`money/backfill.py`'s `AMOUNT_SYSTEM_PROMPT`) enumerate the values in prose, so
+all five surfaces move together.
+
+**Live verification.** The archive's one credit note is classified NULL today
+and already sits in the `backfill-amounts` queue, so it is picked up by the next
+ordinary run with no reclassification pass. That document resolving to `refund`
+and appearing as a negative contribution is the evidence this works against real
+data. A passing test suite is not: the money-facts branch passed every gate,
+deployed clean, and classified nothing.
 
 ### 8.2 `reference`
 
@@ -445,6 +502,25 @@ Two documents describe one payment when any rule fires and the veto does not.
 | R3 | same `(sender, amount, currency)`, **complementary `amount_kind`** (`payment_due` <-> `payment_made`), later date >= earlier, gap <= 60 days | auto |
 | R4 | same sender and amount, same `amount_kind`, or gap > 60 days | **proposed** in the drill-through panel, never applied automatically |
 | VETO | both documents carry a `reference` and they differ | never merge, even if R1 or R3 fires |
+
+**Sign homogeneity is a precondition, not a rule.** A pair is only ever
+considered when both documents sit on the same side of zero — expressed in the
+`pairs` CTE, above every rule, as
+
+```sql
+AND (a.amount_kind IS DISTINCT FROM 'refund') = (b.amount_kind IS DISTINCT FROM 'refund')
+```
+
+It has to sit above R2, not beside it, because R2 is otherwise the *strongest*
+evidence: a credit note that quotes the invoice it reverses shares that invoice's
+`reference` exactly, and R2 would merge them. Merging a `+X` with a `−X` erases
+both from the total; leaving them as two payments nets them to zero, which is the
+right answer. A NULL `amount_kind` counts as not-a-refund, so a NULL never merges
+with a refund — the cautious direction, and a NULL contributes nothing anyway.
+
+A manual `MERGE` override across opposite signs is **refused at the API with a
+400** rather than silently accepted, so the invariant the chart engine relies on
+holds without qualification: **every payment group has one well-defined sign.**
 
 **Why R3 is safe.** An invoice and its receipt are never the same kind of amount:
 one is `payment_due`, the other `payment_made`. Two genuinely separate purchases
@@ -466,6 +542,15 @@ judgement than `kind`, which is already known to misclassify receipts as invoice
 settled by two smaller receipts) does not match on amount; an invoice billed in
 one currency and paid in another does not match either. Both surface as R4
 proposals.
+
+A third limit follows from the single `refund` value (§8.1.1): a credit note and
+a separate refund receipt for the same amount, on different dates and sharing no
+`reference`, are two `refund` documents rather than a complementary pair, so
+they net the refund off twice. R1 pairs them when they fall on the same day and
+R2 when they share a reference; R3 cannot, because complementarity is defined
+only over `payment_due` <-> `payment_made`. Splitting `refund` in two would close
+this, and the day the archive contains such a pair is the day to do it — it is a
+vocabulary addition, not a redesign.
 
 ### 8.4 Spend lines
 
@@ -523,7 +608,8 @@ Every chart carries a footer accounting for everything its rule touched but its
 total did not:
 
 ```
-EUR 1,204.18 across 14 payments from 17 documents
+EUR 1,155.18 across 15 payments from 18 documents
+  including 1 refund netted off       -EUR 49.00
 
   excluded from the total
      2 coverage_limit   EUR 20,000.00
@@ -531,6 +617,12 @@ EUR 1,204.18 across 14 payments from 17 documents
   needs attention
      3 documents uncategorised   EUR 89.20
 ```
+
+A refund belongs in the header block, not in `excluded from the total` — it *is*
+in the total, and the point of §8.1.1 is that it lowers it. Showing it anywhere
+else would read as money the chart ignored. A split value whose net is negative
+draws below the baseline, so the y-axis of any chart containing a refund always
+includes zero.
 
 The last line is the most important. A document the model failed to label matches
 no rule, so without this it disappears from every chart with no way to notice.
@@ -627,6 +719,12 @@ D  view            board + workspace
 E  removal         delete the old series stack
 ```
 
+A and B have shipped. The `refund` value and the signed map (§8.1.1) are strictly
+B's work, but they land as the **first step of C** rather than as a reopening of
+B: `AMOUNT_SIGN` has no consumer until the chart engine exists, so shipping it
+alone would add an enum value, a migration and a rule precondition that no
+executed code reads — the shape this repository has already been caught by twice.
+
 **Every migration is additive.** Nothing is dropped until the replacement has run
 against the live archive. The new view ships behind a setting; once flipped, the
 old stack is deleted in a **separate follow-up PR**: `series.py`,
@@ -661,6 +759,7 @@ superseded header; the series sections of `docs/architecture.md` and
 | `sum(lines) != amount_total` | rejected at write; document flagged |
 | missing FX rate | amount reported as unconvertible in the footer; never dropped, never counted 1:1 |
 | payment merged wrongly | visible as a group in the drill-through panel; `[split]` stores an exception |
+| `MERGE` override across opposite signs | refused **400**, never stored — a payment group must have one sign (§8.3) |
 | money with no category | reported in the footer of every chart whose date and currency window contains it, plus a global uncategorised queue |
 | labelling job fails midway | idempotent per document; re-runnable; partial results are valid |
 
@@ -678,6 +777,14 @@ four days apart that must stay separate; an invoice and a differently-kinded
 document six days apart that must merge; four same-amount invoices where only the
 same-day pair merges; a reference-matched pair months apart. Entered as **shaped
 fixtures with invented senders and amounts** — this repository is public.
+
+The sign precondition (§8.3) adds three that must be observed failing against the
+current view before the fix: a `refund` and a `payment_made` for the same amount,
+same sender, **same day**, which R1 would otherwise merge; a `refund` carrying
+the **same `reference`** as the `payment_due` it reverses, which R2 would
+otherwise merge and which is the case the precondition exists for; and a NULL
+`amount_kind` beside a same-day `refund`, which must stay separate. A mixed-sign
+`MERGE` override is asserted to return 400, not to be silently stored.
 
 **Labelling** gets an eval with a hand-checked gold set and a per-facet
 precision/recall floor, in the shape of the existing Ask recall baseline —
