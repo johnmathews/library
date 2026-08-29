@@ -431,6 +431,114 @@ def test_differing_references_veto_a_same_day_merge(api_database_url: str) -> No
     assert _group(api_database_url, a) == [a]
 
 
+def test_a_refund_does_not_merge_with_the_same_day_payment_it_reverses(
+    api_database_url: str,
+) -> None:
+    a, b = _pair(
+        api_database_url,
+        [
+            ("2026-04-01", "49.00", AmountKind.PAYMENT_MADE, None),
+            ("2026-04-01", "49.00", AmountKind.REFUND, None),
+        ],
+    )
+    assert _group(api_database_url, a) == [a], "R1 must not merge across opposite signs"
+    assert _group(api_database_url, b) == [b], "R1 must not merge across opposite signs"
+
+
+def test_a_credit_note_quoting_its_invoice_reference_does_not_merge(
+    api_database_url: str,
+) -> None:
+    """The case the precondition exists for.
+
+    R2 is the strongest rule and matches at any date gap. Without the guard
+    these two merge, which was confirmed by executing the pre-0034 view.
+    """
+    a, b = _pair(
+        api_database_url,
+        [
+            ("2026-04-01", "120.00", AmountKind.PAYMENT_DUE, "X-1"),
+            ("2026-06-30", "120.00", AmountKind.REFUND, "X-1"),
+        ],
+    )
+    assert _group(api_database_url, a) == [a]
+    assert _group(api_database_url, b) == [b]
+
+
+def test_an_undecided_kind_never_merges_with_a_refund(api_database_url: str) -> None:
+    """NULL counts as not-a-refund: the cautious direction, and a NULL
+    contributes to no total anyway."""
+    a, b = _pair(
+        api_database_url,
+        [
+            ("2026-04-01", "30.00", None, None),
+            ("2026-04-01", "30.00", AmountKind.REFUND, None),
+        ],
+    )
+    assert _group(api_database_url, a) == [a]
+    assert _group(api_database_url, b) == [b]
+
+
+def test_the_guard_does_not_break_the_rules_it_sits_above(api_database_url: str) -> None:
+    a, b = _pair(
+        api_database_url,
+        [
+            ("2026-04-01", "77.00", AmountKind.PAYMENT_DUE, None),
+            ("2026-04-01", "77.00", AmountKind.PAYMENT_MADE, None),
+        ],
+    )
+    assert _group(api_database_url, a) == sorted([a, b]), (
+        "R1 must still fire between two positive kinds"
+    )
+
+    c, d = _pair(
+        api_database_url,
+        [
+            ("2026-04-01", "15.00", AmountKind.REFUND, None),
+            ("2026-04-01", "15.00", AmountKind.REFUND, None),
+        ],
+    )
+    assert _group(api_database_url, c) == sorted([c, d]), (
+        "two refunds on one day are still one payment"
+    )
+
+
+def test_two_unbackfilled_documents_still_merge_on_r1(api_database_url: str) -> None:
+    """Regression guard for the sign guard's spelling.
+
+    ``(a.amount_kind = 'refund') = (b.amount_kind = 'refund')`` looks like an
+    equivalent rewrite of the guard but is NOT: a NULL amount_kind makes each
+    side NULL, so the equality is itself NULL and the whole WHERE clause
+    drops the pair from ``pairs`` -- silently killing R1 for every
+    un-backfilled document, which is most of the live archive. ``IS DISTINCT
+    FROM`` treats NULL as a definite value and does not have this failure
+    mode. This must still merge like any other same-day, same-amount,
+    same-sender pair.
+    """
+    a, b = _pair(
+        api_database_url,
+        [
+            ("2026-04-01", "62.00", None, None),
+            ("2026-04-01", "62.00", None, None),
+        ],
+    )
+    assert _group(api_database_url, a) == sorted([a, b])
+    assert _group(api_database_url, b) == sorted([a, b])
+
+
+def test_two_unbackfilled_documents_still_merge_on_r2(api_database_url: str) -> None:
+    """The R2 half of the same regression: a shared reference, any date gap,
+    must still merge two NULL-``amount_kind`` documents."""
+    a, b = _pair(
+        api_database_url,
+        [
+            ("2026-01-10", "88.00", None, "Q-7"),
+            ("2026-07-02", "88.00", None, "Q-7"),
+        ],
+    )
+    assert _group(api_database_url, a) == sorted([a, b])
+    assert _group(api_database_url, b) == sorted([a, b])
+
+
 def test_dateless_documents_still_pair_on_reference(api_database_url: str) -> None:
     a, b = _pair(
         api_database_url,

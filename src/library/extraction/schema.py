@@ -111,6 +111,7 @@ AMOUNT_KINDS: tuple[str, ...] = (
     "payment_due",
     "payment_made",
     "assessment",
+    "refund",
     "coverage_limit",
     "balance",
     "estimate",
@@ -198,6 +199,8 @@ class ExtractedMetadata(BaseModel):
             "payment_due (an invoice or bill the reader owes); "
             "payment_made (a receipt or confirmation that money was paid); "
             "assessment (a tax or levy demand); "
+            "refund (money returned to the reader, or an amount owed cancelled — a "
+            "credit note, refund receipt or reversal); "
             "coverage_limit (an insurance sum insured or maximum payout — NOT "
             "money anyone paid); "
             "balance (an account or statement position); "

@@ -18,8 +18,10 @@ Design notes
 """
 
 import enum
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
+from types import MappingProxyType
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -153,24 +155,38 @@ class MemberOrigin(enum.StrEnum):
 class AmountKind(enum.StrEnum):
     """What a document's ``amount_total`` actually is.
 
-    Only ``PAYMENT_DUE``, ``PAYMENT_MADE`` and ``ASSESSMENT`` are ever summed
-    into a spending total. The rest exist so that a coverage ceiling, an opening
+    ``amount_total`` is always a magnitude. The sign of a document's
+    contribution to a spending total is a property of what the number
+    *means*, so it is carried here and nowhere else — see ``AMOUNT_SIGN``.
+    The non-contributing values exist so that a coverage ceiling, an opening
     balance, a quote or a nil-return confirmation can be recorded faithfully
-    without contaminating one.
+    without contaminating a total.
     """
 
     PAYMENT_DUE = "payment_due"
     PAYMENT_MADE = "payment_made"
     ASSESSMENT = "assessment"
+    REFUND = "refund"
     COVERAGE_LIMIT = "coverage_limit"
     BALANCE = "balance"
     ESTIMATE = "estimate"
     NONE = "none"
 
 
-SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(
-    {AmountKind.PAYMENT_DUE, AmountKind.PAYMENT_MADE, AmountKind.ASSESSMENT}
+#: How each contributing kind enters a spending total. A kind absent from this
+#: map never enters one, so "summable" and "signed" are the same predicate and
+#: cannot drift apart. A refund is the only negative: money returned, or an
+#: amount owed cancelled.
+AMOUNT_SIGN: Mapping[AmountKind, int] = MappingProxyType(
+    {
+        AmountKind.PAYMENT_DUE: 1,
+        AmountKind.PAYMENT_MADE: 1,
+        AmountKind.ASSESSMENT: 1,
+        AmountKind.REFUND: -1,
+    }
 )
+
+SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(AMOUNT_SIGN)
 
 
 class HeldEmailStatus(enum.StrEnum):

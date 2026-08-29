@@ -4,6 +4,7 @@ import asyncio
 import hashlib
 import importlib.util
 import pathlib
+import re
 import uuid
 from collections.abc import Awaitable, Callable
 
@@ -26,14 +27,20 @@ pytestmark = pytest.mark.integration
 
 
 def _migration_amount_kinds() -> tuple[str, ...]:
-    """``_AMOUNT_KINDS`` as migration 0033 actually declares it.
+    """``_AMOUNT_KINDS`` as migration 0034 actually declares it.
 
+    0034 is the migration that owns the vocabulary's database-side
+    enforcement — it adds the ``ck_documents_amount_kind`` CHECK that 0033
+    never had — so it is the current third copy this test compares against.
     Loaded from the file rather than copied here: a copy would be a fourth
     place to drift. The module name starts with a digit, so it cannot be
     imported by name.
     """
-    path = pathlib.Path(__file__).resolve().parents[1] / "migrations/versions/0033_money_facts.py"
-    spec = importlib.util.spec_from_file_location("money_facts_migration", path)
+    path = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "migrations/versions/0034_refund_amount_kind.py"
+    )
+    spec = importlib.util.spec_from_file_location("refund_amount_kind_migration", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -42,7 +49,7 @@ def _migration_amount_kinds() -> tuple[str, ...]:
 
 
 def test_the_three_copies_of_the_amount_kinds_agree() -> None:
-    """The seven kinds exist in three places and nothing else compares them.
+    """The eight kinds exist in three places and nothing else compares them.
 
     Drift is dangerous in both directions. A kind the migration's enum accepts
     but ``AMOUNT_KINDS`` omits is silently normalised to NULL and disappears;
@@ -54,6 +61,92 @@ def test_the_three_copies_of_the_amount_kinds_agree() -> None:
     from_enum = tuple(kind.value for kind in AmountKind)
     assert from_enum == AMOUNT_KINDS
     assert from_enum == _migration_amount_kinds()
+
+
+def _migration_negative_kinds() -> set[str]:
+    """The kind literal(s) named in 0034's ``_SIGN_GUARD`` SQL.
+
+    ``_SIGN_GUARD`` and ``AMOUNT_SIGN`` are two hand-maintained lists of the
+    same fact — which kinds are negative — so nothing stops them from
+    disagreeing. This parses the guard's SQL text for the ``'kind'`` literals
+    it names, the same style as ``_migration_amount_kinds`` above.
+    """
+    path = (
+        pathlib.Path(__file__).resolve().parents[1]
+        / "migrations/versions/0034_refund_amount_kind.py"
+    )
+    spec = importlib.util.spec_from_file_location("refund_amount_kind_migration", path)
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    guard: str = module._SIGN_GUARD
+    return set(re.findall(r"'([a-z_]+)'", guard))
+
+
+def test_the_sign_guard_and_the_sign_map_agree_on_which_kinds_are_negative() -> None:
+    """The migration hardcodes the guard's kind(s); ``AMOUNT_SIGN`` is the
+    Python source of truth. One list drifting from the other would silently
+    let a negative kind merge with a positive one, or vice versa."""
+    from library.models import AMOUNT_SIGN
+
+    negative_in_python = {kind.value for kind, sign in AMOUNT_SIGN.items() if sign < 0}
+    assert _migration_negative_kinds() == negative_in_python
+
+
+def test_refund_is_a_known_kind_and_contributes_negatively() -> None:
+    from library.models import AMOUNT_SIGN, SUMMABLE_AMOUNT_KINDS, AmountKind
+
+    assert AmountKind.REFUND in SUMMABLE_AMOUNT_KINDS
+    assert AMOUNT_SIGN[AmountKind.REFUND] == -1
+    assert AMOUNT_SIGN[AmountKind.PAYMENT_DUE] == 1
+    assert AMOUNT_SIGN[AmountKind.PAYMENT_MADE] == 1
+    assert AMOUNT_SIGN[AmountKind.ASSESSMENT] == 1
+
+
+def test_summable_is_derived_from_the_sign_map_not_declared_twice() -> None:
+    """Two hand-maintained lists are two lists that can disagree."""
+    from library.models import AMOUNT_SIGN, SUMMABLE_AMOUNT_KINDS
+
+    assert frozenset(AMOUNT_SIGN) == SUMMABLE_AMOUNT_KINDS
+
+
+def test_a_non_contributing_kind_has_no_sign() -> None:
+    from library.models import AMOUNT_SIGN, AmountKind
+
+    for kind in (
+        AmountKind.COVERAGE_LIMIT,
+        AmountKind.BALANCE,
+        AmountKind.ESTIMATE,
+        AmountKind.NONE,
+    ):
+        assert kind not in AMOUNT_SIGN
+
+
+def test_the_database_now_rejects_a_kind_outside_the_vocabulary(
+    api_database_url: str,
+) -> None:
+    """`0033` shipped `amount_kind` as an unconstrained varchar(16).
+
+    Verified against Postgres: `'not_a_real_kind'` inserted successfully
+    before `0034`. The vocabulary is load-bearing twice over — it decides
+    what enters a total and what may merge — so it belongs in the database.
+    """
+    import sqlalchemy
+    from sqlalchemy import create_engine, text
+
+    engine = create_engine(
+        api_database_url.replace("postgresql+asyncpg://", "postgresql+psycopg://")
+    )
+    with engine.begin() as connection, pytest.raises(sqlalchemy.exc.IntegrityError):
+        connection.execute(
+            text(
+                "INSERT INTO documents (sha256, mime_type, status, source, "
+                "language, amount_kind, created_at, updated_at) VALUES "
+                "(:s, 'application/pdf', 'ready', 'upload', 'en', "
+                "'not_a_real_kind', now(), now())"
+            ),
+            {"s": "c" * 64},
+        )
 
 
 async def _run[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T:
