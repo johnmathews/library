@@ -45,45 +45,59 @@ still needs both documents reachable from the number. What was needed was a
 notion of **payment identity**: which documents describe one payment,
 computed once, joinable from anywhere a total is built.
 
-## Why a date window cannot work, in either direction
+## Why a single date window cannot work, in either direction
 
-The first design instinct was a date-window join: same sender, same amount,
-same currency, within N days. It fails in both directions at once, and no
-single choice of N fixes it.
+The first design instinct was a single date-window join: same sender, same
+amount, same currency, within N days, full stop. It fails in both directions
+at once, and no single choice of N fixes it, because it never looks at what
+each document actually *is* — only at how far apart the two dates are.
 
-Widen the window and it starts merging things that must stay separate: the
-archive has two genuinely different purchases from the same vendor, same
-amount, four days apart — two real charges, not one event told twice.
-Narrow the window and a legitimate invoice/receipt pair that happens to
-settle late — the archive also has one issued five months after its invoice
-— falls outside it and never merges. There is no width for N that gets both
-cases right, because the thing that actually distinguishes them is not *how
-far apart* the two documents are. It is *what each document is*.
+Widen the window and it starts merging things that must stay separate:
+`tests/test_payment_identity.py` fixes a pair of genuinely different
+purchases from the same sender, same amount, four days apart, that must
+never merge — both are `payment_made`, two separate real charges, not one
+event told twice. Narrow the window instead and a legitimate invoice/receipt
+pair that settles late falls outside it and never merges — the same test
+file's R2 case pairs an invoice and its receipt roughly two and a half
+months apart, well past any window narrow enough to keep the four-days-apart
+purchases separate. There is no width for N that gets both cases right using
+proximity alone.
 
-## The insight that resolved it: complementarity, not proximity
+## The insight that resolved it: two separate mechanisms, not one wider window
 
-An invoice and the receipt that settles it are never the same kind of
-amount: one is `payment_due`, the other is `payment_made`. Two separate
-purchases of the same value, by contrast, are always the *same* kind — two
-receipts, or two invoices, never one of each. That is a property `amount_kind`
-already records, and it does not depend on the two documents being close in
-time at all.
+The design does not try to make one window work for everything. It splits
+the problem in two, using two independent kinds of evidence.
 
-So the rule that survived (R3 in [`docs/money-facts.md`](../docs/money-facts.md)
-§4) merges on **same sender, amount and currency, plus complementary
-`amount_kind`**, and only *then* applies a date bound — 60 days — as a
-backstop against reaching across genuinely unrelated history, not as the
-mechanism that tells the two cases apart. Complementarity does the actual
-separating work: the four-days-apart pair is `payment_made`/`payment_made`
-and never matches R3 regardless of the window; the five-months-apart pair is
-`payment_due`/`payment_made` and matches regardless of the gap. A same-day
-exact match (R1) and a shared `reference` number at any gap (R2) round out
-the other two ways two documents turn out to be one payment, and a `VETO`
-(both documents carry a `reference`, and they differ) beats every rule when
-it applies, even a same-day amount match.
+Where two documents share the sender's own invoice/order number (**R2**),
+that number is unambiguous regardless of how far apart the two dates are —
+an invoice and the receipt that settles it two and a half months
+later still carry the same reference. `reference` needs no date bound at
+all, because the identifier itself is the evidence:
+`test_r2_a_reference_match_merges_across_any_gap` is literally named for
+this — "the case a date window cannot reach."
+
+Where no shared reference exists, the rule that decides is `amount_kind`
+**complementarity** (**R3**), not a wider window. An invoice and the receipt
+that settles it are never the same kind of amount — one is `payment_due`,
+the other `payment_made` — while two separate purchases of the same value
+are always the *same* kind. Complementarity is what actually tells the two
+cases apart; the four-days-apart pair is `payment_made`/`payment_made` and
+never matches R3 **at any window width**, because it fails the
+complementarity test regardless of how close together the dates are. R3
+still carries a 60-day bound on top of complementarity — as a backstop
+against merging complementary-but-unrelated amounts separated by long,
+coincidental intervals, not as the thing doing the separating work — so a
+complementary pair that happens to be more than 60 days apart, and does not
+share a reference, is not merged by anything in this layer (§5 in
+[`docs/money-facts.md`](../docs/money-facts.md) — a known, stated gap, not a
+silent one).
+
+A same-day exact match (**R1**) and a `VETO` (both documents carry a
+`reference`, and they differ, beating every other rule even on a same-day
+amount match) round out the rule set.
 
 Verified against every one of the 20 known duplicate groups and against the
-four-days-apart / five-months-apart pair described above:
+four-days-apart / reference-match-across-any-gap pairs described above:
 `tests/test_payment_identity.py` seeds each shape with invented senders and
 amounts and asserts the collapse (or non-collapse) directly against the
 `payments` SQL view.
