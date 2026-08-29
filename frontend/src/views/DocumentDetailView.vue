@@ -53,6 +53,7 @@ import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
 import NoteEditorPanel from '@/components/NoteEditorPanel.vue'
 import DocumentMetadataEditor from '@/components/DocumentMetadataEditor.vue'
 import FacetEditor from '@/components/facets/FacetEditor.vue'
+import PaymentGroup from '@/components/payments/PaymentGroup.vue'
 import DocumentComments from '@/components/DocumentComments.vue'
 import ActionDock from '@/components/ActionDock.vue'
 import { useDocumentLayout, HERO_FIELD_LABELS } from '@/composables/useDocumentLayout'
@@ -1554,6 +1555,16 @@ watch(
           :labels="facetLabels"
           @saved="facetLabels = $event"
         />
+
+        <!-- Payment group (docs/money-facts.md): same non-draggable-sibling
+             deal as FacetEditor above — a real DOM child of
+             `#document-metadata-column` with no `[data-card-drag-handle]`, so
+             SortableJS counts it as a sibling but never lets it be dragged.
+             Unlike FacetEditor it often renders NOTHING at all (no root
+             element) when this document isn't part of a collapsed payment,
+             which only shrinks the sibling count SortableJS sees — the
+             out-of-range append behaviour documented above still holds. -->
+        <PaymentGroup :document-id="doc.id" />
       </div>
     </div>
 

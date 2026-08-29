@@ -219,6 +219,17 @@ describe('DocumentDetailView', () => {
   /** This document's current facet labels; tests mutate this, and the PUT
    * handler below mutates it too so a save round-trips like the real API. */
   let documentLabels: Record<string, string>
+  /** What GET /api/documents/12/payment returns; defaults to just this
+   * document (no collapse), so PaymentGroup renders nothing in every test
+   * that doesn't opt into a payment group. The split handler above mutates
+   * this so a split round-trips like the real API. */
+  let paymentDocuments: {
+    id: number
+    title: string | null
+    document_date: string | null
+    amount_kind: string | null
+    reference: string | null
+  }[]
 
   beforeEach(async () => {
     // useDocumentLayout is a module singleton — reset its persisted state and
@@ -240,6 +251,9 @@ describe('DocumentDetailView', () => {
       jsonResponse({ page_count: 1, pages: [{ page_number: 1, markdown: '# Invoice\n\nTotal: €123.45' }] } satisfies DocumentMarkdownResponse)
     neighborsList = [{ id: 8 }, { id: 12 }, { id: 20 }]
     documentLabels = {}
+    paymentDocuments = [
+      { id: 12, title: detail.title, document_date: detail.document_date, amount_kind: 'payment_due', reference: null },
+    ]
     capturedSortables.length = 0
     FakeIntersectionObserver.instances = []
     vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
@@ -302,6 +316,14 @@ describe('DocumentDetailView', () => {
           else documentLabels[key] = value
         }
         return Promise.resolve(jsonResponse({ labels: documentLabels }))
+      }
+      if (path === '/api/documents/12/payment' && method === 'GET') {
+        return Promise.resolve(jsonResponse({ payment_id: 900, documents: paymentDocuments }))
+      }
+      if (url === '/api/payments/split' && method === 'POST') {
+        const splitBody = JSON.parse(String(init?.body ?? '{}')) as { doc_a: number; doc_b: number }
+        paymentDocuments = paymentDocuments.filter((doc) => doc.id === splitBody.doc_a)
+        return Promise.resolve(jsonResponse({ payment_id: 900, documents: paymentDocuments }))
       }
       return Promise.resolve(jsonResponse({ detail: `unexpected ${method} ${url}` }, 500))
     })
@@ -2274,6 +2296,47 @@ describe('DocumentDetailView', () => {
       })
       expect((categorySelect.element as HTMLSelectElement).value).toBe('')
       expect(editor.find('[data-testid="facet-error"]').exists()).toBe(false)
+    })
+  })
+
+  describe('payment group (docs/money-facts.md)', () => {
+    it('renders nothing in the metadata column when this document is alone in its payment', async () => {
+      const w = await mountView()
+      const metadataColumn = w.find('#document-metadata-column')
+      expect(metadataColumn.find('[data-testid="payment-group"]').exists()).toBe(false)
+      expect(metadataColumn.find('[data-testid="payment-error"]').exists()).toBe(false)
+    })
+
+    it('mounts in the metadata column and lists both documents when this one was collapsed with another', async () => {
+      paymentDocuments = [
+        { id: 12, title: detail.title, document_date: detail.document_date, amount_kind: 'payment_due', reference: null },
+        { id: 20, title: 'Betaalbevestiging', document_date: '2026-05-16', amount_kind: 'payment_made', reference: null },
+      ]
+      const w = await mountView()
+
+      // Mounted for real inside the metadata column, not just in isolation.
+      const metadataColumn = w.find('#document-metadata-column')
+      const group = metadataColumn.find('[data-testid="payment-group"]')
+      expect(group.exists()).toBe(true)
+      expect(group.findAll('[data-testid="payment-group-row"]')).toHaveLength(2)
+      expect(group.text()).toContain('Betaalbevestiging')
+
+      // Splitting posts doc_a/doc_b to the real endpoint and re-renders from
+      // the response — the panel disappears once only one document remains.
+      await group.get('[data-testid="payment-split"]').trigger('click')
+      await flushPromises()
+
+      const splitCall = fetchMock.mock.calls.find(
+        (call) =>
+          String(call[0]) === '/api/payments/split' &&
+          (call[1] as RequestInit | undefined)?.method === 'POST',
+      )
+      expect(splitCall).toBeTruthy()
+      expect(JSON.parse(String((splitCall![1] as RequestInit).body))).toEqual({
+        doc_a: 12,
+        doc_b: 20,
+      })
+      expect(metadataColumn.find('[data-testid="payment-group"]').exists()).toBe(false)
     })
   })
 })
