@@ -475,3 +475,27 @@ def test_fx_rates_table_seeded(migrated_database_url: str) -> None:
         row[0] for row in fetch_all(migrated_database_url, "SELECT DISTINCT currency FROM fx_rates")
     }
     assert {"EUR", "GBP"} <= currencies
+
+
+def test_check_constraint_names_match_the_naming_convention(
+    migrated_database_url: str,
+) -> None:
+    """`sa.CheckConstraint(name=...)` is substituted *into* the "ck" naming
+    convention's `%(constraint_name)s` token, not used verbatim: passing an
+    already-prefixed name (`ck_charts_default_grain`) doubles the prefix in
+    the live database (`ck_charts_ck_charts_default_grain`). 0035 and 0036
+    pass the convention-relative suffix instead — this pins the actual
+    database-side names so a future CHECK doesn't repeat the doubling."""
+    checks = fetch_all(
+        migrated_database_url,
+        """
+        SELECT rel.relname, con.conname
+        FROM pg_constraint con
+        JOIN pg_class rel ON rel.oid = con.conrelid
+        WHERE con.contype = 'c'
+          AND rel.relname IN ('charts', 'spend_lines')
+        """,
+    )
+    by_table = dict(checks)
+    assert by_table["charts"] == "ck_charts_default_grain"
+    assert by_table["spend_lines"] == "ck_spend_lines_origin"

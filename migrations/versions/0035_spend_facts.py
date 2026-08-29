@@ -176,7 +176,10 @@ def upgrade() -> None:
         sa.Column("amount", sa.Numeric(14, 2), nullable=False),
         sa.Column("note", sa.Text(), nullable=True),
         sa.Column("origin", sa.String(16), nullable=False, server_default="manual"),
-        sa.CheckConstraint("origin IN ('extracted','manual')", name="ck_spend_lines_origin"),
+        # name is convention-relative, not the literal database name: the "ck"
+        # naming convention already prefixes it to `ck_spend_lines_origin`.
+        # An already-prefixed name here would be prefixed twice.
+        sa.CheckConstraint("origin IN ('extracted','manual')", name="origin"),
     )
     op.create_index("ix_spend_lines_document", "spend_lines", ["document_id"])
     op.create_table(

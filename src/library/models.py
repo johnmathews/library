@@ -210,6 +210,15 @@ class HeldEmailStatus(enum.StrEnum):
     DISMISSED = "dismissed"
 
 
+class Grain(enum.StrEnum):
+    """The time bucket a chart's x-axis uses (spec §9.2)."""
+
+    WEEK = "week"
+    MONTH = "month"
+    QUARTER = "quarter"
+    YEAR = "year"
+
+
 class Base(DeclarativeBase):
     """Declarative base with deterministic constraint names for Alembic."""
 
@@ -1427,3 +1436,41 @@ class PaymentOverride(Base):
     doc_a: Mapped[int] = mapped_column(BigInteger, ForeignKey("documents.id", ondelete="CASCADE"))
     doc_b: Mapped[int] = mapped_column(BigInteger, ForeignKey("documents.id", ondelete="CASCADE"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Chart(Base):
+    """A saved question over ``spend_facts``.
+
+    ``rule`` is a serialised :class:`library.charts.rule.Rule`. The two axes
+    are independent by design: ``default_grain`` and ``default_split`` are
+    only starting positions, and changing either at request time never alters
+    the total (spec §9.2).
+    """
+
+    __tablename__ = "charts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    question_text: Mapped[str] = mapped_column(Text)
+    rule: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    default_grain: Mapped[Grain] = mapped_column(
+        Enum(
+            Grain,
+            name="chart_grain",
+            native_enum=False,
+            length=16,
+            # Without this SQLAlchemy persists the member *name* ("MONTH"),
+            # which the migration's `default_grain IN ('week',...)` CHECK
+            # rejects. Same treatment as every other enum column here.
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        default=Grain.MONTH,
+        server_default=Grain.MONTH.value,
+    )
+    default_split: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    display_currency: Mapped[str] = mapped_column(String(3))
+    ordinal: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
