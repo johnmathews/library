@@ -1,11 +1,14 @@
 """Shared test fixtures for the Library backend."""
 
 import asyncio
+import hashlib
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 from alembic import command
@@ -14,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from procrastinate import PsycopgConnector
 from procrastinate.testing import InMemoryConnector
-from sqlalchemy import text
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
@@ -25,8 +28,17 @@ from library.auth.passwords import hash_password
 from library.config import get_settings
 from library.db import get_session
 from library.extraction import apply as extraction_apply_module
+from library.facets.vocabulary import create_facet, create_value, set_document_label
 from library.jobs import job_app, procrastinate_conninfo
-from library.models import Base, User
+from library.models import (
+    AmountKind,
+    Base,
+    Document,
+    DocumentSource,
+    DocumentStatus,
+    Sender,
+    User,
+)
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
@@ -494,3 +506,141 @@ def payment_pair(api_database_url: str) -> tuple[int, int]:
             await engine.dispose()
 
     return asyncio.run(_seed())
+
+
+# --- The charts-engine fixture vocabulary -----------------------------------
+#
+# `session`, `facets` and `document` are the shared building blocks for the
+# spend-lines / spend-facts / chart-query work. They live here rather than in
+# one test file because seven later tasks build on exactly this shape.
+
+#: The date every fixture document carries unless the caller names another.
+#: A real date rather than NULL on purpose: the R1 payment rule (same sender,
+#: same currency, same amount, *same day*) can only ever merge two documents
+#: that share a date, so a NULL default would make merge behaviour untestable
+#: from these fixtures.
+FIXTURE_DOCUMENT_DATE: date = date(2026, 3, 15)
+
+#: The vocabulary the `facets` fixture creates. Deliberately contains two
+#: facets carrying values that could be confused for each other's — `scope`
+#: has no `services`, `category` does — so a test can prove a line label
+#: cannot claim one facet while pointing at another facet's value.
+FIXTURE_VOCABULARY: dict[str, tuple[str, ...]] = {
+    "category": ("software", "services", "supplies", "accountancy"),
+    "scope": ("business", "personal"),
+    "cost_type": ("subscription", "usage"),
+}
+
+
+@pytest.fixture
+async def session(api_database_url: str) -> AsyncIterator[AsyncSession]:
+    """An ``AsyncSession`` on the shared API database.
+
+    Requesting ``api_database_url`` is what arms the autouse truncation, so a
+    test using this fixture leaves nothing behind. ``expire_on_commit=False``
+    matches the app's own session factory, so an ORM object read after a commit
+    does not go looking for a fresh connection.
+    """
+    engine = create_async_engine(api_database_url, poolclass=NullPool)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as db_session:
+            yield db_session
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+async def facets(session: AsyncSession) -> dict[str, tuple[str, ...]]:
+    """Create ``FIXTURE_VOCABULARY`` and return it.
+
+    Committed rather than flushed: other sessions (an API client, a second
+    engine) must be able to see the vocabulary a test's documents are labelled
+    against.
+    """
+    for ordinal, (facet_key, value_keys) in enumerate(FIXTURE_VOCABULARY.items()):
+        await create_facet(session, facet_key, facet_key.replace("_", " ").title(), ordinal)
+        for value_key in value_keys:
+            await create_value(session, facet_key, value_key, value_key.title())
+    await session.commit()
+    return FIXTURE_VOCABULARY
+
+
+class DocumentFactory(Protocol):
+    """Signature of the `document` fixture. See its docstring for the defaults."""
+
+    async def __call__(
+        self,
+        *,
+        amount_total: Decimal | str | None = None,
+        amount_kind: AmountKind | None = None,
+        document_date: date | None = FIXTURE_DOCUMENT_DATE,
+        currency: str | None = "EUR",
+        labels: Mapping[str, str] | None = None,
+        deleted: bool = False,
+        title: str | None = None,
+        sender: str | None = None,
+        reference: str | None = None,
+    ) -> Document: ...
+
+
+@pytest.fixture
+async def document(session: AsyncSession, facets: dict[str, tuple[str, ...]]) -> DocumentFactory:
+    """Make a document, committed, with everything the chart work needs on it.
+
+    Depends on `facets` so `labels=` always resolves; the vocabulary is cheap
+    and truncated with everything else, and making the dependency implicit
+    removes an ordering trap from every later task.
+
+    `sender` defaults to **None**, so two fixture documents never merge into one
+    payment by accident — the payment rules all require a non-NULL, matching
+    `sender_id`. A test that wants a merge names the sender on both documents;
+    senders are created on demand and shared by name within a test.
+    """
+
+    async def _sender_id(name: str) -> int:
+        existing = await session.scalar(select(Sender.id).where(Sender.name == name))
+        if existing is not None:
+            return int(existing)
+        row = Sender(name=name)
+        session.add(row)
+        await session.flush()
+        return row.id
+
+    async def _make(
+        *,
+        amount_total: Decimal | str | None = None,
+        amount_kind: AmountKind | None = None,
+        document_date: date | None = FIXTURE_DOCUMENT_DATE,
+        currency: str | None = "EUR",
+        labels: Mapping[str, str] | None = None,
+        deleted: bool = False,
+        title: str | None = None,
+        sender: str | None = None,
+        reference: str | None = None,
+    ) -> Document:
+        marker = uuid.uuid4().hex
+        row = Document(
+            sha256=hashlib.sha256(marker.encode()).hexdigest(),
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            status=DocumentStatus.INDEXED,
+            title=title if title is not None else f"fixture-{marker[:8]}",
+            document_date=document_date,
+            amount_total=Decimal(amount_total) if amount_total is not None else None,
+            amount_kind=amount_kind,
+            # R2 (same sender + same reference, any date gap) is the strongest
+            # merge rule and the one 0034's sign guard exists for, so a
+            # canonicality test needs to be able to set this.
+            reference=reference,
+            currency=currency,
+            sender_id=await _sender_id(sender) if sender is not None else None,
+            deleted_at=datetime.now(UTC) if deleted else None,
+        )
+        session.add(row)
+        await session.flush()
+        for facet_key, value_key in (labels or {}).items():
+            await set_document_label(session, row.id, facet_key, value_key)
+        await session.commit()
+        return row
+
+    return _make

@@ -189,6 +189,14 @@ AMOUNT_SIGN: Mapping[AmountKind, int] = MappingProxyType(
 SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(AMOUNT_SIGN)
 
 
+class SpendLineOrigin(enum.StrEnum):
+    """Where a line came from. Only ``MANUAL`` is produced today; extraction
+    proposing lines is deferred (spec §14, open question 3)."""
+
+    EXTRACTED = "extracted"
+    MANUAL = "manual"
+
+
 class HeldEmailStatus(enum.StrEnum):
     """Lifecycle of a held email (see ``HeldEmail``).
 
@@ -411,6 +419,62 @@ class DocumentLabel(Base):
 
     document_id: Mapped[int] = mapped_column(
         ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    facet_id: Mapped[int] = mapped_column(
+        ForeignKey("facets.id", ondelete="RESTRICT"), primary_key=True
+    )
+    facet_value_id: Mapped[int] = mapped_column(Integer)
+
+
+class SpendLine(Base):
+    """One part of a document's amount, when the money divides.
+
+    A document has either no lines at all — the common case, and the one
+    ``spend_facts`` synthesises a row for — or a complete set summing to
+    ``amount_total``. There is no partial state; the sum is enforced by a pair
+    of deferred constraint triggers (migration 0035) rather than by application
+    code, and from both sides: editing ``documents.amount_total`` out from under
+    an allocation is refused just as an unbalanced line set is.
+    """
+
+    __tablename__ = "spend_lines"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    origin: Mapped[SpendLineOrigin] = mapped_column(
+        Enum(
+            SpendLineOrigin,
+            name="spend_line_origin",
+            native_enum=False,
+            length=16,
+            # Without this SQLAlchemy persists the member *name* ("MANUAL"),
+            # which the migration's `origin IN ('extracted','manual')` CHECK
+            # rejects. Same treatment as every other enum column here.
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        default=SpendLineOrigin.MANUAL,
+        server_default=SpendLineOrigin.MANUAL.value,
+    )
+
+
+class LineLabel(Base):
+    """One line's value for one facet. Overrides the document's, if any."""
+
+    __tablename__ = "line_labels"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["facet_value_id", "facet_id"],
+            ["facet_values.id", "facet_values.facet_id"],
+            name="line_labels_value_facet",
+        ),
+    )
+
+    line_id: Mapped[int] = mapped_column(
+        ForeignKey("spend_lines.id", ondelete="CASCADE"), primary_key=True
     )
     facet_id: Mapped[int] = mapped_column(
         ForeignKey("facets.id", ondelete="RESTRICT"), primary_key=True
