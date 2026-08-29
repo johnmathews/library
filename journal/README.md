@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-168 entries.
+169 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -14,6 +14,7 @@ CI checks it is current.
 ## August 2026
 
 - **2026-08-29** — [Amount semantics and payment identity](260829-money-facts.md)
+- **2026-08-29** — [The amount classifier could not read its own answers](260829-amount-classifier-fence.md)
 - **2026-08-28** — [The OCR weights were never in the image](260828-vendored-ocr-weights.md)
 - **2026-08-28** — [A controlled label vocabulary, in place of 771 drifted tags](260828-facet-vocabulary.md)
 - **2026-08-27** — [Retrieval reach](260827-retrieval-reach.md)

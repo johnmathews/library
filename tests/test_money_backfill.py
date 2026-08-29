@@ -1,10 +1,12 @@
-"""Selection for the amount backfill, and its per-document failure guard."""
+"""Selection for the amount backfill, its failure guard, and response handling."""
 
 import asyncio
 import hashlib
 import uuid
 from collections.abc import Awaitable, Callable
 from decimal import Decimal
+from types import SimpleNamespace
+from typing import Any, cast
 
 import pytest
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
@@ -138,3 +140,91 @@ def test_a_classification_error_does_not_abort_the_run(
     assert skipped >= 1
     assert classified >= 1
     assert empty == 0
+
+
+# --- the amount classifier's response handling -------------------------------
+#
+# The first live `backfill-amounts --limit 5` against the real archive logged
+# "amount classifier returned unparseable JSON" five times out of five and
+# classified nothing. The model had wrapped its JSON in a ```json fence while
+# the code called `messages.create()` and `json.loads`-ed the raw text. Every
+# test below this line exists because none above it could have caught that:
+# they all fed `_parse` a hand-written JSON string, and the API call shape was
+# never exercised at all.
+
+
+def test_a_fenced_payload_still_classifies() -> None:
+    """The exact production shape: correct JSON inside a ```json fence."""
+    payload = '```json\n{"amount_kind": "payment_due", "reference": "INV-1"}\n```'
+    assert backfill_module._parse(payload) == ("payment_due", "INV-1")
+
+
+def test_a_payload_wrapped_in_prose_still_classifies() -> None:
+    payload = 'Here is the classification:\n{"amount_kind": "payment_made"}\nHope that helps.'
+    assert backfill_module._parse(payload) == ("payment_made", None)
+
+
+def test_a_payload_that_is_not_json_at_all_stays_undecided() -> None:
+    """Undecided, not raised: the document stays in the queue for a later run."""
+    assert backfill_module._parse("I could not tell.") == (None, None)
+
+
+async def test_the_api_backend_asks_for_structured_output(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pins the fix: the API path must use `messages.parse` with the schema.
+
+    A `messages.create` call returning fenced text is exactly what shipped, so
+    this asserts the call shape and not merely the returned tuple — a stub that
+    answered both methods would let the defect back in unnoticed.
+    """
+    seen: dict[str, object] = {}
+
+    class _Messages:
+        async def parse(self, **kwargs: object) -> object:
+            seen.update(kwargs)
+            return SimpleNamespace(
+                parsed_output=backfill_module.AmountClassification(
+                    amount_kind="payment_due", reference="INV-9"
+                ),
+                usage=SimpleNamespace(input_tokens=11, output_tokens=3),
+            )
+
+        async def create(self, **kwargs: object) -> object:  # pragma: no cover - must not run
+            raise AssertionError("the API backend must use messages.parse, not messages.create")
+
+    client = cast(Any, SimpleNamespace(messages=_Messages()))
+    result = await backfill_module.classify_amount(
+        Settings(),
+        title="t",
+        sender="s",
+        kind="invoice",
+        amount="9.99",
+        currency="EUR",
+        excerpt="x",
+        client=client,
+    )
+
+    assert result == ("payment_due", "INV-9", 11, 3)
+    assert seen["output_format"] is backfill_module.AmountClassification
+
+
+async def test_an_unparseable_structured_response_raises() -> None:
+    """`parsed_output` of None is a real failure, not a silent undecided."""
+
+    class _Messages:
+        async def parse(self, **kwargs: object) -> object:
+            return SimpleNamespace(
+                parsed_output=None, usage=SimpleNamespace(input_tokens=1, output_tokens=1)
+            )
+
+    client = cast(Any, SimpleNamespace(messages=_Messages()))
+    with pytest.raises(backfill_module.AmountParseError):
+        await backfill_module.classify_amount(
+            Settings(),
+            title="t",
+            sender="s",
+            kind="invoice",
+            amount="9.99",
+            currency="EUR",
+            excerpt="x",
+            client=client,
+        )
