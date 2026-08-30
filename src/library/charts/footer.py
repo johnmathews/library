@@ -207,6 +207,23 @@ class _Group:
 #: is not `sign * converted`.
 _NETTED_REFUND = "netted_refund"
 
+#: Every bucket `_CLASSIFY_SQL` can name that this module actually recognises.
+#: `_resolved_bucket` maps anything else — including a name this module does
+#: not know, which `_CLASSIFY_SQL`'s own comment says can reach Python — to
+#: `UNACCOUNTED`, the same way `chart_footer`'s dispatch always has. One
+#: function shared by `chart_footer` and `chart_footer_documents`: without it,
+#: an unforeseen bucket name would make the footer report `unaccounted` money
+#: while the drill route returned nothing for it — the one bucket whose whole
+#: reason to be drillable is the shape nobody predicted, going silent in
+#: exactly that shape.
+_KNOWN_BUCKETS = frozenset({_NETTED_REFUND, "excluded", UNCLASSIFIED, UNDATED, UNCATEGORISED})
+
+
+def _resolved_bucket(row_bucket: str) -> str:
+    """The bucket a row is reported under: `row_bucket` itself if this module
+    recognises it, `UNACCOUNTED` otherwise."""
+    return row_bucket if row_bucket in _KNOWN_BUCKETS else UNACCOUNTED
+
 
 @dataclass(frozen=True, slots=True)
 class _AccountedRow:
@@ -247,7 +264,8 @@ async def _accounted_rows(
     rate could convert.
 
     The one execution of `_CLASSIFY_SQL` **and** the one place a row is
-    converted and signed. `chart_footer` aggregates the first return value and
+    converted (see `_AccountedRow` for the one bucket where "signed" does not
+    apply). `chart_footer` aggregates the first return value and
     `chart_footer_documents` filters it, so the count a footer reports and the
     list a panel opens cannot disagree — not because a test compares them, but
     because there is only one of them.
@@ -316,12 +334,13 @@ async def _accounted_rows(
 class FooterDocument(BaseModel):
     """One document behind a footer bucket.
 
-    `amount` is the **sum of this document's rows in this bucket**, converted
-    and signed — not one row's raw value. A document split across spend lines
-    emits one row per line, and a `100.00` document split `60.00`/`40.00` with
-    neither line labelled emits two, proved against Postgres before this was
-    written. Rendering a single row's amount would print a number the footer
-    never reports.
+    `amount` is the **sum of this document's rows in this bucket**, each
+    already converted (and, per `_AccountedRow`, signed for every bucket this
+    route can open) — not one row's raw value. A document split across spend
+    lines emits one row per line, and a `100.00` document split `60.00`/`40.00`
+    with neither line labelled emits two, proved against Postgres before this
+    was written. Rendering a single row's amount would print a number the
+    footer never reports.
 
     `currency` and `date` are the **document's own**, carried through for
     display; `amount` is in the chart's currency. A row showing `amount` in
@@ -371,7 +390,8 @@ async def chart_footer_documents(
     selected = (
         row
         for row in rows
-        if row.bucket == bucket and (bucket != "excluded" or row.amount_kind == amount_kind)
+        if _resolved_bucket(row.bucket) == bucket
+        and (bucket != "excluded" or row.amount_kind == amount_kind)
     )
     merged: dict[int, FooterDocument] = {}
     for row in selected:
@@ -434,23 +454,30 @@ async def chart_footer(
     refunds = _Group()
 
     for row in rows:
-        if row.bucket == _NETTED_REFUND:
+        resolved = _resolved_bucket(row.bucket)
+        if resolved == _NETTED_REFUND:
             refunds.add(row.amount, row.document_id)
-        elif row.bucket == "excluded":
-            # `_CLASSIFY_SQL` routes a NULL `amount_kind` to `unclassified`
-            # before it ever reaches the `excluded` arm, so this is never None.
-            assert row.amount_kind is not None
-            excluded.setdefault(row.amount_kind, _Group()).add(row.amount, row.document_id)
-        elif row.bucket == "unclassified":
+        elif resolved == "excluded":
+            if row.amount_kind is None:
+                # `_CLASSIFY_SQL` routes a NULL `amount_kind` to `unclassified`
+                # before it ever reaches the `excluded` arm, so this never
+                # actually fires today. Routed to `unaccounted` rather than
+                # asserted, so an unforeseen future shape is reported instead
+                # of 500ing the whole chart — the same policy `_resolved_bucket`
+                # already applies to a bucket name this module does not know.
+                unaccounted.add(row.amount, row.document_id)
+            else:
+                excluded.setdefault(row.amount_kind, _Group()).add(row.amount, row.document_id)
+        elif resolved == UNCLASSIFIED:
             unclassified.add(row.amount, row.document_id)
-        elif row.bucket == "undated":
+        elif resolved == UNDATED:
             undated.add(row.amount, row.document_id)
-        elif row.bucket == UNCATEGORISED:
+        elif resolved == UNCATEGORISED:
             uncategorised.add(row.amount, row.document_id)
         else:
-            # Named buckets only above, so an unforeseen one lands here and is
-            # reported. A trailing `else: uncategorised.add(...)` would have
-            # relabelled it as a gap the chart understood.
+            # `_resolved_bucket` returns `UNACCOUNTED` for anything none of the
+            # arms above claimed, so this is reached only by that bucket —
+            # reported rather than dropped, the whole point of it existing.
             unaccounted.add(row.amount, row.document_id)
 
     return Footer(

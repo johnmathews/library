@@ -1288,6 +1288,28 @@ def test_the_footer_route_caps_its_limit_at_100(api_client: TestClient) -> None:
     assert response.status_code == 422
 
 
+def test_the_footer_route_reports_the_buckets_full_size_before_paging(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A bucket bigger than one page must say so.
+
+    `uncategorised` on a real archive is exactly this shape (§9.4 calls it "a
+    visible task" because it tends to be large), so a page of `limit` items
+    beside a `total` that only counts the page would make a bucket of 340 look
+    complete at 100 — indistinguishable from the footer's own count.
+    """
+    _seed_vocabulary(api_database_url)
+    for _ in range(3):
+        _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, "api-footer-paging", SOFTWARE_RULE)
+    body = api_client.get(
+        f"/api/spending/{chart_id}/footer/uncategorised", params={"limit": 2}
+    ).json()
+    assert body["total"] == 3
+    assert len(body["documents"]) == 2
+    assert body["total"] > len(body["documents"])
+
+
 def test_the_footer_route_and_the_footer_count_agree_after_a_window_narrows(
     api_client: TestClient, api_database_url: str
 ) -> None:

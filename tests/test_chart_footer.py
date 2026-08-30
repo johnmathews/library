@@ -553,14 +553,27 @@ async def test_the_list_length_equals_the_footer_s_count(
     """The invariant this route exists to hold: what the footer counts is what
     the panel lists. §8's "the panel must add up to the bar", one level down.
 
-    Two documents so an off-by-one is visible; the same document twice would
-    pass under a broken deduplication.
+    Two documents so an off-by-one is visible; a third, split across two spend
+    lines, so the same document twice would pass under a broken deduplication
+    for *every* parametrisation, not only `uncategorised`: without a split
+    document in the fixture, no document here ever emits two rows into one
+    bucket, and dropping the merge in `chart_footer_documents` would leave
+    both assertions below green (mutation check a).
     """
     from library.charts.footer import chart_footer_documents
 
     defaults = {"document_date": date(2026, 4, 1), "currency": "EUR"}
     for _ in range(2):
         await document(amount_total=Decimal("10.00"), **{**defaults, **make})
+    split = await document(amount_total=Decimal("30.00"), **{**defaults, **make})
+    await replace_lines(
+        session,
+        split.id,
+        [
+            LineInput(amount=Decimal("18.00"), note="a", labels={}),
+            LineInput(amount=Decimal("12.00"), note="b", labels={}),
+        ],
+    )
     # A second, different excluded kind alongside whatever `make` seeds: with
     # only one excluded kind in the archive, `amount_kind` has nothing to
     # filter, and a deleted filter would pass unnoticed (mutation check c).

@@ -45,7 +45,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.charts.draft import MAX_QUESTION_CHARS, DraftError, draft_rule
-from library.charts.footer import ExcludedGroup, Footer, chart_footer, chart_footer_documents
+from library.charts.footer import (
+    UNACCOUNTED,
+    UNCATEGORISED,
+    UNCLASSIFIED,
+    UNDATED,
+    ExcludedGroup,
+    Footer,
+    chart_footer,
+    chart_footer_documents,
+)
 from library.charts.query import (
     SENDER_SPLIT,
     CellPayment,
@@ -1008,11 +1017,14 @@ async def chart_cell_data(
 #: The buckets `_CLASSIFY_SQL` can put a row in that the footer reports. Named
 #: here rather than derived from `FooterOut`'s fields so an unknown bucket is a
 #: 422 the owner can read, and so `unaccounted` is openable: a bug signal you
-#: cannot open is not a signal. `unconvertible` is deliberately absent: it is
-#: not a `_CLASSIFY_SQL` bucket at all but a merge of two separately-reported
-#: lists (docs/charts.md §5), so listing its documents would need
-#: `Unconvertible` to carry document ids — an engine change, out of scope.
-_FOOTER_BUCKETS = frozenset({"excluded", "unclassified", "uncategorised", "undated", "unaccounted"})
+#: cannot open is not a signal. Built from `footer.py`'s own constants rather
+#: than re-spelled string literals, so a rename there cannot leave this set
+#: stale and the renamed bucket un-drillable behind a 422 naming a bucket the
+#: engine no longer has. `unconvertible` is deliberately absent: it is not a
+#: `_CLASSIFY_SQL` bucket at all but a merge of two separately-reported lists
+#: (docs/charts.md §5), so listing its documents would need `Unconvertible` to
+#: carry document ids — an engine change, out of scope.
+_FOOTER_BUCKETS = frozenset({"excluded", UNCLASSIFIED, UNCATEGORISED, UNDATED, UNACCOUNTED})
 
 
 class FooterDocumentOut(BaseModel):
@@ -1028,7 +1040,15 @@ class FooterDocumentOut(BaseModel):
 
 
 class FooterDocumentsOut(BaseModel):
+    """`total` is the bucket's full size, taken **before** paging: a bucket
+    with more documents than `limit` still returns only a page of them, and
+    without `total` a client cannot tell a complete list from the first 100 of
+    340 — the steady state for `uncategorised` on a real archive, not an edge
+    case (§9.4 calls it "a visible task" precisely because it tends to be
+    large)."""
+
     bucket: str
+    total: int
     documents: list[FooterDocumentOut]
 
 
@@ -1075,6 +1095,7 @@ async def chart_footer_bucket(
         until=query.until,
         facets_in_rule=query.facets_in_rule,
     )
+    total = len(rows)
     page = rows[offset : offset + limit]
     titles: dict[int, str | None] = dict(
         (
@@ -1089,6 +1110,7 @@ async def chart_footer_bucket(
     )
     return FooterDocumentsOut(
         bucket=bucket,
+        total=total,
         documents=[
             FooterDocumentOut(
                 id=row.document_id,
