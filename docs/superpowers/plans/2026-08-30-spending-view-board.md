@@ -1408,10 +1408,42 @@ Re-measure if the shell's padding changes. Do not convert this to a `lg:` rule:
 at a 1280px viewport the column is 960 or 1136 depending on a sidebar the user
 collapses independently, and no viewport query can tell those apart.
 
+**Two mechanisms, not one — and the difference is forced by CSS, not chosen.**
+
+The *toolbar* sits in normal flow inside the workspace, so it uses a real CSS
+`@container` query at `@3xl` and needs no JavaScript.
+
+The *panel* cannot. `SpendingDrillPanel` is a native `<dialog>` opened with
+`showModal()`, which puts it in the **top layer** — it is not a descendant of
+the workspace's container, so no `@container` rule can reach it and no custom
+property inherits into it. Task 6 therefore takes `sheet` as a resolved boolean
+and mirrors it to `data-presentation`, and **this task owns computing it**.
+
+Compute it by observing the **container**, not the viewport:
+
+- `ResizeObserver` on the workspace's own content column, compared against the
+  same 48rem threshold the toolbar's `@container` rule uses.
+- **Not** `window.innerWidth`, **not** `matchMedia`, **not** a `lg:` class. At a
+  1280px viewport the column is 960px with the sidebar expanded and 1136px with
+  it collapsed — a viewport query cannot tell those apart, and getting this
+  wrong reintroduces exactly the defect this app has already been caught by
+  twice.
+- Define 48rem once as a named constant and use it for both the observer and,
+  via a comment, the CSS rule — so the two cannot drift silently.
+
+The e2e guard asserts the observable outcome (docked right when wide, docked to
+the bottom when narrow), which is what a user experiences and what can be proved
+to go red.
+
 - [ ] **Step 2: Write the failing spec**
 
 ```ts
 it('sends the toolbar through PageHeader controls, not a band of its own', () => { … })
+
+// The panel's presentation follows the CONTENT COLUMN, not the viewport: at a
+// 1280px viewport the column is 960px expanded and 1136px collapsed.
+it('opens the panel as a sheet when the content column is below the threshold', async () => { … })
+it('opens it as a side panel when the column is above it, at the same viewport', async () => { … })
 
 it('loads the chart by id rather than paging the list', async () => {
   await mountedWorkspace()
