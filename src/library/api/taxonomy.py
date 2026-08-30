@@ -178,7 +178,7 @@ async def patch_sender(
     return SenderWithCount(
         id=sender.id,
         name=sender.name,
-        document_count=await taxonomy._sender_document_count(session, sender_id),
+        document_count=await taxonomy.sender_document_count(session, sender_id),
         colour=sender.colour,
     )
 

@@ -416,7 +416,7 @@ async def create_recipient(session: AsyncSession, name: str) -> "CreateEntityRes
 # nullable ON DELETE SET NULL). Each service owns its transaction.
 
 
-async def _sender_document_count(session: AsyncSession, sender_id: int) -> int:
+async def sender_document_count(session: AsyncSession, sender_id: int) -> int:
     """Non-deleted documents from a sender (matches list_senders counts)."""
     return (
         await session.execute(
@@ -481,7 +481,7 @@ async def rename_sender(
 
     if target is not None:
         if not merge:
-            count = await _sender_document_count(session, target.id)
+            count = await sender_document_count(session, target.id)
             return SenderRenameResult(status="collision", sender=target, document_count=count)
         await session.execute(
             update(Document).where(Document.sender_id == sender_id).values(sender_id=target.id)
@@ -514,7 +514,7 @@ async def reassign_and_delete_sender(
         if await session.get(Sender, target_id) is None:
             return DeleteResult(status="target_not_found")
 
-    count = await _sender_document_count(session, sender_id)
+    count = await sender_document_count(session, sender_id)
     if count > 0 and not provided:
         return DeleteResult(status="in_use", document_count=count)
 
