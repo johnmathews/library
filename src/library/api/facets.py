@@ -27,6 +27,7 @@ from library.facets.vocabulary import (
     ValueInUseError,
 )
 from library.models import Document, Facet, FacetValueSuggestion
+from library.schemas import Colour
 
 router: APIRouter = APIRouter(tags=["facets"])
 
@@ -87,12 +88,6 @@ class FacetCreate(BaseModel):
 class ValueCreate(BaseModel):
     key: Key
     label: Label
-
-
-#: Six-digit hex with a leading hash. The same shape the database CHECK
-#: enforces (migration 0037), stated here so a malformed colour is a 422 the
-#: owner can read rather than an IntegrityError translated after the fact.
-Colour = Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")]
 
 
 class ValuePatch(BaseModel):

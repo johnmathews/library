@@ -103,15 +103,23 @@ TypeScript as a second copy of engine semantics. Also rejected: resolving inside
 `charts/query.py`, which would make `split_value` a name and break `/cell`'s
 round-trip on any renamed or duplicated sender.
 
-### 2.4 All six footer buckets drill through
+### 2.4 Five footer buckets drill through
 
 §9.4 calls uncategorised money "a visible task", and today it is a number with
 nowhere to go: no route lists the documents behind a footer bucket, and the
 document list has no "facet is unset", no `amount_kind IS NULL` and no
 "summable but undated" filter to link into.
 
-One new route lists any bucket (§3.3). It covers `unaccounted` too, which should
-always be empty — a bug signal you cannot open is not a signal.
+One new route lists any bucket (§3.3): `excluded`, `unclassified`,
+`uncategorised`, `undated` and `unaccounted`. It covers `unaccounted` too,
+which should always be empty — a bug signal you cannot open is not a signal.
+
+`unconvertible` is deliberately not among them. It is not a `_CLASSIFY_SQL`
+bucket at all but a merge of two separately-reported lists (§9.3) — `query.py`'s
+rows that would have entered the total and `footer.py`'s rows it accounts
+for — so listing its documents needs `Unconvertible` to carry document ids, an
+engine change out of scope for this plan. It renders as a plain figure
+instead (§4.5). See [charts.md](../../charts.md) §13 for the limit as shipped.
 
 ### 2.5 Colour is a nullable override over a derived palette slot
 
@@ -211,7 +219,8 @@ GET /api/spending/{id}/footer/{bucket}?from&to&currency&amount_kind&limit&offset
 ```
 
 `bucket` is one of `excluded`, `unclassified`, `uncategorised`, `undated`,
-`unaccounted`, `unconvertible`; anything else is a 422 naming it.
+`unaccounted`; anything else is a 422 naming it. `unconvertible` is
+deliberately absent from this list — see §2.4.
 `amount_kind` selects one group out of `excluded`, which is a *list* of groups
 (one per kind) rather than a single figure. `limit` ≤ 100, `offset` — the
 repository's standing cap.
@@ -463,7 +472,10 @@ canonical rows, and merged `unconvertible.documents` is a summed upper bound.
 Each is correct; they are not a partition of the archive and the UI must never
 add them together or present them as parts of one whole.
 
-Every count is a button opening §4.6's panel on 4a's bucket route.
+Every count is a button opening §4.6's panel on 4a's bucket route — except
+`refund_count` and `unconvertible[].documents` (§2.4), which have no bucket
+route to open (a refund is inside the total, not a footer group, and
+`unconvertible` is a merge with no document ids) and render as plain figures.
 
 ### 4.6 Drill-through
 

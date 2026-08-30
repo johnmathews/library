@@ -1290,6 +1290,19 @@ def test_an_unknown_footer_bucket_is_a_422_naming_it(api_client: TestClient) -> 
     assert "nonsense" in response.json()["detail"]
 
 
+def test_excluded_without_amount_kind_is_a_422_not_an_empty_page(
+    api_client: TestClient,
+) -> None:
+    """`row.amount_kind == amount_kind` can never match an `excluded` row when
+    `amount_kind` is omitted — every `excluded` row carries a kind — so a
+    missing `amount_kind` and an unrecognised one would both otherwise render
+    as an empty page indistinguishable from "that group is genuinely empty"."""
+    chart_id = _save_chart(api_client, "api-footer-excluded-422", {})
+    response = api_client.get(f"/api/spending/{chart_id}/footer/excluded")
+    assert response.status_code == 422
+    assert "amount_kind" in response.json()["detail"]
+
+
 def test_the_footer_route_caps_its_limit_at_100(api_client: TestClient) -> None:
     chart_id = _save_chart(api_client, "api-footer-limit", {})
     response = api_client.get(
@@ -1465,3 +1478,34 @@ def test_a_merged_pair_counts_once(api_client: TestClient, api_database_url: str
 
     alpha = next(c for c in counts if c["facet_key"] == facet)
     assert alpha["documents"] == 1, "two documents, one payment, one canonical row"
+
+
+def test_a_split_document_counts_once_in_facet_counts(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`count(DISTINCT sf.document_id)` guards a *different* overcounting
+    mechanism than `is_canonical` does: one canonical document split across
+    spend lines emits one `spend_facts` row per line, and both lines here
+    carry the same label (inherited from the document, per migration 0035's
+    `doc_labels || line_labels`) — two identical `(facet_key, value_key)`
+    pairs from one document. Deleting `DISTINCT` from `_FACET_COUNTS_SQL`
+    leaves this document counted twice while every other test in this file
+    stays green, which is exactly the regression this test exists to catch."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha",))
+    document_id = _seed_document(
+        api_database_url,
+        amount="20.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={facet: "alpha"},
+    )
+    response = api_client.put(
+        f"/api/documents/{document_id}/spend-lines",
+        json={"lines": [{"amount": "10.00"}, {"amount": "10.00"}]},
+    )
+    assert response.status_code == 200, response.text
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    alpha = next(c for c in counts if c["facet_key"] == facet)
+    assert alpha["documents"] == 1, "one document split into two lines, one canonical row"

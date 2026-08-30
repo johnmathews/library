@@ -219,9 +219,21 @@ _NETTED_REFUND = "netted_refund"
 _KNOWN_BUCKETS = frozenset({_NETTED_REFUND, "excluded", UNCLASSIFIED, UNDATED, UNCATEGORISED})
 
 
-def _resolved_bucket(row_bucket: str) -> str:
+def _resolved_bucket(row_bucket: str, amount_kind: str | None) -> str:
     """The bucket a row is reported under: `row_bucket` itself if this module
-    recognises it, `UNACCOUNTED` otherwise."""
+    recognises it, `UNACCOUNTED` otherwise.
+
+    An `excluded` row with `amount_kind is None` is also routed to
+    `UNACCOUNTED` here, for both callers at once. `_CLASSIFY_SQL` orders its
+    `WHEN sf.amount_kind IS NULL THEN 'unclassified'` arm before the
+    `excluded` one, so no row reaching either caller can actually carry
+    `('excluded', None)` today — but the two callers must still agree about
+    what an unforeseen one would mean, and folding the rule in here rather
+    than testing for it separately in each caller is what makes that true by
+    construction instead of by two call sites happening to match.
+    """
+    if row_bucket == "excluded" and amount_kind is None:
+        return UNACCOUNTED
     return row_bucket if row_bucket in _KNOWN_BUCKETS else UNACCOUNTED
 
 
@@ -390,7 +402,7 @@ async def chart_footer_documents(
     selected = (
         row
         for row in rows
-        if _resolved_bucket(row.bucket) == bucket
+        if _resolved_bucket(row.bucket, row.amount_kind) == bucket
         and (bucket != "excluded" or row.amount_kind == amount_kind)
     )
     merged: dict[int, FooterDocument] = {}
@@ -454,20 +466,15 @@ async def chart_footer(
     refunds = _Group()
 
     for row in rows:
-        resolved = _resolved_bucket(row.bucket)
+        resolved = _resolved_bucket(row.bucket, row.amount_kind)
         if resolved == _NETTED_REFUND:
             refunds.add(row.amount, row.document_id)
         elif resolved == "excluded":
-            if row.amount_kind is None:
-                # `_CLASSIFY_SQL` routes a NULL `amount_kind` to `unclassified`
-                # before it ever reaches the `excluded` arm, so this never
-                # actually fires today. Routed to `unaccounted` rather than
-                # asserted, so an unforeseen future shape is reported instead
-                # of 500ing the whole chart — the same policy `_resolved_bucket`
-                # already applies to a bucket name this module does not know.
-                unaccounted.add(row.amount, row.document_id)
-            else:
-                excluded.setdefault(row.amount_kind, _Group()).add(row.amount, row.document_id)
+            # `_resolved_bucket` already routes an `excluded` row with
+            # `amount_kind is None` to `UNACCOUNTED`, so `row.amount_kind`
+            # cannot be `None` by the time it is used as a dict key here.
+            assert row.amount_kind is not None
+            excluded.setdefault(row.amount_kind, _Group()).add(row.amount, row.document_id)
         elif resolved == UNCLASSIFIED:
             unclassified.add(row.amount, row.document_id)
         elif resolved == UNDATED:

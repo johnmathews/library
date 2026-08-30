@@ -78,12 +78,21 @@ document split across spend lines emits one `spend_facts` row per line, and
 `jsonb_each_text` produces one `(facet_key, value_key)` pair per row, so two
 lines carrying the same label produce two identical pairs from the *same*
 document. Removing either filter overcounts, on a different class of archive
-data than the other one catches. Recorded here rather than left to be
-rediscovered: no test in this branch's suite actually exercises the
-split-line half of that claim (it would need a split document seeded
-alongside the facet-counts fixtures, which none of Task 7's tests do), so it
-is documented as read from the query's structure, not as proven by execution
-— a distinction worth keeping visible rather than blurring into "verified."
+data than the other one catches.
+
+**Update, final fix wave:** this was recorded above as read-but-not-tested,
+and a fix wave over the whole branch flagged that as a genuine gap — every
+new test in this branch's Global Constraints owes a mutation check, and
+deleting `DISTINCT` left all four of Task 7's counts tests green. Closed by
+`tests/test_api_spending.py::test_a_split_document_counts_once_in_facet_counts`:
+seed one document with a facet label, split it into two unlabelled spend
+lines (they inherit the document's label per migration 0035's
+`doc_labels || line_labels`), assert `documents == 1` from
+`GET /api/facets/counts`. The mutation ran both ways — deleting `DISTINCT`
+from `_FACET_COUNTS_SQL` turned the new test red (`2 == 1`) while the other
+three counts tests stayed green, and restoring it turned the new test green
+again. The split-line half of the non-redundancy claim is now proven by
+execution, not read from the query's structure alone.
 
 ## 3. Extracting `chart_footer`'s whole per-row treatment, not just its SQL
 

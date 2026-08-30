@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library import taxonomy
 from library.db import get_session
 from library.models import Sender
+from library.schemas import Colour
 
 router: APIRouter = APIRouter(tags=["taxonomy"])
 
@@ -153,7 +154,7 @@ class SenderPatch(BaseModel):
     name is derived from ingested documents and renaming one is a taxonomy
     operation with its own merge semantics (see the admin recipients route)."""
 
-    colour: Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")] | None = None
+    colour: Colour | None = None
 
 
 @router.patch("/senders/{sender_id}", response_model=SenderWithCount, summary="Edit a sender")

@@ -309,7 +309,10 @@ class CellOutBody(BaseModel):
     total: Decimal
     payments: list[CellPaymentOut]
     #: This cell's split bucket, resolved for display — so a drilled panel can
-    #: title itself without re-reading `/data`.
+    #: title itself without re-reading `/data`. `""` for an **unsplit** chart
+    #: (`_resolve_splits` returns `[]`, so there is no bucket to resolve) —
+    #: never a placeholder string, and distinct from an empty `label` on a
+    #: real bucket, which cannot occur.
     label: str
     colour: str | None
 
@@ -1081,6 +1084,15 @@ async def chart_footer_bucket(
         raise _unprocessable(
             f"unknown footer bucket '{bucket}'; use one of {sorted(_FOOTER_BUCKETS)}"
         )
+    if bucket == "excluded" and amount_kind is None:
+        # `excluded` is a *list* of groups, one per kind (§9.4) — unlike every
+        # other bucket, which has exactly one. Without `amount_kind` naming
+        # which group, `row.amount_kind == amount_kind` can never match (an
+        # excluded row always carries a kind) and the route would return an
+        # empty page indistinguishable from "that group is genuinely empty",
+        # three lines below a bucket check that already 422s and names the
+        # problem back to the caller.
+        raise _unprocessable("bucket 'excluded' needs '?amount_kind' naming which group")
     chart = await _load_chart(session, chart_id)
     query = await _resolve_query(
         session, chart, grain=None, split=None, currency=currency, since=since, until=until

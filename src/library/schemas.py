@@ -294,6 +294,15 @@ CurrencyCode = Annotated[
     str, StringConstraints(min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$", to_upper=True)
 ]
 
+#: Six-digit hex with a leading hash — a chart split value's stored colour
+#: override (spec §2.5), on both `facet_values` and `senders`. The same shape
+#: the database CHECK enforces (migration 0037), stated here so a malformed
+#: colour is a 422 the owner can read rather than an `IntegrityError`
+#: translated after the fact. Shared by `library.api.facets` and
+#: `library.api.taxonomy` so the two PATCH routes cannot drift apart on the
+#: one contract they both owe the same database constraint.
+Colour = Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")]
+
 
 class DocumentUpdate(BaseModel):
     """PATCH /api/documents/{id} body; only fields present in the body change.

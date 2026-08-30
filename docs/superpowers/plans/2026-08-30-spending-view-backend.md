@@ -105,9 +105,8 @@ idiom is the one above.
 | `src/library/charts/footer.py` | modify — extract the row fetch; **new** `chart_footer_documents` |
 | `src/library/api/spending.py` | modify — `GET /api/spending/{id}`; `SplitValueOut` + `DataOut.splits`; `CellOutBody.label`/`.colour`; **new** `GET /api/spending/{id}/footer/{bucket}` |
 | `tests/test_split_colour.py` | **create** — the migration's constraint and the read/write surfaces |
-| `tests/test_api_spending.py` | modify — chart-by-id, split resolution, the footer drill route |
+| `tests/test_api_spending.py` | modify — chart-by-id, split resolution, the footer drill route, `GET /api/facets/counts` |
 | `tests/test_chart_footer.py` | modify — `chart_footer_documents` and its count/list invariant |
-| `tests/test_api_facets.py` | modify — `GET /api/facets/counts` |
 
 ---
 
@@ -1858,7 +1857,7 @@ git add -A && git commit -m "feat(charts): drill through to the documents behind
 
 **Files:**
 - Modify: `src/library/api/facets.py` (new route, beside `list_facets`)
-- Test: `tests/test_api_facets.py`
+- Test: `tests/test_api_spending.py`
 
 **Interfaces:**
 - Consumes: nothing from earlier tasks.
