@@ -53,17 +53,15 @@ async function signIn(page: Page): Promise<void> {
 }
 
 /**
- * Open /charts through the sidebar. Below the lg breakpoint the sidebar is
- * translated offscreen behind the header hamburger; reveal it first when the
- * hamburger is present (an offscreen link still reports "visible").
+ * Open the legacy Smart Groups view directly. `/charts` now leads to the new
+ * board (`SpendingBoardView`), which shares the "Charts" heading with this
+ * page and so cannot be told apart from it by that heading alone — asserting
+ * `charts-create-button` instead pins the landing page to the one view that
+ * actually renders it.
  */
 async function openChartsPage(page: Page): Promise<void> {
-  const hamburger = page.locator('button[aria-controls="sidebar"]')
-  if (await hamburger.isVisible()) {
-    await hamburger.click()
-  }
-  await page.getByTestId('sidebar-charts-link').click()
-  await expect(page.getByRole('heading', { name: 'Charts', exact: true })).toBeVisible()
+  await page.goto('/charts/legacy')
+  await expect(page.getByTestId('charts-create-button')).toBeVisible()
 }
 
 /** Seed a throwaway plain-text document via the API (session + CSRF cookie,

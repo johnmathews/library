@@ -2,11 +2,26 @@
 /**
  * `/charts` empty state (spec §4.9, §10.4, §2.2).
  *
- * "All spending" is **first and pinned** — an empty rule (`{ all: [] }`)
- * split by `category`. It is not a migration-seeded row (§2.2 rejects that:
- * a display currency nobody chose, and a one-shot that means "gone once
- * deleted") — it is created here, by the owner clicking it once, through the
- * ordinary `POST /api/spending` path every other chart uses.
+ * "All spending" is **first and pinned** — an empty rule (`{ all: [] }`).
+ * It is not a migration-seeded row (§2.2 rejects that: a display currency
+ * nobody chose, and a one-shot that means "gone once deleted") — it is
+ * created here, by the owner clicking it once, through the ordinary
+ * `POST /api/spending` path every other chart uses.
+ *
+ * **Its split axis degrades to the vocabulary that actually exists.**
+ * `default_split: 'category'` only works once the `category` facet has been
+ * seeded (`library label-archive` — an operator step, never automatic on
+ * migrate/startup); a genuinely fresh archive has no facets at all, and
+ * `POST /api/spending` 422s on a split axis the vocabulary doesn't carry.
+ * That is the single most important action on the first-run screen, so it
+ * must not depend on an operator having run a CLI command first. Whether any
+ * facet counts came back from `GET /api/facets/counts` (below) is the
+ * signal: some means the vocabulary is populated enough to split by
+ * `category` (today's behaviour); none means propose the total unsplit
+ * instead — a perfectly good first chart, and one a fresh archive can
+ * always draw. Never probe for the `category` facet by name: that would
+ * stay broken for an archive whose vocabulary exists but happens to have no
+ * `category` values yet, which "any counts at all" does not.
  *
  * Every other proposal comes from `GET /api/facets/counts`: the values with
  * the most documents, each shown with its count and date span. That route
@@ -37,18 +52,6 @@ interface Proposal {
   rule: Rule
   name: string
   defaultSplit: string | null
-}
-
-// Pinned first regardless of load state or facet counts — it is not derived
-// from `/api/facets/counts` at all, so it is available even before that
-// fetch resolves (or if it fails).
-const ALL_SPENDING: Proposal = {
-  key: '__all_spending__',
-  label: 'All spending',
-  detail: 'Every document, split by category.',
-  rule: { all: [] },
-  name: 'All spending',
-  defaultSplit: 'category',
 }
 
 const counts = ref<FacetCount[]>([])
@@ -98,7 +101,23 @@ const facetProposals = computed<Proposal[]>(() =>
     }),
 )
 
-const proposals = computed<Proposal[]>(() => [ALL_SPENDING, ...facetProposals.value])
+// Pinned first regardless of load state — it renders even before the counts
+// fetch below resolves (or if it fails), just unsplit until proven otherwise.
+// See the file header: split-by-`category` only once `counts` shows the
+// vocabulary actually has something to split by.
+const allSpendingProposal = computed<Proposal>(() => {
+  const hasFacetData = counts.value.length > 0
+  return {
+    key: '__all_spending__',
+    label: 'All spending',
+    detail: hasFacetData ? 'Every document, split by category.' : 'Every document, as one total.',
+    rule: { all: [] },
+    name: 'All spending',
+    defaultSplit: hasFacetData ? 'category' : null,
+  }
+})
+
+const proposals = computed<Proposal[]>(() => [allSpendingProposal.value, ...facetProposals.value])
 
 const savingKey = ref<string | null>(null)
 const saveError = ref<string | null>(null)

@@ -1,0 +1,142 @@
+/**
+ * Spending board acceptance e2e: sign in → sidebar → `/charts` → the fresh
+ * archive's empty state offers "All spending" first → creating it produces a
+ * card on the board → opening the card lands on its workspace, where the
+ * toolbar, the chart region and all three footer accounting blocks render →
+ * back on the board, the card's overflow menu deletes it and the board
+ * returns to the empty state.
+ *
+ * **No drill-through is asserted here.** The e2e database is fresh, so "All
+ * spending" covers no documents: every chart cell is empty and every footer
+ * group is null, which makes a bucket-click step unreachable rather than
+ * failing — the worst kind of test, one that cannot detect the breakage its
+ * name claims. This spec's job is the route swap, the empty state's ordinary
+ * save path, and the workspace's three regions rendering; the geometry of the
+ * toolbar/chip and drill-panel presentation is `spending-layout.spec.ts`'s
+ * job, and drill-through *content* is unit-tested (Task 6) against fixtures
+ * that can actually express a merge, an amountless document and a 422.
+ *
+ * `/charts` and `/charts/legacy` (the surviving Smart Groups view, driven by
+ * `smart-groups.spec.ts`) both render the page title "Charts" via
+ * `PageHeader`, so that heading cannot tell the two pages apart — a spec
+ * that landed on the wrong one would still go green. Every navigation
+ * assertion below instead targets a testid unique to the new board
+ * (`spending-empty-state`, `spending-card`), never the shared heading.
+ *
+ * **This spec never asserts that "All spending" is split.** It saves as an
+ * empty rule split by `category` once the archive's facet vocabulary has
+ * been seeded (`library label-archive` — an operator step, never automatic
+ * on migrate/startup), and unsplit on a genuinely fresh one — degrading
+ * gracefully was the fix for the 422 this very spec caught on an unseeded
+ * database (`SpendingEmptyState.vue`). Only the label ("All spending"), a
+ * card appearing, and the workspace opening are asserted, so this spec
+ * passes identically on a CI database that has never run `label-archive` and
+ * on a local one that has.
+ */
+import { expect, test, type Page, type TestInfo } from '@playwright/test'
+
+import { requireStack } from './fixtures/require-stack'
+
+const USERNAME = process.env.E2E_USERNAME ?? 'e2e'
+const PASSWORD = process.env.E2E_PASSWORD ?? 'e2e-password-123'
+
+requireStack()
+
+async function signIn(page: Page): Promise<void> {
+  await page.goto('/')
+  await expect(page).toHaveURL(/\/login/)
+  await page.locator('#username').fill(USERNAME)
+  await page.locator('#password').fill(PASSWORD)
+  await page.getByRole('button', { name: 'Sign in' }).click()
+  await expect(page.getByRole('heading', { name: 'Documents', exact: true })).toBeVisible()
+}
+
+/**
+ * Open /charts through the sidebar. Below the lg breakpoint the sidebar is
+ * translated offscreen behind the header hamburger; reveal it first when the
+ * hamburger is present (an offscreen link still reports "visible").
+ *
+ * Landing is asserted on `spending-empty-state` — a testid the OLD view
+ * (`ChartsView`, still reachable at `/charts/legacy`) does not render — never
+ * on the "Charts" heading the two pages share.
+ */
+async function openChartsBoard(page: Page): Promise<void> {
+  const hamburger = page.locator('button[aria-controls="sidebar"]')
+  if (await hamburger.isVisible()) {
+    await hamburger.click()
+  }
+  await page.getByTestId('sidebar-charts-link').click()
+  await expect(page).toHaveURL(/\/charts$/)
+  await expect(page.getByTestId('spending-empty-state')).toBeVisible()
+}
+
+/**
+ * The full toolbar row lives behind a container-query threshold
+ * (`spending-layout.spec.ts` measures it): visible directly on a wide column,
+ * hidden behind a chip below it. The chip's own button reveals the SAME
+ * controls in place, so clicking it first (when present) makes
+ * `workspace-toolbar` assertable uniformly across every project without
+ * guessing visibility from `isVisible()` on a container-hidden element.
+ * Branching on the project name mirrors the pattern already used throughout
+ * this suite (e.g. `charts-layout.spec.ts`'s per-project skips) rather than
+ * risking the isVisible()-on-hidden-element trap this file was warned about.
+ */
+async function revealWorkspaceToolbar(page: Page, testInfo: TestInfo): Promise<void> {
+  if (testInfo.project.name !== 'chromium') {
+    await page.getByTestId('workspace-toolbar-chip-button').click()
+  }
+}
+
+test('create "All spending" from the empty state, open it, and delete it', async ({
+  page,
+}, testInfo) => {
+  await signIn(page)
+  await openChartsBoard(page)
+
+  // "All spending" is first and pinned (spec §4.9) — never a facet proposal,
+  // which the fresh archive has none of anyway.
+  const proposals = page.getByTestId('spending-empty-proposal-label')
+  await expect(proposals.first()).toHaveText('All spending')
+
+  // Click it: the ordinary save path (POST /api/spending), not a
+  // migration-seeded row.
+  await page.getByTestId('spending-empty-proposal').first().click()
+
+  // A card appears on the board.
+  const card = page.getByTestId('spending-card').filter({ hasText: 'All spending' })
+  await expect(card).toBeVisible()
+  await expect(card.getByTestId('spending-card-name')).toHaveText('All spending')
+
+  // Open the card via its overflow menu (spec §10.3 #5: no always-visible
+  // per-card controls) — never a click on the card face itself.
+  await card.getByTestId('spending-card-menu').click()
+  await card.getByTestId('spending-card-edit').click()
+  await expect(page).toHaveURL(/\/charts\/\d+$/)
+
+  // The toolbar, the chart, and all three footer blocks render.
+  await revealWorkspaceToolbar(page, testInfo)
+  await expect(page.getByTestId('workspace-toolbar')).toBeVisible()
+  await expect(page.getByTestId('workspace-grain')).toBeVisible()
+
+  await expect(page.getByTestId('workspace-chart-region')).toBeVisible()
+  await expect(page.getByTestId('workspace-headline-figure')).toBeVisible()
+
+  await expect(page.getByTestId('spending-footer-excluded')).toBeVisible()
+  await expect(page.getByTestId('spending-footer-attention')).toBeVisible()
+  await expect(page.getByTestId('spending-footer-unconvertible')).toBeVisible()
+
+  // Back to the board, then delete via the overflow menu — no confirm step
+  // (unlike the legacy view's series-delete-confirm-button): SpendingCard's
+  // delete emits straight through to `DELETE /api/spending/{id}`.
+  await page.getByRole('link', { name: 'Back to charts' }).click()
+  await expect(page).toHaveURL(/\/charts$/)
+
+  const boardCard = page.getByTestId('spending-card').filter({ hasText: 'All spending' })
+  await expect(boardCard).toBeVisible()
+  await boardCard.getByTestId('spending-card-menu').click()
+  await boardCard.getByTestId('spending-card-delete').click()
+
+  // Back to the empty state.
+  await expect(page.getByTestId('spending-empty-state')).toBeVisible()
+  await expect(page.getByTestId('spending-card')).toHaveCount(0)
+})

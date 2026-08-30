@@ -77,6 +77,33 @@ describe('SpendingEmptyState', () => {
     expect(wrapper.emitted('created')).toEqual([[SAVED_CHART]])
   })
 
+  // The `category` facet is only seeded via `library label-archive` (an
+  // operator step, never automatic on migrate/startup) — a genuinely fresh
+  // archive has no facets, and `POST /api/spending` 422s on a split axis the
+  // vocabulary doesn't carry. "All spending" is the flagship first-run
+  // action, so it must degrade to unsplit rather than fail.
+  it('saves All spending unsplit when the archive has no facet vocabulary yet', async () => {
+    createChart.mockResolvedValueOnce({ ...SAVED_CHART, default_split: null })
+    const wrapper = await mountEmpty([])
+    await proposal(wrapper, 'All spending').trigger('click')
+    await flushPromises()
+    expect(createChart).toHaveBeenCalledWith(
+      expect.objectContaining({ rule: { all: [] }, default_split: null }),
+    )
+  })
+
+  // The description must not promise a split the save will not draw — that
+  // is what pins the defect: a description-only fix (or a fix that reverts
+  // under mutation) still 422s if the payload itself is not checked, so the
+  // save-path assertion above is the one that actually matters and this one
+  // guards the second half of the same promise.
+  it('labels All spending as one total, not a split, when there is no facet vocabulary yet', async () => {
+    const wrapper = await mountEmpty([])
+    const row = proposal(wrapper, 'All spending')
+    expect(row.text()).toContain('one total')
+    expect(row.text()).not.toContain('category')
+  })
+
   it('sends the currency prop on the seed save, never one it chose', async () => {
     createChart.mockResolvedValueOnce(SAVED_CHART)
     const wrapper = await mountEmpty(COUNTS, 'GBP')
