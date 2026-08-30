@@ -543,6 +543,11 @@ async def _resolve_query(
 _NO_SENDER = "No sender"
 _UNLABELLED = "Uncategorised"
 
+#: `senders.id` is Postgres `int4` (`models.py`'s `Sender.id`); a client-
+#: supplied id above this can never be a real row and would raise from
+#: asyncpg's own range check rather than resolving to the fallback.
+_MAX_SENDER_ID = 2**31 - 1
+
 
 async def _resolve_splits(
     session: AsyncSession, query: _ChartQuery, values: list[str | None]
@@ -562,21 +567,33 @@ async def _resolve_splits(
         return []
 
     if query.split == SENDER_SPLIT:
-        ids = [int(value) for value in values if value is not None]
+        # `values` can come straight from `/cell`'s `split_value` query
+        # parameter, which is client-controlled and never validated as an id
+        # (§9.5: `/cell` takes whatever `/data` handed back, but a client can
+        # send anything). Anything that is not a plain non-negative integer,
+        # or is too big for `senders.id` (`int4`), cannot name a real sender
+        # either way, so it is filtered out here rather than reaching `int()`
+        # or asyncpg's range check — both of which would otherwise turn a
+        # junk id into an unhandled 500 on a route with no other validation.
+        numeric = {
+            value: int(value)
+            for value in values
+            if value is not None and value.isdigit() and int(value) <= _MAX_SENDER_ID
+        }
         rows = (
             await session.execute(
-                select(Sender.id, Sender.name, Sender.colour).where(Sender.id.in_(ids))
+                select(Sender.id, Sender.name, Sender.colour).where(Sender.id.in_(numeric.values()))
             )
         ).all()
         by_id = {str(row.id): (row.name, row.colour) for row in rows}
-        return [
-            SplitValueOut(
-                value=value,
-                label=_NO_SENDER if value is None else by_id.get(value, (value, None))[0],
-                colour=None if value is None else by_id.get(value, (value, None))[1],
-            )
-            for value in values
-        ]
+        results = []
+        for value in values:
+            if value is None:
+                results.append(SplitValueOut(value=None, label=_NO_SENDER, colour=None))
+                continue
+            name, colour = by_id.get(value, (value, None))
+            results.append(SplitValueOut(value=value, label=name, colour=colour))
+        return results
 
     facet = next((f for f in query.vocabulary if f.key == query.split), None)
     by_key = {v.key: v for v in facet.values} if facet is not None else {}

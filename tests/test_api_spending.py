@@ -527,6 +527,13 @@ def test_the_unlabelled_bucket_is_named_by_the_axis(
     by_facet = api_client.get(f"/api/spending/{facet_chart}/data").json()
     by_sender = api_client.get(f"/api/spending/{sender_chart}/data").json()
 
+    # Without this, an empty result (e.g. the seed silently failing) would
+    # satisfy the `in` checks below vacuously: `splits == []` contains
+    # neither pair, but so would a `splits` list that happened to omit them.
+    # Asserting the seeded document actually produced one cell each pins the
+    # test to real data.
+    assert len(by_facet["cells"]) == 1
+    assert len(by_sender["cells"]) == 1
     assert (None, "Uncategorised") in [(s["value"], s["label"]) for s in by_facet["splits"]]
     assert (None, "No sender") in [(s["value"], s["label"]) for s in by_sender["splits"]]
 
@@ -558,41 +565,60 @@ def test_a_split_value_carries_its_stored_colour_and_null_when_unset(
     assert colours["services"] is None
 
 
-def test_a_split_value_whose_row_vanished_falls_back_to_the_raw_value(
+def test_a_split_value_with_no_sender_row_falls_back_to_the_raw_value(
     api_client: TestClient, api_database_url: str
 ) -> None:
-    """Facet values are deletable at runtime and a saved chart can rot. A
-    rotted legend entry is a legible defect; a 500 on every chart in range is
-    not — the same failure the `sorted()` over a null currency caused."""
-    name = f"{VENDOR_A} {uuid.uuid4()}"
-    document_id, _sender_id = _seed_sender_document(api_database_url, sender=name, amount="10.00")
-
-    async def orphan(session: AsyncSession) -> None:
-        # `documents.sender_id` is `ON DELETE SET NULL`, so the database
-        # itself refuses to let this column point at a sender that does not
-        # exist — the literal `UPDATE ... SET sender_id = 999999` this test
-        # started from fails with a foreign-key violation before it can set up
-        # the state the assertion needs. Triggers (the FK's own enforcement
-        # included) are disabled for this one statement and restored before
-        # commit, which is what fabricates the row a live deletion can never
-        # actually leave behind while proving the resolver does not trust
-        # that guarantee.
-        await session.execute(text("ALTER TABLE documents DISABLE TRIGGER ALL"))
-        try:
-            await session.execute(
-                text("UPDATE documents SET sender_id = 999999 WHERE id = :id"),
-                {"id": document_id},
-            )
-        finally:
-            await session.execute(text("ALTER TABLE documents ENABLE TRIGGER ALL"))
-
-    _run(api_database_url, orphan)
+    """A sender referenced by a saved chart's data can be deleted after the
+    fact (a document's `sender_id` then becomes `NULL`, but `/cell`'s
+    `split_value` is a client-supplied query parameter that is never
+    validated against `spend_facts` at all — so this needs no fixture
+    surgery to reach: nothing has to have ever named 999999 for a client to
+    ask for it.
+    """
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
     chart_id = _save_chart(api_client, "api-splits-orphan", {}, default_split="sender")
 
-    response = api_client.get(f"/api/spending/{chart_id}/data")
+    body = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={"period": "2026-03-01", "split": "sender", "split_value": "999999"},
+    ).json()
+
+    assert body["label"] == "999999"
+
+
+def test_a_non_numeric_split_value_resolves_to_itself_rather_than_500ing(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`split_value` is an unvalidated `/cell` query parameter. `int()` on it
+    used to be an unhandled 500 for anything that was not a plain integer —
+    the one surface a client actually controls."""
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, "api-splits-junk-id", {}, default_split="sender")
+
+    response = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={"period": "2026-03-01", "split": "sender", "split_value": "not-an-id"},
+    )
 
     assert response.status_code == 200, response.text
-    assert "999999" in [s["label"] for s in response.json()["splits"]]
+    assert response.json()["label"] == "not-an-id"
+
+
+def test_an_out_of_range_split_value_resolves_to_itself_rather_than_500ing(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`senders.id` is Postgres `int4`; a numeric id too large for it used to
+    reach asyncpg's own range check and 500 rather than resolving to itself."""
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, "api-splits-oor-id", {}, default_split="sender")
+
+    response = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={"period": "2026-03-01", "split": "sender", "split_value": "99999999999"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["label"] == "99999999999"
 
 
 def test_a_cell_carries_its_own_label_and_colour(
@@ -646,11 +672,17 @@ def test_an_unsplit_chart_has_no_split_values(
     assert body["splits"] == []
 
 
+#: Five buckets rather than two: a two-element `set()` agrees with insertion
+#: order about half the time, so a mutation to `set()` there would only be
+#: caught by chance. Five gives 1-in-120 accidental agreement instead.
+_LEGEND_ORDER_VALUES = ("software", "services", "hardware", "travel", "office")
+
+
 def test_the_legend_order_matches_the_cells(api_client: TestClient, api_database_url: str) -> None:
     """De-duplication preserves the engine's ordering. A `set()` would not, and
     a legend ordered differently from the chart is a legend that mislabels it."""
-    _seed_vocabulary(api_database_url)
-    for value in ("software", "services"):
+    _seed_vocabulary(api_database_url, values=_LEGEND_ORDER_VALUES)
+    for value in _LEGEND_ORDER_VALUES:
         _seed_document(
             api_database_url,
             amount="10.00",
@@ -665,6 +697,9 @@ def test_the_legend_order_matches_the_cells(api_client: TestClient, api_database
     for cell in body["cells"]:
         if cell["split_value"] not in first_seen:
             first_seen.append(cell["split_value"])
+    # Without this, an empty `cells`/`splits` pair (e.g. the seed silently
+    # failing) would satisfy the equality below vacuously.
+    assert len(first_seen) == len(_LEGEND_ORDER_VALUES)
     assert [s["value"] for s in body["splits"]] == first_seen
 
 
