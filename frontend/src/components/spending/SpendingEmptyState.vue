@@ -69,9 +69,12 @@ interface Proposal {
   defaultSplit: string | null
 }
 
-// Matches the shared palette's slot count (`SPLIT_PALETTE.length`, six) —
-// past that, colours would start repeating across proposal cards anyway,
-// and six is already enough to fill the first screen without scrolling.
+// A judgement call, not a derived number: this component imports no
+// palette and a proposal card carries no per-value colour, so there is no
+// mechanism that breaks past six (unlike `bands()`'s six-slot fold, which
+// genuinely runs out of colours). Six is simply enough to read as a
+// shortlist on a first screen without scrolling, on the phone-width layout
+// spec §4.9 targets — a judgement call about how much fits, nothing more.
 const MAX_PROPOSALS = 6
 
 const counts = ref<FacetCount[]>([])

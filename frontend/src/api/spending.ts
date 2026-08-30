@@ -261,21 +261,31 @@ export function fetchCell(
 
 /**
  * GET /api/spending/{id}/footer/{bucket} — the documents behind a footer
- * exclusion bucket. `FooterArgs` (`from`/`to`/`currency`) is structurally a
- * subset of `ChartArgs`, so the window portion of the query is built by
+ * exclusion bucket. The window portion of the query is built by
  * `windowQuery` itself — the same omit-undefined-key handling `/data` and
- * `/cell` get — rather than a second inline `{ from, to, currency }` object
- * that would drift from it silently.
+ * `/cell` get — rather than a second inline object that would drift from it
+ * silently, but `from`/`to`/`currency` are picked out of `opts` BY NAME
+ * first and handed to `windowQuery` as a fresh `{ from, to, currency }`
+ * literal, never `opts` (or a rest-spread of it) directly. `windowQuery`
+ * emits `split` whenever the key is merely PRESENT on the object it is
+ * given (see its own docblock — that is what makes an explicitly-cleared
+ * split axis distinguishable from an unset one on `/data`), and this route
+ * declares no `split` param at all (its own docblock, above) — sending one
+ * is silently ignored by the server, which would trap a caller into
+ * thinking it changed the bucket. A rest-spread of `opts` would forward
+ * whatever extra keys a future caller happened to pass, including a stray
+ * `split`; naming the three allowed keys keeps that impossible BY
+ * CONSTRUCTION rather than by "no caller does that today".
  */
 export function fetchFooterBucket(
   id: number,
   bucket: FooterBucket,
   opts: FooterArgs & { amount_kind?: string; limit?: number; offset?: number } = {},
 ): Promise<FooterDocuments> {
-  const { amount_kind, limit = MAX_LIMIT, offset = 0, ...windowArgs } = opts
+  const { amount_kind, limit = MAX_LIMIT, offset = 0, from, to, currency } = opts
   return apiFetch<FooterDocuments>(`/api/spending/${id}/footer/${bucket}`, {
     query: {
-      ...windowQuery(windowArgs),
+      ...windowQuery({ from, to, currency }),
       amount_kind,
       limit: Math.min(limit, MAX_LIMIT),
       offset,

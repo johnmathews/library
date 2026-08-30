@@ -24,6 +24,24 @@ const COUNTS: FacetCount[] = [
   { facet_key: 'category', value_key: 'travel', documents: 4, first_date: '2026-02-01', last_date: '2026-02-20' },
 ]
 
+// At least 9 distinct counts, none tied, so a cap-and-sort defect (wrong
+// count, wrong members, or wrong order) all have somewhere to show up.
+// Spec §4.9: "the values with the most documents" — a selection, capped at
+// MAX_PROPOSALS (6 in the component), never the whole vocabulary.
+const MANY_COUNTS: FacetCount[] = [
+  { facet_key: 'category', value_key: 'software', documents: 40, first_date: '2026-01-04', last_date: '2026-03-11' },
+  { facet_key: 'category', value_key: 'travel', documents: 35, first_date: '2026-02-01', last_date: '2026-02-20' },
+  { facet_key: 'category', value_key: 'insurance', documents: 30, first_date: '2026-01-10', last_date: '2026-04-01' },
+  { facet_key: 'category', value_key: 'energy', documents: 25, first_date: '2026-01-15', last_date: '2026-05-01' },
+  { facet_key: 'category', value_key: 'dining', documents: 20, first_date: '2026-02-05', last_date: '2026-06-01' },
+  { facet_key: 'category', value_key: 'parking', documents: 15, first_date: '2026-03-01', last_date: '2026-03-30' },
+  // Everything below this line has a LOWER count than every entry above —
+  // these seven must never appear among the rendered proposals.
+  { facet_key: 'category', value_key: 'banking', documents: 10, first_date: '2026-01-01', last_date: '2026-01-31' },
+  { facet_key: 'category', value_key: 'pension', documents: 8, first_date: '2026-02-01', last_date: '2026-02-28' },
+  { facet_key: 'category', value_key: 'fines', documents: 3, first_date: '2026-04-01', last_date: '2026-04-15' },
+]
+
 const SAVED_CHART: Chart = {
   id: 3,
   name: 'All spending',
@@ -122,6 +140,37 @@ describe('SpendingEmptyState', () => {
   it('ranks facet proposals by document count, descending', async () => {
     const wrapper = await mountEmpty(COUNTS)
     expect(proposalLabels(wrapper)).toEqual(['All spending', 'software', 'travel'])
+  })
+
+  // Spec review finding 3 (Important): the facet-derived list is unbounded
+  // without this — a fully labelled archive can return 30+ counts, and the
+  // first screen becomes a wall of equal-weight cards instead of the "most
+  // documents" shortlist §4.9 asks for. MANY_COUNTS carries 9 counts, all
+  // distinct, so a cap defect (wrong count), a sort defect (wrong members)
+  // and an ordering defect (right members, wrong order) each have a
+  // fixture that can actually catch them — COUNTS (2 entries) cannot.
+  // Mutation check: deleting `.slice(0, MAX_PROPOSALS)` in
+  // SpendingEmptyState.vue turns this red (9 facet proposals render, not 6).
+  it('caps facet proposals at 6, sorted by document count descending, with All spending first and additional', async () => {
+    const wrapper = await mountEmpty(MANY_COUNTS)
+    const labels = proposalLabels(wrapper)
+    expect(labels).toEqual([
+      'All spending',
+      'software',
+      'travel',
+      'insurance',
+      'energy',
+      'dining',
+      'parking',
+    ])
+    // "All spending" is pinned and additional to the cap, not counted
+    // against it — 6 facet proposals plus the pinned row is 7 total.
+    expect(labels).toHaveLength(7)
+    // The three lowest-ranked counts (banking/pension/fines) must never
+    // reach the screen at all.
+    expect(labels).not.toContain('banking')
+    expect(labels).not.toContain('pension')
+    expect(labels).not.toContain('fines')
   })
 
   // A value with no money behind it is absent from the response by

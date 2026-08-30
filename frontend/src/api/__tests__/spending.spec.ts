@@ -66,6 +66,18 @@ describe('spending API', () => {
     expect(String(fetchMock.mock.calls[0]![0])).toContain('limit=100')
   })
 
+  // Spec review round 2, finding N5: the footer route declares no `split`
+  // param and silently ignores one — sending it would trap a caller into
+  // thinking it changed the bucket. `fetchFooterBucket` must drop a stray
+  // `split` key BY CONSTRUCTION (picking from/to/currency out by name), not
+  // merely because no caller happens to pass one today — cast past the
+  // FooterArgs type to simulate a future/misbehaving caller that does.
+  it('never forwards a split key to the footer route, even if a caller passed one', async () => {
+    respondWith({ bucket: 'uncategorised', total: 0, documents: [] })
+    await fetchFooterBucket(1, 'uncategorised', { split: 'category' } as unknown as Parameters<typeof fetchFooterBucket>[2])
+    expect(String(fetchMock.mock.calls[0]![0])).not.toContain('split')
+  })
+
   // The split trap, both directions.
   it('sends split= when the split is cleared', async () => {
     respondWith(DATA)

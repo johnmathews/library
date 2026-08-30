@@ -281,7 +281,7 @@ this repository's tracked history — this section is the erratum's only
 durable record.
 
 History has **deliberately not been rewritten** to fix the commit message —
-amending or rebasing a already-shared commit trades a known, findable
+amending or rebasing an already-shared commit trades a known, findable
 correction for a silent one, and the mutation-count evidence itself (the
 tests, not the prose describing them) was never wrong. Anyone reading
 `9e2040c`'s message in `git log` should treat "the true count is 4, not 5"

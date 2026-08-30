@@ -14,8 +14,9 @@ vi.mock('vue-chartjs', () => ({
 // a test can invoke it directly, exactly as SortableJS would after a real
 // drop, and it also stands in for the destroy() lifecycle so cleanup on
 // unmount/hide is provable without a live drag session.
-let capturedSortableOptions: { onEnd: (evt: { oldIndex?: number | null; newIndex?: number | null }) => void } | null =
-  null
+let capturedSortableOptions:
+  | { onEnd: (evt: { oldIndex?: number | null; newIndex?: number | null }) => void; filter?: string }
+  | null = null
 const sortableDestroy = vi.fn()
 vi.mock('sortablejs', () => ({
   default: {
@@ -365,6 +366,22 @@ describe('SpendingBoardView', () => {
       [1, 1],
       [2, 0],
     ])
+  })
+
+  // Spec review round 2, finding N3: the card's name is a RouterLink
+  // (spec review finding 5) living inside this whole-card drag surface (no
+  // handle). Without excluding it, a drag begun on the name could start a
+  // native HTML5 drag instead of SortableJS's own, and a drag ending on it
+  // could still fire a click and navigate mid-reorder. This only proves the
+  // OPTION reaches Sortable.create — no layer in this suite exercises a
+  // real HTML5 drag gesture (jsdom cannot fire one, per the comment on
+  // `capturedSortableOptions` above), so the actual exclusion behaviour
+  // rests on reading SortableJS's own `filter` semantics, not execution.
+  it("excludes the card name link from initiating a drag ('filter' passed to Sortable.create)", async () => {
+    vi.mocked(fetchChartData).mockImplementation((id) => Promise.resolve(emptyData(id)))
+    await mountedBoard(THREE_CHARTS)
+    expect(capturedSortableOptions).not.toBeNull()
+    expect(capturedSortableOptions!.filter).toBe('a')
   })
 
   it('ignores a drop with no index, and a drop back in the same slot persists nothing', async () => {

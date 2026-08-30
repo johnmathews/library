@@ -198,6 +198,17 @@ watch(gridEl, (el) => {
   if (el) {
     sortable = Sortable.create(el, {
       animation: 150,
+      // The card's name is now a RouterLink (spec review finding 5) living
+      // inside this whole-card drag surface (no handle — see the file
+      // docblock). An <a> is natively draggable, so without this a drag
+      // begun on the name could start an HTML5 drag instead of SortableJS's
+      // own, and a drag ending on it could still fire a click and navigate
+      // mid-reorder (spec review round 2, finding N3). `filter` is
+      // SortableJS's own mechanism for "this selector never initiates a
+      // drag" — truer to the library's intent than `draggable="false"` on
+      // the link, which would only suppress the browser's native drag and
+      // say nothing to SortableJS's own pointer-drag detection.
+      filter: 'a',
       onEnd: (evt) => {
         if (evt.oldIndex == null || evt.newIndex == null) return
         void reorder(evt.oldIndex, evt.newIndex)

@@ -72,7 +72,7 @@
  * navigation — it moves onto the name itself, where a reader would expect
  * to find it (spec review finding 5).
  */
-import { computed, ref } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import { RouterLink } from 'vue-router'
 import { updateChart, type Chart, type ChartData, type Grain } from '@/api/spending'
 import { ApiError } from '@/api/client'
@@ -321,11 +321,23 @@ const renameValue = ref('')
 const renameBusy = ref(false)
 const renameError = ref<string | null>(null)
 
+const renameInputEl = ref<HTMLInputElement | null>(null)
+
 function chooseRename(): void {
   menuOpen.value = false
   renameValue.value = props.chart.name
   renameError.value = null
   renaming.value = true
+  // The overflow trigger this click came from is inside the AppPopover's
+  // v-else branch and unmounts the same tick renaming flips true, so
+  // without this a keyboard user is dropped to document.body and has to
+  // tab from the top of the page (spec review round 2, finding N2).
+  // Selected, not just focused, so typing immediately overwrites — same
+  // idiom as ConversationSidebar.vue's own startRename.
+  void nextTick(() => {
+    renameInputEl.value?.focus()
+    renameInputEl.value?.select()
+  })
 }
 function cancelRename(): void {
   renaming.value = false
@@ -365,9 +377,23 @@ async function saveRename(): Promise<void> {
 
 const confirmingDelete = ref(false)
 
+const deleteConfirmButtonEl = ref<HTMLButtonElement | null>(null)
+
 function chooseDelete(): void {
   menuOpen.value = false
   confirmingDelete.value = true
+  // Same reasoning as chooseRename above: the trigger this click came from
+  // is gone the instant confirmingDelete flips true, so focus must be
+  // handed somewhere deliberately rather than left to fall to
+  // document.body. The Confirm button, not Cancel — unlike ConfirmDialog.vue
+  // (a destructive-default-avoidance dialog, where Cancel is focused on
+  // open), this is a two-step confirm the owner already chose "Delete" to
+  // reach; landing on Confirm lets Enter finish what they started, and
+  // Cancel is still one Tab (or Escape via AppPopover, though the popover
+  // itself is unmounted here) away.
+  void nextTick(() => {
+    deleteConfirmButtonEl.value?.focus()
+  })
 }
 function cancelDeleteConfirm(): void {
   confirmingDelete.value = false
@@ -383,12 +409,18 @@ function confirmDeleteChart(): void {
     <div class="flex items-start justify-between gap-2">
       <span class="min-w-0 flex-1">
         <!-- Inline rename: an editable input replaces the name+link while
-             this card is being renamed. Enter saves, Esc cancels. -->
+             this card is being renamed. Enter saves, Esc cancels. `maxlength`
+             matches the backend's own cap (ChartPatch.name, max_length=120,
+             src/library/api/spending.py) — sending more than that is a
+             guaranteed 422 whose validation-array detail renders as raw
+             JSON (api/client.ts's readError JSON.stringifies it), so this
+             must never drift ahead of the server's own limit. -->
         <input
           v-if="renaming"
+          ref="renameInputEl"
           v-model="renameValue"
           type="text"
-          maxlength="200"
+          maxlength="120"
           aria-label="Chart name"
           class="form-input w-full text-sm"
           data-testid="spending-card-rename-input"
@@ -434,6 +466,7 @@ function confirmDeleteChart(): void {
 
         <template v-else-if="confirmingDelete">
           <button
+            ref="deleteConfirmButtonEl"
             type="button"
             class="text-xs font-medium text-red-500 transition hover:text-red-600 dark:hover:text-red-400"
             data-testid="spending-card-delete-confirm"

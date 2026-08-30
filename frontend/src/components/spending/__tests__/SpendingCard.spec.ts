@@ -118,6 +118,36 @@ function mountCard(overrides: Overrides = {}): VueWrapper {
   })
 }
 
+// Focus-management tests (spec review round 2, finding N2) need the wrapper
+// actually IN the document — document.activeElement only tracks a real DOM
+// attachment, the same reason AppPopover.spec.ts's own focus test does this.
+// Callers must `wrapper.unmount()` when done, to detach the node again.
+function mountCardAttached(overrides: Overrides = {}): VueWrapper {
+  const data =
+    overrides.data !== undefined
+      ? overrides.data
+      : buildData({
+          cells: overrides.cells,
+          grain: overrides.grain,
+          footer: overrides.footer,
+          currency: overrides.currency,
+          splits: overrides.splits,
+        })
+  return mount(SpendingCard, {
+    global: { plugins: [router] },
+    attachTo: document.body,
+    props: {
+      chart: { ...BASE_CHART, ...overrides.chart },
+      data,
+      error: overrides.error ?? null,
+      busy: overrides.busy ?? false,
+      canMoveUp: overrides.canMoveUp ?? true,
+      canMoveDown: overrides.canMoveDown ?? true,
+      today: overrides.today ?? '2026-08-14',
+    },
+  })
+}
+
 // June complete, July complete, August present but PARTIAL (today is
 // 2026-08-14, mid-month) — the exact shape a partial-bucket-as-headline bug
 // cannot tell apart from a chart that simply has no August cell yet.
@@ -389,11 +419,55 @@ describe('SpendingCard', () => {
       // Back to the ordinary menu trigger, not stuck in the confirm state.
       expect(wrapper.find('[data-testid="spending-card-menu"]').exists()).toBe(true)
     })
+
+    // Spec review round 2, finding N2: the overflow trigger this click came
+    // from lives inside the AppPopover's v-else branch and unmounts the
+    // SAME tick confirmingDelete flips true — without an explicit focus
+    // target a keyboard user is dropped to document.body and has to tab
+    // from the top of the page.
+    it('moves focus to the Confirm button when delete is armed', async () => {
+      const wrapper = mountCardAttached(READY)
+      await openOverflowMenu(wrapper)
+      await wrapper.get('[data-testid="spending-card-delete"]').trigger('click')
+      await flushPromises()
+      expect(document.activeElement).toBe(wrapper.get('[data-testid="spending-card-delete-confirm"]').element)
+      wrapper.unmount()
+    })
   })
 
   // Finding 5: "Edit" navigated to the workspace but changed nothing. The
   // menu item is now "Rename" and actually persists a new name.
   describe('rename', () => {
+    // Spec review round 2, finding N1: the backend caps ChartPatch.name at
+    // 120 (src/library/api/spending.py Field(max_length=120)) — anything
+    // longer is a guaranteed 422 whose validation-array detail renders as a
+    // raw JSON blob (api/client.ts's readError JSON.stringifies it). Pinned
+    // here so the input's own cap can never silently drift past the
+    // server's without a test going red.
+    it("caps the rename input's length to match the backend's own cap (120)", async () => {
+      const wrapper = mountCard(READY)
+      await openOverflowMenu(wrapper)
+      await wrapper.get('[data-testid="spending-card-rename"]').trigger('click')
+      const input = wrapper.get('[data-testid="spending-card-rename-input"]')
+      expect(input.attributes('maxlength')).toBe('120')
+    })
+
+    // Spec review round 2, finding N2: same missing-focus defect as delete,
+    // on the rename path — carrying over ConversationSidebar.vue's own
+    // startRename idiom (nextTick -> focus + select) rather than leaving
+    // the keyboard user dropped to document.body.
+    it('moves focus into the rename input, with its text selected, when rename is armed', async () => {
+      const wrapper = mountCardAttached(READY)
+      await openOverflowMenu(wrapper)
+      await wrapper.get('[data-testid="spending-card-rename"]').trigger('click')
+      await flushPromises()
+      const input = wrapper.get('[data-testid="spending-card-rename-input"]').element as HTMLInputElement
+      expect(document.activeElement).toBe(input)
+      expect(input.selectionStart).toBe(0)
+      expect(input.selectionEnd).toBe(input.value.length)
+      wrapper.unmount()
+    })
+
     it('renames the chart on the happy path', async () => {
       const updated: Chart = { ...BASE_CHART, id: 1, name: 'Cloud hosting (renamed)' }
       vi.mocked(updateChart).mockResolvedValueOnce(updated)
