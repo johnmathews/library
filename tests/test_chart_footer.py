@@ -491,3 +491,114 @@ async def test_a_refund_the_total_could_not_convert_is_not_reported_twice(
     assert [(u.currency, u.amount) for u in series.unconvertible] == [("ZZZ", Decimal("-30.00"))]
     assert footer.unconvertible == []
     assert (footer.netted_refunds, footer.refund_count) == (Decimal("0"), 0)
+
+
+@pytest.mark.asyncio
+async def test_a_split_document_appears_once_with_its_rows_summed(
+    session, document, facets
+) -> None:
+    """Executed against Postgres before this was planned: a document split
+    across spend lines emits **two** rows into one bucket while
+    `_Group.documents` — a set — reports one. So the list deduplicates, and a
+    listed document's amount is the sum of its rows in that bucket.
+
+    Rendering one row's amount would print `60.00` under a footer reading
+    `100.00`: a number that appears nowhere in the accounting.
+    """
+    from library.charts.footer import chart_footer_documents
+
+    doc = await document(
+        amount_total=Decimal("100.00"),
+        amount_kind=AmountKind.PAYMENT_MADE,
+        document_date=date(2026, 4, 1),
+    )
+    await replace_lines(
+        session,
+        doc.id,
+        [
+            LineInput(amount=Decimal("60.00"), note="a", labels={}),
+            LineInput(amount=Decimal("40.00"), note="b", labels={}),
+        ],
+    )
+    await session.commit()
+    rule = Rule(all=[Clause(facet="category", values=["software"])])
+
+    rows = await chart_footer_documents(
+        session,
+        rule,
+        bucket="uncategorised",
+        amount_kind=None,
+        currency="EUR",
+        since=None,
+        until=None,
+        facets_in_rule={"category"},
+    )
+
+    assert [(r.document_id, r.amount) for r in rows] == [(doc.id, Decimal("100.00"))]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("bucket", "kind", "make"),
+    [
+        ("uncategorised", None, {"amount_kind": AmountKind.PAYMENT_MADE}),
+        ("unclassified", None, {"amount_kind": None}),
+        ("undated", None, {"amount_kind": AmountKind.PAYMENT_MADE, "document_date": None}),
+        ("excluded", "coverage_limit", {"amount_kind": "coverage_limit"}),
+    ],
+)
+async def test_the_list_length_equals_the_footer_s_count(
+    session, document, facets, bucket: str, kind: str | None, make: dict
+) -> None:
+    """The invariant this route exists to hold: what the footer counts is what
+    the panel lists. §8's "the panel must add up to the bar", one level down.
+
+    Two documents so an off-by-one is visible; the same document twice would
+    pass under a broken deduplication.
+    """
+    from library.charts.footer import chart_footer_documents
+
+    defaults = {"document_date": date(2026, 4, 1), "currency": "EUR"}
+    for _ in range(2):
+        await document(amount_total=Decimal("10.00"), **{**defaults, **make})
+    # A second, different excluded kind alongside whatever `make` seeds: with
+    # only one excluded kind in the archive, `amount_kind` has nothing to
+    # filter, and a deleted filter would pass unnoticed (mutation check c).
+    await document(amount_total=Decimal("999.00"), amount_kind="balance", **{**defaults})
+    await session.commit()
+    rule = Rule(all=[Clause(facet="category", values=["software"])])
+    shared = {
+        "currency": "EUR",
+        "since": None,
+        "until": None,
+        "facets_in_rule": {"category"},
+    }
+
+    footer = await chart_footer(session, rule, **shared)
+    rows = await chart_footer_documents(session, rule, bucket=bucket, amount_kind=kind, **shared)
+
+    group = (
+        next(g for g in footer.excluded if g.amount_kind == kind)
+        if bucket == "excluded"
+        else getattr(footer, bucket)
+    )
+    assert group is not None, f"the fixture did not land in {bucket}"
+    assert len(rows) == group.documents
+    assert sum((r.amount for r in rows), Decimal(0)) == group.amount
+
+
+@pytest.mark.asyncio
+async def test_an_empty_bucket_lists_nothing_rather_than_raising(session, facets) -> None:
+    from library.charts.footer import chart_footer_documents
+
+    rows = await chart_footer_documents(
+        session,
+        Rule(),
+        bucket="unaccounted",
+        amount_kind=None,
+        currency="EUR",
+        since=None,
+        until=None,
+        facets_in_rule=set(),
+    )
+    assert rows == []

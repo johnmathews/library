@@ -45,7 +45,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.charts.draft import MAX_QUESTION_CHARS, DraftError, draft_rule
-from library.charts.footer import ExcludedGroup, Footer, chart_footer
+from library.charts.footer import ExcludedGroup, Footer, chart_footer, chart_footer_documents
 from library.charts.query import (
     SENDER_SPLIT,
     CellPayment,
@@ -1001,6 +1001,104 @@ async def chart_cell_data(
                 ],
             )
             for payment, share in zip(payments, rendered, strict=True)
+        ],
+    )
+
+
+#: The buckets `_CLASSIFY_SQL` can put a row in that the footer reports. Named
+#: here rather than derived from `FooterOut`'s fields so an unknown bucket is a
+#: 422 the owner can read, and so `unaccounted` is openable: a bug signal you
+#: cannot open is not a signal. `unconvertible` is deliberately absent: it is
+#: not a `_CLASSIFY_SQL` bucket at all but a merge of two separately-reported
+#: lists (docs/charts.md §5), so listing its documents would need
+#: `Unconvertible` to carry document ids — an engine change, out of scope.
+_FOOTER_BUCKETS = frozenset({"excluded", "unclassified", "uncategorised", "undated", "unaccounted"})
+
+
+class FooterDocumentOut(BaseModel):
+    """One document behind a footer count. `amount` is this document's total
+    within the bucket, summed across its spend lines."""
+
+    id: int
+    title: str | None
+    date: date | None
+    amount: Decimal
+    currency: str | None
+    amount_kind: str | None
+
+
+class FooterDocumentsOut(BaseModel):
+    bucket: str
+    documents: list[FooterDocumentOut]
+
+
+@router.get("/spending/{chart_id}/footer/{bucket}", summary="The documents behind a footer count")
+async def chart_footer_bucket(
+    chart_id: int,
+    bucket: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    amount_kind: Annotated[
+        str | None, Query(description="Selects one group out of `excluded`.")
+    ] = None,
+    since: Annotated[date | None, Query(alias="from")] = None,
+    until: Annotated[date | None, Query(alias="to")] = None,
+    currency: Annotated[str | None, Query(pattern=r"^[A-Za-z]{3}$")] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> FooterDocumentsOut:
+    """§9.4 calls uncategorised money "a visible task". This is what makes it
+    one: without it every footer count is a number with nowhere to go.
+
+    Takes the same window arguments as `/data` and resolves them the same way,
+    so the list answers the question the footer counted. `split` is left to
+    the chart's default (`_resolve_query`'s `split=None`) rather than cleared:
+    `chart_footer` itself takes no split, but inheriting the default still
+    validates it exactly as `/data` does, so a chart whose split axis names a
+    facet deleted at runtime is a 422 from both routes rather than a footer
+    panel that opens under a chart that will not draw.
+    """
+    if bucket not in _FOOTER_BUCKETS:
+        raise _unprocessable(
+            f"unknown footer bucket '{bucket}'; use one of {sorted(_FOOTER_BUCKETS)}"
+        )
+    chart = await _load_chart(session, chart_id)
+    query = await _resolve_query(
+        session, chart, grain=None, split=None, currency=currency, since=since, until=until
+    )
+    rows = await chart_footer_documents(
+        session,
+        query.rule,
+        bucket=bucket,
+        amount_kind=amount_kind,
+        currency=query.currency,
+        since=query.since,
+        until=query.until,
+        facets_in_rule=query.facets_in_rule,
+    )
+    page = rows[offset : offset + limit]
+    titles: dict[int, str | None] = dict(
+        (
+            await session.execute(
+                select(Document.id, Document.title).where(
+                    Document.id.in_([row.document_id for row in page])
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    return FooterDocumentsOut(
+        bucket=bucket,
+        documents=[
+            FooterDocumentOut(
+                id=row.document_id,
+                title=titles.get(row.document_id),
+                date=row.date,
+                amount=_money(row.amount),
+                currency=row.currency,
+                amount_kind=row.amount_kind,
+            )
+            for row in page
         ],
     )
 

@@ -1248,3 +1248,66 @@ async def test_a_database_error_that_is_not_the_sum_trigger_is_not_a_400(
         await _commit_allocation(session)
     assert getattr(caught.value.orig, "sqlstate", None) == "23505"
     await session.rollback()
+
+
+# --- the footer drill route ---------------------------------------------------
+
+
+def test_the_footer_route_lists_the_documents_behind_a_count(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    _seed_vocabulary(api_database_url)
+    document_id = _seed_document(api_database_url, amount="89.20", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, "api-footer-drill", SOFTWARE_RULE)
+    data = api_client.get(f"/api/spending/{chart_id}/data").json()
+    counted = data["footer"]["uncategorised"]["documents"]
+
+    body = api_client.get(
+        f"/api/spending/{chart_id}/footer/uncategorised",
+        params={"currency": data["currency"]},
+    ).json()
+
+    assert len(body["documents"]) == counted
+    listed = {d["id"]: d for d in body["documents"]}
+    assert document_id in listed
+    assert listed[document_id]["amount"] == "89.20"
+
+
+def test_an_unknown_footer_bucket_is_a_422_naming_it(api_client: TestClient) -> None:
+    chart_id = _save_chart(api_client, "api-footer-bucket-422", {})
+    response = api_client.get(f"/api/spending/{chart_id}/footer/nonsense")
+    assert response.status_code == 422
+    assert "nonsense" in response.json()["detail"]
+
+
+def test_the_footer_route_caps_its_limit_at_100(api_client: TestClient) -> None:
+    chart_id = _save_chart(api_client, "api-footer-limit", {})
+    response = api_client.get(
+        f"/api/spending/{chart_id}/footer/uncategorised", params={"limit": 101}
+    )
+    assert response.status_code == 422
+
+
+def test_the_footer_route_and_the_footer_count_agree_after_a_window_narrows(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The route takes /data's window arguments and must resolve them the same
+    way, or the list answers a different question from the count above it."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE, day=MARCH)
+    _seed_document(
+        api_database_url,
+        amount="20.00",
+        kind=AmountKind.PAYMENT_MADE,
+        day=date(2026, 6, 1),
+    )
+    chart_id = _save_chart(api_client, "api-footer-window", SOFTWARE_RULE)
+    window = {"from": "2026-03-01", "to": "2026-03-31"}
+
+    data = api_client.get(f"/api/spending/{chart_id}/data", params=window).json()
+    body = api_client.get(
+        f"/api/spending/{chart_id}/footer/uncategorised",
+        params={**window, "currency": data["currency"]},
+    ).json()
+
+    assert len(body["documents"]) == data["footer"]["uncategorised"]["documents"]
