@@ -78,6 +78,13 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/VocabularyView.vue'),
   },
   {
+    // GOV.UK pattern, as on document-delete: a destructive, irreversible action
+    // gets a confirmation PAGE with its own URL, never a modal.
+    path: '/vocabulary/:facetKey/:valueKey/merge',
+    name: 'vocabulary-merge',
+    component: () => import('../views/vocabulary/ValueMergeView.vue'),
+  },
+  {
     path: '/jobs',
     name: 'jobs',
     component: () => import('../views/JobsView.vue'),

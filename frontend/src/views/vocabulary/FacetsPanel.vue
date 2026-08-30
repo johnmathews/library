@@ -17,6 +17,7 @@
  * ...)` with a `loaded` flag, fetching on the first false -> true transition.
  */
 import { computed, reactive, ref, watch } from 'vue'
+import { RouterLink } from 'vue-router'
 import {
   addAlias,
   createFacet,
@@ -585,6 +586,13 @@ async function saveCreateValue(facetKey: string): Promise<void> {
               >
                 Add alias
               </button>
+              <RouterLink
+                :to="{ name: 'vocabulary-merge', params: { facetKey: facet.key, valueKey: value.key } }"
+                class="btn-xs border border-gray-200 dark:border-gray-700/60 text-gray-700 dark:text-gray-300"
+                :data-testid="`value-${facet.key}-${value.key}-merge-btn`"
+              >
+                Merge
+              </RouterLink>
               <button
                 type="button"
                 class="btn-xs border border-red-200 dark:border-red-500/40 text-red-600 dark:text-red-400"
