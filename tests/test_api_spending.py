@@ -586,39 +586,67 @@ def test_a_split_value_with_no_sender_row_falls_back_to_the_raw_value(
     assert body["label"] == "999999"
 
 
-def test_a_non_numeric_split_value_resolves_to_itself_rather_than_500ing(
-    api_client: TestClient, api_database_url: str
+#: Every input class that has crashed `_resolve_splits`'s sender branch, or
+#: that a narrower guard than `int()` itself would still let through:
+#: - a Unicode "digit" `str.isdigit()` accepts but `int()` rejects (superscript
+#:   two, category No) — the guard `isdigit() and int(value) <= MAX` still
+#:   raises on this one;
+#: - the empty string and a `+`-prefixed value, both edge cases of `int()`'s
+#:   own grammar;
+#: - a non-integer string;
+#: - a value out of `senders.id`'s `int4` range;
+#: - fullwidth and Arabic-indic decimal digits, which `int()` *does* accept —
+#:   included so a fix that over-corrects to ASCII-only parsing is not
+#:   mistaken for covering this class.
+_MALFORMED_SPLIT_VALUES = ["²", "", "+5", "not-an-id", "99999999999", "１２３", "٣"]  # noqa: RUF001
+
+
+@pytest.mark.parametrize("split_value", _MALFORMED_SPLIT_VALUES)
+def test_a_malformed_split_value_resolves_to_itself_rather_than_500ing(
+    api_client: TestClient, api_database_url: str, split_value: str
 ) -> None:
-    """`split_value` is an unvalidated `/cell` query parameter. `int()` on it
-    used to be an unhandled 500 for anything that was not a plain integer —
-    the one surface a client actually controls."""
+    """`split_value` is an unvalidated `/cell` query parameter — the one
+    surface a client actually controls. Every value in this class must come
+    back 200 with itself as the label (no sender is seeded, so nothing here
+    can resolve to a real name), never 500."""
     _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
-    chart_id = _save_chart(api_client, "api-splits-junk-id", {}, default_split="sender")
+    chart_id = _save_chart(
+        api_client, f"api-splits-malformed-{uuid.uuid4()}", {}, default_split="sender"
+    )
 
     response = api_client.get(
         f"/api/spending/{chart_id}/cell",
-        params={"period": "2026-03-01", "split": "sender", "split_value": "not-an-id"},
+        params={"period": "2026-03-01", "split": "sender", "split_value": split_value},
     )
 
     assert response.status_code == 200, response.text
-    assert response.json()["label"] == "not-an-id"
+    assert response.json()["label"] == split_value
 
 
-def test_an_out_of_range_split_value_resolves_to_itself_rather_than_500ing(
+def test_a_split_value_in_non_canonical_form_still_resolves_to_the_senders_name(
     api_client: TestClient, api_database_url: str
 ) -> None:
-    """`senders.id` is Postgres `int4`; a numeric id too large for it used to
-    reach asyncpg's own range check and 500 rather than resolving to itself."""
-    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
-    chart_id = _save_chart(api_client, "api-splits-oor-id", {}, default_split="sender")
-
-    response = api_client.get(
-        f"/api/spending/{chart_id}/cell",
-        params={"period": "2026-03-01", "split": "sender", "split_value": "99999999999"},
+    """`int()` accepts forms `senders.id` never renders on the wire — a
+    leading zero, here. Resolution must key on the *parsed* id, not the raw
+    string: a lookup keyed on the string would only ever match `str(row.id)`
+    exactly, so a real sender sent in a non-canonical form would mislabel to
+    the raw input instead of the sender's name."""
+    name = f"{VENDOR_A} {uuid.uuid4()}"
+    _document_id, sender_id = _seed_sender_document(api_database_url, sender=name, amount="10.00")
+    chart_id = _save_chart(
+        api_client, f"api-splits-canonical-{uuid.uuid4()}", {}, default_split="sender"
     )
 
-    assert response.status_code == 200, response.text
-    assert response.json()["label"] == "99999999999"
+    body = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={
+            "period": "2026-03-01",
+            "split": "sender",
+            "split_value": f"00{sender_id}",
+        },
+    ).json()
+
+    assert body["label"] == name
 
 
 def test_a_cell_carries_its_own_label_and_colour(

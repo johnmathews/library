@@ -570,28 +570,46 @@ async def _resolve_splits(
         # `values` can come straight from `/cell`'s `split_value` query
         # parameter, which is client-controlled and never validated as an id
         # (§9.5: `/cell` takes whatever `/data` handed back, but a client can
-        # send anything). Anything that is not a plain non-negative integer,
-        # or is too big for `senders.id` (`int4`), cannot name a real sender
-        # either way, so it is filtered out here rather than reaching `int()`
-        # or asyncpg's range check — both of which would otherwise turn a
-        # junk id into an unhandled 500 on a route with no other validation.
-        numeric = {
-            value: int(value)
-            for value in values
-            if value is not None and value.isdigit() and int(value) <= _MAX_SENDER_ID
-        }
+        # send anything). `int()` itself is the only reliable judge of "is
+        # this a number" — `str.isdigit()` is not a safe gate in front of it:
+        # it is `True` for characters `int()` rejects (superscripts and other
+        # Unicode category-No "digits", e.g. `"²"`), so filtering on it first
+        # still lets `int()` raise. Parsing defensively and bounding the
+        # result against `senders.id`'s `int4` range (`_MAX_SENDER_ID`) is
+        # what actually keeps a junk id from reaching `int()`'s `ValueError`
+        # or asyncpg's own range check — both unhandled 500s on a route with
+        # no other validation.
+        #
+        # Keyed by the **parsed** id, not the raw string: `int()` accepts
+        # forms `senders.id` never renders (`"007"`, fullwidth or other
+        # non-ASCII decimal digits), and a client sending one of those for a
+        # real sender must still get that sender's name, not a raw-string
+        # fallback that only fires for a mismatch of spelling, not of value.
+        numeric: dict[str, int] = {}
+        for value in values:
+            if value is None:
+                continue
+            try:
+                parsed = int(value)
+            except ValueError:
+                continue
+            if 0 <= parsed <= _MAX_SENDER_ID:
+                numeric[value] = parsed
         rows = (
             await session.execute(
                 select(Sender.id, Sender.name, Sender.colour).where(Sender.id.in_(numeric.values()))
             )
         ).all()
-        by_id = {str(row.id): (row.name, row.colour) for row in rows}
+        by_id = {row.id: (row.name, row.colour) for row in rows}
         results = []
         for value in values:
             if value is None:
                 results.append(SplitValueOut(value=None, label=_NO_SENDER, colour=None))
                 continue
-            name, colour = by_id.get(value, (value, None))
+            sender_id = numeric.get(value)
+            name, colour = (
+                (value, None) if sender_id is None else by_id.get(sender_id, (value, None))
+            )
             results.append(SplitValueOut(value=value, label=name, colour=colour))
         return results
 
