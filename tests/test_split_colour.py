@@ -75,3 +75,17 @@ async def test_anything_that_is_not_a_six_digit_hex_is_refused(
         await session.execute(text(f"UPDATE {table} SET colour = :colour"), {"colour": colour})
         await session.commit()
     await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_the_vocabulary_carries_each_value_s_colour(session: AsyncSession, facets) -> None:
+    """`load_vocabulary` is what the spending router already loads to validate a
+    rule, so reading colour from it is what makes split resolution free."""
+    from library.facets.vocabulary import load_vocabulary
+
+    await session.execute(text("UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'software'"))
+    await session.commit()
+    vocabulary = await load_vocabulary(session)
+    category = next(f for f in vocabulary if f.key == "category")
+    assert category.value("software").colour == "#1f77b4"
+    assert category.value("services").colour is None

@@ -110,6 +110,8 @@ class SenderCount:
     id: int
     name: str
     document_count: int
+    #: A stored colour for this sender as a chart split value; see Sender.colour.
+    colour: str | None = None
 
 
 @dataclass(frozen=True)
@@ -200,7 +202,7 @@ async def create_kind(session: AsyncSession, name: str) -> CreateKindResult:
 async def list_senders(session: AsyncSession) -> list[SenderCount]:
     """All senders ordered by name; counts exclude soft-deleted documents."""
     statement = (
-        select(Sender.id, Sender.name, func.count(Document.id))
+        select(Sender.id, Sender.name, Sender.colour, func.count(Document.id))
         .join(
             Document,
             (Document.sender_id == Sender.id) & Document.deleted_at.is_(None),
@@ -211,8 +213,8 @@ async def list_senders(session: AsyncSession) -> list[SenderCount]:
     )
     rows = (await session.execute(statement)).all()
     return [
-        SenderCount(id=sender_id, name=name, document_count=count)
-        for sender_id, name, count in rows
+        SenderCount(id=sender_id, name=name, document_count=count, colour=colour)
+        for sender_id, name, colour, count in rows
     ]
 
 

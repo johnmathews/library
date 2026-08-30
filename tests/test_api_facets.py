@@ -9,7 +9,7 @@ from datetime import UTC, datetime
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -20,6 +20,7 @@ from library.models import (
     DocumentStatus,
     Facet,
     FacetValueSuggestion,
+    Sender,
 )
 
 pytestmark = pytest.mark.integration
@@ -392,3 +393,38 @@ def test_putting_labels_on_a_deleted_document_is_404(
         f"/api/documents/{document_id}/labels", json={"labels": {key: "alpha"}}
     )
     assert response.status_code == 404, response.text
+
+
+def test_get_facets_returns_colour(api_client: TestClient, api_database_url: str) -> None:
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+    api_client.post(f"/api/facets/{key}/values", json={"key": "beta", "label": "Beta"})
+
+    async def paint(session: AsyncSession) -> None:
+        await session.execute(
+            text(
+                "UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'alpha' "
+                "AND facet_id = (SELECT id FROM facets WHERE key = :facet)"
+            ),
+            {"facet": key},
+        )
+        await session.commit()
+
+    _run(api_database_url, paint)
+
+    facet = next(f for f in api_client.get("/api/facets").json()["facets"] if f["key"] == key)
+    colours = {v["key"]: v["colour"] for v in facet["values"]}
+    assert colours == {"alpha": "#1f77b4", "beta": None}
+
+
+def test_get_senders_returns_colour(api_client: TestClient, api_database_url: str) -> None:
+    name = f"Corvus Test Supply {uuid.uuid4()}"
+
+    async def seed(session: AsyncSession) -> None:
+        session.add(Sender(name=name, colour="#d62728"))
+        await session.commit()
+
+    _run(api_database_url, seed)
+
+    rows = api_client.get("/api/senders").json()
+    assert [r["colour"] for r in rows if r["name"] == name] == ["#d62728"]

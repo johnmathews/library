@@ -31,6 +31,8 @@ class VocabularyValue:
     label: str
     parent_id: int | None
     aliases: tuple[str, ...]
+    #: A stored override; None means "derive a palette slot from `key`".
+    colour: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +72,7 @@ async def load_vocabulary(session: AsyncSession) -> tuple[VocabularyFacet, ...]:
                 label=value.label,
                 parent_id=value.parent_id,
                 aliases=tuple(sorted(aliases.get(value.id, ()))),
+                colour=value.colour,
             )
         )
     return tuple(

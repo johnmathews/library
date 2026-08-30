@@ -61,6 +61,9 @@ class ValueOut(BaseModel):
     label: str
     parent_id: int | None
     aliases: list[str]
+    #: A stored colour for this value as a chart split value; null means the
+    #: client derives a stable palette slot from `key` (spec §2.5).
+    colour: str | None = None
 
 
 class FacetOut(BaseModel):
@@ -119,6 +122,7 @@ async def list_facets(session: Annotated[AsyncSession, Depends(get_session)]) ->
                         label=value.label,
                         parent_id=value.parent_id,
                         aliases=list(value.aliases),
+                        colour=value.colour,
                     )
                     for value in facet.values
                 ],

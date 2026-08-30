@@ -55,6 +55,9 @@ class SenderWithCount(BaseModel):
     id: int
     name: str
     document_count: int = Field(description="Non-deleted documents from this sender.")
+    #: A stored colour for this sender as a chart split value; null means the
+    #: client derives a stable palette slot from `id` (spec §2.5).
+    colour: str | None = None
 
 
 class RecipientWithCount(BaseModel):
