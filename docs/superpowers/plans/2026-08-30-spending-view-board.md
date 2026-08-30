@@ -1359,6 +1359,12 @@ it('moves a card down and persists only the ordinals that changed', async () => 
 
 it('shows the empty state when there are no charts, and the board after saving one', async () => { … })
 
+// Carried from Task 7's review: a card with `busy` true and no data yet renders
+// no body at all, so a first load would show a board of empty rectangles. The
+// board owns the load lifecycle, so the placeholder belongs here, not on the
+// card.
+it('shows a placeholder for each card while its first load is in flight', async () => { … })
+
 it('caps its list request at the server maximum', async () => {
   await mountedBoard([])
   expect(vi.mocked(listCharts).mock.calls[0]![0]).toBeLessThanOrEqual(100)
