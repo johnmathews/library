@@ -2066,7 +2066,7 @@ git add -A && git commit -m "feat(charts): document counts per facet value"
 - Create: `journal/260830-spending-view-backend.md`
 - Modify: `docs/superpowers/plans/2026-08-30-spending-view-backend.md` (tick the boxes)
 
-- [ ] **Step 1: Update `docs/charts.md`**
+- [x] **Step 1: Update `docs/charts.md`**
 
 Add the three new spending routes to §11's table:
 
@@ -2085,7 +2085,7 @@ known limits — it is fixed. Add in its place:
 >   to carry document ids and merge as a union — the same engine change the
 >   upper-bound `documents` count already wants.
 
-- [ ] **Step 2: Update `docs/api.md` and `docs/facets.md`**
+- [x] **Step 2: Update `docs/api.md` and `docs/facets.md`**
 
 `docs/api.md`: the three new spending routes, `PATCH /api/senders/{id}`,
 `GET /api/facets/counts`, and the `colour` field on `GET /api/facets` and
@@ -2097,7 +2097,7 @@ Both files carry the repository's stamp convention. Update **Last updated** and
 actually read and the tests that cover the claims. Do not write "verified" for
 anything you did not read.
 
-- [ ] **Step 3: Write the journal entry**
+- [x] **Step 3: Write the journal entry**
 
 Create `journal/260830-spending-view-backend.md`. H1 is a clean title with no
 number or date (`# The spending view's backend`). Cover: the two prototypes and
@@ -2108,13 +2108,13 @@ proved; anything that surprised you during implementation.
 
 **No real sender names, amounts or addresses.**
 
-- [ ] **Step 4: Regenerate the journal index**
+- [x] **Step 4: Regenerate the journal index**
 
 ```bash
 uv run python scripts/build_journal_index.py
 ```
 
-- [ ] **Step 5: Run everything**
+- [x] **Step 5: Run everything**
 
 ```bash
 uv run pytest -q
@@ -2126,7 +2126,7 @@ uv run python scripts/check_docs.py --max-violations 0
 All four must pass before the PR. Report actual output; do not summarise a run
 you did not watch finish.
 
-- [ ] **Step 6: Grep for leaked real values**
+- [x] **Step 6: Grep for leaked real values**
 
 ```bash
 git diff main --stat

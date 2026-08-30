@@ -1,7 +1,7 @@
 # Facet vocabulary
 
-**Status:** active. **Last updated:** 2026-08-29 (the `category` facet grew 4 values — `vehicle-purchase`, `dining`, `employment`, `equipment-certification` — after a full labelling run over 258 real documents left 8 uncategorised and the model's own suggestion queue named all four; §3's description of value/alias matching corrected to say casefolded (case-insensitive), not exact-match, since `parse_label_response` now casefolds — and corrected again same day after a review caught the first correction overclaiming accent-insensitivity too: casefold does not strip diacritics, so `Škoda` and `Skoda` still do not match one another.) Earlier (2026-08-28): (initial version: the closed-set facet vocabulary that replaces free-form tags for the axes charts and search need — `category`, `scope`, `cost_type`, plus `vehicle`/`property`/`person`, which ship empty. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §6–7.5, plan: [superpowers/plans/2026-08-28-charts-facet-vocabulary.md](superpowers/plans/2026-08-28-charts-facet-vocabulary.md)).
-**Last verified:** 2026-08-29 — method: diffed the new `category` row (19 values, order and keys) and §3's matching description against `SEED_VOCABULARY` in `src/library/facets/seed.py` and `parse_label_response` in `src/library/facets/labeller.py` — the four new keys/labels/aliases match `seed.py` exactly. §3's matching prose was re-checked a second time same day after a review caught it overclaiming accent-insensitivity: confirmed by executing `'Skoda'.casefold() == 'Škoda'.casefold()` (`False`) and `'SKODA'.casefold() == 'Škoda'.casefold()` (`False`) that `str.casefold()` folds case only, not diacritics, so the doc now says case-insensitive and gives a same-script (`Skoda`/`SKODA`/`skoda`) example rather than a cross-accent one; covered by executed assertions in `tests/test_facet_labeller.py` (`test_an_alias_resolves_regardless_of_case_including_non_ascii_letters`, `test_a_value_key_differing_only_in_case_resolves`, `test_casefold_does_not_fold_diacritics`) and `tests/test_facet_seed.py`. Earlier (2026-08-28) — method: re-verified after a fix wave. §3 now describes the sanitisation `accept` applies to the key it derives and its 422, and §4 the 409 on merging a value into itself — both diffed against `derive_value_key`/`accept_suggestion` in `src/library/api/facets.py` and `merge_values` in `src/library/facets/vocabulary.py`, and covered by executed assertions in `tests/test_api_facets.py` and `tests/test_facet_crud.py`. §5's `--only` sentence is corrected (it bypasses the relabel skip-check entirely; `--relabel`/`--limit` do nothing alongside it) against `label_archive` in `src/library/cli.py`, and carries a new warning that `PATCH /api/admin/recipients/{id}` with `merge=true` (`rename_recipient` in `src/library/taxonomy.py`, read in full) drops the losing recipient's `user_id` link — an unfixed follow-up, not a claim about this branch's CLI path. Original method: read every module in `src/library/facets/` (`vocabulary.py`, `seed.py`, `labeller.py`, `apply.py`, `backfill.py`, `recipients.py`) and `src/library/api/facets.py` in full; the `Facet`/`FacetValue`/`FacetValueAlias`/`DocumentLabel`/`FacetValueSuggestion` models and the `document_labels`/`facet_values` constraints in `src/library/models.py`; the `facet` query parameter and its 422 paths in `src/library/api/documents.py` and `src/library/search.py`; the `label-archive` and `recipients` commands in `src/library/cli.py`; and the wire-behaviour assertions in `tests/test_api_facets.py`, `tests/test_facet_search.py`, `tests/test_facet_crud.py` and `tests/test_facet_backfill.py`. No tests were executed as part of writing this document; a full `uv run pytest -q` run is recorded in the journal entry for this work.
+**Status:** active. **Last updated:** 2026-08-30 (spending-view backend, Task 8: new §4.1 documents a value's optional stored `colour` (migration 0037) — null is the normal state and means the client derives a palette slot from the value's `key`; set or cleared through `PATCH /api/facets/{facet_key}/values/{value_key}`, independently of `label`, told apart by presence in the request body rather than by value; a new row in §4's cost table; §6 updated to say `GET /api/facets` carries `colour` and the value-PATCH route edits it. See [charts.md](charts.md) §4 and §11 for the split axis this exists for, and [api.md](api.md) §1.23/§1.8.4.0 for the full wire contract on both the facet-value and sender routes.) Earlier (2026-08-29): the `category` facet grew 4 values — `vehicle-purchase`, `dining`, `employment`, `equipment-certification` — after a full labelling run over 258 real documents left 8 uncategorised and the model's own suggestion queue named all four; §3's description of value/alias matching corrected to say casefolded (case-insensitive), not exact-match, since `parse_label_response` now casefolds — and corrected again same day after a review caught the first correction overclaiming accent-insensitivity too: casefold does not strip diacritics, so `Škoda` and `Skoda` still do not match one another.) Earlier (2026-08-28): (initial version: the closed-set facet vocabulary that replaces free-form tags for the axes charts and search need — `category`, `scope`, `cost_type`, plus `vehicle`/`property`/`person`, which ship empty. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §6–7.5, plan: [superpowers/plans/2026-08-28-charts-facet-vocabulary.md](superpowers/plans/2026-08-28-charts-facet-vocabulary.md)).
+**Last verified:** 2026-08-30 — method: read the `colour` columns on `FacetValue` and `Sender` and their `CheckConstraint` in `src/library/models.py`, `migrations/versions/0037_split_colour.py` in full, `ValuePatch`/`Colour`/`patch_value` and the `colour` field on `ValueOut` in `src/library/api/facets.py`, and `set_value_colour`/`get_value` in `src/library/facets/vocabulary.py`. New §4.1's nullability, `model_fields_set` absent-vs-null distinction, and the CHECK/column-width design are covered by executed assertions in `tests/test_api_facets.py` (`test_get_facets_returns_colour`, `test_a_value_s_colour_can_be_set_without_renaming_it`, `test_an_explicit_null_clears_a_colour_and_an_absent_field_does_not`, `test_a_malformed_colour_is_a_422_not_a_500`) and `tests/test_split_colour.py`, run green as part of a full backend pass (see the journal entry for the count). §6's sentence on the sender route is covered by `test_get_senders_returns_colour`, `test_a_sender_s_colour_can_be_set_and_cleared` and `test_a_malformed_sender_colour_is_a_422`. Nothing else in this document was re-checked this pass; the rest carries forward its previous verification below unchanged. Earlier (2026-08-29) — method: diffed the new `category` row (19 values, order and keys) and §3's matching description against `SEED_VOCABULARY` in `src/library/facets/seed.py` and `parse_label_response` in `src/library/facets/labeller.py` — the four new keys/labels/aliases match `seed.py` exactly. §3's matching prose was re-checked a second time same day after a review caught it overclaiming accent-insensitivity: confirmed by executing `'Skoda'.casefold() == 'Škoda'.casefold()` (`False`) and `'SKODA'.casefold() == 'Škoda'.casefold()` (`False`) that `str.casefold()` folds case only, not diacritics, so the doc now says case-insensitive and gives a same-script (`Skoda`/`SKODA`/`skoda`) example rather than a cross-accent one; covered by executed assertions in `tests/test_facet_labeller.py` (`test_an_alias_resolves_regardless_of_case_including_non_ascii_letters`, `test_a_value_key_differing_only_in_case_resolves`, `test_casefold_does_not_fold_diacritics`) and `tests/test_facet_seed.py`. Earlier (2026-08-28) — method: re-verified after a fix wave. §3 now describes the sanitisation `accept` applies to the key it derives and its 422, and §4 the 409 on merging a value into itself — both diffed against `derive_value_key`/`accept_suggestion` in `src/library/api/facets.py` and `merge_values` in `src/library/facets/vocabulary.py`, and covered by executed assertions in `tests/test_api_facets.py` and `tests/test_facet_crud.py`. §5's `--only` sentence is corrected (it bypasses the relabel skip-check entirely; `--relabel`/`--limit` do nothing alongside it) against `label_archive` in `src/library/cli.py`, and carries a new warning that `PATCH /api/admin/recipients/{id}` with `merge=true` (`rename_recipient` in `src/library/taxonomy.py`, read in full) drops the losing recipient's `user_id` link — an unfixed follow-up, not a claim about this branch's CLI path. Original method: read every module in `src/library/facets/` (`vocabulary.py`, `seed.py`, `labeller.py`, `apply.py`, `backfill.py`, `recipients.py`) and `src/library/api/facets.py` in full; the `Facet`/`FacetValue`/`FacetValueAlias`/`DocumentLabel`/`FacetValueSuggestion` models and the `document_labels`/`facet_values` constraints in `src/library/models.py`; the `facet` query parameter and its 422 paths in `src/library/api/documents.py` and `src/library/search.py`; the `label-archive` and `recipients` commands in `src/library/cli.py`; and the wire-behaviour assertions in `tests/test_api_facets.py`, `tests/test_facet_search.py`, `tests/test_facet_crud.py` and `tests/test_facet_backfill.py`. No tests were executed as part of writing this document; a full `uv run pytest -q` run is recorded in the journal entry for this work.
 
 ## 1. What a facet is, and why it is not a tag
 
@@ -120,6 +120,7 @@ a client's request body — see [api.md](api.md)).
 | operation | cost |
 | --- | --- |
 | rename a value's display label | free — labels reference `facet_value_id`, never the display text |
+| set or clear a value's stored colour | free — a display-only override on the value row itself, independent of the label |
 | add an alias | free |
 | merge two values | cheap — repoints every label from the source to the target in one `UPDATE`, keeps the source key as an alias of the target |
 | create a facet or a value | free to create; a labelling pass is needed before any document actually carries it |
@@ -143,6 +144,38 @@ value and every alias it had.
 Split has no dedicated call because there is nothing mechanical to do: the
 system does not know which of the new two values each existing document
 belongs to, only a model re-reading each document's content can decide that.
+
+### 4.1 A value's colour
+
+Every value carries an optional `colour` (migration 0037): a stored six-digit
+`#rrggbb` hex string, or `null`. **Null is the normal state**, not an unset
+default waiting to be filled in — it means the client derives a stable
+palette slot from the value's `key` instead of reading a stored one, which is
+what lets a chart's legend be coloured consistently before anyone has picked
+a colour by hand. Setting one is how an owner overrides that derived slot for
+a value they want to stand out or match an external convention (e.g. a
+vehicle's own brand colour, once `vehicle` carries values).
+
+Set or cleared through `PATCH /api/facets/{facet_key}/values/{value_key}`
+(`{"colour": "#rrggbb"}` or `{"colour": null}`), independently of the label —
+an **absent** `colour` in the request body leaves the stored value untouched,
+while an **explicit `null`** clears it back to the derived slot; the two are
+told apart by whether the key is present in the request body at all, not by
+its value, since `null` must mean something different from "not sent" (see
+[api.md](api.md) §1.23). The same optional-`colour`-with-the-same-nullability
+shape exists on `senders` (`PATCH /api/senders/{id}`, api.md §1.8.4.0), since
+`split=sender` is a chart split axis exactly like a facet ([charts.md](charts.md)
+§4) and needs the same stable-legend-colour treatment; a sender is not part of
+this vocabulary and has no label to go with the colour, only a name.
+
+The format is enforced by an explicit `CHECK (colour ~ '^#[0-9a-fA-F]{6}$')`
+in the database, not only by the API's own pattern validation: the column
+itself is a plain `String(32)`, deliberately wider than a hex value needs, so
+the CHECK is the sole judge of format on any writer that is not this API (a
+future admin script, a data migration) — a tightly-sized column would refuse
+an over-length value as a Postgres `DataError` rather than the `IntegrityError`
+this schema's other constraints raise, a second and differently-shaped
+enforcer.
 
 ## 5. `library label-archive`
 
@@ -197,8 +230,10 @@ without refusing on a conflict. Tracked as a follow-up; unchanged here.
 The full wire contract — every route, status code and JSON shape — is in
 [api.md](api.md); this is the shape of it. `GET /api/facets` returns the
 whole vocabulary in one call (a few dozen rows; every facet, value and
-alias). `POST /api/facets` and `POST /api/facets/{key}/values` create a facet
-or a value. `PATCH .../values/{value}` renames a label; `POST
+alias, plus each value's stored `colour` — §4.1). `POST /api/facets` and
+`POST /api/facets/{key}/values` create a facet or a value. `PATCH
+.../values/{value}` edits a value's label and/or its `colour` (§4.1),
+independently of each other; `POST
 .../values/{value}/aliases` adds an alias; `POST .../values/{value}/merge`
 folds one value into another (with `dry_run`); `DELETE .../values/{value}`
 removes an unused value. `GET`/`PUT /api/documents/{id}/labels` read and set

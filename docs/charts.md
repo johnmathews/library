@@ -1,8 +1,8 @@
 # The chart engine
 
-**Status:** active. **Last updated:** 2026-08-30 (§10.1 now enumerates **five** writers of `amount_total`, not four — Ask's document-edit tool is the fifth, and the only one that does not translate the trigger's refusal into an answer the owner can act on; §13 gains that limit and the two adjacent ones found in the same review, re-extraction's partial skip of `amount_total` while still writing `currency`, and `skipped_fields` landing outside the `extraction_completed` event detail. The live-archive verification of this engine is [journal/260830-chart-engine.md](../journal/260830-chart-engine.md). Earlier (2026-08-29) — initial version — the `spend_facts` relation and the canonical-document rule, the `spend_lines`/`line_labels` write path and its two deferred sum triggers, rule translation, the two orthogonal axes and the invariant total, per-document-date conversion, the footer's **eight** categories, the drill-through, LLM rule drafting against the closed vocabulary, the ten `/api/spending` + `/api/documents/{id}/spend-lines` routes, and the `line_labels` index measured and declined. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §5, §8.4 and §9; plan: [superpowers/plans/2026-08-29-charts-engine.md](superpowers/plans/2026-08-29-charts-engine.md). What an amount *means* is [money-facts.md](money-facts.md); this document is what a chart does with it.)
-**Last verified:** 2026-08-30 — method: the fifth `amount_total` writer was read rather than taken on report — `src/library/ask/engine.py`'s document-edit tool, where `_WRITABLE_FIELDS = tuple(DocumentUpdate.model_fields)`, `DocumentUpdate.amount_total` is a real field (`src/library/schemas.py`), and the tool's `await session.commit()` sits outside any SQLSTATE handling, so the trigger's refusal escapes the whole turn. `src/library/api/documents.py` and `src/library/extraction/apply.py` are now named here because §10.1 makes claims about both and the earlier method line named neither: read `update_document` in full (it commits through `commit_allocation` and translates `AllocationError` to a 400, so row two is right) and `apply.py`'s `scalar_values` loop in full, which confirms the skip is `amount_total`-only — `currency` and `amount_kind` are set on the same pass — and that `skipped_fields` reaches `document.extra["extraction"]` but is absent from the `extraction_completed` detail dict passed to `_record_event`, which is §13's third new limit. Row four re-checked against `src/library/importer/runner.py`'s `amount_total is None` guard. No code changed in this pass; the full backend suite stands at 2182 passed at `b32a67c`. Both docs gates run green in this pass. Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: this document went red on `main` not from any drift in the code it covers, but because PR #121 squash-merged as commit `b32a67c`, dated 2026-08-30 UTC, one day after every stamp written on the branch — the `--since=<bare date>` failure mode already on record, here landing on the commit-date comparison `stale-covered-code`/`stale-doc-edit` both make. Re-verified in full rather than merely re-dated: re-read `src/library/charts/rule.py`, `query.py`, `footer.py` and `draft.py`, `src/library/spend_lines.py`, and `src/library/api/spending.py` end to end against the tree at `b32a67c`, and diffed every numbered claim in this document against them clause by clause — the canonical tie-break's `COALESCE(..., false)`, the `not_in` NULL arm, the three split expressions, the eight footer buckets and their `CASE` order, the ten routes, and the write path's trigger/escape-hatch/refusal table — all still match. Re-read the `spend_facts` view, `spend_lines_sum_matches()` and both constraint triggers in `migrations/versions/0035_spend_facts.py`, and the `charts` table in `0036_charts.py`, line by line. Route count re-taken from `grep -c '@router\.' src/library/api/spending.py` → still 10. No prose changed as a result — the code this document describes is unchanged from the PR that was reviewed under the 2026-08-29 stamp below; only the commit's calendar date moved. Both docs gates run green in this pass. Confirmed no real sender, amount or reference appears in the text. Earlier (2026-08-29) — method: read `src/library/charts/rule.py`, `query.py`, `footer.py` and `draft.py` in full, `src/library/spend_lines.py` in full, and `src/library/api/spending.py` in full (every response model, `_resolve_query`, `_merge_unconvertible`, `_footer_out`, `_data_out`, `_rendered_shares`, `_commit_allocation` and all ten route bodies); read the `spend_facts` view, the `spend_lines_sum_matches()` function and both constraint triggers in `migrations/versions/0035_spend_facts.py` line by line, and `0036_charts.py` for the `charts` table. Route count taken from `grep -c '@router\.' src/library/api/spending.py` → 10. The §11 `EXPLAIN` plans are the verbatim output of two runs against a freshly migrated, seeded and `ANALYZE`d `pgvector/pgvector:pg17`, not a reconstruction. Every behavioural claim below is covered by an executed assertion in `tests/test_spend_facts.py`, `tests/test_spend_lines.py`, `tests/test_chart_rule.py`, `tests/test_chart_query.py`, `tests/test_chart_footer.py`, `tests/test_chart_draft.py`, `tests/test_chart_model.py` and `tests/test_api_spending.py`; the full backend suite ran green (2182 passed) at the commit this document describes. Both docs gates run green in this pass. Confirmed no real sender, amount or reference appears in the text.
-**Covers:** src/library/charts/, src/library/api/spending.py, src/library/spend_lines.py, migrations/versions/0035_spend_facts.py, migrations/versions/0036_charts.py
+**Status:** active. **Last updated:** 2026-08-30 (spending-view backend, Task 8: §11's route table gains `GET /spending/{id}` and `GET /spending/{id}/footer/{bucket}`, now **twelve** routes not ten; new §7.1 documents the footer drill route — `_accounted_rows` as the one shared classify/convert/sign step, the split-document-emits-one-row-per-line shape and why the drill list deduplicates by `document_id` and sums a document's rows, and `FooterDocumentsOut.total` reporting the bucket's full size before paging; §11 gains `DataOut.splits`/`SplitValueOut` and `CellOutBody`'s `label`/`colour`; §13 drops "a sender split emits ids, not names" — fixed by Task 5 — and gains "`unconvertible` has no drill-through" in its place. `migrations/versions/0037_split_colour.py` joins **Covers**. The live-archive verification of the pre-existing engine is in [journal/260830-chart-engine.md](../journal/260830-chart-engine.md); this branch's own work is in [journal/260830-spending-view-backend.md](../journal/260830-spending-view-backend.md).) Earlier the same day — §10.1 now enumerates **five** writers of `amount_total`, not four — Ask's document-edit tool is the fifth, and the only one that does not translate the trigger's refusal into an answer the owner can act on; §13 gains that limit and the two adjacent ones found in the same review, re-extraction's partial skip of `amount_total` while still writing `currency`, and `skipped_fields` landing outside the `extraction_completed` event detail. The live-archive verification of this engine is [journal/260830-chart-engine.md](../journal/260830-chart-engine.md). Earlier (2026-08-29) — initial version — the `spend_facts` relation and the canonical-document rule, the `spend_lines`/`line_labels` write path and its two deferred sum triggers, rule translation, the two orthogonal axes and the invariant total, per-document-date conversion, the footer's **eight** categories, the drill-through, LLM rule drafting against the closed vocabulary, the ten `/api/spending` + `/api/documents/{id}/spend-lines` routes, and the `line_labels` index measured and declined. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §5, §8.4 and §9; plan: [superpowers/plans/2026-08-29-charts-engine.md](superpowers/plans/2026-08-29-charts-engine.md). What an amount *means* is [money-facts.md](money-facts.md); this document is what a chart does with it.)
+**Last verified:** 2026-08-30 — method: read `src/library/api/spending.py` end to end for the two new routes and the changed response models — `get_chart` (§11's new row), `chart_footer_bucket`, `FooterDocumentOut`/`FooterDocumentsOut`, `_resolve_splits`, `SplitValueOut`, `DataOut.splits` and `CellOutBody`'s `label`/`colour` fields; read `_accounted_rows`, `chart_footer_documents` and `_resolved_bucket` in `src/library/charts/footer.py` in full for §7.1; read `migrations/versions/0037_split_colour.py` and the `colour` columns on `Sender`/`FacetValue` in `src/library/models.py`. Route count re-taken from `grep -c '@router\.' src/library/api/spending.py` → 12. The split-document-emits-two-rows claim in §7.1 is covered by an executed assertion in `tests/test_chart_footer.py::test_a_split_document_appears_once_with_its_rows_summed` (a `100.00` document split `60.00`/`40.00`, both lines unlabelled, produces one `FooterDocument` with `amount=100.00`) and by the parametrised `test_the_list_length_equals_the_footer_s_count`; `GET /spending/{id}` is covered by `tests/test_api_spending.py::test_one_chart_can_be_read_by_id` and `test_reading_an_unknown_chart_is_a_404`; the drill route's paging/`total`/unknown-bucket/window-agreement claims are covered by `test_the_footer_route_lists_the_documents_behind_a_count`, `test_the_footer_route_caps_its_limit_at_100`, `test_the_footer_route_reports_the_buckets_full_size_before_paging` and `test_the_footer_route_and_the_footer_count_agree_after_a_window_narrows`, all in `tests/test_api_spending.py`. The mutation checks behind the "one shared classification" and "the dedup is load-bearing" claims are recorded in `.superpowers/sdd/2026-08-30-spending-view-backend/task-6-report.md` (Step 7 (a) and (b)) rather than re-run in this pass. Full backend suite run as part of this pass: see the journal entry for the verbatim count. Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: the fifth `amount_total` writer was read rather than taken on report — `src/library/ask/engine.py`'s document-edit tool, where `_WRITABLE_FIELDS = tuple(DocumentUpdate.model_fields)`, `DocumentUpdate.amount_total` is a real field (`src/library/schemas.py`), and the tool's `await session.commit()` sits outside any SQLSTATE handling, so the trigger's refusal escapes the whole turn. `src/library/api/documents.py` and `src/library/extraction/apply.py` are now named here because §10.1 makes claims about both and the earlier method line named neither: read `update_document` in full (it commits through `commit_allocation` and translates `AllocationError` to a 400, so row two is right) and `apply.py`'s `scalar_values` loop in full, which confirms the skip is `amount_total`-only — `currency` and `amount_kind` are set on the same pass — and that `skipped_fields` reaches `document.extra["extraction"]` but is absent from the `extraction_completed` detail dict passed to `_record_event`, which is §13's third new limit. Row four re-checked against `src/library/importer/runner.py`'s `amount_total is None` guard. No code changed in this pass; the full backend suite stands at 2182 passed at `b32a67c`. Both docs gates run green in this pass. Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: this document went red on `main` not from any drift in the code it covers, but because PR #121 squash-merged as commit `b32a67c`, dated 2026-08-30 UTC, one day after every stamp written on the branch — the `--since=<bare date>` failure mode already on record, here landing on the commit-date comparison `stale-covered-code`/`stale-doc-edit` both make. Re-verified in full rather than merely re-dated: re-read `src/library/charts/rule.py`, `query.py`, `footer.py` and `draft.py`, `src/library/spend_lines.py`, and `src/library/api/spending.py` end to end against the tree at `b32a67c`, and diffed every numbered claim in this document against them clause by clause — the canonical tie-break's `COALESCE(..., false)`, the `not_in` NULL arm, the three split expressions, the eight footer buckets and their `CASE` order, the ten routes, and the write path's trigger/escape-hatch/refusal table — all still match. Re-read the `spend_facts` view, `spend_lines_sum_matches()` and both constraint triggers in `migrations/versions/0035_spend_facts.py`, and the `charts` table in `0036_charts.py`, line by line. Route count re-taken from `grep -c '@router\.' src/library/api/spending.py` → still 10. No prose changed as a result — the code this document describes is unchanged from the PR that was reviewed under the 2026-08-29 stamp below; only the commit's calendar date moved. Both docs gates run green in this pass. Confirmed no real sender, amount or reference appears in the text. Earlier (2026-08-29) — method: read `src/library/charts/rule.py`, `query.py`, `footer.py` and `draft.py` in full, `src/library/spend_lines.py` in full, and `src/library/api/spending.py` in full (every response model, `_resolve_query`, `_merge_unconvertible`, `_footer_out`, `_data_out`, `_rendered_shares`, `_commit_allocation` and all ten route bodies); read the `spend_facts` view, the `spend_lines_sum_matches()` function and both constraint triggers in `migrations/versions/0035_spend_facts.py` line by line, and `0036_charts.py` for the `charts` table. Route count taken from `grep -c '@router\.' src/library/api/spending.py` → 10. The §11 `EXPLAIN` plans are the verbatim output of two runs against a freshly migrated, seeded and `ANALYZE`d `pgvector/pgvector:pg17`, not a reconstruction. Every behavioural claim below is covered by an executed assertion in `tests/test_spend_facts.py`, `tests/test_spend_lines.py`, `tests/test_chart_rule.py`, `tests/test_chart_query.py`, `tests/test_chart_footer.py`, `tests/test_chart_draft.py`, `tests/test_chart_model.py` and `tests/test_api_spending.py`; the full backend suite ran green (2182 passed) at the commit this document describes. Both docs gates run green in this pass. Confirmed no real sender, amount or reference appears in the text.
+**Covers:** src/library/charts/, src/library/api/spending.py, src/library/spend_lines.py, migrations/versions/0035_spend_facts.py, migrations/versions/0036_charts.py, migrations/versions/0037_split_colour.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
 > reference number below is invented.
@@ -376,6 +376,46 @@ rule switches off the reporting of uncategorised money with no error and no test
 in `footer.py` able to notice, so `_ChartQuery.facets_in_rule` is the one place
 it is computed.
 
+### 7.1 Drilling into a footer bucket
+
+`GET /spending/{id}/footer/{bucket}` is `uncategorised`'s (and every other
+excluded bucket's) equivalent of §8: without it a footer count is a number
+with nowhere to go, and `uncategorised` in particular is described in §7 as
+*a visible task* precisely because it tends to be large.
+
+The footer's per-row classify/convert/sign step is shared, not duplicated:
+`_accounted_rows` is the **one** execution of the footer's `CASE` statement
+and the one conversion/sign step, called by both `chart_footer` (which
+aggregates its output into `Footer`'s eight fields) and
+`chart_footer_documents` (which filters and deduplicates the same output into
+a document list). There is exactly one classification to disagree with
+itself, which is what makes "the panel must add up to the bar" true of the
+footer as well as of `/cell`. `_resolved_bucket` — mapping any bucket name
+`footer.py` does not recognise to `unaccounted` — is shared for the same
+reason: an unforeseen bucket name must not make the footer report
+`unaccounted` money while the drill route silently returns nothing for it.
+
+**A document split across spend lines emits one row per line into a bucket.**
+A `100.00` document split `60.00`/`40.00`, neither line labelled, under a rule
+naming `category`, produces **two** `uncategorised` rows sharing one
+`document_id`, while `Footer`'s `_Group.documents` — a `set[int]` — reports
+`1`. Proved by executing this shape against Postgres before it was planned
+([journal/260830-spending-view-backend.md](../journal/260830-spending-view-backend.md)).
+So the drill list **deduplicates by `document_id`**, and a listed
+document's `amount` is the **sum of its rows in that bucket** (`100.00`), not
+one row's (`60.00`) — rendering a single row's amount would print a number
+that appears nowhere in the footer's own accounting.
+
+`FooterDocumentsOut.total` is the bucket's full size **before** paging: a
+bucket with more documents than `limit` still returns only a page, and
+without `total` a client cannot tell a complete list of 3 from the first 100
+of 340. `limit` is capped at 100, the same bound every other list endpoint
+uses. `amount_kind` selects one group out of `excluded` (a list of groups
+rather than one figure); it is ignored for every other bucket, which has
+exactly one.
+
+`unconvertible` is deliberately **not** one of `_FOOTER_BUCKETS` — see §13.
+
 ## 8. Drill-through: the panel must add up to the bar
 
 `GET /spending/{id}/cell` lists the payments behind one cell, each expandable to
@@ -540,7 +580,7 @@ is the silence this feature exists to remove.
 
 ## 11. The API
 
-Ten routes, mounted at **`/api/spending`** rather than the design's
+Twelve routes, mounted at **`/api/spending`** rather than the design's
 `/api/charts`: the old series stack still owns `/api/charts` across thirteen
 routes, and this router takes that prefix when that one is deleted.
 
@@ -548,18 +588,24 @@ routes, and this router takes that prefix when that one is deleted.
 | --- | --- | --- |
 | `GET` | `/api/spending` | saved questions; `limit` ≤ 100, `offset` |
 | `POST` | `/api/spending` | save (201); duplicate `name` → 409 |
+| `GET` | `/api/spending/{id}` | one saved question |
 | `PATCH` | `/api/spending/{id}` | every field optional |
 | `DELETE` | `/api/spending/{id}` | 204 |
 | `GET` | `/api/spending/{id}/data` | `?grain&split&from&to&currency` |
 | `GET` | `/api/spending/{id}/cell` | `?period&split_value` + all of `/data`'s |
+| `GET` | `/api/spending/{id}/footer/{bucket}` | the documents behind a footer count; `limit` ≤ 100 |
 | `POST` | `/api/spending/draft` | question → rule, split, preview |
 | `GET` | `/api/documents/{id}/spend-lines` | a document's allocation |
 | `PUT` | `/api/documents/{id}/spend-lines` | replace the whole allocation |
 | `DELETE` | `/api/documents/{id}/spend-lines` | return to unsplit (204) |
 
+`GET /spending/{id}` exists so the workspace can load a chart directly by id
+rather than paging the list — a page-scoped `GET /spending?limit=…` would stop
+finding a chart as soon as there are more of them than the page size.
+
 **No router builds SQL.** Every number comes from `charts/query.py`,
 `charts/footer.py`, `charts/draft.py` or `spend_lines.py`; this module parses,
-validates, calls them and serialises. Four things it is responsible for that
+validates, calls them and serialises. Five things it is responsible for that
 nothing underneath it can be:
 
 1. **`facets_in_rule`** for the footer (§7).
@@ -574,6 +620,25 @@ nothing underneath it can be:
    drops `unclassified` and `unaccounted` and silently restores the bugs they
    were added for.
 4. **An empty rule means all spending** (§9).
+5. **The footer drill inherits `/data`'s exact resolution.** `/footer/{bucket}`
+   calls `_resolve_query` with `split=None` — which means *take the chart's
+   default split*, not *no split axis*; the empty string is what clears an
+   axis. `chart_footer_documents` itself takes no split argument, so the
+   resolved value is inert in the query, but resolving it still runs
+   `_validate_split` against the chart's default, so a chart whose default
+   split names a facet deleted at runtime is a **422 from both routes**,
+   rather than a footer panel opening under a chart that will not draw.
+
+`DataOut.splits: list[SplitValueOut]` names and colours every split bucket
+present in `cells`, resolved the same way `/cell`'s `split_value` is (§4): a
+sender id becomes the sender's name, a facet value key becomes its label, and
+the unlabelled bucket resolves to a fixed placeholder string with `value:
+null`. `SplitValueOut.colour` is a stored override, `null` meaning the client
+derives a stable palette slot from `value`. `splits` is `[]` for an unsplit
+chart — there is no axis, so there are no buckets to name, which is a
+different claim from a split axis whose only bucket is the unlabelled one.
+`CellOutBody` carries the same `label`/`colour` pair for its own one bucket,
+so a drilled panel can title itself without a second read of `/data`.
 
 Validation worth knowing about:
 
@@ -674,7 +739,11 @@ Add it later in one line if a real workload ever says otherwise.
   indistinguishable from two genuine ones ([money-facts.md](money-facts.md) §5).
 - **The unconvertible `documents` count is an upper bound** after the API's
   merge (§5).
-- **A sender split emits ids, not names** (§4).
+- **`unconvertible` has no drill-through.** Every other footer bucket lists
+  its documents; `unconvertible` is not a `_CLASSIFY_SQL` bucket but a merge
+  of two separately-reported lists (§5), so listing it needs `Unconvertible`
+  to carry document ids and merge as a union — the same engine change the
+  upper-bound `documents` count already wants.
 - **`unclassified` is window-scoped.** A document with an undecided
   `amount_kind` outside every chart's range is still counted nowhere; there is
   no archive-wide backlog count and no way to set `amount_kind` by hand
