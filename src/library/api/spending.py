@@ -665,6 +665,16 @@ async def list_charts(
     return ChartListOut(charts=[_chart_out(chart) for chart in rows])
 
 
+@router.get("/spending/{chart_id}", summary="One saved question")
+async def get_chart(
+    chart_id: int, session: Annotated[AsyncSession, Depends(get_session)]
+) -> ChartOut:
+    """One chart by id. The workspace loads through this rather than paging the
+    list, which would stop finding a chart as soon as there are more than
+    `limit` of them."""
+    return _chart_out(await _load_chart(session, chart_id))
+
+
 @router.post("/spending", status_code=status.HTTP_201_CREATED, summary="Save a question")
 async def create_chart(
     body: ChartIn, session: Annotated[AsyncSession, Depends(get_session)]

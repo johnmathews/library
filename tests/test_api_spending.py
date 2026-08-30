@@ -236,6 +236,24 @@ def test_editing_and_deleting_a_chart(api_client: TestClient) -> None:
     assert api_client.get(f"/api/spending/{chart_id}/data").status_code == 404
 
 
+def test_one_chart_can_be_read_by_id(api_client: TestClient) -> None:
+    """The workspace loads one chart. Without this it has to page the list
+    looking for a row, which breaks the moment there are more than `limit`."""
+    chart_id = _save_chart(api_client, "api-read-by-id", {"all": []})
+
+    response = api_client.get(f"/api/spending/{chart_id}")
+
+    assert response.status_code == 200, response.text
+    listed = api_client.get("/api/spending?limit=100").json()["charts"]
+    assert response.json() == next(c for c in listed if c["id"] == chart_id)
+
+
+def test_reading_an_unknown_chart_is_a_404(api_client: TestClient) -> None:
+    response = api_client.get("/api/spending/999999")
+    assert response.status_code == 404
+    assert "999999" in response.json()["detail"]
+
+
 def test_saving_a_rule_with_an_empty_value_list_is_a_422(api_client: TestClient) -> None:
     """`rule_predicate` raises `RuleError` on it; unreported it would be a 500
     the first time the chart was drawn."""
