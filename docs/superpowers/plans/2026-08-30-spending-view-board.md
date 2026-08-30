@@ -61,7 +61,8 @@ Each of these is a documented behaviour of the deployed API, not a style prefere
 | file | responsibility |
 | --- | --- |
 | `frontend/src/spending/money.ts` | **create** — decimal-string ↔ integer cents, and display formatting |
-| `frontend/src/spending/palette.ts` | **create** — the four-slot palette, the fold, slot assignment |
+| `frontend/src/utils/splitPalette.ts` | **create** — the six-slot palette shared with plan 4c (4c owns it; see Task 2) |
+| `frontend/src/spending/palette.ts` | **create** — the fold and per-chart slot assignment |
 | `frontend/src/api/spending.ts` | **create** — typed functions over `apiFetch` for all of the above routes |
 | `frontend/src/components/spending/SpendingChart.vue` | **create** — the stacked-bar mark |
 | `frontend/src/components/spending/SpendingLegend.vue` | **create** — swatch/label/value, isolate and exclude |
@@ -519,76 +520,122 @@ git commit -m "feat(spending): the API client and exact money arithmetic"
 
 ---
 
-### Task 2: The palette — fold and slot assignment
+### Task 2: The palette — the shared module, the fold, slot assignment
 
 **Files:**
+- Create: `frontend/src/utils/splitPalette.ts` (see the ownership note below)
 - Create: `frontend/src/spending/palette.ts`, `frontend/src/spending/__tests__/palette.spec.ts`
 
 **Interfaces:**
-- Consumes: `toCents` from `./money`; `SplitValue`, `Cell` from `@/api/spending`.
-- Produces: `SLOTS`, `OTHER_COLOUR`, `OTHER_VALUE`, `bands(splits, cells): Band[]`, and `interface Band { value: string | null | typeof OTHER_VALUE; label: string; light: string; dark: string; totalCents: number; members: SplitValue[]; isOther: boolean }`. Tasks 3, 4, 6, 7, 9 and 10 consume `bands()`; none of them re-derives a colour.
+- Consumes: `toCents` from `@/spending/money`; `SplitValue`, `Cell` from `@/api/spending`; `SPLIT_PALETTE`, `deriveSlot`, `resolveSplitColour` from `@/utils/splitPalette`.
+- Produces: `bands(splits, cells): Band[]` and `interface Band { value: string | null | typeof OTHER_VALUE; label: string; light: string; dark: string; totalCents: number; members: SplitValue[]; isOther: boolean }`, plus `OTHER_VALUE` and `OTHER_COLOUR`. Tasks 3, 4, 6, 7, 9 and 10 consume `bands()`; none of them derives a colour itself.
 
-Read spec §4.12 before starting. The four hexes and the cap are a computed result, not a preference — do not add a fifth slot.
+Read spec §4.12 before starting.
+
+**Ownership note — `splitPalette.ts` belongs to plan 4c**, which is building the
+facet-vocabulary panel in a parallel worktree and needs the same value-to-colour
+mapping (§2.5 has both plans deriving a slot when `colour` is null). Create it
+here with **exactly** the contract and hex values below so this branch builds
+and tests on its own; whichever branch merges second deletes its copy and keeps
+the other. Because the values are identical the reconciliation is a deletion,
+not a merge. Put that fact in the module's docstring.
+
+```ts
+export interface PaletteSlot { name: string; light: string; dark: string }
+export const SPLIT_PALETTE: readonly PaletteSlot[]     // the six slots below
+export function deriveSlot(key: string): PaletteSlot   // FNV-1a over the key
+export function resolveSplitColour(stored: string | null, key: string, dark: boolean): string
+```
+
+`resolveSplitColour` has three cases: a null `stored` derives a slot from the
+key and returns that slot's step for the current theme; a `stored` value
+matching a slot's **light** hex resolves to that slot and returns its step for
+the theme (the database holds one hex, which is what stops an owner's override
+being a light-mode colour on a dark chart); anything else is returned verbatim.
+
+| slot | name | light | dark |
+| --- | --- | --- | --- |
+| 1 | Blue | `#1283dc` | `#5791ca` |
+| 2 | Orange | `#ff6f42` | `#b93b09` |
+| 3 | Green | `#51ae7f` | `#19825f` |
+| 4 | Indigo | `#4423da` | `#584fcc` |
+| 5 | Plum | `#993375` | `#ed3297` |
+| 6 | Olive | `#876708` | `#b08923` |
+
+Validated against this app's own chart surfaces (`.card` is `bg-white` /
+`dark:bg-gray-800`) on the **all-pairs** pairlist in both modes: worst CVD ΔE
+9.9 light and 9.3 dark, normal-vision 19.8 and 17.2. Do not change a hex.
 
 - [ ] **Step 1: Write the failing spec**
 
-`frontend/src/spending/__tests__/palette.spec.ts`. Every assertion below was executed against the reference implementation before this plan was written, and all 16 pass. The last four are the adversarial ones and are the reason this module is tested apart from any component.
+`frontend/src/spending/__tests__/palette.spec.ts`. The fold, ordering and
+stored-colour assertions below were executed against a reference implementation
+before this plan was written.
 
 ```ts
 import { describe, expect, it } from 'vitest'
-import { bands, OTHER_VALUE, SLOTS } from '../palette'
+import { bands, OTHER_VALUE } from '../palette'
+import { SPLIT_PALETTE, deriveSlot } from '@/utils/splitPalette'
 
 const S = (value: string | null, label: string, colour: string | null = null) => ({ value, label, colour })
-const C = (split_value: string | null, total: string) => ({ split_value, total, period: '2026-01-01', payments: 1 })
+const C = (split_value: string | null, total: string) =>
+  ({ split_value, total, period: '2026-01-01', payments: 1 })
 
 describe('palette', () => {
   it('gives an unsplit chart no bands at all', () => {
     expect(bands([], [C(null, '10.00')])).toEqual([])
   })
 
-  it('colours every value when there are no more than four', () => {
-    const b = bands([S('b', 'B'), S('a', 'A')], [C('a', '10.00'), C('b', '30.00')])
-    expect(b.map((x) => [x.value, x.light])).toEqual([
-      ['a', SLOTS[0]!.light], ['b', SLOTS[1]!.light],
-    ])
+  // The whole point of a hash-derived slot: the same key is the same colour
+  // wherever it appears, including in 4c's vocabulary panel.
+  it('gives a value the slot its key derives, when nothing collides', () => {
+    const b = bands([S('hosting', 'Hosting')], [C('hosting', '10.00')])
+    expect(b[0]!.light).toBe(deriveSlot('hosting').light)
   })
 
-  // The recolor-on-filter defect: slots must follow the key, not the ranking.
-  it('assigns slots in key order, not magnitude order', () => {
-    const b = bands([S('a', 'A'), S('b', 'B')], [C('a', '1.00'), C('b', '99.00')])
-    expect(b.map((x) => [x.value, x.light])).toEqual([
-      ['a', SLOTS[0]!.light], ['b', SLOTS[1]!.light],
-    ])
+  // De-collision: two bands must never render the same colour.
+  it('never gives two bands the same colour', () => {
+    const keys = ['hosting', 'licences', 'tools', 'training', 'postage', 'freight']
+    const b = bands(keys.map((k) => S(k, k)), keys.map((k) => C(k, '10.00')))
+    const lights = b.map((x) => x.light)
+    expect(new Set(lights).size).toBe(lights.length)
   })
 
-  it('folds the tail past four into one Other bucket', () => {
-    const splits = ['a', 'b', 'c', 'd', 'e', 'f'].map((v) => S(v, v.toUpperCase()))
-    const cells = [C('a','60.00'),C('b','50.00'),C('c','40.00'),C('d','30.00'),C('e','20.00'),C('f','10.00')]
-    const b = bands(splits, cells)
+  it('is deterministic under input reordering', () => {
+    const keys = ['hosting', 'licences', 'tools', 'training']
+    const cells = keys.map((k) => C(k, '10.00'))
+    const one = bands(keys.map((k) => S(k, k)), cells).map((x) => [x.value, x.light])
+    const two = bands([...keys].reverse().map((k) => S(k, k)), cells).map((x) => [x.value, x.light])
+    expect(one).toEqual(two)
+  })
+
+  it('folds the tail past six into one Other bucket', () => {
+    const keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+    const cells = keys.map((k, i) => C(k, `${100 - i * 10}.00`))
+    const b = bands(keys.map((k) => S(k, k.toUpperCase())), cells)
     expect(b.map((x) => (x.value === OTHER_VALUE ? 'OTHER' : x.value)))
-      .toEqual(['a', 'b', 'c', 'd', 'OTHER'])
-    expect(b[4]!.label).toBe('Other (2)')
-    expect(b[4]!.totalCents).toBe(3000)
-    expect(b[4]!.members.map((m) => m.value)).toEqual(['e', 'f'])
+      .toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'OTHER'])
+    expect(b.at(-1)!.label).toBe('Other (2)')
+    expect(b.at(-1)!.members.map((m) => m.value)).toEqual(['g', 'h'])
   })
 
   // §9.2's promise: the stack height is the total, whatever the split does.
   it('preserves the total across the fold', () => {
-    const splits = ['a','b','c','d','e','f'].map((v) => S(v, v.toUpperCase()))
-    const cells = [C('a','60.00'),C('b','50.00'),C('c','40.00'),C('d','30.00'),C('e','20.00'),C('f','10.11')]
-    const b = bands(splits, cells)
-    expect(b.reduce((n, x) => n + x.totalCents, 0)).toBe(21011)
+    const keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h']
+    const cells = keys.map((k, i) => C(k, `${100 - i * 10}.11`))
+    const b = bands(keys.map((k) => S(k, k)), cells)
+    const expected = cells.reduce((n, c) => n + Math.round(parseFloat(c.total) * 100), 0)
+    expect(b.reduce((n, x) => n + x.totalCents, 0)).toBe(expected)
   })
 
   // Forced tie: a fold that depends on input order is a fold that flickers.
   it('folds deterministically when every total is equal', () => {
-    const cells = ['a','b','c','d','e'].map((v) => C(v, '10.00'))
-    const forwards = bands(['a','b','c','d','e'].map((v) => S(v, v)), cells)
-    const backwards = bands(['e','d','c','b','a'].map((v) => S(v, v)), cells)
-    const names = (bs: ReturnType<typeof bands>) =>
-      bs.map((x) => (x.value === OTHER_VALUE ? 'OTHER' : x.value))
-    expect(names(forwards)).toEqual(names(backwards))
-    expect(names(forwards)).toEqual(['a', 'b', 'c', 'd', 'OTHER'])
+    const keys = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+    const cells = keys.map((k) => C(k, '10.00'))
+    const names = (ks: string[]) =>
+      bands(ks.map((k) => S(k, k)), cells).map((x) => (x.value === OTHER_VALUE ? 'OTHER' : x.value))
+    expect(names(keys)).toEqual(names([...keys].reverse()))
+    expect(names(keys)).toEqual(['a', 'b', 'c', 'd', 'e', 'f', 'OTHER'])
   })
 
   it('keeps the unlabelled bucket, sorted last, with the API label', () => {
@@ -603,10 +650,12 @@ describe('palette', () => {
     expect(b.map((x) => x.totalCents)).toEqual([-500, 2000])
   })
 
-  it('uses a stored colour verbatim and does not hand its slot out twice', () => {
-    const b = bands([S('a', 'A', SLOTS[0]!.light), S('b', 'B')], [C('a', '1.00'), C('b', '2.00')])
-    expect(b[0]!.light).toBe(SLOTS[0]!.light)
-    expect(b[1]!.light).toBe(SLOTS[1]!.light)
+  // A stored colour claims its slot before any derived one is handed out.
+  it('honours a stored colour and does not hand its slot out twice', () => {
+    const claimed = SPLIT_PALETTE[2]!
+    const b = bands([S('a', 'A', claimed.light), S('b', 'B')], [C('a', '1.00'), C('b', '2.00')])
+    expect(b[0]!.light).toBe(claimed.light)
+    expect(b[1]!.light).not.toBe(claimed.light)
   })
 
   it('keeps a split value that has no cells, as a real zero', () => {
@@ -621,58 +670,29 @@ describe('palette', () => {
 Run: `cd /Users/john/projects/syncthing/agent-lxc/library-4b/frontend && npx vitest run src/spending/__tests__/palette.spec.ts`
 Expected: FAIL — cannot resolve `../palette`.
 
-- [ ] **Step 3: Write `palette.ts`**
+- [ ] **Step 3: Write both modules**
 
-The reference implementation, executed against the spec above:
+`splitPalette.ts` to the contract above. FNV-1a, exactly:
 
 ```ts
-/**
- * The chart's colour policy, in one pure module (spec §4.12).
- *
- * Four slots, not eight. Categorical colour is gated on CVD separation, a
- * normal-vision floor, a lightness band and a chroma floor, against the surface
- * the chart renders on — `.card`'s white and `gray-800`. Searched over every
- * step of `main.css`'s five chromatic ramps in both modes at once, four is the
- * cap: no step of the `yellow` ramp clears CVD against either `green` or `red`.
- *
- * Light mode: worst-pair CVD ΔE 13.4, normal-vision 18.5, all four >= 3:1 on
- * white. Dark mode: ΔE 7.7 — the 6-8 floor band, which is legal alongside
- * secondary encoding — and two slots below 3:1, which obliges a relief channel.
- * Both obligations are met by encoding this view ships anyway: a 2px surface gap
- * between stacked segments, a legend whenever there are two or more series,
- * direct labels where they fit, and the drill panel, which is the chart's text
- * equivalent and therefore the table view the relief rule asks for.
- *
- * Do not add a fifth slot. It is a computed cap, not a preference.
- */
-export const SLOTS = [
-  { light: '#5d47de', dark: '#5d47de' }, // violet-700
-  { light: '#3193da', dark: '#3193da' }, // sky-700
-  { light: '#239f52', dark: '#239f52' }, // green-700
-  { light: '#941818', dark: '#c52727' }, // red-900 / red-800
-] as const
-
-/** The fold. Deliberately neutral: it is a grouping, not an identity. */
-export const OTHER_COLOUR = { light: '#9ca3af', dark: '#9ca3af' } as const
-
-/**
- * The fold's `value`. A symbol rather than a string because `/cell` takes a
- * real `split_value` and this is not one — the type system should refuse the
- * call rather than the server returning a confusing empty panel.
- */
-export const OTHER_VALUE = Symbol.for('spending.other')
+export function fnv1a(key: string): number {
+  let h = 0x811c9dc5
+  for (let i = 0; i < key.length; i++) {
+    h ^= key.charCodeAt(i)
+    h = Math.imul(h, 0x01000193) >>> 0
+  }
+  return h
+}
+export const deriveSlot = (key: string): PaletteSlot =>
+  SPLIT_PALETTE[fnv1a(key) % SPLIT_PALETTE.length]!
 ```
 
+Then `palette.ts`. The fold and ordering, then the assignment:
+
 ```ts
-export interface Band {
-  value: string | null | typeof OTHER_VALUE
-  label: string
-  light: string
-  dark: string
-  totalCents: number
-  members: SplitValue[]   // non-empty only on the fold
-  isOther: boolean
-}
+export const OTHER_VALUE = Symbol.for('spending.other')
+export const OTHER_COLOUR = { light: '#9ca3af', dark: '#9ca3af' } as const  // gray-400
+const MAX_BANDS = SPLIT_PALETTE.length
 
 const NULL_KEY = '\u0000null'
 const keyOf = (v: string | null): string => (v === null ? NULL_KEY : v)
@@ -680,88 +700,54 @@ const keyOf = (v: string | null): string => (v === null ? NULL_KEY : v)
 // `null` sorts LAST: "no value for this facet" reads as the trailing bucket.
 const cmpKey = (a: string | null, b: string | null): number =>
   a === null ? (b === null ? 0 : 1) : b === null ? -1 : a < b ? -1 : a > b ? 1 : 0
-
-export function bands(splits: SplitValue[], cells: Cell[]): Band[] {
-  if (splits.length === 0) return []
-
-  const totals = new Map<string, number>()
-  for (const cell of cells) {
-    const k = keyOf(cell.split_value)
-    totals.set(k, (totals.get(k) ?? 0) + toCents(cell.total))
-  }
-  const withTotals = splits.map((s) => ({ ...s, totalCents: totals.get(keyOf(s.value)) ?? 0 }))
-
-  // Rank decides what FOLDS. Ties break on the key so the fold cannot flicker
-  // between two renders of the same data.
-  const ranked = [...withTotals].sort(
-    (a, b) => b.totalCents - a.totalCents || cmpKey(a.value, b.value),
-  )
-  const survivors = ranked.slice(0, SLOTS.length)
-  const tail = ranked.slice(SLOTS.length)
-
-  // Key order decides what COLOUR. Assigning by rank would repaint the
-  // survivors whenever a filter changed the ranking.
-  survivors.sort((a, b) => cmpKey(a.value, b.value))
-
-  const claimed = new Set(
-    survivors.flatMap((s) => (s.colour ? [s.colour.toLowerCase()] : [])),
-  )
-  const pool = SLOTS.filter((slot) => !claimed.has(slot.light.toLowerCase()))
-  let next = 0
-
-  const out: Band[] = survivors.map((s) => {
-    if (s.colour) {
-      return { value: s.value, label: s.label, light: s.colour, dark: s.colour,
-               totalCents: s.totalCents, members: [], isOther: false }
-    }
-    const slot = pool[next++]!
-    return { value: s.value, label: s.label, light: slot.light, dark: slot.dark,
-             totalCents: s.totalCents, members: [], isOther: false }
-  })
-
-  if (tail.length) {
-    out.push({
-      value: OTHER_VALUE,
-      label: `Other (${tail.length})`,
-      light: OTHER_COLOUR.light,
-      dark: OTHER_COLOUR.dark,
-      totalCents: tail.reduce((n, t) => n + t.totalCents, 0),
-      members: tail.sort((a, b) => b.totalCents - a.totalCents || cmpKey(a.value, b.value)),
-      isOther: true,
-    })
-  }
-  return out
-}
 ```
 
-This body was executed against the Step 1 assertions before this plan was
-written; all 16 pass. Two rules it must not soften:
+`bands()` then: sum `cells` into cents per `split_value`; rank by total
+descending with **ties broken by key ascending**; keep the first `MAX_BANDS`;
+fold the rest into `Other`; re-sort the survivors by key ascending with `null`
+last; and assign colours in two passes over that key order —
 
-- **Rank order decides what folds; key order decides what colour.** Conflating
-  them is the recolor-on-filter defect.
-- **`null` sorts last**, so "no value for this facet" reads as the trailing
-  legend entry rather than the leading one.
+```ts
+// Pass 1: stored colours claim their slot. Pass 2: derived slots take their
+// preferred slot, or walk forward to the next free one.
+const taken = new Set<number>()
+// ... pass 1 over survivors with a non-null `colour`, matching SPLIT_PALETTE
+//     by LIGHT hex; a hex matching no slot is used verbatim and claims nothing.
+// ... pass 2: let idx = SPLIT_PALETTE.indexOf(deriveSlot(keyOf(value)))
+//     while (taken.has(idx)) idx = (idx + 1) % SPLIT_PALETTE.length
+```
+
+The walk terminates because `survivors.length <= SPLIT_PALETTE.length`; still,
+bound it at `SPLIT_PALETTE.length` iterations rather than trusting that.
+
+Four rules the implementation must not soften:
+
+- **Rank order decides what folds; key order decides the assignment sequence.**
+- **Stored colours claim before derived ones**, so an override always wins.
+- **Two bands never share a colour.**
+- **`null` sorts last.**
 
 - [ ] **Step 4: Run it and watch it pass**
 
-Run: `cd /Users/john/projects/syncthing/agent-lxc/library-4b/frontend && npx vitest run src/spending/__tests__/palette.spec.ts`
-Expected: PASS, 10 tests.
+Run: `cd /Users/john/projects/syncthing/agent-lxc/library-4b/frontend && npx vitest run src/spending/__tests__/palette.spec.ts && npm run type-check`
+Expected: PASS, 11 tests.
 
-- [ ] **Step 5: Mutation-check the two rules**
+- [ ] **Step 5: Mutation-check the three rules**
 
-1. Delete the `survivors.sort(byKey)` line so slots follow rank. Expected: "assigns slots in key order" goes RED. Restore.
-2. Change the tie-break to `|| 0`. Expected: "folds deterministically when every total is equal" goes RED. Restore.
+Each must red the named test; restore after each.
 
-Both must red. If either stays green the test cannot detect the defect its name claims.
+1. Delete the de-collision walk (always use the derived slot). → "never gives two bands the same colour" reds. Use the six keys in that test; they are chosen to collide.
+2. Change the tie-break to `|| 0`. → "folds deterministically when every total is equal" reds.
+3. Run pass 2 before pass 1. → "honours a stored colour" reds.
+
+If any stays green, the test cannot detect the defect its name claims — fix the test, not the check.
 
 - [ ] **Step 6: Commit**
 
 ```bash
-git add frontend/src/spending/palette.ts frontend/src/spending/__tests__/palette.spec.ts
-git commit -m "feat(spending): the four-slot palette, the fold and slot assignment"
+git add frontend/src/utils/splitPalette.ts frontend/src/spending/palette.ts frontend/src/spending/__tests__/palette.spec.ts
+git commit -m "feat(spending): the shared split palette, the fold and slot assignment"
 ```
-
----
 
 ### Task 3: `SpendingChart.vue`
 
@@ -806,12 +792,13 @@ it('uses a category x axis, so every period is the same width', () => {
   expect(chartDataOf(mountChart()).labels).toEqual(['2026-06-01', '2026-07-01', '2026-08-01'])
 })
 
+// The chart takes `bands` as a prop and must not re-derive a colour: the
+// assignment (fold, de-collision, stored overrides) belongs to palette.ts.
 it('draws one dataset per band, in band order, with the band colour', () => {
+  const bands = BANDS   // built by the fixture via bands(splits, cells)
   const datasets = chartDataOf(mountChart()).datasets
-  expect(datasets.map((d) => d.label)).toEqual(['Hosting', 'Licences', 'Other (2)'])
-  expect(datasets.map((d) => d.backgroundColor)).toEqual([
-    SLOTS[0]!.light, SLOTS[1]!.light, OTHER_COLOUR.light,
-  ])
+  expect(datasets.map((d) => d.label)).toEqual(bands.map((b) => b.label))
+  expect(datasets.map((d) => d.backgroundColor)).toEqual(bands.map((b) => b.light))
 })
 
 // The 2px surface gap is the separator; a border around a mark is not.
@@ -839,17 +826,22 @@ it('emits the Other symbol for the folded band, never a fake split value', () =>
 
 // Isolation is a display filter and must not change the assignment.
 it('hides a band without recolouring the survivors', () => {
-  const hidden = new Set(['licences'])
-  const datasets = chartDataOf(mountChart(DATA, hidden)).datasets
-  expect(datasets.map((d) => d.label)).toEqual(['Hosting', 'Other (2)'])
-  expect(datasets[0]!.backgroundColor).toBe(SLOTS[0]!.light)   // still slot 1
-  expect(datasets[1]!.backgroundColor).toBe(OTHER_COLOUR.light)
+  const before = chartDataOf(mountChart(DATA)).datasets
+  const after = chartDataOf(mountChart(DATA, new Set(['licences']))).datasets
+  expect(after.map((d) => d.label)).toEqual(['Hosting', 'Other (2)'])
+  // Every survivor keeps the exact colour it had before the filter.
+  for (const dataset of after) {
+    const was = before.find((d) => d.label === dataset.label)!
+    expect(dataset.backgroundColor).toBe(was.backgroundColor)
+  }
 })
 
 it('renders a single unsplit series with no legend datasets to name', () => {
+  // `bands()` returns [] for an unsplit chart, so the chart draws one series
+  // in the first palette slot and the legend renders nothing.
   const datasets = chartDataOf(mountChart(UNSPLIT)).datasets
   expect(datasets).toHaveLength(1)
-  expect(datasets[0]!.backgroundColor).toBe(SLOTS[0]!.light)
+  expect(datasets[0]!.backgroundColor).toBe(SPLIT_PALETTE[0]!.light)
 })
 ```
 
