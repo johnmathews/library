@@ -551,7 +551,11 @@ async function saveCreateValue(facetKey: string): Promise<void> {
                     Same colour as another value
                   </span>
                 </div>
-                <p v-if="value.aliases.length > 0" class="text-xs text-gray-500 dark:text-gray-400">
+                <p
+                  v-if="value.aliases.length > 0"
+                  class="text-xs text-gray-500 dark:text-gray-400"
+                  :data-testid="`value-${facet.key}-${value.key}-aliases`"
+                >
                   aka {{ value.aliases.join(', ') }}
                 </p>
               </div>

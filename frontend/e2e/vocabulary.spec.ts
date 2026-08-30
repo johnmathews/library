@@ -129,22 +129,26 @@ test('the vocabulary panel journey: create, rename, alias, colour, label, merge,
   await expect(alphaRow).toContainText(alphaRenamedLabel)
 
   // --- Step 5: add an alias, then the same alias again -------------------
+  const aliasesLine = page.getByTestId(`value-${facetKey}-${alphaKey}-aliases`)
   await page.getByTestId(`value-${facetKey}-${alphaKey}-alias-btn`).click()
   await page.getByTestId(`value-${facetKey}-${alphaKey}-alias-input`).fill(aliasText)
   await page.getByTestId(`value-${facetKey}-${alphaKey}-alias-save`).click()
-  await expect(alphaRow).toContainText(`aka ${aliasText}`)
+  await expect(aliasesLine).toHaveText(`aka ${aliasText}`)
 
   // Re-open the editor and add the identical alias again: the panel must
   // refuse it (case-insensitively, client-side — see FacetsPanel.vue) rather
-  // than let the row grow a duplicate.
+  // than let the row grow a duplicate. Asserted against the aliases line's
+  // own testid specifically (not the whole row) — the row also contains the
+  // error paragraph below, whose text repeats `aliasText` verbatim ("Already
+  // covered by the alias '<aliasText>'"), so a substring count over the whole
+  // row would double-count and fail even when no duplicate was added.
   await page.getByTestId(`value-${facetKey}-${alphaKey}-alias-btn`).click()
   await page.getByTestId(`value-${facetKey}-${alphaKey}-alias-input`).fill(aliasText)
   await page.getByTestId(`value-${facetKey}-${alphaKey}-alias-save`).click()
   await expect(page.getByTestId(`value-${facetKey}-${alphaKey}-error`)).toContainText(
     'Already covered by the alias',
   )
-  const rowTextAfterDuplicate = await alphaRow.innerText()
-  expect(rowTextAfterDuplicate.split(aliasText).length - 1).toBe(1)
+  await expect(aliasesLine).toHaveText(`aka ${aliasText}`)
   await page.getByTestId(`value-${facetKey}-${alphaKey}-alias-cancel`).click()
 
   // --- Step 6: set a colour, reload, assert it persisted -----------------
