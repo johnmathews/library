@@ -1747,8 +1747,20 @@ async def chart_footer_bucket(
     )
 ```
 
-Note `grain=None, split=None` on `_resolve_query`: the footer takes no grain and
-no split axis, and passing a chart's default split would be inert at best.
+Note `grain=None, split=None` on `_resolve_query`, and read what it actually
+does before assuming: `split=None` means **"take the chart's default"**, not
+"no split axis" — the empty string is what clears an axis. So this call
+inherits the chart's `default_split` and validates it exactly as `/data` does.
+
+That is deliberate and it is the correct choice, but not because the split is
+unused: `chart_footer` takes no split argument, so the resolved value is inert
+in the query. It matters because of `_validate_split`. Inheriting the default
+means the drill route refuses precisely when `/data` refuses — a chart whose
+split axis names a facet deleted at runtime is a 422 from both, rather than a
+footer panel that opens under a chart that will not draw. Passing `split=""` to
+skip the validation would make the two disagree, which is the same class of
+failure as a panel that answers a different question from its bar.
+
 Import `chart_footer_documents` from `library.charts.footer`.
 
 `unconvertible` is deliberately **not** in `_FOOTER_BUCKETS`: it is not a
