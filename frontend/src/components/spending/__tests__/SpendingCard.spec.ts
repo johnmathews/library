@@ -198,6 +198,22 @@ describe('SpendingCard', () => {
     expect(attention(mountCard(CLEAN)).exists()).toBe(false)
   })
 
+  // Each of the four needs-attention buckets gets its own case: a bug that
+  // mislabels one (e.g. rendering `unclassified` under the `undated` name)
+  // would pass a test that only ever exercises `uncategorised`.
+  it.each([
+    ['unclassified', { unclassified: { amount_kind: 'unclassified', amount: '12.00', documents: 2 } }, '2 documents unclassified'],
+    ['undated', { undated: { amount_kind: 'undated', amount: '18.00', documents: 5 } }, '5 documents undated'],
+    ['unaccounted', { unaccounted: { amount_kind: 'unaccounted', amount: '9.00', documents: 1 } }, '1 document unaccounted'],
+  ] as const)('names the %s bucket in the needs-attention line', (_bucket, footer, expected) => {
+    const wrapper = mountCard({
+      today: '2026-08-14',
+      cells: [{ period: '2026-07-01', split_value: null, total: '500.00', payments: 3 }],
+      footer,
+    })
+    expect(attention(wrapper).text()).toContain(expected)
+  })
+
   it('renders its own error without hiding the rest of the board', () => {
     expect(mountCard({ data: null, error: 'Could not load this chart.' }).text()).toContain(
       'Could not load this chart.',
@@ -395,5 +411,33 @@ describe('SpendingCard', () => {
     // "Show all" clears every hidden band.
     await wrapper.get('[data-testid="spending-legend-reset"]').trigger('click')
     expect(rows()[1]!.attributes('aria-pressed')).toBe('true')
+  })
+
+  it('un-excludes a band on a second modifier-click, without touching Show all', async () => {
+    const splits: SplitValue[] = [
+      { value: 'aws', label: 'AWS', colour: null },
+      { value: 'gcp', label: 'GCP', colour: null },
+    ]
+    const wrapper = mountCard({
+      today: '2026-08-14',
+      splits,
+      cells: [
+        { period: '2026-07-01', split_value: 'aws', total: '700.00', payments: 3 },
+        { period: '2026-07-01', split_value: 'gcp', total: '350.00', payments: 2 },
+      ],
+    })
+    const rows = () => wrapper.findAll('[data-testid="spending-legend-row"]')
+
+    // Modifier-click GCP: it hides, AWS stays visible.
+    await rows()[1]!.trigger('click', { ctrlKey: true })
+    expect(rows()[1]!.attributes('aria-pressed')).toBe('false')
+    expect(rows()[0]!.attributes('aria-pressed')).toBe('true')
+
+    // Modifier-click it again: back to where it started, with no "Show all"
+    // click involved — `onExclude` toggling off, not `onReset` clearing.
+    await rows()[1]!.trigger('click', { ctrlKey: true })
+    expect(rows()[1]!.attributes('aria-pressed')).toBe('true')
+    expect(rows()[0]!.attributes('aria-pressed')).toBe('true')
+    expect(wrapper.find('[data-testid="spending-legend-reset"]').exists()).toBe(false)
   })
 })
