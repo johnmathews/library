@@ -36,12 +36,16 @@
  * cents (`toCents`/`fromCents`), never `parseFloat`, because
  * `1284.50 - 1142.20` prints `142.29999999999998` in IEEE754.
  *
- * Edit and delete live behind the overflow menu (`AppPopover`), not on the
- * card face — a card shows data, not six controls each. Move up / move down
- * are ordinary, always-visible buttons, disabled at the ends: this is the
- * accessible reorder path (drag is the other one, task 8's board), and the
- * one the e2e suite can click on every viewport project without touching a
- * pointer-drag gesture.
+ * Edit, delete, move up and move down all live behind the overflow menu
+ * (`AppPopover`) — spec §10.3 #5 is that a card shows data, not six controls
+ * each, and two always-visible reorder buttons on every card multiplied
+ * across a whole board is exactly the defect that line names. This does not
+ * weaken the reorder path: `AppPopover` is keyboard-operable, closes on
+ * Escape and returns focus to its trigger, so move up / move down (real
+ * `<button>`s, disabled at the ends) stay fully reachable by keyboard — it
+ * just takes one activation to open the menu first. It is still the path
+ * the e2e suite clicks on every viewport project (drag is the other one,
+ * task 8's board), and on a phone a menu beats two more face buttons.
  */
 import { computed, ref } from 'vue'
 import type { Chart, ChartData, Grain } from '@/api/spending'
@@ -270,6 +274,14 @@ const attentionText = computed<string | null>(() => {
 
 const menuOpen = ref(false)
 
+function chooseMoveUp(): void {
+  menuOpen.value = false
+  emit('move-up')
+}
+function chooseMoveDown(): void {
+  menuOpen.value = false
+  emit('move-down')
+}
 function chooseEdit(): void {
   menuOpen.value = false
   emit('edit')
@@ -291,31 +303,6 @@ function chooseDelete(): void {
       </h3>
 
       <div class="flex shrink-0 items-center gap-0.5">
-        <button
-          type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 dark:hover:bg-gray-700/60 dark:hover:text-gray-200"
-          data-testid="spending-card-move-up"
-          aria-label="Move up"
-          :disabled="!canMoveUp"
-          @click="emit('move-up')"
-        >
-          <svg class="h-3.5 w-3.5 fill-none stroke-current" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M5 15l7-7 7 7" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </button>
-        <button
-          type="button"
-          class="flex h-7 w-7 items-center justify-center rounded-lg text-gray-400 transition hover:bg-gray-100 hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-30 disabled:hover:bg-transparent disabled:hover:text-gray-400 dark:hover:bg-gray-700/60 dark:hover:text-gray-200"
-          data-testid="spending-card-move-down"
-          aria-label="Move down"
-          :disabled="!canMoveDown"
-          @click="emit('move-down')"
-        >
-          <svg class="h-3.5 w-3.5 fill-none stroke-current" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M5 9l7 7 7-7" stroke-linecap="round" stroke-linejoin="round" />
-          </svg>
-        </button>
-
         <AppPopover
           :open="menuOpen"
           align="right"
@@ -342,6 +329,33 @@ function chooseDelete(): void {
             </button>
           </template>
 
+          <button
+            type="button"
+            role="menuitem"
+            class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent dark:text-gray-200 dark:hover:bg-gray-700/60"
+            data-testid="spending-card-move-up"
+            :disabled="!canMoveUp"
+            @click="chooseMoveUp"
+          >
+            <svg class="h-3.5 w-3.5 shrink-0 fill-none stroke-current" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 15l7-7 7 7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            Move up
+          </button>
+          <button
+            type="button"
+            role="menuitem"
+            class="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition hover:bg-gray-100 disabled:cursor-not-allowed disabled:opacity-40 disabled:hover:bg-transparent dark:text-gray-200 dark:hover:bg-gray-700/60"
+            data-testid="spending-card-move-down"
+            :disabled="!canMoveDown"
+            @click="chooseMoveDown"
+          >
+            <svg class="h-3.5 w-3.5 shrink-0 fill-none stroke-current" stroke-width="2" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M5 9l7 7 7-7" stroke-linecap="round" stroke-linejoin="round" />
+            </svg>
+            Move down
+          </button>
+          <div class="my-1 border-t border-gray-200 dark:border-gray-700/60" role="separator" />
           <button
             type="button"
             role="menuitem"

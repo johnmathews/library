@@ -165,6 +165,11 @@ function moveDown(wrapper: VueWrapper) {
 function chartLabels(wrapper: VueWrapper): string[] {
   return (wrapper.findComponent({ name: 'Bar' }).props('data') as { labels: string[] }).labels
 }
+/** Edit / delete / move-up / move-down all live behind the overflow menu —
+ * open it before looking for any of them. */
+async function openOverflowMenu(wrapper: VueWrapper): Promise<void> {
+  await wrapper.get('[data-testid="spending-card-menu"]').trigger('click')
+}
 
 describe('SpendingCard', () => {
   // --- The brief's pinned assertions --------------------------------------
@@ -204,10 +209,16 @@ describe('SpendingCard', () => {
     expect(wrapper.find('[data-testid="spending-card-delete"]').exists()).toBe(false)
   })
 
-  it('offers move up and move down as real buttons, disabled at the ends', () => {
+  it('offers move up and move down as real buttons in the menu, disabled at the ends', async () => {
     const wrapper = mountCard({ canMoveUp: false, canMoveDown: true })
+    await openOverflowMenu(wrapper)
     expect(moveUp(wrapper).attributes('disabled')).toBeDefined()
     expect(moveDown(wrapper).attributes('disabled')).toBeUndefined()
+  })
+
+  it('keeps the card face free of reorder controls until the menu is opened', () => {
+    const wrapper = mountCard({ canMoveUp: true, canMoveDown: true })
+    expect(wrapper.find('[data-testid="spending-card-move-up"]').exists()).toBe(false)
   })
 
   // --- Extra coverage beyond the brief's pinned assertions ----------------
@@ -324,12 +335,17 @@ describe('SpendingCard', () => {
     expect(wrapper.find('[data-testid="spending-card-edit"]').exists()).toBe(false)
   })
 
-  it('emits move-up and move-down when clicked', async () => {
+  it('emits move-up and move-down when clicked, closing the menu after', async () => {
     const wrapper = mountCard(READY)
+    await openOverflowMenu(wrapper)
     await moveUp(wrapper).trigger('click')
-    await moveDown(wrapper).trigger('click')
     expect(wrapper.emitted('move-up')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="spending-card-move-up"]').exists()).toBe(false)
+
+    await openOverflowMenu(wrapper)
+    await moveDown(wrapper).trigger('click')
     expect(wrapper.emitted('move-down')).toHaveLength(1)
+    expect(wrapper.find('[data-testid="spending-card-move-down"]').exists()).toBe(false)
   })
 
   it('shows no direction glyph when the two buckets are exactly equal', () => {
