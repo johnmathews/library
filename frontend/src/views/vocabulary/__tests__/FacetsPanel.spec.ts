@@ -1,4 +1,4 @@
-import { flushPromises, mount } from '@vue/test-utils'
+import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import FacetsPanel from '../FacetsPanel.vue'
 import { ApiError } from '@/api/client'
@@ -42,7 +42,7 @@ beforeEach(() => {
 const open = async () => {
   const wrapper = mount(FacetsPanel, {
     props: { active: true },
-    global: { stubs: { SplitColourPicker: true } },
+    global: { stubs: { SplitColourPicker: true, RouterLink: RouterLinkStub } },
   })
   await flushPromises()
   return wrapper
@@ -50,7 +50,10 @@ const open = async () => {
 
 describe('FacetsPanel', () => {
   it('does not load until its tab is opened', async () => {
-    mount(FacetsPanel, { props: { active: false }, global: { stubs: { SplitColourPicker: true } } })
+    mount(FacetsPanel, {
+      props: { active: false },
+      global: { stubs: { SplitColourPicker: true, RouterLink: RouterLinkStub } },
+    })
     await flushPromises()
     expect(api.fetchFacets).not.toHaveBeenCalled()
   })
@@ -81,17 +84,49 @@ describe('FacetsPanel', () => {
     expect(api.renameValue).toHaveBeenCalledWith('category', 'alpha', 'Renamed')
   })
 
-  it('refuses to add an alias the value already has, without calling the API', async () => {
-    // The route is idempotent (ON CONFLICT DO NOTHING), so it would answer 200
-    // and the panel would report a phantom addition.
+  it('refuses to add an alias the value already has (case-insensitively), without calling the API', async () => {
+    // The route itself is NOT case-insensitive (facet_value_aliases stores
+    // aliases as typed and add_alias's ON CONFLICT DO NOTHING does no
+    // lowering), so this is not simply mirroring server idempotency — the
+    // block exists because the labeller resolves values/aliases casefolded
+    // (docs/facets.md §3), so a case-only variant would add a dead row the
+    // labeller can never reach. Submitting a DIFFERENT-CASE variant of an
+    // existing alias exercises that specifically.
     const wrapper = await open()
     await wrapper.find('[data-testid="value-category-alpha-alias-btn"]').trigger('click')
-    await wrapper.find('[data-testid="value-category-alpha-alias-input"]').setValue('a-one')
+    await wrapper.find('[data-testid="value-category-alpha-alias-input"]').setValue('A-One')
     await wrapper.find('[data-testid="value-category-alpha-alias-save"]').trigger('click')
     await flushPromises()
     expect(api.addAlias).not.toHaveBeenCalled()
     expect(wrapper.find('[data-testid="value-category-alpha-error"]').text())
-      .toContain('already an alias')
+      .toContain("Already covered by the alias 'a-one'")
+  })
+
+  it('does NOT block a diacritic variant of an existing alias — casefold does not fold diacritics', async () => {
+    // Same boundary as the backend's
+    // tests/test_facet_labeller.py::test_casefold_does_not_fold_diacritics:
+    // Python's casefold() (and JS's toLowerCase()) fold case but not
+    // accents, so "Skoda" and "Škoda" compare unequal even case-insensitively.
+    // A value whose only alias is the accented form genuinely still needs the
+    // unaccented form added — this must reach the API, not be blocked as a
+    // phantom duplicate.
+    vi.mocked(api.fetchFacets).mockResolvedValue([
+      {
+        key: 'vehicle', label: 'Vehicle', ordinal: 0,
+        values: [
+          { key: 'koda', label: 'Koda', parent_id: null, aliases: ['Škoda'], colour: null },
+        ],
+      },
+    ])
+    vi.mocked(api.fetchFacetCounts).mockResolvedValue([])
+    vi.mocked(api.fetchLabelCounts).mockResolvedValue([])
+    vi.mocked(api.addAlias).mockResolvedValue({ alias: 'Skoda' })
+    const wrapper = await open()
+    await wrapper.find('[data-testid="value-vehicle-koda-alias-btn"]').trigger('click')
+    await wrapper.find('[data-testid="value-vehicle-koda-alias-input"]').setValue('Skoda')
+    await wrapper.find('[data-testid="value-vehicle-koda-alias-save"]').trigger('click')
+    await flushPromises()
+    expect(api.addAlias).toHaveBeenCalledWith('vehicle', 'koda', 'Skoda')
   })
 
   it('adds an alias the value does not have', async () => {

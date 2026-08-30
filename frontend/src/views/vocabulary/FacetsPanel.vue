@@ -228,7 +228,25 @@ function cancelAlias(): void {
 /** Adding an alias the value already has must not call the API: the route is
  * idempotent server-side (ON CONFLICT DO NOTHING) so it would answer 200 and
  * this panel would report a phantom addition. Check the loaded vocabulary
- * first. */
+ * first.
+ *
+ * The comparison is deliberately CASE-INSENSITIVE, even though the server's
+ * `facet_value_aliases` table stores aliases case-sensitively and its
+ * `add_alias` does no lowering before its own `ON CONFLICT DO NOTHING`
+ * (`src/library/facets/vocabulary.py`) — so a case-only variant is not a
+ * server-side no-op on its own. It is still correctly blocked here because
+ * the LABELLER resolves values and aliases casefolded (docs/facets.md §3;
+ * `parse_label_response` in `src/library/facets/labeller.py`): a case-only
+ * variant already resolves through the existing alias and would add nothing
+ * but a dead, unreachable row. Do not "fix" this to exact equality — that
+ * would let the owner create exactly that dead row.
+ *
+ * `casefold()`/`toLowerCase()` fold case but not diacritics, so an alias
+ * differing only by a diacritic (e.g. `Skoda` vs. an existing `Škoda`) is a
+ * genuinely distinct alias the labeller cannot resolve through the existing
+ * one, and must still reach the API — see
+ * `tests/test_facet_labeller.py::test_casefold_does_not_fold_diacritics` for
+ * the backend side of the same boundary. */
 async function saveAlias(facetKey: string, valueKey: string): Promise<void> {
   const key = rowKey(facetKey, valueKey)
   const alias = aliasText.value.trim()
@@ -237,9 +255,14 @@ async function saveAlias(facetKey: string, valueKey: string): Promise<void> {
     return
   }
   const value = findValue(facetKey, valueKey)
-  const already = value?.aliases.some((existing) => existing.trim().toLowerCase() === alias.toLowerCase())
-  if (already) {
-    setRowError(key, `'${alias}' is already an alias of this value.`)
+  const existingMatch = value?.aliases.find(
+    (existing) => existing.trim().toLowerCase() === alias.toLowerCase(),
+  )
+  if (existingMatch) {
+    setRowError(
+      key,
+      `Already covered by the alias '${existingMatch}' — aliases match case-insensitively.`,
+    )
     return
   }
   setPending(key, true)
