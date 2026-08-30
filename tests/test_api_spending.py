@@ -1600,6 +1600,53 @@ def test_a_value_no_document_carries_is_absent_from_label_counts(
     assert {c["value_key"] for c in counts if c["facet_key"] == facet} == {"carried"}
 
 
+def test_a_split_documents_line_only_label_is_absent_from_label_counts(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The divergence between the two routes runs in BOTH directions. The
+    three tests above are all one direction — a value `label-counts` carries
+    that `counts` (money) does not. This is the mirror: a **split** document
+    whose `line_labels` name a value that its `document_labels` do not.
+
+    Migration 0035's `spend_facts` view inherits a line's label onto the
+    document via `doc_labels || line_labels` (jsonb `||` takes the RIGHT
+    operand on a key collision), so `/api/facets/counts` — which reads
+    `spend_facts` — sees the value. But `label_counts` (`vocabulary.py`)
+    reads `document_labels` directly, and no row is ever written there for a
+    label that arrives only through `PUT .../spend-lines`'s per-line
+    `labels` (`replace_lines` in `src/library/spend_lines.py` writes
+    `line_labels`, never `document_labels`) — so the value must be absent
+    from `label-counts` even though the money route reports it."""
+    facet = f"lc-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("line-only",))
+    document_id = _seed_document(
+        api_database_url,
+        amount="20.00",
+        kind=AmountKind.PAYMENT_MADE,
+        # No document-level label: the value is named only on one line below.
+    )
+    response = api_client.put(
+        f"/api/documents/{document_id}/spend-lines",
+        json={
+            "lines": [
+                {"amount": "10.00", "labels": {facet: "line-only"}},
+                {"amount": "10.00"},
+            ]
+        },
+    )
+    assert response.status_code == 200, response.text
+
+    money = api_client.get("/api/facets/counts").json()["counts"]
+    labelled = api_client.get("/api/facets/label-counts").json()["counts"]
+
+    assert {c["value_key"] for c in money if c["facet_key"] == facet} == {"line-only"}, (
+        "the money route inherits the line label via spend_facts's doc_labels || line_labels"
+    )
+    assert not [c for c in labelled if c["facet_key"] == facet], (
+        "label-counts reads document_labels directly, and no row was ever written there"
+    )
+
+
 def test_the_displayed_count_is_the_count_delete_enforces(
     api_client: TestClient, api_database_url: str
 ) -> None:
