@@ -1,0 +1,166 @@
+<script setup lang="ts">
+/**
+ * `/charts` empty state (spec §4.9, §10.4, §2.2).
+ *
+ * "All spending" is **first and pinned** — an empty rule (`{ all: [] }`)
+ * split by `category`. It is not a migration-seeded row (§2.2 rejects that:
+ * a display currency nobody chose, and a one-shot that means "gone once
+ * deleted") — it is created here, by the owner clicking it once, through the
+ * ordinary `POST /api/spending` path every other chart uses.
+ *
+ * Every other proposal comes from `GET /api/facets/counts`: the values with
+ * the most documents, each shown with its count and date span. That route
+ * counts over `spend_facts`, which deliberately excludes amountless,
+ * soft-deleted and non-canonical documents (§3.4) — so a value with no money
+ * behind it never reaches this component at all, and this component does
+ * not second-guess that: whatever the route returns is what gets proposed,
+ * nothing more.
+ *
+ * Accepting a proposal costs the owner one click and saves; ignoring the
+ * rest costs nothing and creates nothing — the difference from the old
+ * "candidates" idea, which created series that persisted as noise even when
+ * unwanted.
+ */
+import { computed, onMounted, ref } from 'vue'
+import { createChart, type Chart, type Rule } from '@/api/spending'
+import { fetchFacetCounts, type FacetCount } from '@/api/facets'
+import { ApiError } from '@/api/client'
+import { formatDate } from '@/utils/documentFormat'
+
+const props = defineProps<{ currency: string }>()
+const emit = defineEmits<{ created: [chart: Chart] }>()
+
+interface Proposal {
+  key: string
+  label: string
+  detail: string | null
+  rule: Rule
+  name: string
+  defaultSplit: string | null
+}
+
+// Pinned first regardless of load state or facet counts — it is not derived
+// from `/api/facets/counts` at all, so it is available even before that
+// fetch resolves (or if it fails).
+const ALL_SPENDING: Proposal = {
+  key: '__all_spending__',
+  label: 'All spending',
+  detail: 'Every document, split by category.',
+  rule: { all: [] },
+  name: 'All spending',
+  defaultSplit: 'category',
+}
+
+const counts = ref<FacetCount[]>([])
+const loading = ref(true)
+const loadError = ref<string | null>(null)
+
+onMounted(async () => {
+  try {
+    counts.value = await fetchFacetCounts()
+  } catch (err) {
+    loadError.value = err instanceof ApiError ? err.detail : 'Could not load proposed questions.'
+  } finally {
+    loading.value = false
+  }
+})
+
+function documentsLabel(n: number): string {
+  return `${n} document${n === 1 ? '' : 's'}`
+}
+
+/** e.g. "4 May 2026 – 12 July 2026", or a single date when the span collapses
+ * to one day. `null` when either bound is absent (the route sends both
+ * together, but this does not assume that). */
+function dateSpan(first: string | null, last: string | null): string | null {
+  const from = formatDate(first)
+  const to = formatDate(last)
+  if (!from || !to) return null
+  return from === to ? from : `${from} – ${to}`
+}
+
+// Ranked by document count, descending — "the values with the most
+// documents" (§4.9) — ties broken by key so the order is deterministic
+// rather than whatever the route happened to return.
+const facetProposals = computed<Proposal[]>(() =>
+  [...counts.value]
+    .sort((a, b) => b.documents - a.documents || a.value_key.localeCompare(b.value_key))
+    .map((count) => {
+      const span = dateSpan(count.first_date, count.last_date)
+      return {
+        key: `${count.facet_key}:${count.value_key}`,
+        label: count.value_key,
+        detail: span ? `${documentsLabel(count.documents)} · ${span}` : documentsLabel(count.documents),
+        rule: { all: [{ facet: count.facet_key, op: 'in' as const, values: [count.value_key] }] },
+        name: count.value_key,
+        defaultSplit: null,
+      }
+    }),
+)
+
+const proposals = computed<Proposal[]>(() => [ALL_SPENDING, ...facetProposals.value])
+
+const savingKey = ref<string | null>(null)
+const saveError = ref<string | null>(null)
+
+async function choose(proposal: Proposal): Promise<void> {
+  if (savingKey.value !== null) return
+  savingKey.value = proposal.key
+  saveError.value = null
+  try {
+    const chart = await createChart({
+      name: proposal.name,
+      rule: proposal.rule,
+      default_split: proposal.defaultSplit,
+      display_currency: props.currency,
+    })
+    emit('created', chart)
+  } catch (err) {
+    saveError.value = err instanceof ApiError ? err.detail : 'Could not create this chart.'
+  } finally {
+    savingKey.value = null
+  }
+}
+</script>
+
+<template>
+  <div class="flex flex-col gap-4" data-testid="spending-empty-state">
+    <p class="text-sm text-gray-500 dark:text-gray-400">
+      No charts yet. Start with the aggregate view below, or chart one of these.
+    </p>
+
+    <p v-if="loadError" class="text-sm text-red-600 dark:text-red-400" data-testid="spending-empty-load-error">
+      {{ loadError }}
+    </p>
+    <p v-if="saveError" class="text-sm text-red-600 dark:text-red-400" data-testid="spending-empty-save-error">
+      {{ saveError }}
+    </p>
+
+    <ul class="flex flex-col gap-2" data-testid="spending-empty-proposals">
+      <li v-for="proposal in proposals" :key="proposal.key">
+        <button
+          type="button"
+          class="card flex w-full items-center justify-between gap-3 p-4 text-left transition hover:border-violet-300 disabled:cursor-not-allowed disabled:opacity-60"
+          data-testid="spending-empty-proposal"
+          :disabled="savingKey === proposal.key"
+          @click="choose(proposal)"
+        >
+          <span class="min-w-0">
+            <span
+              class="block truncate font-medium text-gray-800 dark:text-gray-100"
+              data-testid="spending-empty-proposal-label"
+            >
+              {{ proposal.label }}
+            </span>
+            <span v-if="proposal.detail" class="block text-xs text-gray-500 dark:text-gray-400">
+              {{ proposal.detail }}
+            </span>
+          </span>
+          <span class="shrink-0 text-xs font-medium text-violet-600 dark:text-violet-400">
+            {{ savingKey === proposal.key ? 'Saving…' : 'Chart it' }}
+          </span>
+        </button>
+      </li>
+    </ul>
+  </div>
+</template>
