@@ -1052,7 +1052,9 @@ cd /Users/john/projects/syncthing/agent-lxc/library-4c && git add -A && git comm
 
 **Files:**
 - Modify: `frontend/src/views/vocabulary/FacetsPanel.vue` (replace the stub)
+- Create: `frontend/src/utils/slugify.ts`
 - Test: `frontend/src/views/vocabulary/__tests__/FacetsPanel.spec.ts`
+- Test: `frontend/src/utils/__tests__/slugify.spec.ts`
 
 **Interfaces:**
 - Consumes: every read/write client function from Task 3; `SplitColourPicker` (Task 4); `resolveSplitColour`, `deriveSlot`, `SPLIT_PALETTE` (Task 2).
@@ -1282,10 +1284,10 @@ State to hold: `vocabulary`, `moneyCounts` and `labelCounts` as `Map`s keyed `` 
 
 Lazy load exactly as `AdminMetadataPanel` does — `watch(() => props.active, ...)` with a `loaded` flag, loading on the first `false → true` transition. Load the three GETs with `Promise.all`.
 
-Key slugification for the create-value key field, mirroring the server's `derive_value_key` for convenience only (the server remains the judge and its 422 is rendered):
+Key slugification for the create-value key field, mirroring the server's `derive_value_key` for convenience only (the server remains the judge and its 422 is rendered). **Create it as `frontend/src/utils/slugify.ts` with its own unit test** — Task 9 imports the same function, and a copy would be a second copy of a normalisation rule:
 
 ```ts
-function slugify(label: string): string {
+export function slugify(label: string): string {
   return label
     .trim()
     .toLowerCase()
@@ -1798,7 +1800,7 @@ describe('SuggestionsPanel', () => {
 cd /Users/john/projects/syncthing/agent-lxc/library-4c/frontend && npm run test:unit -- SuggestionsPanel
 ```
 
-Lazy load on `active`. One row per suggestion (`suggestion-{id}`) showing the facet key, the suggested label, the derived key (reuse the `slugify` helper from Task 6 — **move it to `frontend/src/utils/slugify.ts` and import it in both places** rather than copying it), the reason, a `RouterLink` to `{ name: 'document-detail', params: { id: document_id } }`, and Accept / Dismiss buttons. Reload the list after either action. Empty state at `suggestions-empty`.
+Lazy load on `active`. One row per suggestion (`suggestion-{id}`) showing the facet key, the suggested label, the derived key (import `slugify` from `@/utils/slugify`, created in Task 6 — do not copy it), the reason, a `RouterLink` to `{ name: 'document-detail', params: { id: document_id } }`, and Accept / Dismiss buttons. Reload the list after either action. Empty state at `suggestions-empty`.
 
 - [ ] **Step 3: Run, mutation-check, commit**
 
