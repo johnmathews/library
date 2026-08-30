@@ -130,8 +130,15 @@ export function bands(splits: SplitValue[], cells: Cell[]): Band[] {
   const resolved = new Map<number, { light: string; dark: string }>()
 
   // Pass 1: a stored colour claims its slot before any derived one is
-  // handed out, so an owner's override always wins. A stored hex that
-  // matches no slot is used verbatim and claims nothing.
+  // handed out, so an owner's override always wins — but only the FIRST
+  // claimant. Two survivors can carry the same stored hex (nothing stops two
+  // owners picking identical overrides from the same restricted picker), and
+  // if both matched the same slot unconditionally they would render as the
+  // same colour — exactly the defect de-collision exists to prevent. So a
+  // stored colour that matches a slot ALREADY taken by an earlier survivor is
+  // left unresolved here and falls through to pass 2's derived walk, same as
+  // if it had never named a colour at all. A stored hex that matches no slot
+  // at all is still used verbatim and claims nothing (unchanged).
   survivors.forEach((s, i) => {
     if (s.isOther || s.colour === null) return
     const idx = SPLIT_PALETTE.findIndex((slot) => slot.light === s.colour)
@@ -139,16 +146,18 @@ export function bands(splits: SplitValue[], cells: Cell[]): Band[] {
       resolved.set(i, { light: s.colour, dark: s.colour })
       return
     }
+    if (taken.has(idx)) return // collides with an earlier claimant — pass 2 resolves it
     taken.add(idx)
     resolved.set(i, { light: SPLIT_PALETTE[idx]!.light, dark: SPLIT_PALETTE[idx]!.dark })
   })
 
-  // Pass 2: everything left derives a slot from its key and takes it, or
-  // walks forward to the next free one. The walk terminates because
-  // survivors.length <= SPLIT_PALETTE.length, but it is still bounded
-  // rather than trusted to.
+  // Pass 2: everything pass 1 didn't resolve — colour-less survivors AND
+  // stored-colour survivors that lost a slot collision above — derives a
+  // slot from its key and takes it, or walks forward to the next free one.
+  // The walk terminates because survivors.length <= SPLIT_PALETTE.length,
+  // but it is still bounded rather than trusted to.
   survivors.forEach((s, i) => {
-    if (s.isOther || s.colour !== null) return
+    if (s.isOther || resolved.has(i)) return
     let idx = SPLIT_PALETTE.indexOf(deriveSlot(keyOf(s.value)))
     let steps = 0
     while (taken.has(idx) && steps < SPLIT_PALETTE.length) {

@@ -39,6 +39,20 @@
  * `documents` — canonical rows; merged `unconvertible.documents` — a
  * summed upper bound) and this component never adds any two of them or
  * presents them as parts of one whole; each stays in its own block.
+ *
+ * TESTID INVARIANT: `spending-footer-bucket-${token}` is shared by two
+ * different token vocabularies — `group.amount_kind` for excluded rows (an
+ * open-ended value from the backend's closed `AmountKind` enum) and
+ * `row.bucket` (one of the four fixed attention names: `unclassified` /
+ * `uncategorised` / `undated` / `unaccounted`) for needs-attention rows. The
+ * scheme is unambiguous only because those two vocabularies never overlap —
+ * `AmountKind` is a closed enum on the backend and none of its members is
+ * spelled like an attention bucket. `FooterBucket` (`@/api/spending`) is
+ * itself a bare `string` for `amount_kind`'s half, so nothing in the type
+ * system enforces this; if a future `AmountKind` value collided with one of
+ * the four names, a test targeting `spending-footer-bucket-undated` would
+ * silently resolve to the wrong row (or both), and `wrapper.get(...)` would
+ * throw on an ambiguous match rather than naming the real defect.
  */
 import { computed } from 'vue'
 import type { ChartData, ExcludedGroup, FooterBucket, Unconvertible } from '@/api/spending'
@@ -63,6 +77,12 @@ const refundLabel = computed(() => {
   const n = props.data.footer.refund_count
   return `${n} refund${n === 1 ? '' : 's'} netted off`
 })
+
+/** Same pluralisation the refund count already gets — "1 document", never
+ * "1 documents" — applied everywhere a bucket's `documents` count renders. */
+function documentLabel(n: number): string {
+  return `${n} document${n === 1 ? '' : 's'}`
+}
 
 interface AttentionRow {
   bucket: FooterBucket
@@ -149,7 +169,7 @@ function onAttentionClick(bucket: FooterBucket): void {
             :data-testid="`spending-footer-bucket-${group.amount_kind}`"
             @click="onExcludedClick(group)"
           >
-            <span class="text-gray-800 dark:text-gray-100">{{ group.amount_kind }} &middot; {{ group.documents }} documents</span>
+            <span class="text-gray-800 dark:text-gray-100">{{ group.amount_kind }} &middot; {{ documentLabel(group.documents) }}</span>
             <span class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100">{{ money(group.amount) }}</span>
           </button>
         </li>
@@ -182,7 +202,7 @@ function onAttentionClick(bucket: FooterBucket): void {
             :data-testid="`spending-footer-bucket-${row.bucket}`"
             @click="onAttentionClick(row.bucket)"
           >
-            <span class="text-gray-800 dark:text-gray-100">{{ row.bucket }} &middot; {{ row.group.documents }} documents</span>
+            <span class="text-gray-800 dark:text-gray-100">{{ row.bucket }} &middot; {{ documentLabel(row.group.documents) }}</span>
             <span class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100">{{ money(row.group.amount) }}</span>
           </button>
         </li>
@@ -214,7 +234,7 @@ function onAttentionClick(bucket: FooterBucket): void {
           <span class="text-gray-800 dark:text-gray-100">
             {{ group.currency ?? 'No currency' }}
             &middot;
-            <span data-testid="spending-footer-unconvertible-documents">{{ group.documents }} documents</span>
+            <span data-testid="spending-footer-unconvertible-documents">{{ documentLabel(group.documents) }}</span>
           </span>
           <span
             class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100"

@@ -225,6 +225,33 @@ describe('SpendingFooter', () => {
     expect(rows[2]!.text()).toContain('No currency')
   })
 
+  // The refund count already pluralises correctly; the "documents" figure
+  // beside excluded/attention/unconvertible rows must follow the same rule.
+  it('pluralises a single document correctly (no trailing s)', () => {
+    const wrapper = mountFooter(
+      chartData({
+        excluded: [{ amount_kind: 'coverage_limit', amount: '10.00', documents: 1 }],
+        unclassified: { amount_kind: 'unclassified', amount: '5.00', documents: 1 },
+        unconvertible: [{ currency: 'JPY', amount: '100.00', documents: 1 }],
+      }),
+    )
+    expect(bucketButton(wrapper, 'coverage_limit').text()).toContain('1 document')
+    expect(bucketButton(wrapper, 'coverage_limit').text()).not.toContain('1 documents')
+    expect(bucketButton(wrapper, 'unclassified').text()).toContain('1 document')
+    expect(bucketButton(wrapper, 'unclassified').text()).not.toContain('1 documents')
+    expect(unconvertibleFigure(wrapper).text()).toContain('1 document')
+    expect(unconvertibleFigure(wrapper).text()).not.toContain('1 documents')
+  })
+
+  it('pluralises multiple documents', () => {
+    const wrapper = mountFooter(
+      chartData({
+        excluded: [{ amount_kind: 'coverage_limit', amount: '10.00', documents: 4 }],
+      }),
+    )
+    expect(bucketButton(wrapper, 'coverage_limit').text()).toContain('4 documents')
+  })
+
   it('keeps two null-currency entries stable relative to each other', () => {
     const wrapper = mountFooter(
       chartData({

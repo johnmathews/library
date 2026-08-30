@@ -245,6 +245,23 @@ describe('QuestionDraft', () => {
     expect(wrapper.get('[data-testid="question-draft-save-error"]').text()).toBe('Could not save this chart.')
   })
 
+  // A save failure attached to an earlier draft must not survive onto a
+  // fresh, unrelated one.
+  it('clears a stale save error when a new question is submitted', async () => {
+    createChart.mockRejectedValueOnce(new ApiError(409, 'A chart with this name already exists.'))
+    const wrapper = await drafted()
+    await saveButton(wrapper).trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="question-draft-save-error"]').exists()).toBe(true)
+
+    draftQuestion.mockResolvedValueOnce(draftOf({ question: 'How much do we spend on hosting?' }))
+    await askInput(wrapper).setValue('How much do we spend on hosting?')
+    await wrapper.get('form').trigger('submit')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="question-draft-save-error"]').exists()).toBe(false)
+  })
+
   it('does nothing when save is clicked while the rule is null', async () => {
     const wrapper = await drafted({ rule: null, preview: null, expressible: false })
     await saveButton(wrapper).trigger('click')

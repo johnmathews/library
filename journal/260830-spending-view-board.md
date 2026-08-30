@@ -5,7 +5,7 @@
 
 ## 1. What shipped
 
-Plan 4b of the spending-view work, twelve implementation tasks on top of the
+Plan 4b of the spending-view work, thirteen implementation tasks on top of the
 chart engine (`b32a67c`) and its backend surface (plan 4a, `60d6c95`): the
 `/charts` **board** (`SpendingBoardView.vue`, one card per saved chart,
 reorderable by keyboard and drag) and the `/charts/:chartId` **workspace**
@@ -44,8 +44,10 @@ happens to produce.
 
 Adopting the shared module also reopened a design call the user had made
 under a premise that had just changed: the user chose **key-order** slot
-assignment (first-seen split value gets slot 0) on the premise of a
-four-slot palette. Re-measured with **adversarial** keys (not a fixture whose
+assignment (the surviving bands are sorted by their value key and assigned
+slots in that order — deterministic regardless of arrival order, not "the
+first one seen gets slot 0") on the premise of a four-slot palette. Re-measured
+with **adversarial** keys (not a fixture whose
 keys shared a formulaic prefix, which had produced a misleadingly high first
 reading of 99.6%), a band keeps its hash-derived slot across a reorder only
 92.5% / 76.5% / 60.7% of the time at 2 / 4 / 6 bands — key-order has that

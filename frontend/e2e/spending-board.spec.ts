@@ -17,11 +17,11 @@
  * that can actually express a merge, an amountless document and a 422.
  *
  * `/charts` and `/charts/legacy` (the surviving Smart Groups view, driven by
- * `smart-groups.spec.ts`) both render the page title "Charts" via
- * `PageHeader`, so that heading cannot tell the two pages apart — a spec
- * that landed on the wrong one would still go green. Every navigation
- * assertion below instead targets a testid unique to the new board
- * (`spending-empty-state`, `spending-card`), never the shared heading.
+ * `smart-groups.spec.ts`) are titled "Charts" and "Series charts"
+ * respectively, but every navigation assertion below still targets a testid
+ * unique to the new board (`spending-empty-state`, `spending-card`), never a
+ * heading — the two titles used to collide, and asserting on testids rather
+ * than the fixed-since-then heading is the sturdier habit either way.
  *
  * **This spec never asserts that "All spending" is split.** It saves as an
  * empty rule split by `category` once the archive's facet vocabulary has
@@ -57,8 +57,8 @@ async function signIn(page: Page): Promise<void> {
  * hamburger is present (an offscreen link still reports "visible").
  *
  * Landing is asserted on `spending-empty-state` — a testid the OLD view
- * (`ChartsView`, still reachable at `/charts/legacy`) does not render — never
- * on the "Charts" heading the two pages share.
+ * (`ChartsView`, still reachable at `/charts/legacy`) does not render —
+ * never on a page heading.
  */
 async function openChartsBoard(page: Page): Promise<void> {
   const hamburger = page.locator('button[aria-controls="sidebar"]')

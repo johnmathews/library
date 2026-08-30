@@ -163,18 +163,29 @@ describe('SpendingLegend', () => {
   // Task 3 shipped without.
   it('renders the dark-theme swatch colour, distinct from the light one', () => {
     const lightWrapper = mountLegend()
-    const lightStyle = rowOf(lightWrapper, 'Hosting')
+    const lightHosting = rowOf(lightWrapper, 'Hosting')
+      .find('[data-testid="spending-legend-swatch"]')
+      .attributes('style')
+    const lightLicences = rowOf(lightWrapper, 'Licences')
       .find('[data-testid="spending-legend-swatch"]')
       .attributes('style')
 
     localStorage.setItem('vueuse-color-scheme', 'dark')
     const darkWrapper = mountLegend()
-    const darkStyle = rowOf(darkWrapper, 'Hosting')
+    const darkHosting = rowOf(darkWrapper, 'Hosting')
+      .find('[data-testid="spending-legend-swatch"]')
+      .attributes('style')
+    const darkLicences = rowOf(darkWrapper, 'Licences')
       .find('[data-testid="spending-legend-swatch"]')
       .attributes('style')
 
-    expect(darkStyle).not.toBe(lightStyle)
-    expect(darkStyle).toContain(cssColour(SPLIT_PALETTE[0]!.dark))
+    // Both rendered bands change between themes, and each lands on ITS OWN
+    // slot's dark hex — not just "different from light", which a bug that
+    // shifted every band to the same wrong slot could still satisfy.
+    expect(darkHosting).not.toBe(lightHosting)
+    expect(darkHosting).toContain(cssColour(SPLIT_PALETTE[0]!.dark))
+    expect(darkLicences).not.toBe(lightLicences)
+    expect(darkLicences).toContain(cssColour(SPLIT_PALETTE[1]!.dark))
   })
 
   it('shows a reset control once a band is hidden, and clicking it emits reset', async () => {

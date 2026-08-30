@@ -54,10 +54,11 @@ async function signIn(page: Page): Promise<void> {
 
 /**
  * Open the legacy Smart Groups view directly. `/charts` now leads to the new
- * board (`SpendingBoardView`), which shares the "Charts" heading with this
- * page and so cannot be told apart from it by that heading alone — asserting
- * `charts-create-button` instead pins the landing page to the one view that
- * actually renders it.
+ * board (`SpendingBoardView`, titled "Charts"); this page is titled "Series
+ * charts". Asserting `charts-create-button` rather than either heading pins
+ * the landing page to the one view that actually renders the control —
+ * `legacy-charts.spec.ts` is the permanent (non-nightly-gated) guard for
+ * this same route.
  */
 async function openChartsPage(page: Page): Promise<void> {
   await page.goto('/charts/legacy')

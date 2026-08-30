@@ -338,6 +338,11 @@ const chipSummary = computed<string>(() => {
   return parts.join(' · ')
 })
 
+// `@3xl/workspace` = 48rem = 768px — the SAME threshold as SHEET_THRESHOLD_PX
+// above (see the comment there). One number, referenced from both the
+// ResizeObserver check and this Tailwind container-query breakpoint, so a
+// change to one that isn't mirrored in the other is a merge/stack boundary
+// that silently disagrees with the drill-panel's sheet-vs-modal boundary.
 const toolbarRowClass = computed<string>(() =>
   mobileControlsOpen.value
     ? 'flex flex-wrap items-end gap-3'

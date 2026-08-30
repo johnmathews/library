@@ -88,6 +88,20 @@ describe('palette', () => {
     expect(b[1]!.light).not.toBe(claimed.light)
   })
 
+  // De-collision must also apply BETWEEN two stored colours: a picker that
+  // only offers palette slots makes two owners choosing the identical hex
+  // easy to produce. The first claimant keeps the slot; the second falls
+  // through to the derived walk rather than rendering the same colour.
+  it('de-collides two survivors that stored the identical colour', () => {
+    const claimed = deriveSlot('a')
+    const b = bands(
+      [S('a', 'A', claimed.light), S('b', 'B', claimed.light)],
+      [C('a', '1.00'), C('b', '2.00')],
+    )
+    expect(b[0]!.light).toBe(claimed.light)
+    expect(b[1]!.light).not.toBe(claimed.light)
+  })
+
   it('keeps a split value that has no cells, as a real zero', () => {
     const b = bands([S('a', 'A'), S('b', 'B')], [C('a', '10.00')])
     expect(b.map((x) => [x.value, x.totalCents])).toEqual([['a', 1000], ['b', 0]])

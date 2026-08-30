@@ -52,6 +52,18 @@ const saveError = ref<string | null>(null)
 // only in principle — today the API never sends a preview without a rule —
 // but this reads the rule directly rather than trusting that coupling, so a
 // future preview-without-rule response still cannot be saved.
+//
+// The mirror direction — `rule` present but `preview` null — is NOT one of
+// the three documented wire states above (`preview: null` only ever
+// accompanies `rule: null`, the collapsed row). If a future response broke
+// that coupling, `canSave` would read true (a rule exists) while
+// `hasPreview` reads false, landing in the `v-else` branch below: no chart,
+// no legend, just `message`/`unknown_terms`, with an ENABLED Save button
+// beside it — nothing rendered contradicts nothing disabled, so this is not
+// a crash, but a save whose preview the user never saw. Not reachable under
+// the current API contract, so left undocumented-as-a-branch rather than
+// guarded outright; if the contract ever allows it, gate `canSave` on
+// `hasPreview` too rather than trusting `rule` alone.
 const hasPreview = computed(
   () => draft.value !== null && draft.value.rule !== null && draft.value.preview !== null,
 )
@@ -80,6 +92,10 @@ async function submit(): Promise<void> {
   drafting.value = true
   draftError.value = null
   draft.value = null
+  // A save failure attached to the PREVIOUS draft must not survive onto a
+  // new, unrelated one — otherwise a stale banner reappears beside a draft
+  // it never applied to.
+  saveError.value = null
   try {
     draft.value = await draftQuestion({ question: text, display_currency: props.currency })
   } catch (err) {
