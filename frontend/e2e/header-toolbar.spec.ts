@@ -1,11 +1,16 @@
 /**
  * Real-geometry spec for the `PageHeader` controls slot.
  *
- * `/charts`, `/jobs` and `/matters` each used to open a second full-width band
- * below the header just to hold their filter bar. `PageHeader`'s `#controls`
- * slot merges that bar into the header row — controls left, page commands
- * right — when the page container is wide enough, and stacks them when it is
- * not.
+ * `/charts/legacy`, `/jobs` and `/matters` each used to open a second
+ * full-width band below the header just to hold their filter bar.
+ * `PageHeader`'s `#controls` slot merges that bar into the header row —
+ * controls left, page commands right — when the page container is wide
+ * enough, and stacks them when it is not.
+ *
+ * This spec drives `/charts/legacy` (the pre-spending-board `ChartsView` +
+ * `ChartControls`, kept around only as the Smart Groups editor) rather than
+ * the `/charts` route, which now renders the unrelated `SpendingBoardView`
+ * and has no `ChartControls`/`chart-controls` testid to assert against.
  *
  * "Wide enough" is a **container** measurement, not a viewport one, and that is
  * the claim this file exists to pin down. The content column is the viewport
@@ -60,8 +65,10 @@ async function setSidebar(page: Page, expanded: boolean): Promise<void> {
   await page.reload()
 }
 
-async function openCharts(page: Page): Promise<void> {
-  await page.goto('/charts')
+/** Opens the legacy charts board — the only page left with a `PageHeader` +
+ * `ChartControls` pairing (see the file header comment). */
+async function openLegacyCharts(page: Page): Promise<void> {
+  await page.goto('/charts/legacy')
   await expect(page.getByTestId('chart-controls')).toBeVisible()
 }
 
@@ -75,13 +82,13 @@ async function isMerged(page: Page): Promise<boolean> {
   return Math.abs(controls.bottom - actions.bottom) < 4
 }
 
-test('the charts filter bar and the page actions share one header row on a wide screen', async ({
+test('the legacy charts filter bar and the page actions share one header row on a wide screen', async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium', 'a desktop-width claim')
   await signIn(page)
   await page.setViewportSize({ width: 1440, height: 900 })
-  await openCharts(page)
+  await openLegacyCharts(page)
 
   expect(await isMerged(page), 'controls and actions must share the header row at 1440px').toBe(
     true,
@@ -99,7 +106,7 @@ test('the charts filter bar and the page actions share one header row on a wide 
     'actions must be flush to the content column’s right edge',
   ).toBeLessThan(40)
 
-  await expectNoHorizontalOverflow(page, 'charts header toolbar at 1440px')
+  await expectNoHorizontalOverflow(page, 'legacy charts header toolbar at 1440px')
 })
 
 test('the merge is gated on the container, not the viewport', async ({ page }, testInfo) => {
@@ -110,20 +117,20 @@ test('the merge is gated on the container, not the viewport', async ({ page }, t
   // Same viewport, both sidebar states. The outcomes differ, which is precisely
   // what a viewport breakpoint could not do.
   await setSidebar(page, true)
-  await openCharts(page)
+  await openLegacyCharts(page)
   expect(
     await isMerged(page),
     'at 1280px with the sidebar EXPANDED the column is too narrow — must stack',
   ).toBe(false)
-  await expectNoHorizontalOverflow(page, 'charts header, 1280px, sidebar expanded')
+  await expectNoHorizontalOverflow(page, 'legacy charts header, 1280px, sidebar expanded')
 
   await setSidebar(page, false)
-  await openCharts(page)
+  await openLegacyCharts(page)
   expect(
     await isMerged(page),
     'at 1280px with the sidebar COLLAPSED there is room — must merge',
   ).toBe(true)
-  await expectNoHorizontalOverflow(page, 'charts header, 1280px, sidebar collapsed')
+  await expectNoHorizontalOverflow(page, 'legacy charts header, 1280px, sidebar collapsed')
 })
 
 test('stacking below the threshold puts the controls above the actions, not overlapping', async ({
@@ -131,7 +138,7 @@ test('stacking below the threshold puts the controls above the actions, not over
 }) => {
   await signIn(page)
   await setSidebar(page, true)
-  await openCharts(page)
+  await openLegacyCharts(page)
 
   // On a phone the header is always stacked. Reading order is DOM order is
   // visual order — controls, then actions — so focus order never disagrees with
@@ -143,7 +150,7 @@ test('stacking below the threshold puts the controls above the actions, not over
       actions.top + 1,
     )
   }
-  await expectNoHorizontalOverflow(page, 'charts header, stacked')
+  await expectNoHorizontalOverflow(page, 'legacy charts header, stacked')
 })
 
 test('the jobs filter bar rides in the header toolbar with one label recipe', async ({

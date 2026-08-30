@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
 import {
-  addAlias, createFacet, createValue, deleteValue, fetchLabelCounts, mergeValue,
-  renameValue, setValueColour,
+  addAlias, createFacet, createValue, deleteValue, fetchFacetCounts, fetchLabelCounts,
+  mergeValue, renameValue, setValueColour,
 } from '../facets'
 import { setSenderColour } from '../taxonomy'
 
@@ -108,5 +108,26 @@ describe('routes and methods', () => {
     const url = String(spy.mock.calls[0]![0]!)
     const limit = new URL(url, 'http://x').searchParams.get('limit')
     expect(limit === null || Number(limit) <= 100).toBe(true)
+  })
+})
+
+describe('facet counts (the empty state\'s chart proposals)', () => {
+  const COUNT = {
+    facet_key: 'category',
+    value_key: 'software',
+    documents: 12,
+    first_date: '2026-01-01',
+    last_date: '2026-06-30',
+  }
+
+  // A different route from fetchLabelCounts, deliberately: /api/facets/counts
+  // reads spend_facts, so it excludes amountless, soft-deleted and
+  // non-canonical documents — a value with no money behind it is absent by
+  // construction, which is what keeps a moneyless proposal off the empty state.
+  it('GETs /api/facets/counts and unwraps the counts envelope', async () => {
+    const spy = stubFetch({ counts: [COUNT] })
+    const counts = await fetchFacetCounts()
+    expect(String(spy.mock.calls[0]![0])).toBe('/api/facets/counts')
+    expect(counts).toEqual([COUNT])
   })
 })

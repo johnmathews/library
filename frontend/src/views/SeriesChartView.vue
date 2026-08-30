@@ -34,9 +34,11 @@ const {
 } = useChartsTimeframe()
 const { grouping, options: groupingOptions } = useChartsGrouping()
 
-// After the series is deleted there is nothing to show here — return to the grid.
+// After the series is deleted there is nothing to show here — return to the
+// grid. `/charts` is now the spending board, not a series grid, so this goes
+// to `/charts/legacy`, where the series grid (and Smart Groups UI) live.
 function onDeleted(): void {
-  router.push('/charts')
+  router.push('/charts/legacy')
 }
 
 // --- Export & share (W6) ----------------------------------------------------
@@ -91,12 +93,14 @@ watch(() => route.params.seriesId, load)
 
 <template>
   <div id="series-chart-view">
+    <!-- `/charts` is the spending board now; the series grid this view
+         belongs to lives at `/charts/legacy` (see onDeleted above). -->
     <RouterLink
-      to="/charts"
+      to="/charts/legacy"
       data-testid="series-chart-back"
       class="inline-block mb-4 text-sm text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:underline"
     >
-      &larr; All charts
+      &larr; Series grid
     </RouterLink>
 
     <p

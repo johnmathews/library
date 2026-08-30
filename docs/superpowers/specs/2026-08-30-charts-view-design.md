@@ -423,11 +423,12 @@ are fixed here because they are not aesthetic choices:
 3. **Uniform time buckets.** The x-axis is periods, not documents. §10.3 #1 is
    the whole reason the old view was replaced: nothing is 2px wide because two
    invoices landed three days apart.
-4. **Colour comes from `SplitValueOut.colour` when set, and from a
-   deterministic palette slot derived from `value` when it is null.** Same
-   value, same colour, in every chart it appears in (§10.3 #3). Two values
-   colliding on a slot within one rendered chart are de-collided at render, so
-   the collision is visible rather than silent.
+4. **Colour comes from `SplitValueOut.colour` when set, and from a palette slot
+   derived deterministically from `value` when it is null.** Same value, same
+   colour, in every chart and every panel it appears in. Two values colliding
+   on a slot within one rendered chart are de-collided at render, so the
+   collision is visible rather than silent. §4.12 records the palette, which is
+   shared with plan 4c, and the de-collision rule.
 
 The range filters the data — `from` and `to` go to the API — rather than
 clamping the axis, so the headline and the drawing can never disagree
@@ -571,6 +572,101 @@ with the backend they read.
 - No `except -> pytest.skip` guards, and no `isVisible()` on a `v-show` element.
 - Every unit test gets a mutation check. Several suites in this repository have
   passed with the feature under test entirely disabled.
+
+### 4.12 The palette, computed and then shared
+
+§4.4 deferred the palette to implementation time under the `dataviz` skill.
+Both this plan and 4c need the same value-to-colour mapping (§2.5 has each of
+them deriving a slot when `colour` is null), so there is **one** definition:
+`frontend/src/utils/splitPalette.ts`, owned by plan 4c.
+
+**Six slots.** Categorical colour is gated on CVD separation (ΔE ≥ 8 in OKLab
+×100, protanopia and deuteranopia at severity 1.0), a normal-vision floor of
+ΔE ≥ 15, an OKLCH lightness band and a chroma floor. Because the slot is
+hash-derived there is no ordering, so any two hues can end up side by side —
+the **all-pairs** pairlist applies, not the adjacent one:
+
+| slot | name | light | dark |
+| --- | --- | --- | --- |
+| 1 | Blue | `#1283dc` | `#5791ca` |
+| 2 | Orange | `#ff6f42` | `#b93b09` |
+| 3 | Green | `#51ae7f` | `#19825f` |
+| 4 | Indigo | `#4423da` | `#584fcc` |
+| 5 | Plum | `#993375` | `#ed3297` |
+| 6 | Olive | `#876708` | `#b08923` |
+
+Re-validated against **this app's own chart surfaces** rather than the skill's
+defaults — `.card` is `bg-white` / `dark:bg-gray-800` — and it passes every
+check in both modes on the all-pairs list: worst-pair CVD ΔE 9.9 light and 9.3
+dark, both above the 8 target; normal-vision 19.8 and 17.2, both above the 15
+floor.
+
+Two slots per mode sit below 3:1 against the surface, so the **relief rule**
+applies: a swatch is never the only carrier of identity. This view satisfies it
+several times over — a legend label beside every swatch, a 2px surface gap
+between stacked segments, direct labels where they fit, and the drill panel,
+which §4.6 already makes the chart's text equivalent.
+
+**An earlier draft of this section recorded a four-slot palette** drawn from
+`main.css`'s own ramps, on the reasoning that a chart should wear the app's
+existing hues. It was retired for the shared module: four slots forced a fold
+at four values, sat in the 6–8 CVD floor band in dark mode, and — decisively —
+would have been a second definition of a mapping 4c also needs. The Mosaic
+ramps cannot reach six: no step of `yellow` clears CVD against either `green`
+or `red`, on either pairlist.
+
+**The derivation.** `deriveSlot(key)` is FNV-1a over the value key, modulo six.
+Within one rendered chart the assignment is then de-collided, and the order of
+operations matters:
+
+1. **Fold** to the six values with the largest totals over the rendered window;
+   everything else becomes one `Other` bucket in a neutral grey. The fold is a
+   display grouping, so the stack height — and with it §9.2's invariant total —
+   is unchanged.
+2. **Stored colours claim first.** A `colour` matching a slot's light hex takes
+   that slot and renders that slot's step for the current theme, so an owner's
+   override is never a light-mode hex on a dark chart.
+3. **Derived slots then take their preferred slot**, or walk forward to the next
+   free one. Two bands are therefore never the same colour.
+4. **Assignment is computed from the unfiltered `splits`.** Legend isolation and
+   exclusion (§4.7) are display filters applied *after* it, so hiding a value
+   never recolours the ones left — the recolor-on-filter defect.
+
+Measured over realistic value keys, a band keeps its derived slot — and so
+agrees with 4c's vocabulary panel — 92.5% of the time at two bands, 76.5% at
+four and 60.7% at six. Perfect agreement is not reachable at any palette size
+smaller than the vocabulary, which is what the stored override exists for.
+
+**`Other` drills in two steps.** `/cell` takes a single `split_value`, so the
+folded bucket has no direct drill target. Clicking it opens §4.6's panel showing
+the folded values and their totals *for that period* — which `/data` has already
+returned, so the step costs no request — and clicking one of those rows calls
+`/cell` for it. A bar segment that answers nothing on click would be the only
+dead end in the chart.
+
+### 4.13 Two settled interaction shapes
+
+**The board card is stat-led.** §10.1 fixes what a card carries; the
+arrangement is: name and overflow menu, then the headline figure, then the
+compact chart, then the legend as a one-line swatch ribbon, then a
+needs-attention line when the footer has one. The figure leads because the
+board is scanned for values, not for shapes.
+
+The headline's delta is **not coloured**. Spending rising is not good or bad
+without knowing what it was spent on, and `dataviz` reserves status colour for
+values that genuinely mean good or bad; the delta gets a direction glyph in
+ordinary ink instead.
+
+**Below the workspace's container threshold**, the toolbar collapses to a single
+tappable line naming the current settings — grain, range, split, currency — that
+opens a control sheet, and the drill panel becomes a bottom sheet at about 70%
+of the viewport height so the bar that was tapped stays on screen above it.
+Five stacked labelled controls are roughly 300px of chrome before any data at
+375px, which is the whole screen.
+
+The sheet is a native `<dialog>`, as `SearchModal.vue` and `ConfirmDialog.vue`
+already are — focus containment, Escape and an inert background come with it
+rather than being hand-rolled a third time.
 
 ## 5. Plan 4c: the vocabulary panel
 

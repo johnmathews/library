@@ -88,8 +88,11 @@ describe('SeriesChartView', () => {
     expect(wrapper.find('[data-testid="chart-controls"]').exists()).toBe(true)
     // No longer boxed into a narrow column.
     expect(wrapper.html()).not.toContain('max-w-2xl')
-    // Always offers a way back to the full grid.
-    expect(wrapper.find('[data-testid="series-chart-back"]').exists()).toBe(true)
+    // Always offers a way back to the series grid — /charts/legacy, not
+    // /charts (the spending board, which lists no series at all).
+    const backLink = wrapper.find('[data-testid="series-chart-back"]')
+    expect(backLink.exists()).toBe(true)
+    expect(backLink.attributes('href')).toBe('/charts/legacy')
   })
 
   it('exports the chart as PDF / JPEG and copies the share link', async () => {
@@ -109,13 +112,15 @@ describe('SeriesChartView', () => {
     expect(wrapper.find('[data-testid="chart-share"]').text()).toContain('Link copied')
   })
 
-  it('returns to the grid when the tile reports the series was deleted', async () => {
+  it('returns to the legacy grid (not the spending board) when the tile reports the series was deleted', async () => {
+    // `/charts` is the spending board now, which doesn't list series at all;
+    // the series grid this view belongs to lives at `/charts/legacy`.
     vi.mocked(fetchChart).mockResolvedValue(series as never)
     const wrapper = mountView()
     await flushPromises()
     wrapper.findComponent(TileStub).vm.$emit('deleted')
     await flushPromises()
-    expect(push).toHaveBeenCalledWith('/charts')
+    expect(push).toHaveBeenCalledWith('/charts/legacy')
   })
 
   it('shows a not-found message when the series cannot be loaded', async () => {

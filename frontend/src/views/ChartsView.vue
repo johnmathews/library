@@ -299,7 +299,7 @@ onMounted(load)
 
 <template>
   <div id="charts-view">
-    <PageHeader title="Charts">
+    <PageHeader title="Series charts">
       <!-- Shared time-range + grouping applied to every tile (W5). It rides in
            the header's controls slot so the filters and the page commands share
            one toolbar row instead of opening a second full-width band. -->
