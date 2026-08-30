@@ -1212,10 +1212,21 @@ it('keeps edit and delete in the overflow menu, not on the card face', () => {
   expect(wrapper.find('[data-testid="spending-card-delete"]').exists()).toBe(false)
 })
 
-it('offers move up and move down as real buttons, disabled at the ends', () => {
+// Spec §4.2 puts move up/down IN the overflow menu, alongside edit and delete —
+// §10.3 #5 is "cards show data, not six controls each", and two more face
+// buttons per card is exactly that. So the menu must be opened first. This is
+// still the accessible reorder path: AppPopover is keyboard-operable and
+// returns focus, and it is the path e2e asserts on all three viewport projects.
+it('offers move up and move down as real buttons in the menu, disabled at the ends', async () => {
   const wrapper = mountCard({ canMoveUp: false, canMoveDown: true })
+  await openOverflowMenu(wrapper)
   expect(moveUp(wrapper).attributes('disabled')).toBeDefined()
   expect(moveDown(wrapper).attributes('disabled')).toBeUndefined()
+})
+
+it('keeps the card face free of reorder controls until the menu is opened', () => {
+  const wrapper = mountCard({ canMoveUp: true, canMoveDown: true })
+  expect(wrapper.find('[data-testid="spending-card-move-up"]').exists()).toBe(false)
 })
 ```
 
