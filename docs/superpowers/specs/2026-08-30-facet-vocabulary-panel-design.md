@@ -51,7 +51,7 @@ already uses (`role="tablist"`, `aria-selected`, `data-testid="vocab-tab-*"`).
 
 | tab | panel | reads | writes |
 | --- | --- | --- | --- |
-| Facets | `FacetsPanel.vue` | `GET /api/facets`, `GET /api/facets/counts` | create facet, create value, rename, alias, merge (via §6), delete |
+| Facets | `FacetsPanel.vue` | `GET /api/facets`, `GET /api/facets/counts`, `GET /api/facets/label-counts` | create facet, create value, rename, alias, merge (via §6), delete |
 | Senders | `SendersPanel.vue` | `GET /api/senders` | `PATCH /api/senders/{id}` |
 | Suggestions | `SuggestionsPanel.vue` | `GET /api/facet-suggestions` | accept, dismiss |
 
@@ -90,13 +90,13 @@ subtly wrong would look correct and mislead the owner about their own archive.
   absent key does not. §4 makes the wrong one unrepresentable in the client
   rather than merely avoided.
 
-## 3. The backend addition: a `labelled` count
+## 3. The backend addition: a label-count route
 
 `GET /api/facets/counts` aggregates the `spend_facts` view. That view's
 `eligible` CTE requires `amount_total IS NOT NULL` **and** a `payments` row, and
 the route filters to `is_canonical`. Every write path this panel offers counts
 something else entirely: `delete_value` and `count_labels` both count rows in
-`document_labels`.
+`document_labels`, unfiltered.
 
 The two numbers diverge in three ways, all of them in the direction that makes
 the panel lie:
@@ -113,27 +113,35 @@ the panel lie:
 A panel whose premise is "the number you see is the number this operation moves"
 cannot display only the money count.
 
-**The change.** `_FACET_COUNTS_SQL` becomes a `FULL OUTER JOIN` between the
-existing `spend_facts` aggregate and a new aggregate over `document_labels`
-joined to `facets` and `facet_values`, keyed on `(facet_key, value_key)`, so a
-row exists for every pair present in **either** relation. `FacetValueCount`
-gains `labelled: int`.
+**The change is a new route, not a new field on the existing one.**
 
-`documents`, `first_date` and `last_date` keep exactly their present meaning and
-present values — they remain money-scoped, and the field docs say so. The change
-is additive: plan 4b reads the fields it already knows and is unaffected.
+```
+GET /api/facets/label-counts  ->  {"counts": [{"facet_key", "value_key", "labelled"}]}
+```
 
-Rejected: deriving per-value label counts client-side from `GET
-/api/documents?facet=k:v&limit=1`. It costs one request per value, and it makes
-the document list's filter a second definition of "in use" that can drift from
-the one `delete_value` enforces.
+`/api/facets/counts` is left exactly as it is. Widening it to emit rows for
+money-less values was the first design and it is wrong twice over. Its
+docstring names it as what the empty state proposes charts from, and
+`test_a_value_with_no_money_behind_it_is_absent` asserts the money-less values
+are absent *on purpose* — "proposing a chart of a value the archive has no
+amounts for is exactly the noise §10.4 replaces". Adding those rows would change
+what plan 4b's empty state proposes, underneath a plan being written in
+parallel, to serve a panel that can just ask its own question.
 
-Rejected: leaving the panel money-only and labelling the column honestly. It
-still leaves an owner unable to tell a genuinely unused value from one used on
-37 amountless documents, and makes every delete of such a value a 409 they could
-not have predicted.
+Two different questions, two routes. The panel calls both and renders
+`"37 labelled · 31 in charts"` — never one number.
 
-Rendered as `"37 labelled · 31 in charts"` — never one number.
+### 3.1 The new query must be the delete check, not a copy of it
+
+`label_counts` is the grouped form of the predicate `count_labels` already
+implements, and the panel's whole claim is that its number is the one delete
+enforces. So the plan also **removes an existing second copy**: `delete_value`
+today inlines its own `select(count()).where(facet_id, facet_value_id)` that
+duplicates `count_labels` exactly. It is changed to call `count_labels`.
+
+That is a deletion, not a comparison test. A test asserting the two agree would
+pass whenever neither exercises the branch where they differ — it fails open,
+which is why this repository's rule is to delete the second copy instead.
 
 ## 4. The client
 
@@ -168,6 +176,7 @@ Plain typed functions over `apiFetch`, matching `payments.ts`:
 
 ```ts
 fetchFacetCounts()                              // GET  /api/facets/counts
+fetchLabelCounts()                              // GET  /api/facets/label-counts
 createFacet(key, label, ordinal?)               // POST /api/facets
 createValue(facetKey, key, label)               // POST /api/facets/{f}/values
 addAlias(facetKey, valueKey, alias)             // POST .../aliases
@@ -190,28 +199,63 @@ makes takes a `limit` above 100, asserted in a unit test.
 New: `frontend/src/utils/splitPalette.ts`.
 
 ```ts
-export const SPLIT_PALETTE: readonly { name: string; hex: string }[]
-export function deriveSlot(key: string): string
-export function resolveSplitColour(stored: string | null, key: string): string
+export interface PaletteSlot { name: string; light: string; dark: string }
+export const SPLIT_PALETTE: readonly PaletteSlot[]
+export function deriveSlot(key: string): PaletteSlot
+export function resolveSplitColour(stored: string | null, key: string, dark: boolean): string
 ```
 
-`resolveSplitColour` is `stored ?? deriveSlot(key)`. `deriveSlot` hashes the key
-to an index — stable across renders, sessions and machines, and independent of
-document counts, so a value's colour does not move when the archive changes.
+**Six slots, validated — not chosen by eye.** Run through the `dataviz` skill's
+`validate_palette.js` on the **all-pairs** pairlist, which is the correct
+pairlist here: a slot is derived by hashing the value key, so any two hues can
+end up side by side in a legend, and the adjacent-only pairlist would be
+checking an ordering that does not exist.
+
+| slot | name | light | dark |
+| --- | --- | --- | --- |
+| 1 | blue | `#1283dc` | `#5791ca` |
+| 2 | orange | `#ff6f42` | `#b93b09` |
+| 3 | green | `#51ae7f` | `#19825f` |
+| 4 | indigo | `#4423da` | `#584fcc` |
+| 5 | plum | `#993375` | `#ed3297` |
+| 6 | olive | `#876708` | `#b08923` |
+
+Both columns report ALL CHECKS PASS on all pairs. Light: worst CVD ΔE 9.9
+(protan), worst normal-vision ΔE 19.8. Dark: worst CVD ΔE 9.3 (deutan), worst
+normal-vision ΔE 17.2. Two light slots and one dark slot sit below 3:1 against
+the chart surface, so the **relief rule** applies — a swatch is never shown
+alone; in this panel and in a chart legend it always carries the value's text
+label beside it. That obligation is a design constraint, not a note.
+
+Six, not eight: the reference eight-hue set clears the adjacent pairlist but
+fails all-pairs (worst normal-vision ΔE 7.1), and no ordering fixes that,
+because with all pairs in play the pairlist does not depend on order. Six is the
+largest set found that clears every gate in both modes.
+
+Six slots against nineteen `category` values means derived collisions are
+certain. That is the expected state, not a defect — §5.3 surfaces them and the
+override resolves them.
+
+**Both modes matter to the stored value too.** The database holds one hex per
+value, so a naive override would be a light-mode colour rendered on a dark
+chart. `resolveSplitColour` therefore resolves in three steps: a null `stored`
+derives a slot from `key` and returns that slot's step for the current mode; a
+`stored` value that **matches a slot's light hex** is that slot, and returns its
+step for the current mode; anything else is returned verbatim, since a hex from
+outside the palette (a script, a future free field) has no theme pair to look
+up. The light hex is the slot's stored identity.
 
 This module is the **single** definition of the mapping. Plan 4b derives the
-same slots for its legend and imports it rather than writing a second copy;
-the module name and signatures are handed to 4b's session as soon as this plan
-is written. Two implementations of "which colour is this value" that agree today
+same slots for its legend and imports it rather than writing a second copy; the
+module name and signatures are handed to 4b's session as soon as this plan is
+written. Two implementations of "which colour is this value" that agree today
 and diverge later is the failure this repository has recorded five times.
 
 Rejected: reusing `SUGGESTED_COLORS` from `api/settings.ts`, the nine hues used
 for per-kind tile colours. Its own docstring says it is "not required to be
 mutually colourblind-safe — they are conveniences, not an auto-assigned series",
 and an auto-assigned series is exactly what `deriveSlot` produces. It also
-includes a slate grey that reads as *disabled* in a chart. The new palette is a
-distinguishable series, checked in both themes, written under the `dataviz`
-skill's categorical-palette rules.
+includes a slate grey that reads as *disabled* in a chart.
 
 ### 5.2 The picker
 
@@ -328,17 +372,26 @@ in the label) are rendered as themselves.
 
 ### 8.1 Backend
 
-Pytest for `labelled`, with fixtures built to be adversarial rather than
-favourable:
+Pytest for `/api/facets/label-counts`, with fixtures built to be adversarial
+rather than favourable — each one a case where it must disagree with
+`/api/facets/counts`, since a fixture where the two agree proves nothing:
 
-- a value labelled **only** on a document with no `amount_total` — `labelled`
-  positive, and today there is no row at all;
-- a value on a **soft-deleted** document — counted by `labelled`, excluded from
-  `documents`, and blocking a delete;
+- a value labelled **only** on a document with no `amount_total` — present here,
+  absent from `/api/facets/counts` entirely;
+- a value on a **soft-deleted** document — counted here, excluded there, and
+  blocking a delete;
 - a **split** document whose `line_labels` name a value its `document_labels` do
-  not — the pair appears in `documents` with `labelled` zero;
-- a value with neither, present in the vocabulary and absent from both
-  aggregates.
+  not — present in `/api/facets/counts`, absent here;
+- a value in the vocabulary that no document carries — absent from both, and
+  deletable.
+
+Plus the regression this route exists to prevent: seed the amountless case,
+assert `label-counts` reports N, then assert `DELETE` answers 409 naming **the
+same N**. That ties the displayed number to the enforced one, which is the
+route's entire claim.
+
+`/api/facets/counts` keeps its existing tests unchanged and unbroken — if any of
+them go red, the change has altered a contract plan 4b depends on.
 
 Every value invented. No real vehicle, property or person value enters a
 fixture; the repository is public and GitGuardian does not catch this class.
