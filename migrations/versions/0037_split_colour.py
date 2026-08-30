@@ -21,10 +21,23 @@ is that a declarative type does not create a constraint on its own
 takes ``rebeccapurple``, ``#1f7`` or a sentence, and the first anyone knows is a
 legend that renders nothing.
 
-``name=`` carries the convention-relative suffix only. Alembic's ``"ck"``
-template is ``"ck_%(table_name)s_%(constraint_name)s"`` and substitutes an
-explicit name *into* the token, so a name already carrying the prefix is
-prefixed twice in the live database (the note in 0036).
+The column is deliberately wider than a hex colour needs (``String(32)``, not
+``String(7)``): a tightly-sized column would itself refuse an over-length
+value, but as a Postgres length error, not an ``IntegrityError`` — a second,
+uncoordinated enforcer with the wrong failure mode. The CHECK is the only thing
+that judges *format*; the column width exists only so nothing absurd gets
+stored.
+
+``name=`` carries the convention-relative suffix only, on both sides of the
+migration. Alembic's ``"ck"`` template is
+``"ck_%(table_name)s_%(constraint_name)s"`` and substitutes an explicit name
+*into* the token, so a name already carrying the prefix is prefixed twice in
+the live database (the note in 0036). This is not only a ``create_check_constraint``
+gotcha: ``op.drop_constraint(..., type_="check")`` runs the given name through
+the same naming convention (``Base.metadata`` carries one — models.py), so the
+downgrade must also pass ``"colour_hex"``, not ``"ck_<table>_colour_hex"``.
+
+
 
 Create Date: 2026-08-30 00:00:00.000000
 
@@ -47,11 +60,18 @@ _HEX = "colour ~ '^#[0-9a-fA-F]{6}$'"
 
 def upgrade() -> None:
     for table in ("facet_values", "senders"):
-        op.add_column(table, sa.Column("colour", sa.String(length=7), nullable=True))
+        op.add_column(table, sa.Column("colour", sa.String(length=32), nullable=True))
         op.create_check_constraint("colour_hex", table, _HEX)
 
 
 def downgrade() -> None:
     for table in ("facet_values", "senders"):
-        op.drop_constraint(f"ck_{table}_colour_hex", table, type_="check")
+        # Same pitfall as the create side: a naming_convention is active on
+        # Base.metadata (models.py), so a plain string given to a "check"-typed
+        # drop_constraint is *also* run through the "ck" template. Passing the
+        # already-prefixed name here produces
+        # ck_<table>_ck_<table>_colour_hex against the live database — pass the
+        # convention-relative suffix only, exactly as create_check_constraint
+        # does above.
+        op.drop_constraint("colour_hex", table, type_="check")
         op.drop_column(table, "colour")
