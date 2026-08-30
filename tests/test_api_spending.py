@@ -1398,15 +1398,28 @@ def test_a_value_with_no_money_behind_it_is_absent(
     """Reading `spend_facts` rather than `document_labels` does this for free:
     the view requires `amount_total IS NOT NULL` and its join to `payments`
     excludes soft-deleted documents. Proposing a chart of a value the archive
-    has no amounts for is exactly the noise §10.4 replaces."""
+    has no amounts for is exactly the noise §10.4 replaces.
+
+    A bare "the excluded values are absent" assertion is true whether the
+    filtering works or nothing under this uuid4 facet key was ever seeded, so
+    a third, money-bearing, non-deleted value under the SAME facet is seeded
+    too and asserted present — that ties the negative claim to the positive
+    one and makes the test discriminate real filtering from an empty-by-
+    coincidence result (review finding on this task)."""
     facet = f"counts-{uuid.uuid4().hex[:8]}"
-    _seed_vocabulary(api_database_url, facet=facet, values=("amountless", "deleted"))
+    _seed_vocabulary(api_database_url, facet=facet, values=("amountless", "deleted", "present"))
     _seed_document(api_database_url, amount=None, labels={facet: "amountless"})
     deleted_id = _seed_document(
         api_database_url,
         amount="99.00",
         kind=AmountKind.PAYMENT_MADE,
         labels={facet: "deleted"},
+    )
+    _seed_document(
+        api_database_url,
+        amount="12.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={facet: "present"},
     )
 
     async def soft_delete(session: AsyncSession) -> None:
@@ -1418,7 +1431,8 @@ def test_a_value_with_no_money_behind_it_is_absent(
 
     counts = api_client.get("/api/facets/counts").json()["counts"]
 
-    assert [c for c in counts if c["facet_key"] == facet] == []
+    mine = {c["value_key"] for c in counts if c["facet_key"] == facet}
+    assert mine == {"present"}
 
 
 def test_a_merged_pair_counts_once(api_client: TestClient, api_database_url: str) -> None:
