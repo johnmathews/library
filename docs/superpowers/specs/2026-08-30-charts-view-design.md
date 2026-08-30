@@ -237,11 +237,29 @@ Pagination is applied in Python over the same materialised row set
 `chart_footer` already builds, rather than by pushing `LIMIT` into the
 statement, because a second statement shape is a second thing to keep in step.
 
-**Open to execution, not to reasoning:** whether a document split across spend
-lines can contribute two rows to one bucket. `_CLASSIFY_SQL` selects per
-`spend_facts` row and `_Group.documents` is a set, so the *count* is already
-distinct-by-document; whether the *list* must therefore deduplicate is settled
-by prototyping against Postgres before the 4a plan is written, not by argument.
+**Settled by execution, before this plan was written.** A document split across
+spend lines *does* contribute two rows to one bucket. A `100.00` document split
+`60.00`/`40.00` with neither line labelled, under a rule naming `category`,
+emits two `uncategorised` rows carrying the same `document_id`, while
+`_Group.documents` — a `set[int]` — reports `documents=1`:
+
+```
+{'document_id': 1, 'amount': Decimal('40.00'), ..., 'bucket': 'uncategorised'}
+{'document_id': 1, 'amount': Decimal('60.00'), ..., 'bucket': 'uncategorised'}
+FOOTER uncategorised -> amount=Decimal('100.00') documents=1
+```
+
+Two consequences, both of which reasoning would have got wrong:
+
+1. **The list deduplicates by `document_id`**, or its length exceeds the count
+   it is supposed to match on exactly the documents an allocation makes
+   interesting.
+2. **A listed document's amount for a bucket is the sum of its rows in that
+   bucket** (`100.00`), not one row's (`60.00`). Rendering a single row's amount
+   would show a number that appears nowhere in the footer.
+
+Both get a test built from this shape, and both get a mutation check: remove the
+deduplication and the length assertion must go red.
 
 ### 3.4 `GET /api/facets/counts`
 
@@ -257,6 +275,31 @@ new place.
 A separate route rather than counts added to `GET /api/facets`, so
 `DocumentFilterBar` — which loads the vocabulary on every document list render —
 does not start paying for an aggregate it never reads.
+
+The shape, prototyped against Postgres before this plan was written:
+
+```sql
+SELECT lbl.key AS facet_key, lbl.value AS value_key,
+       count(DISTINCT sf.document_id) AS documents,
+       min(sf.date) AS first_date, max(sf.date) AS last_date
+FROM spend_facts sf
+CROSS JOIN LATERAL jsonb_each_text(sf.labels) AS lbl(key, value)
+WHERE sf.is_canonical
+GROUP BY lbl.key, lbl.value
+```
+
+Reading `spend_facts` does the filtering for free, which is the reason to read
+it rather than `document_labels`. In the prototype, a labelled document with a
+**null `amount_total`** and a labelled but **soft-deleted** document each
+produced no row at all — the view requires `amount_total IS NOT NULL`, and its
+join to `payments` excludes deleted documents. So the two shapes that would put
+a moneyless proposal in front of the owner are excluded by the relation itself,
+not by a filter someone has to remember to write. Values absent from the result
+are absent from the empty state.
+
+`is_canonical` is the one filter that is not free and is therefore explicit: a
+merged twin is a second row for money already counted once, and counting it
+would overstate every value a merge touches.
 
 ### 3.5 Migration 0037: `colour`
 
