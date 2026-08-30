@@ -56,8 +56,24 @@ MARCH = date(2026, 3, 1)
 
 # tests/test_api_facets.py
 def _make_facet(api_client) -> str        # a fresh, uniquely-keyed facet
-def _run[T](api_database_url, op) -> T
+def _run[T](api_database_url, op) -> T    # DOES NOT COMMIT — see below
 ```
+
+**The two `_run` helpers are not the same function.** They share a name and a
+signature and differ in the one way that matters:
+
+| file | commits? |
+| --- | --- |
+| `tests/test_api_spending.py` | **yes** — `await session.commit()` after `work` |
+| `tests/test_api_facets.py` | **no** — returns `await op(session)` and disposes |
+
+So a seeding body passed to `test_api_facets.py`'s `_run` must `await
+session.commit()` itself, or `api_client` — which reads through a different
+connection — sees nothing. This is worse than a failing test: seeding that
+writes nothing still leaves an assertion that can pass for the wrong reason,
+which is the invisible-pass shape this repository has been bitten by. When you
+add a seeding helper to that file, commit inside it, and satisfy yourself that
+the test would **fail** if the seeded row were absent.
 
 Two consequences:
 
@@ -85,6 +101,7 @@ idiom is the one above.
 | `src/library/facets/vocabulary.py` | modify — `VocabularyValue.colour`, read by `load_vocabulary` |
 | `src/library/api/facets.py` | modify — `colour` on `ValueOut`; `ValueRename` gains optional `colour`; **new** `GET /api/facets/counts` |
 | `src/library/api/taxonomy.py` | modify — `colour` on `SenderWithCount`; **new** `PATCH /api/senders/{id}` |
+| `src/library/taxonomy.py` | modify — `colour` on `SenderCount` and its select; the route validates a projection, not a `Sender` |
 | `src/library/charts/footer.py` | modify — extract the row fetch; **new** `chart_footer_documents` |
 | `src/library/api/spending.py` | modify — `GET /api/spending/{id}`; `SplitValueOut` + `DataOut.splits`; `CellOutBody.label`/`.colour`; **new** `GET /api/spending/{id}/footer/{bucket}` |
 | `tests/test_split_colour.py` | **create** — the migration's constraint and the read/write surfaces |
@@ -460,8 +477,16 @@ class SenderWithCount(BaseModel):
     colour: str | None = None
 ```
 
-`list_senders` uses `model_validate(..., from_attributes=True)`, so the new
-field is picked up from the ORM object with no further change.
+**Correction, found by executing this task:** the API route's `list_senders`
+does call `model_validate(..., from_attributes=True)`, but what it validates is
+not a `Sender`. `library.taxonomy.list_senders` builds its rows from a
+**projected query** — a `SenderCount` carrying `id`, `name` and a count — so
+there is no ORM attribute for `colour` to be read from, and the field silently
+stays `None` on every response.
+
+`src/library/taxonomy.py` therefore has to change too: add `colour` to
+`SenderCount` and to the select. That file is not in this plan's file list; it
+belongs there.
 
 - [ ] **Step 5: Run the test and watch it pass**
 
