@@ -135,7 +135,12 @@ def _seed_document(
 
 
 def _seed_sender_document(
-    database_url: str, *, sender: str, amount: str, day: date = MARCH
+    database_url: str,
+    *,
+    sender: str,
+    amount: str,
+    day: date = MARCH,
+    labels: Mapping[str, str] | None = None,
 ) -> tuple[int, int]:
     """A document from a named sender; returns `(document_id, sender_id)`.
 
@@ -144,7 +149,12 @@ def _seed_sender_document(
     document for the spending API".
     """
     document_id = _seed_document(
-        database_url, amount=amount, kind=AmountKind.PAYMENT_MADE, day=day, sender=sender
+        database_url,
+        amount=amount,
+        kind=AmountKind.PAYMENT_MADE,
+        day=day,
+        sender=sender,
+        labels=labels,
     )
 
     async def read_sender_id(session: AsyncSession) -> int:
@@ -1333,3 +1343,111 @@ def test_the_footer_route_and_the_footer_count_agree_after_a_window_narrows(
     ).json()
 
     assert len(body["documents"]) == data["footer"]["uncategorised"]["documents"]
+
+
+# --- facet counts -------------------------------------------------------------
+
+
+def test_counts_are_ordered_by_document_count(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The empty state proposes questions worth asking, so the busiest values
+    come first (§10.4)."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha", "beta"))
+    for _ in range(2):
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
+            labels={facet: "alpha"},
+        )
+    _seed_document(
+        api_database_url, amount="30.00", kind=AmountKind.PAYMENT_MADE, labels={facet: "beta"}
+    )
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    mine = [c for c in counts if c["facet_key"] == facet]
+    assert [(c["value_key"], c["documents"]) for c in mine] == [("alpha", 2), ("beta", 1)]
+
+
+def test_counts_carry_the_date_span(api_client: TestClient, api_database_url: str) -> None:
+    """ "15 documents in `software` over 3 months" needs both ends."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha",))
+    for day in (date(2026, 1, 5), date(2026, 3, 9)):
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
+            day=day,
+            labels={facet: "alpha"},
+        )
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    alpha = next(c for c in counts if c["facet_key"] == facet)
+    assert alpha["first_date"] == "2026-01-05"
+    assert alpha["last_date"] == "2026-03-09"
+
+
+def test_a_value_with_no_money_behind_it_is_absent(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Reading `spend_facts` rather than `document_labels` does this for free:
+    the view requires `amount_total IS NOT NULL` and its join to `payments`
+    excludes soft-deleted documents. Proposing a chart of a value the archive
+    has no amounts for is exactly the noise §10.4 replaces."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("amountless", "deleted"))
+    _seed_document(api_database_url, amount=None, labels={facet: "amountless"})
+    deleted_id = _seed_document(
+        api_database_url,
+        amount="99.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={facet: "deleted"},
+    )
+
+    async def soft_delete(session: AsyncSession) -> None:
+        await session.execute(
+            text("UPDATE documents SET deleted_at = now() WHERE id = :id"), {"id": deleted_id}
+        )
+
+    _run(api_database_url, soft_delete)
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    assert [c for c in counts if c["facet_key"] == facet] == []
+
+
+def test_a_merged_pair_counts_once(api_client: TestClient, api_database_url: str) -> None:
+    """`is_canonical` is the one filter reading `spend_facts` does not give for
+    free: a merged twin is a second row for money already counted once."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha",))
+    name = f"Corvus Test Assurance {uuid.uuid4()}"
+    document_ids = [
+        _seed_sender_document(
+            api_database_url, sender=name, amount="10.00", labels={facet: "alpha"}
+        )[0]
+        for _ in range(2)
+    ]
+
+    async def read_payment_ids(session: AsyncSession) -> list[int]:
+        rows = await session.execute(
+            text("SELECT DISTINCT payment_id FROM payments WHERE document_id = ANY(:ids)"),
+            {"ids": document_ids},
+        )
+        return [row[0] for row in rows]
+
+    payment_ids = _run(api_database_url, read_payment_ids)
+    assert payment_ids == [payment_ids[0]], (
+        "same sender, amount, currency and day (R1) must merge the pair into one "
+        "payment, or the count below proves nothing"
+    )
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    alpha = next(c for c in counts if c["facet_key"] == facet)
+    assert alpha["documents"] == 1, "two documents, one payment, one canonical row"

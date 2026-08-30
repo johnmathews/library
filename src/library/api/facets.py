@@ -9,11 +9,12 @@ app.py, like every other router.
 """
 
 import re
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, StringConstraints
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -144,6 +145,52 @@ async def list_facets(session: Annotated[AsyncSession, Depends(get_session)]) ->
             for facet in facets
         ]
     )
+
+
+#: Counted over `spend_facts`, not `document_labels`, and that choice does the
+#: filtering for free: the view requires `amount_total IS NOT NULL` and its
+#: join to `payments` excludes soft-deleted documents, so neither an amountless
+#: nor a deleted document can put a moneyless proposal in front of the owner.
+#: `is_canonical` is the one filter that is not free and so is explicit: a
+#: merged twin is a second row for money already counted once.
+_FACET_COUNTS_SQL = """
+SELECT lbl.key AS facet_key,
+       lbl.value AS value_key,
+       count(DISTINCT sf.document_id) AS documents,
+       min(sf.date) AS first_date,
+       max(sf.date) AS last_date
+FROM spend_facts sf
+CROSS JOIN LATERAL jsonb_each_text(sf.labels) AS lbl(key, value)
+WHERE sf.is_canonical
+GROUP BY lbl.key, lbl.value
+ORDER BY documents DESC, lbl.key, lbl.value
+"""
+
+
+class FacetValueCount(BaseModel):
+    facet_key: str
+    value_key: str
+    documents: int
+    first_date: date | None
+    last_date: date | None
+
+
+class FacetCountsOut(BaseModel):
+    counts: list[FacetValueCount]
+
+
+@router.get("/facets/counts", summary="Document counts per facet value")
+async def facet_counts(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> FacetCountsOut:
+    """What the empty state proposes charts from (§10.4).
+
+    A separate route rather than counts on `GET /api/facets`, so
+    `DocumentFilterBar` — which loads the vocabulary on every document list
+    render — does not start paying for an aggregate it never reads.
+    """
+    rows = (await session.execute(text(_FACET_COUNTS_SQL))).mappings().all()
+    return FacetCountsOut(counts=[FacetValueCount(**dict(row)) for row in rows])
 
 
 @router.post("/facets", status_code=status.HTTP_201_CREATED, summary="Create a facet")
