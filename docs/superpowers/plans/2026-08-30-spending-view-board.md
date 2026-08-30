@@ -1169,7 +1169,9 @@ In `DrillOtherBody`, drop the `cell.period === props.period` filter. Expected: "
 - Create: `frontend/src/components/spending/SpendingCard.vue` + `__tests__/SpendingCard.spec.ts`
 
 **Interfaces:**
-- Produces: props `{ chart: Chart; data: ChartData | null; error: string | null; busy: boolean; canMoveUp: boolean; canMoveDown: boolean }`; emits `edit`, `delete`, `move-up`, `move-down`.
+- Produces: props `{ chart: Chart; data: ChartData | null; error: string | null; busy: boolean; canMoveUp: boolean; canMoveDown: boolean; today?: string }`; emits `edit`, `delete`, `move-up`, `move-down`.
+  `today` defaults to the real current date and exists so "the most recent **complete** bucket" is
+  testable — without pinning it, that test asserts something different every day it runs.
 
 Anatomy is settled (spec §4.13): name and overflow menu, then the headline figure, then the compact chart, then the legend ribbon, then a needs-attention line when the footer has one.
 
@@ -1242,7 +1244,12 @@ and `quarter` are right.
 
 **Interfaces:**
 - `QuestionDraft` props `{ currency: string }`, emits `saved: [chart: Chart]`.
-- `SpendingEmptyState` emits `created: [chart: Chart]`.
+- `SpendingEmptyState` props `{ currency: string }`, emits `created: [chart: Chart]`.
+
+Both take the currency rather than choosing one. The board supplies it from the existing
+`useCurrencyOptions()` composable (built-ins EUR / GBP / USD, per-machine persisted) and lets it be
+changed through the existing `CurrencySelect.vue`. Hardcoding a currency here would be the same
+defect §2.2 rejected in the seed migration: a display currency nobody chose.
 
 Drafting has **three** states, not two (spec §4.8). Conflating the last two is the failure the redesign spec §7.5 names.
 
@@ -1332,10 +1339,16 @@ it('loads every chart in parallel and renders a failed one inline', async () => 
 })
 
 it('moves a card down and persists only the ordinals that changed', async () => {
-  const wrapper = await mountedBoard(THREE_CHARTS)   // ordinals 0, 1, 2
+  // Charts 1, 2, 3 at ordinals 0, 1, 2. Moving the FIRST card down swaps it
+  // with the second, so chart 2 takes ordinal 0 and chart 1 takes ordinal 1.
+  // Chart 3 does not move and must not be PATCHed. The two calls have no
+  // required order, so sort before comparing.
+  const wrapper = await mountedBoard(THREE_CHARTS)
   await moveDown(cardAt(wrapper, 0)).trigger('click')
-  expect(vi.mocked(updateChart).mock.calls.map((c) => [c[0], c[1].ordinal]))
-    .toEqual([[1, 0], [2, 1]])          // the third card did not move
+  const calls = vi.mocked(updateChart).mock.calls
+    .map((c) => [c[0], c[1].ordinal])
+    .sort((a, b) => Number(a[0]) - Number(b[0]))
+  expect(calls).toEqual([[1, 1], [2, 0]])
 })
 
 it('shows the empty state when there are no charts, and the board after saving one', async () => { … })
@@ -1522,9 +1535,17 @@ sign in
   -> click it -> a card appears
   -> open the card -> /charts/{id}
   -> the toolbar, the chart, and all three footer blocks render
-  -> click a footer bucket -> the panel opens and names the bucket
-  -> close -> overflow menu -> delete -> back to the empty state
+  -> overflow menu -> delete -> back to the empty state
 ```
+
+**Do not assert a drill-through here.** The e2e database is fresh, so "All
+spending" covers no documents: there are no bars to click and every footer group
+is null, which makes a bucket-click step unreachable rather than failing — the
+worst kind of test, one that cannot detect the breakage its name claims. E2E's
+job on this branch is the route swap, the empty state's save path, the footer's
+three blocks rendering, and the container geometry. Drill-through *content* is
+unit-tested in Task 6 against fixtures that can express a merge, an amountless
+document and a 422, none of which this archive can produce.
 
 Assertions must hold on all three projects. Use `data-testid` throughout, and
 `toBeVisible()` rather than `isVisible()`.
