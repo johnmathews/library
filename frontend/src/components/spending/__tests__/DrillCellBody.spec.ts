@@ -100,6 +100,72 @@ const CELL_WITH_MERGE: CellBody = {
   ],
 }
 
+// At least three payments whose apportioned totals sum EXACTLY to the cell
+// total, deliberately chosen so naive equal-thirds rounding would fail:
+// 100.00 / 3 = 33.33 repeating, and 33.33 + 33.33 + 33.33 = 99.99, a cent
+// short. Largest-remainder apportionment (CellOutBody.payments' actual
+// contract) gives the third payment the extra cent instead, which is the
+// only way three real payments sum to a round total. A single-payment
+// fixture can never exercise this — the v-for that renders each payment's
+// total needs more than one payment to prove anything about summation.
+const CELL_MULTI_PAYMENT: CellBody = {
+  period: '2026-08-01',
+  split_value: 'hosting',
+  total: '100.00',
+  label: 'Hosting',
+  colour: null,
+  payments: [
+    {
+      payment_id: 21,
+      total: '33.33',
+      documents: [
+        {
+          id: 401,
+          title: 'Vendor A invoice',
+          date: '2026-08-02',
+          amount: '33.33',
+          currency: 'EUR',
+          amount_kind: 'payment_due',
+          reference: 'INV-401',
+          is_canonical: true,
+        },
+      ],
+    },
+    {
+      payment_id: 22,
+      total: '33.33',
+      documents: [
+        {
+          id: 402,
+          title: 'Vendor B invoice',
+          date: '2026-08-03',
+          amount: '33.33',
+          currency: 'EUR',
+          amount_kind: 'payment_due',
+          reference: 'INV-402',
+          is_canonical: true,
+        },
+      ],
+    },
+    {
+      payment_id: 23,
+      total: '33.34',
+      documents: [
+        {
+          id: 403,
+          title: 'Vendor C invoice',
+          date: '2026-08-04',
+          amount: '33.34',
+          currency: 'EUR',
+          amount_kind: 'payment_due',
+          reference: 'INV-403',
+          is_canonical: true,
+        },
+      ],
+    },
+  ],
+}
+
 const CELL_WITH_AMOUNTLESS_DOCUMENT: CellBody = {
   period: '2026-08-01',
   split_value: 'hosting',
@@ -172,6 +238,12 @@ function paymentTotals(wrapper: VueWrapper): string[] {
     .map((row) => row.attributes('data-amount')!)
 }
 
+function documentAmounts(wrapper: VueWrapper): (string | undefined)[] {
+  return wrapper
+    .findAll('[data-testid="drill-document-amount"]')
+    .map((row) => row.attributes('data-amount'))
+}
+
 beforeEach(() => {
   fetchCell.mockReset()
   fetchFacets.mockReset().mockResolvedValue([])
@@ -210,12 +282,19 @@ describe('DrillCellBody', () => {
   })
 
   // The panel is where a wrong merge is noticed, so it must add up to the bar.
+  // Three-plus payments, apportioned by largest remainder so naive
+  // equal-thirds rounding (33.33 x 3 = 99.99) would fail this assertion.
   it('shows each payment total and their sum equals the cell total', async () => {
-    const wrapper = await mountedCellBody(CELL_WITH_MERGE)
+    const wrapper = await mountedCellBody(CELL_MULTI_PAYMENT)
     const shown = paymentTotals(wrapper)
       .map(toCents)
       .reduce((a, b) => a + b, 0)
-    expect(fromCents(shown)).toBe(CELL_WITH_MERGE.total)
+    expect(fromCents(shown)).toBe(CELL_MULTI_PAYMENT.total)
+    // Pin the exact largest-remainder split too, not just the sum — a
+    // component that rendered equal thirds (33.33/33.33/33.33) would still
+    // fail the sum check above by a cent, but pinning the values makes the
+    // rounding contract explicit rather than incidental to the sum passing.
+    expect(paymentTotals(wrapper)).toEqual(['33.33', '33.33', '33.34'])
   })
 
   // A merged pair doubles the document sum; that is the merge this panel exposes.
@@ -228,6 +307,43 @@ describe('DrillCellBody', () => {
   it('renders a document with no amount and no currency', async () => {
     const wrapper = await mountedCellBody(CELL_WITH_AMOUNTLESS_DOCUMENT)
     expect(wrapper.text()).toContain('No amount recorded')
+    // Data-carrying too — a null amount means no raw figure to expose, so
+    // the amountless row omits the attribute rather than stringifying null.
+    expect(documentAmounts(wrapper)).toEqual(['300.00', undefined])
+  })
+
+  // `CellDocument.currency` is independently optional from `.amount` — an
+  // amount can arrive with no currency of its own, in which case the
+  // document falls back to the panel's resolved display currency
+  // (`args.currency`) rather than rendering a bare, unlabelled number.
+  it('falls back to the panel currency for a document with an amount but no currency', async () => {
+    const wrapper = await mountedCellBody({
+      period: '2026-08-01',
+      split_value: 'hosting',
+      total: '45.00',
+      label: 'Hosting',
+      colour: null,
+      payments: [
+        {
+          payment_id: 31,
+          total: '45.00',
+          documents: [
+            {
+              id: 501,
+              title: 'Currency-inherited document',
+              date: '2026-08-06',
+              amount: '45.00',
+              currency: null,
+              amount_kind: 'payment_due',
+              reference: 'INV-501',
+              is_canonical: true,
+            },
+          ],
+        },
+      ],
+    })
+    expect(wrapper.get('[data-testid="drill-document-amount"]').text()).toBe('EUR 45.00')
+    expect(documentAmounts(wrapper)).toEqual(['45.00'])
   })
 
   it('reuses FacetEditor and PaymentGroup per document rather than reimplementing them', async () => {

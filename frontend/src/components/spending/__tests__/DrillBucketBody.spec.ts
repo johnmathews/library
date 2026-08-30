@@ -90,6 +90,23 @@ describe('DrillBucketBody', () => {
     expect(wrapper.get('[data-testid="drill-document"] a').attributes('href')).toBe('/documents/1')
   })
 
+  // A null currency is still a real, deliberately-modelled state (an
+  // unconvertible or currency-less footer document, same shape
+  // SpendingFooter.vue's own bareAmount treatment handles) — it must render
+  // the grouped digits without a currency prefix, not "null 12.50" or a
+  // blank amount.
+  it('renders a document with a null currency without a currency prefix', async () => {
+    fetchFooterBucket.mockResolvedValue({
+      bucket: 'uncategorised',
+      total: 1,
+      documents: [{ ...doc(1), currency: null }],
+    })
+    const wrapper = await mountedBucketBody()
+    const amount = wrapper.get('[data-testid="drill-document-amount"]')
+    expect(amount.text()).toBe('12.50')
+    expect(amount.attributes('data-amount')).toBe('12.50')
+  })
+
   it('shows a real empty state when the bucket is genuinely empty', async () => {
     fetchFooterBucket.mockResolvedValue({ bucket: 'uncategorised', total: 0, documents: [] })
     const wrapper = await mountedBucketBody()

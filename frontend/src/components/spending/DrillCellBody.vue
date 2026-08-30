@@ -168,6 +168,7 @@ function money(amount: string, currency: string | null): string {
               </RouterLink>
               <span
                 class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100"
+                :data-amount="doc.amount ?? undefined"
                 data-testid="drill-document-amount"
               >
                 <template v-if="doc.amount !== null">{{ money(doc.amount, doc.currency) }}</template>

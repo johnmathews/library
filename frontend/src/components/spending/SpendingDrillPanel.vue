@@ -18,6 +18,13 @@
  * `<dialog>` is top-layer, out-of-flow content with no ambient container of
  * its own to query. `data-presentation` mirrors that decision as a plain DOM
  * attribute so a test asserts the outcome, not a class list.
+ *
+ * The `backdrop:` treatment (below, on the `<dialog>` itself, same as the
+ * other two components) is not cosmetic here: spec §4.13's bottom-sheet
+ * design is explicitly "so the bar you tapped stays on screen (dimmed)
+ * above it" — the chart the panel drilled into needs to still read as
+ * present-but-inactive underneath the sheet, not vanish behind opaque
+ * floating debris.
  */
 import { ref, watch } from 'vue'
 
@@ -72,7 +79,7 @@ function onDialogClick(event: MouseEvent): void {
 <template>
   <dialog
     ref="dialog"
-    class="app-drill-panel bg-white text-left shadow-lg dark:bg-gray-800"
+    class="app-drill-panel bg-white text-left shadow-lg backdrop:bg-gray-900/40 dark:bg-gray-800"
     :data-presentation="sheet ? 'sheet' : 'panel'"
     aria-labelledby="drill-panel-title"
     data-testid="drill-panel"

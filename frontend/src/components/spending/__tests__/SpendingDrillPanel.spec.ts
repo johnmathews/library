@@ -62,6 +62,18 @@ describe('SpendingDrillPanel', () => {
     expect(wrapper.get('[data-testid="drill-body-content"]').text()).toBe('Body content')
   })
 
+  // spec §4.13: the bottom sheet is deliberately partial-height "so the bar
+  // you tapped stays on screen (dimmed) above it" — without a `backdrop:`
+  // treatment the chart behind is never dimmed and the sheet reads as
+  // floating debris rather than a layer over it. jsdom cannot render
+  // `::backdrop` itself, so this asserts the DOM-observable proxy: the
+  // dialog carries a `backdrop:` utility class, the same convention
+  // `SearchModal.vue` and `ConfirmDialog.vue` both already use.
+  it('dims the page behind it via a backdrop treatment, same as SearchModal/ConfirmDialog', () => {
+    const wrapper = mountPanel()
+    expect(wrapper.get('dialog').attributes('class')).toMatch(/(?:^|\s)backdrop:bg-/)
+  })
+
   it('calls showModal when open flips true and close when it flips false', async () => {
     const wrapper = mountPanel({ open: false })
     const el = wrapper.get('dialog').element as HTMLDialogElement
