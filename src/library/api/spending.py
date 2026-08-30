@@ -57,8 +57,8 @@ from library.charts.query import (
 )
 from library.charts.rule import Rule, RuleError, rule_predicate
 from library.db import get_session
-from library.facets.vocabulary import VocabularyFacet, load_vocabulary
-from library.models import Chart, Document, Facet, FacetValue, Grain, LineLabel, SpendLine
+from library.facets.vocabulary import VocabularyFacet, VocabularyValue, load_vocabulary
+from library.models import Chart, Document, Facet, FacetValue, Grain, LineLabel, Sender, SpendLine
 from library.spend_lines import (
     AllocationError,
     LineInput,
@@ -145,6 +145,28 @@ class CellOut(BaseModel):
     payments: int
 
 
+class SplitValueOut(BaseModel):
+    """One bucket of the split axis, resolved for display (§2.3).
+
+    `value` is exactly what `/cell` must be sent back — the sender id as text,
+    or the facet value key, never the label. Resolution is a display concern
+    and lives here rather than in the engine, which keeps `split_value` stable
+    across a rename (docs/charts.md §4).
+
+    A **list** rather than a mapping: the unlabelled bucket's `value` is
+    `null`, which cannot be a JSON object key, and it is the bucket whose name
+    a client is least able to invent — it means "no value for this facet" under
+    a facet split and "no sender" under `split=sender`.
+
+    `colour` is a stored override; `null` means the client derives a stable
+    palette slot from `value` (§2.5).
+    """
+
+    value: str | None
+    label: str
+    colour: str | None
+
+
 class UnconvertibleOut(BaseModel):
     """Money the chart could not express in its display currency (§9.3).
 
@@ -228,6 +250,9 @@ class DataOut(BaseModel):
     since: date | None
     until: date | None
     cells: list[CellOut]
+    #: Every split bucket in `cells`, resolved for display (§2.3). Empty when
+    #: the chart has no split axis.
+    splits: list[SplitValueOut]
     total: Decimal
     payments: int
     documents: int
@@ -274,6 +299,10 @@ class CellOutBody(BaseModel):
     split_value: str | None
     total: Decimal
     payments: list[CellPaymentOut]
+    #: This cell's split bucket, resolved for display — so a drilled panel can
+    #: title itself without re-reading `/data`.
+    label: str
+    colour: str | None
 
 
 class DraftIn(BaseModel):
@@ -365,6 +394,12 @@ class _ChartQuery:
     currency: str
     since: date | None
     until: date | None
+    #: The vocabulary this request was validated against. Kept so split
+    #: resolution reads the labels already loaded rather than loading them
+    #: again — and reads the *same* ones the rule was validated against, so a
+    #: value deleted mid-request cannot be valid in one half and missing in the
+    #: other.
+    vocabulary: tuple[VocabularyFacet, ...]
 
     def shared(self) -> _SharedArgs:
         return {
@@ -497,7 +532,70 @@ async def _resolve_query(
         currency=(currency or chart.display_currency).upper(),
         since=since,
         until=until,
+        vocabulary=vocabulary,
     )
+
+
+#: What the `null` split bucket is called, per axis. It is a real bucket — an
+#: unlabelled row lands in it rather than being dropped, which is the
+#: mechanical basis of the total's invariance (docs/charts.md §4) — so it needs
+#: a name, and only the API knows which one.
+_NO_SENDER = "No sender"
+_UNLABELLED = "Uncategorised"
+
+
+async def _resolve_splits(
+    session: AsyncSession, query: _ChartQuery, values: list[str | None]
+) -> list[SplitValueOut]:
+    """Label and colour each split bucket present in a result.
+
+    Returns `[]` for an unsplit chart: there is no axis, so there are no
+    buckets to name — distinct from a split axis whose only bucket is the
+    unlabelled one.
+
+    A `value` whose sender row or facet value has since been deleted resolves
+    to itself. Facet values are deletable at runtime and a saved chart can rot;
+    a rotted legend entry is a legible defect, while raising here would be a
+    500 on every chart in range of one such row.
+    """
+    if query.split is None:
+        return []
+
+    if query.split == SENDER_SPLIT:
+        ids = [int(value) for value in values if value is not None]
+        rows = (
+            await session.execute(
+                select(Sender.id, Sender.name, Sender.colour).where(Sender.id.in_(ids))
+            )
+        ).all()
+        by_id = {str(row.id): (row.name, row.colour) for row in rows}
+        return [
+            SplitValueOut(
+                value=value,
+                label=_NO_SENDER if value is None else by_id.get(value, (value, None))[0],
+                colour=None if value is None else by_id.get(value, (value, None))[1],
+            )
+            for value in values
+        ]
+
+    facet = next((f for f in query.vocabulary if f.key == query.split), None)
+    by_key = {v.key: v for v in facet.values} if facet is not None else {}
+    return [
+        SplitValueOut(
+            value=value,
+            label=_UNLABELLED if value is None else _label_of(by_key.get(value), value),
+            colour=None if value is None else _colour_of(by_key.get(value)),
+        )
+        for value in values
+    ]
+
+
+def _label_of(value: VocabularyValue | None, fallback: str) -> str:
+    return fallback if value is None else value.label
+
+
+def _colour_of(value: VocabularyValue | None) -> str | None:
+    return None if value is None else value.colour
 
 
 def _merge_unconvertible(
@@ -559,7 +657,13 @@ def _footer_out(footer: Footer, from_total: list[Unconvertible]) -> FooterOut:
     )
 
 
-def _data_out(chart_id: int | None, query: _ChartQuery, series: Series, footer: Footer) -> DataOut:
+def _data_out(
+    chart_id: int | None,
+    query: _ChartQuery,
+    series: Series,
+    footer: Footer,
+    splits: list[SplitValueOut],
+) -> DataOut:
     """Serialise a chart's answer so the headline is the drawing (§2.5).
 
     `chart_series` guarantees `total == sum(cells)` **unquantised**, and
@@ -587,6 +691,7 @@ def _data_out(chart_id: int | None, query: _ChartQuery, series: Series, footer: 
         since=query.since,
         until=query.until,
         cells=cells,
+        splits=splits,
         # `_money` of an already-2dp sum is a no-op for the invariant and gives
         # the empty chart its `"0.00"`: `Decimal(0)` renders as `"0"`.
         total=_money(sum((cell.total for cell in cells), Decimal(0))),
@@ -641,7 +746,15 @@ async def _answer(session: AsyncSession, chart_id: int | None, query: _ChartQuer
         until=query.until,
         facets_in_rule=query.facets_in_rule,
     )
-    return _data_out(chart_id, query, series, footer)
+    # Manual de-duplication rather than `set()`: it preserves the engine's
+    # ordering, and the legend must match the order the chart draws its cells
+    # in, not an arbitrary hash order.
+    seen: list[str | None] = []
+    for cell in series.cells:
+        if cell.split_value not in seen:
+            seen.append(cell.split_value)
+    splits = await _resolve_splits(session, query, seen)
+    return _data_out(chart_id, query, series, footer, splits)
 
 
 # --- charts ------------------------------------------------------------------
@@ -818,6 +931,8 @@ async def chart_cell_data(
         raise _unprocessable(
             f"period {period} is not the start of a {query.grain.value}; use {start}"
         )
+    resolved = await _resolve_splits(session, query, [split_value])
+    bucket = resolved[0] if resolved else None
     payments: list[CellPayment] = await chart_cell(
         session,
         query.rule,
@@ -830,6 +945,8 @@ async def chart_cell_data(
         period=period,
         split_value=split_value,
         total=_money(sum(rendered, Decimal(0))),
+        label=bucket.label if bucket else "",
+        colour=bucket.colour if bucket else None,
         payments=[
             CellPaymentOut(
                 payment_id=payment.payment_id,
@@ -904,6 +1021,7 @@ async def draft_chart(
         currency=body.display_currency.upper(),
         since=body.since,
         until=body.until,
+        vocabulary=vocabulary,
     )
     return DraftOut(
         question=body.question,

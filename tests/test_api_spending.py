@@ -29,7 +29,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -44,6 +44,7 @@ from library.models import (
     DocumentStatus,
     FacetValue,
     FxRate,
+    Sender,
     SpendLine,
 )
 from library.schemas import DocumentUpdate
@@ -99,6 +100,7 @@ def _seed_document(
     day: date | None = MARCH,
     currency: str | None = "EUR",
     labels: Mapping[str, str] | None = None,
+    sender: str | None = None,
 ) -> int:
     async def work(session: AsyncSession) -> int:
         marker = f"spending-api:{uuid.uuid4()}"
@@ -113,6 +115,16 @@ def _seed_document(
             currency=currency,
             amount_kind=kind,
         )
+        if sender is not None:
+            existing = (
+                await session.execute(select(Sender.id).where(Sender.name == sender))
+            ).scalar_one_or_none()
+            if existing is None:
+                sender_row = Sender(name=sender)
+                session.add(sender_row)
+                await session.flush()
+                existing = sender_row.id
+            document.sender_id = existing
         session.add(document)
         await session.flush()
         for facet_key, value_key in (labels or {}).items():
@@ -120,6 +132,25 @@ def _seed_document(
         return document.id
 
     return _run(database_url, work)
+
+
+def _seed_sender_document(
+    database_url: str, *, sender: str, amount: str, day: date = MARCH
+) -> tuple[int, int]:
+    """A document from a named sender; returns `(document_id, sender_id)`.
+
+    Extends `_seed_document`'s job rather than replacing it: `sender=` there
+    resolves-or-creates the `Sender` row, so there is one definition of "seed a
+    document for the spending API".
+    """
+    document_id = _seed_document(
+        database_url, amount=amount, kind=AmountKind.PAYMENT_MADE, day=day, sender=sender
+    )
+
+    async def read_sender_id(session: AsyncSession) -> int:
+        return (await session.execute(select(Sender.id).where(Sender.name == sender))).scalar_one()
+
+    return document_id, _run(database_url, read_sender_id)
 
 
 def _save_chart(
@@ -149,6 +180,9 @@ def _save_chart(
 SOFTWARE_RULE: dict[str, object] = {
     "all": [{"facet": "category", "op": "in", "values": ["software"]}]
 }
+
+#: Invented. Nothing here corresponds to a real sender.
+VENDOR_A = "Corvus Test Assurance"
 
 
 #: Two invented currencies, one worth exactly half the other, so an amount of
@@ -440,6 +474,198 @@ def test_an_unknown_grain_is_a_422_naming_it(api_client: TestClient) -> None:
     response = api_client.get(f"/api/spending/{chart_id}/data?grain=fortnight")
     assert response.status_code == 422
     assert "fortnight" in response.text
+
+
+# --- split value resolution (labels and colours) -----------------------------
+
+
+def test_a_facet_split_resolves_value_keys_to_display_labels(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`spend_facts.labels` maps a facet key to a value *key*, so an unresolved
+    legend reads `software`. §2.3: the legend carries names."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+    chart_id = _save_chart(api_client, "api-splits-facet", {}, default_split="category")
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    assert {s["value"]: s["label"] for s in body["splits"]} == {"software": "Software"}
+
+
+def test_a_sender_split_resolves_ids_to_names(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The engine emits `CAST(sf.sender_id AS text)`, so without resolution the
+    legend reads `41`. The id stays as `value` because `/cell` round-trips it."""
+    name = f"{VENDOR_A} {uuid.uuid4()}"
+    _seed_sender_document(api_database_url, sender=name, amount="10.00")
+    chart_id = _save_chart(api_client, "api-splits-sender", {}, default_split="sender")
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    named = [s for s in body["splits"] if s["label"] == name]
+    assert len(named) == 1
+    assert named[0]["value"].isdigit(), "value stays the id /cell must be sent back"
+
+
+def test_the_unlabelled_bucket_is_named_by_the_axis(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`split_value` is null both for "no value for this facet" and for "no
+    sender". A client cannot invent either name; the API supplies it."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    facet_chart = _save_chart(api_client, "api-splits-null-facet", {}, default_split="category")
+    sender_chart = _save_chart(api_client, "api-splits-null-sender", {}, default_split="sender")
+
+    by_facet = api_client.get(f"/api/spending/{facet_chart}/data").json()
+    by_sender = api_client.get(f"/api/spending/{sender_chart}/data").json()
+
+    assert (None, "Uncategorised") in [(s["value"], s["label"]) for s in by_facet["splits"]]
+    assert (None, "No sender") in [(s["value"], s["label"]) for s in by_sender["splits"]]
+
+
+def test_a_split_value_carries_its_stored_colour_and_null_when_unset(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    _seed_vocabulary(api_database_url)
+    for value in ("software", "services"):
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
+            labels={"category": value},
+        )
+
+    async def paint(session: AsyncSession) -> None:
+        await session.execute(
+            text("UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'software'")
+        )
+
+    _run(api_database_url, paint)
+    chart_id = _save_chart(api_client, "api-splits-colour", {}, default_split="category")
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    colours = {s["value"]: s["colour"] for s in body["splits"]}
+    assert colours["software"] == "#1f77b4"
+    assert colours["services"] is None
+
+
+def test_a_split_value_whose_row_vanished_falls_back_to_the_raw_value(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Facet values are deletable at runtime and a saved chart can rot. A
+    rotted legend entry is a legible defect; a 500 on every chart in range is
+    not — the same failure the `sorted()` over a null currency caused."""
+    name = f"{VENDOR_A} {uuid.uuid4()}"
+    document_id, _sender_id = _seed_sender_document(api_database_url, sender=name, amount="10.00")
+
+    async def orphan(session: AsyncSession) -> None:
+        # `documents.sender_id` is `ON DELETE SET NULL`, so the database
+        # itself refuses to let this column point at a sender that does not
+        # exist — the literal `UPDATE ... SET sender_id = 999999` this test
+        # started from fails with a foreign-key violation before it can set up
+        # the state the assertion needs. Triggers (the FK's own enforcement
+        # included) are disabled for this one statement and restored before
+        # commit, which is what fabricates the row a live deletion can never
+        # actually leave behind while proving the resolver does not trust
+        # that guarantee.
+        await session.execute(text("ALTER TABLE documents DISABLE TRIGGER ALL"))
+        try:
+            await session.execute(
+                text("UPDATE documents SET sender_id = 999999 WHERE id = :id"),
+                {"id": document_id},
+            )
+        finally:
+            await session.execute(text("ALTER TABLE documents ENABLE TRIGGER ALL"))
+
+    _run(api_database_url, orphan)
+    chart_id = _save_chart(api_client, "api-splits-orphan", {}, default_split="sender")
+
+    response = api_client.get(f"/api/spending/{chart_id}/data")
+
+    assert response.status_code == 200, response.text
+    assert "999999" in [s["label"] for s in response.json()["splits"]]
+
+
+def test_a_cell_carries_its_own_label_and_colour(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """So a drilled panel can title itself without re-reading /data."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+
+    async def paint(session: AsyncSession) -> None:
+        await session.execute(
+            text("UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'software'")
+        )
+
+    _run(api_database_url, paint)
+    chart_id = _save_chart(api_client, "api-cell-label", SOFTWARE_RULE, default_split="category")
+    data = api_client.get(f"/api/spending/{chart_id}/data").json()
+    cell = next(c for c in data["cells"] if c["split_value"] == "software")
+
+    body = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={
+            "period": cell["period"],
+            "split_value": cell["split_value"],
+            "grain": data["grain"],
+            "split": data["split"],
+            "currency": data["currency"],
+        },
+    ).json()
+
+    assert body["label"] == "Software"
+    assert body["colour"] == "#1f77b4"
+
+
+def test_an_unsplit_chart_has_no_split_values(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`split_value` is null for an unsplit chart too, and that is not a bucket
+    needing a name — it is the absence of an axis."""
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, "api-splits-none", {})
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    assert body["split"] is None
+    assert body["splits"] == []
+
+
+def test_the_legend_order_matches_the_cells(api_client: TestClient, api_database_url: str) -> None:
+    """De-duplication preserves the engine's ordering. A `set()` would not, and
+    a legend ordered differently from the chart is a legend that mislabels it."""
+    _seed_vocabulary(api_database_url)
+    for value in ("software", "services"):
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
+            labels={"category": value},
+        )
+    chart_id = _save_chart(api_client, "api-splits-order", {}, default_split="category")
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    first_seen: list[str | None] = []
+    for cell in body["cells"]:
+        if cell["split_value"] not in first_seen:
+            first_seen.append(cell["split_value"])
+    assert [s["value"] for s in body["splits"]] == first_seen
 
 
 # --- the drill-through -------------------------------------------------------
