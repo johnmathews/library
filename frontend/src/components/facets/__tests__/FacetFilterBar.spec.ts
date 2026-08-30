@@ -9,8 +9,8 @@ const FACETS: FacetRef[] = [
     label: 'Category',
     ordinal: 0,
     values: [
-      { key: 'software', label: 'Software', parent_id: null, aliases: [] },
-      { key: 'energy', label: 'Energy', parent_id: null, aliases: [] },
+      { key: 'software', label: 'Software', parent_id: null, aliases: [], colour: null },
+      { key: 'energy', label: 'Energy', parent_id: null, aliases: [], colour: null },
     ],
   },
   { key: 'vehicle', label: 'Vehicle', ordinal: 1, values: [] },

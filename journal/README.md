@@ -15,6 +15,7 @@ CI checks it is current.
 
 - **2026-08-30** — [The spending view's board](260830-spending-view-board.md)
 - **2026-08-30** — [The spending view's backend](260830-spending-view-backend.md)
+- **2026-08-30** — [The facet vocabulary panel](260830-facet-vocabulary-panel.md)
 - **2026-08-30** — [The chart engine meets the live archive](260830-chart-engine.md)
 - **2026-08-29** — [Amount semantics and payment identity](260829-money-facts.md)
 - **2026-08-29** — [What the archive said when we finally asked it](260829-first-live-amount-backfill.md)

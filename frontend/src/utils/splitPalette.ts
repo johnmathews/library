@@ -1,32 +1,35 @@
 /**
- * The shared six-slot categorical palette for split-value colouring
- * (docs/superpowers/specs/2026-08-30-charts-view-design.md §4.12).
+ * The categorical palette for chart split values (facet values and senders).
  *
- * OWNERSHIP: this module is owned by plan 4c (the facet-vocabulary panel),
- * which is being built in a parallel worktree at the same time as this one
- * (plan 4b, the `/charts` spending view). Both plans derive a colour for a
- * split value whose `colour` is null (spec §2.5), and they must derive the
- * *same* colour for the same value wherever it appears — so there is meant
- * to be exactly one definition of this mapping, not two. Because the two
- * branches cannot see each other's commits, this file is duplicated here
- * verbatim (same contract, same hex values) purely so plan 4b's branch
- * builds and tests standalone. Whichever branch merges second deletes its
- * copy of this file and keeps the other's — since the values are identical
- * by construction, that reconciliation is a deletion, not a merge. If you
- * are reading this after both branches have landed and two copies of this
- * file still exist, that is the cleanup that was missed.
+ * A value's colour is a nullable override over a slot derived from its key
+ * (charts-view design §2.5): null is the normal state, so every legend is
+ * stably coloured before anyone has chosen anything, and the migration invents
+ * no data.
  *
- * The six slots were chosen by a colour-science validator run against this
- * app's own chart surfaces (`.card` is `bg-white` / `dark:bg-gray-800`) on
- * the all-pairs pairlist in both light and dark mode: worst CVD (colour
- * vision deficiency) ΔE 9.9 light / 9.3 dark, normal-vision ΔE 19.8 light /
- * 17.2 dark. Do not change a hex value — that revalidation is expensive to
- * redo and silently invalidated by any edit here.
+ * The six slots were validated with the `dataviz` skill's validate_palette.js
+ * on the ALL-PAIRS pairlist — the correct list here, because a slot is derived
+ * by hashing the key, so any two hues can end up side by side in a legend and
+ * there is no ordering to check adjacency against. Both modes report ALL CHECKS
+ * PASS: light worst CVD ΔE 9.9 (protan) and normal-vision ΔE 19.8; dark worst
+ * CVD ΔE 9.3 (deutan) and normal-vision ΔE 17.2.
+ *
+ * Two light slots and one dark slot fall below 3:1 against the chart surface,
+ * so the relief rule applies: **a swatch is never shown alone**. In this panel
+ * and in a chart legend it always carries the value's text label beside it.
+ * Re-run the validator and update these numbers before changing any hex.
+ *
+ * Six rather than eight: the eight-hue reference set clears the adjacent
+ * pairlist but fails all-pairs (worst normal-vision ΔE 7.1), and no ordering
+ * fixes that, because with all pairs in play the pairlist does not depend on
+ * order.
  */
 
 export interface PaletteSlot {
+  /** Display name in the picker. */
   name: string
+  /** The slot's stored identity: this is the hex written to the database. */
   light: string
+  /** The same hue re-stepped for the dark chart surface — selected, not flipped. */
   dark: string
 }
 
@@ -39,49 +42,56 @@ export const SPLIT_PALETTE: readonly PaletteSlot[] = [
   { name: 'Olive', light: '#876708', dark: '#b08923' },
 ]
 
-/** FNV-1a hash of `key`, folded into an unsigned 32-bit integer. */
-export function fnv1a(key: string): number {
-  let h = 0x811c9dc5
-  for (let i = 0; i < key.length; i++) {
-    h ^= key.charCodeAt(i)
-    h = Math.imul(h, 0x01000193) >>> 0
+/**
+ * The palette slot a value falls in when it has no stored colour.
+ *
+ * FNV-1a over the key's code units: stable across renders, sessions, machines
+ * and releases, and independent of document counts and of how many values the
+ * facet has — so a value's colour never moves because the archive changed.
+ * Keyed on the value's `key`, never its ordinal or its rank in a chart.
+ */
+export function deriveSlot(key: string): PaletteSlot {
+  let hash = 0x811c9dc5
+  for (let i = 0; i < key.length; i += 1) {
+    hash ^= key.charCodeAt(i)
+    hash = Math.imul(hash, 0x01000193) >>> 0
   }
-  return h
+  return SPLIT_PALETTE[hash % SPLIT_PALETTE.length]!
 }
 
-/** The palette slot a value key hashes to, before any de-collision walk. */
-export const deriveSlot = (key: string): PaletteSlot =>
-  SPLIT_PALETTE[fnv1a(key) % SPLIT_PALETTE.length]!
+/**
+ * The palette slot a stored hex identifies, or null if it isn't one.
+ *
+ * The single definition of "is this stored hex this slot" — a stored colour
+ * is a slot only when it matches that slot's `light` step (case-insensitively;
+ * `light` is the stored identity per the header above). `SplitColourPicker.vue`
+ * used to make this same decision a second way (`normalized === slot.light`
+ * inline) and `resolveSplitColour` a third; two definitions that happen to
+ * agree today are one definition away from silently disagreeing — see the
+ * repository's standing rule on removing the second copy rather than testing
+ * that copies agree. Both callers now go through this function.
+ */
+export function slotForStored(stored: string | null): PaletteSlot | null {
+  if (!stored) return null
+  const lower = stored.toLowerCase()
+  return SPLIT_PALETTE.find((candidate) => candidate.light === lower) ?? null
+}
 
 /**
- * Resolve the colour to render for a SINGLE split value.
+ * The colour to paint a split value, for the current theme.
  *
- * - `stored === null` derives a slot from `key` and returns that slot's step
- *   for the current theme.
- * - `stored` matching a slot's **light** hex resolves to that slot and
- *   returns its step for `dark` — the database holds one hex (the light
- *   step), so this is what stops an owner's override rendering as a
- *   light-mode colour on a dark chart.
- * - Anything else (a stored hex that matches no slot) is returned verbatim.
- *
- * UNUSED by plan 4b (the `/charts` spending view) as of this branch — its
- * own colour resolution always goes through `@/spending/palette`'s
- * `bands()`, which resolves a whole SET of survivors together and de-collides
- * a stored colour that lands on a slot an earlier survivor already claimed
- * (a case this single-value function has no way to detect, since it never
- * sees its siblings). Calling this instead of `bands()` anywhere in 4b would
- * silently drop that de-collision guarantee. This function exists for the
- * parallel plan-4c vocabulary panel, which resolves one facet value's
- * colour in isolation (no sibling set to de-collide against) — see the file
- * header's ownership note. Left in place, not deleted, so it is not silently
- * dead: covered directly by `splitPalette.spec.ts`.
+ * Three cases, in order: no stored colour derives a slot from the key; a stored
+ * colour that *is* a palette slot's light step resolves to that slot, so an
+ * override picked from the palette is theme-aware even though the database
+ * holds one hex; anything else is an arbitrary colour from outside the palette
+ * (a script, a data migration) with no theme pair to look up, returned as-is.
  */
 export function resolveSplitColour(stored: string | null, key: string, dark: boolean): string {
-  if (stored === null) {
+  if (!stored) {
     const slot = deriveSlot(key)
     return dark ? slot.dark : slot.light
   }
-  const slot = SPLIT_PALETTE.find((s) => s.light === stored)
-  if (slot) return dark ? slot.dark : slot.light
-  return stored
+  const slot = slotForStored(stored)
+  if (!slot) return stored
+  return dark ? slot.dark : slot.light
 }

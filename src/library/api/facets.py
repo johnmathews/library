@@ -188,6 +188,36 @@ async def facet_counts(
     return FacetCountsOut(counts=[FacetValueCount(**dict(row)) for row in rows])
 
 
+class LabelCount(BaseModel):
+    facet_key: str
+    value_key: str
+    labelled: int
+
+
+class LabelCountsOut(BaseModel):
+    counts: list[LabelCount]
+
+
+@router.get("/facets/label-counts", summary="Documents carrying each facet value")
+async def facet_label_counts(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> LabelCountsOut:
+    """How many documents carry each value — the number `delete` enforces.
+
+    Deliberately *not* a field on `/facets/counts`, which aggregates
+    `spend_facts` and answers a different question: what the empty state can
+    propose a chart from. That route excludes amountless, soft-deleted and
+    non-canonical documents on purpose, and a value this route reports is
+    routinely absent there. Two questions, two routes.
+    """
+    return LabelCountsOut(
+        counts=[
+            LabelCount(facet_key=facet_key, value_key=value_key, labelled=count)
+            for facet_key, value_key, count in await vocabulary.label_counts(session)
+        ]
+    )
+
+
 @router.post("/facets", status_code=status.HTTP_201_CREATED, summary="Create a facet")
 async def create_facet(
     body: FacetCreate, session: Annotated[AsyncSession, Depends(get_session)]

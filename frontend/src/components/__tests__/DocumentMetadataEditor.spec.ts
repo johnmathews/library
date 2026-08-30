@@ -40,7 +40,7 @@ const KINDS = [
   { slug: 'invoice', name: 'Invoice', document_count: 3 },
   { slug: 'receipt', name: 'Receipt', document_count: 0 },
 ]
-const SENDERS = [{ id: 3, name: 'Eneco', document_count: 3 }]
+const SENDERS = [{ id: 3, name: 'Eneco', document_count: 3, colour: null }]
 const RECIPIENTS = [
   { id: 5, name: 'John', document_count: 7 },
   { id: 6, name: 'Wife', document_count: 2 },

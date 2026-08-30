@@ -53,7 +53,7 @@
  */
 import { computed, onMounted, ref } from 'vue'
 import { createChart, type Chart, type Rule } from '@/api/spending'
-import { fetchFacetCounts, type FacetCount } from '@/api/facets'
+import { fetchFacetCounts, type FacetValueCount } from '@/api/facets'
 import { ApiError } from '@/api/client'
 import { formatDate } from '@/utils/documentFormat'
 
@@ -77,7 +77,7 @@ interface Proposal {
 // spec §4.9 targets — a judgement call about how much fits, nothing more.
 const MAX_PROPOSALS = 6
 
-const counts = ref<FacetCount[]>([])
+const counts = ref<FacetValueCount[]>([])
 const loading = ref(true)
 const loadError = ref<string | null>(null)
 

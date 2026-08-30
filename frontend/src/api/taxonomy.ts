@@ -16,6 +16,7 @@ export interface SenderOption {
   id: number
   name: string
   document_count: number
+  colour: string | null
 }
 
 export interface RecipientOption {
@@ -65,4 +66,14 @@ export function listRecipients(signal?: AbortSignal): Promise<RecipientOption[]>
 /** GET /api/tags — all tags, ordered by name. */
 export function listTags(signal?: AbortSignal): Promise<TagOption[]> {
   return apiFetch<TagOption[]>('/api/tags', { signal })
+}
+
+/**
+ * PATCH /api/senders/{id} — set or clear a sender's chart colour, and nothing
+ * else: a sender's name comes from ingested documents and renaming one is an
+ * admin taxonomy operation with its own merge semantics. `null` clears the
+ * override; not calling this leaves it alone (see `setValueColour`).
+ */
+export function setSenderColour(id: number, colour: string | null): Promise<SenderOption> {
+  return apiFetch<SenderOption>(`/api/senders/${id}`, { method: 'PATCH', body: { colour } })
 }

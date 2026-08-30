@@ -16,10 +16,10 @@ vi.mock('@/api/facets', async (importOriginal) => ({
 import SpendingEmptyState from '../SpendingEmptyState.vue'
 import { ApiError } from '@/api/client'
 import type { Chart } from '@/api/spending'
-import type { FacetCount } from '@/api/facets'
+import type { FacetValueCount } from '@/api/facets'
 
 // Values, counts and dates are invented; this repository is public.
-const COUNTS: FacetCount[] = [
+const COUNTS: FacetValueCount[] = [
   { facet_key: 'category', value_key: 'software', documents: 15, first_date: '2026-01-04', last_date: '2026-03-11' },
   { facet_key: 'category', value_key: 'travel', documents: 4, first_date: '2026-02-01', last_date: '2026-02-20' },
 ]
@@ -28,7 +28,7 @@ const COUNTS: FacetCount[] = [
 // count, wrong members, or wrong order) all have somewhere to show up.
 // Spec §4.9: "the values with the most documents" — a selection, capped at
 // MAX_PROPOSALS (6 in the component), never the whole vocabulary.
-const MANY_COUNTS: FacetCount[] = [
+const MANY_COUNTS: FacetValueCount[] = [
   { facet_key: 'category', value_key: 'software', documents: 40, first_date: '2026-01-04', last_date: '2026-03-11' },
   { facet_key: 'category', value_key: 'travel', documents: 35, first_date: '2026-02-01', last_date: '2026-02-20' },
   { facet_key: 'category', value_key: 'insurance', documents: 30, first_date: '2026-01-10', last_date: '2026-04-01' },
@@ -53,7 +53,7 @@ const SAVED_CHART: Chart = {
   ordinal: 0,
 }
 
-async function mountEmpty(counts: FacetCount[], currency = 'USD'): Promise<VueWrapper> {
+async function mountEmpty(counts: FacetValueCount[], currency = 'USD'): Promise<VueWrapper> {
   fetchFacetCounts.mockResolvedValueOnce(counts)
   const wrapper = mount(SpendingEmptyState, { props: { currency } })
   await flushPromises()
