@@ -428,3 +428,101 @@ def test_get_senders_returns_colour(api_client: TestClient, api_database_url: st
 
     rows = api_client.get("/api/senders").json()
     assert [r["colour"] for r in rows if r["name"] == name] == ["#d62728"]
+
+
+COLOUR_PATTERN_REJECTS = ["1f77b4", "#1f7", "#gggggg", "rebeccapurple"]
+
+
+def _colour(api_client: TestClient, facet_key: str, value_key: str) -> str | None:
+    facet = next(f for f in api_client.get("/api/facets").json()["facets"] if f["key"] == facet_key)
+    return next(v["colour"] for v in facet["values"] if v["key"] == value_key)
+
+
+def _labelled(api_client: TestClient, facet_key: str, value_key: str) -> str:
+    facet = next(f for f in api_client.get("/api/facets").json()["facets"] if f["key"] == facet_key)
+    return next(v["label"] for v in facet["values"] if v["key"] == value_key)
+
+
+def test_a_value_s_colour_can_be_set_without_renaming_it(api_client: TestClient) -> None:
+    """Setting a colour must not force a rename. `label` is optional on the
+    patch for the same reason `colour` is: an absent field is left alone."""
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+
+    response = api_client.patch(f"/api/facets/{key}/values/alpha", json={"colour": "#1f77b4"})
+
+    assert response.status_code == 200, response.text
+    assert _colour(api_client, key, "alpha") == "#1f77b4"
+    assert _labelled(api_client, key, "alpha") == "Alpha"
+
+
+def test_an_explicit_null_clears_a_colour_and_an_absent_field_does_not(
+    api_client: TestClient,
+) -> None:
+    """The `model_fields_set` distinction, which is the whole reason this is not
+    one nullable field: "clear it" and "do not touch it" are different requests
+    that both look like None."""
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+    api_client.patch(f"/api/facets/{key}/values/alpha", json={"colour": "#1f77b4"})
+
+    api_client.patch(f"/api/facets/{key}/values/alpha", json={"label": "Alpha renamed"})
+    assert _colour(api_client, key, "alpha") == "#1f77b4", "an absent colour is left alone"
+
+    api_client.patch(f"/api/facets/{key}/values/alpha", json={"colour": None})
+    assert _colour(api_client, key, "alpha") is None, "an explicit null clears it"
+
+
+@pytest.mark.parametrize("colour", COLOUR_PATTERN_REJECTS)
+def test_a_malformed_colour_is_a_422_not_a_500(api_client: TestClient, colour: str) -> None:
+    """Refused by the request model, so the database CHECK is defence in depth
+    rather than the error path the owner sees."""
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+
+    response = api_client.patch(f"/api/facets/{key}/values/alpha", json={"colour": colour})
+
+    assert response.status_code == 422
+
+
+def test_patching_an_unknown_value_is_still_a_404(api_client: TestClient) -> None:
+    """The behaviour the route had before it became a patch, preserved."""
+    key = _make_facet(api_client)
+    response = api_client.patch(f"/api/facets/{key}/values/absent", json={"label": "X"})
+    assert response.status_code == 404
+
+
+def _seed_sender(api_database_url: str, name: str) -> int:
+    async def work(session: AsyncSession) -> int:
+        sender = Sender(name=name)
+        session.add(sender)
+        await session.flush()
+        await session.commit()
+        return sender.id
+
+    return _run(api_database_url, work)
+
+
+def test_a_sender_s_colour_can_be_set_and_cleared(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    sender_id = _seed_sender(api_database_url, f"Corvus Test Supply {uuid.uuid4()}")
+
+    set_response = api_client.patch(f"/api/senders/{sender_id}", json={"colour": "#d62728"})
+    assert set_response.status_code == 200, set_response.text
+    assert set_response.json()["colour"] == "#d62728"
+
+    clear_response = api_client.patch(f"/api/senders/{sender_id}", json={"colour": None})
+    assert clear_response.json()["colour"] is None
+
+
+def test_patching_an_unknown_sender_is_a_404(api_client: TestClient) -> None:
+    assert api_client.patch("/api/senders/999999", json={"colour": "#d62728"}).status_code == 404
+
+
+@pytest.mark.parametrize("colour", COLOUR_PATTERN_REJECTS)
+def test_a_malformed_sender_colour_is_a_422(
+    api_client: TestClient, api_database_url: str, colour: str
+) -> None:
+    sender_id = _seed_sender(api_database_url, f"Corvus Test Supply {uuid.uuid4()}")
+    assert api_client.patch(f"/api/senders/{sender_id}", json={"colour": colour}).status_code == 422

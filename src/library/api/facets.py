@@ -88,8 +88,22 @@ class ValueCreate(BaseModel):
     label: Label
 
 
-class ValueRename(BaseModel):
-    label: Label
+#: Six-digit hex with a leading hash. The same shape the database CHECK
+#: enforces (migration 0037), stated here so a malformed colour is a 422 the
+#: owner can read rather than an IntegrityError translated after the fact.
+Colour = Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")]
+
+
+class ValuePatch(BaseModel):
+    """Edit a value's display attributes. Every field optional.
+
+    `colour` is genuinely nullable, so "clear it" and "do not touch it" cannot
+    both be `None` in one field — they are told apart by `model_fields_set`,
+    exactly as `ChartPatch.default_split` already is.
+    """
+
+    label: Label | None = None
+    colour: Colour | None = None
 
 
 class AliasCreate(BaseModel):
@@ -170,21 +184,37 @@ async def create_value(
     return {"key": body.key}
 
 
-@router.patch("/facets/{facet_key}/values/{value_key}", summary="Rename a value")
-async def rename_value(
+@router.patch("/facets/{facet_key}/values/{value_key}", summary="Edit a value")
+async def patch_value(
     facet_key: str,
     value_key: str,
-    body: ValueRename,
+    body: ValuePatch,
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> dict[str, str]:
+) -> ValueOut:
+    fields = body.model_fields_set
     try:
-        await vocabulary.rename_value(session, facet_key, value_key, body.label)
+        if "label" in fields:
+            if body.label is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="label cannot be cleared; a value must have a display label",
+                )
+            await vocabulary.rename_value(session, facet_key, value_key, body.label)
+        if "colour" in fields:
+            await vocabulary.set_value_colour(session, facet_key, value_key, body.colour)
+        value = await vocabulary.get_value(session, facet_key, value_key)
     except (UnknownFacetError, UnknownValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Unknown facet value"
         ) from exc
     await session.commit()
-    return {"label": body.label}
+    return ValueOut(
+        key=value.key,
+        label=value.label,
+        parent_id=value.parent_id,
+        aliases=sorted(value.aliases),
+        colour=value.colour,
+    )
 
 
 @router.post("/facets/{facet_key}/values/{value_key}/aliases", summary="Add an alias")
