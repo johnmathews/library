@@ -1509,3 +1509,112 @@ def test_a_split_document_counts_once_in_facet_counts(
 
     alpha = next(c for c in counts if c["facet_key"] == facet)
     assert alpha["documents"] == 1, "one document split into two lines, one canonical row"
+
+
+# --- label counts ---------------------------------------------------------
+#
+# `/api/facets/label-counts` reads `document_labels` directly rather than
+# `spend_facts`, so it counts every value a document carries, including ones
+# `/api/facets/counts` was built to leave out. Each test below is a case
+# where the two routes must *disagree* — a fixture where they agree proves
+# nothing about which table label-counts actually reads.
+#
+# These tests live here rather than in `tests/test_api_facets.py` because the
+# seeding helpers they need (`_seed_vocabulary`, `_seed_document`, `_run`,
+# `AmountKind`) live in this file; `test_api_facets.py` defines its own,
+# differently-behaved `_run` (callers commit inside the op, rather than `_run`
+# committing after it returns), so importing this module's `_run` under the
+# same name there would shadow one helper with another that has different
+# transaction semantics — a second copy of `_run`, not a reuse of one.
+
+
+def test_label_counts_include_a_value_with_no_money_behind_it(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The whole reason this route exists. `/api/facets/counts` reads
+    `spend_facts`, whose `eligible` CTE requires `amount_total IS NOT NULL`, so
+    a value carried only by amountless documents has no row there at all — it
+    renders as unused and then 409s on delete."""
+    facet = f"lc-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("amountless", "monied"))
+    _seed_document(api_database_url, amount=None, labels={facet: "amountless"})
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={facet: "monied"},
+    )
+
+    labelled = api_client.get("/api/facets/label-counts").json()["counts"]
+    money = api_client.get("/api/facets/counts").json()["counts"]
+
+    mine = {c["value_key"]: c["labelled"] for c in labelled if c["facet_key"] == facet}
+    assert mine == {"amountless": 1, "monied": 1}
+    assert {c["value_key"] for c in money if c["facet_key"] == facet} == {"monied"}, (
+        "the money route must be unchanged — if this fails, plan 4b's empty "
+        "state has been altered underneath it"
+    )
+
+
+def test_label_counts_count_a_soft_deleted_document(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`document_labels` rows survive a soft delete and still block a delete,
+    so the number shown must include them or it is not the number enforced."""
+    facet = f"lc-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("gone",))
+    doc_id = _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={facet: "gone"},
+    )
+
+    async def soft_delete(session: AsyncSession) -> None:
+        await session.execute(
+            text("UPDATE documents SET deleted_at = now() WHERE id = :id"), {"id": doc_id}
+        )
+
+    _run(api_database_url, soft_delete)
+
+    counts = api_client.get("/api/facets/label-counts").json()["counts"]
+
+    gone = next(c for c in counts if c["facet_key"] == facet)
+    assert gone["labelled"] == 1
+    money = api_client.get("/api/facets/counts").json()["counts"]
+    assert not [c for c in money if c["facet_key"] == facet], "excluded from the money route"
+
+
+def test_a_value_no_document_carries_is_absent_from_label_counts(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """An unused value has no row, which is what makes it deletable. Paired with
+    a carried value under the same facet so the assertion cannot pass by the
+    facet being empty."""
+    facet = f"lc-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("unused", "carried"))
+    _seed_document(api_database_url, amount=None, labels={facet: "carried"})
+
+    counts = api_client.get("/api/facets/label-counts").json()["counts"]
+
+    assert {c["value_key"] for c in counts if c["facet_key"] == facet} == {"carried"}
+
+
+def test_the_displayed_count_is_the_count_delete_enforces(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The route's entire claim, tied to the operation in one test: the number
+    the panel shows and the number the 409 names must be the same number."""
+    facet = f"lc-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("busy",))
+    for _ in range(3):
+        _seed_document(api_database_url, amount=None, labels={facet: "busy"})
+
+    counts = api_client.get("/api/facets/label-counts").json()["counts"]
+    shown = next(c for c in counts if c["facet_key"] == facet)["labelled"]
+
+    response = api_client.delete(f"/api/facets/{facet}/values/busy")
+
+    assert response.status_code == 409
+    assert f"is on {shown} documents" in response.json()["detail"]
+    assert shown == 3
