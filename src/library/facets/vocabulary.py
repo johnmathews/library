@@ -303,16 +303,29 @@ async def count_labels(session: AsyncSession, facet_key: str, value_key: str) ->
     )
 
 
+async def label_counts(session: AsyncSession) -> list[tuple[str, str, int]]:
+    """`(facet_key, value_key, documents)` for every value a document carries.
+
+    The grouped form of `count_labels`, over exactly the same rows and with
+    exactly the same absence of filtering — a soft-deleted or amountless
+    document still carries its label and still blocks a delete. Values no
+    document carries are absent, which is what makes them deletable.
+    """
+    rows = await session.execute(
+        select(Facet.key, FacetValue.key, func.count())
+        .select_from(DocumentLabel)
+        .join(Facet, Facet.id == DocumentLabel.facet_id)
+        .join(FacetValue, FacetValue.id == DocumentLabel.facet_value_id)
+        .group_by(Facet.key, FacetValue.key)
+        .order_by(func.count().desc(), Facet.key, FacetValue.key)
+    )
+    return [(facet_key, value_key, int(count)) for facet_key, value_key, count in rows]
+
+
 async def delete_value(session: AsyncSession, facet_key: str, key: str) -> None:
     """Remove an unused value. Refuses while any document still carries it."""
-    facet_id, value_id = await _resolve(session, facet_key, key)
-    in_use = (
-        await session.execute(
-            select(func.count())
-            .select_from(DocumentLabel)
-            .where(DocumentLabel.facet_id == facet_id, DocumentLabel.facet_value_id == value_id)
-        )
-    ).scalar_one()
+    _facet_id, value_id = await _resolve(session, facet_key, key)
+    in_use = await count_labels(session, facet_key, key)
     if in_use:
         raise ValueInUseError(f"{facet_key}={key} is on {in_use} documents")
     await session.execute(delete(FacetValueAlias).where(FacetValueAlias.facet_value_id == value_id))
