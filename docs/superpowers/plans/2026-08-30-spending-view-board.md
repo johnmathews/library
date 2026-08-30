@@ -1510,7 +1510,7 @@ it('keeps the headline total when a legend entry is isolated', async () => {
 
 **Files:**
 - Modify: `frontend/src/router/index.ts`
-- Delete: `frontend/src/views/ChartsView.vue`, `frontend/src/views/__tests__/ChartsView.spec.ts`
+- **Keep** `frontend/src/views/ChartsView.vue` and its spec — see the Smart Groups note below.
 
 Spec §4.10 is the authoritative list. `SeriesChartView.vue`, `SeriesChartTile.vue`, `ChartControls.vue`, `DocumentSeriesTrend.vue` and the two charts composables all **stay** — they have a live consumer on the document detail page and are plan 5's to remove.
 
@@ -1535,14 +1535,35 @@ it('routes a numeric id to the workspace and a series id to the old view', () =>
 { path: '/charts', name: 'charts', component: () => import('../views/SpendingBoardView.vue') },
 { path: '/charts/:chartId(\\d+)', name: 'spending-workspace',
   component: () => import('../views/SpendingWorkspaceView.vue') },
+// Unlinked from the sidebar; reachable by URL and by smart-groups.spec.ts.
+// Declared BEFORE `:seriesId` or the literal would be swallowed as a series id.
+{ path: '/charts/legacy', name: 'charts-legacy',
+  component: () => import('../views/ChartsView.vue') },
 { path: '/charts/:seriesId', name: 'series-chart',
   component: () => import('../views/SeriesChartView.vue') },
 ```
 
-The workspace route must be declared **before** `/charts/:seriesId`, exactly as
-`/ask/new` already precedes `/ask/:threadId(\d+)`.
+Both the workspace and `/charts/legacy` must be declared **before**
+`/charts/:seriesId`, exactly as `/ask/new` already precedes
+`/ask/:threadId(\d+)`. `legacy` is not a digit, so it never reaches the
+workspace route — but it *would* match `:seriesId`.
 
-- [ ] **Step 4: Delete the old view and its spec.** Then `npm run type-check` to prove nothing else imported it.
+### Why `ChartsView.vue` survives this plan
+
+Spec §4.10 says to delete it. That is wrong, and the reason is easy to miss:
+the Smart Groups creation UI — the create form, the document search, and the
+staged-review backfill modal — exists **only** inside `ChartsView.vue`
+(`charts-create-button`, `charts-create-smart`, `charts-create-search`,
+`charts-backfill-modal`, `charts-backfill-add` appear in no other component).
+Deleting it would leave the Smart Groups backend running with no client, which
+is the shipped-but-unwired shape §2.2 rejected a CLI seed command over — and
+spec §6 is explicit that **plan 5, not this plan, deletes the series stack**.
+
+So the view moves to an unlinked route instead of being deleted, and plan 5
+removes it with the backend it serves. `views/__tests__/ChartsView.spec.ts` is
+**kept** for the same reason.
+
+- [ ] **Step 4: Point the sidebar at the new board only.** `sidebar-charts-link` keeps its testid and its `/charts` target; nothing links to `/charts/legacy`. Then `npm run type-check`.
 
 - [ ] **Step 5: Commit** — `refactor(spending): /charts becomes the spending board`
 
@@ -1552,6 +1573,7 @@ The workspace route must be declared **before** `/charts/:seriesId`, exactly as
 
 **Files:**
 - Delete: `frontend/e2e/charts.spec.ts`, `frontend/e2e/charts-layout.spec.ts`
+- Modify: `frontend/e2e/smart-groups.spec.ts` — its `openChartsPage` navigates to `/charts/legacy` directly instead of clicking the sidebar link, since the sidebar now leads to the new board. **Everything else in that spec is unchanged**: its create/backfill journey is the only end-to-end coverage Smart Groups has, and it keeps working against the same view at a new URL.
 - Create: `frontend/e2e/spending-board.spec.ts`, `frontend/e2e/spending-layout.spec.ts`
 - Modify: `frontend/e2e/smart-groups.spec.ts`
 
@@ -1559,13 +1581,14 @@ The workspace route must be declared **before** `/charts/:seriesId`, exactly as
 must be at least as strict. Both new specs use `requireStack()` and the
 `fixtures/layout.ts` helpers.
 
-- [ ] **Step 1: Repoint `smart-groups.spec.ts`**
+- [ ] **Step 1: Repoint `smart-groups.spec.ts` at `/charts/legacy`**
 
-It opens `/charts` through the sidebar and then asserts on the *old board's*
-create flow. Its subject is authored series, not the board, so point its
-`openChartsPage` at the single-series route it actually needs and drop the
-`charts-create-*` interactions that belonged to the deleted view. Do not delete
-the spec — its authored-series coverage is still the only one there is.
+Change `openChartsPage` to `await page.goto('/charts/legacy')` plus the heading
+assertion, and delete the hamburger/sidebar-click preamble — the sidebar now
+leads to the new board. **Change nothing else.** Its `charts-create-*` and
+`charts-backfill-*` interactions all still work, because the view they drive
+still exists at the new URL. This spec is the only end-to-end coverage Smart
+Groups has, and preserving it is why the view survives (Task 11).
 
 - [ ] **Step 2: Write `spending-board.spec.ts`**
 
