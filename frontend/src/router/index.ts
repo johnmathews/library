@@ -77,6 +77,23 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/charts',
     name: 'charts',
+    component: () => import('../views/SpendingBoardView.vue'),
+  },
+  {
+    // Digit-constrained so it can never be swallowed by `:seriesId` below;
+    // must be declared before it, exactly as `/ask/:threadId(\d+)` is.
+    path: '/charts/:chartId(\\d+)',
+    name: 'spending-workspace',
+    component: () => import('../views/SpendingWorkspaceView.vue'),
+  },
+  {
+    // The pre-board grid + Smart Groups creation UI (create form, document
+    // search, staged-review backfill modal) live here and nowhere else.
+    // Unlinked from the sidebar; reachable by URL and by smart-groups.spec.ts.
+    // Declared before `:seriesId` or the literal `legacy` would be swallowed
+    // as a series id.
+    path: '/charts/legacy',
+    name: 'charts-legacy',
     component: () => import('../views/ChartsView.vue'),
   },
   {
