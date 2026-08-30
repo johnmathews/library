@@ -15,15 +15,17 @@
  *
  * `modelValue` is the stored hex (nullable — null means "use the derived
  * slot", matching splitPalette.ts's `resolveSplitColour`). Selection is
- * decided by comparing `modelValue`'s lowercase form against each slot's
- * `light` step, the value's stored identity per splitPalette.ts.
+ * decided by `splitPalette.ts`'s `slotForStored` — the one definition of
+ * "is this stored hex this slot", shared with `resolveSplitColour` so the
+ * swatch a row paints and the button this picker marks pressed can never
+ * disagree about which slot a stored colour is.
  *
  * Ships standalone and unwired to any chart — see charts-view design §4.7 for
  * where 4b/5 will mount it against the legend swatch. `components/charts/`
  * is out of scope here.
  */
 import { computed } from 'vue'
-import { SPLIT_PALETTE, deriveSlot } from '@/utils/splitPalette'
+import { SPLIT_PALETTE, deriveSlot, slotForStored } from '@/utils/splitPalette'
 
 const props = defineProps<{
   modelValue: string | null
@@ -37,8 +39,10 @@ const normalized = computed(() => props.modelValue?.toLowerCase() ?? null)
 
 const defaultSlotName = computed(() => deriveSlot(props.slotKey).name)
 
+const selectedSlot = computed(() => slotForStored(props.modelValue))
+
 function isSelected(slot: (typeof SPLIT_PALETTE)[number]): boolean {
-  return normalized.value === slot.light
+  return selectedSlot.value === slot
 }
 
 function choose(slot: (typeof SPLIT_PALETTE)[number]): void {

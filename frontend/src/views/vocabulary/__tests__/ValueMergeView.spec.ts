@@ -167,6 +167,43 @@ describe('ValueMergeView', () => {
     ).toBe(false)
   })
 
+  it("never lets a stale REJECTION for a superseded target attach an error to a valid, approved preview", async () => {
+    // Mirror of the test above, on the catch path: pick beta, then gamma.
+    // Gamma's dry run resolves 200 first and enables Apply; beta's — for a
+    // target the owner has already moved on from — then 404s. Without the
+    // same `if (target.value !== next) return` guard in the `catch`, that
+    // stale rejection would render an error beside gamma's still-valid,
+    // still-approved preview: a superseded target's failure attached to the
+    // current selection's success.
+    const wrapper = await open()
+
+    let rejectBeta!: (err: unknown) => void
+    vi.mocked(api.mergeValue).mockReturnValueOnce(new Promise((_r, j) => { rejectBeta = j }))
+    await wrapper.find('[data-testid="merge-target"]').setValue('beta')
+
+    let resolveGamma!: (v: { moved: number }) => void
+    vi.mocked(api.mergeValue).mockReturnValueOnce(new Promise((r) => { resolveGamma = r }))
+    await wrapper.find('[data-testid="merge-target"]').setValue('gamma')
+
+    resolveGamma({ moved: 4 })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="merge-diff"]').text()).toContain('4')
+    expect(wrapper.find('[data-testid="merge-error"]').exists()).toBe(false)
+
+    // The stale beta rejection — superseded before it ever resolved — lands
+    // afterwards. It must not render an error, and gamma's approved preview
+    // must still stand.
+    rejectBeta(new ApiError(404, 'invented-not-found-detail'))
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="merge-error"]').exists()).toBe(false)
+    expect(wrapper.find('[data-testid="merge-diff"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="merge-diff"]').text()).toContain('4')
+    expect(
+      (wrapper.find('[data-testid="merge-apply"]').element as HTMLButtonElement).disabled,
+    ).toBe(false)
+  })
+
   it('renders the server detail verbatim on a 409 (e.g. a self-merge)', async () => {
     // docs/facets.md §4: a merge into itself is refused on the real run and
     // the dry run alike, because the fold is a copy-then-delete that would

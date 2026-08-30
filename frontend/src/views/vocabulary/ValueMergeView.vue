@@ -86,6 +86,10 @@ watch(target, async (next) => {
     moved.value = result.moved
     previewFor.value = next
   } catch (err) {
+    // Same supersession guard as the success path above: a request for a
+    // target the owner has already moved on from must not render its error
+    // beside a later, valid preview for the target now selected.
+    if (target.value !== next) return
     error.value = err instanceof ApiError ? err.detail : 'Could not preview the merge.'
   } finally {
     previewing.value = false

@@ -18,6 +18,7 @@
  */
 import { computed, reactive, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
+import { useDark } from '@vueuse/core'
 import {
   addAlias,
   createFacet,
@@ -108,13 +109,13 @@ function findValue(facetKey: string, valueKey: string): FacetValueRef | undefine
 }
 
 // --- Theme (for colour resolution) --------------------------------------
-// Reuses the mechanism `ThemeToggle.vue` toggles (a `dark` class on <html>)
-// rather than inventing a second one. Read once at setup; the colour picker
-// itself is the live control, so a stale read here only matters until the
-// panel next reloads.
-const isDark = ref(
-  typeof document !== 'undefined' && document.documentElement.classList.contains('dark'),
-)
+// The exact call `ThemeToggle.vue` makes, not a one-off read: both instances
+// share `useColorMode`'s underlying storage-backed state, so toggling the
+// header switch updates this ref too, reactively, wherever the panel is
+// mounted. A plain `ref(document.documentElement.classList.contains('dark'))`
+// read once at setup is the bug this replaces — it neither reacts to the
+// toggle nor race-safely observes the class before `ThemeToggle` has mounted.
+const isDark = useDark({ selector: 'html' })
 
 // --- Same-colour collision marking --------------------------------------
 // Per facet, bucket values by their RESOLVED colour (stored override or
@@ -508,6 +509,13 @@ async function saveCreateValue(facetKey: string): Promise<void> {
     >
       {{ loadError }}
     </div>
+    <p
+      v-else-if="loaded && sortedFacets.length === 0"
+      class="text-sm text-gray-500 dark:text-gray-400"
+      data-testid="facets-empty"
+    >
+      No facets yet. Create one below.
+    </p>
 
     <!-- Facets -->
     <div v-else v-for="facet in sortedFacets" :key="facet.key" class="card p-6 @container">

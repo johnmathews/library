@@ -60,6 +60,24 @@ export function deriveSlot(key: string): PaletteSlot {
 }
 
 /**
+ * The palette slot a stored hex identifies, or null if it isn't one.
+ *
+ * The single definition of "is this stored hex this slot" — a stored colour
+ * is a slot only when it matches that slot's `light` step (case-insensitively;
+ * `light` is the stored identity per the header above). `SplitColourPicker.vue`
+ * used to make this same decision a second way (`normalized === slot.light`
+ * inline) and `resolveSplitColour` a third; two definitions that happen to
+ * agree today are one definition away from silently disagreeing — see the
+ * repository's standing rule on removing the second copy rather than testing
+ * that copies agree. Both callers now go through this function.
+ */
+export function slotForStored(stored: string | null): PaletteSlot | null {
+  if (!stored) return null
+  const lower = stored.toLowerCase()
+  return SPLIT_PALETTE.find((candidate) => candidate.light === lower) ?? null
+}
+
+/**
  * The colour to paint a split value, for the current theme.
  *
  * Three cases, in order: no stored colour derives a slot from the key; a stored
@@ -73,8 +91,7 @@ export function resolveSplitColour(stored: string | null, key: string, dark: boo
     const slot = deriveSlot(key)
     return dark ? slot.dark : slot.light
   }
-  const lower = stored.toLowerCase()
-  const slot = SPLIT_PALETTE.find((candidate) => candidate.light === lower)
+  const slot = slotForStored(stored)
   if (!slot) return stored
   return dark ? slot.dark : slot.light
 }

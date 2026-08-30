@@ -5,8 +5,10 @@
  *
  * Tabs (in display order):
  *   - Facets: facet label values, counts and split colours.
- *   - Senders: sender facet assignment.
- *   - Suggestions: proposed facet-label merges/renames.
+ *   - Senders: a sender's chart split colour, and nothing else — renaming,
+ *     merging or deleting a sender is an admin taxonomy operation elsewhere.
+ *   - Suggestions: the labeller's pending queue — values it wanted but the
+ *     vocabulary did not contain — accept (create the value) or dismiss.
  * Tab selection is local state (no sub-routes).
  */
 import { ref } from 'vue'

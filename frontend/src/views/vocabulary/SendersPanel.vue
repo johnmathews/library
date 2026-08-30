@@ -129,9 +129,16 @@ async function onColourChange(id: number, colour: string | null): Promise<void> 
         {{ loadError }}
       </div>
       <p
-        v-else-if="filteredSenders.length === 0"
+        v-else-if="senders.length === 0"
         class="text-sm text-gray-500 dark:text-gray-400"
         data-testid="senders-empty"
+      >
+        No senders yet. Senders appear here once a document names one.
+      </p>
+      <p
+        v-else-if="filteredSenders.length === 0"
+        class="text-sm text-gray-500 dark:text-gray-400"
+        data-testid="senders-filter-empty"
       >
         No senders match that filter.
       </p>

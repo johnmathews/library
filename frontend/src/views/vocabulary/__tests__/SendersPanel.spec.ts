@@ -35,6 +35,26 @@ describe('SendersPanel', () => {
     expect(names[0]!).toContain('Zebra Fixture Co')
   })
 
+  it('says there are no senders at all on a fresh archive, not that a filter matched nothing', async () => {
+    // The filter is empty in this scenario — naming it would be false. Zero
+    // senders and zero matching senders are different facts and need
+    // different copy.
+    vi.mocked(api.listSenders).mockResolvedValue([])
+    const wrapper = await open()
+    expect(wrapper.find('[data-testid="senders-empty"]').text()).toContain('No senders yet')
+    expect(wrapper.find('[data-testid="senders-filter-empty"]').exists()).toBe(false)
+  })
+
+  it('says no senders match the filter when senders exist but none match', async () => {
+    const wrapper = await open()
+    await wrapper.find('[data-testid="sender-filter"]').setValue('no such sender anywhere')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="senders-filter-empty"]').text()).toContain(
+      'No senders match that filter.',
+    )
+    expect(wrapper.find('[data-testid="senders-empty"]').exists()).toBe(false)
+  })
+
   it('filters by name', async () => {
     const wrapper = await open()
     await wrapper.find('[data-testid="sender-filter"]').setValue('aardvark')

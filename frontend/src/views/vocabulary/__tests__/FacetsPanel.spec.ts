@@ -1,8 +1,9 @@
 import { flushPromises, mount, RouterLinkStub } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { useDark } from '@vueuse/core'
 import FacetsPanel from '../FacetsPanel.vue'
 import { ApiError } from '@/api/client'
-import { SPLIT_PALETTE } from '@/utils/splitPalette'
+import { SPLIT_PALETTE, deriveSlot } from '@/utils/splitPalette'
 
 vi.mock('@/api/facets', () => ({
   fetchFacets: vi.fn(),
@@ -16,6 +17,17 @@ vi.mock('@/api/facets', () => ({
   deleteValue: vi.fn(),
 }))
 import * as api from '@/api/facets'
+
+/** jsdom renders an inline `background-color` hex as `rgb(r, g, b)` when the
+ * style attribute is read back, so a swatch colour assertion has to compare
+ * in that form. */
+function hexToRgb(hex: string): string {
+  const value = hex.replace('#', '')
+  const r = Number.parseInt(value.slice(0, 2), 16)
+  const g = Number.parseInt(value.slice(2, 4), 16)
+  const b = Number.parseInt(value.slice(4, 6), 16)
+  return `rgb(${r}, ${g}, ${b})`
+}
 
 const VOCAB = [
   {
@@ -174,6 +186,61 @@ describe('FacetsPanel', () => {
     wrapper.findComponent({ name: 'SplitColourPicker' }).vm.$emit('update:modelValue', null)
     await flushPromises()
     expect(api.setValueColour).toHaveBeenCalledWith('category', 'alpha', null)
+  })
+
+  it('shows an empty state when the vocabulary has no facets at all', async () => {
+    vi.mocked(api.fetchFacets).mockResolvedValue([])
+    vi.mocked(api.fetchFacetCounts).mockResolvedValue([])
+    vi.mocked(api.fetchLabelCounts).mockResolvedValue([])
+    const wrapper = await open()
+    expect(wrapper.find('[data-testid="facets-empty"]').text()).toContain('No facets yet')
+  })
+
+  it('repaints a derived swatch reactively when dark mode toggles elsewhere on the page', async () => {
+    // FacetsPanel must react to the SAME shared dark-mode state
+    // `ThemeToggle.vue` owns (`useDark({ selector: 'html' })`), not read it
+    // once at setup. A second `useDark()` call here is a different composable
+    // instance backed by the same storage key — exactly what happens when
+    // ThemeToggle's own checkbox is toggled elsewhere on the page. A plain
+    // `document.documentElement.classList.contains('dark')` read once at
+    // mount can never observe that: `useDark` WRITES the class, it never
+    // reads it back, so a raw classList mutation would not exercise the
+    // real mechanism this test pins (verified against @vueuse/core's source:
+    // its state is driven from localStorage/system preference, with no
+    // MutationObserver on the element).
+    localStorage.clear()
+    document.documentElement.classList.remove('dark')
+    if (!window.matchMedia) {
+      window.matchMedia = (() => ({
+        matches: false,
+        media: '',
+        addEventListener() {},
+        removeEventListener() {},
+        addListener() {},
+        removeListener() {},
+        dispatchEvent() {
+          return false
+        },
+      })) as unknown as typeof window.matchMedia
+    }
+
+    const wrapper = await open()
+    const swatch = () => wrapper.find('[aria-label="Colour for Alpha"]')
+    const slot = deriveSlot('alpha')
+    // jsdom normalises a `background-color` written as a hex string to
+    // `rgb(r, g, b)` when the style attribute is read back, so the DOM
+    // outcome is asserted in that form rather than against the hex literal.
+    expect(swatch().attributes('style')).toContain(hexToRgb(slot.light))
+
+    const isDark = useDark({ selector: 'html' })
+    isDark.value = true
+    await flushPromises()
+
+    expect(document.documentElement.classList.contains('dark')).toBe(true)
+    expect(swatch().attributes('style')).toContain(hexToRgb(slot.dark))
+
+    isDark.value = false
+    await flushPromises()
   })
 
   it('marks two values in one facet that resolve to the same colour', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { SPLIT_PALETTE, deriveSlot, resolveSplitColour } from '../splitPalette'
+import { SPLIT_PALETTE, deriveSlot, resolveSplitColour, slotForStored } from '../splitPalette'
 
 describe('splitPalette', () => {
   it('offers six slots, each with a light and a dark step', () => {
@@ -51,5 +51,29 @@ describe('splitPalette', () => {
   it('matches a stored palette colour case-insensitively', () => {
     const slot = SPLIT_PALETTE[0]!
     expect(resolveSplitColour(slot.light.toUpperCase(), 'anything', true)).toBe(slot.dark)
+  })
+
+  describe('slotForStored', () => {
+    // The single definition of "is this stored hex this slot" — SplitColourPicker
+    // and resolveSplitColour both go through this, rather than each deciding it
+    // their own way (the two-definitions bug this function was extracted to close).
+
+    it('identifies the slot a stored light hex belongs to', () => {
+      const slot = SPLIT_PALETTE[3]!
+      expect(slotForStored(slot.light)).toBe(slot)
+    })
+
+    it('matches case-insensitively', () => {
+      const slot = SPLIT_PALETTE[0]!
+      expect(slotForStored(slot.light.toUpperCase())).toBe(slot)
+    })
+
+    it('returns null for a colour outside the palette', () => {
+      expect(slotForStored('#123456')).toBeNull()
+    })
+
+    it('returns null for a null or absent stored colour', () => {
+      expect(slotForStored(null)).toBeNull()
+    })
   })
 })
