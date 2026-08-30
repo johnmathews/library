@@ -88,8 +88,11 @@ describe('SeriesChartView', () => {
     expect(wrapper.find('[data-testid="chart-controls"]').exists()).toBe(true)
     // No longer boxed into a narrow column.
     expect(wrapper.html()).not.toContain('max-w-2xl')
-    // Always offers a way back to the full grid.
-    expect(wrapper.find('[data-testid="series-chart-back"]').exists()).toBe(true)
+    // Always offers a way back to the series grid — /charts/legacy, not
+    // /charts (the spending board, which lists no series at all).
+    const backLink = wrapper.find('[data-testid="series-chart-back"]')
+    expect(backLink.exists()).toBe(true)
+    expect(backLink.attributes('href')).toBe('/charts/legacy')
   })
 
   it('exports the chart as PDF / JPEG and copies the share link', async () => {

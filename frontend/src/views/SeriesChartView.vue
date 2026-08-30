@@ -93,12 +93,14 @@ watch(() => route.params.seriesId, load)
 
 <template>
   <div id="series-chart-view">
+    <!-- `/charts` is the spending board now; the series grid this view
+         belongs to lives at `/charts/legacy` (see onDeleted above). -->
     <RouterLink
-      to="/charts"
+      to="/charts/legacy"
       data-testid="series-chart-back"
       class="inline-block mb-4 text-sm text-violet-600 hover:text-violet-700 dark:text-violet-400 dark:hover:text-violet-300 hover:underline"
     >
-      &larr; All charts
+      &larr; Series grid
     </RouterLink>
 
     <p
