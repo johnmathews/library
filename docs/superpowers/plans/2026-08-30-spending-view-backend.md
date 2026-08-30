@@ -1563,18 +1563,52 @@ uv run pytest tests/test_chart_footer.py tests/test_api_spending.py -q -k "split
 
 Expected: FAIL — `ImportError: cannot import name 'chart_footer_documents'`.
 
-- [ ] **Step 3: Extract the shared row fetch**
+- [ ] **Step 3: Extract the shared work — the loop, not just the SQL**
 
-Read `chart_footer` in `src/library/charts/footer.py`. It builds the statement,
-binds the parameters and iterates the rows. Move everything up to and including
-the `session.execute(...)` into one private function, and have `chart_footer`
-call it. **Do not copy the statement.** The whole reason this route is cheap is
-that the classification stays in one place; a second `text(_CLASSIFY_SQL...)`
-call site is a second thing that can drift, and it would fail *open* — the count
-and the list would disagree only on the branch neither test exercised.
+**Read `chart_footer` in full before writing anything.** The plan originally
+said to extract "the statement, the binds and the execute". That is not
+enough, and the reason is the invariant this whole route exists to hold.
+
+`chart_footer` does three things to every row before a bucket ever sees it:
 
 ```python
-async def _classified_rows(
+converted = await convert_amount(session, row.amount, row.currency, currency, row.date)
+if converted is None:
+    missing.setdefault(row.currency, _Group()).add(sign * row.amount, row.document_id)
+    continue                          # <- the row NEVER reaches its bucket
+kind = AmountKind(row.amount_kind) if row.amount_kind is not None else None
+sign = 1 if kind is None else AMOUNT_SIGN.get(kind, 1)
+signed = sign * converted
+```
+
+So a bucket's reported `documents` count **excludes every unconvertible row** —
+those went to `unconvertible` instead — and its `amount` is a sum of
+**converted, signed** values, not of raw ones. A drill list that fetched rows
+and filtered by bucket alone would be longer than the count above it on any
+archive containing one unconvertible document, and its amounts would be in the
+wrong currency and possibly the wrong sign.
+
+Extract the **whole per-row treatment**, not the query. One function classifies,
+converts and signs; `chart_footer` aggregates what it yields and
+`chart_footer_documents` filters it:
+
+```python
+@dataclass(frozen=True, slots=True)
+class _AccountedRow:
+    """One classified row, converted to the chart's currency and signed.
+
+    `amount` is `sign * converted`, so a refund lowers what it is part of and a
+    kind that never enters a total contributes its magnitude — the same
+    treatment the total gives it.
+    """
+
+    document_id: int
+    bucket: str
+    amount_kind: str | None
+    amount: Decimal
+
+
+async def _accounted_rows(
     session: AsyncSession,
     rule: Rule,
     *,
@@ -1582,19 +1616,36 @@ async def _classified_rows(
     since: date | None,
     until: date | None,
     facets_in_rule: set[str],
-) -> Sequence[Any]:
-    """Every row the rule touched, each in exactly one bucket.
+) -> tuple[list[_AccountedRow], dict[str | None, _Group]]:
+    """Every row the rule touched, classified, converted and signed, plus the
+    ones no rate could convert.
 
-    The one execution of `_CLASSIFY_SQL`. `chart_footer` aggregates what this
-    returns; `chart_footer_documents` filters it. Two callers, one `CASE` — so
-    a bucket the aggregate reports and a bucket the list can open are the same
-    bucket by construction rather than by a test comparing two copies.
+    The one execution of `_CLASSIFY_SQL` **and** the one place a row is
+    converted and signed. `chart_footer` aggregates the first return value and
+    `chart_footer_documents` filters it, so the count a footer reports and the
+    list a panel opens cannot disagree — not because a test compares them, but
+    because there is only one of them.
+
+    A row whose amount no rate can convert is in the second return value and in
+    neither bucket, exactly as the footer reports it: `unconvertible` is not a
+    bucket of the `CASE` but a separate account (docs/charts.md §5).
     """
 ```
 
-Its body is the code you just moved. Preserve the existing bind construction
-exactly — `summable`, `refund`, `facets`, `since`, `until` and the rule's own
-binds.
+Its body is `chart_footer`'s existing loop, up to but not including the bucket
+dispatch. `chart_footer` then becomes that dispatch over the returned list —
+its behaviour must not change, and Step 6 re-runs the whole existing footer
+suite as the proof.
+
+Do **not** write a second `text(_CLASSIFY_SQL...)` call site, and do not write a
+second conversion. Two copies of "convert, sign, skip if unconvertible" is
+precisely the shape this repository has recorded losing to five times: a
+comparison test between two copies fails **open**, passing whenever neither
+copy exercises the branch on which they differ.
+
+Note the bucket names are module constants (`UNCLASSIFIED`, `UNDATED`,
+`UNCATEGORISED`, `UNACCOUNTED` at `footer.py:82-88`), while `"excluded"` and
+`"netted_refund"` appear as literals in the `CASE`. Use the constants.
 
 - [ ] **Step 4: Add `chart_footer_documents`**
 
@@ -1602,11 +1653,12 @@ binds.
 class FooterDocument(BaseModel):
     """One document behind a footer bucket.
 
-    `amount` is the **sum of this document's rows in this bucket**, not one
-    row's: a document split across spend lines emits one row per line, and a
-    `100.00` document split `60.00`/`40.00` with neither line labelled emits
-    two — proved against Postgres before this was written. Rendering a single
-    row's amount would print a number the footer never reports.
+    `amount` is the **sum of this document's rows in this bucket**, converted
+    and signed — not one row's raw value. A document split across spend lines
+    emits one row per line, and a `100.00` document split `60.00`/`40.00` with
+    neither line labelled emits two, proved against Postgres before this was
+    written. Rendering a single row's amount would print a number the footer
+    never reports.
     """
 
     document_id: int
@@ -1630,50 +1682,25 @@ async def chart_footer_documents(
     """The documents behind one footer bucket, deduplicated by document.
 
     `len(...)` equals the bucket's reported `documents` and the amounts sum to
-    its reported `amount`, because both come from the same rows `chart_footer`
-    aggregated. `amount_kind` selects one group out of `excluded`, which is a
-    list of groups rather than a single figure; it is ignored for every other
-    bucket, which has exactly one group.
+    its reported `amount`, because both come from the same `_accounted_rows`
+    the footer aggregated — unconvertible rows included in neither.
+
+    `amount_kind` selects one group out of `excluded`, which is a list of
+    groups rather than a single figure; it is ignored for every other bucket,
+    which has exactly one group.
 
     Ordering is by descending absolute amount then document id — the largest
     contributor first, and stable across calls.
     """
-    rows = await _classified_rows(
-        session,
-        rule,
-        currency=currency,
-        since=since,
-        until=until,
-        facets_in_rule=facets_in_rule,
-    )
-    merged: dict[int, FooterDocument] = {}
-    for row in rows:
-        if row.bucket != bucket:
-            continue
-        if bucket == "excluded" and amount_kind is not None and row.amount_kind != amount_kind:
-            continue
-        existing = merged.get(row.document_id)
-        if existing is None:
-            merged[row.document_id] = FooterDocument(
-                document_id=row.document_id,
-                amount=row.amount,
-                currency=row.currency,
-                date=row.date,
-                amount_kind=row.amount_kind,
-            )
-        else:
-            merged[row.document_id] = existing.model_copy(
-                update={"amount": existing.amount + row.amount}
-            )
-    return sorted(merged.values(), key=lambda d: (-abs(d.amount), d.document_id))
 ```
 
-**Signs.** `chart_footer` accounts summable amounts *signed* through
-`AMOUNT_SIGN` and reports magnitudes for kinds that never enter a total. Read
-how it does that and apply the identical treatment here, or the sums in
-`test_the_list_length_equals_the_footer_s_count` will not match for a bucket
-containing a refund. Do not re-derive the rule — call whatever `footer.py`
-already uses.
+`currency` and `date` on the returned rows are the **document's own**, carried
+through for display; `amount` is in the chart's currency. Say so in the field
+docstrings, because a row showing `amount` in EUR beside `currency: "GBP"` is
+otherwise read as a bug.
+
+Merge rows by `document_id`, summing `amount`. Sort by
+`(-abs(amount), document_id)`.
 
 - [ ] **Step 5: Add the route**
 
