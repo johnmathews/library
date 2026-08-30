@@ -163,9 +163,9 @@ const recipientList = [
 ]
 
 const senderList = [
-  { id: 20, name: 'Acme', document_count: 0 },
-  { id: 21, name: 'Globex', document_count: 4 },
-  { id: 22, name: 'Initech', document_count: 2 },
+  { id: 20, name: 'Acme', document_count: 0, colour: null },
+  { id: 21, name: 'Globex', document_count: 4, colour: null },
+  { id: 22, name: 'Initech', document_count: 2, colour: null },
 ]
 
 const kindList = [

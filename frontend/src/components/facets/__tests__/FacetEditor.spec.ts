@@ -14,7 +14,7 @@ const FACETS: FacetRef[] = [
     key: 'category',
     label: 'Category',
     ordinal: 0,
-    values: [{ key: 'software', label: 'Software', parent_id: null, aliases: [] }],
+    values: [{ key: 'software', label: 'Software', parent_id: null, aliases: [], colour: null }],
   },
   { key: 'vehicle', label: 'Vehicle', ordinal: 1, values: [] },
 ]
@@ -28,8 +28,8 @@ const TWO_VALUE_FACETS: FacetRef[] = [
     label: 'Category',
     ordinal: 0,
     values: [
-      { key: 'software', label: 'Software', parent_id: null, aliases: [] },
-      { key: 'hardware', label: 'Hardware', parent_id: null, aliases: [] },
+      { key: 'software', label: 'Software', parent_id: null, aliases: [], colour: null },
+      { key: 'hardware', label: 'Hardware', parent_id: null, aliases: [], colour: null },
     ],
   },
   {
@@ -37,8 +37,8 @@ const TWO_VALUE_FACETS: FacetRef[] = [
     label: 'Priority',
     ordinal: 1,
     values: [
-      { key: 'high', label: 'High', parent_id: null, aliases: [] },
-      { key: 'low', label: 'Low', parent_id: null, aliases: [] },
+      { key: 'high', label: 'High', parent_id: null, aliases: [], colour: null },
+      { key: 'low', label: 'Low', parent_id: null, aliases: [], colour: null },
     ],
   },
 ]
