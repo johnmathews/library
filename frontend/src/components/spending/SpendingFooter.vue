@@ -73,6 +73,15 @@ function bareAmount(amount: string): string {
   return formatMoney(amount, '').trim()
 }
 
+// NOTE for the unconvertible block's amount span (in the template below):
+// it deliberately does NOT call `money()`. `Unconvertible.amount` is, by the
+// backend's own docstring (`src/library/charts/query.py`), denominated in
+// the GROUP's own `currency` — the whole reason the row exists is that it
+// could not be converted INTO the chart's display currency, so rendering it
+// with `props.data.currency` would print a number the accounting never
+// produced. Each row formats with its own `group.currency` (or, when that is
+// itself null, the bare digits via `bareAmount`) — never `money()`.
+
 const refundLabel = computed(() => {
   const n = props.data.footer.refund_count
   return `${n} refund${n === 1 ? '' : 's'} netted off`
@@ -240,7 +249,7 @@ function onAttentionClick(bucket: FooterBucket): void {
             class="shrink-0 tabular-nums text-gray-800 dark:text-gray-100"
             data-testid="spending-footer-unconvertible-amount"
           >
-            {{ group.currency === null ? bareAmount(group.amount) : money(group.amount) }}
+            {{ group.currency === null ? bareAmount(group.amount) : formatMoney(group.amount, group.currency) }}
           </span>
         </li>
       </ul>

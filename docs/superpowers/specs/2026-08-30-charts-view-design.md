@@ -560,6 +560,19 @@ Nothing else. Per §2.1, `SeriesChartView.vue`, `SeriesChartTile.vue`,
 all have a live consumer on the document detail page and are plan 5's to remove,
 with the backend they read.
 
+### 4.11 Testing 4b
+
+- E2E assertions hold on **all three viewport projects** — chromium 1280,
+  mobile-webkit 375, tablet-webkit 656 — and the toolbar and panel collapse
+  below the tablet breakpoint is asserted, not assumed.
+- Container-query guards are proved to go red before being trusted.
+- Fixtures are scoped so they do not pollute the shared serial backend's
+  document ordering: a fixture carrying a `document_date` reorders the dashboard
+  and breaks specs that click the first tile.
+- No `except -> pytest.skip` guards, and no `isVisible()` on a `v-show` element.
+- Every unit test gets a mutation check. Several suites in this repository have
+  passed with the feature under test entirely disabled.
+
 ### 4.12 The palette, computed and then shared
 
 §4.4 deferred the palette to implementation time under the `dataviz` skill.
@@ -654,19 +667,6 @@ Five stacked labelled controls are roughly 300px of chrome before any data at
 The sheet is a native `<dialog>`, as `SearchModal.vue` and `ConfirmDialog.vue`
 already are — focus containment, Escape and an inert background come with it
 rather than being hand-rolled a third time.
-
-### 4.11 Testing 4b
-
-- E2E assertions hold on **all three viewport projects** — chromium 1280,
-  mobile-webkit 375, tablet-webkit 656 — and the toolbar and panel collapse
-  below the tablet breakpoint is asserted, not assumed.
-- Container-query guards are proved to go red before being trusted.
-- Fixtures are scoped so they do not pollute the shared serial backend's
-  document ordering: a fixture carrying a `document_date` reorders the dashboard
-  and breaks specs that click the first tile.
-- No `except -> pytest.skip` guards, and no `isVisible()` on a `v-show` element.
-- Every unit test gets a mutation check. Several suites in this repository have
-  passed with the feature under test entirely disabled.
 
 ## 5. Plan 4c: the vocabulary panel
 

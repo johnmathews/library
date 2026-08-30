@@ -17,10 +17,16 @@
  * resolves the chart's default split) — only `from`/`to`/`currency` are
  * read from `args`, so the wider `ChartArgs` this component receives is
  * narrowed rather than spread whole.
+ *
+ * A failed load surfaces `ApiError.detail` when there is one, exactly like
+ * its sibling `DrillCellBody` — a generic "could not load" message would
+ * swallow the server's own explanation of what went wrong, which for a real
+ * 4xx/5xx here is the only account of the failure this panel shows.
  */
 import { computed, onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { fetchFooterBucket, MAX_LIMIT, type ChartArgs, type FooterBucket, type FooterDocument } from '@/api/spending'
+import { ApiError } from '@/api/client'
 import { formatMoney } from '@/spending/money'
 import { formatDate } from '@/utils/documentFormat'
 
@@ -63,8 +69,13 @@ async function load(): Promise<void> {
     })
     documents.value = page.documents
     total.value = page.total
-  } catch {
-    loadError.value = 'Could not load these documents.'
+  } catch (err) {
+    // Surface the server's own `detail` exactly as the sibling `DrillCellBody`
+    // does, rather than swallowing it behind a generic message — its 422s
+    // name the actual boundary problem, and an empty panel under a
+    // non-empty bucket count would read as "nothing here" when something
+    // went wrong instead.
+    loadError.value = err instanceof ApiError ? err.detail : 'Could not load these documents.'
   } finally {
     loading.value = false
   }
@@ -85,8 +96,8 @@ async function loadMore(): Promise<void> {
     })
     documents.value = [...documents.value, ...page.documents]
     total.value = page.total
-  } catch {
-    moreError.value = 'Could not load more of these documents.'
+  } catch (err) {
+    moreError.value = err instanceof ApiError ? err.detail : 'Could not load more of these documents.'
   } finally {
     loadingMore.value = false
   }

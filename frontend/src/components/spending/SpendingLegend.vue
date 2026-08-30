@@ -76,6 +76,13 @@ const anyHidden = computed(() => props.hidden.size > 0)
     class="flex flex-col gap-1"
     data-testid="spending-legend"
   >
+    <!--
+      `aria-pressed` on this row means "this band is currently VISIBLE" —
+      deliberately NOT the conventional toggle-button reading of "this is the
+      pressed/active choice". A legend row reports display-filter state, not
+      a mode switch, so `!isHidden(band)` is the correct value even though it
+      repurposes what the attribute usually means.
+    -->
     <button
       v-for="band in bands"
       :key="typeof band.value === 'symbol' ? 'other' : (band.value ?? 'null')"

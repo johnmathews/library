@@ -79,7 +79,10 @@ describe('spending API', () => {
     expect(String(fetchMock.mock.calls[0]![0])).not.toContain('split=')
   })
 
-  // from/to are the aliases; since/until are the field names.
+  // from/to are the aliases; since/until are the field names. Both wire
+  // names are asserted absent — a builder that dropped `to` silently (e.g.
+  // spelling the query key `until` instead of `to`) would still pass a test
+  // that only checked for `since=`.
   it('sends the window as from/to, not since/until', async () => {
     respondWith(DATA)
     await fetchChartData(1, { from: '2026-01-01', to: '2026-08-31' })
@@ -87,6 +90,7 @@ describe('spending API', () => {
     expect(url).toContain('from=2026-01-01')
     expect(url).toContain('to=2026-08-31')
     expect(url).not.toContain('since=')
+    expect(url).not.toContain('until=')
   })
 
   it('echoes /data resolved arguments into /cell verbatim', async () => {

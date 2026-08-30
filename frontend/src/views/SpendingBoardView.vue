@@ -29,7 +29,6 @@
  * configured option (`EUR`) until the owner changes it.
  */
 import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
-import { useRouter } from 'vue-router'
 import { useStorage } from '@vueuse/core'
 import Sortable from 'sortablejs'
 import {
@@ -49,7 +48,6 @@ import QuestionDraft from '@/components/spending/QuestionDraft.vue'
 import SpendingEmptyState from '@/components/spending/SpendingEmptyState.vue'
 import SpendingCard from '@/components/spending/SpendingCard.vue'
 
-const router = useRouter()
 const { options: currencyOptions } = useCurrencyOptions()
 // Persisted per-machine, like `useCurrencyOptions` itself — a display
 // preference about THIS screen, not an API-remembered value. Defaults to the
@@ -149,6 +147,10 @@ async function reorder(fromIndex: number, toIndex: number): Promise<void> {
   // (the drag path) — never from outside input.
   const moved = charts.value[fromIndex]!
 
+  // Kept so a failed PATCH can restore exactly what the board showed before
+  // this drag/click — never left showing an order the server rejected.
+  const previous = charts.value
+
   const next = [...charts.value]
   next.splice(fromIndex, 1)
   next.splice(toIndex, 0, moved)
@@ -164,6 +166,16 @@ async function reorder(fromIndex: number, toIndex: number): Promise<void> {
   try {
     await Promise.all(changed.map(({ chart, ordinal }) => updateChart(chart.id, { ordinal })))
   } catch (err) {
+    // `Promise.all` fires every changed PATCH in parallel and rejects as
+    // soon as ONE does — the others already in flight can still land, so the
+    // server may now hold a partially-applied reorder even though this
+    // branch is reached. Nothing client-side can undo that partial write (no
+    // compensating transaction to run), but the LOCAL order is rolled back
+    // so the screen at least stops claiming an order the server did not
+    // fully accept; a full reload reconciles from whatever the server
+    // actually ended up with either way (`sortCharts` falls back to name
+    // order for any chart the reorder left with a duplicate ordinal).
+    charts.value = previous
     reorderError.value = errorText(err)
   }
 }
@@ -199,10 +211,15 @@ onBeforeUnmount(() => {
   sortable = null
 })
 
-// --- Edit / delete -----------------------------------------------------------
+// --- Rename / delete -----------------------------------------------------------
 
-function onEdit(chart: Chart): void {
-  void router.push(`/charts/${chart.id}`)
+// `SpendingCard` owns the PATCH itself (a chart's name is card-local, not
+// something the board polls) and hands back the server's response once it
+// succeeds — this just keeps the board's own `charts` array in sync so the
+// new name survives a re-render and, if it changed the sort tie-break,
+// re-sorts.
+function onRenamed(updated: Chart): void {
+  charts.value = sortCharts(charts.value.map((c) => (c.id === updated.id ? updated : c)))
 }
 
 async function onDelete(chart: Chart): Promise<void> {
@@ -266,7 +283,7 @@ async function onDelete(chart: Chart): Promise<void> {
             :busy="cardState.get(chart.id)?.busy ?? false"
             :can-move-up="index > 0"
             :can-move-down="index < charts.length - 1"
-            @edit="onEdit(chart)"
+            @renamed="onRenamed"
             @delete="onDelete(chart)"
             @move-up="moveUp(index)"
             @move-down="moveDown(index)"

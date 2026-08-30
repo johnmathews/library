@@ -259,3 +259,30 @@ the route swap was 1364/1364 across 109 files, coverage above the gate on
 every changed file. `npm run type-check` and `npm run lint` clean throughout.
 `uv run python scripts/build_journal_index.py` and `make check-docs` both run
 clean for this entry.
+
+## 8. Erratum: commit `9e2040c`'s mutation-count claim is wrong
+
+Commit `9e2040c50c4b9dbd215111a67a8f5d8d9127f3bb` ("test(spending): cover the
+remaining needs-attention buckets and exclude round-trip") says in its own
+message that Task 7's first mutation check "claimed 5 tests red when the true
+count is 4" and that "the true failing count under that mutation is 4 tests,
+not 5". That claim is factually wrong.
+
+The count was re-settled by actually re-running the mutation, not by
+adjudicating between the two prior claims: applying the mutation and running
+the suite produces **5** failures, with membership matching what the
+commit's own round-2 report already recorded (`DATA_ENDS_BEFORE_TODAY`
+correctly stays green under it, defending a different property). The
+*original* report had the right count (5) and the wrong membership; the
+commit's "correction" moved the count in the wrong direction while fixing
+membership. Full detail lives in this branch's `.superpowers/` working
+notes (task-7 brief/report/review), which are gitignored and so not part of
+this repository's tracked history — this section is the erratum's only
+durable record.
+
+History has **deliberately not been rewritten** to fix the commit message —
+amending or rebasing a already-shared commit trades a known, findable
+correction for a silent one, and the mutation-count evidence itself (the
+tests, not the prose describing them) was never wrong. Anyone reading
+`9e2040c`'s message in `git log` should treat "the true count is 4, not 5"
+as itself incorrect: the count is 5.

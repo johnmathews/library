@@ -94,6 +94,9 @@ function refundFigure(wrapper: VueWrapper) {
 function unconvertibleFigure(wrapper: VueWrapper) {
   return wrapper.get('[data-testid="spending-footer-unconvertible-documents"]')
 }
+function unconvertibleAmount(wrapper: VueWrapper) {
+  return wrapper.get('[data-testid="spending-footer-unconvertible-amount"]')
+}
 function bucketButton(wrapper: VueWrapper, token: string) {
   return wrapper.get(`[data-testid="spending-footer-bucket-${token}"]`)
 }
@@ -218,11 +221,36 @@ describe('SpendingFooter', () => {
     expect(row.text()).toContain('JPY')
   })
 
+  // Spec review finding 1 (Critical): an unconvertible amount is denominated
+  // in the GROUP's OWN currency (the backend's own docstring), never the
+  // chart's display currency — that is the entire reason the row exists. The
+  // chart here displays in GBP; the unconvertible group is JPY. The label
+  // span alone (`toContain('JPY')`, above) is satisfied whether or not the
+  // AMOUNT is correct, since the label always names the currency — this
+  // assertion is tied to the amount span itself, and pins the exact grouped
+  // digits so reverting to `formatMoney(group.amount, props.data.currency)`
+  // (rendering "GBP 3,000.00") turns it red.
+  it('formats an unconvertible amount in the GROUP\'s own currency, never the chart\'s display currency', () => {
+    const wrapper = mountFooter(FULL)
+    const amount = unconvertibleAmount(wrapper)
+    expect(amount.text()).toBe('JPY 3,000.00')
+    expect(amount.text()).not.toContain('GBP')
+  })
+
   it('sorts multiple real currencies alphabetically before the null entry', () => {
     const rows = unconvertibleRows(mountFooter(WITH_NULL_CURRENCY))
     expect(rows[0]!.text()).toContain('AUD')
     expect(rows[1]!.text()).toContain('CHF')
     expect(rows[2]!.text()).toContain('No currency')
+  })
+
+  it('formats every unconvertible row in ITS OWN currency, even with several different ones on screen', () => {
+    // Chart currency is GBP (`chartData` default); none of these three
+    // groups is in GBP, so a bug that fell back to the chart's currency
+    // would render GBP on every row instead of each row's own code.
+    const rows = unconvertibleRows(mountFooter(WITH_NULL_CURRENCY))
+    const amounts = rows.map((row) => row.get('[data-testid="spending-footer-unconvertible-amount"]').text())
+    expect(amounts).toEqual(['AUD 20.00', 'CHF 30.00', '10.00'])
   })
 
   // The refund count already pluralises correctly; the "documents" figure

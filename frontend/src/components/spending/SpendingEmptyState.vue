@@ -19,17 +19,32 @@
  * signal: some means the vocabulary is populated enough to split by
  * `category` (today's behaviour); none means propose the total unsplit
  * instead — a perfectly good first chart, and one a fresh archive can
- * always draw. Never probe for the `category` facet by name: that would
- * stay broken for an archive whose vocabulary exists but happens to have no
- * `category` values yet, which "any counts at all" does not.
+ * always draw. This guard is sound for a reason narrower than "any counts at
+ * all implies a usable vocabulary" in general: `library/facets/seed.py`
+ * seeds `category`, `scope` and `cost_type` (plus the value-less `vehicle` /
+ * `property` / `person`) as ONE `SEED_VOCABULARY` tuple through one
+ * `seed_vocabulary()` call — an all-or-nothing seed — and no route deletes a
+ * facet, only values within one. So on THIS archive's seeding story, any
+ * counts at all means `category` was seeded alongside them and still exists.
+ * A hand-built vocabulary assembled value-by-value through `POST
+ * /api/facets` without ever adding `category` would break this guard (it is
+ * still sound in the sense of "never worse than checking `category` isn't
+ * there", just not for the reason the property looks general enough to
+ * suggest) — never probe for the `category` facet by name regardless, since
+ * that would stay broken for an archive whose vocabulary exists but happens
+ * to have no `category` VALUES yet, which "any counts at all" does not.
  *
  * Every other proposal comes from `GET /api/facets/counts`: the values with
- * the most documents, each shown with its count and date span. That route
- * counts over `spend_facts`, which deliberately excludes amountless,
- * soft-deleted and non-canonical documents (§3.4) — so a value with no money
- * behind it never reaches this component at all, and this component does
- * not second-guess that: whatever the route returns is what gets proposed,
- * nothing more.
+ * the most documents, each shown with its count and date span, ranked
+ * descending and capped at `MAX_PROPOSALS` (below) — the route itself
+ * carries no limit, and a fully labelled archive can return 30+ values,
+ * which would turn the first screen into a wall of equal-weight cards
+ * instead of a scannable shortlist (spec §4.9: "the values with the *most*
+ * documents"). That route counts over `spend_facts`, which deliberately
+ * excludes amountless, soft-deleted and non-canonical documents (§3.4) — so
+ * a value with no money behind it never reaches this component at all, and
+ * this component does not second-guess that: whatever the route returns is
+ * what gets proposed, nothing more (beyond the rank + cap here).
  *
  * Accepting a proposal costs the owner one click and saves; ignoring the
  * rest costs nothing and creates nothing — the difference from the old
@@ -53,6 +68,11 @@ interface Proposal {
   name: string
   defaultSplit: string | null
 }
+
+// Matches the shared palette's slot count (`SPLIT_PALETTE.length`, six) —
+// past that, colours would start repeating across proposal cards anyway,
+// and six is already enough to fill the first screen without scrolling.
+const MAX_PROPOSALS = 6
 
 const counts = ref<FacetCount[]>([])
 const loading = ref(true)
@@ -88,6 +108,7 @@ function dateSpan(first: string | null, last: string | null): string | null {
 const facetProposals = computed<Proposal[]>(() =>
   [...counts.value]
     .sort((a, b) => b.documents - a.documents || a.value_key.localeCompare(b.value_key))
+    .slice(0, MAX_PROPOSALS)
     .map((count) => {
       const span = dateSpan(count.first_date, count.last_date)
       return {

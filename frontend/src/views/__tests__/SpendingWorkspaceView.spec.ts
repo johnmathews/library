@@ -414,6 +414,28 @@ describe('SpendingWorkspaceView', () => {
     expect(wrapper.find('[data-testid="workspace-selection"]').exists()).toBe(false)
   })
 
+  // A stale `hidden` set must not survive a refetch: left alone, an old
+  // isolate/exclude filter can end up naming no CURRENT band at all (e.g.
+  // after the split axis changes), which used to render an unclearable bare
+  // "Hiding " line — no "Show all" button on screen to clear it, since that
+  // button only renders when `bands.length > 0`.
+  it('clears a stale isolate/exclude filter on refetch rather than leaving an unclearable "Hiding" line', async () => {
+    const wrapper = await mountedWorkspace()
+    const row = wrapper
+      .findAll('[data-testid="spending-legend-row"]')
+      .find((r) => r.text().includes(labelFor('hosting')))!
+    await row.trigger('click', { metaKey: true })
+    expect(selectionLine(wrapper).text()).toContain('Hiding')
+
+    // Any args change re-triggers `/data` — a grain change here, but the
+    // exact trigger doesn't matter: the fix resets `hiddenSplitValues`
+    // unconditionally in the args watcher, before the new data lands.
+    await wrapper.get('[data-testid="workspace-grain"]').setValue('year')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="workspace-selection"]').exists()).toBe(false)
+  })
+
   // §4.7: isolation must not touch the number the API reported.
   it('keeps the headline total when a legend entry is isolated', async () => {
     const wrapper = await mountedWorkspace()

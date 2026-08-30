@@ -35,5 +35,11 @@ export function formatMoney(amount: string, currency: string): string {
   const negative = cents < 0
   const abs = Math.abs(cents)
   const whole = String(Math.floor(abs / 100)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')
-  return `${negative ? '-' : ''}${currency} ${whole}.${String(abs % 100).padStart(2, '0')}`
+  // An empty `currency` (the null-currency amounts on the spending footer)
+  // contributes no prefix AND no separating space — `${currency} ` alone
+  // would leave a floating space that only the SIGN sits in front of once
+  // trimmed (`"- 45.00"`.trim() is still `"- 45.00"`, since trim only strips
+  // the string's own leading/trailing edges, not an internal gap).
+  const prefix = currency ? `${currency} ` : ''
+  return `${negative ? '-' : ''}${prefix}${whole}.${String(abs % 100).padStart(2, '0')}`
 }

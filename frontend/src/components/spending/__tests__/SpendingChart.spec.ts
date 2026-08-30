@@ -233,6 +233,18 @@ describe('SpendingChart', () => {
     }
   })
 
+  // The unsplit-total fallback must key on `bands.length === 0`, never
+  // `visibleBands.length === 0` — the latter is ALSO true once every band
+  // has been hidden via the legend, and would redraw the chart as a single
+  // series at the grand total (summing the hidden cells right back in)
+  // directly under a selection line claiming everything is hidden. An empty
+  // chart is the honest answer to "everything is hidden".
+  it('draws zero datasets when every band is hidden — never the unsplit grand total', () => {
+    const allHidden = new Set(BANDS.map((b) => b.value))
+    const datasets = chartDataOf(mountChart(DATA, allHidden)).datasets
+    expect(datasets).toEqual([])
+  })
+
   it('renders a single unsplit series with no legend datasets to name', () => {
     // `bands()` returns [] for an unsplit chart, so the chart draws one series
     // in the first palette slot and the legend renders nothing.
@@ -264,6 +276,22 @@ describe('SpendingChart', () => {
     ).plugins.tooltip.callbacks.label
     // Hosting (dataset 0), 2026-08-01 (index 2): total 12.00 USD.
     expect(label({ datasetIndex: 0, dataIndex: 2 })).toBe('Hosting: USD 12.00')
+  })
+
+  // The tooltip TITLE (the period, drawn above the label lines) is never
+  // overridden — `plugins.tooltip.callbacks` carries no `title` key at all,
+  // so Chart.js's own default applies: it renders the x-axis category label
+  // for the hovered bar, i.e. `chartData.labels[dataIndex]`. That default is
+  // only correct because `labels` is `periods` (asserted above) — this test
+  // pins both halves of that reliance: no override exists, and the data the
+  // default would read from is the period string, not something else.
+  it('relies on Chart.js\'s own default tooltip title — never overrides it', () => {
+    const wrapper = mountChart()
+    const options = optionsOf(wrapper) as unknown as {
+      plugins: { tooltip: { callbacks: Record<string, unknown> } }
+    }
+    expect(options.plugins.tooltip.callbacks.title).toBeUndefined()
+    expect(chartDataOf(wrapper).labels).toEqual(['2026-06-01', '2026-07-01', '2026-08-01'])
   })
 
   it('drops y-axis ticks and shortens x labels when compact, without touching the data', () => {

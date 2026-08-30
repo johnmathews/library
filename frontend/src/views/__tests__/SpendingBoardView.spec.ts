@@ -240,23 +240,41 @@ describe('SpendingBoardView', () => {
     expect(vi.mocked(listCharts).mock.calls[0]![0]).toBeLessThanOrEqual(100)
   })
 
-  it('navigates to the workspace when a card is edited', async () => {
+  it('navigates to the workspace via the card name — the only route there from the board', async () => {
     vi.mocked(fetchChartData).mockImplementation((id) => Promise.resolve(emptyData(id)))
     const wrapper = await mountedBoard(THREE_CHARTS)
     const card = cardAt(wrapper, 0)
-    await card.get('[data-testid="spending-card-menu"]').trigger('click')
-    await card.get('[data-testid="spending-card-edit"]').trigger('click')
+    await card.get('[data-testid="spending-card-name"]').trigger('click')
     await flushPromises()
     expect(router.currentRoute.value.fullPath).toBe('/charts/1')
   })
 
-  it('deletes a card and removes it from the board', async () => {
+  it('renames a card and keeps the board in sync', async () => {
+    vi.mocked(fetchChartData).mockImplementation((id) => Promise.resolve(emptyData(id)))
+    const renamed: Chart = { ...THREE_CHARTS[0]!, name: 'Renamed chart' }
+    vi.mocked(updateChart).mockResolvedValueOnce(renamed)
+    const wrapper = await mountedBoard(THREE_CHARTS)
+    const card = cardAt(wrapper, 0)
+    await card.get('[data-testid="spending-card-menu"]').trigger('click')
+    await card.get('[data-testid="spending-card-rename"]').trigger('click')
+    await card.get('[data-testid="spending-card-rename-input"]').setValue('Renamed chart')
+    await card.get('[data-testid="spending-card-rename-save"]').trigger('click')
+    await flushPromises()
+
+    expect(updateChart).toHaveBeenCalledWith(1, { name: 'Renamed chart' })
+    expect(cardAt(wrapper, 0).get('[data-testid="spending-card-name"]').text()).toBe('Renamed chart')
+  })
+
+  it('deletes a card and removes it from the board, after confirming', async () => {
     vi.mocked(fetchChartData).mockImplementation((id) => Promise.resolve(emptyData(id)))
     vi.mocked(deleteChart).mockResolvedValue(undefined)
     const wrapper = await mountedBoard(THREE_CHARTS)
     const card = cardAt(wrapper, 0)
     await card.get('[data-testid="spending-card-menu"]').trigger('click')
     await card.get('[data-testid="spending-card-delete"]').trigger('click')
+    // Armed, not yet deleted — the overflow item only arms the confirm step.
+    expect(deleteChart).not.toHaveBeenCalled()
+    await card.get('[data-testid="spending-card-delete-confirm"]').trigger('click')
     await flushPromises()
     expect(deleteChart).toHaveBeenCalledWith(1)
     expect(cards(wrapper)).toHaveLength(2)
@@ -269,6 +287,7 @@ describe('SpendingBoardView', () => {
     const card = cardAt(wrapper, 0)
     await card.get('[data-testid="spending-card-menu"]').trigger('click')
     await card.get('[data-testid="spending-card-delete"]').trigger('click')
+    await card.get('[data-testid="spending-card-delete-confirm"]').trigger('click')
     await flushPromises()
     expect(cards(wrapper)).toHaveLength(3)
     expect(cardAt(wrapper, 0).text()).toContain('delete failed')
@@ -359,7 +378,10 @@ describe('SpendingBoardView', () => {
     expect(updateChart).not.toHaveBeenCalled()
   })
 
-  it('shows a reorder error inline without discarding the new order', async () => {
+  // A failed reorder is rolled back, not left showing an order the server
+  // rejected (spec review finding 9) — the board must not keep displaying
+  // the optimistic move until the next full reload.
+  it('shows a reorder error inline AND restores the previous order', async () => {
     vi.mocked(fetchChartData).mockImplementation((id) => Promise.resolve(emptyData(id)))
     vi.mocked(updateChart).mockRejectedValue(new ApiError(500, 'reorder failed'))
     const wrapper = await mountedBoard(THREE_CHARTS)
@@ -368,6 +390,8 @@ describe('SpendingBoardView', () => {
     await flushPromises()
     expect(wrapper.get('[data-testid="board-reorder-error"]').text()).toBe('reorder failed')
     expect(cards(wrapper)).toHaveLength(3)
+    const names = cards(wrapper).map((c) => c.get('[data-testid="spending-card-name"]').text())
+    expect(names).toEqual(['Chart 1', 'Chart 2', 'Chart 3'])
   })
 
   it('destroys the drag instance when the last card is deleted and the grid disappears', async () => {
@@ -382,6 +406,7 @@ describe('SpendingBoardView', () => {
     const card = cardAt(wrapper, 0)
     await card.get('[data-testid="spending-card-menu"]').trigger('click')
     await card.get('[data-testid="spending-card-delete"]').trigger('click')
+    await card.get('[data-testid="spending-card-delete-confirm"]').trigger('click')
     await flushPromises()
 
     expect(wrapper.find('[data-testid="spending-empty-state"]').exists()).toBe(true)

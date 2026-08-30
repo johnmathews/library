@@ -57,5 +57,17 @@ describe('money', () => {
     it('formats a whole-number input with no decimal part', () => {
       expect(formatMoney('0', 'GBP')).toBe('GBP 0.00')
     })
+
+    // A null-currency amount (`SpendingFooter`'s `bareAmount`, `DrillBucketBody`)
+    // calls `formatMoney(amount, '')`. §4.5's own "an unconvertible payment and
+    // an equal unconvertible refund" case can net negative, so this must render
+    // the bare digits with no floating space where the currency prefix would
+    // have gone — `"- 45.00"` reads as a stray leading space once the sign is
+    // in front of it, and `.trim()` cannot fix an INTERNAL gap, only the
+    // string's own leading/trailing edges.
+    it('formats an empty currency with no leading space, positive or negative', () => {
+      expect(formatMoney('45.00', '')).toBe('45.00')
+      expect(formatMoney('-45.00', '')).toBe('-45.00')
+    })
   })
 })

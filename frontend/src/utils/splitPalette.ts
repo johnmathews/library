@@ -54,7 +54,7 @@ export const deriveSlot = (key: string): PaletteSlot =>
   SPLIT_PALETTE[fnv1a(key) % SPLIT_PALETTE.length]!
 
 /**
- * Resolve the colour to render for a split value.
+ * Resolve the colour to render for a SINGLE split value.
  *
  * - `stored === null` derives a slot from `key` and returns that slot's step
  *   for the current theme.
@@ -63,6 +63,18 @@ export const deriveSlot = (key: string): PaletteSlot =>
  *   step), so this is what stops an owner's override rendering as a
  *   light-mode colour on a dark chart.
  * - Anything else (a stored hex that matches no slot) is returned verbatim.
+ *
+ * UNUSED by plan 4b (the `/charts` spending view) as of this branch — its
+ * own colour resolution always goes through `@/spending/palette`'s
+ * `bands()`, which resolves a whole SET of survivors together and de-collides
+ * a stored colour that lands on a slot an earlier survivor already claimed
+ * (a case this single-value function has no way to detect, since it never
+ * sees its siblings). Calling this instead of `bands()` anywhere in 4b would
+ * silently drop that de-collision guarantee. This function exists for the
+ * parallel plan-4c vocabulary panel, which resolves one facet value's
+ * colour in isolation (no sibling set to de-collide against) — see the file
+ * header's ownership note. Left in place, not deleted, so it is not silently
+ * dead: covered directly by `splitPalette.spec.ts`.
  */
 export function resolveSplitColour(stored: string | null, key: string, dark: boolean): string {
   if (stored === null) {

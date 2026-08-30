@@ -1,10 +1,14 @@
 /**
  * Spending board acceptance e2e: sign in → sidebar → `/charts` → the fresh
  * archive's empty state offers "All spending" first → creating it produces a
- * card on the board → opening the card lands on its workspace, where the
+ * card on the board → renaming it via the overflow menu's "Rename" item
+ * actually renames it → opening the card BY ITS NAME lands on its workspace
+ * (the only route there from the board — the menu no longer has an "Edit"
+ * item that navigated but changed nothing, spec review finding 5), where the
  * toolbar, the chart region and all three footer accounting blocks render →
- * back on the board, the card's overflow menu deletes it and the board
- * returns to the empty state.
+ * back on the board, the card's overflow menu "Delete" arms a two-step
+ * confirm that a dismiss leaves untouched (spec review finding 4) and an
+ * accept actually deletes, returning the board to the empty state.
  *
  * **No drill-through is asserted here.** The e2e database is fresh, so "All
  * spending" covers no documents: every chart cell is empty and every footer
@@ -102,15 +106,28 @@ test('create "All spending" from the empty state, open it, and delete it', async
   // migration-seeded row.
   await page.getByTestId('spending-empty-proposal').first().click()
 
-  // A card appears on the board.
-  const card = page.getByTestId('spending-card').filter({ hasText: 'All spending' })
+  // A card appears on the board. Captured as `.first()`, not
+  // `.filter({ hasText: 'All spending' })` — that filter is on TEXT
+  // CONTENT, and the rename step below swaps the name into an `<input>`'s
+  // VALUE (not text), which would make the filtered locator match nothing
+  // mid-rename. There is exactly one card on this fresh board throughout
+  // the whole test, so `.first()` is unambiguous.
+  const card = page.getByTestId('spending-card').first()
   await expect(card).toBeVisible()
   await expect(card.getByTestId('spending-card-name')).toHaveText('All spending')
 
-  // Open the card via its overflow menu (spec §10.3 #5: no always-visible
-  // per-card controls) — never a click on the card face itself.
+  // Rename it via the overflow menu (spec review finding 5: "Edit" used to
+  // navigate but change nothing — it is now "Rename", and actually renames).
   await card.getByTestId('spending-card-menu').click()
-  await card.getByTestId('spending-card-edit').click()
+  await card.getByTestId('spending-card-rename').click()
+  await card.getByTestId('spending-card-rename-input').fill('All spending (renamed)')
+  await card.getByTestId('spending-card-rename-save').click()
+  await expect(card.getByTestId('spending-card-name')).toHaveText('All spending (renamed)')
+
+  // Open the card via its name — the only route from the board into the
+  // workspace now that "Edit" is gone (spec §10.3 #5: no always-visible
+  // per-card controls, so this is still not a click on the whole card face).
+  await card.getByTestId('spending-card-name').click()
   await expect(page).toHaveURL(/\/charts\/\d+$/)
 
   // The toolbar, the chart, and all three footer blocks render.
@@ -125,16 +142,26 @@ test('create "All spending" from the empty state, open it, and delete it', async
   await expect(page.getByTestId('spending-footer-attention')).toBeVisible()
   await expect(page.getByTestId('spending-footer-unconvertible')).toBeVisible()
 
-  // Back to the board, then delete via the overflow menu — no confirm step
-  // (unlike the legacy view's series-delete-confirm-button): SpendingCard's
-  // delete emits straight through to `DELETE /api/spending/{id}`.
+  // Back to the board, then delete via the overflow menu — now a two-step
+  // confirm (spec review finding 4): the menu item only ARMS a Confirm/
+  // Cancel pair, so a stray click on "Delete" cannot destroy the chart.
   await page.getByRole('link', { name: 'Back to charts' }).click()
   await expect(page).toHaveURL(/\/charts$/)
 
-  const boardCard = page.getByTestId('spending-card').filter({ hasText: 'All spending' })
+  const boardCard = page.getByTestId('spending-card').first()
   await expect(boardCard).toBeVisible()
+  await expect(boardCard.getByTestId('spending-card-name')).toHaveText('All spending (renamed)')
   await boardCard.getByTestId('spending-card-menu').click()
   await boardCard.getByTestId('spending-card-delete').click()
+
+  // Dismissing the confirmation deletes nothing.
+  await boardCard.getByTestId('spending-card-delete-cancel').click()
+  await expect(boardCard).toBeVisible()
+
+  // Confirming does.
+  await boardCard.getByTestId('spending-card-menu').click()
+  await boardCard.getByTestId('spending-card-delete').click()
+  await boardCard.getByTestId('spending-card-delete-confirm').click()
 
   // Back to the empty state.
   await expect(page.getByTestId('spending-empty-state')).toBeVisible()

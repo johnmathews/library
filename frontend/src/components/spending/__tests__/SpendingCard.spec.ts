@@ -1,12 +1,27 @@
-import { describe, it, expect, vi } from 'vitest'
-import { mount, type VueWrapper } from '@vue/test-utils'
+import { afterEach, describe, it, expect, vi } from 'vitest'
+import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
+import { createMemoryHistory, createRouter } from 'vue-router'
 
 vi.mock('vue-chartjs', () => ({
   Bar: { name: 'Bar', props: ['data', 'options'], template: '<canvas />' },
 }))
 
+vi.mock('@/api/spending', async () => {
+  const actual = await vi.importActual<typeof import('@/api/spending')>('@/api/spending')
+  return { ...actual, updateChart: vi.fn() }
+})
+
 import SpendingCard from '../SpendingCard.vue'
-import type { Cell, Chart, ChartData, Footer, Grain, SplitValue } from '@/api/spending'
+import { updateChart, type Cell, type Chart, type ChartData, type Footer, type Grain, type SplitValue } from '@/api/spending'
+import { ApiError } from '@/api/client'
+
+const router = createRouter({
+  history: createMemoryHistory(),
+  routes: [
+    { path: '/charts', name: 'charts', component: { template: '<div/>' } },
+    { path: '/charts/:chartId', name: 'spending-workspace', component: { template: '<div/>' } },
+  ],
+})
 
 // --- Fixtures ----------------------------------------------------------
 //
@@ -90,6 +105,7 @@ function mountCard(overrides: Overrides = {}): VueWrapper {
           splits: overrides.splits,
         })
   return mount(SpendingCard, {
+    global: { plugins: [router] },
     props: {
       chart: { ...BASE_CHART, ...overrides.chart },
       data,
@@ -172,6 +188,11 @@ async function openOverflowMenu(wrapper: VueWrapper): Promise<void> {
 }
 
 describe('SpendingCard', () => {
+  afterEach(() => {
+    vi.clearAllMocks()
+  })
+
+
   // --- The brief's pinned assertions --------------------------------------
 
   it('headlines the most recent COMPLETE bucket, not the current partial one', () => {
@@ -336,19 +357,104 @@ describe('SpendingCard', () => {
     expect(body.text()).toContain('142.30')
   })
 
-  it('opens the overflow menu and emits edit / delete, closing the menu after', async () => {
-    const wrapper = mountCard(READY)
-    await wrapper.get('[data-testid="spending-card-menu"]').trigger('click')
-    expect(wrapper.find('[data-testid="spending-card-edit"]').exists()).toBe(true)
+  it('names the card with a link to its workspace — the only route there from the board', () => {
+    const wrapper = mountCard({ ...READY, chart: { id: 42, name: 'Cloud hosting' } })
+    const link = wrapper.get('[data-testid="spending-card-name"]')
+    expect(link.text()).toBe('Cloud hosting')
+    expect(link.attributes('href')).toBe('/charts/42')
+  })
 
-    await wrapper.get('[data-testid="spending-card-delete"]').trigger('click')
-    expect(wrapper.emitted('delete')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="spending-card-delete"]').exists()).toBe(false)
+  // Finding 4: delete has no confirmation — one click, irreversible, sitting
+  // directly under the rename item. The overflow item ARMS a Confirm/Cancel
+  // pair; only Confirm actually emits.
+  describe('delete confirmation', () => {
+    it('does not delete the chart until the confirmation is accepted', async () => {
+      const wrapper = mountCard(READY)
+      await openOverflowMenu(wrapper)
+      await wrapper.get('[data-testid="spending-card-delete"]').trigger('click')
+      // Armed, not yet deleted.
+      expect(wrapper.emitted('delete')).toBeUndefined()
+      expect(wrapper.find('[data-testid="spending-card-delete-confirm"]').exists()).toBe(true)
 
-    await wrapper.get('[data-testid="spending-card-menu"]').trigger('click')
-    await wrapper.get('[data-testid="spending-card-edit"]').trigger('click')
-    expect(wrapper.emitted('edit')).toHaveLength(1)
-    expect(wrapper.find('[data-testid="spending-card-edit"]').exists()).toBe(false)
+      await wrapper.get('[data-testid="spending-card-delete-confirm"]').trigger('click')
+      expect(wrapper.emitted('delete')).toHaveLength(1)
+    })
+
+    it('deletes nothing when the confirmation is dismissed', async () => {
+      const wrapper = mountCard(READY)
+      await openOverflowMenu(wrapper)
+      await wrapper.get('[data-testid="spending-card-delete"]').trigger('click')
+      await wrapper.get('[data-testid="spending-card-delete-cancel"]').trigger('click')
+      expect(wrapper.emitted('delete')).toBeUndefined()
+      // Back to the ordinary menu trigger, not stuck in the confirm state.
+      expect(wrapper.find('[data-testid="spending-card-menu"]').exists()).toBe(true)
+    })
+  })
+
+  // Finding 5: "Edit" navigated to the workspace but changed nothing. The
+  // menu item is now "Rename" and actually persists a new name.
+  describe('rename', () => {
+    it('renames the chart on the happy path', async () => {
+      const updated: Chart = { ...BASE_CHART, id: 1, name: 'Cloud hosting (renamed)' }
+      vi.mocked(updateChart).mockResolvedValueOnce(updated)
+      const wrapper = mountCard(READY)
+      await openOverflowMenu(wrapper)
+      await wrapper.get('[data-testid="spending-card-rename"]').trigger('click')
+
+      const input = wrapper.get('[data-testid="spending-card-rename-input"]')
+      expect((input.element as HTMLInputElement).value).toBe('Cloud hosting')
+      await input.setValue('Cloud hosting (renamed)')
+      await wrapper.get('[data-testid="spending-card-rename-save"]').trigger('click')
+      await flushPromises()
+
+      expect(updateChart).toHaveBeenCalledWith(1, { name: 'Cloud hosting (renamed)' })
+      expect(wrapper.emitted('renamed')).toEqual([[updated]])
+      // Back to the read state — the input is gone, replaced by the link.
+      // The DISPLAYED name still reads the (unchanged in this isolated
+      // mount) `chart` prop — syncing it is the parent's job in response to
+      // `renamed`, covered by SpendingBoardView.spec.ts's own rename test.
+      expect(wrapper.find('[data-testid="spending-card-rename-input"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="spending-card-name"]').exists()).toBe(true)
+    })
+
+    it('surfaces an error on a failed rename WITHOUT discarding the typed name', async () => {
+      vi.mocked(updateChart).mockRejectedValueOnce(new ApiError(422, 'Name cannot be blank'))
+      const wrapper = mountCard(READY)
+      await openOverflowMenu(wrapper)
+      await wrapper.get('[data-testid="spending-card-rename"]').trigger('click')
+      await wrapper.get('[data-testid="spending-card-rename-input"]').setValue('A new name')
+      await wrapper.get('[data-testid="spending-card-rename-save"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.get('[data-testid="spending-card-rename-error"]').text()).toBe('Name cannot be blank')
+      expect(wrapper.emitted('renamed')).toBeUndefined()
+      // Still editing, and the typed value survives the failure.
+      const input = wrapper.get('[data-testid="spending-card-rename-input"]')
+      expect((input.element as HTMLInputElement).value).toBe('A new name')
+    })
+
+    it('treats a blank or unchanged name as a no-op that just closes the editor', async () => {
+      const wrapper = mountCard({ ...READY, chart: { name: 'Cloud hosting' } })
+      await openOverflowMenu(wrapper)
+      await wrapper.get('[data-testid="spending-card-rename"]').trigger('click')
+      await wrapper.get('[data-testid="spending-card-rename-input"]').setValue('Cloud hosting')
+      await wrapper.get('[data-testid="spending-card-rename-save"]').trigger('click')
+      await flushPromises()
+
+      expect(updateChart).not.toHaveBeenCalled()
+      expect(wrapper.find('[data-testid="spending-card-rename-input"]').exists()).toBe(false)
+    })
+
+    it('discards the edit on cancel without saving', async () => {
+      const wrapper = mountCard(READY)
+      await openOverflowMenu(wrapper)
+      await wrapper.get('[data-testid="spending-card-rename"]').trigger('click')
+      await wrapper.get('[data-testid="spending-card-rename-input"]').setValue('Something else entirely')
+      await wrapper.get('[data-testid="spending-card-rename-cancel"]').trigger('click')
+
+      expect(updateChart).not.toHaveBeenCalled()
+      expect(wrapper.get('[data-testid="spending-card-name"]').text()).toBe('Cloud hosting')
+    })
   })
 
   it('emits move-up and move-down when clicked, closing the menu after', async () => {

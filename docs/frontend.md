@@ -769,17 +769,27 @@ either itself:
   chart draws from. Click **isolates** a band; modifier-click (Cmd/Ctrl)
   **excludes** just that one. Both are client-side filters the parent also
   applies to the chart — this component never removes a hidden row from its
-  own list, only marks it, so there is always a way back to "Show all".
+  own list, only marks it, so there is always a way back to "Show all". Each
+  row's `aria-pressed` is repurposed to mean "this band is visible", not the
+  conventional pressed/active toggle reading — deliberate, documented at the
+  call site.
 - **`SpendingFooter.vue`** — the "nothing is excluded silently" accounting
   statement: every document a chart's rule touched but its total did not
   count, in three labelled blocks. A refund is **netted**, not excluded — it
   stays inside the header total and lowers it, and must never appear here.
-- **`SpendingCard.vue`** — one saved chart as it appears on the board: name +
-  overflow menu, headline figure (the most recent *complete* bucket, never
-  the last one drawn — the current period is always partial), compact
-  chart, legend ribbon, a needs-attention line. Fetches nothing — `data` /
-  `error` / `busy` are handed down by `SpendingBoardView`, which is what
-  keeps one card's failure from taking down the rest of the grid.
+- **`SpendingCard.vue`** — one saved chart as it appears on the board: name
+  (a link to `/charts/{id}`, the only route from the board into the
+  workspace) + overflow menu, headline figure (the most recent *complete*
+  bucket, never the last one drawn — the current period is always partial),
+  compact chart, legend ribbon, a needs-attention line. Fetches nothing about
+  the chart's *data* — `data` / `error` / `busy` are handed down by
+  `SpendingBoardView`, which is what keeps one card's failure from taking
+  down the rest of the grid. The overflow menu is **Move up / Move down /
+  Rename / Delete**; Rename and Delete are each two-step in place (an inline
+  name input with Save/Cancel; a Confirm/Cancel pair) rather than firing on
+  one click — Rename issues its own `PATCH /api/spending/{id}` (the one
+  action this card fetches for itself) and emits `renamed`; Delete still
+  emits `delete` for the board to act on, only gated behind the confirm step.
 - **`SpendingDrillPanel.vue`** and its three bodies — the drill-through
   shell (a native `<dialog>` opened with `showModal()`, side-panel or
   bottom-sheet presentation) plus `DrillCellBody` (one bar: period × split

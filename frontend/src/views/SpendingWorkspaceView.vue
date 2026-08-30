@@ -192,6 +192,14 @@ async function loadChart(): Promise<void> {
   // chart's own defaults above never fires a redundant second fetch.
   stopArgsWatch = watch(currentArgs, () => {
     drill.value = null // stale echoed args would answer the wrong question
+    // A stale isolate/exclude filter must not survive a refetch: the split
+    // axis itself can change (e.g. toggled off), so the OLD hidden keys may
+    // no longer name any band in the NEW `workspaceBands` at all — left
+    // alone, `selectionLine` below would render an unclearable bare "Hiding "
+    // line (every hidden key names nothing, so `hiddenLabels` is empty) with
+    // no "Show all" button on screen to reset it (that button only renders
+    // when `bands.length > 0`).
+    hiddenSplitValues.value = new Set()
     void loadData()
   })
 }
@@ -234,6 +242,11 @@ const selectionLine = computed<string | null>(() => {
   const hiddenLabels = workspaceBands.value
     .filter((b) => hiddenSplitValues.value.has(b.value))
     .map((b) => b.label)
+  // Belt-and-suspenders alongside the args-watcher reset above: a `hidden`
+  // set that names no CURRENT band (stale after a split/band change slips
+  // through some other path) must render nothing here rather than an
+  // unclearable bare "Hiding " line.
+  if (hiddenLabels.length === 0) return null
   return `Hiding ${hiddenLabels.join(', ')}`
 })
 

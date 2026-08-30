@@ -1,6 +1,7 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import DrillBucketBody from '../DrillBucketBody.vue'
+import { ApiError } from '@/api/client'
 import type { ChartArgs, FooterBucket, FooterDocument, FooterDocuments } from '@/api/spending'
 
 const fetchFooterBucket = vi.fn()
@@ -119,6 +120,27 @@ describe('DrillBucketBody', () => {
     const wrapper = await mountedBucketBody()
     expect(wrapper.get('[data-testid="drill-error"]').text()).toBe('Could not load these documents.')
     expect(wrapper.find('[data-testid="drill-empty"]').exists()).toBe(false)
+  })
+
+  // Spec review finding 7 (Minor): this sibling used to swallow the server's
+  // own `detail` behind a generic message, unlike `DrillCellBody` — which
+  // deliberately surfaces it, because the server's message names the actual
+  // problem. Same contract here now.
+  it('surfaces the server\'s own ApiError detail on a failed initial load', async () => {
+    fetchFooterBucket.mockReset().mockRejectedValue(new ApiError(500, 'the bucket route is temporarily unavailable'))
+    const wrapper = await mountedBucketBody()
+    expect(wrapper.get('[data-testid="drill-error"]').text()).toBe('the bucket route is temporarily unavailable')
+  })
+
+  it('surfaces the server\'s own ApiError detail on a failed "Show more"', async () => {
+    fetchFooterBucket.mockResolvedValueOnce({ bucket: 'uncategorised', total: 4, documents: page(3).documents })
+    const wrapper = await mountedBucketBody()
+
+    fetchFooterBucket.mockRejectedValueOnce(new ApiError(500, 'the next page could not be read'))
+    await wrapper.get('[data-testid="drill-load-more"]').trigger('click')
+    await flushPromises()
+
+    expect(wrapper.get('[data-testid="drill-more-error"]').text()).toBe('the next page could not be read')
   })
 
   it('surfaces an error from Show more without discarding the page already shown', async () => {

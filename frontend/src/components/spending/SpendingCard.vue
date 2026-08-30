@@ -7,14 +7,22 @@
  * then a needs-attention line when the footer has one. The figure leads
  * because the board is scanned for values, not for shapes.
  *
- * This component fetches nothing — `data`/`error`/`busy` are handed down by
- * whatever polls the chart, and `edit` / `delete` / `move-up` / `move-down`
- * are emitted for the parent to act on. That keeps every card provably
- * independent: one card's fetch failing renders that card's own error line
- * (`error`) without hiding the rest of the board, and a card mid-refetch
- * (`busy`) keeps showing its last render, dimmed, rather than flashing a
- * skeleton — `SpendingChart` deliberately carries no loading signal of its
- * own and never keys its `<Bar>` on `data`, so the card owns that treatment.
+ * This component fetches nothing about a chart's DATA — `data`/`error`/`busy`
+ * are handed down by whatever polls the chart, and `delete` / `move-up` /
+ * `move-down` are emitted for the parent to act on. That keeps every card
+ * provably independent: one card's fetch failing renders that card's own
+ * error line (`error`) without hiding the rest of the board, and a card
+ * mid-refetch (`busy`) keeps showing its last render, dimmed, rather than
+ * flashing a skeleton — `SpendingChart` deliberately carries no loading
+ * signal of its own and never keys its `<Bar>` on `data`, so the card owns
+ * that treatment.
+ *
+ * Renaming is the one exception: it is card-local (nothing polls a chart's
+ * *name*, unlike its data), so this component issues its own
+ * `PATCH /api/spending/{id}` via `updateChart` and emits `renamed` with the
+ * server's response once it succeeds — the same precedent
+ * `SpendingEmptyState` sets by owning its own `createChart` call, rather
+ * than the emit-only edit/delete/move contract above.
  *
  * The headline is the most recent *complete* bucket, not the last one the
  * chart drew: the current period is always partial (it is still
@@ -36,7 +44,7 @@
  * cents (`toCents`/`fromCents`), never `parseFloat`, because
  * `1284.50 - 1142.20` prints `142.29999999999998` in IEEE754.
  *
- * Edit, delete, move up and move down all live behind the overflow menu
+ * Rename, delete, move up and move down all live behind the overflow menu
  * (`AppPopover`) — spec §10.3 #5 is that a card shows data, not six controls
  * each, and two always-visible reorder buttons on every card multiplied
  * across a whole board is exactly the defect that line names. This does not
@@ -46,9 +54,28 @@
  * just takes one activation to open the menu first. It is still the path
  * the e2e suite clicks on every viewport project (drag is the other one,
  * task 8's board), and on a phone a menu beats two more face buttons.
+ *
+ * Rename and delete are each **two-step, in place** — the overflow item
+ * ARMS an inline affordance (a name input with Save/Cancel; a Confirm/Cancel
+ * pair) that replaces the header row itself, rather than a menu item that
+ * fires the action on one click. This is the same shape the app's most
+ * recent overflow menu uses (`ThreadActionsMenu` + its hosts, e.g.
+ * `ConversationSidebar.vue`: the menu only emits the intent, the host arms
+ * an inline row), not the `ConfirmDialog.vue` modal — a card in a grid does
+ * not need a second, wider, `<dialog>`-anchored surface on top of a popover
+ * for a decision this small, and one click on the wrong menu item can no
+ * longer destroy a chart with no way back (spec review finding 4). A chart's
+ * NAME is also a real navigation target now: `spending-card-name` is a
+ * `RouterLink` to `/charts/{id}`, the only route from the board into the
+ * workspace, so replacing the old mislabelled "Edit" menu item (which
+ * navigated there but changed nothing) with "Rename" does not remove that
+ * navigation — it moves onto the name itself, where a reader would expect
+ * to find it (spec review finding 5).
  */
 import { computed, ref } from 'vue'
-import type { Chart, ChartData, Grain } from '@/api/spending'
+import { RouterLink } from 'vue-router'
+import { updateChart, type Chart, type ChartData, type Grain } from '@/api/spending'
+import { ApiError } from '@/api/client'
 import { bands, OTHER_VALUE, type Band } from '@/spending/palette'
 import { formatMoney, fromCents, toCents } from '@/spending/money'
 import AppPopover from '@/components/app/AppPopover.vue'
@@ -71,7 +98,7 @@ const props = withDefaults(
 )
 
 const emit = defineEmits<{
-  edit: []
+  renamed: [chart: Chart]
   delete: []
   'move-up': []
   'move-down': []
@@ -270,7 +297,7 @@ const attentionText = computed<string | null>(() => {
     .join(', ')
 })
 
-// --- Overflow menu ---------------------------------------------------------
+// --- Overflow menu -----------------------------------------------------------
 
 const menuOpen = ref(false)
 
@@ -282,12 +309,71 @@ function chooseMoveDown(): void {
   menuOpen.value = false
   emit('move-down')
 }
-function chooseEdit(): void {
+
+// --- Rename (inline, two-step: the menu item ARMS the input row) -----------
+//
+// Owns its own `PATCH` (see the file docblock) — the one action this card
+// fetches for itself rather than emitting up, since a chart's name has
+// nothing to do with the data-polling loop `data`/`error`/`busy` exist for.
+
+const renaming = ref(false)
+const renameValue = ref('')
+const renameBusy = ref(false)
+const renameError = ref<string | null>(null)
+
+function chooseRename(): void {
   menuOpen.value = false
-  emit('edit')
+  renameValue.value = props.chart.name
+  renameError.value = null
+  renaming.value = true
 }
+function cancelRename(): void {
+  renaming.value = false
+  renameError.value = null
+}
+async function saveRename(): Promise<void> {
+  if (renameBusy.value) return
+  const name = renameValue.value.trim()
+  // A blank or unchanged name is a no-op — close the editor rather than
+  // sending a doomed/pointless request (mirrors the Ask thread rename idiom,
+  // ConversationSidebar.vue's `saveRename`).
+  if (!name || name === props.chart.name) {
+    cancelRename()
+    return
+  }
+  renameBusy.value = true
+  renameError.value = null
+  try {
+    const updated = await updateChart(props.chart.id, { name })
+    renaming.value = false
+    emit('renamed', updated)
+  } catch (err) {
+    // Keep the form open with exactly what was typed — a failed save must
+    // never discard it (spec review finding 5).
+    renameError.value = err instanceof ApiError ? err.detail : 'Could not rename this chart.'
+  } finally {
+    renameBusy.value = false
+  }
+}
+
+// --- Delete (inline, two-step: the menu item ARMS a Confirm/Cancel pair) ---
+//
+// The parent still owns the actual `DELETE` (via the `delete` emit, same as
+// before) — only the confirmation gate is new. A card mid-delete failure
+// already has an established path: `SpendingBoardView.onDelete` sets this
+// card's own `error` prop on a rejected request, same as a failed data load.
+
+const confirmingDelete = ref(false)
+
 function chooseDelete(): void {
   menuOpen.value = false
+  confirmingDelete.value = true
+}
+function cancelDeleteConfirm(): void {
+  confirmingDelete.value = false
+}
+function confirmDeleteChart(): void {
+  confirmingDelete.value = false
   emit('delete')
 }
 </script>
@@ -295,15 +381,78 @@ function chooseDelete(): void {
 <template>
   <div class="card flex flex-col gap-3 p-5" data-testid="spending-card">
     <div class="flex items-start justify-between gap-2">
-      <h3
-        class="min-w-0 truncate text-sm font-semibold text-gray-800 dark:text-gray-100"
-        data-testid="spending-card-name"
-      >
-        {{ chart.name }}
-      </h3>
+      <span class="min-w-0 flex-1">
+        <!-- Inline rename: an editable input replaces the name+link while
+             this card is being renamed. Enter saves, Esc cancels. -->
+        <input
+          v-if="renaming"
+          v-model="renameValue"
+          type="text"
+          maxlength="200"
+          aria-label="Chart name"
+          class="form-input w-full text-sm"
+          data-testid="spending-card-rename-input"
+          :disabled="renameBusy"
+          @keydown.enter.prevent="saveRename"
+          @keydown.esc.prevent="cancelRename"
+        />
+        <h3
+          v-else
+          class="min-w-0 truncate text-sm font-semibold text-gray-800 dark:text-gray-100"
+        >
+          <RouterLink
+            :to="`/charts/${chart.id}`"
+            class="hover:underline"
+            data-testid="spending-card-name"
+          >
+            {{ chart.name }}
+          </RouterLink>
+        </h3>
+      </span>
 
-      <div class="flex shrink-0 items-center gap-0.5">
+      <div class="flex shrink-0 items-center gap-2">
+        <template v-if="renaming">
+          <button
+            type="button"
+            class="text-xs font-medium text-violet-600 transition hover:text-violet-700 disabled:cursor-not-allowed disabled:opacity-50 dark:text-violet-400 dark:hover:text-violet-300"
+            data-testid="spending-card-rename-save"
+            :disabled="renameBusy || !renameValue.trim()"
+            @click="saveRename"
+          >
+            {{ renameBusy ? 'Saving…' : 'Save' }}
+          </button>
+          <button
+            type="button"
+            class="text-xs text-gray-400 transition hover:text-gray-600 disabled:cursor-not-allowed disabled:opacity-50 dark:hover:text-gray-200"
+            data-testid="spending-card-rename-cancel"
+            :disabled="renameBusy"
+            @click="cancelRename"
+          >
+            Cancel
+          </button>
+        </template>
+
+        <template v-else-if="confirmingDelete">
+          <button
+            type="button"
+            class="text-xs font-medium text-red-500 transition hover:text-red-600 dark:hover:text-red-400"
+            data-testid="spending-card-delete-confirm"
+            @click="confirmDeleteChart"
+          >
+            Confirm
+          </button>
+          <button
+            type="button"
+            class="text-xs text-gray-400 transition hover:text-gray-600 dark:hover:text-gray-200"
+            data-testid="spending-card-delete-cancel"
+            @click="cancelDeleteConfirm"
+          >
+            Cancel
+          </button>
+        </template>
+
         <AppPopover
+          v-else
           :open="menuOpen"
           align="right"
           panel-class="w-36 p-1"
@@ -360,10 +509,10 @@ function chooseDelete(): void {
             type="button"
             role="menuitem"
             class="flex w-full items-center rounded-lg px-3 py-2 text-left text-sm text-gray-700 transition hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-700/60"
-            data-testid="spending-card-edit"
-            @click="chooseEdit"
+            data-testid="spending-card-rename"
+            @click="chooseRename"
           >
-            Edit
+            Rename
           </button>
           <button
             type="button"
@@ -377,6 +526,14 @@ function chooseDelete(): void {
         </AppPopover>
       </div>
     </div>
+
+    <p
+      v-if="renameError"
+      class="text-xs text-red-600 dark:text-red-400"
+      data-testid="spending-card-rename-error"
+    >
+      {{ renameError }}
+    </p>
 
     <p v-if="error" class="text-sm text-red-600 dark:text-red-400" data-testid="spending-card-error">
       {{ error }}

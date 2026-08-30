@@ -259,18 +259,23 @@ export function fetchCell(
   return apiFetch<CellBody>(`/api/spending/${id}/cell`, { query })
 }
 
-/** GET /api/spending/{id}/footer/{bucket} — the documents behind a footer exclusion bucket. */
+/**
+ * GET /api/spending/{id}/footer/{bucket} — the documents behind a footer
+ * exclusion bucket. `FooterArgs` (`from`/`to`/`currency`) is structurally a
+ * subset of `ChartArgs`, so the window portion of the query is built by
+ * `windowQuery` itself — the same omit-undefined-key handling `/data` and
+ * `/cell` get — rather than a second inline `{ from, to, currency }` object
+ * that would drift from it silently.
+ */
 export function fetchFooterBucket(
   id: number,
   bucket: FooterBucket,
   opts: FooterArgs & { amount_kind?: string; limit?: number; offset?: number } = {},
 ): Promise<FooterDocuments> {
-  const { amount_kind, limit = MAX_LIMIT, offset = 0, from, to, currency } = opts
+  const { amount_kind, limit = MAX_LIMIT, offset = 0, ...windowArgs } = opts
   return apiFetch<FooterDocuments>(`/api/spending/${id}/footer/${bucket}`, {
     query: {
-      from,
-      to,
-      currency,
+      ...windowQuery(windowArgs),
       amount_kind,
       limit: Math.min(limit, MAX_LIMIT),
       offset,

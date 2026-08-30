@@ -111,8 +111,20 @@ interface Series {
 // colour or an order, it reads `band.light` / `band.dark` verbatim. The
 // unsplit case (`bands` is `[]`) draws a single series in the first shared
 // palette slot instead, since there is no fold to read a band from.
+//
+// The sentinel MUST be `props.bands.length === 0`, never
+// `visibleBands.value.length === 0` — the latter is also true when every
+// band has been hidden via the legend's isolate/exclude filter, and
+// `centsForPeriod` sums ALL cells for a period, hidden ones included. Keying
+// the unsplit fallback on that would redraw a filtered-to-nothing chart as a
+// single series at the grand total, directly under a selection line that
+// says everything is hidden — the exact recolour-on-filter defect §4.12 #4
+// exists to prevent. When `bands` is non-empty but `visibleBands` is empty,
+// falling through to the `else` branch below is correct: `.map()` over an
+// empty array returns `[]`, so the chart draws zero datasets — an empty
+// chart is the honest answer to "everything is hidden".
 const series = computed<Series[]>(() => {
-  if (visibleBands.value.length === 0) {
+  if (props.bands.length === 0) {
     const slot = SPLIT_PALETTE[0]!
     return [
       {
@@ -227,6 +239,10 @@ const chartOptions = computed(() => ({
     // `bands` prop — Chart.js's own legend would re-list datasets from a
     // second source of truth.
     legend: { display: false },
+    // No `title` callback: Chart.js's own default renders the hovered bar's
+    // x-axis category label, which is exactly the period string here
+    // (`chartData.labels` is `periods`, a category scale) — so the default
+    // is already correct and is left alone rather than reimplemented.
     tooltip: { callbacks: { label: tooltipLabel } },
   },
   scales: {
