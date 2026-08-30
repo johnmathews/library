@@ -70,6 +70,14 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/SettingsView.vue'),
   },
   {
+    // The facet vocabulary: the closed set every chart splits by, plus the
+    // split colours. Its CRUD routes are authenticated but not admin-gated, so
+    // neither is this (docs/facets.md).
+    path: '/vocabulary',
+    name: 'vocabulary',
+    component: () => import('../views/VocabularyView.vue'),
+  },
+  {
     path: '/jobs',
     name: 'jobs',
     component: () => import('../views/JobsView.vue'),
