@@ -1971,7 +1971,7 @@ parameter (it forwards to `_seed_document`, which already takes one).
 - [ ] **Step 2: Run and watch it fail**
 
 ```bash
-uv run pytest tests/test_api_facets.py -q -k counts
+uv run pytest tests/test_api_spending.py -q -k counts
 ```
 
 Expected: FAIL — 404, or 422 if `counts` is captured by `{facet_key}`.
@@ -2034,7 +2034,7 @@ Add `from sqlalchemy import text` and `from datetime import date` if absent.
 - [ ] **Step 4: Run and watch it pass**
 
 ```bash
-uv run pytest tests/test_api_facets.py -q
+uv run pytest tests/test_api_spending.py -q
 ```
 
 Expected: PASS, including every pre-existing facets test — that is the check
