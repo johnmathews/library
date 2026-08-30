@@ -31,6 +31,8 @@ class VocabularyValue:
     label: str
     parent_id: int | None
     aliases: tuple[str, ...]
+    #: A stored override; None means "derive a palette slot from `key`".
+    colour: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +72,7 @@ async def load_vocabulary(session: AsyncSession) -> tuple[VocabularyFacet, ...]:
                 label=value.label,
                 parent_id=value.parent_id,
                 aliases=tuple(sorted(aliases.get(value.id, ()))),
+                colour=value.colour,
             )
         )
     return tuple(
@@ -185,6 +188,39 @@ async def rename_value(session: AsyncSession, facet_key: str, key: str, label: s
     """Change a value's display label. Free: labels reference the id, not the text."""
     _, value_id = await _resolve(session, facet_key, key)
     await session.execute(update(FacetValue).where(FacetValue.id == value_id).values(label=label))
+
+
+async def set_value_colour(
+    session: AsyncSession, facet_key: str, value_key: str, colour: str | None
+) -> None:
+    """Set or clear a value's stored colour. `None` clears it, returning the
+    value to the derived palette slot (spec §2.5)."""
+    _facet_id, value_id = await _resolve(session, facet_key, value_key)
+    await session.execute(update(FacetValue).where(FacetValue.id == value_id).values(colour=colour))
+
+
+async def get_value(session: AsyncSession, facet_key: str, value_key: str) -> VocabularyValue:
+    """One value, with its aliases and colour. Raises like `rename_value` does."""
+    _facet_id, value_id = await _resolve(session, facet_key, value_key)
+    row = await session.get(FacetValue, value_id)
+    assert row is not None  # _resolve just found it in this transaction
+    aliases = (
+        (
+            await session.execute(
+                select(FacetValueAlias.alias).where(FacetValueAlias.facet_value_id == value_id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+    return VocabularyValue(
+        id=row.id,
+        key=row.key,
+        label=row.label,
+        parent_id=row.parent_id,
+        aliases=tuple(aliases),
+        colour=row.colour,
+    )
 
 
 async def add_alias(session: AsyncSession, facet_key: str, key: str, alias: str) -> None:

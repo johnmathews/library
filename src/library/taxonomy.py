@@ -110,6 +110,8 @@ class SenderCount:
     id: int
     name: str
     document_count: int
+    #: A stored colour for this sender as a chart split value; see Sender.colour.
+    colour: str | None = None
 
 
 @dataclass(frozen=True)
@@ -200,7 +202,7 @@ async def create_kind(session: AsyncSession, name: str) -> CreateKindResult:
 async def list_senders(session: AsyncSession) -> list[SenderCount]:
     """All senders ordered by name; counts exclude soft-deleted documents."""
     statement = (
-        select(Sender.id, Sender.name, func.count(Document.id))
+        select(Sender.id, Sender.name, Sender.colour, func.count(Document.id))
         .join(
             Document,
             (Document.sender_id == Sender.id) & Document.deleted_at.is_(None),
@@ -211,8 +213,8 @@ async def list_senders(session: AsyncSession) -> list[SenderCount]:
     )
     rows = (await session.execute(statement)).all()
     return [
-        SenderCount(id=sender_id, name=name, document_count=count)
-        for sender_id, name, count in rows
+        SenderCount(id=sender_id, name=name, document_count=count, colour=colour)
+        for sender_id, name, colour, count in rows
     ]
 
 
@@ -414,7 +416,7 @@ async def create_recipient(session: AsyncSession, name: str) -> "CreateEntityRes
 # nullable ON DELETE SET NULL). Each service owns its transaction.
 
 
-async def _sender_document_count(session: AsyncSession, sender_id: int) -> int:
+async def sender_document_count(session: AsyncSession, sender_id: int) -> int:
     """Non-deleted documents from a sender (matches list_senders counts)."""
     return (
         await session.execute(
@@ -479,7 +481,7 @@ async def rename_sender(
 
     if target is not None:
         if not merge:
-            count = await _sender_document_count(session, target.id)
+            count = await sender_document_count(session, target.id)
             return SenderRenameResult(status="collision", sender=target, document_count=count)
         await session.execute(
             update(Document).where(Document.sender_id == sender_id).values(sender_id=target.id)
@@ -512,7 +514,7 @@ async def reassign_and_delete_sender(
         if await session.get(Sender, target_id) is None:
             return DeleteResult(status="target_not_found")
 
-    count = await _sender_document_count(session, sender_id)
+    count = await sender_document_count(session, sender_id)
     if count > 0 and not provided:
         return DeleteResult(status="in_use", document_count=count)
 

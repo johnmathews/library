@@ -14,6 +14,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from library import taxonomy
 from library.db import get_session
+from library.models import Sender
+from library.schemas import Colour
 
 router: APIRouter = APIRouter(tags=["taxonomy"])
 
@@ -55,6 +57,9 @@ class SenderWithCount(BaseModel):
     id: int
     name: str
     document_count: int = Field(description="Non-deleted documents from this sender.")
+    #: A stored colour for this sender as a chart split value; null means the
+    #: client derives a stable palette slot from `id` (spec §2.5).
+    colour: str | None = None
 
 
 class RecipientWithCount(BaseModel):
@@ -142,6 +147,41 @@ async def list_senders(
         SenderWithCount.model_validate(sender, from_attributes=True)
         for sender in await taxonomy.list_senders(session)
     ]
+
+
+class SenderPatch(BaseModel):
+    """Edit a sender's display attributes. `colour` only, for now: a sender's
+    name is derived from ingested documents and renaming one is a taxonomy
+    operation with its own merge semantics (see the admin recipients route)."""
+
+    colour: Colour | None = None
+
+
+@router.patch("/senders/{sender_id}", response_model=SenderWithCount, summary="Edit a sender")
+async def patch_sender(
+    sender_id: int,
+    body: SenderPatch,
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> SenderWithCount:
+    """Set or clear a sender's stored chart colour (spec §2.5).
+
+    An absent `colour` leaves it alone; an explicit `null` clears it, returning
+    the sender to a palette slot derived from its id.
+    """
+    sender = await session.get(Sender, sender_id)
+    if sender is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail=f"no sender with id {sender_id}"
+        )
+    if "colour" in body.model_fields_set:
+        sender.colour = body.colour
+    await session.commit()
+    return SenderWithCount(
+        id=sender.id,
+        name=sender.name,
+        document_count=await taxonomy.sender_document_count(session, sender_id),
+        colour=sender.colour,
+    )
 
 
 @router.get("/recipients", response_model=list[RecipientWithCount], summary="List recipients")

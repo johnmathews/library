@@ -9,11 +9,12 @@ app.py, like every other router.
 """
 
 import re
+from datetime import date
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field, StringConstraints
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -26,6 +27,7 @@ from library.facets.vocabulary import (
     ValueInUseError,
 )
 from library.models import Document, Facet, FacetValueSuggestion
+from library.schemas import Colour
 
 router: APIRouter = APIRouter(tags=["facets"])
 
@@ -61,6 +63,9 @@ class ValueOut(BaseModel):
     label: str
     parent_id: int | None
     aliases: list[str]
+    #: A stored colour for this value as a chart split value; null means the
+    #: client derives a stable palette slot from `key` (spec §2.5).
+    colour: str | None = None
 
 
 class FacetOut(BaseModel):
@@ -85,8 +90,16 @@ class ValueCreate(BaseModel):
     label: Label
 
 
-class ValueRename(BaseModel):
-    label: Label
+class ValuePatch(BaseModel):
+    """Edit a value's display attributes. Every field optional.
+
+    `colour` is genuinely nullable, so "clear it" and "do not touch it" cannot
+    both be `None` in one field — they are told apart by `model_fields_set`,
+    exactly as `ChartPatch.default_split` already is.
+    """
+
+    label: Label | None = None
+    colour: Colour | None = None
 
 
 class AliasCreate(BaseModel):
@@ -119,6 +132,7 @@ async def list_facets(session: Annotated[AsyncSession, Depends(get_session)]) ->
                         label=value.label,
                         parent_id=value.parent_id,
                         aliases=list(value.aliases),
+                        colour=value.colour,
                     )
                     for value in facet.values
                 ],
@@ -126,6 +140,52 @@ async def list_facets(session: Annotated[AsyncSession, Depends(get_session)]) ->
             for facet in facets
         ]
     )
+
+
+#: Counted over `spend_facts`, not `document_labels`, and that choice does the
+#: filtering for free: the view requires `amount_total IS NOT NULL` and its
+#: join to `payments` excludes soft-deleted documents, so neither an amountless
+#: nor a deleted document can put a moneyless proposal in front of the owner.
+#: `is_canonical` is the one filter that is not free and so is explicit: a
+#: merged twin is a second row for money already counted once.
+_FACET_COUNTS_SQL = """
+SELECT lbl.key AS facet_key,
+       lbl.value AS value_key,
+       count(DISTINCT sf.document_id) AS documents,
+       min(sf.date) AS first_date,
+       max(sf.date) AS last_date
+FROM spend_facts sf
+CROSS JOIN LATERAL jsonb_each_text(sf.labels) AS lbl(key, value)
+WHERE sf.is_canonical
+GROUP BY lbl.key, lbl.value
+ORDER BY documents DESC, lbl.key, lbl.value
+"""
+
+
+class FacetValueCount(BaseModel):
+    facet_key: str
+    value_key: str
+    documents: int
+    first_date: date | None
+    last_date: date | None
+
+
+class FacetCountsOut(BaseModel):
+    counts: list[FacetValueCount]
+
+
+@router.get("/facets/counts", summary="Document counts per facet value")
+async def facet_counts(
+    session: Annotated[AsyncSession, Depends(get_session)],
+) -> FacetCountsOut:
+    """What the empty state proposes charts from (§10.4).
+
+    A separate route rather than counts on `GET /api/facets`, so
+    `DocumentFilterBar` — which loads the vocabulary on every document list
+    render — does not start paying for an aggregate it never reads.
+    """
+    rows = (await session.execute(text(_FACET_COUNTS_SQL))).mappings().all()
+    return FacetCountsOut(counts=[FacetValueCount(**dict(row)) for row in rows])
 
 
 @router.post("/facets", status_code=status.HTTP_201_CREATED, summary="Create a facet")
@@ -166,21 +226,37 @@ async def create_value(
     return {"key": body.key}
 
 
-@router.patch("/facets/{facet_key}/values/{value_key}", summary="Rename a value")
-async def rename_value(
+@router.patch("/facets/{facet_key}/values/{value_key}", summary="Edit a value")
+async def patch_value(
     facet_key: str,
     value_key: str,
-    body: ValueRename,
+    body: ValuePatch,
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> dict[str, str]:
+) -> ValueOut:
+    fields = body.model_fields_set
     try:
-        await vocabulary.rename_value(session, facet_key, value_key, body.label)
+        if "label" in fields:
+            if body.label is None:
+                raise HTTPException(
+                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                    detail="label cannot be cleared; a value must have a display label",
+                )
+            await vocabulary.rename_value(session, facet_key, value_key, body.label)
+        if "colour" in fields:
+            await vocabulary.set_value_colour(session, facet_key, value_key, body.colour)
+        value = await vocabulary.get_value(session, facet_key, value_key)
     except (UnknownFacetError, UnknownValueError) as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND, detail="Unknown facet value"
         ) from exc
     await session.commit()
-    return {"label": body.label}
+    return ValueOut(
+        key=value.key,
+        label=value.label,
+        parent_id=value.parent_id,
+        aliases=sorted(value.aliases),
+        colour=value.colour,
+    )
 
 
 @router.post("/facets/{facet_key}/values/{value_key}/aliases", summary="Add an alias")

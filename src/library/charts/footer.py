@@ -200,6 +200,229 @@ class _Group:
         )
 
 
+#: `_accounted_rows`'s bucket for a refund that matched the rule: it is
+#: already inside the total (`query.py` counts it, signed, there), and this
+#: module reports it again only as a lens on that total — "how much was
+#: netted off" — which is why it is the one bucket whose `_AccountedRow.amount`
+#: is not `sign * converted`.
+_NETTED_REFUND = "netted_refund"
+
+#: Every bucket `_CLASSIFY_SQL` can name that this module actually recognises.
+#: `_resolved_bucket` maps anything else — including a name this module does
+#: not know, which `_CLASSIFY_SQL`'s own comment says can reach Python — to
+#: `UNACCOUNTED`, the same way `chart_footer`'s dispatch always has. One
+#: function shared by `chart_footer` and `chart_footer_documents`: without it,
+#: an unforeseen bucket name would make the footer report `unaccounted` money
+#: while the drill route returned nothing for it — the one bucket whose whole
+#: reason to be drillable is the shape nobody predicted, going silent in
+#: exactly that shape.
+_KNOWN_BUCKETS = frozenset({_NETTED_REFUND, "excluded", UNCLASSIFIED, UNDATED, UNCATEGORISED})
+
+
+def _resolved_bucket(row_bucket: str, amount_kind: str | None) -> str:
+    """The bucket a row is reported under: `row_bucket` itself if this module
+    recognises it, `UNACCOUNTED` otherwise.
+
+    An `excluded` row with `amount_kind is None` is also routed to
+    `UNACCOUNTED` here, for both callers at once. `_CLASSIFY_SQL` orders its
+    `WHEN sf.amount_kind IS NULL THEN 'unclassified'` arm before the
+    `excluded` one, so no row reaching either caller can actually carry
+    `('excluded', None)` today — but the two callers must still agree about
+    what an unforeseen one would mean, and folding the rule in here rather
+    than testing for it separately in each caller is what makes that true by
+    construction instead of by two call sites happening to match.
+    """
+    if row_bucket == "excluded" and amount_kind is None:
+        return UNACCOUNTED
+    return row_bucket if row_bucket in _KNOWN_BUCKETS else UNACCOUNTED
+
+
+@dataclass(frozen=True, slots=True)
+class _AccountedRow:
+    """One classified row, converted to the chart's currency.
+
+    `amount` is `sign * converted` for every bucket except `_NETTED_REFUND`:
+    a refund lowers what it is part of, and a kind that never enters a total
+    contributes its magnitude — the same treatment the total gives it.
+    `_NETTED_REFUND` is the one exception, carrying the plain converted
+    magnitude rather than the signed value, because it is not being counted
+    here at all (`query.py` already counted it, signed); `Footer.netted_refunds`
+    is a positive magnitude rendered beside the total it is already inside, and
+    negating it a second time would say the opposite of what happened.
+
+    `currency` and `date` are the **document's own**, carried through for
+    display rather than converted — `amount` is the only field in the chart's
+    currency.
+    """
+
+    document_id: int
+    bucket: str
+    amount_kind: str | None
+    amount: Decimal
+    currency: str | None
+    date: date | None
+
+
+async def _accounted_rows(
+    session: AsyncSession,
+    rule: Rule,
+    *,
+    currency: str,
+    since: date | None,
+    until: date | None,
+    facets_in_rule: set[str],
+) -> tuple[list[_AccountedRow], dict[str | None, _Group]]:
+    """Every row the rule touched, classified and converted, plus the ones no
+    rate could convert.
+
+    The one execution of `_CLASSIFY_SQL` **and** the one place a row is
+    converted (see `_AccountedRow` for the one bucket where "signed" does not
+    apply). `chart_footer` aggregates the first return value and
+    `chart_footer_documents` filters it, so the count a footer reports and the
+    list a panel opens cannot disagree — not because a test compares them, but
+    because there is only one of them.
+
+    A row whose amount no rate can convert is in the second return value and
+    in neither bucket, exactly as the footer reports it: `unconvertible` is
+    not a bucket of the `CASE` but a separate account (docs/charts.md §5). A
+    `_NETTED_REFUND` row that cannot convert is dropped entirely — it was not
+    in the total either, so it was not netted off anything, and `query.py` has
+    already reported it; joining `missing` here would double the merged
+    unconvertible line (Task 10).
+    """
+    fragment, params = rule_predicate(rule)
+    unlabelled = _UNLABELLED if facets_in_rule else _NEVER_UNLABELLED
+    params["facets"] = sorted(facets_in_rule)
+    params["summable"] = sorted(kind.value for kind in SUMMABLE_AMOUNT_KINDS)
+    params["refund"] = AmountKind.REFUND.value
+    params["since"] = since
+    params["until"] = until
+    statement = text(_CLASSIFY_SQL.format(rule=fragment, unlabelled=unlabelled))
+    rows = (await session.execute(statement, params)).all()
+
+    accounted: list[_AccountedRow] = []
+    # Keyed by `str | None`: a row with no currency at all belongs here too.
+    missing: dict[str | None, _Group] = {}
+
+    for row in rows:
+        converted = await convert_amount(session, row.amount, row.currency, currency, row.date)
+        if row.bucket == _NETTED_REFUND:
+            if converted is not None:
+                accounted.append(
+                    _AccountedRow(
+                        document_id=row.document_id,
+                        bucket=row.bucket,
+                        amount_kind=row.amount_kind,
+                        amount=converted,
+                        currency=row.currency,
+                        date=row.date,
+                    )
+                )
+            continue
+        # A summable amount enters signed, so a refund lowers what it is part
+        # of; a kind that never enters a total has no sign and is accounted as
+        # the magnitude it is.
+        kind = AmountKind(row.amount_kind) if row.amount_kind is not None else None
+        sign = 1 if kind is None else AMOUNT_SIGN.get(kind, 1)
+        if converted is None:
+            # Reported, never dropped and never counted 1:1 (§9.3). The sign
+            # convention is the one the group would have used, so the merge in
+            # Task 10 stays coherent.
+            missing.setdefault(row.currency, _Group()).add(sign * row.amount, row.document_id)
+            continue
+        accounted.append(
+            _AccountedRow(
+                document_id=row.document_id,
+                bucket=row.bucket,
+                amount_kind=row.amount_kind,
+                amount=sign * converted,
+                currency=row.currency,
+                date=row.date,
+            )
+        )
+    return accounted, missing
+
+
+class FooterDocument(BaseModel):
+    """One document behind a footer bucket.
+
+    `amount` is the **sum of this document's rows in this bucket**, each
+    already converted (and, per `_AccountedRow`, signed for every bucket this
+    route can open) — not one row's raw value. A document split across spend
+    lines emits one row per line, and a `100.00` document split `60.00`/`40.00`
+    with neither line labelled emits two, proved against Postgres before this
+    was written. Rendering a single row's amount would print a number the
+    footer never reports.
+
+    `currency` and `date` are the **document's own**, carried through for
+    display; `amount` is in the chart's currency. A row showing `amount` in
+    EUR beside `currency: "GBP"` is not a bug — it is the document's own
+    currency next to the chart's converted figure.
+    """
+
+    document_id: int
+    amount: Decimal
+    currency: str | None
+    date: date | None
+    amount_kind: str | None
+
+
+async def chart_footer_documents(
+    session: AsyncSession,
+    rule: Rule,
+    *,
+    bucket: str,
+    amount_kind: str | None,
+    currency: str,
+    since: date | None,
+    until: date | None,
+    facets_in_rule: set[str],
+) -> list[FooterDocument]:
+    """The documents behind one footer bucket, deduplicated by document.
+
+    `len(...)` equals the bucket's reported `documents` and the amounts sum to
+    its reported `amount`, because both come from the same `_accounted_rows`
+    the footer aggregated — unconvertible rows included in neither.
+
+    `amount_kind` selects one group out of `excluded`, which is a list of
+    groups rather than a single figure; it is ignored for every other bucket,
+    which has exactly one group.
+
+    Ordering is by descending absolute amount then document id — the largest
+    contributor first, and stable across calls.
+    """
+    rows, _missing = await _accounted_rows(
+        session,
+        rule,
+        currency=currency,
+        since=since,
+        until=until,
+        facets_in_rule=facets_in_rule,
+    )
+    selected = (
+        row
+        for row in rows
+        if _resolved_bucket(row.bucket, row.amount_kind) == bucket
+        and (bucket != "excluded" or row.amount_kind == amount_kind)
+    )
+    merged: dict[int, FooterDocument] = {}
+    for row in selected:
+        existing = merged.get(row.document_id)
+        if existing is None:
+            merged[row.document_id] = FooterDocument(
+                document_id=row.document_id,
+                amount=row.amount,
+                currency=row.currency,
+                date=row.date,
+                amount_kind=row.amount_kind,
+            )
+        else:
+            merged[row.document_id] = existing.model_copy(
+                update={"amount": existing.amount + row.amount}
+            )
+    return sorted(merged.values(), key=lambda doc: (-abs(doc.amount), doc.document_id))
+
+
 async def chart_footer(
     session: AsyncSession,
     rule: Rule,
@@ -222,59 +445,47 @@ async def chart_footer(
     *would have* entered the total are left to `query.py`, which already
     reports them: Task 10 merges the two lists by currency, and reporting a row
     in both would double it.
+
+    The dispatch below is the only thing this function still does itself:
+    `_accounted_rows` does the fetch, the conversion and the signing, shared
+    with `chart_footer_documents`, so the two cannot disagree about what a row
+    is worth.
     """
-    fragment, params = rule_predicate(rule)
-    unlabelled = _UNLABELLED if facets_in_rule else _NEVER_UNLABELLED
-    params["facets"] = sorted(facets_in_rule)
-    params["summable"] = sorted(kind.value for kind in SUMMABLE_AMOUNT_KINDS)
-    params["refund"] = AmountKind.REFUND.value
-    params["since"] = since
-    params["until"] = until
-    statement = text(_CLASSIFY_SQL.format(rule=fragment, unlabelled=unlabelled))
-    rows = (await session.execute(statement, params)).all()
+    rows, missing = await _accounted_rows(
+        session,
+        rule,
+        currency=currency,
+        since=since,
+        until=until,
+        facets_in_rule=facets_in_rule,
+    )
 
     excluded: dict[str, _Group] = {}
     unclassified, uncategorised, undated = _Group(), _Group(), _Group()
     unaccounted = _Group()
     refunds = _Group()
-    # Keyed by `str | None`: a row with no currency at all belongs here too.
-    missing: dict[str | None, _Group] = {}
 
     for row in rows:
-        converted = await convert_amount(session, row.amount, row.currency, currency, row.date)
-        if row.bucket == "netted_refund":
-            # A refund the total could not convert is not in the total, so it
-            # was not netted off anything — and `query.py` has already reported
-            # it. Counting it here would inflate the header and double the
-            # merged unconvertible line.
-            if converted is not None:
-                refunds.add(converted, row.document_id)
-            continue
-        # A summable amount enters signed, so a refund lowers what it is part
-        # of; a kind that never enters a total has no sign and is accounted as
-        # the magnitude it is.
-        kind = AmountKind(row.amount_kind) if row.amount_kind is not None else None
-        sign = 1 if kind is None else AMOUNT_SIGN.get(kind, 1)
-        if converted is None:
-            # Reported, never dropped and never counted 1:1 (§9.3). The sign
-            # convention is the one the group would have used, so the merge in
-            # Task 10 stays coherent.
-            missing.setdefault(row.currency, _Group()).add(sign * row.amount, row.document_id)
-            continue
-        signed = sign * converted
-        if row.bucket == "excluded":
-            excluded.setdefault(row.amount_kind, _Group()).add(signed, row.document_id)
-        elif row.bucket == "unclassified":
-            unclassified.add(signed, row.document_id)
-        elif row.bucket == "undated":
-            undated.add(signed, row.document_id)
-        elif row.bucket == UNCATEGORISED:
-            uncategorised.add(signed, row.document_id)
+        resolved = _resolved_bucket(row.bucket, row.amount_kind)
+        if resolved == _NETTED_REFUND:
+            refunds.add(row.amount, row.document_id)
+        elif resolved == "excluded":
+            # `_resolved_bucket` already routes an `excluded` row with
+            # `amount_kind is None` to `UNACCOUNTED`, so `row.amount_kind`
+            # cannot be `None` by the time it is used as a dict key here.
+            assert row.amount_kind is not None
+            excluded.setdefault(row.amount_kind, _Group()).add(row.amount, row.document_id)
+        elif resolved == UNCLASSIFIED:
+            unclassified.add(row.amount, row.document_id)
+        elif resolved == UNDATED:
+            undated.add(row.amount, row.document_id)
+        elif resolved == UNCATEGORISED:
+            uncategorised.add(row.amount, row.document_id)
         else:
-            # Named buckets only above, so an unforeseen one lands here and is
-            # reported. A trailing `else: uncategorised.add(...)` would have
-            # relabelled it as a gap the chart understood.
-            unaccounted.add(signed, row.document_id)
+            # `_resolved_bucket` returns `UNACCOUNTED` for anything none of the
+            # arms above claimed, so this is reached only by that bucket —
+            # reported rather than dropped, the whole point of it existing.
+            unaccounted.add(row.amount, row.document_id)
 
     return Footer(
         netted_refunds=refunds.amount,

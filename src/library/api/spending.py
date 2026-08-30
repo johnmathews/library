@@ -45,7 +45,16 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.charts.draft import MAX_QUESTION_CHARS, DraftError, draft_rule
-from library.charts.footer import ExcludedGroup, Footer, chart_footer
+from library.charts.footer import (
+    UNACCOUNTED,
+    UNCATEGORISED,
+    UNCLASSIFIED,
+    UNDATED,
+    ExcludedGroup,
+    Footer,
+    chart_footer,
+    chart_footer_documents,
+)
 from library.charts.query import (
     SENDER_SPLIT,
     CellPayment,
@@ -57,8 +66,8 @@ from library.charts.query import (
 )
 from library.charts.rule import Rule, RuleError, rule_predicate
 from library.db import get_session
-from library.facets.vocabulary import VocabularyFacet, load_vocabulary
-from library.models import Chart, Document, Facet, FacetValue, Grain, LineLabel, SpendLine
+from library.facets.vocabulary import VocabularyFacet, VocabularyValue, load_vocabulary
+from library.models import Chart, Document, Facet, FacetValue, Grain, LineLabel, Sender, SpendLine
 from library.spend_lines import (
     AllocationError,
     LineInput,
@@ -145,6 +154,28 @@ class CellOut(BaseModel):
     payments: int
 
 
+class SplitValueOut(BaseModel):
+    """One bucket of the split axis, resolved for display (§2.3).
+
+    `value` is exactly what `/cell` must be sent back — the sender id as text,
+    or the facet value key, never the label. Resolution is a display concern
+    and lives here rather than in the engine, which keeps `split_value` stable
+    across a rename (docs/charts.md §4).
+
+    A **list** rather than a mapping: the unlabelled bucket's `value` is
+    `null`, which cannot be a JSON object key, and it is the bucket whose name
+    a client is least able to invent — it means "no value for this facet" under
+    a facet split and "no sender" under `split=sender`.
+
+    `colour` is a stored override; `null` means the client derives a stable
+    palette slot from `value` (§2.5).
+    """
+
+    value: str | None
+    label: str
+    colour: str | None
+
+
 class UnconvertibleOut(BaseModel):
     """Money the chart could not express in its display currency (§9.3).
 
@@ -228,6 +259,9 @@ class DataOut(BaseModel):
     since: date | None
     until: date | None
     cells: list[CellOut]
+    #: Every split bucket in `cells`, resolved for display (§2.3). Empty when
+    #: the chart has no split axis.
+    splits: list[SplitValueOut]
     total: Decimal
     payments: int
     documents: int
@@ -274,6 +308,13 @@ class CellOutBody(BaseModel):
     split_value: str | None
     total: Decimal
     payments: list[CellPaymentOut]
+    #: This cell's split bucket, resolved for display — so a drilled panel can
+    #: title itself without re-reading `/data`. `""` for an **unsplit** chart
+    #: (`_resolve_splits` returns `[]`, so there is no bucket to resolve) —
+    #: never a placeholder string, and distinct from an empty `label` on a
+    #: real bucket, which cannot occur.
+    label: str
+    colour: str | None
 
 
 class DraftIn(BaseModel):
@@ -365,6 +406,12 @@ class _ChartQuery:
     currency: str
     since: date | None
     until: date | None
+    #: The vocabulary this request was validated against. Kept so split
+    #: resolution reads the labels already loaded rather than loading them
+    #: again — and reads the *same* ones the rule was validated against, so a
+    #: value deleted mid-request cannot be valid in one half and missing in the
+    #: other.
+    vocabulary: tuple[VocabularyFacet, ...]
 
     def shared(self) -> _SharedArgs:
         return {
@@ -497,7 +544,105 @@ async def _resolve_query(
         currency=(currency or chart.display_currency).upper(),
         since=since,
         until=until,
+        vocabulary=vocabulary,
     )
+
+
+#: What the `null` split bucket is called, per axis. It is a real bucket — an
+#: unlabelled row lands in it rather than being dropped, which is the
+#: mechanical basis of the total's invariance (docs/charts.md §4) — so it needs
+#: a name, and only the API knows which one.
+_NO_SENDER = "No sender"
+_UNLABELLED = "Uncategorised"
+
+#: `senders.id` is Postgres `int4` (`models.py`'s `Sender.id`); a client-
+#: supplied id above this can never be a real row and would raise from
+#: asyncpg's own range check rather than resolving to the fallback.
+_MAX_SENDER_ID = 2**31 - 1
+
+
+async def _resolve_splits(
+    session: AsyncSession, query: _ChartQuery, values: list[str | None]
+) -> list[SplitValueOut]:
+    """Label and colour each split bucket present in a result.
+
+    Returns `[]` for an unsplit chart: there is no axis, so there are no
+    buckets to name — distinct from a split axis whose only bucket is the
+    unlabelled one.
+
+    A `value` whose sender row or facet value has since been deleted resolves
+    to itself. Facet values are deletable at runtime and a saved chart can rot;
+    a rotted legend entry is a legible defect, while raising here would be a
+    500 on every chart in range of one such row.
+    """
+    if query.split is None:
+        return []
+
+    if query.split == SENDER_SPLIT:
+        # `values` can come straight from `/cell`'s `split_value` query
+        # parameter, which is client-controlled and never validated as an id
+        # (§9.5: `/cell` takes whatever `/data` handed back, but a client can
+        # send anything). `int()` itself is the only reliable judge of "is
+        # this a number" — `str.isdigit()` is not a safe gate in front of it:
+        # it is `True` for characters `int()` rejects (superscripts and other
+        # Unicode category-No "digits", e.g. `"²"`), so filtering on it first
+        # still lets `int()` raise. Parsing defensively and bounding the
+        # result against `senders.id`'s `int4` range (`_MAX_SENDER_ID`) is
+        # what actually keeps a junk id from reaching `int()`'s `ValueError`
+        # or asyncpg's own range check — both unhandled 500s on a route with
+        # no other validation.
+        #
+        # Keyed by the **parsed** id, not the raw string: `int()` accepts
+        # forms `senders.id` never renders (`"007"`, fullwidth or other
+        # non-ASCII decimal digits), and a client sending one of those for a
+        # real sender must still get that sender's name, not a raw-string
+        # fallback that only fires for a mismatch of spelling, not of value.
+        numeric: dict[str, int] = {}
+        for value in values:
+            if value is None:
+                continue
+            try:
+                parsed = int(value)
+            except ValueError:
+                continue
+            if 0 <= parsed <= _MAX_SENDER_ID:
+                numeric[value] = parsed
+        rows = (
+            await session.execute(
+                select(Sender.id, Sender.name, Sender.colour).where(Sender.id.in_(numeric.values()))
+            )
+        ).all()
+        by_id = {row.id: (row.name, row.colour) for row in rows}
+        results = []
+        for value in values:
+            if value is None:
+                results.append(SplitValueOut(value=None, label=_NO_SENDER, colour=None))
+                continue
+            sender_id = numeric.get(value)
+            name, colour = (
+                (value, None) if sender_id is None else by_id.get(sender_id, (value, None))
+            )
+            results.append(SplitValueOut(value=value, label=name, colour=colour))
+        return results
+
+    facet = next((f for f in query.vocabulary if f.key == query.split), None)
+    by_key = {v.key: v for v in facet.values} if facet is not None else {}
+    return [
+        SplitValueOut(
+            value=value,
+            label=_UNLABELLED if value is None else _label_of(by_key.get(value), value),
+            colour=None if value is None else _colour_of(by_key.get(value)),
+        )
+        for value in values
+    ]
+
+
+def _label_of(value: VocabularyValue | None, fallback: str) -> str:
+    return fallback if value is None else value.label
+
+
+def _colour_of(value: VocabularyValue | None) -> str | None:
+    return None if value is None else value.colour
 
 
 def _merge_unconvertible(
@@ -559,7 +704,13 @@ def _footer_out(footer: Footer, from_total: list[Unconvertible]) -> FooterOut:
     )
 
 
-def _data_out(chart_id: int | None, query: _ChartQuery, series: Series, footer: Footer) -> DataOut:
+def _data_out(
+    chart_id: int | None,
+    query: _ChartQuery,
+    series: Series,
+    footer: Footer,
+    splits: list[SplitValueOut],
+) -> DataOut:
     """Serialise a chart's answer so the headline is the drawing (§2.5).
 
     `chart_series` guarantees `total == sum(cells)` **unquantised**, and
@@ -587,6 +738,7 @@ def _data_out(chart_id: int | None, query: _ChartQuery, series: Series, footer: 
         since=query.since,
         until=query.until,
         cells=cells,
+        splits=splits,
         # `_money` of an already-2dp sum is a no-op for the invariant and gives
         # the empty chart its `"0.00"`: `Decimal(0)` renders as `"0"`.
         total=_money(sum((cell.total for cell in cells), Decimal(0))),
@@ -641,7 +793,15 @@ async def _answer(session: AsyncSession, chart_id: int | None, query: _ChartQuer
         until=query.until,
         facets_in_rule=query.facets_in_rule,
     )
-    return _data_out(chart_id, query, series, footer)
+    # Manual de-duplication rather than `set()`: it preserves the engine's
+    # ordering, and the legend must match the order the chart draws its cells
+    # in, not an arbitrary hash order.
+    seen: list[str | None] = []
+    for cell in series.cells:
+        if cell.split_value not in seen:
+            seen.append(cell.split_value)
+    splits = await _resolve_splits(session, query, seen)
+    return _data_out(chart_id, query, series, footer, splits)
 
 
 # --- charts ------------------------------------------------------------------
@@ -663,6 +823,16 @@ async def list_charts(
         .all()
     )
     return ChartListOut(charts=[_chart_out(chart) for chart in rows])
+
+
+@router.get("/spending/{chart_id}", summary="One saved question")
+async def get_chart(
+    chart_id: int, session: Annotated[AsyncSession, Depends(get_session)]
+) -> ChartOut:
+    """One chart by id. The workspace loads through this rather than paging the
+    list, which would stop finding a chart as soon as there are more than
+    `limit` of them."""
+    return _chart_out(await _load_chart(session, chart_id))
 
 
 @router.post("/spending", status_code=status.HTTP_201_CREATED, summary="Save a question")
@@ -808,6 +978,8 @@ async def chart_cell_data(
         raise _unprocessable(
             f"period {period} is not the start of a {query.grain.value}; use {start}"
         )
+    resolved = await _resolve_splits(session, query, [split_value])
+    bucket = resolved[0] if resolved else None
     payments: list[CellPayment] = await chart_cell(
         session,
         query.rule,
@@ -820,6 +992,8 @@ async def chart_cell_data(
         period=period,
         split_value=split_value,
         total=_money(sum(rendered, Decimal(0))),
+        label=bucket.label if bucket else "",
+        colour=bucket.colour if bucket else None,
         payments=[
             CellPaymentOut(
                 payment_id=payment.payment_id,
@@ -839,6 +1013,126 @@ async def chart_cell_data(
                 ],
             )
             for payment, share in zip(payments, rendered, strict=True)
+        ],
+    )
+
+
+#: The buckets `_CLASSIFY_SQL` can put a row in that the footer reports. Named
+#: here rather than derived from `FooterOut`'s fields so an unknown bucket is a
+#: 422 the owner can read, and so `unaccounted` is openable: a bug signal you
+#: cannot open is not a signal. Built from `footer.py`'s own constants rather
+#: than re-spelled string literals, so a rename there cannot leave this set
+#: stale and the renamed bucket un-drillable behind a 422 naming a bucket the
+#: engine no longer has. `unconvertible` is deliberately absent: it is not a
+#: `_CLASSIFY_SQL` bucket at all but a merge of two separately-reported lists
+#: (docs/charts.md §5), so listing its documents would need `Unconvertible` to
+#: carry document ids — an engine change, out of scope.
+_FOOTER_BUCKETS = frozenset({"excluded", UNCLASSIFIED, UNCATEGORISED, UNDATED, UNACCOUNTED})
+
+
+class FooterDocumentOut(BaseModel):
+    """One document behind a footer count. `amount` is this document's total
+    within the bucket, summed across its spend lines."""
+
+    id: int
+    title: str | None
+    date: date | None
+    amount: Decimal
+    currency: str | None
+    amount_kind: str | None
+
+
+class FooterDocumentsOut(BaseModel):
+    """`total` is the bucket's full size, taken **before** paging: a bucket
+    with more documents than `limit` still returns only a page of them, and
+    without `total` a client cannot tell a complete list from the first 100 of
+    340 — the steady state for `uncategorised` on a real archive, not an edge
+    case (§9.4 calls it "a visible task" precisely because it tends to be
+    large)."""
+
+    bucket: str
+    total: int
+    documents: list[FooterDocumentOut]
+
+
+@router.get("/spending/{chart_id}/footer/{bucket}", summary="The documents behind a footer count")
+async def chart_footer_bucket(
+    chart_id: int,
+    bucket: str,
+    session: Annotated[AsyncSession, Depends(get_session)],
+    amount_kind: Annotated[
+        str | None, Query(description="Selects one group out of `excluded`.")
+    ] = None,
+    since: Annotated[date | None, Query(alias="from")] = None,
+    until: Annotated[date | None, Query(alias="to")] = None,
+    currency: Annotated[str | None, Query(pattern=r"^[A-Za-z]{3}$")] = None,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    offset: Annotated[int, Query(ge=0)] = 0,
+) -> FooterDocumentsOut:
+    """§9.4 calls uncategorised money "a visible task". This is what makes it
+    one: without it every footer count is a number with nowhere to go.
+
+    Takes the same window arguments as `/data` and resolves them the same way,
+    so the list answers the question the footer counted. `split` is left to
+    the chart's default (`_resolve_query`'s `split=None`) rather than cleared:
+    `chart_footer` itself takes no split, but inheriting the default still
+    validates it exactly as `/data` does, so a chart whose split axis names a
+    facet deleted at runtime is a 422 from both routes rather than a footer
+    panel that opens under a chart that will not draw.
+    """
+    if bucket not in _FOOTER_BUCKETS:
+        raise _unprocessable(
+            f"unknown footer bucket '{bucket}'; use one of {sorted(_FOOTER_BUCKETS)}"
+        )
+    if bucket == "excluded" and amount_kind is None:
+        # `excluded` is a *list* of groups, one per kind (§9.4) — unlike every
+        # other bucket, which has exactly one. Without `amount_kind` naming
+        # which group, `row.amount_kind == amount_kind` can never match (an
+        # excluded row always carries a kind) and the route would return an
+        # empty page indistinguishable from "that group is genuinely empty",
+        # three lines below a bucket check that already 422s and names the
+        # problem back to the caller.
+        raise _unprocessable("bucket 'excluded' needs '?amount_kind' naming which group")
+    chart = await _load_chart(session, chart_id)
+    query = await _resolve_query(
+        session, chart, grain=None, split=None, currency=currency, since=since, until=until
+    )
+    rows = await chart_footer_documents(
+        session,
+        query.rule,
+        bucket=bucket,
+        amount_kind=amount_kind,
+        currency=query.currency,
+        since=query.since,
+        until=query.until,
+        facets_in_rule=query.facets_in_rule,
+    )
+    total = len(rows)
+    page = rows[offset : offset + limit]
+    titles: dict[int, str | None] = dict(
+        (
+            await session.execute(
+                select(Document.id, Document.title).where(
+                    Document.id.in_([row.document_id for row in page])
+                )
+            )
+        )
+        .tuples()
+        .all()
+    )
+    return FooterDocumentsOut(
+        bucket=bucket,
+        total=total,
+        documents=[
+            FooterDocumentOut(
+                id=row.document_id,
+                title=titles.get(row.document_id),
+                date=row.date,
+                amount=_money(row.amount),
+                currency=row.currency,
+                amount_kind=row.amount_kind,
+            )
+            for row in page
         ],
     )
 
@@ -894,6 +1188,7 @@ async def draft_chart(
         currency=body.display_currency.upper(),
         since=body.since,
         until=body.until,
+        vocabulary=vocabulary,
     )
     return DraftOut(
         question=body.question,

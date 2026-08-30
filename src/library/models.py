@@ -322,6 +322,11 @@ class Sender(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    #: A stored colour for this sender as a chart split value (spec §10.3).
+    #: NULL means "derive a palette slot from the id" — the normal state.
+    colour: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    __table_args__ = (CheckConstraint("colour ~ '^#[0-9a-fA-F]{6}$'", name="colour_hex"),)
 
 
 class Recipient(Base):
@@ -391,6 +396,7 @@ class FacetValue(Base):
     __table_args__ = (
         UniqueConstraint("facet_id", "key", name="facet_values_facet_key"),
         UniqueConstraint("id", "facet_id", name="facet_values_id_facet"),
+        CheckConstraint("colour ~ '^#[0-9a-fA-F]{6}$'", name="colour_hex"),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
@@ -401,6 +407,9 @@ class FacetValue(Base):
         ForeignKey("facet_values.id", ondelete="RESTRICT"), nullable=True
     )
     ordinal: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    #: A stored colour for this value as a chart split value (spec §10.3).
+    #: NULL means "derive a palette slot from the key" — the normal state.
+    colour: Mapped[str | None] = mapped_column(String(32), nullable=True)
 
 
 class FacetValueAlias(Base):

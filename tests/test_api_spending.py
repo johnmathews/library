@@ -29,7 +29,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, text
+from sqlalchemy import delete, select, text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -44,6 +44,7 @@ from library.models import (
     DocumentStatus,
     FacetValue,
     FxRate,
+    Sender,
     SpendLine,
 )
 from library.schemas import DocumentUpdate
@@ -99,6 +100,7 @@ def _seed_document(
     day: date | None = MARCH,
     currency: str | None = "EUR",
     labels: Mapping[str, str] | None = None,
+    sender: str | None = None,
 ) -> int:
     async def work(session: AsyncSession) -> int:
         marker = f"spending-api:{uuid.uuid4()}"
@@ -113,6 +115,16 @@ def _seed_document(
             currency=currency,
             amount_kind=kind,
         )
+        if sender is not None:
+            existing = (
+                await session.execute(select(Sender.id).where(Sender.name == sender))
+            ).scalar_one_or_none()
+            if existing is None:
+                sender_row = Sender(name=sender)
+                session.add(sender_row)
+                await session.flush()
+                existing = sender_row.id
+            document.sender_id = existing
         session.add(document)
         await session.flush()
         for facet_key, value_key in (labels or {}).items():
@@ -120,6 +132,35 @@ def _seed_document(
         return document.id
 
     return _run(database_url, work)
+
+
+def _seed_sender_document(
+    database_url: str,
+    *,
+    sender: str,
+    amount: str,
+    day: date = MARCH,
+    labels: Mapping[str, str] | None = None,
+) -> tuple[int, int]:
+    """A document from a named sender; returns `(document_id, sender_id)`.
+
+    Extends `_seed_document`'s job rather than replacing it: `sender=` there
+    resolves-or-creates the `Sender` row, so there is one definition of "seed a
+    document for the spending API".
+    """
+    document_id = _seed_document(
+        database_url,
+        amount=amount,
+        kind=AmountKind.PAYMENT_MADE,
+        day=day,
+        sender=sender,
+        labels=labels,
+    )
+
+    async def read_sender_id(session: AsyncSession) -> int:
+        return (await session.execute(select(Sender.id).where(Sender.name == sender))).scalar_one()
+
+    return document_id, _run(database_url, read_sender_id)
 
 
 def _save_chart(
@@ -149,6 +190,9 @@ def _save_chart(
 SOFTWARE_RULE: dict[str, object] = {
     "all": [{"facet": "category", "op": "in", "values": ["software"]}]
 }
+
+#: Invented. Nothing here corresponds to a real sender.
+VENDOR_A = "Corvus Test Assurance"
 
 
 #: Two invented currencies, one worth exactly half the other, so an amount of
@@ -234,6 +278,24 @@ def test_editing_and_deleting_a_chart(api_client: TestClient) -> None:
     assert patched.json()["default_grain"] == "quarter"
     assert api_client.delete(f"/api/spending/{chart_id}").status_code == 204
     assert api_client.get(f"/api/spending/{chart_id}/data").status_code == 404
+
+
+def test_one_chart_can_be_read_by_id(api_client: TestClient) -> None:
+    """The workspace loads one chart. Without this it has to page the list
+    looking for a row, which breaks the moment there are more than `limit`."""
+    chart_id = _save_chart(api_client, "api-read-by-id", {"all": []})
+
+    response = api_client.get(f"/api/spending/{chart_id}")
+
+    assert response.status_code == 200, response.text
+    listed = api_client.get("/api/spending?limit=100").json()["charts"]
+    assert response.json() == next(c for c in listed if c["id"] == chart_id)
+
+
+def test_reading_an_unknown_chart_is_a_404(api_client: TestClient) -> None:
+    response = api_client.get("/api/spending/999999")
+    assert response.status_code == 404
+    assert "999999" in response.json()["detail"]
 
 
 def test_saving_a_rule_with_an_empty_value_list_is_a_422(api_client: TestClient) -> None:
@@ -422,6 +484,261 @@ def test_an_unknown_grain_is_a_422_naming_it(api_client: TestClient) -> None:
     response = api_client.get(f"/api/spending/{chart_id}/data?grain=fortnight")
     assert response.status_code == 422
     assert "fortnight" in response.text
+
+
+# --- split value resolution (labels and colours) -----------------------------
+
+
+def test_a_facet_split_resolves_value_keys_to_display_labels(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`spend_facts.labels` maps a facet key to a value *key*, so an unresolved
+    legend reads `software`. §2.3: the legend carries names."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+    chart_id = _save_chart(api_client, "api-splits-facet", {}, default_split="category")
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    assert {s["value"]: s["label"] for s in body["splits"]} == {"software": "Software"}
+
+
+def test_a_sender_split_resolves_ids_to_names(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The engine emits `CAST(sf.sender_id AS text)`, so without resolution the
+    legend reads `41`. The id stays as `value` because `/cell` round-trips it."""
+    name = f"{VENDOR_A} {uuid.uuid4()}"
+    _seed_sender_document(api_database_url, sender=name, amount="10.00")
+    chart_id = _save_chart(api_client, "api-splits-sender", {}, default_split="sender")
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    named = [s for s in body["splits"] if s["label"] == name]
+    assert len(named) == 1
+    assert named[0]["value"].isdigit(), "value stays the id /cell must be sent back"
+
+
+def test_the_unlabelled_bucket_is_named_by_the_axis(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`split_value` is null both for "no value for this facet" and for "no
+    sender". A client cannot invent either name; the API supplies it."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    facet_chart = _save_chart(api_client, "api-splits-null-facet", {}, default_split="category")
+    sender_chart = _save_chart(api_client, "api-splits-null-sender", {}, default_split="sender")
+
+    by_facet = api_client.get(f"/api/spending/{facet_chart}/data").json()
+    by_sender = api_client.get(f"/api/spending/{sender_chart}/data").json()
+
+    # Without this, an empty result (e.g. the seed silently failing) would
+    # satisfy the `in` checks below vacuously: `splits == []` contains
+    # neither pair, but so would a `splits` list that happened to omit them.
+    # Asserting the seeded document actually produced one cell each pins the
+    # test to real data.
+    assert len(by_facet["cells"]) == 1
+    assert len(by_sender["cells"]) == 1
+    assert (None, "Uncategorised") in [(s["value"], s["label"]) for s in by_facet["splits"]]
+    assert (None, "No sender") in [(s["value"], s["label"]) for s in by_sender["splits"]]
+
+
+def test_a_split_value_carries_its_stored_colour_and_null_when_unset(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    _seed_vocabulary(api_database_url)
+    for value in ("software", "services"):
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
+            labels={"category": value},
+        )
+
+    async def paint(session: AsyncSession) -> None:
+        await session.execute(
+            text("UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'software'")
+        )
+
+    _run(api_database_url, paint)
+    chart_id = _save_chart(api_client, "api-splits-colour", {}, default_split="category")
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    colours = {s["value"]: s["colour"] for s in body["splits"]}
+    assert colours["software"] == "#1f77b4"
+    assert colours["services"] is None
+
+
+def test_a_split_value_with_no_sender_row_falls_back_to_the_raw_value(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A sender referenced by a saved chart's data can be deleted after the
+    fact (a document's `sender_id` then becomes `NULL`, but `/cell`'s
+    `split_value` is a client-supplied query parameter that is never
+    validated against `spend_facts` at all — so this needs no fixture
+    surgery to reach: nothing has to have ever named 999999 for a client to
+    ask for it.
+    """
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, "api-splits-orphan", {}, default_split="sender")
+
+    body = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={"period": "2026-03-01", "split": "sender", "split_value": "999999"},
+    ).json()
+
+    assert body["label"] == "999999"
+
+
+#: Every input class that has crashed `_resolve_splits`'s sender branch, or
+#: that a narrower guard than `int()` itself would still let through:
+#: - a Unicode "digit" `str.isdigit()` accepts but `int()` rejects (superscript
+#:   two, category No) — the guard `isdigit() and int(value) <= MAX` still
+#:   raises on this one;
+#: - the empty string and a `+`-prefixed value, both edge cases of `int()`'s
+#:   own grammar;
+#: - a non-integer string;
+#: - a value out of `senders.id`'s `int4` range;
+#: - fullwidth and Arabic-indic decimal digits, which `int()` *does* accept —
+#:   included so a fix that over-corrects to ASCII-only parsing is not
+#:   mistaken for covering this class.
+_MALFORMED_SPLIT_VALUES = ["²", "", "+5", "not-an-id", "99999999999", "１２３", "٣"]  # noqa: RUF001
+
+
+@pytest.mark.parametrize("split_value", _MALFORMED_SPLIT_VALUES)
+def test_a_malformed_split_value_resolves_to_itself_rather_than_500ing(
+    api_client: TestClient, api_database_url: str, split_value: str
+) -> None:
+    """`split_value` is an unvalidated `/cell` query parameter — the one
+    surface a client actually controls. Every value in this class must come
+    back 200 with itself as the label (no sender is seeded, so nothing here
+    can resolve to a real name), never 500."""
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(
+        api_client, f"api-splits-malformed-{uuid.uuid4()}", {}, default_split="sender"
+    )
+
+    response = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={"period": "2026-03-01", "split": "sender", "split_value": split_value},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["label"] == split_value
+
+
+def test_a_split_value_in_non_canonical_form_still_resolves_to_the_senders_name(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`int()` accepts forms `senders.id` never renders on the wire — a
+    leading zero, here. Resolution must key on the *parsed* id, not the raw
+    string: a lookup keyed on the string would only ever match `str(row.id)`
+    exactly, so a real sender sent in a non-canonical form would mislabel to
+    the raw input instead of the sender's name."""
+    name = f"{VENDOR_A} {uuid.uuid4()}"
+    _document_id, sender_id = _seed_sender_document(api_database_url, sender=name, amount="10.00")
+    chart_id = _save_chart(
+        api_client, f"api-splits-canonical-{uuid.uuid4()}", {}, default_split="sender"
+    )
+
+    body = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={
+            "period": "2026-03-01",
+            "split": "sender",
+            "split_value": f"00{sender_id}",
+        },
+    ).json()
+
+    assert body["label"] == name
+
+
+def test_a_cell_carries_its_own_label_and_colour(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """So a drilled panel can title itself without re-reading /data."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+
+    async def paint(session: AsyncSession) -> None:
+        await session.execute(
+            text("UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'software'")
+        )
+
+    _run(api_database_url, paint)
+    chart_id = _save_chart(api_client, "api-cell-label", SOFTWARE_RULE, default_split="category")
+    data = api_client.get(f"/api/spending/{chart_id}/data").json()
+    cell = next(c for c in data["cells"] if c["split_value"] == "software")
+
+    body = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={
+            "period": cell["period"],
+            "split_value": cell["split_value"],
+            "grain": data["grain"],
+            "split": data["split"],
+            "currency": data["currency"],
+        },
+    ).json()
+
+    assert body["label"] == "Software"
+    assert body["colour"] == "#1f77b4"
+
+
+def test_an_unsplit_chart_has_no_split_values(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`split_value` is null for an unsplit chart too, and that is not a bucket
+    needing a name — it is the absence of an axis."""
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, "api-splits-none", {})
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    assert body["split"] is None
+    assert body["splits"] == []
+
+
+#: Five buckets rather than two: a two-element `set()` agrees with insertion
+#: order about half the time, so a mutation to `set()` there would only be
+#: caught by chance. Five gives 1-in-120 accidental agreement instead.
+_LEGEND_ORDER_VALUES = ("software", "services", "hardware", "travel", "office")
+
+
+def test_the_legend_order_matches_the_cells(api_client: TestClient, api_database_url: str) -> None:
+    """De-duplication preserves the engine's ordering. A `set()` would not, and
+    a legend ordered differently from the chart is a legend that mislabels it."""
+    _seed_vocabulary(api_database_url, values=_LEGEND_ORDER_VALUES)
+    for value in _LEGEND_ORDER_VALUES:
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
+            labels={"category": value},
+        )
+    chart_id = _save_chart(api_client, "api-splits-order", {}, default_split="category")
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    first_seen: list[str | None] = []
+    for cell in body["cells"]:
+        if cell["split_value"] not in first_seen:
+            first_seen.append(cell["split_value"])
+    # Without this, an empty `cells`/`splits` pair (e.g. the seed silently
+    # failing) would satisfy the equality below vacuously.
+    assert len(first_seen) == len(_LEGEND_ORDER_VALUES)
+    assert [s["value"] for s in body["splits"]] == first_seen
 
 
 # --- the drill-through -------------------------------------------------------
@@ -941,3 +1258,254 @@ async def test_a_database_error_that_is_not_the_sum_trigger_is_not_a_400(
         await _commit_allocation(session)
     assert getattr(caught.value.orig, "sqlstate", None) == "23505"
     await session.rollback()
+
+
+# --- the footer drill route ---------------------------------------------------
+
+
+def test_the_footer_route_lists_the_documents_behind_a_count(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    _seed_vocabulary(api_database_url)
+    document_id = _seed_document(api_database_url, amount="89.20", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, "api-footer-drill", SOFTWARE_RULE)
+    data = api_client.get(f"/api/spending/{chart_id}/data").json()
+    counted = data["footer"]["uncategorised"]["documents"]
+
+    body = api_client.get(
+        f"/api/spending/{chart_id}/footer/uncategorised",
+        params={"currency": data["currency"]},
+    ).json()
+
+    assert len(body["documents"]) == counted
+    listed = {d["id"]: d for d in body["documents"]}
+    assert document_id in listed
+    assert listed[document_id]["amount"] == "89.20"
+
+
+def test_an_unknown_footer_bucket_is_a_422_naming_it(api_client: TestClient) -> None:
+    chart_id = _save_chart(api_client, "api-footer-bucket-422", {})
+    response = api_client.get(f"/api/spending/{chart_id}/footer/nonsense")
+    assert response.status_code == 422
+    assert "nonsense" in response.json()["detail"]
+
+
+def test_excluded_without_amount_kind_is_a_422_not_an_empty_page(
+    api_client: TestClient,
+) -> None:
+    """`row.amount_kind == amount_kind` can never match an `excluded` row when
+    `amount_kind` is omitted — every `excluded` row carries a kind — so a
+    missing `amount_kind` and an unrecognised one would both otherwise render
+    as an empty page indistinguishable from "that group is genuinely empty"."""
+    chart_id = _save_chart(api_client, "api-footer-excluded-422", {})
+    response = api_client.get(f"/api/spending/{chart_id}/footer/excluded")
+    assert response.status_code == 422
+    assert "amount_kind" in response.json()["detail"]
+
+
+def test_the_footer_route_caps_its_limit_at_100(api_client: TestClient) -> None:
+    chart_id = _save_chart(api_client, "api-footer-limit", {})
+    response = api_client.get(
+        f"/api/spending/{chart_id}/footer/uncategorised", params={"limit": 101}
+    )
+    assert response.status_code == 422
+
+
+def test_the_footer_route_reports_the_buckets_full_size_before_paging(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A bucket bigger than one page must say so.
+
+    `uncategorised` on a real archive is exactly this shape (§9.4 calls it "a
+    visible task" because it tends to be large), so a page of `limit` items
+    beside a `total` that only counts the page would make a bucket of 340 look
+    complete at 100 — indistinguishable from the footer's own count.
+    """
+    _seed_vocabulary(api_database_url)
+    for _ in range(3):
+        _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, "api-footer-paging", SOFTWARE_RULE)
+    body = api_client.get(
+        f"/api/spending/{chart_id}/footer/uncategorised", params={"limit": 2}
+    ).json()
+    assert body["total"] == 3
+    assert len(body["documents"]) == 2
+    assert body["total"] > len(body["documents"])
+
+
+def test_the_footer_route_and_the_footer_count_agree_after_a_window_narrows(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The route takes /data's window arguments and must resolve them the same
+    way, or the list answers a different question from the count above it."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE, day=MARCH)
+    _seed_document(
+        api_database_url,
+        amount="20.00",
+        kind=AmountKind.PAYMENT_MADE,
+        day=date(2026, 6, 1),
+    )
+    chart_id = _save_chart(api_client, "api-footer-window", SOFTWARE_RULE)
+    window = {"from": "2026-03-01", "to": "2026-03-31"}
+
+    data = api_client.get(f"/api/spending/{chart_id}/data", params=window).json()
+    body = api_client.get(
+        f"/api/spending/{chart_id}/footer/uncategorised",
+        params={**window, "currency": data["currency"]},
+    ).json()
+
+    assert len(body["documents"]) == data["footer"]["uncategorised"]["documents"]
+
+
+# --- facet counts -------------------------------------------------------------
+
+
+def test_counts_are_ordered_by_document_count(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The empty state proposes questions worth asking, so the busiest values
+    come first (§10.4)."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha", "beta"))
+    for _ in range(2):
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
+            labels={facet: "alpha"},
+        )
+    _seed_document(
+        api_database_url, amount="30.00", kind=AmountKind.PAYMENT_MADE, labels={facet: "beta"}
+    )
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    mine = [c for c in counts if c["facet_key"] == facet]
+    assert [(c["value_key"], c["documents"]) for c in mine] == [("alpha", 2), ("beta", 1)]
+
+
+def test_counts_carry_the_date_span(api_client: TestClient, api_database_url: str) -> None:
+    """ "15 documents in `software` over 3 months" needs both ends."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha",))
+    for day in (date(2026, 1, 5), date(2026, 3, 9)):
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
+            day=day,
+            labels={facet: "alpha"},
+        )
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    alpha = next(c for c in counts if c["facet_key"] == facet)
+    assert alpha["first_date"] == "2026-01-05"
+    assert alpha["last_date"] == "2026-03-09"
+
+
+def test_a_value_with_no_money_behind_it_is_absent(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Reading `spend_facts` rather than `document_labels` does this for free:
+    the view requires `amount_total IS NOT NULL` and its join to `payments`
+    excludes soft-deleted documents. Proposing a chart of a value the archive
+    has no amounts for is exactly the noise §10.4 replaces.
+
+    A bare "the excluded values are absent" assertion is true whether the
+    filtering works or nothing under this uuid4 facet key was ever seeded, so
+    a third, money-bearing, non-deleted value under the SAME facet is seeded
+    too and asserted present — that ties the negative claim to the positive
+    one and makes the test discriminate real filtering from an empty-by-
+    coincidence result (review finding on this task)."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("amountless", "deleted", "present"))
+    _seed_document(api_database_url, amount=None, labels={facet: "amountless"})
+    deleted_id = _seed_document(
+        api_database_url,
+        amount="99.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={facet: "deleted"},
+    )
+    _seed_document(
+        api_database_url,
+        amount="12.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={facet: "present"},
+    )
+
+    async def soft_delete(session: AsyncSession) -> None:
+        await session.execute(
+            text("UPDATE documents SET deleted_at = now() WHERE id = :id"), {"id": deleted_id}
+        )
+
+    _run(api_database_url, soft_delete)
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    mine = {c["value_key"] for c in counts if c["facet_key"] == facet}
+    assert mine == {"present"}
+
+
+def test_a_merged_pair_counts_once(api_client: TestClient, api_database_url: str) -> None:
+    """`is_canonical` is the one filter reading `spend_facts` does not give for
+    free: a merged twin is a second row for money already counted once."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha",))
+    name = f"Corvus Test Assurance {uuid.uuid4()}"
+    document_ids = [
+        _seed_sender_document(
+            api_database_url, sender=name, amount="10.00", labels={facet: "alpha"}
+        )[0]
+        for _ in range(2)
+    ]
+
+    async def read_payment_ids(session: AsyncSession) -> list[int]:
+        rows = await session.execute(
+            text("SELECT DISTINCT payment_id FROM payments WHERE document_id = ANY(:ids)"),
+            {"ids": document_ids},
+        )
+        return [row[0] for row in rows]
+
+    payment_ids = _run(api_database_url, read_payment_ids)
+    assert payment_ids == [payment_ids[0]], (
+        "same sender, amount, currency and day (R1) must merge the pair into one "
+        "payment, or the count below proves nothing"
+    )
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    alpha = next(c for c in counts if c["facet_key"] == facet)
+    assert alpha["documents"] == 1, "two documents, one payment, one canonical row"
+
+
+def test_a_split_document_counts_once_in_facet_counts(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`count(DISTINCT sf.document_id)` guards a *different* overcounting
+    mechanism than `is_canonical` does: one canonical document split across
+    spend lines emits one `spend_facts` row per line, and both lines here
+    carry the same label (inherited from the document, per migration 0035's
+    `doc_labels || line_labels`) — two identical `(facet_key, value_key)`
+    pairs from one document. Deleting `DISTINCT` from `_FACET_COUNTS_SQL`
+    leaves this document counted twice while every other test in this file
+    stays green, which is exactly the regression this test exists to catch."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha",))
+    document_id = _seed_document(
+        api_database_url,
+        amount="20.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={facet: "alpha"},
+    )
+    response = api_client.put(
+        f"/api/documents/{document_id}/spend-lines",
+        json={"lines": [{"amount": "10.00"}, {"amount": "10.00"}]},
+    )
+    assert response.status_code == 200, response.text
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    alpha = next(c for c in counts if c["facet_key"] == facet)
+    assert alpha["documents"] == 1, "one document split into two lines, one canonical row"
