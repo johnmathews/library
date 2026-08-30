@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { fromCents, toCents } from '../money'
+import { formatMoney, fromCents, toCents } from '../money'
 
 describe('money', () => {
   it('parses the decimal strings the API actually sends', () => {
@@ -21,9 +21,41 @@ describe('money', () => {
     expect(fromCents(toCents('1284.50') - toCents('1142.20'))).toBe('142.30')
   })
 
+  // These values are the ones that actually catch a `Number(amount) * 100`
+  // implementation: 0.29 * 100 is 28.999999999999996 and 0.57 * 100 is
+  // 56.99999999999999 in IEEE754 — both floor to a cent short. (0.10, 0.20,
+  // 1284.50 and 1142.20 above do not drift under that multiplication, so they
+  // cannot detect this particular bug on their own.)
+  it('parses amounts a naive float multiply would round down', () => {
+    expect(toCents('0.29')).toBe(29)
+    expect(toCents('0.57')).toBe(57)
+  })
+
   it('round-trips negatives and sub-unit values', () => {
     expect(fromCents(-4900)).toBe('-49.00')
     expect(fromCents(-5)).toBe('-0.05')
     expect(fromCents(0)).toBe('0.00')
+  })
+
+  describe('formatMoney', () => {
+    it('groups thousands with commas', () => {
+      expect(formatMoney('1284.50', 'EUR')).toBe('EUR 1,284.50')
+    })
+
+    it('does not add a separator under 1000', () => {
+      expect(formatMoney('284.50', 'EUR')).toBe('EUR 284.50')
+    })
+
+    it('puts the sign before the currency code', () => {
+      expect(formatMoney('-49.00', 'USD')).toBe('-USD 49.00')
+    })
+
+    it('formats a sub-unit value', () => {
+      expect(formatMoney('0.05', 'GBP')).toBe('GBP 0.05')
+    })
+
+    it('formats a whole-number input with no decimal part', () => {
+      expect(formatMoney('0', 'GBP')).toBe('GBP 0.00')
+    })
   })
 })

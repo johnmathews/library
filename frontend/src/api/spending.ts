@@ -132,14 +132,6 @@ export interface Draft {
   preview: ChartData | null
 }
 
-export interface FacetCount {
-  facet_key: string
-  value_key: string
-  documents: number
-  first_date: string | null
-  last_date: string | null
-}
-
 export const FOOTER_BUCKETS = ['excluded', 'unclassified', 'uncategorised', 'undated', 'unaccounted'] as const
 export type FooterBucket = (typeof FOOTER_BUCKETS)[number]
 
@@ -148,6 +140,19 @@ export interface ChartArgs {
   grain?: Grain
   /** `''` clears the split axis; `undefined` takes the chart's default. */
   split?: string | null
+  from?: string
+  to?: string
+  currency?: string
+}
+
+/**
+ * Window arguments the footer routes accept. `GET
+ * /api/spending/{id}/footer/{bucket}` declares no `grain` or `split` query
+ * param (it always resolves the chart's default split, §-comment on the
+ * handler) — `ChartArgs` is too wide here and sending either is silently
+ * ignored, which would trap a caller into thinking it changed the bucket.
+ */
+export interface FooterArgs {
   from?: string
   to?: string
   currency?: string
@@ -258,12 +263,14 @@ export function fetchCell(
 export function fetchFooterBucket(
   id: number,
   bucket: FooterBucket,
-  opts: ChartArgs & { amount_kind?: string; limit?: number; offset?: number } = {},
+  opts: FooterArgs & { amount_kind?: string; limit?: number; offset?: number } = {},
 ): Promise<FooterDocuments> {
-  const { amount_kind, limit = MAX_LIMIT, offset = 0, ...args } = opts
+  const { amount_kind, limit = MAX_LIMIT, offset = 0, from, to, currency } = opts
   return apiFetch<FooterDocuments>(`/api/spending/${id}/footer/${bucket}`, {
     query: {
-      ...windowQuery(args),
+      from,
+      to,
+      currency,
       amount_kind,
       limit: Math.min(limit, MAX_LIMIT),
       offset,
@@ -274,10 +281,4 @@ export function fetchFooterBucket(
 /** POST /api/spending/draft — turn a free-text question into a rule preview. */
 export function draftQuestion(body: DraftIn): Promise<Draft> {
   return apiFetch<Draft>('/api/spending/draft', { method: 'POST', body })
-}
-
-/** GET /api/facets/counts — document counts per facet value, for the empty-state chart proposals. */
-export async function fetchFacetCounts(): Promise<FacetCount[]> {
-  const body = await apiFetch<{ counts: FacetCount[] }>('/api/facets/counts')
-  return body.counts
 }

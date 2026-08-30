@@ -28,6 +28,20 @@ export async function fetchFacets(): Promise<FacetRef[]> {
   return body.facets
 }
 
+export interface FacetCount {
+  facet_key: string
+  value_key: string
+  documents: number
+  first_date: string | null
+  last_date: string | null
+}
+
+/** GET /api/facets/counts — document counts per facet value, for the empty-state chart proposals. */
+export async function fetchFacetCounts(): Promise<FacetCount[]> {
+  const body = await apiFetch<{ counts: FacetCount[] }>('/api/facets/counts')
+  return body.counts
+}
+
 /** GET /api/documents/{id}/labels — this document's facet_key -> value_key map. */
 export async function fetchDocumentLabels(id: number): Promise<Record<string, string>> {
   const body = await apiFetch<{ labels: Record<string, string> }>(`/api/documents/${id}/labels`)
