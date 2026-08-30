@@ -1491,6 +1491,17 @@ it('opens the Other body for the folded segment, not a /cell call', async () => 
 
 it('opens a footer bucket in the same panel shell', async () => { … })
 
+// Carried from Task 3: SpendingChart has no loading signal of its own and
+// never keys its <Bar> on `data`, so the previous render is held rather than
+// flashing a skeleton. The CONSUMER owns the reduced-opacity treatment, and
+// SpendingCard already does it — the workspace must too, or the requirement is
+// only half met.
+it('dims the chart while a refetch is in flight, without unmounting it', async () => { … })
+
+// Carried from Task 4: the legend emits `reset` from its "Show all" control
+// when any band is hidden. An unwired emit is a dead control.
+it('restores every hidden band when the legend asks to reset', async () => { … })
+
 // §4.7: isolation must not touch the number the API reported.
 it('keeps the headline total when a legend entry is isolated', async () => {
   const before = headlineTotal(wrapper)
