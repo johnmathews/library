@@ -2,6 +2,7 @@ import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import ValueMergeView from '../ValueMergeView.vue'
 import { SPLIT_PALETTE } from '@/utils/splitPalette'
+import { ApiError } from '@/api/client'
 
 vi.mock('@/api/facets', () => ({ fetchFacets: vi.fn(), mergeValue: vi.fn() }))
 import * as api from '@/api/facets'
@@ -131,5 +132,50 @@ describe('ValueMergeView', () => {
     await flushPromises()
     expect(api.mergeValue).toHaveBeenLastCalledWith('category', 'alpha', 'beta', false)
     expect(push).toHaveBeenCalledWith({ name: 'vocabulary' })
+  })
+  it("never lets a stale response for a superseded target attach to the current preview", async () => {
+    // The async continuation's `if (target.value !== next) return` guard is the
+    // only thing standing between an out-of-order dry-run resolution and a
+    // count that belongs to the wrong target being shown as approved.
+    const wrapper = await open()
+
+    let resolveBeta!: (v: { moved: number }) => void
+    vi.mocked(api.mergeValue).mockReturnValueOnce(new Promise((r) => { resolveBeta = r }))
+    await wrapper.find('[data-testid="merge-target"]').setValue('beta')
+
+    let resolveGamma!: (v: { moved: number }) => void
+    vi.mocked(api.mergeValue).mockReturnValueOnce(new Promise((r) => { resolveGamma = r }))
+    await wrapper.find('[data-testid="merge-target"]').setValue('gamma')
+
+    // The newer request (gamma, the current selection) lands first.
+    resolveGamma({ moved: 4 })
+    await flushPromises()
+    expect(wrapper.find('[data-testid="merge-diff"]').text()).toContain('4')
+    expect(
+      (wrapper.find('[data-testid="merge-apply"]').element as HTMLButtonElement).disabled,
+    ).toBe(false)
+
+    // The stale beta response — superseded before it ever resolved — lands
+    // afterwards. It must not blank the diff or detach it from gamma.
+    resolveBeta({ moved: 9 })
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="merge-diff"]').exists()).toBe(true)
+    expect(wrapper.find('[data-testid="merge-diff"]').text()).toContain('4')
+    expect(
+      (wrapper.find('[data-testid="merge-apply"]').element as HTMLButtonElement).disabled,
+    ).toBe(false)
+  })
+
+  it('renders the server detail verbatim on a 409 (e.g. a self-merge)', async () => {
+    // docs/facets.md §4: a merge into itself is refused on the real run and
+    // the dry run alike, because the fold is a copy-then-delete that would
+    // otherwise destroy the value and all its aliases.
+    const wrapper = await open()
+    await chooseTarget(wrapper, 'beta')
+    vi.mocked(api.mergeValue).mockRejectedValueOnce(new ApiError(409, 'invented-conflict-detail'))
+    await wrapper.find('[data-testid="merge-apply"]').trigger('click')
+    await flushPromises()
+    expect(wrapper.find('[data-testid="merge-error"]').text()).toBe('invented-conflict-detail')
   })
 })
