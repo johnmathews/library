@@ -104,6 +104,15 @@ const WITH_NEGATIVE_CELL: ChartData = {
   ),
 }
 
+// Every segment negative for one period — a bucket that is entirely a
+// refund, so the whole stack's net is negative (distinct from
+// WITH_NEGATIVE_CELL, which mixes one negative segment into an otherwise
+// positive stack).
+const ALL_NEGATIVE_PERIOD: ChartData = {
+  ...DATA,
+  cells: DATA.cells.map((c) => (c.period === '2026-06-01' ? { ...c, total: `-${c.total}` } : c)),
+}
+
 const UNSPLIT: ChartData = {
   ...DATA,
   split: null,
@@ -130,6 +139,12 @@ interface BarProps {
     scales: { x: { type: string; stacked: boolean }; y: { stacked: boolean; beginAtZero: boolean } }
   }
 }
+interface FullBorderRadius {
+  topLeft: number
+  topRight: number
+  bottomLeft: number
+  bottomRight: number
+}
 interface BarDataset {
   label: string
   data: number[]
@@ -137,6 +152,7 @@ interface BarDataset {
   borderWidth: number
   borderColor: string
   maxBarThickness: number
+  borderRadius: (ctx: { dataIndex: number }) => FullBorderRadius
 }
 
 function barProps(wrapper: VueWrapper): BarProps {
@@ -270,5 +286,58 @@ describe('SpendingChart', () => {
     }
     const datasets = chartDataOf(mountChart(sparse)).datasets
     expect(datasets[1]!.data).toEqual([5, 0, 7]) // Licences: Jun, (missing) Jul, Aug
+  })
+
+  // --- borderRadius: only the outermost stack segment rounds -----------------
+  //
+  // The mock hands us the real scriptable `borderRadius` function on each
+  // dataset object, so it is exercised directly — `datasets[i].borderRadius`
+  // is exactly what Chart.js itself would call per bar segment, per render.
+
+  const SQUARE = { topLeft: 0, topRight: 0, bottomLeft: 0, bottomRight: 0 }
+  const TOP_ROUNDED = { topLeft: 4, topRight: 4, bottomLeft: 0, bottomRight: 0 }
+  const BOTTOM_ROUNDED = { topLeft: 0, topRight: 0, bottomLeft: 4, bottomRight: 4 }
+
+  it('rounds only the topmost segment of an all-positive stack', () => {
+    // 2026-06-01 (index 0): hosting 10.00, licences 5.00, Other 3.00 — all
+    // positive, so the topmost (last, in stack order) is Other.
+    const datasets = chartDataOf(mountChart()).datasets
+    expect(datasets[0]!.borderRadius({ dataIndex: 0 })).toEqual(SQUARE)
+    expect(datasets[1]!.borderRadius({ dataIndex: 0 })).toEqual(SQUARE)
+    expect(datasets[2]!.borderRadius({ dataIndex: 0 })).toEqual(TOP_ROUNDED)
+  })
+
+  it('rounds the bottom of the outermost negative segment when the stack net is negative', () => {
+    // 2026-06-01 (index 0) under ALL_NEGATIVE_PERIOD: hosting -10.00,
+    // licences -5.00, Other -3.00 — every segment negative, so the outer
+    // (most negative, last in stack order) is Other, rounded at the bottom.
+    const datasets = chartDataOf(mountChart(ALL_NEGATIVE_PERIOD)).datasets
+    expect(datasets[0]!.borderRadius({ dataIndex: 0 })).toEqual(SQUARE)
+    expect(datasets[1]!.borderRadius({ dataIndex: 0 })).toEqual(SQUARE)
+    expect(datasets[2]!.borderRadius({ dataIndex: 0 })).toEqual(BOTTOM_ROUNDED)
+  })
+
+  it('rounds the positive arm at its top and the negative arm at its bottom, independently, in a mixed stack', () => {
+    // 2026-08-01 (index 2) under WITH_NEGATIVE_CELL: hosting -3.00 (the only
+    // negative segment — bottom-rounded), licences 7.00 (interior positive —
+    // square), Other 6.00 (the last positive — top-rounded).
+    const datasets = chartDataOf(mountChart(WITH_NEGATIVE_CELL)).datasets
+    expect(datasets[0]!.borderRadius({ dataIndex: 2 })).toEqual(BOTTOM_ROUNDED)
+    expect(datasets[1]!.borderRadius({ dataIndex: 2 })).toEqual(SQUARE)
+    expect(datasets[2]!.borderRadius({ dataIndex: 2 })).toEqual(TOP_ROUNDED)
+  })
+
+  it('keeps a zero-valued segment square and never picks it as the outermost', () => {
+    // 2026-07-01 (index 1) with the Licences cell removed: hosting 11.00,
+    // licences 0 (absent), Other 4.50 — the zero segment stays square, and
+    // Other (still the last positive) keeps the top rounding regardless.
+    const sparse: ChartData = {
+      ...DATA,
+      cells: DATA.cells.filter((c) => !(c.period === '2026-07-01' && c.split_value === 'licences')),
+    }
+    const datasets = chartDataOf(mountChart(sparse)).datasets
+    expect(datasets[1]!.borderRadius({ dataIndex: 1 })).toEqual(SQUARE)
+    expect(datasets[0]!.borderRadius({ dataIndex: 1 })).toEqual(SQUARE)
+    expect(datasets[2]!.borderRadius({ dataIndex: 1 })).toEqual(TOP_ROUNDED)
   })
 })

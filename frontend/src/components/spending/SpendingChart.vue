@@ -9,7 +9,7 @@
  * where `bands` is `[]` and there is nothing to fold — the single series
  * draws in the first shared-palette slot (`SPLIT_PALETTE[0]`).
  */
-import { computed, ref } from 'vue'
+import { computed } from 'vue'
 import { Bar } from 'vue-chartjs'
 import { BarElement, CategoryScale, Chart as ChartJS, LinearScale, Tooltip } from 'chart.js'
 import { useDark } from '@vueuse/core'
@@ -247,14 +247,6 @@ const chartOptions = computed(() => ({
     },
   },
 }))
-
-// Handle to the underlying Chart.js instance, for a future canvas export —
-// the same pattern SeriesChartTile.vue exposes.
-const barRef = ref<{ chart?: { canvas: HTMLCanvasElement } } | null>(null)
-function getChartCanvas(): HTMLCanvasElement | null {
-  return barRef.value?.chart?.canvas ?? null
-}
-defineExpose({ getChartCanvas })
 </script>
 
 <template>
@@ -263,7 +255,6 @@ defineExpose({ getChartCanvas })
     data-testid="spending-chart"
   >
     <Bar
-      ref="barRef"
       :data="chartData"
       :options="chartOptions"
     />
