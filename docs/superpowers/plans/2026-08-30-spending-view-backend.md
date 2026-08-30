@@ -357,6 +357,7 @@ async def test_the_vocabulary_carries_each_value_s_colour(session: AsyncSession,
     assert category.value("software").colour == "#1f77b4"
     assert category.value("services").colour is None
 
+```
 
 These two are **API-level** — synchronous, `api_client`, uniquely-keyed
 fixtures. Put them in `tests/test_api_facets.py`, not in
@@ -1801,9 +1802,6 @@ git add -A && git commit -m "feat(charts): drill through to the documents behind
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/test_api_facets.py`:
-
-```python
 These are **API-level**, and they go in `tests/test_api_spending.py` rather than
 `tests/test_api_facets.py` — that is where `_seed_document` and `_seed_vocabulary`
 live, and where a document with an amount can be seeded at all.
