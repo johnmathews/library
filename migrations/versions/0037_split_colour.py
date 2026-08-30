@@ -37,8 +37,6 @@ gotcha: ``op.drop_constraint(..., type_="check")`` runs the given name through
 the same naming convention (``Base.metadata`` carries one — models.py), so the
 downgrade must also pass ``"colour_hex"``, not ``"ck_<table>_colour_hex"``.
 
-
-
 Create Date: 2026-08-30 00:00:00.000000
 
 """
