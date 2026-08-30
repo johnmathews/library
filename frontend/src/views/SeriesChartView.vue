@@ -34,9 +34,11 @@ const {
 } = useChartsTimeframe()
 const { grouping, options: groupingOptions } = useChartsGrouping()
 
-// After the series is deleted there is nothing to show here — return to the grid.
+// After the series is deleted there is nothing to show here — return to the
+// grid. `/charts` is now the spending board, not a series grid, so this goes
+// to `/charts/legacy`, where the series grid (and Smart Groups UI) live.
 function onDeleted(): void {
-  router.push('/charts')
+  router.push('/charts/legacy')
 }
 
 // --- Export & share (W6) ----------------------------------------------------

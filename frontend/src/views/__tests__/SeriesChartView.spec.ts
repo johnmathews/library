@@ -109,13 +109,15 @@ describe('SeriesChartView', () => {
     expect(wrapper.find('[data-testid="chart-share"]').text()).toContain('Link copied')
   })
 
-  it('returns to the grid when the tile reports the series was deleted', async () => {
+  it('returns to the legacy grid (not the spending board) when the tile reports the series was deleted', async () => {
+    // `/charts` is the spending board now, which doesn't list series at all;
+    // the series grid this view belongs to lives at `/charts/legacy`.
     vi.mocked(fetchChart).mockResolvedValue(series as never)
     const wrapper = mountView()
     await flushPromises()
     wrapper.findComponent(TileStub).vm.$emit('deleted')
     await flushPromises()
-    expect(push).toHaveBeenCalledWith('/charts')
+    expect(push).toHaveBeenCalledWith('/charts/legacy')
   })
 
   it('shows a not-found message when the series cannot be loaded', async () => {
