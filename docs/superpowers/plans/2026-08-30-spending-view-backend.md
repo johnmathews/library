@@ -23,6 +23,57 @@
 - **Direct pushes to `main` are rejected by a ruleset.** Everything goes through a PR. CI's `backend` job takes ~16–18 minutes and is not hanging.
 - Run the full backend suite before opening the PR: `uv run pytest -q`.
 
+### The two test idioms, and which one a test uses
+
+This repository has **two** shapes of test and they do not mix. Using the wrong
+one is the most likely way to waste a round on this plan.
+
+**Engine-level** (`tests/test_chart_footer.py`, `tests/test_chart_query.py`,
+`tests/test_split_colour.py`): `async def`, the `session` fixture, and the
+`document` / `facets` fixtures from `tests/conftest.py`. `asyncio_mode = "auto"`,
+so no `@pytest.mark.asyncio` is needed. `document(...)` takes
+`amount_total`, `amount_kind`, `document_date`, `currency`, `labels`, `deleted`,
+`sender`, `title`. `facets` creates `FIXTURE_VOCABULARY`.
+
+**API-level** (`tests/test_api_spending.py`, `tests/test_api_facets.py`):
+**synchronous** `def`, the `api_client: TestClient` fixture, and seeding through
+a **separate engine** — `api_client` drives the app on its own loop, so the test
+cannot share the `session` fixture's. Never write `await api_client.get(...)`;
+`TestClient` is synchronous.
+
+The helpers already in those files, to be reused rather than rewritten:
+
+```python
+# tests/test_api_spending.py
+def _run[T](database_url: str, work: Callable[[AsyncSession], Awaitable[T]]) -> T
+def _seed_vocabulary(database_url, facet="category", values=("software", "services")) -> None
+def _seed_document(database_url, *, amount: str | None = None, kind: AmountKind | None = None,
+                   day: date | None = MARCH, currency: str | None = "EUR",
+                   labels: Mapping[str, str] | None = None) -> int
+def _save_chart(api_client, name, rule, *, default_split=None) -> int
+SOFTWARE_RULE: dict[str, object]
+MARCH = date(2026, 3, 1)
+
+# tests/test_api_facets.py
+def _make_facet(api_client) -> str        # a fresh, uniquely-keyed facet
+def _run[T](api_database_url, op) -> T
+```
+
+Two consequences:
+
+- **Chart and facet names must be unique per test.** Both suites share one
+  database and list endpoints default to 25 rows, so a list assertion is scoped
+  by a name the test invented, never by a count. Follow the existing `api-...`
+  prefix convention in `test_api_spending.py`.
+- **`_seed_document` has no `sender=` parameter yet.** Task 5 needs one; add it
+  to the existing helper (resolving or creating a `Sender` by name inside
+  `work`) rather than writing a second seeding function.
+
+Where a task below shows a test written against `session`/`document` but names
+an HTTP route, it is an **API-level** test: seed with these helpers and call
+`api_client` synchronously. The assertions are the requirement; the seeding
+idiom is the one above.
+
 ---
 
 ## File Structure
@@ -307,36 +358,48 @@ async def test_the_vocabulary_carries_each_value_s_colour(session: AsyncSession,
     assert category.value("services").colour is None
 
 
-@pytest.mark.asyncio
-async def test_get_facets_returns_colour(client, session: AsyncSession, facets) -> None:
-    await session.execute(
-        text("UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'software'")
-    )
-    await session.commit()
-    body = (await client.get("/api/facets")).json()
-    values = {
-        v["key"]: v["colour"]
-        for f in body["facets"]
-        if f["key"] == "category"
-        for v in f["values"]
-    }
-    assert values["software"] == "#1f77b4"
-    assert values["services"] is None
+These two are **API-level** — synchronous, `api_client`, uniquely-keyed
+fixtures. Put them in `tests/test_api_facets.py`, not in
+`tests/test_split_colour.py`:
+
+```python
+def test_get_facets_returns_colour(api_client: TestClient, api_database_url: str) -> None:
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+    api_client.post(f"/api/facets/{key}/values", json={"key": "beta", "label": "Beta"})
+
+    async def paint(session: AsyncSession) -> None:
+        await session.execute(
+            text(
+                "UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'alpha' "
+                "AND facet_id = (SELECT id FROM facets WHERE key = :facet)"
+            ),
+            {"facet": key},
+        )
+
+    _run(api_database_url, paint)
+
+    facet = next(f for f in api_client.get("/api/facets").json()["facets"] if f["key"] == key)
+    colours = {v["key"]: v["colour"] for v in facet["values"]}
+    assert colours == {"alpha": "#1f77b4", "beta": None}
 
 
-@pytest.mark.asyncio
-async def test_get_senders_returns_colour(client, session: AsyncSession) -> None:
-    await session.execute(
-        text("INSERT INTO senders (name, colour) VALUES ('Corvus Test Supply', '#d62728')")
-    )
-    await session.commit()
-    rows = (await client.get("/api/senders")).json()
-    assert [r["colour"] for r in rows if r["name"] == "Corvus Test Supply"] == ["#d62728"]
+def test_get_senders_returns_colour(api_client: TestClient, api_database_url: str) -> None:
+    name = f"Corvus Test Supply {uuid.uuid4()}"
+
+    async def seed(session: AsyncSession) -> None:
+        session.add(Sender(name=name, colour="#d62728"))
+
+    _run(api_database_url, seed)
+
+    rows = api_client.get("/api/senders").json()
+    assert [r["colour"] for r in rows if r["name"] == name] == ["#d62728"]
 ```
 
-Check the existing `client` fixture's name in `tests/test_api_facets.py` and use
-whatever that file uses; the fixtures in this repository are shared through
-`tests/conftest.py`.
+`_make_facet` and `_run` already exist in `tests/test_api_facets.py`; add
+`Sender` and `text` to its imports. Check the exact path and body shape of the
+create-value route (`@router.post("/facets/{facet_key}/values"...)` at ~line 147
+of `src/library/api/facets.py`) and match it — do not guess.
 
 - [ ] **Step 2: Run the test and watch it fail**
 
@@ -443,102 +506,108 @@ Append to `tests/test_split_colour.py`:
 COLOUR_PATTERN_REJECTS = ["1f77b4", "#1f7", "#gggggg", "rebeccapurple"]
 
 
-@pytest.mark.asyncio
-async def test_a_value_s_colour_can_be_set_without_renaming_it(client, facets) -> None:
+def _colour(api_client: TestClient, facet_key: str, value_key: str) -> str | None:
+    facet = next(
+        f for f in api_client.get("/api/facets").json()["facets"] if f["key"] == facet_key
+    )
+    return next(v["colour"] for v in facet["values"] if v["key"] == value_key)
+
+
+def _labelled(api_client: TestClient, facet_key: str, value_key: str) -> str:
+    facet = next(
+        f for f in api_client.get("/api/facets").json()["facets"] if f["key"] == facet_key
+    )
+    return next(v["label"] for v in facet["values"] if v["key"] == value_key)
+
+
+def test_a_value_s_colour_can_be_set_without_renaming_it(api_client: TestClient) -> None:
     """Setting a colour must not force a rename. `label` is optional on the
     patch for the same reason `colour` is: an absent field is left alone."""
-    before = (await client.get("/api/facets")).json()
-    label_before = next(
-        v["label"]
-        for f in before["facets"]
-        if f["key"] == "category"
-        for v in f["values"]
-        if v["key"] == "software"
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+
+    response = api_client.patch(
+        f"/api/facets/{key}/values/alpha", json={"colour": "#1f77b4"}
     )
-    response = await client.patch(
-        "/api/facets/category/values/software", json={"colour": "#1f77b4"}
-    )
-    assert response.status_code == 200
-    after = (await client.get("/api/facets")).json()
-    value = next(
-        v for f in after["facets"] if f["key"] == "category" for v in f["values"]
-        if v["key"] == "software"
-    )
-    assert value["colour"] == "#1f77b4"
-    assert value["label"] == label_before
+
+    assert response.status_code == 200, response.text
+    assert _colour(api_client, key, "alpha") == "#1f77b4"
+    assert _labelled(api_client, key, "alpha") == "Alpha"
 
 
-@pytest.mark.asyncio
-async def test_an_explicit_null_clears_a_colour_and_an_absent_field_does_not(
-    client, facets
+def test_an_explicit_null_clears_a_colour_and_an_absent_field_does_not(
+    api_client: TestClient,
 ) -> None:
     """The `model_fields_set` distinction, which is the whole reason this is not
     one nullable field: "clear it" and "do not touch it" are different requests
     that both look like None."""
-    await client.patch("/api/facets/category/values/software", json={"colour": "#1f77b4"})
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+    api_client.patch(f"/api/facets/{key}/values/alpha", json={"colour": "#1f77b4"})
 
-    await client.patch("/api/facets/category/values/software", json={"label": "Software"})
-    kept = (await client.get("/api/facets")).json()
-    assert _colour(kept, "software") == "#1f77b4", "an absent colour must be left alone"
+    api_client.patch(f"/api/facets/{key}/values/alpha", json={"label": "Alpha renamed"})
+    assert _colour(api_client, key, "alpha") == "#1f77b4", "an absent colour is left alone"
 
-    await client.patch("/api/facets/category/values/software", json={"colour": None})
-    cleared = (await client.get("/api/facets")).json()
-    assert _colour(cleared, "software") is None, "an explicit null must clear it"
-
-
-def _colour(body: dict, value_key: str) -> str | None:
-    return next(
-        v["colour"]
-        for f in body["facets"]
-        if f["key"] == "category"
-        for v in f["values"]
-        if v["key"] == value_key
-    )
+    api_client.patch(f"/api/facets/{key}/values/alpha", json={"colour": None})
+    assert _colour(api_client, key, "alpha") is None, "an explicit null clears it"
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("colour", COLOUR_PATTERN_REJECTS)
-async def test_a_malformed_colour_is_a_422_not_a_500(client, facets, colour: str) -> None:
+def test_a_malformed_colour_is_a_422_not_a_500(api_client: TestClient, colour: str) -> None:
     """Refused by the request model, so the database CHECK is defence in depth
     rather than the error path the owner sees."""
-    response = await client.patch(
-        "/api/facets/category/values/software", json={"colour": colour}
-    )
+    key = _make_facet(api_client)
+    api_client.post(f"/api/facets/{key}/values", json={"key": "alpha", "label": "Alpha"})
+
+    response = api_client.patch(f"/api/facets/{key}/values/alpha", json={"colour": colour})
+
     assert response.status_code == 422
 
 
-@pytest.mark.asyncio
-async def test_a_sender_s_colour_can_be_set_and_cleared(client, session: AsyncSession) -> None:
-    await session.execute(text("INSERT INTO senders (name) VALUES ('Corvus Test Supply')"))
-    await session.commit()
-    sender_id = await session.scalar(
-        text("SELECT id FROM senders WHERE name = 'Corvus Test Supply'")
-    )
+def test_patching_an_unknown_value_is_still_a_404(api_client: TestClient) -> None:
+    """The behaviour the route had before it became a patch, preserved."""
+    key = _make_facet(api_client)
+    response = api_client.patch(f"/api/facets/{key}/values/absent", json={"label": "X"})
+    assert response.status_code == 404
 
-    set_response = await client.patch(f"/api/senders/{sender_id}", json={"colour": "#d62728"})
-    assert set_response.status_code == 200
+
+def _seed_sender(api_database_url: str, name: str) -> int:
+    async def work(session: AsyncSession) -> int:
+        sender = Sender(name=name)
+        session.add(sender)
+        await session.flush()
+        return sender.id
+
+    return _run(api_database_url, work)
+
+
+def test_a_sender_s_colour_can_be_set_and_cleared(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    sender_id = _seed_sender(api_database_url, f"Corvus Test Supply {uuid.uuid4()}")
+
+    set_response = api_client.patch(f"/api/senders/{sender_id}", json={"colour": "#d62728"})
+    assert set_response.status_code == 200, set_response.text
     assert set_response.json()["colour"] == "#d62728"
 
-    clear_response = await client.patch(f"/api/senders/{sender_id}", json={"colour": None})
+    clear_response = api_client.patch(f"/api/senders/{sender_id}", json={"colour": None})
     assert clear_response.json()["colour"] is None
 
 
-@pytest.mark.asyncio
-async def test_patching_an_unknown_sender_is_a_404(client) -> None:
-    assert (await client.patch("/api/senders/999999", json={"colour": "#d62728"})).status_code == 404
+def test_patching_an_unknown_sender_is_a_404(api_client: TestClient) -> None:
+    assert api_client.patch("/api/senders/999999", json={"colour": "#d62728"}).status_code == 404
 
 
-@pytest.mark.asyncio
 @pytest.mark.parametrize("colour", COLOUR_PATTERN_REJECTS)
-async def test_a_malformed_sender_colour_is_a_422(client, session, colour: str) -> None:
-    await session.execute(text("INSERT INTO senders (name) VALUES ('Corvus Test Supply')"))
-    await session.commit()
-    sender_id = await session.scalar(
-        text("SELECT id FROM senders WHERE name = 'Corvus Test Supply'")
-    )
-    response = await client.patch(f"/api/senders/{sender_id}", json={"colour": colour})
-    assert response.status_code == 422
+def test_a_malformed_sender_colour_is_a_422(
+    api_client: TestClient, api_database_url: str, colour: str
+) -> None:
+    sender_id = _seed_sender(api_database_url, f"Corvus Test Supply {uuid.uuid4()}")
+    assert api_client.patch(f"/api/senders/{sender_id}", json={"colour": colour}).status_code == 422
 ```
+
+All API-level: synchronous, `api_client`, `_make_facet` for a uniquely-keyed
+facet. They live in `tests/test_api_facets.py`.
 
 - [ ] **Step 2: Run the test and watch it fail**
 
@@ -747,34 +816,27 @@ git add -A && git commit -m "feat(charts): set and clear a split value's colour"
 Append to `tests/test_api_spending.py`:
 
 ```python
-@pytest.mark.asyncio
-async def test_one_chart_can_be_read_by_id(client, facets) -> None:
+def test_one_chart_can_be_read_by_id(api_client: TestClient) -> None:
     """The workspace loads one chart. Without this it has to page the list
     looking for a row, which breaks the moment there are more than `limit`."""
-    created = (
-        await client.post(
-            "/api/spending",
-            json={
-                "name": "Software spending",
-                "rule": {"all": [{"facet": "category", "values": ["software"]}]},
-                "display_currency": "EUR",
-                "default_split": "cost_type",
-            },
-        )
-    ).json()
+    chart_id = _save_chart(api_client, "api-read-by-id", SOFTWARE_RULE, default_split="cost_type")
 
-    response = await client.get(f"/api/spending/{created['id']}")
+    response = api_client.get(f"/api/spending/{chart_id}")
 
-    assert response.status_code == 200
-    assert response.json() == created
+    assert response.status_code == 200, response.text
+    listed = api_client.get("/api/spending?limit=100").json()["charts"]
+    assert response.json() == next(c for c in listed if c["id"] == chart_id)
 
 
-@pytest.mark.asyncio
-async def test_reading_an_unknown_chart_is_a_404(client) -> None:
-    response = await client.get("/api/spending/999999")
+def test_reading_an_unknown_chart_is_a_404(api_client: TestClient) -> None:
+    response = api_client.get("/api/spending/999999")
     assert response.status_code == 404
     assert "999999" in response.json()["detail"]
 ```
+
+`_save_chart` validates the split against the vocabulary, so seed it first if
+`cost_type` is not present — read `_seed_vocabulary`'s default values and pass a
+split that exists, or call `_save_chart` with `default_split=None`.
 
 - [ ] **Step 2: Run and watch it fail**
 
@@ -846,211 +908,212 @@ Append to `tests/test_api_spending.py`:
 ```python
 #: Invented. Nothing here corresponds to a real sender.
 VENDOR_A = "Corvus Test Assurance"
-VENDOR_B = "Kestrel Test Utilities"
 
 
-@pytest.mark.asyncio
-async def test_a_facet_split_resolves_value_keys_to_display_labels(
-    client, session, document, facets
+def _seed_sender_document(
+    database_url: str, *, sender: str, amount: str, day: date = MARCH
+) -> tuple[int, int]:
+    """A document from a named sender; returns `(document_id, sender_id)`.
+
+    Extends `_seed_document`'s job rather than replacing it: add a `sender=`
+    parameter to that helper and call it from here, so there is one definition
+    of "seed a document for the spending API".
+    """
+
+
+def test_a_facet_split_resolves_value_keys_to_display_labels(
+    api_client: TestClient, api_database_url: str
 ) -> None:
     """`spend_facts.labels` maps a facet key to a value *key*, so an unresolved
     legend reads `software`. §2.3: the legend carries names."""
-    await document(
-        amount_total=Decimal("10.00"),
-        amount_kind=AmountKind.PAYMENT_MADE,
-        document_date=date(2026, 4, 1),
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
         labels={"category": "software"},
     )
-    await session.commit()
-    chart = (
-        await client.post(
-            "/api/spending",
-            json={"name": "All", "display_currency": "EUR", "default_split": "category"},
-        )
-    ).json()
+    chart_id = _save_chart(api_client, "api-splits-facet", {}, default_split="category")
 
-    body = (await client.get(f"/api/spending/{chart['id']}/data")).json()
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
 
     assert {s["value"]: s["label"] for s in body["splits"]} == {"software": "Software"}
 
 
-@pytest.mark.asyncio
-async def test_a_sender_split_resolves_ids_to_names(client, session, document, facets) -> None:
+def test_a_sender_split_resolves_ids_to_names(
+    api_client: TestClient, api_database_url: str
+) -> None:
     """The engine emits `CAST(sf.sender_id AS text)`, so without resolution the
     legend reads `41`. The id stays as `value` because `/cell` round-trips it."""
-    await document(
-        amount_total=Decimal("10.00"),
-        amount_kind=AmountKind.PAYMENT_MADE,
-        document_date=date(2026, 4, 1),
-        sender=VENDOR_A,
-    )
-    await session.commit()
-    chart = (
-        await client.post(
-            "/api/spending",
-            json={"name": "All", "display_currency": "EUR", "default_split": "sender"},
-        )
-    ).json()
+    name = f"{VENDOR_A} {uuid.uuid4()}"
+    _seed_sender_document(api_database_url, sender=name, amount="10.00")
+    chart_id = _save_chart(api_client, "api-splits-sender", {}, default_split="sender")
 
-    body = (await client.get(f"/api/spending/{chart['id']}/data")).json()
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
 
-    assert [s["label"] for s in body["splits"]] == [VENDOR_A]
-    assert body["splits"][0]["value"].isdigit(), "value stays the id /cell must be sent back"
+    named = [s for s in body["splits"] if s["label"] == name]
+    assert len(named) == 1
+    assert named[0]["value"].isdigit(), "value stays the id /cell must be sent back"
 
 
-@pytest.mark.asyncio
-async def test_the_unlabelled_bucket_is_named_by_the_axis(
-    client, session, document, facets
+def test_the_unlabelled_bucket_is_named_by_the_axis(
+    api_client: TestClient, api_database_url: str
 ) -> None:
     """`split_value` is null both for "no value for this facet" and for "no
     sender". A client cannot invent either name; the API supplies it."""
-    await document(
-        amount_total=Decimal("10.00"),
-        amount_kind=AmountKind.PAYMENT_MADE,
-        document_date=date(2026, 4, 1),
-    )
-    await session.commit()
-    facet_chart = (
-        await client.post(
-            "/api/spending",
-            json={"name": "By category", "display_currency": "EUR", "default_split": "category"},
-        )
-    ).json()
-    sender_chart = (
-        await client.post(
-            "/api/spending",
-            json={"name": "By sender", "display_currency": "EUR", "default_split": "sender"},
-        )
-    ).json()
+    _seed_vocabulary(api_database_url)
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    facet_chart = _save_chart(api_client, "api-splits-null-facet", {}, default_split="category")
+    sender_chart = _save_chart(api_client, "api-splits-null-sender", {}, default_split="sender")
 
-    by_facet = (await client.get(f"/api/spending/{facet_chart['id']}/data")).json()
-    by_sender = (await client.get(f"/api/spending/{sender_chart['id']}/data")).json()
+    by_facet = api_client.get(f"/api/spending/{facet_chart}/data").json()
+    by_sender = api_client.get(f"/api/spending/{sender_chart}/data").json()
 
-    assert [(s["value"], s["label"]) for s in by_facet["splits"]] == [(None, "Uncategorised")]
-    assert [(s["value"], s["label"]) for s in by_sender["splits"]] == [(None, "No sender")]
+    assert (None, "Uncategorised") in [(s["value"], s["label"]) for s in by_facet["splits"]]
+    assert (None, "No sender") in [(s["value"], s["label"]) for s in by_sender["splits"]]
 
 
-@pytest.mark.asyncio
-async def test_a_split_value_carries_its_stored_colour_and_null_when_unset(
-    client, session, document, facets
+def test_a_split_value_carries_its_stored_colour_and_null_when_unset(
+    api_client: TestClient, api_database_url: str
 ) -> None:
-    await session.execute(
-        text("UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'software'")
-    )
+    _seed_vocabulary(api_database_url)
     for value in ("software", "services"):
-        await document(
-            amount_total=Decimal("10.00"),
-            amount_kind=AmountKind.PAYMENT_MADE,
-            document_date=date(2026, 4, 1),
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
             labels={"category": value},
         )
-    await session.commit()
-    chart = (
-        await client.post(
-            "/api/spending",
-            json={"name": "All", "display_currency": "EUR", "default_split": "category"},
-        )
-    ).json()
 
-    body = (await client.get(f"/api/spending/{chart['id']}/data")).json()
+    async def paint(session: AsyncSession) -> None:
+        await session.execute(
+            text("UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'software'")
+        )
+
+    _run(api_database_url, paint)
+    chart_id = _save_chart(api_client, "api-splits-colour", {}, default_split="category")
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
 
     colours = {s["value"]: s["colour"] for s in body["splits"]}
-    assert colours == {"software": "#1f77b4", "services": None}
+    assert colours["software"] == "#1f77b4"
+    assert colours["services"] is None
 
 
-@pytest.mark.asyncio
-async def test_a_split_value_whose_row_vanished_falls_back_to_the_raw_value(
-    client, session, document, facets
+def test_a_split_value_whose_row_vanished_falls_back_to_the_raw_value(
+    api_client: TestClient, api_database_url: str
 ) -> None:
     """Facet values are deletable at runtime and a saved chart can rot. A
     rotted legend entry is a legible defect; a 500 on every chart in range is
     not — the same failure the `sorted()` over a null currency caused."""
-    await document(
-        amount_total=Decimal("10.00"),
-        amount_kind=AmountKind.PAYMENT_MADE,
-        document_date=date(2026, 4, 1),
-        sender=VENDOR_A,
+    name = f"{VENDOR_A} {uuid.uuid4()}"
+    document_id, _sender_id = _seed_sender_document(
+        api_database_url, sender=name, amount="10.00"
     )
-    await session.commit()
-    chart = (
-        await client.post(
-            "/api/spending",
-            json={"name": "All", "display_currency": "EUR", "default_split": "sender"},
+
+    async def orphan(session: AsyncSession) -> None:
+        # Break the reference the way runtime deletion would, without going
+        # through a route that would refuse it.
+        await session.execute(
+            text("UPDATE documents SET sender_id = 999999 WHERE id = :id"),
+            {"id": document_id},
         )
-    ).json()
-    # Break the reference the way runtime deletion would, without going through
-    # a route that would refuse it.
-    await session.execute(text("UPDATE documents SET sender_id = 999999"))
-    await session.commit()
 
-    response = await client.get(f"/api/spending/{chart['id']}/data")
+    _run(api_database_url, orphan)
+    chart_id = _save_chart(api_client, "api-splits-orphan", {}, default_split="sender")
 
-    assert response.status_code == 200
-    assert [s["label"] for s in response.json()["splits"]] == ["999999"]
+    response = api_client.get(f"/api/spending/{chart_id}/data")
+
+    assert response.status_code == 200, response.text
+    assert "999999" in [s["label"] for s in response.json()["splits"]]
 
 
-@pytest.mark.asyncio
-async def test_a_cell_carries_its_own_label_and_colour(
-    client, session, document, facets
+def test_a_cell_carries_its_own_label_and_colour(
+    api_client: TestClient, api_database_url: str
 ) -> None:
     """So a drilled panel can title itself without re-reading /data."""
-    await session.execute(
-        text("UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'software'")
-    )
-    await document(
-        amount_total=Decimal("10.00"),
-        amount_kind=AmountKind.PAYMENT_MADE,
-        document_date=date(2026, 4, 1),
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
         labels={"category": "software"},
     )
-    await session.commit()
-    chart = (
-        await client.post(
-            "/api/spending",
-            json={"name": "All", "display_currency": "EUR", "default_split": "category"},
-        )
-    ).json()
-    data = (await client.get(f"/api/spending/{chart['id']}/data")).json()
-    cell = data["cells"][0]
 
-    body = (
-        await client.get(
-            f"/api/spending/{chart['id']}/cell",
-            params={
-                "period": cell["period"],
-                "split_value": cell["split_value"],
-                "grain": data["grain"],
-                "split": data["split"],
-                "currency": data["currency"],
-            },
+    async def paint(session: AsyncSession) -> None:
+        await session.execute(
+            text("UPDATE facet_values SET colour = '#1f77b4' WHERE key = 'software'")
         )
+
+    _run(api_database_url, paint)
+    chart_id = _save_chart(api_client, "api-cell-label", SOFTWARE_RULE, default_split="category")
+    data = api_client.get(f"/api/spending/{chart_id}/data").json()
+    cell = next(c for c in data["cells"] if c["split_value"] == "software")
+
+    body = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={
+            "period": cell["period"],
+            "split_value": cell["split_value"],
+            "grain": data["grain"],
+            "split": data["split"],
+            "currency": data["currency"],
+        },
     ).json()
 
     assert body["label"] == "Software"
     assert body["colour"] == "#1f77b4"
 
 
-@pytest.mark.asyncio
-async def test_an_unsplit_chart_has_no_split_values(client, session, document, facets) -> None:
+def test_an_unsplit_chart_has_no_split_values(
+    api_client: TestClient, api_database_url: str
+) -> None:
     """`split_value` is null for an unsplit chart too, and that is not a bucket
     needing a name — it is the absence of an axis."""
-    await document(
-        amount_total=Decimal("10.00"),
-        amount_kind=AmountKind.PAYMENT_MADE,
-        document_date=date(2026, 4, 1),
-    )
-    await session.commit()
-    chart = (
-        await client.post(
-            "/api/spending", json={"name": "All", "display_currency": "EUR"}
-        )
-    ).json()
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, "api-splits-none", {})
 
-    body = (await client.get(f"/api/spending/{chart['id']}/data")).json()
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
 
     assert body["split"] is None
     assert body["splits"] == []
+
+
+def test_the_legend_order_matches_the_cells(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """De-duplication preserves the engine's ordering. A `set()` would not, and
+    a legend ordered differently from the chart is a legend that mislabels it."""
+    _seed_vocabulary(api_database_url)
+    for value in ("software", "services"):
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
+            labels={"category": value},
+        )
+    chart_id = _save_chart(api_client, "api-splits-order", {}, default_split="category")
+
+    body = api_client.get(f"/api/spending/{chart_id}/data").json()
+
+    first_seen: list[str | None] = []
+    for cell in body["cells"]:
+        if cell["split_value"] not in first_seen:
+            first_seen.append(cell["split_value"])
+    assert [s["value"] for s in body["splits"]] == first_seen
 ```
+
+All API-level: synchronous, `api_client`, the existing `_seed_*` / `_save_chart`
+helpers. `_save_chart(api_client, name, {})` saves an empty rule — the "all
+spending" shape, which is what a split test wants so the split axis is the only
+variable.
+
+**`_seed_sender_document`'s body is deliberately left for you to write**, and
+the way to write it is to add a `sender: str | None = None` parameter to the
+existing `_seed_document` and have it resolve-or-create a `Sender` by name
+inside its `work` coroutine, returning both ids. Writing a second seeding
+function beside `_seed_document` is what this codebase deletes rather than
+tests — there must be one definition of "seed a document for the spending API".
 
 - [ ] **Step 2: Run and watch every one fail**
 
@@ -1400,65 +1463,71 @@ async def test_an_empty_bucket_lists_nothing_rather_than_raising(session, facets
 Append to `tests/test_api_spending.py`:
 
 ```python
-@pytest.mark.asyncio
-async def test_the_footer_route_lists_the_documents_behind_a_count(
-    client, session, document, facets
+def test_the_footer_route_lists_the_documents_behind_a_count(
+    api_client: TestClient, api_database_url: str
 ) -> None:
-    await document(
-        amount_total=Decimal("89.20"),
-        amount_kind=AmountKind.PAYMENT_MADE,
-        document_date=date(2026, 4, 1),
-        title="Kestrel Test Utilities statement",
+    _seed_vocabulary(api_database_url)
+    document_id = _seed_document(
+        api_database_url, amount="89.20", kind=AmountKind.PAYMENT_MADE
     )
-    await session.commit()
-    chart = (
-        await client.post(
-            "/api/spending",
-            json={
-                "name": "Software",
-                "display_currency": "EUR",
-                "rule": {"all": [{"facet": "category", "values": ["software"]}]},
-            },
-        )
-    ).json()
-    data = (await client.get(f"/api/spending/{chart['id']}/data")).json()
-    assert data["footer"]["uncategorised"]["documents"] == 1
+    chart_id = _save_chart(api_client, "api-footer-drill", SOFTWARE_RULE)
+    data = api_client.get(f"/api/spending/{chart_id}/data").json()
+    counted = data["footer"]["uncategorised"]["documents"]
 
-    body = (
-        await client.get(
-            f"/api/spending/{chart['id']}/footer/uncategorised",
-            params={"currency": data["currency"]},
-        )
+    body = api_client.get(
+        f"/api/spending/{chart_id}/footer/uncategorised",
+        params={"currency": data["currency"]},
     ).json()
 
-    assert [d["title"] for d in body["documents"]] == ["Kestrel Test Utilities statement"]
-    assert body["documents"][0]["amount"] == "89.20"
+    assert len(body["documents"]) == counted
+    listed = {d["id"]: d for d in body["documents"]}
+    assert document_id in listed
+    assert listed[document_id]["amount"] == "89.20"
 
 
-@pytest.mark.asyncio
-async def test_an_unknown_footer_bucket_is_a_422_naming_it(client, facets) -> None:
-    chart = (
-        await client.post(
-            "/api/spending", json={"name": "All", "display_currency": "EUR"}
-        )
-    ).json()
-    response = await client.get(f"/api/spending/{chart['id']}/footer/nonsense")
+def test_an_unknown_footer_bucket_is_a_422_naming_it(api_client: TestClient) -> None:
+    chart_id = _save_chart(api_client, "api-footer-bucket-422", {})
+    response = api_client.get(f"/api/spending/{chart_id}/footer/nonsense")
     assert response.status_code == 422
     assert "nonsense" in response.json()["detail"]
 
 
-@pytest.mark.asyncio
-async def test_the_footer_route_caps_its_limit_at_100(client, facets) -> None:
-    chart = (
-        await client.post(
-            "/api/spending", json={"name": "All", "display_currency": "EUR"}
-        )
-    ).json()
-    response = await client.get(
-        f"/api/spending/{chart['id']}/footer/uncategorised", params={"limit": 101}
+def test_the_footer_route_caps_its_limit_at_100(api_client: TestClient) -> None:
+    chart_id = _save_chart(api_client, "api-footer-limit", {})
+    response = api_client.get(
+        f"/api/spending/{chart_id}/footer/uncategorised", params={"limit": 101}
     )
     assert response.status_code == 422
+
+
+def test_the_footer_route_and_the_footer_count_agree_after_a_window_narrows(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The route takes /data's window arguments and must resolve them the same
+    way, or the list answers a different question from the count above it."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE, day=MARCH)
+    _seed_document(
+        api_database_url,
+        amount="20.00",
+        kind=AmountKind.PAYMENT_MADE,
+        day=date(2026, 6, 1),
+    )
+    chart_id = _save_chart(api_client, "api-footer-window", SOFTWARE_RULE)
+    window = {"from": "2026-03-01", "to": "2026-03-31"}
+
+    data = api_client.get(f"/api/spending/{chart_id}/data", params=window).json()
+    body = api_client.get(
+        f"/api/spending/{chart_id}/footer/uncategorised",
+        params={**window, "currency": data["currency"]},
+    ).json()
+
+    assert len(body["documents"]) == data["footer"]["uncategorised"]["documents"]
 ```
+
+The first three are API-level in `tests/test_api_spending.py`. The engine-level
+tests above them belong in `tests/test_chart_footer.py` and use `session` /
+`document` / `replace_lines`, which that file already imports.
 
 - [ ] **Step 2: Run and watch it fail**
 
@@ -1735,75 +1804,108 @@ git add -A && git commit -m "feat(charts): drill through to the documents behind
 Append to `tests/test_api_facets.py`:
 
 ```python
-@pytest.mark.asyncio
-async def test_counts_are_ordered_by_document_count(client, session, document, facets) -> None:
+These are **API-level**, and they go in `tests/test_api_spending.py` rather than
+`tests/test_api_facets.py` — that is where `_seed_document` and `_seed_vocabulary`
+live, and where a document with an amount can be seeded at all.
+
+```python
+def test_counts_are_ordered_by_document_count(
+    api_client: TestClient, api_database_url: str
+) -> None:
     """The empty state proposes questions worth asking, so the busiest values
     come first (§10.4)."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha", "beta"))
     for _ in range(2):
-        await document(
-            amount_total=Decimal("10.00"),
-            amount_kind=AmountKind.PAYMENT_MADE,
-            document_date=date(2026, 1, 5),
-            labels={"category": "software"},
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
+            labels={facet: "alpha"},
         )
-    await document(
-        amount_total=Decimal("30.00"),
-        amount_kind=AmountKind.PAYMENT_MADE,
-        document_date=date(2026, 2, 2),
-        labels={"category": "services"},
+    _seed_document(
+        api_database_url, amount="30.00", kind=AmountKind.PAYMENT_MADE, labels={facet: "beta"}
     )
-    await session.commit()
 
-    counts = (await client.get("/api/facets/counts")).json()["counts"]
+    counts = api_client.get("/api/facets/counts").json()["counts"]
 
-    category = [c for c in counts if c["facet_key"] == "category"]
-    assert [(c["value_key"], c["documents"]) for c in category] == [
-        ("software", 2),
-        ("services", 1),
-    ]
+    mine = [c for c in counts if c["facet_key"] == facet]
+    assert [(c["value_key"], c["documents"]) for c in mine] == [("alpha", 2), ("beta", 1)]
 
 
-@pytest.mark.asyncio
-async def test_counts_carry_the_date_span(client, session, document, facets) -> None:
+def test_counts_carry_the_date_span(api_client: TestClient, api_database_url: str) -> None:
     """"15 documents in `software` over 3 months" needs both ends."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha",))
     for day in (date(2026, 1, 5), date(2026, 3, 9)):
-        await document(
-            amount_total=Decimal("10.00"),
-            amount_kind=AmountKind.PAYMENT_MADE,
-            document_date=day,
-            labels={"category": "software"},
+        _seed_document(
+            api_database_url,
+            amount="10.00",
+            kind=AmountKind.PAYMENT_MADE,
+            day=day,
+            labels={facet: "alpha"},
         )
-    await session.commit()
 
-    counts = (await client.get("/api/facets/counts")).json()["counts"]
+    counts = api_client.get("/api/facets/counts").json()["counts"]
 
-    software = next(c for c in counts if c["value_key"] == "software")
-    assert software["first_date"] == "2026-01-05"
-    assert software["last_date"] == "2026-03-09"
+    alpha = next(c for c in counts if c["facet_key"] == facet)
+    assert alpha["first_date"] == "2026-01-05"
+    assert alpha["last_date"] == "2026-03-09"
 
 
-@pytest.mark.asyncio
-async def test_a_value_with_no_money_behind_it_is_absent(
-    client, session, document, facets
+def test_a_value_with_no_money_behind_it_is_absent(
+    api_client: TestClient, api_database_url: str
 ) -> None:
     """Reading `spend_facts` rather than `document_labels` does this for free:
     the view requires `amount_total IS NOT NULL` and its join to `payments`
     excludes soft-deleted documents. Proposing a chart of a value the archive
     has no amounts for is exactly the noise §10.4 replaces."""
-    await document(document_date=date(2026, 2, 2), labels={"category": "supplies"})
-    await document(
-        amount_total=Decimal("99.00"),
-        amount_kind=AmountKind.PAYMENT_MADE,
-        document_date=date(2026, 2, 2),
-        labels={"category": "accountancy"},
-        deleted=True,
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("amountless", "deleted"))
+    _seed_document(api_database_url, amount=None, labels={facet: "amountless"})
+    deleted_id = _seed_document(
+        api_database_url,
+        amount="99.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={facet: "deleted"},
     )
-    await session.commit()
 
-    counts = (await client.get("/api/facets/counts")).json()["counts"]
+    async def soft_delete(session: AsyncSession) -> None:
+        await session.execute(
+            text("UPDATE documents SET deleted_at = now() WHERE id = :id"), {"id": deleted_id}
+        )
 
-    assert {c["value_key"] for c in counts} == set()
+    _run(api_database_url, soft_delete)
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    assert [c for c in counts if c["facet_key"] == facet] == []
+
+
+def test_a_merged_pair_counts_once(api_client: TestClient, api_database_url: str) -> None:
+    """`is_canonical` is the one filter reading `spend_facts` does not give for
+    free: a merged twin is a second row for money already counted once."""
+    facet = f"counts-{uuid.uuid4().hex[:8]}"
+    _seed_vocabulary(api_database_url, facet=facet, values=("alpha",))
+    name = f"Corvus Test Assurance {uuid.uuid4()}"
+    for _ in range(2):
+        _seed_sender_document(
+            api_database_url, sender=name, amount="10.00", labels={facet: "alpha"}
+        )
+
+    counts = api_client.get("/api/facets/counts").json()["counts"]
+
+    alpha = next(c for c in counts if c["facet_key"] == facet)
+    assert alpha["documents"] == 1, "two documents, one payment, one canonical row"
 ```
+
+The last test depends on the payment rules actually merging the pair. Read
+`docs/money-facts.md` §5 and confirm what the rules require — same sender, same
+amount, same or near date, and a non-null `amount_kind` — and shape the fixture
+so the merge genuinely happens. **Assert the merge before asserting the count**:
+if the pair does not merge, `documents == 2` is correct and the test would be
+green while testing nothing. Extend `_seed_sender_document` with a `labels=`
+parameter (it forwards to `_seed_document`, which already takes one).
 
 - [ ] **Step 2: Run and watch it fail**
 
