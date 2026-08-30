@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
@@ -54,6 +54,8 @@ import {
 import { ApiError } from '@/api/client'
 import { fetchFacetCounts } from '@/api/facets'
 import SpendingBoardView from '../SpendingBoardView.vue'
+import QuestionDraft from '@/components/spending/QuestionDraft.vue'
+import SpendingEmptyState from '@/components/spending/SpendingEmptyState.vue'
 
 // --- Fixtures ----------------------------------------------------------
 //
@@ -139,6 +141,12 @@ async function moveUp(card: ReturnType<typeof cardAt>) {
 }
 
 describe('SpendingBoardView', () => {
+  beforeEach(() => {
+    // The board persists its currency choice in localStorage
+    // (`library:charts-board-currency`) — start every test from "nothing
+    // stored" so the default-option assertions don't depend on test order.
+    localStorage.clear()
+  })
   afterEach(() => {
     vi.clearAllMocks()
   })
@@ -387,5 +395,68 @@ describe('SpendingBoardView', () => {
     sortableDestroy.mockClear()
     wrapper.unmount()
     expect(sortableDestroy).toHaveBeenCalled()
+  })
+
+  // --- Currency picker (Task 9 fix round 1) -------------------------------
+  //
+  // Task 8's brief: the board "supplies [the currency] from the existing
+  // `useCurrencyOptions()` composable ... and lets it be changed through the
+  // existing `CurrencySelect.vue`". Without this wiring every chart the board
+  // creates — the empty state's "All spending" and every saved draft — is
+  // created with a hardcoded `EUR`, silently wrong on a non-EUR archive.
+
+  it('renders the currency picker in the header controls and defaults to the first available option', async () => {
+    vi.mocked(fetchFacetCounts).mockResolvedValue([])
+    const wrapper = await mountedBoard([])
+    const controls = wrapper.get('[data-testid="page-header-controls"]')
+    const select = controls.get('[data-testid="currency-select"]').element as HTMLSelectElement
+    expect(select.value).toBe('EUR')
+  })
+
+  it('changing the currency passes the new value through to both child components', async () => {
+    vi.mocked(fetchFacetCounts).mockResolvedValue([])
+    const wrapper = await mountedBoard([])
+    await wrapper.get('[data-testid="currency-select"]').setValue('GBP')
+    await flushPromises()
+    expect(wrapper.getComponent(QuestionDraft).props('currency')).toBe('GBP')
+    expect(wrapper.getComponent(SpendingEmptyState).props('currency')).toBe('GBP')
+  })
+
+  it('persists the chosen currency across a remount', async () => {
+    vi.mocked(fetchFacetCounts).mockResolvedValue([])
+    const first = await mountedBoard([])
+    await first.get('[data-testid="currency-select"]').setValue('GBP')
+    await flushPromises()
+    first.unmount()
+
+    const second = await mountedBoard([])
+    const select = second.get('[data-testid="currency-select"]').element as HTMLSelectElement
+    expect(select.value).toBe('GBP')
+  })
+
+  it('saves a chart with the chosen currency, not a hardcoded default', async () => {
+    // This is the assertion that actually pins the defect: a board that
+    // hardcodes the currency it hands to its children would call
+    // `createChart` with `display_currency: 'EUR'` here regardless of what
+    // the picker shows.
+    vi.mocked(fetchFacetCounts).mockResolvedValue([])
+    const created = chart({
+      id: 9,
+      name: 'All spending',
+      ordinal: 0,
+      default_split: 'category',
+      display_currency: 'GBP',
+    })
+    vi.mocked(createChart).mockResolvedValue(created)
+    vi.mocked(fetchChartData).mockResolvedValue(emptyData(9))
+
+    const wrapper = await mountedBoard([])
+    await wrapper.get('[data-testid="currency-select"]').setValue('GBP')
+    await flushPromises()
+
+    await wrapper.get('[data-testid="spending-empty-proposal"]').trigger('click')
+    await flushPromises()
+
+    expect(createChart).toHaveBeenCalledWith(expect.objectContaining({ display_currency: 'GBP' }))
   })
 })

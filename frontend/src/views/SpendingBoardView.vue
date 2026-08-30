@@ -20,13 +20,17 @@
  * PATCHed — with three charts at ordinals 0, 1, 2, moving the first down
  * swaps it with the second and leaves the third alone.
  *
- * `useCurrencyOptions()` supplies the currency both `QuestionDraft` (the
- * header's "ask a question" input) and `SpendingEmptyState` create new charts
- * in — the first configured option, so the choice is deterministic rather
- * than reading whatever `Object.keys` order a Set happens to iterate.
+ * The board's own currency choice — which `QuestionDraft` (the header's
+ * "ask a question" input) and `SpendingEmptyState` create new charts in —
+ * is picked via `CurrencySelect` (built on `useCurrencyOptions()`) and
+ * persisted per-machine in `localStorage`, exactly like `useCurrencyOptions`
+ * persists its own custom codes: this is a display preference about this
+ * screen, not something the API remembers. It defaults to the first
+ * configured option (`EUR`) until the owner changes it.
  */
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
 import { useRouter } from 'vue-router'
+import { useStorage } from '@vueuse/core'
 import Sortable from 'sortablejs'
 import {
   deleteChart,
@@ -40,13 +44,17 @@ import {
 import { ApiError } from '@/api/client'
 import { useCurrencyOptions } from '@/composables/useCurrencyOptions'
 import { PageHeader } from '@/components/app'
+import CurrencySelect from '@/components/CurrencySelect.vue'
 import QuestionDraft from '@/components/spending/QuestionDraft.vue'
 import SpendingEmptyState from '@/components/spending/SpendingEmptyState.vue'
 import SpendingCard from '@/components/spending/SpendingCard.vue'
 
 const router = useRouter()
 const { options: currencyOptions } = useCurrencyOptions()
-const currency = computed<string>(() => currencyOptions.value[0] ?? 'EUR')
+// Persisted per-machine, like `useCurrencyOptions` itself — a display
+// preference about THIS screen, not an API-remembered value. Defaults to the
+// first configured option (`EUR`) until changed via `CurrencySelect` below.
+const currency = useStorage<string>('library:charts-board-currency', currencyOptions.value[0] ?? 'EUR')
 
 function errorText(err: unknown): string {
   return err instanceof ApiError ? err.detail : 'Something went wrong — check your connection and try again.'
@@ -213,7 +221,12 @@ async function onDelete(chart: Chart): Promise<void> {
   <div id="spending-board-view">
     <PageHeader title="Charts" description="Saved questions over your document archive, answered as spending over time.">
       <template #controls>
-        <QuestionDraft :currency="currency" @saved="onChartCreated" />
+        <div class="flex flex-wrap items-end gap-3">
+          <QuestionDraft :currency="currency" @saved="onChartCreated" />
+          <div class="w-28 shrink-0" data-testid="board-currency-select">
+            <CurrencySelect v-model="currency" />
+          </div>
+        </div>
       </template>
     </PageHeader>
 
