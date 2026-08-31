@@ -42,9 +42,9 @@
  * assertion: if someone swaps the container query for a viewport one, exactly
  * that test goes red.
  *
- * Geometry, not class lists — see the note at the top of `charts-layout.spec.ts`.
+ * Geometry, not class lists — see the note at the top of `spending-layout.spec.ts`.
  *
- * Companion to `charts-layout.spec.ts`, `ask-layout.spec.ts` and
+ * Companion to `spending-layout.spec.ts`, `ask-layout.spec.ts` and
  * `detail-layout.spec.ts`.
  */
 import { expect, test, type Page } from '@playwright/test'

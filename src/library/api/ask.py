@@ -180,6 +180,11 @@ async def ask(
     # remove.
     thread_id = thread.id
 
+    # `thread` above is flushed, not committed, on the new-thread branch. That is
+    # safe only because a confirmed write requires a previewed id (`ask/engine.py`
+    # `_previewed_ids_from_history`), and previewed ids come solely from replayed
+    # thread history — a brand-new thread has none, so no rollback can happen on
+    # the turn that creates it.
     history = await _history_messages(session, thread_id, settings.ask_history_turns)
     # Who is asking and what the archive calls things — see library.ask.context.
     archive_context = render_archive_context(await load_archive_context(session, user))

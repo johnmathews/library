@@ -34,7 +34,7 @@ that nothing dies as collateral.
 
 ### 2.1 Smart Groups dies; its doc is archived
 
-[`docs/smart-groups.md`](../../smart-groups.md) is documented `active`, shipped
+[`docs/smart-groups.md`](../../archive/smart-groups.md) is documented `active`, shipped
 2026-07-24, and built entirely on this stack: `semantic_membership.py`, the
 `authored_series_exclusions` table, and a creation UI that exists *only* inside
 `ChartsView.vue` at `/charts/legacy`.

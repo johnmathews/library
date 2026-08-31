@@ -152,7 +152,8 @@ def test_label_and_apply_returns_none_for_a_missing_document(api_database_url: s
 def test_label_and_apply_returns_none_when_no_model_is_configured(
     api_database_url: str, seeded_document_id: int
 ) -> None:
-    """No API key is a skip, mirroring series_insight.describe_series."""
+    """A missing API key is a quiet skip rather than an error — labelling is an
+    enrichment pass, so an unconfigured deployment must still ingest."""
     settings = get_settings().model_copy(update={"anthropic_api_key": None})
     outcome = asyncio.run(
         _run(api_database_url, lambda s: label_and_apply(s, settings, seeded_document_id))

@@ -11,8 +11,8 @@ The stamp below is frozen at the moment of archival and describes the feature as
 it stood while it was live. Nothing in the body is true of the running system any
 more: `AuthoredSeries`, `semantic_membership.py`, `series.py`, `series_insight.py`,
 `api/charts.py`, the three background jobs and the `/charts` views named
-throughout were all deleted. The seven tables behind them are dropped in the
-follow-up migration.
+throughout were all deleted. The seven tables behind them have not been
+dropped yet — they are orphaned until the follow-up drop migration.
 
 **Last updated:** 2026-08-12 (documentation verification sweep: the blurb is written inside the create request, not after the review; closing the review modal is not a dismissal; fixed the §3.x cross-references, which pointed at the scorer rather than the three flows; new §6.1 recording that the full journey now runs nightly). Shipped 2026-07-24. Design: [superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md](../superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md).
 **Last verified:** 2026-08-12 — method: checked each claim against `semantic_membership.py`, `series.py`, `api/charts.py`, `series_insight.py`, `jobs.py` and `config.py`, plus `tests/test_smart_groups_api.py` and the `ChartsView.vue`/`SeriesChartTile.vue` surfaces, and confirmed via `grep -rn "_name_anchor_ids" src/ tests/` that only the negative-guard assertion remains; no tests were executed.
