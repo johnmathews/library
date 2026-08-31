@@ -72,10 +72,9 @@ def _write_creds(config_dir: Path, *, hours: float = 5.0, refresh: str | None = 
 
 async def test_no_override_falls_back_to_the_environment(db_session: AsyncSession) -> None:
     """An empty table must behave exactly as the deployed configuration says."""
-    settings = _settings(ask_llm_backend="subscription", series_insight_llm_backend="api")
+    settings = _settings(ask_llm_backend="subscription")
 
     assert await backends.resolve_backend(db_session, "ask", settings) == "subscription"
-    assert await backends.resolve_backend(db_session, "series_insight", settings) == "api"
 
 
 async def test_a_stored_override_wins(db_session: AsyncSession, tmp_path: Path) -> None:
@@ -204,7 +203,7 @@ def test_get_reports_every_surface(api_client: TestClient, with_api_key: None) -
 
     body = response.json()
     surfaces = {s["surface"]: s for s in body["surfaces"]}
-    assert set(surfaces) == {"ask", "series_insight"}
+    assert set(surfaces) == {"ask"}
     assert surfaces["ask"]["backend"] == "api"  # conftest pins the suite
     assert surfaces["ask"]["overridden"] is False
     assert surfaces["ask"]["label"]

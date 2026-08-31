@@ -69,15 +69,6 @@ def test_ask_history_turns_default() -> None:
     assert Settings().ask_history_turns == 3
 
 
-def test_series_defaults() -> None:
-    from library.config import Settings
-
-    settings = Settings()
-    assert settings.series_min_documents == 3
-    assert settings.series_typical_pct == 0.10
-    assert settings.series_flat_pct == 0.05
-
-
 def test_retrieve_chunks_per_doc_default() -> None:
     assert Settings().retrieve_chunks_per_doc == 3
 

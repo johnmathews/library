@@ -58,7 +58,6 @@ def _llm_backend_is_the_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     SDK (see tests/test_ask_backend.py).
     """
     monkeypatch.setenv("LIBRARY_ASK_LLM_BACKEND", "api")
-    monkeypatch.setenv("LIBRARY_SERIES_INSIGHT_LLM_BACKEND", "api")
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
