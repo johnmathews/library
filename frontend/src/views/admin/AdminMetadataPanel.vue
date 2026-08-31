@@ -27,7 +27,6 @@ import {
   renameRecipient,
   renameSender,
   seedFxRate,
-  type CurrencyConflictItem,
   type CurrencyInUse,
   type CurrencyNormalizeResult,
   type FxRateStatus,
@@ -121,10 +120,9 @@ const kindDescriptor: TaxonomyDescriptor<KindOption> = {
 }
 
 // --- Metadata: currencies ---------------------------------------------------
-// Currency is free-text (no reference table) but part of series identity, so
-// "normalise" is a whole-store rewrite, not a per-row edit (see docs/api.md
-// §1.18.6). There is a confirm step because the series-insight cache merge drops
-// rows (they regenerate) and the rename spans every document.
+// Currency is free-text (no reference table), so "normalise" is a whole-store
+// rewrite, not a per-row edit (see docs/api.md §1.18.6). There is a confirm
+// step because the rename spans every document.
 const currencies = ref<CurrencyInUse[]>([])
 const currenciesLoading = ref(false)
 const currenciesLoaded = ref(false)
@@ -135,7 +133,6 @@ const normalizeTo = ref('')
 const normalizeConfirming = ref(false)
 const normalizePending = ref(false)
 const normalizeError = ref<string | null>(null)
-const normalizeConflicts = ref<CurrencyConflictItem[]>([])
 const normalizeResult = ref<CurrencyNormalizeResult | null>(null)
 
 const currencyItems = computed<SelectItem[]>(() => [
@@ -158,7 +155,6 @@ async function loadCurrencies(): Promise<void> {
 
 function startNormalize(): void {
   normalizeError.value = null
-  normalizeConflicts.value = []
   normalizeResult.value = null
   if (!normalizeFrom.value || !normalizeTo.value.trim()) {
     normalizeError.value = 'Choose a source code and enter a 3-letter target code.'
@@ -174,7 +170,6 @@ function cancelNormalize(): void {
 async function confirmNormalize(): Promise<void> {
   normalizePending.value = true
   normalizeError.value = null
-  normalizeConflicts.value = []
   try {
     const result = await normalizeCurrency(normalizeFrom.value, normalizeTo.value.trim())
     normalizeResult.value = result
@@ -185,13 +180,8 @@ async function confirmNormalize(): Promise<void> {
     await loadFxRates()
   } catch (error) {
     normalizeConfirming.value = false
-    if (error instanceof ApiError && error.status === 409 && error.body) {
-      normalizeConflicts.value = (error.body.conflicts as CurrencyConflictItem[]) ?? []
-      normalizeError.value = error.detail
-    } else {
-      normalizeError.value =
-        error instanceof ApiError ? error.detail : 'Could not normalise the currency. Try again.'
-    }
+    normalizeError.value =
+      error instanceof ApiError ? error.detail : 'Could not normalise the currency. Try again.'
   } finally {
     normalizePending.value = false
   }
@@ -291,10 +281,8 @@ watch(
     <div :class="cardClass">
       <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-1">Currencies</h2>
       <p class="mb-4 text-sm text-gray-500 dark:text-gray-400">
-        Currency codes aren't a reference table, but they're part of series
-        identity. Normalising rewrites a code across every document and series
-        — merging duplicate cached insights (they regenerate) and refusing if
-        it would collide with your series overrides.
+        Currency codes aren't a reference table. Normalising rewrites a code
+        across every document that carries it.
       </p>
 
       <p
@@ -358,8 +346,8 @@ watch(
         >
           <p class="mb-2">
             Rename <strong>{{ normalizeFrom }}</strong> to
-            <strong>{{ normalizeTo.toUpperCase() }}</strong> across all documents and series?
-            Duplicate cached insights are merged; this isn't a per-document undo.
+            <strong>{{ normalizeTo.toUpperCase() }}</strong> across all documents? This
+            isn't a per-document undo.
           </p>
           <div class="flex gap-2">
             <AppButton
@@ -402,25 +390,8 @@ watch(
           </p>
         </div>
 
-        <!-- Override-collision refusal -->
-        <div
-          v-if="normalizeConflicts.length"
-          data-testid="currency-conflict"
-          class="mb-4 rounded-lg border border-red-200 bg-red-50 dark:border-red-500/30 dark:bg-red-500/10 px-3 py-2 text-sm text-gray-700 dark:text-gray-200"
-        >
-          <p class="mb-1">
-            Refused: this would collide with {{ normalizeConflicts.length }} series
-            override(s). Resolve them first (nothing was changed).
-          </p>
-          <ul class="list-disc pl-5">
-            <li v-for="(c, i) in normalizeConflicts" :key="i">
-              {{ c.table }} · sender {{ c.sender_id ?? '—' }} · kind {{ c.kind_id ?? '—' }}
-            </li>
-          </ul>
-        </div>
-
         <p
-          v-else-if="normalizeError"
+          v-if="normalizeError"
           data-testid="currency-normalize-error"
           class="mb-4 text-sm text-red-600 dark:text-red-400"
         >
@@ -449,7 +420,7 @@ watch(
             FX rates
           </h3>
           <p class="mb-3 text-sm text-gray-500 dark:text-gray-400">
-            Cross-currency series convert via a stored USD rate. Fetch a live rate per code, or
+            Cross-currency amounts convert via a stored USD rate. Fetch a live rate per code, or
             enter one manually (the value of one unit in USD). USD is the base (1.0).
           </p>
 

@@ -5,7 +5,6 @@ from decimal import Decimal
 from typing import Annotated, Literal
 
 from fastapi import Depends, HTTPException, status
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, StringConstraints
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -45,25 +44,6 @@ class CurrencyNormalizeOut(BaseModel):
     fx_rate_missing: bool
 
 
-class CurrencyConflictItem(BaseModel):
-    """One user-authored override that blocks a currency rename."""
-
-    table: str
-    sender_id: int | None
-    kind_id: int | None
-
-
-class CurrencyOverrideConflict(BaseModel):
-    """409 body when a rename would collide with user-authored series overrides.
-
-    The rename is refused and nothing is changed; the admin resolves the listed
-    overrides first (no user data is dropped).
-    """
-
-    detail: str
-    conflicts: list[CurrencyConflictItem]
-
-
 @router.get(
     "/currencies",
     response_model=list[CurrencyInUse],
@@ -80,27 +60,21 @@ async def list_currencies_route(
 @router.post(
     "/currencies/normalize",
     response_model=CurrencyNormalizeOut,
-    summary="Rename/normalise a currency code across the whole store (series-aware)",
+    summary="Rename/normalise a currency code across the whole store",
     responses={
         400: {"description": "Source and target are the same code"},
-        409: {
-            "model": CurrencyOverrideConflict,
-            "description": "Refused: would collide with user-authored series overrides",
-        },
         422: {"description": "A code is not a 3-letter currency code"},
     },
 )
 async def normalize_currency_route(
     payload: CurrencyNormalizeIn,
     session: Annotated[AsyncSession, Depends(get_session)],
-) -> CurrencyNormalizeOut | JSONResponse:
+) -> CurrencyNormalizeOut:
     """Rename currency ``from_code`` to ``to_code`` everywhere it appears.
 
-    Rewrites documents, authored series and suggestions, merges/cleans the
-    series-insight cache, and updates the series override tables — but refuses
-    (409) if that would collide with a user-authored override, and never touches
-    ``fx_rates`` (a missing target rate is reported in ``fx_rate_missing``). See
-    docs/api.md and the currencies module for the full policy.
+    Rewrites ``documents`` and never touches ``fx_rates`` (a missing target
+    rate is reported in ``fx_rate_missing``). See docs/api.md and the
+    currencies module for the full policy.
     """
     await session.execute(
         text("SELECT pg_advisory_xact_lock(:key)"), {"key": _CURRENCY_MUTATION_LOCK_KEY}
@@ -116,20 +90,6 @@ async def normalize_currency_route(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="from_code and to_code are the same",
-        )
-    if result.status == "override_conflict":
-        return JSONResponse(
-            status_code=status.HTTP_409_CONFLICT,
-            content={
-                "detail": (
-                    f"renaming {result.from_code} to {result.to_code} would collide with "
-                    f"{len(result.conflicts)} user-authored series override(s); resolve them first"
-                ),
-                "conflicts": [
-                    {"table": c.table, "sender_id": c.sender_id, "kind_id": c.kind_id}
-                    for c in result.conflicts
-                ],
-            },
         )
     return CurrencyNormalizeOut(
         from_code=result.from_code,
