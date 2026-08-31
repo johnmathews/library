@@ -113,26 +113,6 @@ class ReviewStatus(enum.StrEnum):
     UNREVIEWED = "unreviewed"
 
 
-class OverrideAction(enum.StrEnum):
-    """Direction of a manual series-membership override."""
-
-    PIN = "pin"
-    EXCLUDE = "exclude"
-
-
-class MemberOrigin(enum.StrEnum):
-    """How a document became a member of an authored series.
-
-    ``manual`` — added by hand; ``accepted_suggestion`` — promoted from a staged
-    backfill suggestion; ``auto`` — silently added by the semantic auto-add job
-    (surfaced with the "added automatically" affordance so the user can prune it).
-    """
-
-    MANUAL = "manual"
-    ACCEPTED_SUGGESTION = "accepted_suggestion"
-    AUTO = "auto"
-
-
 class AmountKind(enum.StrEnum):
     """What a document's ``amount_total`` actually is.
 

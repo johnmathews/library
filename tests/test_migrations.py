@@ -342,37 +342,134 @@ def test_ask_logs_table_is_gone(migrated_database_url: str) -> None:
     assert rows == []
 
 
-def test_series_membership_overrides_table_exists(migrated_database_url: str) -> None:
-    """0015 adds the series_membership_overrides table with a NULLS-NOT-DISTINCT unique."""
-    cols = fetch_all(
-        migrated_database_url,
-        """
-        SELECT column_name, data_type
+#: The legacy series stack's tables, dropped by 0038. Children first — the order
+#: `0038._DROP_ORDER` uses, and the order its `downgrade` reverses.
+SERIES_STACK_TABLES: tuple[str, ...] = (
+    "authored_series_members",
+    "authored_series_suggestions",
+    "authored_series_exclusions",
+    "authored_series",
+    "series_membership_overrides",
+    "series_meta_overrides",
+    "series_insights",
+)
+
+
+def test_series_stack_tables_are_dropped(migrated_database_url: str) -> None:
+    """0038 drops all seven legacy series tables.
+
+    This replaced a guard that asserted `series_membership_overrides` *existed*
+    (0015's NULLS-NOT-DISTINCT unique). That guard was kept deliberately through
+    the code-deletion PR so the drop could not leak forward early; it inverts
+    here, at the migration that actually drops them.
+    """
+    tables = _table_names(migrated_database_url)
+    survivors = sorted(set(SERIES_STACK_TABLES) & tables)
+    assert survivors == [], f"series tables survived 0038: {survivors}"
+    # Not a vacuous pass: a migrated database is still a populated one.
+    assert {"documents", "charts", "spend_lines"} <= tables
+
+
+#: Everything about the seven tables that the 0037 schema fixes and a rewritten
+#: `create_table` can silently get wrong: column types and nullability, server
+#: defaults, every constraint's rendered definition (so `NULLS NOT DISTINCT`,
+#: `ON DELETE` actions and CHECK bodies are all in scope), and every index.
+_SERIES_STACK_SCHEMA_QUERIES: dict[str, str] = {
+    # `ordinal_position` is **selected**, not just ordered by: without it in the
+    # row, two tables holding the same columns in a different order compare
+    # equal, and a reordered `create_table` slips through. `udt_name` and
+    # `collation_name` cost nothing and close the same class of gap (a `char(3)`
+    # rebuilt as `varchar(3)` shares a `data_type`; a column rebuilt under a
+    # different collation reorders text silently).
+    "columns": """
+        SELECT table_name, ordinal_position, column_name, data_type, udt_name,
+               is_nullable, column_default, character_maximum_length,
+               numeric_precision, numeric_scale, collation_name
         FROM information_schema.columns
-        WHERE table_name = 'series_membership_overrides'
-        ORDER BY column_name
-        """,
-    )
-    names = {name for name, _ in cols}
-    assert {
-        "id",
-        "sender_id",
-        "kind_id",
-        "currency",
-        "document_id",
-        "action",
-        "created_at",
-    } <= names
-    unique = fetch_all(
-        migrated_database_url,
-        """
-        SELECT con.conname
+        WHERE table_name = ANY(:tables)
+        ORDER BY table_name, ordinal_position
+    """,
+    "constraints": """
+        SELECT rel.relname, con.conname, con.contype, pg_get_constraintdef(con.oid)
         FROM pg_constraint con
         JOIN pg_class rel ON rel.oid = con.conrelid
-        WHERE rel.relname = 'series_membership_overrides' AND con.contype = 'u'
-        """,
-    )
-    assert ("series_membership_overrides_series_document",) in unique
+        WHERE rel.relname = ANY(:tables)
+        ORDER BY 1, 2
+    """,
+    "indexes": """
+        SELECT tablename, indexname, indexdef
+        FROM pg_indexes
+        WHERE tablename = ANY(:tables)
+        ORDER BY 1, 2
+    """,
+}
+
+
+def _series_stack_schema(database_url: str) -> dict[str, list[tuple[object, ...]]]:
+    return {
+        key: fetch_all(database_url, query, tables=list(SERIES_STACK_TABLES))
+        for key, query in _SERIES_STACK_SCHEMA_QUERIES.items()
+    }
+
+
+def test_0038_downgrade_restores_the_seven_tables_empty(admin_database_url: str) -> None:
+    """`downgrade` to 0037 restores schema, never rows — and `upgrade` re-drops.
+
+    The point of the reverse is that an older image can boot. What it must not
+    do is bring the data back: those rows are gone for good, and only a database
+    backup returns them. Schema *fidelity* is
+    `test_0038_downgrade_restores_the_exact_0037_schema` below; this is the
+    round-trip and the emptiness.
+    """
+    url = create_database(admin_database_url, "library_drop_series")
+    config = alembic_config(url)
+
+    command.upgrade(config, "head")
+    assert set(SERIES_STACK_TABLES) & _table_names(url) == set()
+
+    command.downgrade(config, "0037")
+    missing = sorted(set(SERIES_STACK_TABLES) - _table_names(url))
+    assert missing == [], f"downgrade did not restore: {missing}"
+
+    for table in SERIES_STACK_TABLES:
+        assert fetch_all(url, f"SELECT count(*) FROM {table}")[0][0] == 0, (
+            f"{table} came back non-empty — downgrade restores schema, not rows"
+        )
+
+    command.upgrade(config, "head")
+    assert set(SERIES_STACK_TABLES) & _table_names(url) == set()
+
+
+def test_0038_downgrade_restores_the_exact_0037_schema(admin_database_url: str) -> None:
+    """The recreated tables must equal the ones 0038 dropped, not resemble them.
+
+    0038's `downgrade` is a hand-written mirror of six migrations' `create_table`
+    calls (0009, 0015, 0018, 0019, 0021, 0029) — the kind of transcription where
+    a lost `postgresql_nulls_not_distinct`, a forgotten `ON DELETE CASCADE`, one
+    of the three columns 0029 added later, or 0021's state CHECK all vanish
+    silently and only surface when an older image runs against the result. So
+    rather than assert the handful of properties one remembers to name, this
+    migrates a second database to 0037 directly and diffs the two schemas.
+
+    Both sides come from the migrations themselves, so neither can drift into
+    agreement: the left is the schema 0038 actually removed.
+    """
+    original = create_database(admin_database_url, "library_series_at_0037")
+    command.upgrade(alembic_config(original), "0037")
+
+    roundtrip = create_database(admin_database_url, "library_series_roundtrip")
+    config = alembic_config(roundtrip)
+    command.upgrade(config, "0038")
+    command.downgrade(config, "0037")
+
+    before, after = _series_stack_schema(original), _series_stack_schema(roundtrip)
+    for key in _SERIES_STACK_SCHEMA_QUERIES:
+        assert before[key], f"no {key} found at 0037 — the diff would pass vacuously"
+        assert after[key] == before[key], (
+            f"{key} differ after the downgrade\n"
+            f"lost: {[row for row in before[key] if row not in after[key]]}\n"
+            f"gained: {[row for row in after[key] if row not in before[key]]}"
+        )
 
 
 def test_recipients_table_and_john_seeded(migrated_database_url: str) -> None:

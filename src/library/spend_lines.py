@@ -38,6 +38,19 @@ AMOUNT_SCALE = 2
 #: would have mislabelled as an unbalanced allocation.
 ALLOCATION_TRIGGER_SQLSTATE = "P0001"
 
+#: The refusal handed to `commit_allocation` by the two writers that edit a
+#: document's `amount_total` in place — `PATCH /api/documents/{id}` and Ask's
+#: document-edit tool. It lived twice, typed out identically in both, with
+#: `docs/charts.md` §10.1 telling the reader they were "the same wording" and
+#: nothing enforcing it. The other three writers of `amount_total` answer
+#: differently on purpose (the allocation routes name the sum, re-extraction
+#: skips the field, the importer never reaches the case), so this is shared by
+#: the two that really do give the same advice — not by all of them.
+AMOUNT_ALLOCATED_REFUSAL = (
+    "this document's amount is allocated across spend lines that sum to "
+    "the old amount; clear or replace its spend lines before changing it"
+)
+
 
 class AllocationError(ValueError):
     """The proposed lines do not form a valid allocation."""

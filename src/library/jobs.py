@@ -467,9 +467,9 @@ async def _defer_best_effort(
     These deferrals are correctly best-effort — the document's own work is
     already committed and a queue hiccup must never strand it in ``failed``. But
     a ``logger.warning`` is not a record: logs rotate, nobody greps them, and
-    the *observable* result was a document that quietly never got its thumbnail,
-    its matter classification or its Smart Group membership, with nothing on the
-    document to say so. The retry policy does not help here — the job never got
+    the *observable* result was a document that quietly never got its thumbnail
+    or its matter classification — the two deferrals that take this path — with
+    nothing on the document to say so. The retry policy does not help here — the job never got
     queued, so there is nothing to retry.
 
     So the failure is also written as a ``job_defer_failed`` ingestion event,
@@ -895,8 +895,8 @@ async def purge_deleted_documents(timestamp: int) -> None:
 
     Selects documents whose ``deleted_at`` is older than
     ``deleted_retention_days``, deletes their rows (chunks, comments, pages,
-    events, note versions, and series/tag/project links all cascade at the DB
-    level), then removes their on-disk originals and derived artifacts. Rows are
+    events, note versions, spend lines, and tag/project/matter links all cascade
+    at the DB level), then removes their on-disk originals and derived artifacts. Rows are
     committed gone *before* files are unlinked, so an unlink failure leaves at
     worst an orphaned file (harmless, reclaimable) rather than a live row whose
     file has vanished. Kill switch: an instant no-op unless

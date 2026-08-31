@@ -67,7 +67,11 @@ from library.search import (
     SortDirection,
     build_document_query,
 )
-from library.spend_lines import AllocationError, commit_allocation
+from library.spend_lines import (
+    AMOUNT_ALLOCATED_REFUSAL,
+    AllocationError,
+    commit_allocation,
+)
 from library.storage import derived_path, path_for
 from library.storage import remove as remove_stored_files
 from library.thumbnails import THUMBNAIL_NAME
@@ -433,13 +437,7 @@ async def update_document(
     # that no longer matches its lines makes every chart total for the document
     # quietly wrong); being unable to explain it was not.
     try:
-        await commit_allocation(
-            session,
-            refusal=(
-                "this document's amount is allocated across spend lines that sum to "
-                "the old amount; clear or replace its spend lines before changing it"
-            ),
-        )
+        await commit_allocation(session, refusal=AMOUNT_ALLOCATED_REFUSAL)
     except AllocationError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     # A chunk's context_header embeds the sender/date/kind/title, so editing one
@@ -517,8 +515,8 @@ async def purge_document(
 
     404s unless the document exists and is *currently* soft-deleted — you must
     soft-delete first, so this can never one-step nuke a live document (mirrors
-    restore's guard). Chunks, comments, pages, events, note versions, and
-    series/tag/project links cascade at the DB level. The row is committed gone
+    restore's guard). Chunks, comments, pages, events, note versions, spend lines,
+    and tag/project/matter links cascade at the DB level. The row is committed gone
     *before* files are unlinked, so an unlink failure leaves at worst an orphaned
     file (harmless, reclaimable) rather than a live row whose file has vanished —
     identical ordering to ``purge_deleted_documents`` in jobs.py.
