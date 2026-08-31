@@ -9,19 +9,19 @@ function makeRouter(): Router {
   })
 }
 
-// encode_series_id produces `{sender}-{kind}-{currency}`; encode_authored_series_id
-// produces `a-{id}`. Neither is ever a bare integer, so the two shapes coexist —
-// but only if the digit-constrained workspace route and the `legacy` literal are
-// both declared before `:seriesId`.
 describe('/charts route resolution', () => {
-  it('routes a numeric id to the workspace and a series id to the old view', () => {
+  it('routes the bare path to the board and a numeric id to the workspace', () => {
     const router = makeRouter()
     const resolve = (path: string) => router.resolve(path)
 
     expect(resolve('/charts').name).toBe('charts')
     expect(resolve('/charts/7').name).toBe('spending-workspace')
-    expect(resolve('/charts/legacy').name).toBe('charts-legacy')
-    expect(resolve('/charts/a-12').name).toBe('series-chart')
-    expect(resolve('/charts/4-9-EUR').name).toBe('series-chart')
+  })
+
+  it('a non-numeric /charts child no longer resolves to a legacy route', () => {
+    const router = makeRouter()
+    const resolved = router.resolve('/charts/12-3-EUR')
+    expect(resolved.name).not.toBe('series-chart')
+    expect(resolved.matched.length).toBe(0)
   })
 })

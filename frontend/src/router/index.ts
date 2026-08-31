@@ -95,29 +95,12 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/SpendingBoardView.vue'),
   },
   {
-    // Digit-constrained: a series id is never a bare integer
-    // (`encode_series_id` gives `{sender}-{kind}-{currency}`,
-    // `encode_authored_series_id` gives `a-{id}`), so this and `:seriesId`
-    // below can never collide. vue-router 5 resolves by segment specificity
-    // (static > regex-constrained param > bare param), not declaration
-    // order, so this coexistence doesn't actually depend on where either is
-    // declared — but it's kept first as convention, matching
-    // `/ask/:threadId(\d+)` above. router/__tests__/spending-routes.spec.ts
-    // pins the resolutions.
+    // Digit-constrained as convention, matching `/ask/:threadId(\d+)` above;
+    // no other `/charts/*` route remains to collide with.
+    // router/__tests__/spending-routes.spec.ts pins the resolution.
     path: '/charts/:chartId(\\d+)',
     name: 'spending-workspace',
     component: () => import('../views/SpendingWorkspaceView.vue'),
-  },
-  {
-    // The pre-board grid + Smart Groups creation UI (create form, document
-    // search, staged-review backfill modal) live here and nowhere else.
-    // Unlinked from the sidebar; reachable by URL and by smart-groups.spec.ts.
-    // Kept ahead of `:seriesId` below as convention (see the comment on
-    // `:chartId` above for why the literal `legacy` can never actually be
-    // swallowed as a series id, regardless of order).
-    path: '/charts/legacy',
-    name: 'charts-legacy',
-    component: () => import('../views/ChartsView.vue'),
   },
   {
     path: '/projects',
@@ -133,12 +116,6 @@ export const routes: RouteRecordRaw[] = [
     path: '/saved-views',
     name: 'saved-views',
     component: () => import('../views/SavedViewsView.vue'),
-  },
-  {
-    // Single, shareable chart for one series (stable {sender}-{kind}-{currency} id).
-    path: '/charts/:seriesId',
-    name: 'series-chart',
-    component: () => import('../views/SeriesChartView.vue'),
   },
   {
     path: '/admin',
