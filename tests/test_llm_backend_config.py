@@ -32,23 +32,10 @@ def _write_creds(config_dir: Path, *, hours: float = 5.0, refresh: str | None = 
 # --------------------------------------------------------------------------
 
 
-def test_both_backends_default_to_the_metered_api() -> None:
+def test_ask_backend_defaults_to_the_metered_api() -> None:
     """A deploy must be a no-op until credentials are deliberately provisioned."""
     settings = _settings()
     assert settings.ask_llm_backend == "api"
-    assert settings.series_insight_llm_backend == "api"
-
-
-def test_series_insight_default_is_independent_of_ask() -> None:
-    """Per-surface knobs: the trade is genuinely different per call site.
-
-    Ask is one large infrequent call on the priciest model; series-insight is a
-    small bounded call on the cheapest model, once per ingested document. A
-    single global switch would force the bad half of that trade.
-    """
-    settings = _settings(ask_llm_backend="subscription", claude_config_dir=Path("/"))
-    assert settings.ask_llm_backend == "subscription"
-    assert settings.series_insight_llm_backend == "api"
 
 
 def test_unknown_backend_is_rejected() -> None:
@@ -69,7 +56,6 @@ def test_ask_defaults_to_the_subscription() -> None:
     subscription), which would mask the declared default here.
     """
     assert Settings.model_fields["ask_llm_backend"].default == "subscription"
-    assert Settings.model_fields["series_insight_llm_backend"].default == "api"
 
 
 def test_a_missing_credentials_dir_does_not_block_startup(tmp_path: Path) -> None:

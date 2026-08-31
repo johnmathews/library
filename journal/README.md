@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-174 entries.
+175 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## August 2026
 
+- **2026-08-31** — [Deleting the series stack](260831-delete-series-stack.md)
 - **2026-08-30** — [The spending view's board](260830-spending-view-board.md)
 - **2026-08-30** — [The spending view's backend](260830-spending-view-backend.md)
 - **2026-08-30** — [The facet vocabulary panel](260830-facet-vocabulary-panel.md)

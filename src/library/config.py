@@ -186,35 +186,11 @@ class Settings(BaseSettings):
     # rate; open.er-api.com returns USD->X rates, inverted to rate_to_base(X).
     fx_api_url: str = "https://open.er-api.com/v6/latest"
     fx_api_timeout_s: float = 10.0
-    # Document series + comparative queries (see docs/ask.md, "Document series").
-    # Transport for series-insight descriptions; the default only, overridable at
-    # runtime like ask_llm_backend above. Stays "api" deliberately:
-    # this runs on the *cheapest* model with a deliberately bounded prompt, once
-    # per ingested document, so routing it through the subscription would spend
-    # ~32k of shared quota to avoid a fraction of a cent — and starve ask (and
-    # any other consumer of the same credentials) during an ingest burst.
-    series_insight_llm_backend: LLMBackend = "api"
-    series_min_documents: int = 3  # min members before stats are reported
     # Facet vocabulary labelling (see library.facets.labeller). Below this, a
     # label is stored as `unknown` and queued for review rather than applied. A
     # confidently wrong label silently moves money between charts, so the
     # default is deliberately cautious.
     facet_label_min_confidence: float = 0.6
-    series_typical_pct: float = 0.10  # half-width of the "typical" band vs median
-    series_flat_pct: float = 0.05  # |first→last change| at/below which trend is flat
-    # Authored-series auto-continue (propose-for-review). A newly-indexed
-    # document mechanically matching an authored series' dominant
-    # (sender, kind, currency) signature is recorded as a pending suggestion.
-    series_autocontinue_enabled: bool = True
-    series_autocontinue_min_dominance: float = 0.6  # min signature dominance to match
-    series_suggestion_limit: int = 20  # cap on suggested matches returned/considered
-    # Smart Groups (semantic authored series). Membership is learned from bge-m3
-    # embeddings: a document belongs when its nearest member (positive) is within
-    # `min_similarity` cosine AND closer than any pruned document (negative) by
-    # `neg_margin`. See docs/smart-groups.md.
-    semantic_group_enabled: bool = True
-    semantic_group_min_similarity: float = 0.55  # tau: min cosine to nearest positive
-    semantic_group_neg_margin: float = 0.02  # sim_pos must beat sim_neg by this margin
     # Consume folder watcher (see docs/ingestion.md, "Consume folder" section).
     consume_dir: Path | None = None  # unset = watcher off
     consume_force_polling: bool = False  # required for NFS/SMB mounts (no inotify)

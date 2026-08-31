@@ -14,7 +14,6 @@ from library.api import (
     admin,
     ask,
     auth,
-    charts,
     comments,
     documents,
     events,
@@ -26,7 +25,6 @@ from library.api import (
     payments,
     projects,
     saved_views,
-    series,
     settings,
     spending,
     taxonomy,
@@ -260,8 +258,6 @@ def create_app() -> FastAPI:
     api_router.include_router(payments.router)
     api_router.include_router(spending.router)
     api_router.include_router(comments.router)
-    api_router.include_router(charts.router)
-    api_router.include_router(series.router)
     api_router.include_router(facets.router)
     api_router.include_router(taxonomy.router)
     api_router.include_router(projects.router)
@@ -329,9 +325,9 @@ def create_app() -> FastAPI:
         # to `subscription` without them.
         from library.llm.oauth import credentials_path, token_health
 
-        if credentials_path(settings.claude_config_dir).exists() or "subscription" in (
-            settings.ask_llm_backend,
-            settings.series_insight_llm_backend,
+        if (
+            credentials_path(settings.claude_config_dir).exists()
+            or settings.ask_llm_backend == "subscription"
         ):
             status, detail = token_health(settings.claude_config_dir)
             payload["claude_credentials"] = status

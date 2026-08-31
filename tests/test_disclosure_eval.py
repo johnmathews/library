@@ -304,25 +304,6 @@ def test_list_truncation_seeds_more_documents_than_the_real_query_limit() -> Non
     )
 
 
-def test_series_other_currency_seeds_a_dominant_and_a_minority_currency_bucket() -> None:
-    """The dominant currency bucket must meet `series_min_documents` (else the
-    series is 'insufficient data' rather than a real comparison), and the
-    minority bucket is what `other_currency` should report as dropped."""
-    from library.config import get_settings
-
-    scenario = _scenario("series-other-currency")
-    by_currency: dict[str | None, int] = {}
-    for doc in scenario.docs:
-        by_currency[doc.currency] = by_currency.get(doc.currency, 0) + 1
-    assert sorted(by_currency.values(), reverse=True) == [3, 2]
-    dominant_count = max(by_currency.values())
-    assert dominant_count >= get_settings().series_min_documents
-    # One sender, one kind: otherwise the currency split could be attributed
-    # to `other_series_group` instead of `other_currency`.
-    assert len({d.sender_name for d in scenario.docs}) == 1
-    assert len({d.kind_slug for d in scenario.docs}) == 1
-
-
 def test_complete_no_gaps_is_a_genuine_control_with_nothing_to_disclose() -> None:
     """A control scenario that itself has a gap (a missing amount, a flagged
     document, a second currency) would make `expect_disclosure=False` wrong,

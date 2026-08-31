@@ -1,7 +1,7 @@
 # Jobs view & live notifications
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: the Jobs view is one ordered table, not an Active/Recent split — corrected the column set and refresh trigger and documented the three filters; fixed the ownerless-document examples, the `duplicate` dispatch site and the document-less push link titles).
-**Last verified:** 2026-08-12 — method: checked every event name, channel, endpoint, payload field, task name, cron, retry-exception class, `data-testid` and storage key against `jobs.py`, `events_broker.py`, `api/events.py`, `api/jobs.py`, `notifications.py` and the Jobs view, jobs/notifications stores, toast container and header indicator in `frontend/src`.
+**Status:** active. **Last updated:** 2026-08-31 (the legacy series stack was deleted: dropped the series-insight refresh job section and renumbered §1.2.2/§1.2.3 up to §1.2.1/§1.2.2 — nothing cites those numbers; corrected §1.6.1's best-effort deferral count, five → two; dropped series links from the purge cascade and series-insight from the no-toast list). Earlier: 2026-08-12 (documentation verification sweep: the Jobs view is one ordered table, not an Active/Recent split — corrected the column set and refresh trigger and documented the three filters; fixed the ownerless-document examples, the `duplicate` dispatch site and the document-less push link titles).
+**Last verified:** 2026-08-31 — method: partial, scoped to §1.2, §1.3 and §1.6.1. Re-derived the task list from `src/library/jobs.py` (`grep -n '@job_app'`): no series task remains and the four `@job_app.periodic` tasks §1.6 names are still exactly `sweep_stalled_jobs`, `backfill_budget_skipped`, `purge_deleted_documents`, `poll_email_inbox`; counted the `_defer_best_effort` call sites — two, `generate_thumbnail` and `classify_document_matters`; and confirmed by `grep -rn '§1\.2\.[123]' docs/ src/ frontend/src/` that no document or source file cites this section's subsection numbers, which is why the renumber is safe here and was not done in `api.md`. Nothing else was re-checked this pass; the rest carries forward the 2026-08-12 verification, whose method was: checked every event name, channel, endpoint, payload field, task name, cron, retry-exception class, `data-testid` and storage key against `jobs.py`, `events_broker.py`, `api/events.py`, `api/jobs.py`, `notifications.py` and the Jobs view, jobs/notifications stores, toast container and header indicator in `frontend/src`.
 
 How Library surfaces background work to the user: a **Jobs view**, **toasts**,
 and a **navbar running-jobs indicator**, all fed by a live Server-Sent Events
@@ -61,16 +61,7 @@ worker→api bridge see [architecture.md](architecture.md) §1.4.1.
    `notifications` toast store. The store is connected once in `DefaultLayout`
    (so it runs only for authenticated routes) and torn down on sign-out.
 
-### 1.2.1 Series-insight refresh job
-
-When a document reaches `indexed` with both a sender and a kind, the pipeline
-also defers `library.jobs.generate_series_insight(sender_id, kind_id)`
-(best-effort, like the thumbnail defer). The task regenerates the cached
-natural-language description for that `(sender, kind)` series and upserts it into
-`series_insights` (see [ask.md §1.7](ask.md)). It is idempotent and skips quietly
-for series too small to summarise; it does not toast.
-
-### 1.2.2 Crash recovery (stalled-job sweeper)
+### 1.2.1 Crash recovery (stalled-job sweeper)
 
 A hard-killed worker (OOM/`SIGKILL`/redeploy mid-stage) leaves its in-flight
 `process_document` job in `doing` with the document stranded in a non-terminal
@@ -96,13 +87,13 @@ without being billed twice — the recovery shows up as an `already_extracted` /
 `already_generated` skip in the document's events rather than a second charge
 (see [ingestion.md](ingestion.md), "process_document — pipeline").
 
-### 1.2.3 Recently-Deleted purge job
+### 1.2.2 Recently-Deleted purge job
 
 `library.jobs.purge_deleted_documents` is a daily periodic task (small hours)
 that completes the soft-delete lifecycle: it hard-deletes documents whose
 `deleted_at` is older than `LIBRARY_DELETED_RETENTION_DAYS` (default 30),
 removing the row (chunks, comments, pages, events, note versions, and
-series/tag/project links cascade at the DB level) and unlinking the on-disk
+tag/project links cascade at the DB level) and unlinking the on-disk
 original and derived artifacts. File unlink is safe and unconditional because
 `documents.sha256` is unique — exactly one row references each stored file. The
 task is gated by `LIBRARY_DELETED_PURGE_ENABLED` (default on): with it off,
@@ -112,8 +103,7 @@ restorable. See [api.md §1.6](api.md) for the delete/restore/list endpoints.
 ## 1.3 Scope & non-goals
 
 1. Toasts fire for document processing only — manual re-extract/embed/markdown,
-   email polling, importer, and series-insight jobs appear in the Jobs view but
-   do not toast.
+   email polling and importer jobs appear in the Jobs view but do not toast.
 2. The Jobs view is read-only: no cancel/retry/requeue actions. Retries are
    automatic where configured — see §1.6, which also says which tasks
    deliberately do not retry.
@@ -270,14 +260,17 @@ from a considered "no".
 ### 1.6.1 Deferrals that fail before the job exists
 
 A retry policy cannot help when the `defer_async` call itself fails — there is
-no job to retry. Five follow-up jobs are deferred best-effort after their
-document's own work has committed (thumbnail, matter classification, series
-insight, series autocontinue, semantic-group eval), and a queue error there must
-never strand an already-processed document in `failed`.
+no job to retry. **Two** follow-up jobs are deferred best-effort after their
+document's own work has committed (thumbnail and matter classification), and a
+queue error there must never strand an already-processed document in `failed`.
+There were five until the legacy series stack was deleted; the other three were
+the series-insight refresh, series autocontinue and the semantic-group
+membership eval, and they went with it. The guard below is unchanged — it is a
+property of `_defer_best_effort`, not of any particular caller.
 
 Previously each of those logged a warning and moved on, which meant the
 observable result was a document that quietly never got its thumbnail or its
-Smart Group membership, with nothing on the document to say why. They now also
+matter classification, with nothing on the document to say why. They now also
 record a **`job_defer_failed`** ingestion event carrying the task name and the
 error, so the loss appears on the document's own timeline and is queryable.
 Recording the event is itself guarded — noting a loss must not become a larger

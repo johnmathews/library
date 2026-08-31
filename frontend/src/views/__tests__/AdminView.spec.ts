@@ -846,12 +846,9 @@ describe('AdminView', () => {
     expect(listCurrencies).toHaveBeenCalledTimes(2)
   })
 
-  it('refuses on an override collision and lists the conflicts (nothing reloaded)', async () => {
+  it('surfaces a normalize error inline (nothing reloaded)', async () => {
     vi.mocked(normalizeCurrency).mockRejectedValue(
-      new ApiError(409, 'would collide with overrides', {
-        detail: 'would collide with overrides',
-        conflicts: [{ table: 'series_meta_overrides', sender_id: 3, kind_id: 5 }],
-      }),
+      new ApiError(400, 'from_code and to_code are the same'),
     )
     const wrapper = await openMetadataTab()
 
@@ -862,9 +859,9 @@ describe('AdminView', () => {
     await wrapper.find('[data-testid="currency-normalize-confirm"]').trigger('click')
     await flushPromises()
 
-    const conflict = wrapper.find('[data-testid="currency-conflict"]')
-    expect(conflict.exists()).toBe(true)
-    expect(conflict.text()).toContain('series_meta_overrides')
+    const err = wrapper.find('[data-testid="currency-normalize-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('from_code and to_code are the same')
     // A refused rename must not have reloaded the list (still just the open call).
     expect(listCurrencies).toHaveBeenCalledTimes(1)
   })

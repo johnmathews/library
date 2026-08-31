@@ -21,8 +21,8 @@ import { formatMoney, fromCents, toCents } from '@/spending/money'
 // A category scale, not a time scale: the x-axis is uniform periods, so
 // "nothing is 2px wide because two invoices landed three days apart" is true
 // by construction rather than by configuration (spec §4.4 #3). Registration
-// is global and additive — SeriesChartTile.vue's TimeScale registration
-// stays; both scales coexist.
+// is global and additive, so this must not unregister any scale another
+// chart component may have registered elsewhere.
 ChartJS.register(CategoryScale, LinearScale, BarElement, Tooltip)
 
 const props = defineProps<{

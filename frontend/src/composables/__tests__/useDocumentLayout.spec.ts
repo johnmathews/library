@@ -130,7 +130,7 @@ describe('legacy card-order migration (module init)', () => {
   })
 
   it('migrates a customized legacy flat order into columns on first load', async () => {
-    // Legacy user who moved markdown before preview/series-chart and kept a
+    // Legacy user who moved markdown before preview and kept a
     // custom left-column order, with no card-columns key yet.
     localStorage.setItem(
       CARD_ORDER_STORAGE_KEY,
@@ -139,7 +139,6 @@ describe('legacy card-order migration (module init)', () => {
         'metadata',
         'markdown',
         'preview',
-        'series-chart',
         'notes',
         'actions',
         'comments',
@@ -148,7 +147,7 @@ describe('legacy card-order migration (module init)', () => {
     const mod = await import('../useDocumentLayout')
     const layout = mod.useDocumentLayout()
     // Right column preserved the customized order (markdown before preview).
-    expect(layout.cardColumns.value.right).toEqual(['markdown', 'preview', 'series-chart'])
+    expect(layout.cardColumns.value.right).toEqual(['markdown', 'preview'])
     // Left column preserved the flat order for its members; the legacy single
     // `metadata` card expands in place into the five per-section tiles.
     expect(layout.cardColumns.value.left).toEqual([
@@ -164,11 +163,11 @@ describe('legacy card-order migration (module init)', () => {
     // Legacy user from before "comments" existed as a card.
     localStorage.setItem(
       CARD_ORDER_STORAGE_KEY,
-      JSON.stringify(['history', 'metadata', 'notes', 'actions', 'markdown', 'preview', 'series-chart']),
+      JSON.stringify(['history', 'metadata', 'notes', 'actions', 'markdown', 'preview']),
     )
     const mod = await import('../useDocumentLayout')
     const layout = mod.useDocumentLayout()
-    expect(layout.cardColumns.value.right).toEqual(['markdown', 'preview', 'series-chart'])
+    expect(layout.cardColumns.value.right).toEqual(['markdown', 'preview'])
     // 'comments' wasn't in the legacy order; reconcileCardColumns appends it
     // to its default (left) column rather than dropping it. The legacy single
     // `metadata` card expands in place into the five per-section tiles.
@@ -188,7 +187,7 @@ describe('legacy card-order migration (module init)', () => {
       CARD_COLUMNS_STORAGE_KEY,
       JSON.stringify({
         left: ['metadata', 'notes', 'comments', 'actions', 'history'],
-        right: ['preview', 'markdown', 'series-chart'],
+        right: ['preview', 'markdown'],
       }),
     )
     const mod = await import('../useDocumentLayout')
@@ -348,5 +347,36 @@ describe('useDocumentLayout', () => {
     resetLayout()
     expect(heroFields.value).toEqual(DEFAULT_HERO_FIELDS)
     expect(cardColumns.value).toEqual(DEFAULT_CARD_COLUMNS)
+  })
+})
+
+describe('a stored order naming a removed card', () => {
+  it('drops series-chart and keeps every card that still exists', () => {
+    // What a user's localStorage holds if they arranged their page before
+    // the series chart was removed.
+    const stored = {
+      left: ['notes', 'comments', 'actions'],
+      right: ['preview', 'series-chart', 'markdown'],
+    }
+
+    // Two args: the known-id set is built from `defaults`, not from a module
+    // constant, so this is exactly what discriminates - before the change
+    // 'series-chart' is in DEFAULT_CARD_COLUMNS and survives; after, it is not.
+    const result = reconcileCardColumns(stored, DEFAULT_CARD_COLUMNS)
+
+    expect(result.right).not.toContain('series-chart')
+    // Order among the survivors is preserved, not reset to the default.
+    expect(result.right.filter((id) => id === 'preview' || id === 'markdown')).toEqual([
+      'preview',
+      'markdown',
+    ])
+    // Nothing the user had is silently lost, and no known card goes missing.
+    expect(result.left).toContain('notes')
+    const all = [...result.left, ...result.right]
+    for (const id of [...DEFAULT_CARD_COLUMNS.left, ...DEFAULT_CARD_COLUMNS.right]) {
+      expect(all).toContain(id)
+    }
+    // No duplicates across the two columns.
+    expect(new Set(all).size).toBe(all.length)
   })
 })

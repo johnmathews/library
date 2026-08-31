@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-08-27 (the recall corpus PASSED its acceptance criterion on the third measurement, mean recall@10 = 0.889 against the 0.90 ceiling, and `recall-baseline.json` is committed for the first time - the 201-document run, against 259 archive documents, recorded in its `measured_against` block. Two substantive results beyond the criterion. FIRST EVIDENCE FOR #6: `sender-named-bare-chunk` and `date-scoped` are built so the discriminating fact (sender, year) exists ONLY in metadata and reaches the embedding by exactly one route, the context header #6 prepends; both scored 1.00 where a random retriever had about a 1.2% chance of catching all three expected documents in ten slots. That is an inference from construction, not the before/after delta spec 8.1 wanted - still impossible, since `_seed_corpus` embeds through the real `run_embed` and no header-free path exists - but it is well powered and it is the first positive result #6 has produced. SECOND: `breadth-many-mentions` is the only failing case at 0.33, and half its returned slots went to real archive documents only loosely related to the question, displacing eight genuinely relevant ones - the behaviour finding #7 exists to address, visible in a number for the first time, though synthetic fixtures being shorter than real documents may cost them rank independently. See `journal/260827-first-recall-baseline.md`. Earlier (2026-08-27): (the recall corpus was measured a SECOND time and failed its acceptance criterion again, at mean recall@10 = 0.9028 against the 0.90 ceiling, with none of the four cases rebuilt earlier the same day having fallen. The second failure found the real defect, which is arithmetic and not authorial: a candidate cluster must be several TIMES the rank cut, not merely larger than it. At k=10 over a 13-document cluster, ten of thirteen candidates return whatever the ranking, so a retriever choosing at RANDOM already scores 0.77 and the measurable range is 0.77-1.00. Clusters grown to roughly forty documents each (corpus 90 to 201), putting blind recall at 0.21-0.25; `tests/test_recall_scenarios.py` now computes each case's blind recall and fails above `MAX_BLIND_RECALL` (0.35), mutation-checked by reverting the parking cluster to its 13-document shape. Neither 0.917 nor 0.9028 is committed as a baseline - both describe corpora that no longer exist. One positive reading retained: those four cases scored 1.00 where blind scores 0.71-0.77, and `date-scoped` can only get its year from #6's context header, which is the first positive signal #6 has produced - not proof, since ten slots from thirteen candidates gave a ~42% chance of catching all three blind. `eval-recall` now seeds 201 documents and so makes 201 embedder calls per run. See `journal/260827-recall-corpus-blind-floor.md`. Earlier (2026-08-27): (the recall corpus was measured for the first time against real bge-m3 vectors and FAILED its own acceptance criterion, so it was rebuilt. `library eval-recall --write-baseline` on the deployed host returned mean recall@10 = 0.917, above the 0.90 ceiling §1.2 holds this corpus to, with five of six cases at exactly 1.00 and only `breadth-many-mentions` moving: each of those five expected a SINGLE document against three or four distractors, so the whole candidate pool sat inside the ten-slot cut and the case could not lose recall however retrieval behaved. `recall_scenarios.py` grew from 53 documents to 90, every cluster now exceeds its case's rank cut, and every case except the control (`control-unique-term`, which is meant to sit at 1.00 and exists to catch a broken embedder or harness) expects several documents so recall degrades gradually; both properties are now enforced by `tests/test_recall_scenarios.py`. That 0.917 is recorded as the REASON for the rebuild, not as a baseline — it describes a corpus that no longer exists, and no `recall-baseline.json` was committed from it. `recall-baseline.json` now also carries a `measured_against` block (`archive_documents`/`corpus_documents`, counts only — the file is public) because every case scores over the whole `documents` table, so the same corpus is far harder on the deployed archive (259 real documents competing, six of which outranked expected ones) than on a fresh CI stack; `eval-recall` warns when a run's archive differs from the recorded one by more than ten per cent. Also recorded: #6's retrieval benefit was never measured and cannot now be measured this way — `_seed_corpus` embeds through the real `run_embed`, so the fixtures carry context headers and the 2026-08-27 run was a post-#6 measurement, not the "before" spec §8.1 intended to compare against. See `journal/260827-harden-recall-corpus.md`. Earlier (2026-08-27): (final whole-branch review fix wave on this same branch, nine fixes: (1) `.github/workflows/e2e-nightly.yml`'s `Measure retrieval recall` step moved to run AFTER the Smart Groups journey and its "did it actually run?" assertion, with `continue-on-error: true` added — previously it ran BEFORE the journey with no `|| true`, so it aborted the whole job on the very baseline failures the corpus is deliberately built to contain (`sender-named-bare-chunk`'s own docstring says "expected to fail at baseline"), reinstating the never-runs-anywhere defect this workflow exists to fix. The step now reports recall and does not gate; this section's *Where it runs* paragraph and the workflow's own header comment both wrongly claimed "a recall regression reds the nightly run" and are corrected below. (2) `_seed_corpus` (`library.cli`) now raises if any seeded document produced zero chunks after `run_embed` — verified by execution that with the embedder disabled, seeding previously "succeeded" having created zero chunks (`run_embed` is fail-open by design), so `eval-recall` would have silently scored the FTS leg of RRF alone and reported it as retrieval recall; covered by a new test in `tests/test_recall_seed.py` that forces the embedder off. (3) `ASK_SYSTEM_PROMPT_TEMPLATE`'s coverage rule now names `semantic_search` alongside `query_documents`/`compare_to_series` and states the `unembedded` disclosure obligation as a MUST — previously only the tool description carried that obligation, while the system prompt (the stronger surface) actively implied `semantic_search` carried no coverage at all. (4) A new test drives the Ask write tool's confirmed `update_document_metadata` call through a header-field edit and asserts the re-embed hook (`ask/engine.py`, beside `header_fields_changed`) defers exactly one `embed_document` job, plus a non-header companion asserting none — proven by mutation: deleting the two-line hook made the new test fail (it did not before this pass, across 71 passing tests). (5)-(9) minor: a misleadingly-named empty-payload test renamed (`test_a_patch_that_changes_nothing_defers_nothing` → `test_an_empty_patch_defers_nothing`) plus a same-value-patch behaviour test added, both in `tests/test_chunk_context_header.py`; `library eval-recall --only <case> --write-baseline` is now refused (it would silently overwrite the baseline with just that one case), matching the existing `--ask` guard; `_top_k_arg`'s missing-argument path is now clamped through `ask_search_max_top_k` exactly like an explicit value (an operator-configured default above the ceiling previously bypassed it entirely), and the `top_k` tool-description text no longer asserts a specific default it cannot guarantee; `semantic_search` now strips `review_status` after the shared `_filters_from_args` call, so a model emitting it (the schema does not declare it — see the `_REVIEW_STATUS_PROPERTY` comment) cannot silently narrow a search this tool's coverage block has no way to explain; and a new test in `tests/test_embed_comments.py` asserts comment chunks receive the same document header as content chunks (spec §8.5), which nothing previously checked. Nothing about the corpus, the acceptance criterion, or the missing-baseline state changed in this pass — see `journal/260827-retrieval-reach-fix-wave.md`. Earlier (2026-08-27): (retrieval reach (Plan B, findings #5/#6/#7/#15): §1.10 item 6 — "`semantic_search` takes no metadata filters" — is retired and the list renumbered, since the tool now accepts the same `_FILTER_PROPERTIES` as `query_documents`/`compare_to_series` (not `review_status`, which only a tool that can report a `filtered_review_status` drop is offered) and a clamped `top_k` (`LIBRARY_ASK_SEARCH_MAX_TOP_K`, default ceiling 50; non-positive values clamp to `1` rather than silently slicing from the end of the ranking). §1.2 step 2 documents that surface and the result's new `coverage` block (`matched`/`returned`/`unembedded`). Two new limitations recorded: §1.10 item 10 (chunk context headers, embedding a `sender · date · kind · title` line per chunk since migration `0031`, go stale until a re-embed — deferred automatically when one of those four fields is edited, but pre-`0031` chunks need `--include-existing`) and item 11 (`matched` counts documents, not passages — the honest reading of finding #14, not a fix for it). New *Measuring recall* subsection (§1.2, beside *Measuring disclosure*) documents `library eval-recall`'s two layers, where it runs (nightly, not a merge gate — no embedder in the PR gate and no arm64 TEI image), and the corpus's own acceptance criterion (baseline mean recall@10 below 0.90, spec §8.6). **No baseline has been measured**: this development machine is arm64 with no embedder reachable, so `library eval-recall` has never been run against real bge-m3 vectors, `recall-baseline.json` does not exist in this repository, and the chunk-context-header change's effect on recall (the `sender-named-bare-chunk` case it was built to move) is consequently unverified — a design intent, not a measured result. See `journal/260827-retrieval-reach.md`.). Earlier (2026-08-27): (docs(ask): corrected the stamp's stale claim that the disclosure rule's effect on real answer wording is unmeasured — `library eval-disclosure` (new §1.2 subsection, *Measuring disclosure*) now measures it on demand and was run once against an isolated scratch database, with all six scenarios, including the control, passing; that is evidence, not continuous verification, since CI holds no model credentials to gate on it. The new subsection also documents what the eval measures, the exact invocation, why it is a CLI command rather than a test, that it seeds and rolls back rather than touching real data, and why the control scenario exists. No other prose in this document was touched by this pass.). Earlier (2026-08-27): (final whole-branch review fix wave, three doc-only corrections: (1) §1.2's `compare_to_series` reasons list said the four reasons are "not a chained refinement of one aggregate like the three above" — false for the first three, which chain exactly as `sum_amount`'s reasons do (`no_amount` → `other_series_group` → `other_currency`, each "survived every earlier gate, fails this one"); only `manually_excluded` is the structural exception. Rewritten, because the old wording could invite a future reader to "fix" the code into independent gating — the same double-counting bug a sibling branch already shipped and had to fix. (2) The adjacent `other_currency` parenthetical said dropped documents are "still listed in `other_currencies`" — wrong: `other_currencies` skips a `NULL` currency by construction while the `other_currency` exclusion count does not, so an amount-bearing, currency-`NULL` document lands in `excluded.other_currency` but is never named in `other_currencies`; corrected. (3) §1.10 gained a new item 10 for the early-`status="insufficient"`-predates-overrides gap: §1.7 already explained it in full, but §1.10 — the limitations register a reader actually scans — had nothing pointing there, wrongly implying `compare_to_series` carries no coverage limitation. `src/library/series.py`'s `_insufficient` also had its `currency`/`other_currencies` threaded through on the post-bucketing call site (previously hardcoded `null`/`[]` even once a currency bucket was chosen); a code change, covered by a new test, not itself a doc correction. Earlier (2026-08-26): (a code review on this same branch caught an undisclosed gap this task's first pass missed: `summarize_series`'s early `status="insufficient"` exit — taken before a currency bucket is chosen, when too few documents even match the caller's filters — returns before any PIN/EXCLUDE override is resolved, so on that path `coverage`'s numbers, and `status` itself, can predate an override that would have changed them. Pre-existing `summarize_series` behaviour, not introduced by this branch; only the coverage numbers now surfaced there are new. §1.2's optional-`coverage` paragraph now flags this instead of implying unconditional trust, and §1.7's *Coverage* subsection explains it in full. The `SeriesCoverage` docstring in `src/library/series.py` was narrowed to scope its "invariant holds for every combination of PIN and EXCLUDE" claim to the paths where overrides actually run — a docstring-only change, no logic touched). Earlier (2026-08-26): §1.2: the *Coverage and trust on structured results* subsection now also covers `compare_to_series`, which carries the same `coverage` block on the same terms as `query_documents`; documented its four exclusion reasons — `no_amount`, `other_series_group`, `other_currency`, `manually_excluded` — and that the last of these comes from a persisted PIN/EXCLUDE override rather than a chained filter, with the partition invariant holding across every override combination; §1.7: new *Coverage* subsection describing the series' deliberate narrowing to one `(sender, kind, currency)` triple, now reported rather than silent, and that `review_status` still isn't offered as a filter there even though `needs_review` is reported; §1.10: item 10 removed — it asserted `compare_to_series` reports no coverage, which this branch made false since the tool only ever reaches an emergent series summary, which always carries a populated block). Earlier (2026-08-26): §1.2: new *Coverage and trust on structured results* subsection — every `query_documents` aggregate now returns a `coverage` block (`matched`/`included`/`excluded`/`needs_review`) beside its rows, and the system prompt requires the model to disclose a non-empty `excluded` or a non-zero `needs_review`; §1.10: three new limitations — `semantic_search`'s missing metadata filters, `sum_amount`'s document-not-period coverage, and no-answer citation suppression keyed on the `_NO_ANSWER` sentinel. Earlier (2026-08-25): §1.2 *Archive context*: the system prompt now names the user, their recipient names, their free-text **About you** notes (Settings → Ask) and the archive's kind/tag/project/matter/sender vocabulary; `query_documents` and `compare_to_series` filter by `recipient_contains`, `projects`, `matters`, `tags`. Earlier (2026-08-22): the composer is one flat full-width bar — the nested pill is gone. Earlier (2026-08-21): adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.)
-**Last verified:** 2026-08-27 — method: every number above is a real run of `library eval-recall --write-baseline` on the deployed host against a live bge-m3 embedder; the committed `recall-baseline.json` is that run's own output, copied out of the container unmodified. Confirmed the deployed image carries the 201-document corpus with per-case blind floors 0.21-0.25 by executing `library.ask.recall_scenarios` inside the running container. The blind-chance figures (0.9%, 1.2%, 5.8%) are computed exactly as the probability that all expected documents fall in k slots drawn uniformly from the candidate pool. Checked the six repeatedly-retrieved non-fixture ids against the production database to confirm they are real archive documents rather than fixtures, and read their kinds to characterise them (deliberately not quoted here or anywhere in this repository, which is public). Ran the full backend suite, `ruff format --check`, `ruff check`, `mypy`, `scripts/check_docs.py` and the journal-index check after these edits. NOT verified: #6's benefit remains an inference from how the two cases are constructed, NOT a measured before/after delta. Earlier (2026-08-27) — method: the 0.9028 figure is a real run of `library eval-recall --write-baseline` on the deployed host against a live embedder, read from the `recall-baseline.json` it produced (`breadth-many-mentions` 0.4167, the other five 1.00, `measured_against.archive_documents` 259). Derived each case's blind recall arithmetically from its candidate pool and rank cut (contract-clause 0.23, sender-named-bare-chunk/kind-scoped/date-scoped 0.25, breadth 0.21 after the regrow; 0.71-0.77 before it) and verified the rebuilt corpus by execution: 201 documents, 201 unique markers, every expected marker resolving, max body 455 chars against the 1800 ceiling. Mutation-checked the new floor by reverting the parking cluster to 13 documents, which fails both `test_corpus_is_large_enough_to_discriminate` and `test_every_case_competes_against_more_documents_than_its_cut`. Ran the full backend suite, `ruff format --check`, `ruff check`, `mypy`, `scripts/check_docs.py` and the journal-index check after these edits. NOT verified: the 201-document corpus has never been run against an embedder, so the acceptance criterion is unmet rather than met and no baseline is committed. Earlier (2026-08-27) — method: for this pass, the numbers quoted above are a real run, not a projection: `library eval-recall --write-baseline` was executed on the deployed host against a live bge-m3 embedder and returned `5 passed, 1 failed, mean recall 0.917`, with `breadth-many-mentions` at recall@12=0.50 and the other five cases at 1.00. Confirmed the six ids it retrieved instead were pre-existing archive documents, not fixtures, by querying the production database directly (`SELECT count(*) FROM documents` = 259; all six ids present). Read `_seed_corpus` and `jobs.run_embed` to confirm the fixtures are embedded WITH context headers before writing the post-#6 claim. Re-read the rebuilt `recall_scenarios.py` in full and verified by execution: 90 documents, 90 unique markers, every expected marker resolving, max body 455 chars against the 1800 ceiling. Both new corpus invariants were mutation-tested — reverting `kind-scoped` to a single expected document fails `test_only_the_control_case_expects_a_single_document`, and shrinking the parking cluster back to four fails `test_every_case_competes_against_more_documents_than_its_cut` — and the provenance warning was mutation-tested by early-returning from `_warn_if_baseline_is_not_comparable`, which fails two of the four new `tests/test_cli.py` cases. Ran the full backend suite, `ruff format --check`, `ruff check`, `mypy`, `scripts/check_docs.py` and the journal-index check after these edits — see `journal/260827-harden-recall-corpus.md`. NOT verified: the hardened corpus has not itself been measured against an embedder, so the acceptance criterion remains unmet rather than met, and no baseline is committed. Earlier (2026-08-27) — method: for this fix-wave pass, read the full diff of every change before writing this entry: `.github/workflows/e2e-nightly.yml`'s reordered `Measure retrieval recall` step and its rewritten header comment; `_seed_corpus` and its new post-condition in `src/library/cli.py`; `ASK_SYSTEM_PROMPT_TEMPLATE`'s coverage rule and `_run_semantic_search`/`_top_k_arg` in `src/library/ask/engine.py`; and confirmed by running the full backend suite (`uv run pytest -q`, 1841 passed), `uv run ruff format --check .`, `uv run ruff check .`, `uv run mypy`, and `uv run python scripts/check_docs.py` after these edits — see `journal/260827-retrieval-reach-fix-wave.md`. For FIX 4, additionally deleted the two-line re-embed hook in `ask/engine.py`, re-ran the two new tests to confirm the header-field one fails (0 jobs deferred instead of 1) while the non-header companion still passes, then restored the file and diffed it byte-identical to the pre-mutation copy. Still true, unchanged by this pass: `recall-baseline.json` does not exist in this repository and `library eval-recall` has still never been run against a real embedder (this machine is arm64 with none reachable) — no baseline was written, none was invented, and the acceptance-criterion and #6-effect claims below remain exactly as unverified as before this pass. The rest carries forward its previous verification: for this docs pass (retrieval reach), read `library.ask.recall_eval` (`score_recall`/`RecallVerdict`) and `library.ask.recall_scenarios` in full (53-document `CORPUS`, the six `CASES` including `sender-named-bare-chunk`'s docstring naming it as the #6 case); `library.cli`'s `eval_recall`, `_report_recall`, `_seed_corpus` and `RECALL_BASELINE_PATH`; `ask/engine.py`'s `_FILTER_PROPERTIES`/`_REVIEW_STATUS_PROPERTY` split, the `semantic_search` tool schema, `_run_semantic_search` and `_top_k_arg` (confirmed the negative-slice comment and the `max(1, min(...))` clamp); `library.search`'s `SearchReach`/`search_reach`; `library.jobs.compose_context_header` and `run_embed`'s header composition; `library.documents_service.HEADER_FIELDS`/`header_fields_changed`; migration `0031_chunk_context_header.py`; and `.github/workflows/e2e-nightly.yml`'s `eval-recall` step and its header comment explaining why it is nightly-only. Confirmed by `grep -rn "§1.10" docs/ src/ frontend/src/` that no file outside `docs/api.md` (its own, unrelated §1.10 subsections) and `docs/ask.md` itself cites an `ask.md` §1.10 item by number, so the item-6 renumbering needed no other file updated. Confirmed `recall-baseline.json` does not exist in the repository (`git ls-files | grep recall-baseline` empty) before writing the "no baseline measured" claim. Ran `uv run ruff format --check .`, `uv run ruff check .`, `uv run mypy`, `uv run python scripts/check_docs.py`, and the full backend suite (`uv run coverage run -m pytest && uv run coverage report`) after these doc edits — see the journal entry for the results. The rest carries forward its previous verification: for this docs pass (disclosure eval), read `library.ask.disclosure_eval.score`/`mentions_count`, `library.ask.disclosure_scenarios` (all six `SCENARIOS`), and `library.cli`'s `eval_disclosure`/`_seed_scenario`/`_coverage_from_turn_messages` in full, alongside `ask/engine.py`'s `_tool_result_payloads` and `_previewed_ids_from_history`, and confirmed the new §1.2 subsection's claims against that code: the eval seeds inside one transaction and rolls it back in a `finally` regardless of outcome; the write tool's confirmation gate cannot be satisfied from a single fresh question with no prior history, so no scenario can commit; and `_coverage_from_turn_messages` now decodes coverage via the shared `_tool_result_payloads` helper (commit `e4e2a09`), which handles both the `api` backend's single-JSON `tool_result` content and the `subscription` backend's double-wrapped content, rather than a second copy of that decode. The six-scenario PASS result (all passing, including the control) quoted in the new subsection is this branch's own recorded live run against an isolated scratch database, not reproduced independently by this pass — this pass did not itself run `library eval-disclosure`, `pytest`, `ruff`, or `mypy`; it ran `scripts/check_docs.py` and the journal-index `--check` after its edits. The rest carries forward its previous verification: for this fix-wave pass, re-read §1.2's reasons-list and the adjacent chained-refinement paragraph against `series.py:483` (`no_amount` gate), `:490-494` (`other_series_group` gate), and `:952-953` (`other_currency` list vs. count, confirming the `NULL`-currency asymmetry: `other_currencies` excludes `c is None`, `other_currency`'s count does not); confirmed the first three reasons chain by tracing `_load_members`/`summarize_series` in order. Re-read §1.10's numbered list to confirm item 10 was genuinely missing (not just misnumbered) before adding the new item. Ran `uv run ruff format .`, `uv run ruff check .`, and `uv run mypy src/library/series.py` (all clean) after the `_insufficient` signature change in `src/library/series.py`, plus `scripts/check_docs.py` and the journal-index `--check` (both clean) after these doc edits; did not run the backend test suite as part of this doc verification, that remains the controller's job. The rest carries forward its previous verification: 2026-08-26 — method: for this second pass, re-read `summarize_series` end to end in `src/library/series.py` (both `status="insufficient"` exits — the early one before currency-bucket selection, at `settings.series_min_documents` over raw filter matches, and the later one after `_apply_overrides`/`_coverage_after_overrides` have run) to confirm which one skips override resolution, and checked `git show main:src/library/series.py` to confirm the early-return shape predates this branch. Ran `scripts/check_docs.py` (clean) and the journal-index `--check` (clean) again after this edit. Because this pass also edited `src/library/series.py` (a docstring only, no logic), it ran `ruff format .`, `ruff check .`, and `mypy src/library/series.py` this time — all clean — but it still did **not** run the backend test suite; that remains the controller's job. The disclosure rule's effect on real answer wording is no longer unmeasured, corrected in this pass: `library eval-disclosure` (§1.2, *Measuring disclosure*) exercises it directly and was run once, with all six scenarios — including the control — passing. That is evidence gathered on demand by a human running the command, not a continuously-verified property: CI holds no model credentials, so no CI gate gives repeat assurance between runs, and a future regression in answer wording would not be caught automatically.
+**Status:** active. **Last updated:** 2026-08-31 (the legacy series stack was deleted, and this is the largest single edit in that pass. **§1.7 is removed** — the `compare_to_series` tool and the series engine behind it — and §1.8 onwards deliberately keeps its number, with a seam note at the gap. §1.1's comparative-question type now says plainly that Ask has no tool for it. The tool diagram loses its `compare_to_series` branch and §1.2's numbered tool list goes five → four. **§1.2's coverage contract is narrowed to `query_documents` and `semantic_search`**, and the distinction between the two — a partition versus a reach figure — is now stated rather than implied. `library eval-disclosure` is five scenarios, not six, exercising three exclusion reasons, not four; the single measurement on record predates the removal and has not been re-run. The three `LIBRARY_SERIES_*` env rows are gone. §1.8 gains the write tool's **third** refusal — an allocated `amount_total` now returns a named error instead of 500ing — which the guardrail list omitted. **Two stale claims in *Where it runs* are corrected**: the recall step no longer runs "after the Smart Groups journey and its did-it-actually-run assertion" (that journey is deleted; the job is renamed `retrieval-recall`), and `recall-baseline.json` **does** exist — committed by `012b013` on 2026-08-27, which predates this branch, so that claim has been false for four days. §1.10 loses item 9, renumbers, and **gains item 11**: Ask's money totals are computed from the model the chart engine replaced — no `amount_kind`, no payment identity, no facet filter — so a chart and an Ask answer can disagree and `coverage.excluded` has no bucket that would say so. **Fix round 1:** item 11's payment-identity bullet said an *unmerged* pair is double-counted, which implied Ask honours a merge. It does not honour one — the qualifier is dropped and the bullet now names the three `WHERE` clauses `sum_amount` actually has.) Earlier: 2026-08-27 (the recall corpus PASSED its acceptance criterion on the third measurement, mean recall@10 = 0.889 against the 0.90 ceiling, and `recall-baseline.json` is committed for the first time - the 201-document run, against 259 archive documents, recorded in its `measured_against` block. Two substantive results beyond the criterion. FIRST EVIDENCE FOR #6: `sender-named-bare-chunk` and `date-scoped` are built so the discriminating fact (sender, year) exists ONLY in metadata and reaches the embedding by exactly one route, the context header #6 prepends; both scored 1.00 where a random retriever had about a 1.2% chance of catching all three expected documents in ten slots. That is an inference from construction, not the before/after delta spec 8.1 wanted - still impossible, since `_seed_corpus` embeds through the real `run_embed` and no header-free path exists - but it is well powered and it is the first positive result #6 has produced. SECOND: `breadth-many-mentions` is the only failing case at 0.33, and half its returned slots went to real archive documents only loosely related to the question, displacing eight genuinely relevant ones - the behaviour finding #7 exists to address, visible in a number for the first time, though synthetic fixtures being shorter than real documents may cost them rank independently. See `journal/260827-first-recall-baseline.md`. Earlier (2026-08-27): (the recall corpus was measured a SECOND time and failed its acceptance criterion again, at mean recall@10 = 0.9028 against the 0.90 ceiling, with none of the four cases rebuilt earlier the same day having fallen. The second failure found the real defect, which is arithmetic and not authorial: a candidate cluster must be several TIMES the rank cut, not merely larger than it. At k=10 over a 13-document cluster, ten of thirteen candidates return whatever the ranking, so a retriever choosing at RANDOM already scores 0.77 and the measurable range is 0.77-1.00. Clusters grown to roughly forty documents each (corpus 90 to 201), putting blind recall at 0.21-0.25; `tests/test_recall_scenarios.py` now computes each case's blind recall and fails above `MAX_BLIND_RECALL` (0.35), mutation-checked by reverting the parking cluster to its 13-document shape. Neither 0.917 nor 0.9028 is committed as a baseline - both describe corpora that no longer exist. One positive reading retained: those four cases scored 1.00 where blind scores 0.71-0.77, and `date-scoped` can only get its year from #6's context header, which is the first positive signal #6 has produced - not proof, since ten slots from thirteen candidates gave a ~42% chance of catching all three blind. `eval-recall` now seeds 201 documents and so makes 201 embedder calls per run. See `journal/260827-recall-corpus-blind-floor.md`. Earlier (2026-08-27): (the recall corpus was measured for the first time against real bge-m3 vectors and FAILED its own acceptance criterion, so it was rebuilt. `library eval-recall --write-baseline` on the deployed host returned mean recall@10 = 0.917, above the 0.90 ceiling §1.2 holds this corpus to, with five of six cases at exactly 1.00 and only `breadth-many-mentions` moving: each of those five expected a SINGLE document against three or four distractors, so the whole candidate pool sat inside the ten-slot cut and the case could not lose recall however retrieval behaved. `recall_scenarios.py` grew from 53 documents to 90, every cluster now exceeds its case's rank cut, and every case except the control (`control-unique-term`, which is meant to sit at 1.00 and exists to catch a broken embedder or harness) expects several documents so recall degrades gradually; both properties are now enforced by `tests/test_recall_scenarios.py`. That 0.917 is recorded as the REASON for the rebuild, not as a baseline — it describes a corpus that no longer exists, and no `recall-baseline.json` was committed from it. `recall-baseline.json` now also carries a `measured_against` block (`archive_documents`/`corpus_documents`, counts only — the file is public) because every case scores over the whole `documents` table, so the same corpus is far harder on the deployed archive (259 real documents competing, six of which outranked expected ones) than on a fresh CI stack; `eval-recall` warns when a run's archive differs from the recorded one by more than ten per cent. Also recorded: #6's retrieval benefit was never measured and cannot now be measured this way — `_seed_corpus` embeds through the real `run_embed`, so the fixtures carry context headers and the 2026-08-27 run was a post-#6 measurement, not the "before" spec §8.1 intended to compare against. See `journal/260827-harden-recall-corpus.md`. Earlier (2026-08-27): (final whole-branch review fix wave on this same branch, nine fixes: (1) `.github/workflows/e2e-nightly.yml`'s `Measure retrieval recall` step moved to run AFTER the Smart Groups journey and its "did it actually run?" assertion, with `continue-on-error: true` added — previously it ran BEFORE the journey with no `|| true`, so it aborted the whole job on the very baseline failures the corpus is deliberately built to contain (`sender-named-bare-chunk`'s own docstring says "expected to fail at baseline"), reinstating the never-runs-anywhere defect this workflow exists to fix. The step now reports recall and does not gate; this section's *Where it runs* paragraph and the workflow's own header comment both wrongly claimed "a recall regression reds the nightly run" and are corrected below. (2) `_seed_corpus` (`library.cli`) now raises if any seeded document produced zero chunks after `run_embed` — verified by execution that with the embedder disabled, seeding previously "succeeded" having created zero chunks (`run_embed` is fail-open by design), so `eval-recall` would have silently scored the FTS leg of RRF alone and reported it as retrieval recall; covered by a new test in `tests/test_recall_seed.py` that forces the embedder off. (3) `ASK_SYSTEM_PROMPT_TEMPLATE`'s coverage rule now names `semantic_search` alongside `query_documents`/`compare_to_series` and states the `unembedded` disclosure obligation as a MUST — previously only the tool description carried that obligation, while the system prompt (the stronger surface) actively implied `semantic_search` carried no coverage at all. (4) A new test drives the Ask write tool's confirmed `update_document_metadata` call through a header-field edit and asserts the re-embed hook (`ask/engine.py`, beside `header_fields_changed`) defers exactly one `embed_document` job, plus a non-header companion asserting none — proven by mutation: deleting the two-line hook made the new test fail (it did not before this pass, across 71 passing tests). (5)-(9) minor: a misleadingly-named empty-payload test renamed (`test_a_patch_that_changes_nothing_defers_nothing` → `test_an_empty_patch_defers_nothing`) plus a same-value-patch behaviour test added, both in `tests/test_chunk_context_header.py`; `library eval-recall --only <case> --write-baseline` is now refused (it would silently overwrite the baseline with just that one case), matching the existing `--ask` guard; `_top_k_arg`'s missing-argument path is now clamped through `ask_search_max_top_k` exactly like an explicit value (an operator-configured default above the ceiling previously bypassed it entirely), and the `top_k` tool-description text no longer asserts a specific default it cannot guarantee; `semantic_search` now strips `review_status` after the shared `_filters_from_args` call, so a model emitting it (the schema does not declare it — see the `_REVIEW_STATUS_PROPERTY` comment) cannot silently narrow a search this tool's coverage block has no way to explain; and a new test in `tests/test_embed_comments.py` asserts comment chunks receive the same document header as content chunks (spec §8.5), which nothing previously checked. Nothing about the corpus, the acceptance criterion, or the missing-baseline state changed in this pass — see `journal/260827-retrieval-reach-fix-wave.md`. Earlier (2026-08-27): (retrieval reach (Plan B, findings #5/#6/#7/#15): §1.10 item 6 — "`semantic_search` takes no metadata filters" — is retired and the list renumbered, since the tool now accepts the same `_FILTER_PROPERTIES` as `query_documents`/`compare_to_series` (not `review_status`, which only a tool that can report a `filtered_review_status` drop is offered) and a clamped `top_k` (`LIBRARY_ASK_SEARCH_MAX_TOP_K`, default ceiling 50; non-positive values clamp to `1` rather than silently slicing from the end of the ranking). §1.2 step 2 documents that surface and the result's new `coverage` block (`matched`/`returned`/`unembedded`). Two new limitations recorded: §1.10 item 10 (chunk context headers, embedding a `sender · date · kind · title` line per chunk since migration `0031`, go stale until a re-embed — deferred automatically when one of those four fields is edited, but pre-`0031` chunks need `--include-existing`) and item 11 (`matched` counts documents, not passages — the honest reading of finding #14, not a fix for it). New *Measuring recall* subsection (§1.2, beside *Measuring disclosure*) documents `library eval-recall`'s two layers, where it runs (nightly, not a merge gate — no embedder in the PR gate and no arm64 TEI image), and the corpus's own acceptance criterion (baseline mean recall@10 below 0.90, spec §8.6). **No baseline has been measured**: this development machine is arm64 with no embedder reachable, so `library eval-recall` has never been run against real bge-m3 vectors, `recall-baseline.json` does not exist in this repository, and the chunk-context-header change's effect on recall (the `sender-named-bare-chunk` case it was built to move) is consequently unverified — a design intent, not a measured result. See `journal/260827-retrieval-reach.md`.). Earlier (2026-08-27): (docs(ask): corrected the stamp's stale claim that the disclosure rule's effect on real answer wording is unmeasured — `library eval-disclosure` (new §1.2 subsection, *Measuring disclosure*) now measures it on demand and was run once against an isolated scratch database, with all six scenarios, including the control, passing; that is evidence, not continuous verification, since CI holds no model credentials to gate on it. The new subsection also documents what the eval measures, the exact invocation, why it is a CLI command rather than a test, that it seeds and rolls back rather than touching real data, and why the control scenario exists. No other prose in this document was touched by this pass.). Earlier (2026-08-27): (final whole-branch review fix wave, three doc-only corrections: (1) §1.2's `compare_to_series` reasons list said the four reasons are "not a chained refinement of one aggregate like the three above" — false for the first three, which chain exactly as `sum_amount`'s reasons do (`no_amount` → `other_series_group` → `other_currency`, each "survived every earlier gate, fails this one"); only `manually_excluded` is the structural exception. Rewritten, because the old wording could invite a future reader to "fix" the code into independent gating — the same double-counting bug a sibling branch already shipped and had to fix. (2) The adjacent `other_currency` parenthetical said dropped documents are "still listed in `other_currencies`" — wrong: `other_currencies` skips a `NULL` currency by construction while the `other_currency` exclusion count does not, so an amount-bearing, currency-`NULL` document lands in `excluded.other_currency` but is never named in `other_currencies`; corrected. (3) §1.10 gained a new item 10 for the early-`status="insufficient"`-predates-overrides gap: §1.7 already explained it in full, but §1.10 — the limitations register a reader actually scans — had nothing pointing there, wrongly implying `compare_to_series` carries no coverage limitation. `src/library/series.py`'s `_insufficient` also had its `currency`/`other_currencies` threaded through on the post-bucketing call site (previously hardcoded `null`/`[]` even once a currency bucket was chosen); a code change, covered by a new test, not itself a doc correction. Earlier (2026-08-26): (a code review on this same branch caught an undisclosed gap this task's first pass missed: `summarize_series`'s early `status="insufficient"` exit — taken before a currency bucket is chosen, when too few documents even match the caller's filters — returns before any PIN/EXCLUDE override is resolved, so on that path `coverage`'s numbers, and `status` itself, can predate an override that would have changed them. Pre-existing `summarize_series` behaviour, not introduced by this branch; only the coverage numbers now surfaced there are new. §1.2's optional-`coverage` paragraph now flags this instead of implying unconditional trust, and §1.7's *Coverage* subsection explains it in full. The `SeriesCoverage` docstring in `src/library/series.py` was narrowed to scope its "invariant holds for every combination of PIN and EXCLUDE" claim to the paths where overrides actually run — a docstring-only change, no logic touched). Earlier (2026-08-26): §1.2: the *Coverage and trust on structured results* subsection now also covers `compare_to_series`, which carries the same `coverage` block on the same terms as `query_documents`; documented its four exclusion reasons — `no_amount`, `other_series_group`, `other_currency`, `manually_excluded` — and that the last of these comes from a persisted PIN/EXCLUDE override rather than a chained filter, with the partition invariant holding across every override combination; §1.7: new *Coverage* subsection describing the series' deliberate narrowing to one `(sender, kind, currency)` triple, now reported rather than silent, and that `review_status` still isn't offered as a filter there even though `needs_review` is reported; §1.10: item 10 removed — it asserted `compare_to_series` reports no coverage, which this branch made false since the tool only ever reaches an emergent series summary, which always carries a populated block). Earlier (2026-08-26): §1.2: new *Coverage and trust on structured results* subsection — every `query_documents` aggregate now returns a `coverage` block (`matched`/`included`/`excluded`/`needs_review`) beside its rows, and the system prompt requires the model to disclose a non-empty `excluded` or a non-zero `needs_review`; §1.10: three new limitations — `semantic_search`'s missing metadata filters, `sum_amount`'s document-not-period coverage, and no-answer citation suppression keyed on the `_NO_ANSWER` sentinel. Earlier (2026-08-25): §1.2 *Archive context*: the system prompt now names the user, their recipient names, their free-text **About you** notes (Settings → Ask) and the archive's kind/tag/project/matter/sender vocabulary; `query_documents` and `compare_to_series` filter by `recipient_contains`, `projects`, `matters`, `tags`. Earlier (2026-08-22): the composer is one flat full-width bar — the nested pill is gone. Earlier (2026-08-21): adaptive thinking on the tool loop, with the answer-token and tool-turn caps raised to match). Earlier (2026-08-21): prompt caching inside the tool loop and token accounting that counts cached tokens; document layout is the DEFAULT at `lg+` with the collapsed rail's actions in the thread bar; per-table horizontal scroll containment. Earlier (2026-08-20): `LIBRARY_ASK_LLM_BACKEND` — Ask's tool loop and title call can run against a Claude subscription instead of the metered API; §1.4. Earlier (2026-07-21): two-screen, route-driven Ask (Option B) and the desktop fixed-height fill; §1.6.)
+**Last verified:** 2026-08-31 — method: read `src/library/ask/engine.py` end to end against this branch's HEAD. `TOOLS` holds four entries — `semantic_search`, `query_documents`, `update_document_metadata`, `get_document` — so the three-read-tools claim in §1.8 and the four-branch diagram in §1.2 are taken from the list, not from the old prose; `_run_update_document` commits through `spend_lines.commit_allocation` and returns `{"error": str(exc)}` on `AllocationError`, which is §1.8's new third guardrail. Re-derived the live exclusion reasons from `src/library/structured_query.py` — `no_amount`, `quote_not_spend`, `no_sender`, `no_kind`, `over_limit`, `filtered_review_status`, six not nine — and the scenario list from `library.ask.disclosure_scenarios.SCENARIOS`, which now holds five (`utilities-no-amount`, `spend-excludes-quotes`, `flagged-amounts`, `list-truncation`, `complete-no-gaps`); `series-other-currency` is gone. `.github/workflows/e2e-nightly.yml` was read in full for the corrected *Where it runs* paragraph (single job `retrieval-recall`, `continue-on-error: true`, no `E2E_SMART_GROUPS`, no `assert-e2e-ran.mjs`). `recall-baseline.json` was confirmed present at the repository root and its introducing commit found with `git log --diff-filter=A` → `012b013`, 2026-08-27 — the claim that it does not exist was false when written into the stamp below and is corrected above; its contents (`breadth-many-mentions` 0.33, mean 0.889) are unchanged and every recall number below still stands. §1.10 item 11's three claims were each checked in source rather than argued: `grep -n 'amount_kind\|spend_facts' src/library/structured_query.py` returns nothing, so `sum_amount` reads neither; and although `DocumentFilters` (`src/library/search.py`) does carry a `facets` mapping, Ask's `_FILTER_PROPERTIES` in `engine.py` exposes only `kind`, `sender_contains`, `recipient_contains`, `projects`, `matters`, `tags`, `date_from`, `date_to` — no facet property in any tool schema, which is the precise reason the vocabulary is unreachable from Ask (the doc says so rather than the looser "no facet field"). No eval was re-run in this pass — neither `eval-recall` nor `eval-disclosure` — and the prose says so where it matters. **Fix round 1:** read `sum_amount`'s statement construction and `filter_conditions` (`src/library/search.py`) in full to settle whether a *merged* invoice/receipt pair is double-counted. It is: `sum_amount`'s `conditions` list is `[*filter_conditions(filters), has_amount]` plus the quote gate, `filter_conditions` contributes only `deleted_at IS NULL` and the caller's own filters, and `grep -rn is_canonical src/library/` finds that column only in `charts/`, `api/facets.py` and `api/spending.py` — never in `structured_query.py`. So merging changes nothing for Ask, and item 11 no longer says it does. Earlier (2026-08-27) — method: every number above is a real run of `library eval-recall --write-baseline` on the deployed host against a live bge-m3 embedder; the committed `recall-baseline.json` is that run's own output, copied out of the container unmodified. Confirmed the deployed image carries the 201-document corpus with per-case blind floors 0.21-0.25 by executing `library.ask.recall_scenarios` inside the running container. The blind-chance figures (0.9%, 1.2%, 5.8%) are computed exactly as the probability that all expected documents fall in k slots drawn uniformly from the candidate pool. Checked the six repeatedly-retrieved non-fixture ids against the production database to confirm they are real archive documents rather than fixtures, and read their kinds to characterise them (deliberately not quoted here or anywhere in this repository, which is public). Ran the full backend suite, `ruff format --check`, `ruff check`, `mypy`, `scripts/check_docs.py` and the journal-index check after these edits. NOT verified: #6's benefit remains an inference from how the two cases are constructed, NOT a measured before/after delta. Earlier (2026-08-27) — method: the 0.9028 figure is a real run of `library eval-recall --write-baseline` on the deployed host against a live embedder, read from the `recall-baseline.json` it produced (`breadth-many-mentions` 0.4167, the other five 1.00, `measured_against.archive_documents` 259). Derived each case's blind recall arithmetically from its candidate pool and rank cut (contract-clause 0.23, sender-named-bare-chunk/kind-scoped/date-scoped 0.25, breadth 0.21 after the regrow; 0.71-0.77 before it) and verified the rebuilt corpus by execution: 201 documents, 201 unique markers, every expected marker resolving, max body 455 chars against the 1800 ceiling. Mutation-checked the new floor by reverting the parking cluster to 13 documents, which fails both `test_corpus_is_large_enough_to_discriminate` and `test_every_case_competes_against_more_documents_than_its_cut`. Ran the full backend suite, `ruff format --check`, `ruff check`, `mypy`, `scripts/check_docs.py` and the journal-index check after these edits. NOT verified: the 201-document corpus has never been run against an embedder, so the acceptance criterion is unmet rather than met and no baseline is committed. Earlier (2026-08-27) — method: for this pass, the numbers quoted above are a real run, not a projection: `library eval-recall --write-baseline` was executed on the deployed host against a live bge-m3 embedder and returned `5 passed, 1 failed, mean recall 0.917`, with `breadth-many-mentions` at recall@12=0.50 and the other five cases at 1.00. Confirmed the six ids it retrieved instead were pre-existing archive documents, not fixtures, by querying the production database directly (`SELECT count(*) FROM documents` = 259; all six ids present). Read `_seed_corpus` and `jobs.run_embed` to confirm the fixtures are embedded WITH context headers before writing the post-#6 claim. Re-read the rebuilt `recall_scenarios.py` in full and verified by execution: 90 documents, 90 unique markers, every expected marker resolving, max body 455 chars against the 1800 ceiling. Both new corpus invariants were mutation-tested — reverting `kind-scoped` to a single expected document fails `test_only_the_control_case_expects_a_single_document`, and shrinking the parking cluster back to four fails `test_every_case_competes_against_more_documents_than_its_cut` — and the provenance warning was mutation-tested by early-returning from `_warn_if_baseline_is_not_comparable`, which fails two of the four new `tests/test_cli.py` cases. Ran the full backend suite, `ruff format --check`, `ruff check`, `mypy`, `scripts/check_docs.py` and the journal-index check after these edits — see `journal/260827-harden-recall-corpus.md`. NOT verified: the hardened corpus has not itself been measured against an embedder, so the acceptance criterion remains unmet rather than met, and no baseline is committed. Earlier (2026-08-27) — method: for this fix-wave pass, read the full diff of every change before writing this entry: `.github/workflows/e2e-nightly.yml`'s reordered `Measure retrieval recall` step and its rewritten header comment; `_seed_corpus` and its new post-condition in `src/library/cli.py`; `ASK_SYSTEM_PROMPT_TEMPLATE`'s coverage rule and `_run_semantic_search`/`_top_k_arg` in `src/library/ask/engine.py`; and confirmed by running the full backend suite (`uv run pytest -q`, 1841 passed), `uv run ruff format --check .`, `uv run ruff check .`, `uv run mypy`, and `uv run python scripts/check_docs.py` after these edits — see `journal/260827-retrieval-reach-fix-wave.md`. For FIX 4, additionally deleted the two-line re-embed hook in `ask/engine.py`, re-ran the two new tests to confirm the header-field one fails (0 jobs deferred instead of 1) while the non-header companion still passes, then restored the file and diffed it byte-identical to the pre-mutation copy. Still true, unchanged by this pass: `recall-baseline.json` does not exist in this repository and `library eval-recall` has still never been run against a real embedder (this machine is arm64 with none reachable) — no baseline was written, none was invented, and the acceptance-criterion and #6-effect claims below remain exactly as unverified as before this pass. The rest carries forward its previous verification: for this docs pass (retrieval reach), read `library.ask.recall_eval` (`score_recall`/`RecallVerdict`) and `library.ask.recall_scenarios` in full (53-document `CORPUS`, the six `CASES` including `sender-named-bare-chunk`'s docstring naming it as the #6 case); `library.cli`'s `eval_recall`, `_report_recall`, `_seed_corpus` and `RECALL_BASELINE_PATH`; `ask/engine.py`'s `_FILTER_PROPERTIES`/`_REVIEW_STATUS_PROPERTY` split, the `semantic_search` tool schema, `_run_semantic_search` and `_top_k_arg` (confirmed the negative-slice comment and the `max(1, min(...))` clamp); `library.search`'s `SearchReach`/`search_reach`; `library.jobs.compose_context_header` and `run_embed`'s header composition; `library.documents_service.HEADER_FIELDS`/`header_fields_changed`; migration `0031_chunk_context_header.py`; and `.github/workflows/e2e-nightly.yml`'s `eval-recall` step and its header comment explaining why it is nightly-only. Confirmed by `grep -rn "§1.10" docs/ src/ frontend/src/` that no file outside `docs/api.md` (its own, unrelated §1.10 subsections) and `docs/ask.md` itself cites an `ask.md` §1.10 item by number, so the item-6 renumbering needed no other file updated. Confirmed `recall-baseline.json` does not exist in the repository (`git ls-files | grep recall-baseline` empty) before writing the "no baseline measured" claim. Ran `uv run ruff format --check .`, `uv run ruff check .`, `uv run mypy`, `uv run python scripts/check_docs.py`, and the full backend suite (`uv run coverage run -m pytest && uv run coverage report`) after these doc edits — see the journal entry for the results. The rest carries forward its previous verification: for this docs pass (disclosure eval), read `library.ask.disclosure_eval.score`/`mentions_count`, `library.ask.disclosure_scenarios` (all six `SCENARIOS`), and `library.cli`'s `eval_disclosure`/`_seed_scenario`/`_coverage_from_turn_messages` in full, alongside `ask/engine.py`'s `_tool_result_payloads` and `_previewed_ids_from_history`, and confirmed the new §1.2 subsection's claims against that code: the eval seeds inside one transaction and rolls it back in a `finally` regardless of outcome; the write tool's confirmation gate cannot be satisfied from a single fresh question with no prior history, so no scenario can commit; and `_coverage_from_turn_messages` now decodes coverage via the shared `_tool_result_payloads` helper (commit `e4e2a09`), which handles both the `api` backend's single-JSON `tool_result` content and the `subscription` backend's double-wrapped content, rather than a second copy of that decode. The six-scenario PASS result (all passing, including the control) quoted in the new subsection is this branch's own recorded live run against an isolated scratch database, not reproduced independently by this pass — this pass did not itself run `library eval-disclosure`, `pytest`, `ruff`, or `mypy`; it ran `scripts/check_docs.py` and the journal-index `--check` after its edits. The rest carries forward its previous verification: for this fix-wave pass, re-read §1.2's reasons-list and the adjacent chained-refinement paragraph against `series.py:483` (`no_amount` gate), `:490-494` (`other_series_group` gate), and `:952-953` (`other_currency` list vs. count, confirming the `NULL`-currency asymmetry: `other_currencies` excludes `c is None`, `other_currency`'s count does not); confirmed the first three reasons chain by tracing `_load_members`/`summarize_series` in order. Re-read §1.10's numbered list to confirm item 10 was genuinely missing (not just misnumbered) before adding the new item. Ran `uv run ruff format .`, `uv run ruff check .`, and `uv run mypy src/library/series.py` (all clean) after the `_insufficient` signature change in `src/library/series.py`, plus `scripts/check_docs.py` and the journal-index `--check` (both clean) after these doc edits; did not run the backend test suite as part of this doc verification, that remains the controller's job. The rest carries forward its previous verification: 2026-08-26 — method: for this second pass, re-read `summarize_series` end to end in `src/library/series.py` (both `status="insufficient"` exits — the early one before currency-bucket selection, at `settings.series_min_documents` over raw filter matches, and the later one after `_apply_overrides`/`_coverage_after_overrides` have run) to confirm which one skips override resolution, and checked `git show main:src/library/series.py` to confirm the early-return shape predates this branch. Ran `scripts/check_docs.py` (clean) and the journal-index `--check` (clean) again after this edit. Because this pass also edited `src/library/series.py` (a docstring only, no logic), it ran `ruff format .`, `ruff check .`, and `mypy src/library/series.py` this time — all clean — but it still did **not** run the backend test suite; that remains the controller's job. The disclosure rule's effect on real answer wording is no longer unmeasured, corrected in this pass: `library eval-disclosure` (§1.2, *Measuring disclosure*) exercises it directly and was run once, with all six scenarios — including the control — passing. That is evidence gathered on demand by a human running the command, not a continuously-verified property: CI holds no model credentials, so no CI gate gives repeat assurance between runs, and a future regression in answer wording would not be caught automatically.
 **Covers:** src/library/ask/
 
 Ask lets you put a natural-language question to the archive and get a prose
@@ -26,9 +26,16 @@ right tool per question:
    metadata columns (`sender`, `kind`, `document_date`, `amount_total`), not by
    reading text.
 3. **Comparative questions** ("is this bill higher than usual?", "how does it
-   compare to last year?", "are my bills going up?") — answered by the series
-   engine against the statistical distribution of recurring documents from the
-   same sender and kind.
+   compare to last year?", "are my bills going up?") — **Ask has no dedicated
+   tool for these any more.** A `compare_to_series` tool answered them against
+   the statistical distribution of recurring documents from the same sender and
+   kind until 2026-08-31, when it was deleted with the legacy series stack: its
+   answer was known-wrong in ways it could not report (see §1.10 item 11). Such a
+   question now reaches `query_documents` and `semantic_search` like any other,
+   and gets a comparison the model assembles from rows rather than a computed
+   distribution. The comparison built on the model that replaced it lives in the
+   chart engine ([charts.md](charts.md)); rebuilding a tool over it is on the
+   [roadmap](roadmap.md).
 
 ## 1.2 How it works
 
@@ -37,9 +44,6 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
                                     │                       (FTS + vector RRF) │
                                     ├─▶ query_documents ───▶ structured query ─┤
                                     │                       (sender/kind/date) │
-                                    ├─▶ compare_to_series ─▶ series stats ─────┤
-                                    │                       (distribution/     │
-                                    │                        trend/YoY)        │
                                     └─▶ get_document ──────▶ full text +      │
                                                             comments (one doc) │
             answer + citations ◀───── Claude (answers from tool results) ◀─────┘
@@ -74,7 +78,7 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    (one chunk per document still drives fusion).
 
    **Scoping the search.** `semantic_search` accepts the same metadata filter
-   properties as `query_documents` and `compare_to_series` — `kind`,
+   properties as `query_documents` — `kind`,
    `sender_contains`, `recipient_contains`, `projects`, `matters`, `tags`,
    `date_from`/`date_to` (§1.2 step 3) — so a content question naming a year or
    a sender can be scoped instead of searching the whole archive and relying on
@@ -95,7 +99,7 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    says. `matched: 0` means the filters excluded everything; `matched: 40,
    returned: 0` means those 40 documents genuinely don't say this; a non-zero
    `unembedded` means the negative is partly a technical gap, not a content
-   fact (§1.10 item 11).
+   fact (§1.10 item 10).
 3. **Structured query** (`query_documents`). Aggregations over the extracted
    columns: distinct senders, summed amounts (by currency, optionally grouped by
    sender/kind), and document lists. Filters are the list API's
@@ -115,13 +119,7 @@ question ─▶ Claude (tool-use loop) ─┬─▶ semantic_search ──▶ hy
    the concept→kind hints `quote`/`estimate` → `quote`). The exclusion lives in
    `structured_query.sum_amount`, not the prompt, so it holds regardless of how
    the question is phrased.
-4. **Series comparison** (`compare_to_series`). Statistical summary of a
-   recurring-document series — see §1.7 for details. Takes the same filters as
-   `query_documents`, so a series can be pinned to a matter or a recipient. Returns distribution
-   (count/mean/median/stdev/min/max), a reference-vs-usual verdict, a trend
-   direction, and a year-over-year comparison. All members contribute their ids
-   to the citation set.
-5. **Full-document read** (`get_document`). Once another tool has located a
+4. **Full-document read** (`get_document`). Once another tool has located a
    document, this reads it in full: structured fields, its **comments** (see
    §1.9), and its text (joined per-page markdown, falling back to `ocr_text`),
    truncated to `LIBRARY_ASK_GET_DOCUMENT_MAX_CHARS` (default 8000 chars, with
@@ -194,30 +192,30 @@ follow-ups. The composer offers an **Attach image** control with preview + remov
 
 ### Coverage and trust on structured results
 
-Every `query_documents` result carries a `coverage` block beside its rows, and
-so does `compare_to_series` (§1.7) — the two tools share the same shape:
+**Two tools report coverage: `query_documents` and `semantic_search`.** They
+report different things, and the difference matters. `query_documents` reports a
+**partition** — every matched document is either included or accounted for under
+a named exclusion reason. `semantic_search` reports a **reach** figure instead
+(`matched` / `returned` / `unembedded`, §1.2 step 2): it says how many documents
+the filters admitted and how many of those the index cannot see at all, not why
+each missing one is missing.
+
+`query_documents`'s block sits beside its rows and has this shape:
 
 | Field | Meaning |
 |-------|---------|
 | `matched` | Documents that met the call's filters |
-| `included` | Documents the rows (or, for `compare_to_series`, the statistics) actually account for |
+| `included` | Documents the rows actually account for |
 | `excluded` | Reason → count for the difference; `{}` when the rows are the whole story |
 | `needs_review` | Of `included`, how many carry a `needs_review` extraction flag |
 
 `included + sum(excluded.values()) == matched` is an invariant, pinned by
-`tests/test_structured_query.py` for `query_documents` and by
-`tests/test_series_db.py` for `compare_to_series`.
+`tests/test_structured_query.py`.
 
-`coverage` is optional on the series side: it is present whenever
-`compare_to_series` returns (this tool only ever resolves an emergent
-`(sender, kind, currency)` series, never a user-authored one — see §1.7), so
-the block itself is never missing from this tool's results. The field exists
-to let `None` mean "not reported" for the authored/Smart-Group series this
-tool cannot reach, as distinct from a present block with an empty `excluded`,
-which means "nothing was dropped". That said, presence isn't the same as
-completeness: §1.7 describes a near-threshold case where the numbers — and
-even `status` itself — predate any override, so read that caveat before
-trusting the block fully on an `"insufficient"` result.
+A third tool used to report coverage: `compare_to_series` shared this exact
+shape, and its `coverage` was declared optional so that `None` could mean "not
+reported" for the authored/Smart-Group series it could not reach. Both the tool
+and that distinction were deleted on 2026-08-31 with the legacy series stack.
 
 Each aggregate's exclusion reasons are built as **successive refinements of one
 include chain**, not independently-gated conditions. `sum_amount`, for
@@ -241,41 +239,10 @@ The reasons a document is dropped, by aggregate:
   document with no extracted sender).
 - `list` — `over_limit` (the result limit is 50 and the drop is positional —
   which documents fall off depends on sort order, not a predicate).
-- `compare_to_series` — `no_amount` (the document carries no extracted total,
-  so it cannot contribute a data point), `other_series_group` (a
-  loosely-filtered query matched more than one `(sender, kind)` pair; only the
-  most-populous group becomes the series), `other_currency` (the series
-  bucket is one currency; every other currency present is dropped from the
-  statistics), and `manually_excluded` (the user persisted an EXCLUDE
-  override on this document — see [api.md §1.15](api.md)).
-
-  `other_currency` and `other_currencies` (the field, plural) are not the same
-  list. `other_currencies` names the *codes* present outside the chosen
-  bucket, and skips a `NULL` currency by construction; `other_currency` (the
-  exclusion count) tallies every document outside the chosen bucket,
-  `NULL`-currency ones included. An amount-bearing document whose `currency`
-  is `NULL` — extraction found a total but no currency — is therefore counted
-  in `excluded["other_currency"]` but never named in `other_currencies`.
-
-`compare_to_series`'s first three reasons **are** a chained refinement, the
-same "survived every earlier gate, fails this one" rule as the three
-aggregates above: a document must have an amount (`no_amount`) before its
-`(sender, kind)` group can be judged dominant-or-not (`other_series_group`),
-and must be in the dominant group before its currency bucket can be judged
-chosen-or-not (`other_currency`) — so an amountless document in a
-non-dominant group lands under `no_amount` alone, never both. Only
-`manually_excluded` breaks that chain: it comes from a persisted PIN/EXCLUDE
-override layered on afterwards, a structurally different mechanism, not a
-fourth gate in the same sequence. A PIN is keyed on the resolved series
-identity, not on the call's filters, so it can restore a document the filters
-would otherwise have dropped as `other_series_group` or `other_currency`
-(subtracted back out of whichever reason it would have landed in, so it is
-never double-counted), or pull in a document the filters never matched at all (which grows `matched`
-itself — `matched` is "everything the filters matched, union anything
-pinned in"). Either way the `included + sum(excluded.values()) == matched`
-invariant holds across every combination of PIN and EXCLUDE
-(`tests/test_series_db.py` pins this explicitly, including the override
-case).
+There is also `filtered_review_status`, reported when the caller passes
+`review_status` and the filter removes documents — the reason that exists so the
+filter can be offered at all (§1.2 step 2 explains why `semantic_search` is not
+offered it).
 
 The system prompt requires the model to disclose a non-empty `excluded` and a
 non-zero `needs_review` in its answer, so a partial total reads as one. It is
@@ -298,27 +265,26 @@ test:
 LIBRARY_CLAUDE_CONFIG_DIR="$HOME/.claude" uv run library eval-disclosure
 ```
 
-`library.ask.disclosure_scenarios` defines six synthetic scenarios, each
+`library.ask.disclosure_scenarios` defines **five** synthetic scenarios, each
 naming documents to seed and a question expected to route to
-`query_documents` or `compare_to_series`. The command seeds one scenario's
+`query_documents`. (There were six until 2026-08-31: `series-other-currency`
+drove `compare_to_series` and went with it.) The command seeds one scenario's
 documents at a time, drives the real Ask loop against it, and scores the
 answer with `library.ask.disclosure_eval.score` for whether it named every
 non-zero `excluded` reason and any non-zero `needs_review` the tool's
 `coverage` block actually reported.
 
-**What it measures, exactly.** The reasons list above names nine exclusion
-reasons across `sum_amount`, `distinct_senders`, `list` and
-`compare_to_series`. This eval exercises exactly **four** of them: `no_amount`
-(`utilities-no-amount`), `quote_not_spend` (`spend-excludes-quotes`),
-`over_limit` (`list-truncation`), and `other_currency`
-(`series-other-currency`) — plus a `needs_review` case (`flagged-amounts`,
-unrelated to `excluded`). The remaining five — `no_sender`, `no_kind`,
-`other_series_group`, `manually_excluded`, and `filtered_review_status` — are
-**not** measured by any scenario here; a green run says nothing about whether
-the model discloses those. The sixth scenario, `complete-no-gaps`, is a
-**control** where nothing was dropped — without it, a model that hedges in
-every answer regardless of the facts would score a perfect pass, which is the
-opposite of what the eval is for.
+**What it measures, exactly.** The reasons list above names six exclusion
+reasons across `sum_amount`, `distinct_senders` and `list`. This eval exercises
+exactly **three** of them: `no_amount` (`utilities-no-amount`),
+`quote_not_spend` (`spend-excludes-quotes`) and `over_limit`
+(`list-truncation`) — plus a `needs_review` case (`flagged-amounts`, unrelated
+to `excluded`). The remaining three — `no_sender`, `no_kind` and
+`filtered_review_status` — are **not** measured by any scenario here; a green
+run says nothing about whether the model discloses those. The fifth scenario,
+`complete-no-gaps`, is a **control** where nothing was dropped — without it, a
+model that hedges in every answer regardless of the facts would score a perfect
+pass, which is the opposite of what the eval is for.
 
 Every scenario also drives `run_ask(..., backend="subscription")` only — the
 eval never runs `backend="api"`, so a green run is likewise silent on whether
@@ -345,10 +311,13 @@ false pass or fail — treat a passing score as "no obvious failure to
 disclose," not as certified proof of correct disclosure.
 
 **Measured once, against an isolated scratch database (never the archive):**
-all six scenarios passed, including the control — the model disclosed every
-excluded-reason count and the `needs_review` count the tool actually
-reported, on both `query_documents` and `compare_to_series`, and invented no
-caveat on the control question where nothing was dropped. That is evidence,
+all six scenarios then defined passed, including the control — the model
+disclosed every excluded-reason count and the `needs_review` count the tool
+actually reported, on both `query_documents` and `compare_to_series`, and
+invented no caveat on the control question where nothing was dropped. That
+measurement predates the removal of `compare_to_series` and its scenario, so it
+covers one scenario that no longer exists and the eval has not been re-run
+since. That is evidence,
 not a guarantee, and it is not continuous: the eval is measurable on demand by
 a human running the command above, but CI has no model credentials to run it
 as a regression gate, so a future change could regress disclosed wording
@@ -399,17 +368,24 @@ sibling `eval-disclosure`, every seed is flushed then rolled back inside an
 outer transaction — nothing is committed to the database it runs against.
 
 **Where it runs, and why it isn't a merge gate.** `.github/workflows/e2e-nightly.yml`
-runs `library eval-recall` (layer 1, no `--ask`) after the Smart Groups journey
-and its "did it actually run?" assertion, with `continue-on-error: true` — the
-step **reports** recall and does not gate on it. It cannot run in the PR gate:
-that job starts no embedder at all, and TEI (the bge-m3 sidecar) publishes no
-arm64 image, so it also cannot run on an Apple Silicon development machine —
-only a host with a reachable embedder (Linux/amd64, or the deployed host) can
-drive it. It also cannot gate the nightly today even if it were made to: the
-corpus is deliberately built so some cases fail at baseline (below), and
-`recall-baseline.json` does not exist in this repository, so there is nothing
-yet for a regression to be measured against. Gating on a regression becomes
-possible once a baseline has been recorded with `--write-baseline`;
+runs `library eval-recall` (layer 1, no `--ask`) with `continue-on-error: true` —
+the step **reports** recall and does not gate on it. It is that workflow's only
+step of substance: its single job is `retrieval-recall`, renamed from
+`smart-groups` on 2026-08-31 when the browser journey it used to run after — and
+that journey's `assert-e2e-ran.mjs` "did it actually run?" assertion — were
+deleted with the series stack. The recall step needs neither: it is a CLI command
+inside the `api` container that seeds and queries the database directly, so there
+is no silently-skipped failure mode for such an assertion to catch. It cannot run
+in the PR gate: that job starts no embedder at all, and TEI (the bge-m3 sidecar)
+publishes no arm64 image, so it also cannot run on an Apple Silicon development
+machine — only a host with a reachable embedder (Linux/amd64, or the deployed
+host) can drive it. It also cannot gate the nightly today: the corpus is
+deliberately built so some cases fail at baseline (below), so a gate would fire
+on the corpus's own design rather than on a regression. `recall-baseline.json`
+**is** committed at the repository root — recorded by commit `012b013`
+(2026-08-27), with `breadth-many-mentions` at 0.33 and a mean of 0.889 — so the
+missing piece is a passing baseline, not a baseline. Gating on a regression
+becomes possible once every case passes at baseline and stays there;
 re-tightening this step is a deliberate follow-up, not done yet. Run by hand
 (`library eval-recall`, no flags) it still exits non-zero on any failing case,
 so it can gate a release manually.
@@ -527,9 +503,6 @@ All settings use the `LIBRARY_` env prefix (see `.env.example` /
 | `LIBRARY_ASK_MAX_ANSWER_TOKENS` | `8192` | Per-call output cap. Thinking tokens count against it — see §1.6 Reasoning. |
 | `LIBRARY_ASK_GET_DOCUMENT_MAX_CHARS` | `8000` | Cap on the text `get_document` returns for one document; longer text is truncated with `text_truncated: true`. |
 | `LIBRARY_ASK_HISTORY_TURNS` | `3` | Prior turns re-fed into the loop for follow-ups; `0` disables history (each turn answered cold, still recorded). |
-| `LIBRARY_SERIES_MIN_DOCUMENTS` | `3` | Minimum members before series stats are reported; below this `status:"insufficient"` is returned. |
-| `LIBRARY_SERIES_TYPICAL_PCT` | `0.10` | Half-width of the "typical" verdict band as a fraction of the median (OR'd with ±1 stdev). |
-| `LIBRARY_SERIES_FLAT_PCT` | `0.05` | First→last change fraction at or below which the trend direction is reported as `flat`. |
 
 Ask requires `LIBRARY_ANTHROPIC_API_KEY` (the answer step calls Claude); without
 it `POST /api/ask` returns `503` and the UI shows a friendly message. Indexing
@@ -661,7 +634,10 @@ loop that used `compare_to_series` and `query_documents` and completed
 normally — which also exercises the replay path, since a thinking block
 returned without its signature intact is rejected on the *next* call of the
 turn. The answer correctly excluded same-*kind* documents from other senders.
-That is one observation, not an accuracy measurement.
+That is one observation, not an accuracy measurement — and it is now a
+*historical* one: `compare_to_series` was deleted on 2026-08-31, so the same
+question today drives a two-tool loop. Nothing about the thinking-block or
+replay behaviour depends on which tools the loop calls.
 
 **Prompt caching.** Three breakpoints, of the four Anthropic allows. The static
 system prompt carries one; the tool definitions carry none but sit *before* the
@@ -876,150 +852,22 @@ selected** (chiefly the desktop rail) it prompts the user to pick one
 (`[data-testid="ask-select-thread"]`); and when **no conversations exist yet** it
 invites a first question (`[data-testid="ask-empty"]`).
 
-## 1.7 Document series + comparative queries
-
-The `compare_to_series` tool answers questions about recurring documents — a
-monthly energy bill, an annual insurance renewal — by computing live statistics
-over the series they belong to.
-
-### Series detection
-
-A **series** is the set of documents that share the same `(sender_id, kind_id)`
-pair and carry an `amount_total`. The engine identifies the series automatically
-from the `kind` and `sender_contains` parameters the model supplies (plus the
-other §1.2 step 3 filters — recipient, projects, matters, tags — when it
-narrows further); no user tagging or configuration is needed. If a loose filter matches multiple
-(sender, kind) combinations, the most-populous group is used.
-
-Detection is **on the fly** — there is no materialized series table, and the
-*statistics* are recomputed at query time from the live document set. The only
-thing cached per series is the natural-language **description** (see below).
-
-### Four statistical framings
-
-Every series summary provides four views:
-
-| Framing | What it answers |
-|---------|----------------|
-| **Distribution** | Mean, median, stdev, min, max over the series' amounts. |
-| **Reference-vs-usual** | Where the reference document falls: `higher`, `typical`, or `lower`. |
-| **Trend** | Whether amounts are `rising`, `falling`, or `flat` over time (`flat` when first→last change ≤ `SERIES_FLAT_PCT`; otherwise the sign of the least-squares slope decides). |
-| **Year-over-year** | The member closest to 12 months before the reference date (within a cadence-dependent tolerance) and the percentage change. |
-
-The cadence (`monthly`, `quarterly`, `yearly`, `irregular`) is derived from the
-median gap between consecutive document dates, and influences the YoY match
-tolerance.
-
-### Typical-band rule
-
-The `typical` verdict is given when the reference value is within **±1 stdev
-OR within ±`SERIES_TYPICAL_PCT` (default 10%) of the median**. The OR ensures
-that a very tight, consistent series (small stdev) doesn't flag normal variation
-as `higher`/`lower`; the percent band handles the degenerate case where stdev is
-zero or very small.
-
-### Currency bucketing
-
-Amounts in different currencies are kept separate and cannot be combined. The
-bucket reported is the one matching the reference document's currency; if
-unspecified, the dominant (most-document) currency is used. Other currencies
-present in the series are listed in `other_currencies`.
-
-### Coverage
-
-A series is deliberately narrowed to one `(sender, kind, currency)` triple —
-the dominant `(sender, kind)` group (above), then the one currency bucket
-(above), then documents with no `amount_total` are dropped because they carry
-no data point. That narrowing used to happen silently; it is now reported via
-the `coverage` block described in [§1.2](#12-how-it-works) (`matched` /
-`included` / `excluded` / `needs_review`), so an answer can say what fraction
-of the matching documents its "usual" band actually covers instead of leaving
-the caller to assume it was all of them. Unlike `query_documents`,
-`compare_to_series` does not accept `review_status` as a filter — none of its
-four exclusion reasons is a review-state gate, so offering the filter would
-promise something the tool cannot honour — but `needs_review` is still
-reported as a count within the block, so an answer can flag that some of what
-it included is unverified even though it cannot filter on that state.
-
-**Near-threshold results can predate overrides — including `status` itself.**
-Before choosing a currency bucket, `summarize_series` first checks whether
-enough documents even match the caller's filters at all
-(`settings.series_min_documents`). If they don't, it returns
-`status="insufficient"` immediately — before picking a currency bucket and
-therefore before resolving any PIN/EXCLUDE override, since overrides are
-keyed on a resolved `(sender, kind, currency)` identity that doesn't exist yet
-at that point. On that path `coverage.excluded` only ever holds `no_amount`
-and `other_series_group` (never `manually_excluded`), and — more
-importantly — both `included` and the `"insufficient"` verdict itself predate
-any override: a series the owner has PINned enough documents into to clear
-the threshold can still be reported `"insufficient"` here, and a document the
-owner has EXCLUDEd is still counted in `included`. This is pre-existing
-`summarize_series` behaviour (present before this coverage feature — it
-already returned early on too few matching documents), not something
-introduced by coverage reporting; only the numbers now surfaced on that path
-are new, and this is the one case where they don't reflect overrides at all.
-A series that clears the threshold on filters alone — the ordinary case — is
-unaffected: its `coverage` (and any later `"insufficient"` verdict from too
-few documents in the *chosen currency bucket*) is computed after overrides
-have run, with the full four-reason partition described above.
-
-### Cached series descriptions
-
-Each series also carries a one- or two-sentence **LLM-generated prose
-description** (e.g. *"Energy bills have crept up ~12% over the past year, peaking
-in winter"*). Because that costs an LLM call, it is **precomputed and cached**
-rather than generated per request:
-
-- **Storage.** One row per `(sender_id, kind_id, currency)` in the
-  `series_insights` table (`library.models.SeriesInsight`), with the description,
-  the generating model, the member count it was generated over, and token/cost
-  provenance. The unique key treats a NULL currency as a single bucket
-  (`NULLS NOT DISTINCT`).
-- **Generation.** `library.series_insight.refresh_series_insight` summarises the
-  series, builds a compact stats prompt, and calls the **extraction LLM client**
-  (`settings.extraction_model`, the cheap Haiku tier) to write the prose, then
-  upserts the row. It is best-effort: a disabled feature, a missing API key, or
-  an insufficient series all skip quietly.
-- **Membership hints.** If the owner has manually pinned/excluded documents
-  for this series (see [api.md §1.15](api.md)), up to
-  `MAX_OVERRIDE_EXAMPLES` examples per direction are appended to the prompt as a
-  labelled, authoritative "curated membership" block, and the system prompt is
-  told to weight them — so the description reflects the corrected series. The
-  cap bounds prompt size and cost; tests assert prompt construction only (no
-  live LLM call).
-- **Trigger.** The `library.jobs.generate_series_insight` Procrastinate task is
-  deferred whenever a document reaches `indexed` with both a sender and a kind,
-  so the description refreshes as the series grows.
-
-`summarize_series` attaches the cached description (and per-point document
-`title`s for citation links) to its output; `serialise_summary` includes them in
-the API body. The description is absent until the first successful generation.
-
-### Detail-view trend widget + the /charts view
-
-The document detail view includes a **`DocumentSeriesTrend`** panel that fetches
-the document's series on mount and renders a **`SeriesChartTile`**: a Chart.js
-bar chart of the series' dated points (current document's point highlighted),
-the cached description, a one-line verdict (e.g. *"6.4% above usual · trend
-rising"*), and a list of **citation links** (each point → `/documents/{id}`). The
-panel hides itself silently when `status:"insufficient"` or on fetch error.
-It also carries its own `ChartControls` row (time range, from/to, group-by),
-persisted under `library:doc-series-*` keys, and shows a `doc-series-empty`
-state when the selected window contains no points.
-
-The **`/charts`** view (sidebar nav) renders a responsive grid of the same
-`SeriesChartTile`, one per eligible series, fed by `GET /api/charts`. Tiles here
-have no per-document reference, so the latest member is highlighted.
-
-The raw data is supplied by `GET /api/documents/{id}/series` and `GET /api/charts`;
-see [api.md §1.13–1.14](api.md) for the wire contracts.
+> **Section 1.7 is gone, and §1.8 onwards keeps its number.** It documented the
+> `compare_to_series` tool and the series engine behind it — detection, the four
+> statistical views, the currency bucket, the cached LLM description and the
+> `DocumentSeriesTrend`/`SeriesChartTile` surfaces — all deleted on 2026-08-31
+> with the legacy series stack. The numbering does not close up because the
+> sections after it are cited by number from other documents, and nothing in the
+> toolchain checks a section-number citation. What replaced the model this tool
+> computed over is [charts.md](charts.md); why the tool was not rebuilt on it,
+> and what Ask's money answers still get wrong as a result, is §1.10 item 11.
 
 ## 1.8 Editing document metadata (the write tool)
 
-Ask is an agentic tool-use loop, and beyond the four read-only retrieval tools
-(`semantic_search`, `query_documents`, `compare_to_series`, `get_document`) it
-carries one **write tool, `update_document_metadata`** (`ask.engine`), so a
-conversation can *correct* a document's metadata, not just read it. Writes are
+Ask is an agentic tool-use loop, and beyond the three read-only retrieval tools
+(`semantic_search`, `query_documents`, `get_document`) it carries one **write
+tool, `update_document_metadata`** (`ask.engine`), so a conversation can
+*correct* a document's metadata, not just read it. Writes are
 tightly guarded in code — the prompt asks for good behaviour, but the guardrails
 below are enforced regardless of what the model does.
 
@@ -1041,6 +889,16 @@ below are enforced regardless of what the model does.
   The system prompt additionally instructs the agent to state the exact change
   in prose and get the user's **explicit agreement** before sending a confirmed
   write — but the `previewed_ids` gate is the hard, code-level guarantee.
+- **An allocated `amount_total` is refused, in words.** A confirmed write does
+  not call `session.commit()`; it commits through
+  `spend_lines.commit_allocation`, which translates migration 0035's deferred
+  mirror trigger. If the edit would leave a document's spend lines summing to the
+  *old* `amount_total`, the tool returns an `error` naming the allocation and
+  saying to clear or replace the lines first, and the turn continues. Until
+  2026-08-31 this tool was the only one of `amount_total`'s five writers that did
+  not translate that refusal: the bare `DBAPIError` escaped the whole turn as a
+  500 with a poisoned session. See [charts.md](charts.md) §10.1 for the other
+  four writers and how each answers.
 
 ### Editable fields
 
@@ -1137,14 +995,7 @@ have Ask treat that annotation as ground truth.
    rest. That is deliberate for this release (the goal was disclosure, not
    completeness), but it means a list answer over a large match set is a sample
    the model knows is a sample.
-9. `compare_to_series`'s coverage and `status` itself can predate overrides on
-   a near-threshold series. When too few documents even match the caller's
-   filters, `summarize_series` returns `status="insufficient"` before
-   choosing a currency bucket and therefore before resolving any persisted
-   PIN/EXCLUDE override — so a series a PIN would push over the threshold can
-   still report `"insufficient"`, and a document an EXCLUDE would drop is
-   still counted `included`. See §1.7 for the full explanation.
-10. **Chunk context headers reflect metadata as of the last embed.** A chunk
+9. **Chunk context headers reflect metadata as of the last embed.** A chunk
     embeds a `sender · date · kind · title` line alongside its text. Editing
     one of those four fields defers a re-embed, so the header self-heals — but
     chunks written before migration `0031` carry no header at all until
@@ -1152,8 +1003,39 @@ have Ask treat that annotation as ground truth.
     question naming a sender cannot match those documents on metadata.
     Structured filters are unaffected: they read live metadata, not the
     chunk's stored header.
-11. **`semantic_search`'s `matched` counts documents, not passages.** A
+10. **`semantic_search`'s `matched` counts documents, not passages.** A
     document matching the filters but carrying no chunks is counted in
     `matched` and reported in `unembedded`, but is unreachable by vector
     search. That is the honest reading of finding #14, not a fix for it:
     there is still no UI listing documents missing from the index.
+11. **Money totals are computed from the model the chart engine replaced, and
+    `coverage` cannot say so.** `structured_query.sum_amount` sums raw
+    `amount_total` and reports three exclusions (`no_amount`,
+    `quote_not_spend`, and `no_sender`/`no_kind` when grouping). Three things
+    follow, and none of them appear in `coverage.excluded`:
+    - **It does not read `amount_kind`.** A refund carries a negative meaning
+      that lives in that column, not in the sign of the number being summed, so
+      a refund **adds to** a total instead of reducing it. The non-summable
+      kinds — `coverage_limit`, `balance`, `estimate`, `none` — are summed too,
+      so an insurance policy's cover limit can land inside "what did I spend".
+    - **It does not collapse payment identity — at all.** One payment
+      documented as an invoice and a receipt is **counted twice**, and merging
+      the pair does not help: `sum_amount`'s only `WHERE` clauses are
+      `filter_conditions`' `deleted_at IS NULL`, the amount gate and the quote
+      gate, so it never reads `is_canonical` and never touches `spend_facts`.
+      The canonical-document rule that makes this right lives in the
+      `spend_facts` view, which the chart engine reads and Ask does not.
+    - **It cannot filter by facet.** `DocumentFilters` grew a `facets` field
+      for the vocabulary, but Ask's `_FILTER_PROPERTIES` never did, so no tool
+      schema offers one and the model cannot express the filter. The curated
+      `category` vocabulary is invisible to Ask; a question scoped to a category
+      can only be approximated by sender or kind.
+
+    A chart and an Ask answer to the same money question can therefore disagree,
+    and `coverage.excluded` has **no bucket that would say so**: every one of
+    these is a document Ask *included*, wrongly, not one it dropped. The
+    disclosure contract in §1.2 is honest about what was excluded and silent
+    about what was mis-counted. See [money-facts.md](money-facts.md) for what
+    `amount_kind` and payment identity mean, [charts.md](charts.md) for the
+    relation that gets them right, and the [roadmap](roadmap.md) for the plan to
+    point Ask's aggregate at `spend_facts`.

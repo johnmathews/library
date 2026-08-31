@@ -37,7 +37,6 @@ logger = logging.getLogger(__name__)
 #: configurable — the API and the UI are driven off this mapping.
 BACKEND_SURFACES: dict[str, str] = {
     "ask": "ask_llm_backend",
-    "series_insight": "series_insight_llm_backend",
 }
 
 _VALID_BACKENDS: tuple[str, ...] = get_args(LLMBackend)

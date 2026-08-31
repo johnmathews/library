@@ -8,7 +8,6 @@ recipient identity are reachable from a question.
 
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from types import SimpleNamespace
 from typing import Any, cast
 
 import pytest
@@ -16,8 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from library.ask import engine as ask_engine
-from library.ask.engine import TOOLS, _run_compare_to_series, _run_query_documents
-from library.config import get_settings
+from library.ask.engine import TOOLS, _run_query_documents
 from library.models import ReviewStatus
 from library.search import DocumentFilters
 from tests.test_documents_api import _seed_document
@@ -33,9 +31,8 @@ _FILTER_ARGS: dict[str, Any] = {
 def test_query_tools_declare_the_filters_to_the_model() -> None:
     """A filter the schema does not declare is one the model can never use."""
     by_name = {tool["name"]: tool for tool in TOOLS}
-    for name in ("query_documents", "compare_to_series"):
-        properties = by_name[name]["input_schema"]["properties"]
-        assert set(_FILTER_ARGS) <= set(properties), name
+    properties = by_name["query_documents"]["input_schema"]["properties"]
+    assert set(_FILTER_ARGS) <= set(properties)
 
 
 @pytest.mark.asyncio
@@ -73,27 +70,6 @@ async def test_query_documents_tool_treats_blank_filters_as_absent(
         set(),
     )
     assert captured["filters"] == DocumentFilters()
-
-
-@pytest.mark.asyncio
-async def test_compare_to_series_tool_forwards_the_filters(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    captured: dict[str, DocumentFilters] = {}
-
-    async def fake_summarize(session: Any, *, filters: DocumentFilters, **_: Any) -> Any:
-        captured["filters"] = filters
-        return SimpleNamespace(document_ids=[])
-
-    monkeypatch.setattr(ask_engine, "summarize_series", fake_summarize)
-    monkeypatch.setattr(ask_engine, "serialise_summary", lambda summary: {"status": "stub"})
-    await _run_compare_to_series(cast(Any, None), get_settings(), dict(_FILTER_ARGS), set())
-
-    filters = captured["filters"]
-    assert filters.recipient_contains == "Ada"
-    assert tuple(filters.project_slugs) == ("kitchen-renovation",)
-    assert tuple(filters.matter_slugs) == ("car-insurance",)
-    assert tuple(filters.tag_slugs) == ("tax-2025",)
 
 
 # --- end to end against the database ----------------------------------------
@@ -143,15 +119,6 @@ def test_query_documents_exposes_review_status() -> None:
     tool = next(tool for tool in TOOLS if tool["name"] == "query_documents")
     prop = tool["input_schema"]["properties"]["review_status"]
     assert prop["enum"] == ["verified", "needs_review", "unreviewed"]
-
-
-def test_compare_to_series_does_not_expose_review_status() -> None:
-    """`compare_to_series` has no coverage reporting at all (`summarize_series`
-    already silently drops amountless documents, non-dominant groups, and
-    non-dominant currency buckets), so a filter whose tool cannot report what
-    it removed does not belong on this tool's schema."""
-    tool = next(tool for tool in TOOLS if tool["name"] == "compare_to_series")
-    assert "review_status" not in tool["input_schema"]["properties"]
 
 
 @pytest.mark.asyncio

@@ -646,13 +646,28 @@ class TestModuleMap:
         violations = check_docs.check_module_map(check_docs.MODULE_MAP_DOC, text, found)
         assert violations == [], [v.render() for v in violations]
 
-    def test_deleting_the_series_row_reds_the_gate(self) -> None:
-        """Named in the acceptance criteria, so pinned explicitly."""
+    def test_deleting_the_models_row_reds_the_gate(self) -> None:
+        """Proves the gate is wired to the real tree, not just to fixtures.
+
+        `src/library/models.py` is the anchor, not `src/library/series.py`
+        (retired here after the legacy series stack's deletion left that
+        example module itself deleted, which silently defanged this test
+        instead of reddening it). `models.py` is chosen because: it sits at
+        ~1166 lines, roughly 3x `MODULE_MAP_LINE_FLOOR` (400), so it cannot
+        casually drop below the floor and stop reddening the gate; it is
+        already `MAP_DOC`'s example, the synthetic fixture the sibling tests
+        in this class use, so this real-tree test and its unit-level
+        siblings pin the same anchor; and it is about the least deletable
+        file in the repo, which is exactly the property this test needs from
+        its example after `series.py` demonstrated the failure mode of
+        picking one that wasn't.
+        """
         found = check_docs.scan_source_tree(check_docs.REPO_ROOT)
         text = (check_docs.REPO_ROOT / check_docs.MODULE_MAP_DOC).read_text(encoding="utf-8")
         without = "\n".join(
-            line for line in text.splitlines() if "`src/library/series.py`" not in line
+            line for line in text.splitlines() if "`src/library/models.py`" not in line
         )
+        assert without != text, "the anchor row is gone — pick a still-listed example module"
         violations = check_docs.check_module_map(check_docs.MODULE_MAP_DOC, without, found)
         assert "map-missing-module" in rules(violations)
 

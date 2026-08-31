@@ -3,8 +3,7 @@
  * One `<select>` per facet that has values, AND-composing, for the document
  * list filter bar. Follows the mosaic field-row pattern (`.filter-label` +
  * `.form-select`, `flex flex-wrap items-end gap-3` — see
- * docs/frontend-view-principles.md §5, reference implementation
- * `components/charts/ChartControls.vue`).
+ * docs/frontend-view-principles.md §5).
  *
  * Facets with no values render nothing: the shipped vocabulary's `vehicle`,
  * `property` and `person` facets ship empty, and an empty select is worse

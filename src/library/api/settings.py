@@ -323,13 +323,6 @@ _SURFACE_COPY: dict[str, tuple[str, str]] = {
         "spends subscription quota — roughly 135k tokens for a two-tool turn, "
         "because the Claude Code preamble is re-sent on each step of the loop.",
     ),
-    "series_insight": (
-        "Series descriptions",
-        "The one-line prose description cached for each document series. Runs "
-        "once per ingested document on the cheapest model, so the subscription "
-        "backend's fixed per-call overhead usually costs far more quota than "
-        "the metered call costs in money.",
-    ),
 }
 
 

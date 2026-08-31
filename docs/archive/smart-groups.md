@@ -1,11 +1,25 @@
 # Smart Groups
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: the blurb is written inside the create request, not after the review; closing the review modal is not a dismissal; fixed the §3.x cross-references, which pointed at the scorer rather than the three flows; new §6.1 recording that the full journey now runs nightly). Shipped 2026-07-24. Design: [superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md](superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md).
+**Status:** superseded by [charts.md](../charts.md) (2026-08-31). The feature and
+every module behind it were removed in plan 5 of the charts redesign; a chart
+rule over the facet vocabulary spans senders deterministically, which is what a
+Smart Group existed to do. Kept for the reasoning it records: the
+name-to-seed-query poisoning incident (§4.1) and why membership scoring used
+nearest-positive-neighbour rather than a centroid (§3).
+
+The stamp below is frozen at the moment of archival and describes the feature as
+it stood while it was live. Nothing in the body is true of the running system any
+more: `AuthoredSeries`, `semantic_membership.py`, `series.py`, `series_insight.py`,
+`api/charts.py`, the three background jobs and the `/charts` views named
+throughout were all deleted. The seven tables behind them have not been
+dropped yet — they are orphaned until the follow-up drop migration.
+
+**Last updated:** 2026-08-12 (documentation verification sweep: the blurb is written inside the create request, not after the review; closing the review modal is not a dismissal; fixed the §3.x cross-references, which pointed at the scorer rather than the three flows; new §6.1 recording that the full journey now runs nightly). Shipped 2026-07-24. Design: [superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md](../superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md).
 **Last verified:** 2026-08-12 — method: checked each claim against `semantic_membership.py`, `series.py`, `api/charts.py`, `series_insight.py`, `jobs.py` and `config.py`, plus `tests/test_smart_groups_api.py` and the `ChartsView.vue`/`SeriesChartTile.vue` surfaces, and confirmed via `grep -rn "_name_anchor_ids" src/ tests/` that only the negative-guard assertion remains; no tests were executed.
 
 ## 1. What it is
 
-A Smart Group is an [authored series](api.md) (`AuthoredSeries`) with
+A Smart Group is an [authored series](../api.md) (`AuthoredSeries`) with
 `mode = "semantic"`. Like a manual authored series it is a user-named group
 that charts even without a natural `(sender, kind, currency)` seed, but its
 membership is **learned from document meaning** rather than hand-picked:
@@ -207,6 +221,6 @@ were the only evidence any of it worked end to end.
 
 ## 7. See also
 
-- [superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md](superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md) — full design, including the duplicate-sender companion fix (§9, not yet shipped — tracked separately).
-- [api.md §1.14](api.md) — the `/api/charts` and `/api/charts/authored/*` REST surface (semantic-mode fields are not yet reflected in that doc's authored-series sections; this doc is the source of truth for Smart Group behavior until it is).
-- [frontend.md](frontend.md) — `/charts` view, `SeriesChartTile.vue`, `ChartsView.vue`.
+- [superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md](../superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md) — full design, including the duplicate-sender companion fix (§9, not yet shipped — tracked separately).
+- [charts.md](../charts.md) — the chart engine that replaced this feature. The `/api/charts` and `/api/charts/authored/*` REST surface this section used to cite was documented in `api.md` §1.14, which was deleted with the routes; the surviving spending surface is `/api/spending`.
+- [frontend.md](../frontend.md) — the SPA. The `/charts` legacy view, `SeriesChartTile.vue` and `ChartsView.vue` it used to name were all deleted; `/charts` now routes to the spending workspace.

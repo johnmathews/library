@@ -1,16 +1,25 @@
 /**
  * Real-geometry spec for the `PageHeader` controls slot.
  *
- * `/charts/legacy`, `/jobs` and `/matters` each used to open a second
- * full-width band below the header just to hold their filter bar.
- * `PageHeader`'s `#controls` slot merges that bar into the header row —
- * controls left, page commands right — when the page container is wide
- * enough, and stacks them when it is not.
+ * `/jobs` and `/matters` each used to open a second full-width band below the
+ * header just to hold their filter bar. `PageHeader`'s `#controls` slot
+ * merges that bar into the header row — controls left, page commands right —
+ * when the page container is wide enough, and stacks them when it is not.
  *
- * This spec drives `/charts/legacy` (the pre-spending-board `ChartsView` +
- * `ChartControls`, kept around only as the Smart Groups editor) rather than
- * the `/charts` route, which now renders the unrelated `SpendingBoardView`
- * and has no `ChartControls`/`chart-controls` testid to assert against.
+ * This spec drives `/jobs` for every merge/stack geometry assertion below
+ * (previously `/charts/legacy` carried three of these tests, before the
+ * series-stack removal deleted `ChartsView`/`ChartControls` along with that
+ * route — see `router/__tests__/spending-routes.spec.ts`). The new spending
+ * workspace at `/charts/:chartId(\d+)` is not a substitute: its `PageHeader`
+ * usage (`SpendingWorkspaceView.vue`) passes only `#controls`
+ * (`workspace-toolbar`/`workspace-toolbar-chip`), never `#actions`, so it has
+ * no second group to merge with and cannot express this claim at all —
+ * confirmed by driving it directly: `page-header-actions` never renders on
+ * that route, at any viewport or sidebar state. `/jobs` is the fallback this
+ * file already had a foothold in (the "jobs filter bar" test below predates
+ * this change), and it has both groups (`jobs-filter-bar` controls,
+ * `jobs-show-system`/`jobs-columns-button` actions), so it carries the whole
+ * file now.
  *
  * "Wide enough" is a **container** measurement, not a viewport one, and that is
  * the claim this file exists to pin down. The content column is the viewport
@@ -21,15 +30,21 @@
  *     1280      expanded    1024        no
  *     1280      collapsed   1200        yes
  *
- * Measured on 2026-08-22 against the real stack. A `lg:` breakpoint cannot
- * express that row — it would either stack a 1200px column that had ample room,
- * or merge a 1024px one that did not. `test('...container, not the viewport')`
- * below is that table as an assertion: if someone swaps the container query for
- * a viewport one, exactly that test goes red.
+ * Re-measured on 2026-08-31 against the real stack, driving `/jobs` (the
+ * table's numbers happen to match the pre-2026-08-31 `/charts/legacy`
+ * measurement exactly, because the `@5xl` merge threshold lives on
+ * `PageHeader`'s own container — see `PageHeader.vue` — and does not depend
+ * on which view's content fills the controls/actions slots; this was
+ * confirmed empirically with a throwaway viewport sweep, not assumed from the
+ * old table). A `lg:` breakpoint cannot express that row — it would either
+ * stack a 1200px column that had ample room, or merge a 1024px one that did
+ * not. `test('...container, not the viewport')` below is that table as an
+ * assertion: if someone swaps the container query for a viewport one, exactly
+ * that test goes red.
  *
- * Geometry, not class lists — see the note at the top of `charts-layout.spec.ts`.
+ * Geometry, not class lists — see the note at the top of `spending-layout.spec.ts`.
  *
- * Companion to `charts-layout.spec.ts`, `ask-layout.spec.ts` and
+ * Companion to `spending-layout.spec.ts`, `ask-layout.spec.ts` and
  * `detail-layout.spec.ts`.
  */
 import { expect, test, type Page } from '@playwright/test'
@@ -65,11 +80,11 @@ async function setSidebar(page: Page, expanded: boolean): Promise<void> {
   await page.reload()
 }
 
-/** Opens the legacy charts board — the only page left with a `PageHeader` +
- * `ChartControls` pairing (see the file header comment). */
-async function openLegacyCharts(page: Page): Promise<void> {
-  await page.goto('/charts/legacy')
-  await expect(page.getByTestId('chart-controls')).toBeVisible()
+/** Opens `/jobs` — see the file header for why it now carries every
+ * merge/stack geometry test in this file. */
+async function openJobs(page: Page): Promise<void> {
+  await page.goto('/jobs')
+  await expect(page.getByTestId('jobs-filter-bar')).toBeVisible()
 }
 
 /** True when the controls and the actions render on one visual row. */
@@ -82,13 +97,13 @@ async function isMerged(page: Page): Promise<boolean> {
   return Math.abs(controls.bottom - actions.bottom) < 4
 }
 
-test('the legacy charts filter bar and the page actions share one header row on a wide screen', async ({
+test('the jobs filter bar and the page actions share one header row on a wide screen', async ({
   page,
 }, testInfo) => {
   test.skip(testInfo.project.name !== 'chromium', 'a desktop-width claim')
   await signIn(page)
   await page.setViewportSize({ width: 1440, height: 900 })
-  await openLegacyCharts(page)
+  await openJobs(page)
 
   expect(await isMerged(page), 'controls and actions must share the header row at 1440px').toBe(
     true,
@@ -106,7 +121,7 @@ test('the legacy charts filter bar and the page actions share one header row on 
     'actions must be flush to the content column’s right edge',
   ).toBeLessThan(40)
 
-  await expectNoHorizontalOverflow(page, 'legacy charts header toolbar at 1440px')
+  await expectNoHorizontalOverflow(page, 'jobs header toolbar at 1440px')
 })
 
 test('the merge is gated on the container, not the viewport', async ({ page }, testInfo) => {
@@ -117,20 +132,20 @@ test('the merge is gated on the container, not the viewport', async ({ page }, t
   // Same viewport, both sidebar states. The outcomes differ, which is precisely
   // what a viewport breakpoint could not do.
   await setSidebar(page, true)
-  await openLegacyCharts(page)
+  await openJobs(page)
   expect(
     await isMerged(page),
     'at 1280px with the sidebar EXPANDED the column is too narrow — must stack',
   ).toBe(false)
-  await expectNoHorizontalOverflow(page, 'legacy charts header, 1280px, sidebar expanded')
+  await expectNoHorizontalOverflow(page, 'jobs header, 1280px, sidebar expanded')
 
   await setSidebar(page, false)
-  await openLegacyCharts(page)
+  await openJobs(page)
   expect(
     await isMerged(page),
     'at 1280px with the sidebar COLLAPSED there is room — must merge',
   ).toBe(true)
-  await expectNoHorizontalOverflow(page, 'legacy charts header, 1280px, sidebar collapsed')
+  await expectNoHorizontalOverflow(page, 'jobs header, 1280px, sidebar collapsed')
 })
 
 test('stacking below the threshold puts the controls above the actions, not overlapping', async ({
@@ -138,7 +153,7 @@ test('stacking below the threshold puts the controls above the actions, not over
 }) => {
   await signIn(page)
   await setSidebar(page, true)
-  await openLegacyCharts(page)
+  await openJobs(page)
 
   // On a phone the header is always stacked. Reading order is DOM order is
   // visual order — controls, then actions — so focus order never disagrees with
@@ -150,7 +165,7 @@ test('stacking below the threshold puts the controls above the actions, not over
       actions.top + 1,
     )
   }
-  await expectNoHorizontalOverflow(page, 'legacy charts header, stacked')
+  await expectNoHorizontalOverflow(page, 'jobs header, stacked')
 })
 
 test('the jobs filter bar rides in the header toolbar with one label recipe', async ({

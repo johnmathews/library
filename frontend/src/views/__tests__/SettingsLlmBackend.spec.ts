@@ -20,14 +20,6 @@ const BACKENDS = {
       default: 'api',
       overridden: false,
     },
-    {
-      surface: 'series_insight',
-      label: 'Series descriptions',
-      description: 'Cached prose per document series.',
-      backend: 'api',
-      default: 'api',
-      overridden: false,
-    },
   ],
   credentials_status: 'healthy',
   credentials_detail: 'access token valid (5.0h), refresh token present',
@@ -106,7 +98,6 @@ describe('SettingsView — LLM backend tab', () => {
     expect(
       (wrapper.find('[data-testid="llm-backend-select-ask"]').element as HTMLSelectElement).value,
     ).toBe('api')
-    expect(wrapper.find('[data-testid="llm-surface-series_insight"]').exists()).toBe(true)
   })
 
   it('shows credential status and never renders a key', async () => {
@@ -130,10 +121,7 @@ describe('SettingsView — LLM backend tab', () => {
   it('saves a backend change and reports it applied', async () => {
     const switched = {
       ...BACKENDS,
-      surfaces: [
-        { ...BACKENDS.surfaces[0], backend: 'subscription', overridden: true },
-        BACKENDS.surfaces[1],
-      ],
+      surfaces: [{ ...BACKENDS.surfaces[0], backend: 'subscription', overridden: true }],
     }
     routeFetch({ 'PUT /api/settings/llm-backends/ask': () => jsonResponse(switched) })
     const wrapper = await openTab()
@@ -210,10 +198,7 @@ describe('SettingsView — LLM backend tab', () => {
   it('offers a reset only for an overridden surface', async () => {
     const overridden = {
       ...BACKENDS,
-      surfaces: [
-        { ...BACKENDS.surfaces[0], backend: 'subscription', overridden: true },
-        BACKENDS.surfaces[1],
-      ],
+      surfaces: [{ ...BACKENDS.surfaces[0], backend: 'subscription', overridden: true }],
     }
     routeFetch({
       'GET /api/settings/llm-backends': () => jsonResponse(overridden),
@@ -221,7 +206,6 @@ describe('SettingsView — LLM backend tab', () => {
     })
     const wrapper = await openTab()
 
-    expect(wrapper.find('[data-testid="llm-reset-series_insight"]').exists()).toBe(false)
     await wrapper.find('[data-testid="llm-reset-ask"]').trigger('click')
     await flushPromises()
 

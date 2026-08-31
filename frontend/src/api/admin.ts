@@ -318,8 +318,8 @@ export function deleteKind(slug: string, reassignTo?: string | null): Promise<vo
 }
 
 // --- Currencies -------------------------------------------------------------
-// Currency is free-text (no reference table) but part of series identity, so a
-// rename is a series-aware backend operation. See docs/api.md.
+// Currency is free-text (no reference table); a rename is a plain document
+// rewrite. See docs/api.md.
 
 /** One currency code with the number of (non-deleted) documents using it. */
 export interface CurrencyInUse {
@@ -331,27 +331,10 @@ export interface CurrencyInUse {
 export interface CurrencyNormalizeResult {
   from_code: string
   to_code: string
-  /** Rows changed per table (documents, series_insights, overrides, …). */
+  /** Rows changed (documents). */
   counts: Record<string, number>
   /** True when the target code has no fx_rates row (FX conversion unavailable). */
   fx_rate_missing: boolean
-}
-
-/** One user-authored override that blocks a rename (409 `conflicts` entry). */
-export interface CurrencyConflictItem {
-  table: string
-  sender_id: number | null
-  kind_id: number | null
-}
-
-/**
- * 409 body from `normalizeCurrency` when the rename would collide with
- * user-authored series overrides. The rename is refused and nothing changes.
- * Read off `ApiError.body`.
- */
-export interface CurrencyOverrideConflict {
-  detail: string
-  conflicts: CurrencyConflictItem[]
 }
 
 /** GET /api/admin/currencies — distinct currency codes in use, with counts. */
@@ -361,8 +344,7 @@ export function listCurrencies(signal?: AbortSignal): Promise<CurrencyInUse[]> {
 
 /**
  * POST /api/admin/currencies/normalize — rename `fromCode` to `toCode`
- * everywhere (series-aware). Rejects with 422 (bad code), 400 (same code), or
- * 409 (`CurrencyOverrideConflict`) when user overrides would collide.
+ * everywhere. Rejects with 422 (bad code) or 400 (same code).
  */
 export function normalizeCurrency(
   fromCode: string,

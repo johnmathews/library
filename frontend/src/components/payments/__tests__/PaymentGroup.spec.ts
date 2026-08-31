@@ -10,8 +10,8 @@ vi.mock('@/api/payments', () => ({
   mergePayment: vi.fn(),
 }))
 
-// PaymentGroup rows link to sibling documents via RouterLink; stub it the way
-// SeriesChartTile.spec.ts does so mounting outside a router doesn't throw.
+// PaymentGroup rows link to sibling documents via RouterLink; stub it so
+// mounting outside a router doesn't throw.
 const RouterLinkStub = {
   props: ['to'],
   template: '<a :href="to"><slot /></a>',

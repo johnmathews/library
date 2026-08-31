@@ -223,8 +223,9 @@ async def label_document(
 ) -> tuple[list[LabelProposal], int, int] | None:
     """``(proposals, input_tokens, output_tokens)``, or None when unrunnable.
 
-    Mirrors ``series_insight.describe_series``: a missing API key is a quiet
-    ``None`` (the caller skips the document) rather than an error.
+    A missing API key is a quiet ``None`` (the caller skips the document) rather
+    than an error — labelling is an enrichment pass, so an unconfigured
+    deployment must still ingest.
 
     The API backend uses ``client.messages.parse()`` with :class:`LabelResponse`
     as the structured-output schema (the same approach as

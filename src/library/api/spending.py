@@ -1,4 +1,4 @@
-"""The spending API: the chart engine's ten routes (spec §9.6, §8.4).
+"""The spending API: the chart engine's twelve routes (spec §9.6, §8.4).
 
 Thin by design. Every number here is computed by `library.charts.query`,
 `library.charts.footer`, `library.charts.draft` or `library.spend_lines`; this
@@ -7,9 +7,16 @@ against `spend_facts` — the two invariants those modules hold (the total is
 invariant across split changes, and the drill-through sums to the bar) live in
 one place precisely so a second copy of the query cannot drift from them.
 
-At `/api/spending` rather than §9.6's `/api/charts`: the old series stack still
-owns `/api/charts` across thirteen routes, and this router takes that prefix
-when that one is deleted.
+At `/api/spending` rather than §9.6's `/api/charts`, **permanently**. The
+original note here promised this router would take `/api/charts` once the legacy
+series stack that owned those thirteen routes was deleted. That stack was deleted
+on 2026-08-31 and the promise is withdrawn: `/charts` is the name the redesign
+replaced. Those routes answered "what did one `(sender, kind, currency)` series
+do over time" — a question this engine deliberately does not ask — so inheriting
+the prefix would carry the discarded model's vocabulary into the surface that
+replaced it, and would break every stored link and client for nothing. The SPA
+route stays `/charts` because that is the URL users have bookmarked; the
+API/frontend asymmetry is accepted knowingly. See docs/charts.md §11.
 
 Four things this module is responsible for that nothing underneath it can be:
 
