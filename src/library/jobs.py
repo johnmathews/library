@@ -895,8 +895,8 @@ async def purge_deleted_documents(timestamp: int) -> None:
 
     Selects documents whose ``deleted_at`` is older than
     ``deleted_retention_days``, deletes their rows (chunks, comments, pages,
-    events, note versions, and series/tag/project links all cascade at the DB
-    level), then removes their on-disk originals and derived artifacts. Rows are
+    events, note versions, spend lines, and tag/project/matter links all cascade
+    at the DB level), then removes their on-disk originals and derived artifacts. Rows are
     committed gone *before* files are unlinked, so an unlink failure leaves at
     worst an orphaned file (harmless, reclaimable) rather than a live row whose
     file has vanished. Kill switch: an instant no-op unless

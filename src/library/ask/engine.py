@@ -39,7 +39,11 @@ from library.llm import subscription
 from library.models import Document, DocumentComment, DocumentPage, ReviewStatus
 from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, search_reach, semantic_search
-from library.spend_lines import AllocationError, commit_allocation
+from library.spend_lines import (
+    AMOUNT_ALLOCATED_REFUSAL,
+    AllocationError,
+    commit_allocation,
+)
 from library.structured_query import CONCEPT_TO_KIND, query_documents
 
 logger = logging.getLogger(__name__)
@@ -795,13 +799,7 @@ async def _run_update_document(
     # refusal arrives at COMMIT as a bare DBAPIError, which uncaught is a 500
     # with a poisoned session rather than something the owner can act on.
     try:
-        await commit_allocation(
-            session,
-            refusal=(
-                "this document's amount is allocated across spend lines that sum to "
-                "the old amount; clear or replace its spend lines before changing it"
-            ),
-        )
+        await commit_allocation(session, refusal=AMOUNT_ALLOCATED_REFUSAL)
     except AllocationError as exc:
         return {"error": str(exc)}
     # Same reasoning as the PATCH route (api/documents.py): a header-field edit

@@ -26,7 +26,9 @@ Two things were *added*, not removed: a guard on Ask's `amount_total` commit
 (§5), and an honest limitation in `docs/ask.md` §1.10 saying what Ask's money
 answers still get wrong (§3.2).
 
-The seven tables are still in the database. That is deliberate — see §4.
+The seven tables are still in the database as this PR lands. That is
+deliberate — see §3.3. (**Closed the same day:** the follow-up PR's
+migration 0038 dropped all seven; see the note at the end of §3.3.)
 
 ## 2. Six live consumers the redesign spec never named
 
@@ -130,6 +132,15 @@ The cost is that `main` carries dead tables for a few days, and that someone has
 to remember to finish. `docs/architecture.md` §1.9 names all seven under an
 explicit "orphaned, awaiting the drop migration" heading so the debt is visible
 in the document a new reader is pointed at first, not only in a plan file.
+
+**Closed (2026-08-31).** The follow-up PR shipped `migrations/versions/0038_drop_series_stack.py`,
+which drops all seven — children before parents, because the members,
+suggestions and exclusions tables each hold a `CASCADE` foreign key to
+`authored_series`. Its `downgrade` recreates them **empty**, mirroring the
+`create_table` calls of 0009/0015/0018/0019/0021/0029 (0029's three
+later-added columns included), so an older image can still boot against the
+schema; the rows themselves are gone and only a backup returns them. The
+§1.9 heading above is now a historical map rather than a debt.
 
 ### 3.4 `/api/spending` keeps its prefix
 
