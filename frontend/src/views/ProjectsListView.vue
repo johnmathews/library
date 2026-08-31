@@ -61,7 +61,9 @@ const newDescription = ref('')
 const createError = ref<string | null>(null)
 const creating = ref(false)
 
-// Stable-identity list for AppErrorSummary (see ChartsView for the rationale).
+// A computed keeps this array's reference stable while createError is
+// unchanged, so AppErrorSummary's watch(() => props.errors) only re-focuses
+// the alert when the error message actually changes.
 const createErrorItems = computed<ErrorSummaryItem[]>(() =>
   createError.value ? [{ text: createError.value }] : [],
 )
