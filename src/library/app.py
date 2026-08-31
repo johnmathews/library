@@ -14,7 +14,6 @@ from library.api import (
     admin,
     ask,
     auth,
-    charts,
     comments,
     documents,
     events,
@@ -26,7 +25,6 @@ from library.api import (
     payments,
     projects,
     saved_views,
-    series,
     settings,
     spending,
     taxonomy,
@@ -260,8 +258,6 @@ def create_app() -> FastAPI:
     api_router.include_router(payments.router)
     api_router.include_router(spending.router)
     api_router.include_router(comments.router)
-    api_router.include_router(charts.router)
-    api_router.include_router(series.router)
     api_router.include_router(facets.router)
     api_router.include_router(taxonomy.router)
     api_router.include_router(projects.router)
