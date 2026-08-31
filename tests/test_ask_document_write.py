@@ -15,7 +15,7 @@ from typing import Any, cast
 
 import pytest
 from procrastinate.testing import InMemoryConnector
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -25,6 +25,8 @@ from library.config import get_settings
 from library.documents_service import apply_document_update
 from library.models import Document, IngestionEvent, ReviewStatus
 from library.schemas import DocumentUpdate
+from library.spend_lines import LineInput, replace_lines
+from tests.conftest import DocumentFactory
 from tests.test_api_ask import _FakeAnthropic, _Response, _TextBlock, _ToolUseBlock, _Usage
 from tests.test_documents_api import _seed_document
 
@@ -294,6 +296,58 @@ async def test_update_tool_confirm_without_preview_is_refused(api_database_url: 
         document = await _load(session, document_id)
         assert document.title == "Untouched"
         assert (await _events(session, document_id)) == []
+
+
+@pytest.mark.asyncio
+async def test_update_tool_refuses_an_allocated_documents_amount_edit(
+    session: AsyncSession, document: DocumentFactory
+) -> None:
+    """Ask is the fifth `amount_total` writer, and must translate 0035's refusal.
+
+    A document whose spend lines are allocated against its current amount cannot
+    have that amount changed: the mirror trigger refuses it, and because the
+    trigger is DEFERRABLE INITIALLY DEFERRED the refusal arrives at COMMIT — as a
+    bare `DBAPIError` under asyncpg — rather than at the UPDATE. Unguarded that
+    escapes the whole Ask turn as a 500 with a poisoned session; guarded it is a
+    refusal the owner can act on.
+
+    So this drives the tool all the way through its own `commit`: a test that
+    stopped at a flush, or asserted against an already rolled-back session, would
+    pass against no guard and no trigger at all. `confirmed=true` **and** the id
+    in `previewed_ids` are both required to reach that commit; without either the
+    tool returns a preview or a "preview required first" error and the trigger is
+    never touched.
+    """
+    # Invented amounts — this repository is public.
+    doc = await document(amount_total=Decimal("100.00"))
+    # Held as a plain int: the refusal rolls the session back, which expires
+    # every ORM attribute, and reading `doc.id` afterwards would go to the
+    # database on a sync attribute access and raise MissingGreenlet instead of
+    # asserting anything.
+    document_id = doc.id
+    await replace_lines(
+        session,
+        document_id,
+        [LineInput(amount=Decimal("60.00")), LineInput(amount=Decimal("40.00"))],
+    )
+    await session.commit()
+
+    result = await _run_update_document(
+        session,
+        get_settings(),
+        {"document_id": document_id, "amount_total": "250.00", "confirmed": True},
+        {document_id},
+        {document_id},  # previewed earlier in the thread
+    )
+
+    assert "error" in result, f"expected a refusal, got {result!r}"
+    assert "spend lines" in result["error"]
+    # The session survived the refusal — a poisoned session is the actual damage
+    # the unguarded 500 does — and the rejected edit did not land.
+    still = await session.scalar(
+        text("SELECT amount_total FROM documents WHERE id = :d"), {"d": document_id}
+    )
+    assert still == Decimal("100.00"), "the refused edit must not have landed"
 
 
 # --- Engine-level dispatch --------------------------------------------------

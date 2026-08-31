@@ -39,6 +39,7 @@ from library.llm import subscription
 from library.models import Document, DocumentComment, DocumentPage, ReviewStatus
 from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, search_reach, semantic_search
+from library.spend_lines import AllocationError, commit_allocation
 from library.structured_query import CONCEPT_TO_KIND, query_documents
 
 logger = logging.getLogger(__name__)
@@ -725,7 +726,10 @@ async def _run_update_document(
     actually seen the proposal and replied before anything is written, enforced
     in code rather than only by the system prompt. ``confirmed=false`` returns a
     current-vs-proposed preview and writes nothing; ``confirmed=true`` applies the
-    edit (edited_by="ask") and commits.
+    edit (edited_by="ask") and commits — or, if the edit would leave an
+    allocated document's spend lines summing to the old ``amount_total``,
+    returns the mirror trigger's refusal as a tool-result error (§10.1 of
+    docs/charts.md) rather than letting it escape as a 500.
     """
     raw_id = args.get("document_id")
     try:
@@ -785,7 +789,21 @@ async def _run_update_document(
     # Recompute validation so an agent-applied fix clears its warning (and a bad
     # edit gets flagged) — same behaviour as the PATCH route (documents.py).
     await revalidate_after_edit(session, document, settings)
-    await session.commit()
+    # Committed through the allocation helper, not `session.commit()`. This is
+    # the fifth writer of `amount_total` (docs/charts.md §10.1) and was the only
+    # one that did not translate migration 0035's deferred mirror trigger: the
+    # refusal arrives at COMMIT as a bare DBAPIError, which uncaught is a 500
+    # with a poisoned session rather than something the owner can act on.
+    try:
+        await commit_allocation(
+            session,
+            refusal=(
+                "this document's amount is allocated across spend lines that sum to "
+                "the old amount; clear or replace its spend lines before changing it"
+            ),
+        )
+    except AllocationError as exc:
+        return {"error": str(exc)}
     # Same reasoning as the PATCH route (api/documents.py): a header-field edit
     # invalidates this document's stored chunk headers.
     if header_fields_changed(edited):
