@@ -1483,21 +1483,6 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="preview-fallback"]').exists()).toBe(false)
   })
 
-  it('renders DocumentSeriesTrend with the loaded document id', async () => {
-    const DocumentSeriesTrendStub = { template: '<div />', props: ['documentId'] }
-    await router.push('/documents/12')
-    wrapper = mount(DocumentDetailView, {
-      global: {
-        plugins: [router, pinia],
-        stubs: { DocumentSeriesTrend: DocumentSeriesTrendStub },
-      },
-    })
-    await flushPromises()
-    const trend = wrapper.findComponent(DocumentSeriesTrendStub)
-    expect(trend.exists()).toBe(true)
-    expect(trend.props('documentId')).toBe(detail.id)
-  })
-
   function detailGetCount(): number {
     return fetchMock.mock.calls.filter(
       (call) => String(call[0]) === '/api/documents/12' && ((call[1] as RequestInit | undefined)?.method ?? 'GET') === 'GET',
@@ -1789,62 +1774,13 @@ describe('DocumentDetailView', () => {
     })
 
     it('renders section cards in the saved order within a column', async () => {
-      useDocumentLayout().setColumn('right', ['markdown', 'preview', 'series-chart'])
+      useDocumentLayout().setColumn('right', ['markdown', 'preview'])
       const w = await mountView()
       const ids = w
         .find('#document-preview-column')
         .findAll('[data-testid^="section-card-"]')
         .map((el) => el.attributes('data-testid') ?? '')
       expect(ids.indexOf('section-card-markdown')).toBeLessThan(ids.indexOf('section-card-preview'))
-    })
-
-    /** A DocumentSeriesTrend stand-in that reports its presence on mount, the
-     * same way the real component does once its `load()` resolves. */
-    function makeSeriesTrendStub(presence: boolean): Record<string, unknown> {
-      return {
-        props: ['documentId'],
-        emits: ['presence'],
-        template: '<div data-testid="series-trend-stub" />',
-        mounted(this: { $emit: (event: string, value: boolean) => void }) {
-          this.$emit('presence', presence)
-        },
-      }
-    }
-
-    it('hides the series-chart card, even in edit mode, once DocumentSeriesTrend reports no series', async () => {
-      // Regression test: the wrapper's `empty:hidden` can't hide the card in
-      // edit mode because the drag handle keeps it non-empty — cardPresent
-      // must gate it instead.
-      await router.push('/documents/12')
-      wrapper = mount(DocumentDetailView, {
-        global: {
-          plugins: [router, pinia],
-          stubs: { DocumentSeriesTrend: makeSeriesTrendStub(false) },
-        },
-      })
-      await flushPromises()
-      await wrapper.find('[data-testid="edit-layout-toggle"]').trigger('click')
-      await flushPromises()
-
-      expect(wrapper.find('[data-testid="section-card-series-chart"]').exists()).toBe(false)
-      // Unaffected sibling cards still render normally.
-      expect(wrapper.find('[data-testid="card-drag-handle-preview"]').exists()).toBe(true)
-    })
-
-    it('shows the series-chart card in edit mode once DocumentSeriesTrend reports a present series', async () => {
-      await router.push('/documents/12')
-      wrapper = mount(DocumentDetailView, {
-        global: {
-          plugins: [router, pinia],
-          stubs: { DocumentSeriesTrend: makeSeriesTrendStub(true) },
-        },
-      })
-      await flushPromises()
-      await wrapper.find('[data-testid="edit-layout-toggle"]').trigger('click')
-      await flushPromises()
-
-      expect(wrapper.find('[data-testid="section-card-series-chart"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="card-drag-handle-series-chart"]').exists()).toBe(true)
     })
 
     it('reorders the metadata column independently of the preview column', async () => {

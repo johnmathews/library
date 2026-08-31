@@ -47,7 +47,6 @@ import { useFlashStore } from '@/stores/flash'
 import { useReviewQueueStore } from '@/stores/reviewQueue'
 import { resolveReviewReasons, type ReviewReason } from '@/utils/validationReason'
 import { formatDate, formatDateTime, markdownPageHtml, tagColour } from '@/utils/documentFormat'
-import DocumentSeriesTrend from '@/components/DocumentSeriesTrend.vue'
 import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
 import NoteEditorPanel from '@/components/NoteEditorPanel.vue'
@@ -619,23 +618,11 @@ async function reloadDocument(): Promise<void> {
 // can be dragged into either column, not just reordered within its own
 // (see `buildSortables` below). A column's rendered list filters its full,
 // persisted id list down to cards that actually have content for the current
-// document (notes exist only for note docs; the series chart hides itself
-// when there is no qualifying series — in read mode the wrapper's
-// `empty:hidden` drops it visually, but in edit mode the drag handle keeps
-// the wrapper non-empty, so `seriesChartPresent` gates `cardPresent` instead).
-
-// Whether the series-chart card has anything to show for the current
-// document. Defaults true so the card renders on first mount, mounting
-// `DocumentSeriesTrend`, which then reports the real answer via `presence` —
-// starting false would never mount the child, so it could never re-emit and
-// correct itself. Reset to true on doc→doc navigation (see the route watcher
-// below) so a new document's card isn't left hidden by the previous one's result.
-const seriesChartPresent = ref(true)
+// document (notes exist only for note docs, for example) via `cardPresent`.
 
 /** Whether a card id has content to render for the current document. */
 function cardPresent(id: string): boolean {
   if (id === 'notes') return isNote.value
-  if (id === 'series-chart') return seriesChartPresent.value
   // Present only when the preview card would actually render something: an
   // image/PDF viewer, a downloadable binary original, or — once the text has
   // loaded and turned out empty — the "no preview available" fallback. A text
@@ -839,11 +826,6 @@ watch(
     // leaving blank edit inputs that can PATCH an empty value on Enter.
     setLayoutEditMode(false)
     setMetadataEditMode(false)
-    // Re-show the series-chart card so the new document's DocumentSeriesTrend
-    // remounts and re-reports its own presence; otherwise a no-series doc's
-    // `false` would survive into a doc that does have a qualifying series,
-    // leaving the card hidden forever.
-    seriesChartPresent.value = true
     const numericId = Number(id)
     if (!Number.isInteger(numericId) || numericId < 1) {
       notFound.value = true
@@ -1373,12 +1355,6 @@ watch(
             </template>
           </div>
         </div>
-
-        <DocumentSeriesTrend
-          v-else-if="cardId === 'series-chart'"
-          :document-id="doc.id"
-          @presence="seriesChartPresent = $event"
-        />
 
         <!-- Note-only controls: in-place note editing + version history. Shown
              only for notes (source === 'note'); the generic metadata editor
