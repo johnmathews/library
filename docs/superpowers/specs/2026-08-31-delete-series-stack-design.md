@@ -186,8 +186,12 @@ is `SeriesChartView`), and 17 client functions in
 `test_series_suggestions_db.py`, `test_semantic_membership.py`,
 `test_smart_groups_api.py`, `test_charts_api.py`,
 `test_charts_suggestions_api.py`, `test_charts_write_paths.py`,
-`test_documents_api_series.py`. Five frontend specs, and the e2e specs
-`legacy-charts.spec.ts` and `smart-groups.spec.ts`.
+`test_documents_api_series.py`. Eight frontend specs, and the e2e specs
+`legacy-charts.spec.ts` and `smart-groups.spec.ts`. Five further backend tests
+(`test_currency_admin.py`, `test_facet_apply.py`, `test_jobs_pipeline.py`,
+`test_llm_backend_config.py`, `test_llm_backends.py`) and five frontend specs
+(`useDocumentLayout`, `DocumentDetailView`, `admin`, `AdminView`,
+`SettingsLlmBackend`) are edited rather than deleted.
 
 ## 4. Six live consumers
 
