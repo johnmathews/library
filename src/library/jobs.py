@@ -67,9 +67,6 @@ from library.notifications import (
 )
 from library.ocr import router as ocr_router
 from library.schemas import NotificationEvent
-from library.semantic_membership import auto_add_document
-from library.series_insight import refresh_series_insight
-from library.series_match import propose_authored_matches
 from library.storage import derived_dir, path_for
 from library.storage import remove as remove_stored_files
 
@@ -624,39 +621,6 @@ async def advance_pipeline(
                 needs_review=document.review_status == ReviewStatus.NEEDS_REVIEW,
                 document_url_base=get_settings().public_base_url,
             )
-            # This document may have joined (or grown) a recurring series; refresh
-            # its cached LLM description out of band. Best-effort: a queue hiccup
-            # must never strand an already-indexed document.
-            sender_id, kind_id = document.sender_id, document.kind_id
-            if sender_id is not None and kind_id is not None:
-                await _defer_best_effort(
-                    session,
-                    document.id,
-                    "series insight",
-                    # Bound to locals, not read off `document` inside the lambda:
-                    # the guard above cannot narrow an attribute across a nested
-                    # scope, and the lambda would otherwise re-read it at call time.
-                    lambda: generate_series_insight.defer_async(
-                        sender_id=sender_id, kind_id=kind_id
-                    ),
-                )
-                # It may also match an authored series' signature: propose it for
-                # review (never a silent membership). Best-effort, same as above.
-                await _defer_best_effort(
-                    session,
-                    document.id,
-                    "series autocontinue",
-                    lambda: evaluate_series_autocontinue.defer_async(document_id=document.id),
-                )
-            # Smart Groups: silently add this document to any semantic group it
-            # matches. Unlike the two blocks above, this doesn't require a
-            # sender or kind. Best-effort, same as above.
-            await _defer_best_effort(
-                session,
-                document.id,
-                "semantic-group eval",
-                lambda: evaluate_semantic_groups.defer_async(document_id=document.id),
-            )
         except Exception as exc:
             failed_in = document.status
             await session.rollback()
@@ -826,41 +790,6 @@ async def markdown_document(document_id: int) -> None:
         await apply_markdown(session, document, settings, force=True)
         await maybe_repair_extraction(session, document, settings)
         await run_embed(session, document)
-
-
-@job_app.task(name="library.jobs.generate_series_insight", retry=TRANSIENT_RETRY)
-async def generate_series_insight(sender_id: int, kind_id: int) -> None:
-    """Background task: (re-)generate the cached LLM description for one series.
-
-    Deferred when a document reaches ``indexed`` with both a sender and a kind.
-    Best-effort and idempotent (upserts the single ``series_insights`` row);
-    skips quietly when the series is too small or extraction is disabled.
-    """
-    async with get_sessionmaker()() as session:
-        await refresh_series_insight(session, get_settings(), sender_id, kind_id)
-
-
-@job_app.task(name="library.jobs.evaluate_series_autocontinue", retry=TRANSIENT_RETRY)
-async def evaluate_series_autocontinue(document_id: int) -> None:
-    """Background task: propose an indexed document for any authored series it matches.
-
-    Deferred when a document reaches ``indexed`` with both a sender and a kind.
-    PROPOSE-FOR-REVIEW: records pending suggestions only, never adds a member.
-    Best-effort and idempotent (skips docs already suggested/dismissed/member).
-    """
-    async with get_sessionmaker()() as session:
-        await propose_authored_matches(session, get_settings(), document_id)
-
-
-@job_app.task(name="library.jobs.evaluate_semantic_groups", retry=TRANSIENT_RETRY)
-async def evaluate_semantic_groups(document_id: int) -> None:
-    """Background task: auto-add an indexed document to any Smart Group it matches.
-
-    Deferred when a document reaches ``indexed``. Silent membership by design;
-    the tile's "added automatically" affordance keeps it prunable. Best-effort.
-    """
-    async with get_sessionmaker()() as session:
-        await auto_add_document(session, get_settings(), document_id)
 
 
 def _every_n_minutes_cron(minutes: int) -> str:

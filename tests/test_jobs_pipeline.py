@@ -138,10 +138,7 @@ RETRY_POLICY: dict[str, tuple[bool, str]] = {
     "library.jobs.extract_document": (True, "Anthropic call; already_extracted guards re-spend"),
     "library.jobs.markdown_document": (True, "Anthropic vision call; re-runnable"),
     "library.jobs.classify_document_matters": (True, "Anthropic call; prompt-version guarded"),
-    "library.jobs.generate_series_insight": (True, "Anthropic call; overwrites its cached row"),
     "library.jobs.embed_document": (True, "embedder HTTP; deletes and re-inserts chunks"),
-    "library.jobs.evaluate_series_autocontinue": (True, "DB work; skips already-proposed docs"),
-    "library.jobs.evaluate_semantic_groups": (True, "embedder + DB; membership is idempotent"),
     "library.jobs.ingest_held_email": (True, "human-triggered override; losing it is visible"),
     # No retry, deliberately.
     "library.jobs.generate_thumbnail": (
@@ -418,58 +415,6 @@ async def test_pipeline_defers_matter_classification_after_extract(
     assert [job["args"] for job in matter_jobs] == [
         {"document_id": document_id, "skip_if_classified": True}
     ]
-
-
-async def test_pipeline_defers_series_insight_when_sender_and_kind_present(
-    session_factory: async_sessionmaker[AsyncSession],
-    fake_router: OcrResult,
-    job_connector: InMemoryConnector,
-) -> None:
-    from library.models import Kind, Sender
-
-    async with session_factory() as session:
-        sender = Sender(name="SeriesInsight Energy")
-        session.add(sender)
-        kind = (await session.execute(select(Kind).where(Kind.slug == "utility-bill"))).scalar_one()
-        await session.flush()
-        document = Document(
-            sha256=hashlib.sha256(b"series-insight-defer").hexdigest(),
-            mime_type="application/pdf",
-            source=DocumentSource.UPLOAD,
-            sender_id=sender.id,
-            kind_id=kind.id,
-        )
-        session.add(document)
-        await session.commit()
-        document_id = document.id
-        sender_id = sender.id
-        kind_id = kind.id
-
-    await advance_pipeline(session_factory, document_id)
-
-    insight_jobs = [
-        job
-        for job in job_connector.jobs.values()
-        if job["task_name"] == "library.jobs.generate_series_insight"
-    ]
-    assert [job["args"] for job in insight_jobs] == [{"sender_id": sender_id, "kind_id": kind_id}]
-
-
-async def test_pipeline_skips_series_insight_without_sender_or_kind(
-    session_factory: async_sessionmaker[AsyncSession],
-    fake_router: OcrResult,
-    job_connector: InMemoryConnector,
-) -> None:
-    document_id = await make_document(session_factory, "series-insight-noskip")
-
-    await advance_pipeline(session_factory, document_id)
-
-    insight_jobs = [
-        job
-        for job in job_connector.jobs.values()
-        if job["task_name"] == "library.jobs.generate_series_insight"
-    ]
-    assert insight_jobs == []
 
 
 async def test_ocr_stage_failure_records_ocr_failed_event(
