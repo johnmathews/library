@@ -29,7 +29,7 @@ import httpx
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, select, text, update
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
@@ -39,6 +39,7 @@ from library.api.spending import _commit_allocation
 from library.facets.vocabulary import create_facet, create_value, set_document_label
 from library.models import (
     AmountKind,
+    Chart,
     Document,
     DocumentSource,
     DocumentStatus,
@@ -280,6 +281,212 @@ def test_editing_and_deleting_a_chart(api_client: TestClient) -> None:
     assert api_client.get(f"/api/spending/{chart_id}/data").status_code == 404
 
 
+# --- PATCH: the rule branch --------------------------------------------------
+#
+# `PATCH /api/spending/{id}` has accepted a `rule` since the route was written,
+# but nothing exercised that branch: before these tests the file's only two
+# chart PATCHes sent `{"name": ...}` and `{"name", "default_grain"}`. It is the
+# rule editor's primary write path, so it is characterised here first.
+
+
+def test_patching_a_rule_changes_the_answer(api_client: TestClient, api_database_url: str) -> None:
+    """The write path end to end: the new rule must reach `/data`, not only the
+    stored row. Asserting the PATCH response alone would pass even if `/data`
+    kept answering the old rule."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+    _seed_document(
+        api_database_url,
+        amount="25.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "services"},
+    )
+    chart_id = _save_chart(api_client, "api-patch-rule-answer", SOFTWARE_RULE)
+    assert api_client.get(f"/api/spending/{chart_id}/data").json()["total"] == "10.00"
+
+    services: dict[str, object] = {
+        "all": [{"facet": "category", "op": "in", "values": ["services"]}]
+    }
+    patched = api_client.patch(f"/api/spending/{chart_id}", json={"rule": services})
+
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["rule"] == services
+    assert api_client.get(f"/api/spending/{chart_id}").json()["rule"] == services
+    assert api_client.get(f"/api/spending/{chart_id}/data").json()["total"] == "25.00"
+
+
+def test_patching_a_rule_with_an_unknown_facet_is_a_422_naming_it(api_client: TestClient) -> None:
+    chart_id = _save_chart(api_client, "api-patch-unknown-facet", {"all": []})
+    response = api_client.patch(
+        f"/api/spending/{chart_id}",
+        json={"rule": {"all": [{"facet": "no_such_facet", "op": "in", "values": ["x"]}]}},
+    )
+    assert response.status_code == 422
+    assert "no_such_facet" in response.text
+
+
+def test_patching_a_rule_with_an_unknown_value_is_a_422_naming_it(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    _seed_vocabulary(api_database_url)
+    chart_id = _save_chart(api_client, "api-patch-unknown-value", {"all": []})
+    response = api_client.patch(
+        f"/api/spending/{chart_id}",
+        json={"rule": {"all": [{"facet": "category", "op": "in", "values": ["no_such_value"]}]}},
+    )
+    assert response.status_code == 422
+    assert "no_such_value" in response.text
+
+
+def test_a_refused_rule_patch_leaves_the_chart_unchanged(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The 422 is raised BEFORE `chart.rule` is assigned. A reordering that
+    assigned first would leave a half-applied edit on the session, and the next
+    read would serve a rule the API had just refused."""
+    _seed_vocabulary(api_database_url)
+    chart_id = _save_chart(api_client, "api-patch-refused-intact", SOFTWARE_RULE)
+
+    refused = api_client.patch(
+        f"/api/spending/{chart_id}",
+        json={"rule": {"all": [{"facet": "category", "op": "in", "values": ["ghost"]}]}},
+    )
+
+    assert refused.status_code == 422
+    assert api_client.get(f"/api/spending/{chart_id}").json()["rule"] == SOFTWARE_RULE
+
+
+def test_patching_a_rule_with_an_empty_value_list_is_a_422(api_client: TestClient) -> None:
+    """The PATCH sibling of `test_saving_a_rule_with_an_empty_value_list_is_a_422`.
+    `rule_predicate` raises `RuleError` on it; unreported it would be a 500 the
+    first time the edited chart was drawn."""
+    chart_id = _save_chart(api_client, "api-patch-empty-values", {"all": []})
+    response = api_client.patch(
+        f"/api/spending/{chart_id}",
+        json={"rule": {"all": [{"facet": "category", "op": "in", "values": []}]}},
+    )
+    assert response.status_code == 422
+    assert "category" in response.text
+
+
+def test_patching_to_an_empty_rule_widens_the_chart_to_everything(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`{"all": []}` is a legitimate saved state, not a mistake: it is what the
+    seeded "All spending" card stores. So the API accepts it, and the guard
+    against reaching it by accident is a confirmation in the editor rather than
+    a refusal here. A later blanket 422 has to delete this test deliberately."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+    _seed_document(api_database_url, amount="7.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, "api-patch-widen", SOFTWARE_RULE)
+    narrow = Decimal(api_client.get(f"/api/spending/{chart_id}/data").json()["total"])
+
+    patched = api_client.patch(f"/api/spending/{chart_id}", json={"rule": {"all": []}})
+
+    assert patched.status_code == 200, patched.text
+    widened = Decimal(api_client.get(f"/api/spending/{chart_id}/data").json()["total"])
+    assert widened > narrow
+
+
+def test_patching_a_chart_with_its_own_unchanged_name_is_a_200_not_a_409(
+    api_client: TestClient,
+) -> None:
+    """A form-style editor PATCHes the whole object, including the name it did
+    not change. `_require_free_name` excludes the chart itself, but that
+    exclusion was only ever asserted in its conflicting direction."""
+    name = f"api-patch-self-name-{uuid.uuid4().hex[:8]}"
+    chart_id = _save_chart(api_client, name, {"all": []})
+
+    response = api_client.patch(
+        f"/api/spending/{chart_id}", json={"name": name, "default_grain": "quarter"}
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["name"] == name
+
+
+def test_patching_a_rule_leaves_question_text_untouched(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A deliberate product decision, pinned: the rule editor does not rewrite
+    the plain-language question a chart is headed by. The clause rows are the
+    authoritative statement of what the chart matches, and only the owner can
+    say whether a reworded rule still answers the same question. Changing this
+    means deleting this test on purpose."""
+    _seed_vocabulary(api_database_url)
+    chart_id = _save_chart(api_client, "api-patch-question-text", SOFTWARE_RULE)
+    before = api_client.get(f"/api/spending/{chart_id}").json()["question_text"]
+
+    services = {"all": [{"facet": "category", "op": "in", "values": ["services"]}]}
+    patched = api_client.patch(f"/api/spending/{chart_id}", json={"rule": services})
+
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["question_text"] == before
+
+
+def test_patching_default_split_onto_a_chart_created_without_one(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """A chart saved with `default_split: null` can be given a split axis. The
+    UI had no path to this, which is the same gap as the uneditable rule in a
+    stronger form; the API always supported it."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+    chart_id = _save_chart(api_client, "api-patch-gain-split", SOFTWARE_RULE, default_split=None)
+    assert api_client.get(f"/api/spending/{chart_id}/data").json()["splits"] == []
+
+    patched = api_client.patch(f"/api/spending/{chart_id}", json={"default_split": "category"})
+
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["default_split"] == "category"
+    assert api_client.get(f"/api/spending/{chart_id}/data").json()["splits"] != []
+
+
+def test_patching_default_split_to_null_clears_it(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The other side of the sentinel: an explicit `null` clears the axis, an
+    absent key leaves it alone. A client that omitted the key to mean "clear"
+    would silently keep the old split."""
+    _seed_vocabulary(api_database_url)
+    chart_id = _save_chart(
+        api_client, "api-patch-clear-split", SOFTWARE_RULE, default_split="category"
+    )
+
+    kept = api_client.patch(f"/api/spending/{chart_id}", json={"default_grain": "year"})
+    assert kept.json()["default_split"] == "category"
+
+    cleared = api_client.patch(f"/api/spending/{chart_id}", json={"default_split": None})
+
+    assert cleared.status_code == 200, cleared.text
+    assert cleared.json()["default_split"] is None
+
+
+def test_patching_an_unknown_default_split_is_a_422_naming_it(api_client: TestClient) -> None:
+    chart_id = _save_chart(api_client, "api-patch-bad-split", {"all": []})
+    response = api_client.patch(
+        f"/api/spending/{chart_id}", json={"default_split": "no_such_facet"}
+    )
+    assert response.status_code == 422
+    assert "no_such_facet" in response.text
+
+
 def test_one_chart_can_be_read_by_id(api_client: TestClient) -> None:
     """The workspace loads one chart. Without this it has to page the list
     looking for a row, which breaks the moment there are more than `limit`."""
@@ -313,6 +520,128 @@ def test_saving_a_rule_with_an_empty_value_list_is_a_422(api_client: TestClient)
     )
     assert response.status_code == 422
     assert "category" in response.text
+
+
+#: Two `in` clauses on one facet. A document carries at most one value per
+#: facet, so this can never match anything — the chart reads "you spent
+#: nothing", which is the one answer this feature must never give by accident.
+_SAME_FACET_TWICE: dict[str, object] = {
+    "all": [
+        {"facet": "category", "op": "in", "values": ["software"]},
+        {"facet": "category", "op": "in", "values": ["services"]},
+    ]
+}
+
+
+def test_saving_two_in_clauses_on_one_facet_is_a_422_naming_the_facet(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    _seed_vocabulary(api_database_url)
+    response = api_client.post(
+        "/api/spending",
+        json={
+            "name": "api-same-facet-post",
+            "question_text": "q",
+            "rule": _SAME_FACET_TWICE,
+            "default_grain": "month",
+            "display_currency": "EUR",
+        },
+    )
+    assert response.status_code == 422
+    assert "category" in response.text
+
+
+def test_patching_to_two_in_clauses_on_one_facet_is_a_422(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The editor's own path: an "add filter" button makes this shape reachable
+    in two clicks, where previously only a drafted rule could produce it."""
+    _seed_vocabulary(api_database_url)
+    chart_id = _save_chart(api_client, "api-same-facet-patch", {"all": []})
+    response = api_client.patch(f"/api/spending/{chart_id}", json={"rule": _SAME_FACET_TWICE})
+    assert response.status_code == 422
+    assert "category" in response.text
+
+
+def test_previewing_two_in_clauses_on_one_facet_is_a_422(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """So the editor learns about it before applying, not after."""
+    _seed_vocabulary(api_database_url)
+    response = _preview(api_client, _SAME_FACET_TWICE)
+    assert response.status_code == 422
+    assert "category" in response.text
+
+
+def test_two_not_in_clauses_on_one_facet_are_accepted(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The check is deliberately narrow. Two exclusions on one facet are a
+    legitimate intersection — "not software and not services" is answerable and
+    common. A broader shape check reddens here, which is the point."""
+    _seed_vocabulary(api_database_url)
+    rule = {
+        "all": [
+            {"facet": "category", "op": "not_in", "values": ["software"]},
+            {"facet": "category", "op": "not_in", "values": ["services"]},
+        ]
+    }
+    response = api_client.post(
+        "/api/spending",
+        json={
+            "name": "api-same-facet-not-in",
+            "question_text": "q",
+            "rule": rule,
+            "default_grain": "month",
+            "display_currency": "EUR",
+        },
+    )
+    assert response.status_code == 201, response.text
+
+
+def test_a_chart_with_two_in_clauses_on_one_facet_still_loads_by_id(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The repairability guarantee, and the reason the refusal lives in
+    `_validate_rule` rather than in a `Rule` model validator.
+
+    A chart saved before the check existed must still be *loadable*, because the
+    rule editor is the tool for fixing it. `GET /api/spending/{id}` runs only
+    `Rule.model_validate`, never `_validate_rule`, so it survives.
+
+    MUTATION: move the check into a `Rule` validator and this reddens — the
+    editor can no longer open the chart it exists to repair."""
+    _seed_vocabulary(api_database_url)
+    chart_id = _save_chart(api_client, "api-same-facet-legacy", {"all": []})
+
+    async def write_bad_rule(session: AsyncSession) -> None:
+        await session.execute(
+            update(Chart).where(Chart.id == chart_id).values(rule=_SAME_FACET_TWICE)
+        )
+
+    _run(api_database_url, write_bad_rule)
+
+    response = api_client.get(f"/api/spending/{chart_id}")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["rule"] == _SAME_FACET_TWICE
+
+
+def test_saving_a_rule_with_an_unknown_clause_key_is_a_422(api_client: TestClient) -> None:
+    """`Clause` forbids extras so a mis-named `op` cannot be read as the default
+    `in`. This asserts the refusal reaches the client as a 422 it can act on,
+    rather than a 500."""
+    response = api_client.post(
+        "/api/spending",
+        json={
+            "name": "api-unknown-clause-key",
+            "question_text": "q",
+            "rule": {"all": [{"facet": "category", "operator": "not_in", "values": ["software"]}]},
+            "default_grain": "month",
+            "display_currency": "EUR",
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_a_missing_chart_is_a_404(api_client: TestClient) -> None:
@@ -908,6 +1237,163 @@ def test_a_cell_of_an_unsplit_chart_opens_its_unlabelled_bucket(
     chart_id = _save_chart(api_client, "api-cell-null", {"all": []})
     body = api_client.get(f"/api/spending/{chart_id}/cell?period=2026-03-01").json()
     assert [payment["total"] for payment in body["payments"]] == ["12.50"]
+
+
+# --- preview -----------------------------------------------------------------
+#
+# `/spending/preview` answers a rule the caller already has. Its sibling
+# `/spending/draft` answers a *question*, which costs a model call — so the two
+# differ in exactly the way the rule editor needs, and the tests below pin both
+# halves of that: the answer is real, and no model was asked for it.
+
+
+def _preview(api_client: TestClient, rule: dict[str, object], **kwargs: object) -> httpx.Response:
+    body: dict[str, object] = {"rule": rule, "display_currency": "EUR"}
+    body.update(kwargs)
+    return api_client.post("/api/spending/preview", json=body)
+
+
+def test_previewing_a_rule_answers_it_without_saving_a_chart(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The route's whole purpose: a real answer with no `charts` row behind it.
+    `chart_id: null` is the wire-level proof, and the list assertion is the
+    storage-level one."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="60.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+    before = {c["id"] for c in api_client.get("/api/spending?limit=100").json()["charts"]}
+
+    response = _preview(api_client, SOFTWARE_RULE)
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["total"] == "60.00"
+    assert body["chart_id"] is None
+    after = {c["id"] for c in api_client.get("/api/spending?limit=100").json()["charts"]}
+    assert after == before
+
+
+def test_previewing_an_unknown_facet_is_a_422_naming_it(api_client: TestClient) -> None:
+    """MUTATION: drop the `_validate_rule` call from the handler and this reddens
+    with a 200 and an empty-looking chart. `/spending/draft` legitimately skips
+    that call — `filter_drafted_rule` guarantees vocabulary membership by
+    construction — so a handler copy-pasted from it inherits the omission and
+    answers "you spent nothing" to a rule the API should have refused."""
+    response = _preview(
+        api_client, {"all": [{"facet": "no_such_facet", "op": "in", "values": ["x"]}]}
+    )
+    assert response.status_code == 422
+    assert "no_such_facet" in response.text
+
+
+def test_previewing_a_value_deleted_after_the_editor_loaded_is_a_422_naming_it(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The editor is the repair tool for a rotted rule, so it will preview one.
+    Naming the value is what tells the owner which chip to fix."""
+    _seed_vocabulary(api_database_url)
+
+    async def drop_value(session: AsyncSession) -> None:
+        await session.execute(delete(FacetValue).where(FacetValue.key == "software"))
+
+    _run(api_database_url, drop_value)
+
+    response = _preview(api_client, SOFTWARE_RULE)
+
+    assert response.status_code == 422
+    assert "software" in response.text
+
+
+def test_previewing_an_unknown_split_axis_is_a_422_naming_it(api_client: TestClient) -> None:
+    response = _preview(api_client, {"all": []}, split="no_such_facet")
+    assert response.status_code == 422
+    assert "no_such_facet" in response.text
+
+
+def test_previewing_an_empty_rule_answers_with_everything(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Deliberately a 200, not a 422. `PATCH` accepts an empty rule — it is the
+    seeded "All spending" chart's own saved state — so a preview that refused it
+    would be useless at the one moment the owner most needs it: just after
+    removing their last clause, about to widen the chart to the whole archive.
+    Showing them that number IS the warning."""
+    _seed_document(api_database_url, amount="12.00", kind=AmountKind.PAYMENT_MADE)
+
+    response = _preview(api_client, {"all": []})
+
+    assert response.status_code == 200, response.text
+    assert Decimal(response.json()["total"]) > 0
+
+
+def test_previewing_with_an_empty_split_string_means_no_split_axis(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The client sends `split` on every request so an absent key can never be
+    mistaken for a default. `""` is how it says "no axis"; without the
+    normalisation it reaches `_validate_split` and 422s as an unknown facet."""
+    _seed_vocabulary(api_database_url)
+
+    response = _preview(api_client, SOFTWARE_RULE, split="")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["split"] is None
+    assert response.json()["splits"] == []
+
+
+def test_previewing_with_from_after_to_is_a_422(api_client: TestClient) -> None:
+    """`/data` refuses a reversed window; `/spending/draft` does not, which is a
+    small pre-existing gap. Preview follows `/data`, not its sibling."""
+    response = _preview(api_client, {"all": []}, since="2026-06-01", until="2026-03-01")
+    assert response.status_code == 422
+
+
+def test_a_preview_carries_the_full_footer(api_client: TestClient, api_database_url: str) -> None:
+    """`facets_in_rule` has to reach `chart_footer` through this path too.
+    `chart_footer` trusts its caller for that set, so an empty one silently
+    stops reporting uncategorised money — the money the rule should have caught
+    and did not, which is exactly what an owner editing a rule is looking for."""
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+    _seed_document(api_database_url, amount="9.00", kind=AmountKind.PAYMENT_MADE)
+
+    footer = _preview(api_client, SOFTWARE_RULE).json()["footer"]
+
+    assert set(footer) == {
+        "netted_refunds",
+        "refund_count",
+        "excluded",
+        "unclassified",
+        "uncategorised",
+        "undated",
+        "unaccounted",
+        "unconvertible",
+    }
+    assert footer["uncategorised"] is not None
+
+
+def test_previewing_does_not_call_the_model(
+    api_client: TestClient, api_database_url: str, stub_anthropic: StubAnthropic
+) -> None:
+    """The reason this route exists rather than reusing `/spending/draft`, which
+    calls the model on every request. `stub_anthropic` is left unconfigured, so
+    any call through it raises — a preview that reached the model would 500 here
+    rather than passing quietly."""
+    _seed_vocabulary(api_database_url)
+
+    response = _preview(api_client, SOFTWARE_RULE)
+
+    assert response.status_code == 200, response.text
 
 
 # --- drafting ----------------------------------------------------------------

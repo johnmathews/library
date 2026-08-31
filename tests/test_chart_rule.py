@@ -8,8 +8,28 @@ input by construction.
 from __future__ import annotations
 
 import pytest
+from pydantic import ValidationError
 
 from library.charts.rule import Clause, Rule, RuleError, rule_predicate
+
+
+def test_a_misnamed_operator_field_is_refused_rather_than_read_as_in() -> None:
+    """Pydantic ignores unknown keys by default, so `{"operator": "not_in"}`
+    would validate to `op="in"` — silently turning an exclusion into an
+    inclusion. `draft.py` refuses an *unrecognised* operator for exactly this
+    reason: it is the one rewrite that moves money into a chart rather than out
+    of it. The model the API accepts from a browser needs the same refusal."""
+    with pytest.raises(ValidationError):
+        Rule.model_validate(
+            {"all": [{"facet": "category", "operator": "not_in", "values": ["software"]}]}
+        )
+
+
+def test_an_unknown_top_level_rule_key_is_refused() -> None:
+    """`DraftedRule` carries a `split` alongside `all`, so a client posting the
+    drafted shape verbatim would have its split silently dropped."""
+    with pytest.raises(ValidationError):
+        Rule.model_validate({"all": [], "split": "category"})
 
 
 def test_an_empty_rule_matches_everything() -> None:

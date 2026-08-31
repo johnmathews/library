@@ -324,6 +324,32 @@ class CellOutBody(BaseModel):
     colour: str | None
 
 
+class PreviewIn(BaseModel):
+    """A rule to answer without saving it.
+
+    `DraftIn`'s sibling, and the difference is the whole point: that one takes a
+    *question* and spends a model call turning it into a rule, this one takes a
+    rule the caller already has. The rule editor needs the second — it is
+    showing the owner what their own edit would do, and asking a model to
+    re-derive a rule the owner just typed would be both slower and less
+    faithful.
+
+    `display_currency` is required rather than defaulted for the same reason it
+    is on `DraftIn`: a defaulted currency renders a plausible figure in the
+    wrong denomination, which is worse than refusing.
+    """
+
+    rule: Rule
+    display_currency: str = Field(pattern=r"^[A-Za-z]{3}$")
+    grain: Grain = Grain.MONTH
+    #: `""` means "no split axis", matching `/data`'s query-parameter reading.
+    #: There is no saved chart to default from here, so unlike `/data` an absent
+    #: key and an empty string may safely collapse to the same thing.
+    split: str | None = None
+    since: date | None = None
+    until: date | None = None
+
+
 class DraftIn(BaseModel):
     """A question to draft a rule for.
 
@@ -510,6 +536,38 @@ def _validate_rule(rule: Rule, vocabulary: tuple[VocabularyFacet, ...]) -> None:
                 f"unknown value(s) {sorted(missing)} for facet "
                 f"'{clause.facet}' in this chart's rule"
             )
+    _refuse_unmatchable_conjunction(rule)
+
+
+def _refuse_unmatchable_conjunction(rule: Rule) -> None:
+    """Refuse two `in` clauses on one facet: the rule can never match anything.
+
+    A document carries at most one value per facet, so `category in [a] AND
+    category in [b]` is empty for every row. That is the §12 failure in its
+    purest form — the chart renders "you spent nothing", which is
+    indistinguishable from an honest zero.
+
+    **Refused, not merged.** Rewriting it to `category in [a, b]` turns the AND
+    into an OR, which answers a *different question from the one the owner
+    asked* and moves money into the chart. `draft.py` refuses an unrecognised
+    operator rather than guessing for the same reason. Where a merge is what
+    the owner wants, the editor offers it as a visible action they take.
+
+    Deliberately narrow: only multiple `in` clauses on one facet. Two `not_in`
+    clauses are a legitimate intersection of exclusions, and a mixed pair is
+    unanswerable only if the exclusion covers the inclusion — set arithmetic
+    rather than a shape check, and not what this guards.
+    """
+    seen: set[str] = set()
+    for clause in rule.all:
+        if clause.op != "in":
+            continue
+        if clause.facet in seen:
+            raise _unprocessable(
+                f"facet '{clause.facet}' appears in two 'in' clauses; a document carries at "
+                f"most one value per facet, so this rule can never match anything"
+            )
+        seen.add(clause.facet)
 
 
 def _validate_split(split: str | None, vocabulary: tuple[VocabularyFacet, ...]) -> None:
@@ -1142,6 +1200,52 @@ async def chart_footer_bucket(
             for row in page
         ],
     )
+
+
+# --- preview -----------------------------------------------------------------
+
+
+@router.post("/spending/preview", summary="An unsaved rule's answer")
+async def preview_rule(
+    body: PreviewIn, session: Annotated[AsyncSession, Depends(get_session)]
+) -> DataOut:
+    """Answer a rule that has not been saved, so an edit can be seen before it
+    is applied.
+
+    Assembled entirely from parts `/data` and `/spending/draft` already use —
+    `_answer` takes a nullable chart id precisely because a preview has no chart
+    behind it — so this route adds a surface, not a capability.
+
+    Two lines here are easy to lose when reading this beside `draft_chart`,
+    and both matter:
+
+    * **`_validate_rule` is called.** `draft_chart` does not call it, and is
+      right not to: `filter_drafted_rule` has already guaranteed that every
+      surviving clause names vocabulary that exists. A rule arriving from a
+      client carries no such guarantee, and an unvalidated one answers "you
+      spent nothing" instead of naming the facet or value that is wrong — the
+      §12 failure this feature exists to avoid.
+    * **the window is refused when reversed**, as `_resolve_query` does for
+      `/data`. `draft_chart` omits that check; preview follows `/data`.
+
+    No model is called and nothing is written.
+    """
+    split = body.split or None
+    vocabulary = await load_vocabulary(session)
+    _validate_rule(body.rule, vocabulary)
+    _validate_split(split, vocabulary)
+    if body.since is not None and body.until is not None and body.since > body.until:
+        raise _unprocessable(f"'from' ({body.since}) is after 'to' ({body.until})")
+    query = _ChartQuery(
+        rule=body.rule,
+        grain=body.grain,
+        split=split,
+        currency=body.display_currency.upper(),
+        since=body.since,
+        until=body.until,
+        vocabulary=vocabulary,
+    )
+    return await _answer(session, None, query)
 
 
 # --- drafting ----------------------------------------------------------------
