@@ -1,7 +1,7 @@
 # LLM backends
 
-**Status:** active. **Last updated:** 2026-08-20 (credential failures now answer 503 with the command that fixes them instead of a bare 500 — §5.2). Earlier the same day: corrected the provisioning command — `claude auth login --claudeai`, not `setup-token`, which writes nothing; and `/healthz` now reports credential health whenever credentials exist rather than keying on the environment default, which left the alarm silent for deployments enabled via the toggle). Earlier the same day: credential-file permissions: refreshes now preserve `0600` instead of widening it, plus directory-ownership guidance in §4). Earlier the same day: the backend became an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
-**Last verified:** 2026-08-20 — method: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The §5.2 behaviour was established by running the adapter against an unprovisioned config directory on the production container, which raised the SDK's own `ResultError` ("Not logged in · Please run /login") before any result message — the case the translation now covers; the 503 and the healthy-credentials wording are covered by tests confirmed to fail against the previous behaviour. The §4 provisioning commands were run on the deploy host: `setup-token` left `claude auth status` reporting `loggedIn: false` with no credentials file anywhere, while `claude auth login --claudeai` over SSH produced a `claudeAiOauth` file and `loggedIn: true`. A live Opus call and a full Ask turn then ran on the subscription from the production container (131,966 input tokens for a one-tool turn), and the container's write path was checked to confirm §5's refresh can persist. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure, and the §4/§5 file-permission claims by tests asserting the on-disk mode after a refresh (including under umask 0), confirmed to fail against the previous implementation. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Still unverified: the ~1-year `CLAUDE_CODE_OAUTH_TOKEN` form is documented from the CLI's own output, not exercised.
+**Status:** active. **Last updated:** 2026-08-31 (the `series_insight` surface was deleted with the legacy series stack, so §2's table is one row: `ask`. The switchable-backend *mechanism* is unchanged — `BACKEND_SURFACES` is still a map and a second row is still all it takes — and §3.2 keeps the reason a per-document job should not be switchable. Also corrected the structured-output call-site count, six → nine.) Earlier: 2026-08-20 (credential failures now answer 503 with the command that fixes them instead of a bare 500 — §5.2). Earlier the same day: corrected the provisioning command — `claude auth login --claudeai`, not `setup-token`, which writes nothing; and `/healthz` now reports credential health whenever credentials exist rather than keying on the environment default, which left the alarm silent for deployments enabled via the toggle). Earlier the same day: credential-file permissions: refreshes now preserve `0600` instead of widening it, plus directory-ownership guidance in §4). Earlier the same day: the backend became an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
+**Last verified:** 2026-08-31 — method: partial, scoped to §2, §3.2 and §5.2's closing paragraph. Read `BACKEND_SURFACES` in `src/library/llm/backends.py` (one key, `ask`), confirmed no `series_insight` field survives in `src/library/config.py`, and re-derived the structured-output call sites with `grep -rn 'output_format=' src/library/` — nine files: `charts/draft.py`, `email_label.py`, `extraction/extractor.py`, `extraction/judge.py`, `extraction/repair.py`, `facets/labeller.py`, `markdown/generator.py`, `matter_classifier.py`, `money/backfill.py`. No live LLM calls were made this pass; every measured figure carries forward from the 2026-08-20 verification, whose method was: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The §5.2 behaviour was established by running the adapter against an unprovisioned config directory on the production container, which raised the SDK's own `ResultError` ("Not logged in · Please run /login") before any result message — the case the translation now covers; the 503 and the healthy-credentials wording are covered by tests confirmed to fail against the previous behaviour. The §4 provisioning commands were run on the deploy host: `setup-token` left `claude auth status` reporting `loggedIn: false` with no credentials file anywhere, while `claude auth login --claudeai` over SSH produced a `claudeAiOauth` file and `loggedIn: true`. A live Opus call and a full Ask turn then ran on the subscription from the production container (131,966 input tokens for a one-tool turn), and the container's write path was checked to confirm §5's refresh can persist. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure, and the §4/§5 file-permission claims by tests asserting the on-disk mode after a refresh (including under umask 0), confirmed to fail against the previous implementation. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Still unverified: the ~1-year `CLAUDE_CODE_OAUTH_TOKEN` form is documented from the CLI's own output, not exercised.
 
 > **Purpose** — Library can reach Claude two ways: the metered Anthropic
 > Messages API, or a Claude subscription via the bundled Claude Code CLI. This
@@ -28,21 +28,30 @@ Sonnet and Opus are refused. Going through the CLI is what unlocks them.
 
 ## 2. Which surfaces can use it
 
-Only two, and they are the only two library has that are *not* built on
-structured outputs:
+**One** — `ask`, the only surface library has that is *not* built on structured
+outputs:
 
 | Surface | Environment default | Shipped default |
 | --- | --- | --- |
 | `ask` tool loop + thread titles | `LIBRARY_ASK_LLM_BACKEND` | `subscription` |
-| `series_insight` descriptions | `LIBRARY_SERIES_INSIGHT_LLM_BACKEND` | `api` |
 
-Both are **defaults**, not the control. An admin changes the live value in
+There were two until 2026-08-31: `series_insight` (`LIBRARY_SERIES_INSIGHT_LLM_BACKEND`,
+defaulting to `api`) generated the one-line description shown above a legacy
+series chart, and it went with the rest of the series stack. **The mechanism did
+not go with it.** `BACKEND_SURFACES` in `src/library/llm/backends.py` is still a
+map, the settings view still iterates it, and a second row is still the whole
+cost of making another surface switchable — the table is one row long because
+only one surface qualifies today, not because the layer collapsed into a
+single-purpose switch.
+
+That value is a **default**, not the control. An admin changes the live value in
 **Settings → LLM backend** (§4), which takes effect on the next request without
 a restart. Nothing may read `settings.ask_llm_backend` to decide a live request
 — call `library.llm.backends.resolve_backend` instead.
 
-The other six LLM call sites — extraction, the extraction judge, extraction
-repair, markdown generation, email labelling, matter classification — all use
+The other nine LLM call sites — extraction, the extraction judge, extraction
+repair, markdown generation, email labelling, facet labelling, matter
+classification, the amount backfill and chart-rule drafting — all use
 `client.messages.parse(output_format=...)`, which validates the response against
 a Pydantic schema server-side. **The Agent SDK has no equivalent.** Porting them
 would mean asking for JSON in the prompt and parsing it hopefully, discarding
@@ -102,13 +111,15 @@ large and calls are infrequent.
   larger preamble. A busy Ask session can consume a meaningful slice of a
   subscription's rolling window — and it is the *same* window everything else
   on those credentials draws from.
-- **`series_insight` does not, which is why it defaults to `api`.** It runs on
-  `extraction_model` (`claude-haiku-4-5`, the cheapest) with a deliberately
-  bounded prompt, once per ingested document. Routing it through the SDK spends
-  ~32k of quota per document to avoid a fraction of a cent — and that quota is
-  shared with `ask` and with anything else using the same credentials, so an
-  ingest burst can starve the interactive surface. The switch exists so the
-  trade can be measured, not because it is recommended.
+- **A per-document job would not have earned it.** `series_insight`, the second
+  switchable surface until it was deleted, defaulted to `api` for exactly this
+  reason: it ran on `extraction_model` (`claude-haiku-4-5`, the cheapest) with a
+  bounded prompt, once per ingested document. Routing it through the SDK would
+  have spent ~32k of quota per document to avoid a fraction of a cent — and that
+  quota is shared with `ask` and with anything else on the same credentials, so
+  an ingest burst could starve the interactive surface. Keep the rule even
+  though the surface is gone: **a high-frequency, small-prompt call site should
+  not be made switchable at all.**
 
 ### 3.3 Cost accounting under a subscription
 
@@ -284,8 +295,10 @@ Three things this deliberately avoids:
   reports the underlying failure without a login command, so a CLI crash or a
   rate limit does not send anyone through a pointless re-authentication.
 
-The series-insight job has no user-facing surface; the same message reaches the
-worker log.
+A background job has no user-facing surface to answer with; the same message
+reaches the worker log instead. No background job is switchable today — `ask` is
+the only surface in `BACKEND_SURFACES` — so in practice this path is reached
+only by a job sharing the credentials for another reason.
 
 ## 6. Where the guard lives
 

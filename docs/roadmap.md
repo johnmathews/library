@@ -1,7 +1,7 @@
 # Roadmap & deferred work
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: recorded Recently Deleted, Saved Views and document comments as shipped; narrowed the `ON DELETE SET NULL` claim to `documents`' own FKs). Earlier: 2026-07-25. **Supersedes:** none.
-**Last verified:** 2026-08-12 — method: checked every deferred item against the code that would implement it (greps for `rerank`, `ALLOWED_MIME_TYPES`, matter aggregation, the classifier), every shipped item against its module, migration or e2e spec, and the one cited commit against `git log`; then swept `git log --since=2026-07-20` and the recent migrations for shipped work the document did not record.
+**Status:** active. **Last updated:** 2026-08-31 (the legacy series stack was deleted. §1.1 was "nothing is currently queued" and now carries one item: point Ask's money aggregate at `spend_facts` and give it facet filters, which is also the natural home for rebuilding `compare_to_series`. In §1.4, the `/charts` view and Smart Groups entries are marked shipped-then-removed with the reason, the `smart-groups.md` link repointed to `archive/`, and the dead `api.md §1.14` / `ask.md §1.7` citations dropped; the admin-CRUD entry loses "series-aware". Earlier: 2026-08-12 (documentation verification sweep: recorded Recently Deleted, Saved Views and document comments as shipped; narrowed the `ON DELETE SET NULL` claim to `documents`' own FKs). Earlier: 2026-07-25. **Supersedes:** none.
+**Last verified:** 2026-08-31 — method: partial, scoped to §1.1 and the three §1.4 entries touched. The new §1.1 item's three claims were checked in source, not asserted: `grep -n 'amount_kind\|spend_facts' src/library/structured_query.py` returns nothing, and `_FILTER_PROPERTIES` in `src/library/ask/engine.py` exposes eight properties, none of them a facet. Confirmed `docs/archive/smart-groups.md` resolves on disk after the `git mv` and that `docs/smart-groups.md` no longer exists, and re-read `src/library/currencies.py` for the "single `UPDATE documents`, no conflict case" wording. The deferred items in §1.2 and the decision in §1.3 were not re-checked and carry forward the 2026-08-12 verification, whose method was: checked every deferred item against the code that would implement it (greps for `rerank`, `ALLOWED_MIME_TYPES`, matter aggregation, the classifier), every shipped item against its module, migration or e2e spec, and the one cited commit against `git log`; then swept `git log --since=2026-07-20` and the recent migrations for shipped work the document did not record.
 
 Living list of agreed-but-not-yet-built work and explicitly-deferred ideas, so
 they don't get lost between sessions. Most recent context lives in
@@ -9,7 +9,28 @@ they don't get lost between sessions. Most recent context lives in
 
 ## 1.1 Planned next
 
-Nothing is currently queued.
+1. **Point Ask's money aggregate at `spend_facts`, and give it facet filters.**
+   `structured_query.sum_amount` still sums raw `amount_total`: it does not read
+   `amount_kind`, so a refund adds to a total instead of reducing it and the
+   non-summable kinds (`coverage_limit`, `balance`, `estimate`, `none`)
+   contaminate it; it does not collapse payment identity, so an unmerged
+   invoice/receipt pair is counted twice; and no Ask tool schema offers a facet
+   property, so the curated `category` vocabulary is invisible to the model. A
+   chart and an Ask answer to the same money question can disagree today, and
+   `coverage.excluded` has no bucket that would say so — these are documents Ask
+   *included* wrongly, not ones it dropped. See [ask.md](ask.md) §1.10 item 11
+   for the full statement and [charts.md](charts.md) for the relation that gets
+   all three right.
+
+   **This is also the natural home for rebuilding `compare_to_series`.** The
+   deleted tool answered "is this bill higher than usual?" over a
+   `(sender, kind, currency)` group of raw documents, which double-counted an
+   invoice/receipt pair and could not be scoped to a curated label — the two
+   things that made its answer wrong. A distribution computed over `spend_facts`
+   is payment-deduplicated and label-scoped by construction, so a comparative
+   tool built there starts correct rather than needing the same caveats bolted
+   on. Doing the aggregate first and the comparison second is deliberate: the
+   aggregate is the harder half and the comparison is a query over it.
 
 The **admin role + admin views** shipped in the 2026-06-28 cycle: a boolean
 `users.is_admin` role with a `require_admin` guard, global project mutations
@@ -110,20 +131,26 @@ Recorded here so they read as **done**, not queued:
   `/matters` admin page, and homepage/editor matter controls. See
   [api.md §1.22](api.md), [admin.md §1.2.7](admin.md), and
   [ingestion.md](ingestion.md) "Matter classification".
-- **`/charts` view (series/charts).** An aggregate charts dashboard: a responsive
-  grid of per-`(sender, kind)` series bar-chart tiles with cached LLM
-  descriptions, a shared control bar (time range + custom datepickers +
-  group-by), authored/manual series creation, editable "documents in series"
-  lists, single-chart pages (`/charts/{id}`), and PDF/JPEG/PNG export + copy-link.
-  See [frontend.md §1.7](frontend.md), [ask.md §1.7](ask.md), and
-  [api.md §1.14](api.md).
+- **`/charts` view (series/charts) — shipped, then removed.** An aggregate
+  charts dashboard of per-`(sender, kind)` series bar-chart tiles with cached LLM
+  descriptions, a shared control bar, authored/manual series creation, editable
+  "documents in series" lists, single-chart pages and PDF/JPEG/PNG export.
+  **Deleted on 2026-08-31** along with its backend, its Ask tool and its
+  `/api/charts` surface: the redesign replaced the `(sender, kind, currency)`
+  series with a rule over the facet vocabulary, which spans senders
+  deterministically. `/charts` now serves the spending board. See
+  [charts.md](charts.md) for what replaced it and
+  [journal/260831-delete-series-stack.md](../journal/260831-delete-series-stack.md)
+  for why each piece went.
 - **FX-rate seeding + admin reference-entity CRUD.** The admin API now covers
   reference entities: senders, kinds, recipients (create / rename-or-merge /
-  reassign-then-delete), series-aware currency normalization, and **FX-rate
-  seeding** (`/api/admin/fx-rates`, base = USD, date-aware) so cross-currency
-  series can convert. `documents`' reference FKs (sender, recipient, kind) are
-`ON DELETE SET NULL`; the series override tables cascade instead. Every mutation
-  is guarded by a shared advisory lock. See [admin.md](admin.md) and
+  reassign-then-delete), currency normalization, and **FX-rate seeding**
+  (`/api/admin/fx-rates`, base = USD, date-aware) so cross-currency amounts can
+  convert. `documents`' reference FKs (sender, recipient, kind) are
+  `ON DELETE SET NULL`. Currency normalization was "series-aware" — rewriting
+  five tables and refusing with a `409` on a user-authored override collision —
+  until the series stack was deleted; it is now a single `UPDATE documents` with
+  no conflict case. Every mutation is guarded by a shared advisory lock. See [admin.md](admin.md) and
   [api.md §1.18](api.md).
 - **Per-user per-kind tile border colours.** Each user can colour dashboard tiles
   by document kind (a per-user preference); the border is owned by the tile's
@@ -145,9 +172,14 @@ Recorded here so they read as **done**, not queued:
   matching documents auto-add silently (`origin=auto`, surfaced by a
   "N added automatically" badge); removing/dismissing a document writes a
   negative example so it isn't re-added. The LLM never decides membership — its
-  only job is a best-effort description blurb. See
-  [smart-groups.md](smart-groups.md) and
+  only job was a best-effort description blurb. **Removed on 2026-08-31**: a
+  chart rule over the facet vocabulary spans senders deterministically, which is
+  the thing a Smart Group existed to do, and it does so without a similarity
+  threshold to tune or a negative-example store to keep. See
+  [archive/smart-groups.md](archive/smart-groups.md) (superseded, kept for the
+  name-to-seed-query poisoning incident and the nearest-positive-neighbour
+  decision) and
   [journal/260725-smart-groups.md](../journal/260725-smart-groups.md). The
   companion duplicate-sender fix identified alongside this (design §9) **shipped
-  in `a6c0457` (#40)** — `upsert_sender` collapses internal whitespace, so
-  senders differing only by spacing no longer split.
+  in `a6c0457` (#40)** and survives — `upsert_sender` collapses internal
+  whitespace, so senders differing only by spacing no longer split.

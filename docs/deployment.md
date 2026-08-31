@@ -1,7 +1,7 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: removed a stale `LIBRARY_PDF_UNLOCK_PASSWORDS` default that republished a withdrawn password; `node:26-slim`, not `node:22-slim`; corrected the `compose-smoke` scope and reconciled the RAM guidance). Earlier: 2026-06-11.
-**Last verified:** 2026-08-28 — method: partial, scoped to §1.4. Added §1.4.2 (`status: "degraded"`) and refreshed the two `/healthz` payload examples, each checked against the endpoint in `src/library/app.py` and the vendored-weights check in `src/library/ocr/weights.py`; the deploy-script behaviour described there was read against the new block in `scripts/deploy.sh`. Nothing else was re-checked this pass; the rest carries forward the 2026-08-12 verification below unchanged, whose method was: method: checked every service name, image tag, memory limit, volume, healthcheck, build arg, env var, CLI command and API path against `docker-compose.yml`, `Dockerfile`, `Makefile`, `.env.example`, `config.py`, `app.py`, `cli.py` and `api/`; §1.7.2's deploy path was additionally exercised for real (`make deploy` to the live `paperless` LXC). The §1.2 Proxmox walkthrough, §1.5 reverse proxy and §1.6 backup commands were read, not executed.
+**Status:** active. **Last updated:** 2026-08-31 (dropped "plus Smart Group auto-membership" from the without-the-embedder loss list — Smart Groups was deleted with the legacy series stack, so the only things a missing embedder costs are semantic search and the semantic half of Ask retrieval.) Earlier: 2026-08-12 (documentation verification sweep: removed a stale `LIBRARY_PDF_UNLOCK_PASSWORDS` default that republished a withdrawn password; `node:26-slim`, not `node:22-slim`; corrected the `compose-smoke` scope and reconciled the RAM guidance). Earlier: 2026-06-11.
+**Last verified:** 2026-08-31 — method: partial, scoped to the one edited sentence. Confirmed `grep -rniE 'smart.?group' docs/deployment.md` now returns nothing and that no series job remains in `src/library/jobs.py` to depend on the embedder; the compose file, image tags, memory limits and `/healthz` payloads were not re-checked this pass. Earlier (2026-08-28) — method: partial, scoped to §1.4. Added §1.4.2 (`status: "degraded"`) and refreshed the two `/healthz` payload examples, each checked against the endpoint in `src/library/app.py` and the vendored-weights check in `src/library/ocr/weights.py`; the deploy-script behaviour described there was read against the new block in `scripts/deploy.sh`. Nothing else was re-checked this pass; the rest carries forward the 2026-08-12 verification below unchanged, whose method was: method: checked every service name, image tag, memory limit, volume, healthcheck, build arg, env var, CLI command and API path against `docker-compose.yml`, `Dockerfile`, `Makefile`, `.env.example`, `config.py`, `app.py`, `cli.py` and `api/`; §1.7.2's deploy path was additionally exercised for real (`make deploy` to the live `paperless` LXC). The §1.2 Proxmox walkthrough, §1.5 reverse proxy and §1.6 backup commands were read, not executed.
 
 How to run Library in production: a single `docker compose up` on any
 Docker host. The walkthrough targets the intended home — a Debian LXC on
@@ -141,10 +141,10 @@ crash-loop under `restart: unless-stopped` — worse than an honest
 "no matching manifest" pull error.
 
 **What you lose without the embedder running:** semantic search and the semantic
-half of Ask retrieval, plus Smart Group auto-membership. Everything else —
-upload, the consume folder, OCR, extraction, the markdown layer, full-text
-search, and Ask over full-text hits — works normally. Documents still reach
-`indexed`, each carrying an `embedding_failed` event.
+half of Ask retrieval. Everything else — upload, the consume folder, OCR,
+extraction, the markdown layer, full-text search, and Ask over full-text hits —
+works normally. Documents still reach `indexed`, each carrying an
+`embedding_failed` event.
 
 Production is unchanged: the full `docker compose up -d` still starts the
 embedder, and CI's `compose-smoke` job boots this exact file and asserts that

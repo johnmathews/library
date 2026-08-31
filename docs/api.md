@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-08-30 (facet vocabulary panel, Task 11: new §1.23.6 documents `GET /api/facets/label-counts` — the number the vocabulary panel shows, and the one `DELETE .../values/{value_key}` enforces via `count_labels` rather than a second inlined copy — and why it is a separate route from §1.23.5's `/api/facets/counts` rather than a field on it: the two diverge on amountless documents, soft-deleted/non-canonical documents, and split-line labels, and widening the money route would have broken `test_a_value_with_no_money_behind_it_is_absent`; new endpoint-summary rows, §1.1/§1.23). Earlier the same day (spending-view backend, final fix wave: §1.25's footer-bucket row now documents the `422` when `bucket=excluded` and `amount_kind` is omitted. Earlier the same day, Task 8: new §1.25 documents `GET /api/spending/{id}` and `GET /api/spending/{id}/footer/{bucket}` — the whole ten-route pre-existing `/api/spending` surface stays documented only in [charts.md](charts.md) §11, referenced rather than duplicated; new §1.23.5 documents `GET /api/facets/counts`, including why `is_canonical` and `count(DISTINCT ...)` in its query are not redundant; §1.23.2's JSON example gained the `colour` field it was missing since the colour write-surfaces pass below; new endpoint-summary rows for all three, §1.1)). Earlier the same day — colour write surfaces: `PATCH /api/facets/{facet_key}/values/{value_key}` now also accepts an optional `colour` — a six-digit `#rrggbb` hex or `null` to clear it — alongside `label`, each independently optional and told apart by presence in the body, not by value; documented `colour` on `GET /api/facets`'s values and `GET /api/senders`'s rows, and the new colour-only `PATCH /api/senders/{sender_id}` (§1.8.4/§1.8.4.0, §1.23); new endpoint-summary rows, §1.1). Earlier (2026-08-29, money facts fix round 3: §1.24's closing note no longer says repeating an override "is a no-op, not a conflict" — `add_override` inserts `ON CONFLICT DO UPDATE SET created_at = now()`, so a repeat refreshes the row's timestamp, which is exactly what makes a third correction on a pair land; the note also now says the identical-timestamp tie-break is defensive, since no request sequence can reach it. Earlier the same day — money facts fix round 2: §1.24's `merge`/`split` rows now document the `404` on an unknown or soft-deleted id, which `_require_both_exist` has always returned and the table listed only the `422` for; the reversal note no longer cites the split-then-merge test as if it proved both directions — each direction now has its own test, and the note states the latest-correction-wins rule and its tie-break. Earlier the same day — money facts: new §1.24 — payment identity endpoints (`GET /api/documents/{id}/payment`, `POST /api/payments/merge`/`split`, `GET /api/payments/duplicates`); new endpoint-summary rows, §1.1). Earlier (2026-08-28, facet vocabulary fix wave: the merge row now promises `404` on either side **on a dry run too** and `409` when `into` names the value being merged (§1.23/§1.23.1); `PUT /api/documents/{id}/labels` answers `404` for an unknown or soft-deleted document instead of a `500`; `POST /api/facet-suggestions/{id}/accept` sanitises the key it derives to the documented `^[a-z0-9_-]+$`, 1–64 contract and answers `422` when nothing usable remains (§1.23.3)). Earlier the same day (facet vocabulary: new §1.23 — the controlled facet CRUD surface (`/api/facets`), document labels (`/api/documents/{id}/labels`), and the suggestion queue (`/api/facet-suggestions`), including the `merge` route's `dry_run` and the `422`-on-out-of-vocabulary-value on `PUT .../labels`; repeatable `?facet=key:value` document filter, AND-composing, §1.3.1/§1.23.4; new endpoint-summary rows, §1.1. See [facets.md](facets.md) for the vocabulary design). Earlier (2026-08-27, series coverage: `GET /api/documents/{id}/series` (§1.13), `GET /api/charts` and `GET /api/charts/{series_id}` (§1.14) now carry a top-level `coverage` block — `matched`/`included`/`excluded`/`needs_review` — on every emergent `status:"ok"` result and on §1.13's own `status:"insufficient"` result once `summarize_series` has actually run; it is **absent** (the key omitted, not `null`) for an authored (user-curated) series and for §1.13's bespoke no-sender/kind short circuit, and a present block with an empty `excluded` means nothing was dropped, which is not the same claim as absent. See [ask.md §1.2/§1.7](ask.md) for the full design). Earlier (2026-08-25, Ask profile: new `PUT /api/settings/ask-profile` and the `ask_profile` key on the resolved preference set, §1.10.11; the Ask tools' new recipient/project/matter/tag filters are prompt-side, documented in [ask.md §1.2](ask.md). Earlier (2026-08-20, LLM backend selection: new `GET /api/settings/llm-backends` and admin-only `PUT`/`DELETE /api/settings/llm-backends/{surface}`, §1.10.8–1.10.10; `POST /api/ask` now answers **503** with the fix when the subscription backend cannot authenticate, §1.11). Earlier: 2026-08-12 (documentation verification sweep: documented `DELETE /api/admin/users/{id}` and the Smart Groups create/exclusion contract; corrected the `status` enum, the login/`me` and preferences shapes, the coverage and note-edit claims, and the `ts_rank` normalisation). Earlier (2026-07-17, business matters: business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
-**Last verified:** 2026-08-30 — method: (facet vocabulary panel, Task 11) read `facet_label_counts`, `_FACET_COUNTS_SQL` and `facet_counts` in `src/library/api/facets.py`, and `label_counts`/`count_labels`/`delete_value` in `src/library/facets/vocabulary.py`, in full, and diffed new §1.23.6 and the amended §1.23.5 cross-reference against them; confirmed `delete_value` now calls `count_labels` rather than inlining its own count (`git log`/`git show a1d70cb` shows the inline query removed). Every claim in §1.23.6 is covered by an executed assertion in `tests/test_api_spending.py`: the three-way divergence by `test_label_counts_include_a_value_with_no_money_behind_it` (amountless), `test_label_counts_count_a_soft_deleted_document` (soft-deleted, excluded from `/api/facets/counts` but present here), and the split-line direction is the pre-existing `test_a_facet_split_resolves_value_keys_to_display_labels`/`test_a_split_document_counts_once_in_facet_counts` pair for `/api/facets/counts`, read against `label_counts`'s docstring rather than re-tested (it reads `document_labels` only, which the split fixtures never write to, so the asymmetry is a property of the query's `FROM` clause, not a behaviour to assert per fixture); the shown-number-equals-enforced-number claim by `test_the_displayed_count_is_the_count_delete_enforces`. Did not re-run the full backend suite in this pass — the last full green run is the one this document's own history records below; ran `uv run pytest tests/test_api_spending.py -q -k "label_count or displayed_count"` (4 passed) to confirm the four new-route tests are still green before writing this section, plus the docs gates (`uv run python scripts/check_docs.py`, `uv run python scripts/build_journal_index.py --check`), both clean. Nothing else in this document was re-checked this pass; the rest carries forward its previous verification below unchanged. Earlier the same day — method: added `tests/test_api_spending.py::test_a_split_document_counts_once_in_facet_counts` for §1.23.5's `is_canonical`/`DISTINCT` non-redundancy claim, closing the gap the entry below recorded as read-not-tested: seeded one document with a facet label, split it into two unlabelled spend lines (which inherit the document's label per migration 0035's `doc_labels || line_labels`), and asserted `documents == 1` against `GET /api/facets/counts`. Ran the mutation both ways: removing `DISTINCT` from `_FACET_COUNTS_SQL` turned the new test red (`assert alpha["documents"] == 1` failed with `2 == 1`) while the other three counts tests stayed green, then restoring `DISTINCT` turned it green again (`tests/test_api_spending.py -q -k counts` — 4 passed). The claim is now covered by an executed assertion rather than read from the query's structure alone. Also this pass: `GET /api/spending/{id}/footer/{bucket}` now 422s when `bucket=excluded` and `amount_kind` is omitted (previously an indistinguishable empty page), read against the new check in `chart_footer_bucket` in `src/library/api/spending.py` and covered by the new `tests/test_api_spending.py::test_excluded_without_amount_kind_is_a_422_not_an_empty_page`; this section's route table row updated to match. Full backend suite and both docs gates run green in this pass (see the journal entry for verbatim counts). Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: read `get_chart` and `chart_footer_bucket` (with `FooterDocumentOut`/`FooterDocumentsOut`) in `src/library/api/spending.py` in full for new §1.25, and confirmed the pre-existing surface's route count with `grep -c '@router\.' src/library/api/spending.py` → 12 (10 documented in charts.md §11 already, 2 new here) rather than re-documenting it. Read `_FACET_COUNTS_SQL` and `facet_counts` in `src/library/api/facets.py` for new §1.23.5, and cross-checked the `is_canonical`/`DISTINCT` non-redundancy claim against `.superpowers/sdd/2026-08-30-spending-view-backend/task-7-report.md`, which records it as read from the query rather than exercised by a dedicated split-line facet-counts test — stated here the same way, not claimed as covered by an assertion that does not exist. §1.25's `GET /api/spending/{id}` is covered by `tests/test_api_spending.py::test_one_chart_can_be_read_by_id`/`test_reading_an_unknown_chart_is_a_404`; the footer-bucket route by `test_the_footer_route_lists_the_documents_behind_a_count`, `test_an_unknown_footer_bucket_is_a_422_naming_it`, `test_the_footer_route_caps_its_limit_at_100`, `test_the_footer_route_reports_the_buckets_full_size_before_paging`, `test_the_footer_route_and_the_footer_count_agree_after_a_window_narrows`, all in `tests/test_api_spending.py`. §1.23.5's ordering, date-span and absence claims are covered by `test_counts_are_ordered_by_document_count`, `test_counts_carry_the_date_span`, `test_a_value_with_no_money_behind_it_is_absent` and `test_a_merged_pair_counts_once`, also in `tests/test_api_spending.py`. §1.23.2's added `colour` field in the JSON example was checked against `ValueOut` in `src/library/api/facets.py`, which the earlier pass below verified but its own JSON example update was missed. Nothing else in this document was re-checked this pass. Earlier the same day — method: read `ValuePatch`/`patch_value` in `src/library/api/facets.py`, `set_value_colour`/`get_value`/`_resolve` in `src/library/facets/vocabulary.py`, and `SenderPatch`/`patch_sender` in `src/library/api/taxonomy.py` in full, and diffed §1.1's endpoint-summary rows, §1.23's value-PATCH row, and §1.8.4/new §1.8.4.0 against them. Confirmed the `model_fields_set` distinction (absent `colour` vs. explicit `null`) with a mutation check: flipping `patch_sender`'s `if "colour" in body.model_fields_set:` to `if body.colour is not None:` turned `test_a_sender_s_colour_can_be_set_and_cleared` red on the clear assertion (`assert '#d62728' is None` failed, the colour set earlier in the test survived the clear request), then restored. The sibling value-route sentinel in `patch_value` was not mutation-tested this pass; not claimed as covered. All new claims are covered by executed assertions in `tests/test_api_facets.py` (colour set-without-rename, absent-vs-null, malformed-colour 422 on both the value and sender routes, unknown-value/unknown-sender 404), run green as part of a full `tests/test_split_colour.py tests/test_api_facets.py tests/test_facet_crud.py` pass (67 passed). Nothing else in this document was re-checked this pass. Earlier (2026-08-29) — method: re-read `add_override` in `src/library/money/payments.py` (its `pg_insert(...).on_conflict_do_update(constraint="payment_overrides_unique", set_={"created_at": func.now()})`) and both `merge_payment`/`split_payment` routes in `src/library/api/payments.py` in full, and rewrote §1.24's closing note to what they actually do; the "defensive tie-break" claim was checked by enumerating every `add_override` call site under `src/` (`grep -rn add_override src/` — the two routes, each writing one row then committing). Both reversal directions and the third-correction case stay covered by executed assertions in `tests/test_api_payments.py` and `tests/test_payment_identity.py`, run green in this pass as part of a full backend run (1969 passed, 7 skipped). Nothing else in this document was re-checked this pass. Earlier the same day — method: re-read `_require_both_exist` and the two override routes in `src/library/api/payments.py` and `add_override` in `src/library/money/payments.py`, and diffed §1.24's table and closing note against them; the `404` claim and both reversal directions are covered by executed assertions in `tests/test_api_payments.py` (`test_merge_with_an_unknown_document_is_a_404_not_a_500`, `test_split_then_merge_round_trips`, and the new `test_merge_then_split_round_trips`, which was observed failing before the view fix), run green in this pass. Nothing else in this document was re-checked this pass. Earlier the same day — method: wrote new §1.24 by reading `src/library/api/payments.py` and `src/library/money/payments.py` in full and diffing every route, request/response field, and status code against them; every claim (the payment-group shape, the split-then-merge round trip, the `422` on `doc_a == doc_b`, the `404` on an unknown document, and the duplicates-group shape) is covered by an executed assertion in `tests/test_api_payments.py`, run green (`uv run pytest tests/test_api_payments.py -v`, 6 passed) as part of this pass. Ran `uv run pytest tests/test_check_docs.py -q`, green. Nothing else in this document was re-checked this pass; the rest carries forward the earlier verification below unchanged, whose method was: re-read `src/library/api/facets.py` and `src/library/facets/vocabulary.py` after the fix wave above and diffed §1.23's table, §1.23.1 and §1.23.3 against them; every changed claim is covered by an executed assertion in `tests/test_api_facets.py` (self-merge 409 in use and not in use, dry-run 404/409, the punctuation-heavy and over-long derived keys, the empty-key 422, and the unknown/soft-deleted document 404s), run green as part of this pass. Earlier the same day — method: read `src/library/api/facets.py` in full and diffed every route, status code and request/response shape in new §1.23 against it; read `src/library/facets/vocabulary.py` for the exception→status mapping (`UnknownFacetError`→404, `UnknownValueError`→422 on the labels PUT / 404 elsewhere, `ValueInUseError`→409); read the `facet` query-param parsing and its two 422 branches in `src/library/api/documents.py` and the filter's EXISTS-subquery construction in `src/library/search.py` for §1.3.1/§1.23.4; cross-checked every claim against the executed assertions in `tests/test_api_facets.py` and `tests/test_facet_search.py` (both read in full; not re-executed for this pass, which touched no application code — `uv run pytest tests/test_check_docs.py -q` was run for the docs gate itself). Ran `uv run python scripts/check_docs.py` and `uv run python scripts/build_journal_index.py --check` after the edit. The rest carries forward its previous verification: 2026-08-27 — method: read §1.13/§1.14 in full and diffed the new `coverage` field (JSON examples + field lists) against `serialise_summary`, `SeriesCoverage`, `summarize_series`, and the three call sites that emit it (`src/library/api/documents.py:399`, `src/library/api/charts.py:169,280`) in `src/library/series.py` and `src/library/api/*.py`; also checked `get_document_series`'s bespoke no-sender/kind short-circuit dict, which the docs now note omits `coverage` entirely. Ran `uv run python scripts/check_docs.py` and `uv run python scripts/build_journal_index.py --check` (both clean) after the edit; did not run the backend test suite against this file's claims, so that remains the controller's job. Note: this same pass also threaded a resolved `currency`/`other_currencies` through the post-bucketing `"insufficient"` path in `src/library/series.py` (previously hardcoded `null`/`[]` there); §1.13's own `"insufficient"` example predates that and predates this coverage feature, documents neither field, and was not rewritten here — out of scope for this pass, left as a known pre-existing gap. The rest carries forward its previous verification: 2026-08-25 — method: the new §1.10.11 wire shape, status codes and the `ask_profile` read-model key checked against `src/library/api/settings.py` and `src/library/schemas.py`, covered by executed tests (`tests/test_settings_api.py`, eight new cases incl. the 422, the garbage-blob fallback and the read-side clip) in a full backend run. The rest carries forward its previous verification: 2026-08-20 — method: the new §1.10.8–1.10.10 wire shapes and status codes checked against `src/library/api/settings.py` and `src/library/schemas.py`, and the §1.11 503 against `src/library/api/ask.py`; both covered by executed tests (`tests/test_llm_backends.py`, `tests/test_api_ask.py`) in a full run of 1632 passing. The rest of the document is unchanged since its previous verification, whose method was: 2026-08-12 — method: enumerated every `@router` decorator under `src/library/` and diffed it against the documented surface in both directions, then checked each endpoint's parameters, request/response fields, status codes and auth rules against `src/library/api/**`, `schemas.py`, `config.py` and `app.py`, all read in full; nothing was executed.
+**Status:** active. **Last updated:** 2026-08-31 (the legacy series stack was deleted. **§§1.13–1.15 are removed and the numbering deliberately does not close up** — a note at the seam says so, because 28 citations of §1.16 and later live across nine documents plus `AdminMetadataPanel.vue`, and nothing in the toolchain checks a section-number citation, so renumbering would silently invalidate all of them. The route table loses sixteen rows: the fifteen `/api/charts` and `/api/series/*` routes and `GET /api/documents/{id}/series`. §1.18.6 is rewritten — currency normalisation is now a single `UPDATE documents`, `counts` carries only `documents`, and **there is no `409`**; the conflict case existed only because currency was part of series identity. Smaller: `compare_to_series` out of §1.12's `used_tools` list, the `series_insight` object out of the LLM-surfaces example payload, and "series" out of two soft-delete cascade lists and the shared-corpus sentence.) Earlier: 2026-08-30 (facet vocabulary panel, Task 11: new §1.23.6 documents `GET /api/facets/label-counts` — the number the vocabulary panel shows, and the one `DELETE .../values/{value_key}` enforces via `count_labels` rather than a second inlined copy — and why it is a separate route from §1.23.5's `/api/facets/counts` rather than a field on it: the two diverge on amountless documents, soft-deleted/non-canonical documents, and split-line labels, and widening the money route would have broken `test_a_value_with_no_money_behind_it_is_absent`; new endpoint-summary rows, §1.1/§1.23). Earlier the same day (spending-view backend, final fix wave: §1.25's footer-bucket row now documents the `422` when `bucket=excluded` and `amount_kind` is omitted. Earlier the same day, Task 8: new §1.25 documents `GET /api/spending/{id}` and `GET /api/spending/{id}/footer/{bucket}` — the whole ten-route pre-existing `/api/spending` surface stays documented only in [charts.md](charts.md) §11, referenced rather than duplicated; new §1.23.5 documents `GET /api/facets/counts`, including why `is_canonical` and `count(DISTINCT ...)` in its query are not redundant; §1.23.2's JSON example gained the `colour` field it was missing since the colour write-surfaces pass below; new endpoint-summary rows for all three, §1.1)). Earlier the same day — colour write surfaces: `PATCH /api/facets/{facet_key}/values/{value_key}` now also accepts an optional `colour` — a six-digit `#rrggbb` hex or `null` to clear it — alongside `label`, each independently optional and told apart by presence in the body, not by value; documented `colour` on `GET /api/facets`'s values and `GET /api/senders`'s rows, and the new colour-only `PATCH /api/senders/{sender_id}` (§1.8.4/§1.8.4.0, §1.23); new endpoint-summary rows, §1.1). Earlier (2026-08-29, money facts fix round 3: §1.24's closing note no longer says repeating an override "is a no-op, not a conflict" — `add_override` inserts `ON CONFLICT DO UPDATE SET created_at = now()`, so a repeat refreshes the row's timestamp, which is exactly what makes a third correction on a pair land; the note also now says the identical-timestamp tie-break is defensive, since no request sequence can reach it. Earlier the same day — money facts fix round 2: §1.24's `merge`/`split` rows now document the `404` on an unknown or soft-deleted id, which `_require_both_exist` has always returned and the table listed only the `422` for; the reversal note no longer cites the split-then-merge test as if it proved both directions — each direction now has its own test, and the note states the latest-correction-wins rule and its tie-break. Earlier the same day — money facts: new §1.24 — payment identity endpoints (`GET /api/documents/{id}/payment`, `POST /api/payments/merge`/`split`, `GET /api/payments/duplicates`); new endpoint-summary rows, §1.1). Earlier (2026-08-28, facet vocabulary fix wave: the merge row now promises `404` on either side **on a dry run too** and `409` when `into` names the value being merged (§1.23/§1.23.1); `PUT /api/documents/{id}/labels` answers `404` for an unknown or soft-deleted document instead of a `500`; `POST /api/facet-suggestions/{id}/accept` sanitises the key it derives to the documented `^[a-z0-9_-]+$`, 1–64 contract and answers `422` when nothing usable remains (§1.23.3)). Earlier the same day (facet vocabulary: new §1.23 — the controlled facet CRUD surface (`/api/facets`), document labels (`/api/documents/{id}/labels`), and the suggestion queue (`/api/facet-suggestions`), including the `merge` route's `dry_run` and the `422`-on-out-of-vocabulary-value on `PUT .../labels`; repeatable `?facet=key:value` document filter, AND-composing, §1.3.1/§1.23.4; new endpoint-summary rows, §1.1. See [facets.md](facets.md) for the vocabulary design). Earlier (2026-08-27, series coverage: `GET /api/documents/{id}/series` (§1.13), `GET /api/charts` and `GET /api/charts/{series_id}` (§1.14) now carry a top-level `coverage` block — `matched`/`included`/`excluded`/`needs_review` — on every emergent `status:"ok"` result and on §1.13's own `status:"insufficient"` result once `summarize_series` has actually run; it is **absent** (the key omitted, not `null`) for an authored (user-curated) series and for §1.13's bespoke no-sender/kind short circuit, and a present block with an empty `excluded` means nothing was dropped, which is not the same claim as absent. See [ask.md §1.2/§1.7](ask.md) for the full design). Earlier (2026-08-25, Ask profile: new `PUT /api/settings/ask-profile` and the `ask_profile` key on the resolved preference set, §1.10.11; the Ask tools' new recipient/project/matter/tag filters are prompt-side, documented in [ask.md §1.2](ask.md). Earlier (2026-08-20, LLM backend selection: new `GET /api/settings/llm-backends` and admin-only `PUT`/`DELETE /api/settings/llm-backends/{surface}`, §1.10.8–1.10.10; `POST /api/ask` now answers **503** with the fix when the subscription backend cannot authenticate, §1.11). Earlier: 2026-08-12 (documentation verification sweep: documented `DELETE /api/admin/users/{id}` and the Smart Groups create/exclusion contract; corrected the `status` enum, the login/`me` and preferences shapes, the coverage and note-edit claims, and the `ts_rank` normalisation). Earlier (2026-07-17, business matters: business matters: `/api/matters` CRUD + per-matter document counts, new §1.22; repeatable `?matter=` document filter with OR semantics, §1.3.1; `matters` on document list/detail responses (§1.3.2) and the `PATCH /api/documents/{id}` body (§1.5)). Earlier (2026-07-15, email-triage skip audit: new `GET /api/settings/email-triage/recent-skips` — the last 20 emails with a skipped item, §1.10.7; `noise_filter` gains `decoration_max_bytes`/`decoration_max_edge_px`, §1.10.6). Earlier (2026-07-08, Ask conversation titles: new threads are auto-named by a cheap title model instead of the truncated first question; `PATCH /api/ask/threads/{id}` renames a conversation, §1.11). Earlier (2026-07-06, document comments: `GET`/`POST /api/documents/{id}/comments`, `PATCH`/`DELETE /api/documents/{id}/comments/{cid}` — new §1.19; document detail's `comments` field, §1.4; Ask's `used_tools` gains `get_document`, §1.11). Earlier (2026-07-03, verification flow): `PATCH /api/documents/{id}` now revalidates on save so a corrected field clears its own warning and never un-verifies a human-verified doc, §1.5; list rows carry compact `review_findings` explaining why a document needs review, §1.3.2. Earlier (2026-07-01, authored-series smart features): `signature`, `suggestions` (propose-for-review auto-continue), `odd-ones-out` with a deterministic grounded reason (no LLM — an earlier LLM reason hallucinated a sender absent from every document); additive `signature`/`suggestion_count`/`odd_one_out_count` on `/charts` authored entries, §1.14.3. Earlier: authored series `POST`/`PATCH`/`DELETE /api/charts/authored` + members — user-curated manual series alongside emergent ones, stable `a-{id}` ids, §1.14.2; admin recipient management: `PATCH`/`DELETE /api/admin/recipients/{id}`; recipient field: `GET /api/recipients`, `recipient` in document responses + PATCH body, `recipient_id` list filter).
+**Last verified:** 2026-08-31 — method: partial, scoped to the series surface. Re-derived the live route set — `grep -rn '@router\.' src/library/api/` finds no `/charts` or `/series` path, and `src/library/api/charts.py` and `src/library/api/series.py` no longer exist — so the sixteen deleted rows were removed against the router files rather than against the old prose. Read `normalize_currency` in `src/library/currencies.py` and `normalize_currency_route` in `src/library/api/admin/fx.py` in full for the rewritten §1.18.6: `NormalizeResult.counts` is populated by one `UPDATE documents`, `NormalizeResult.status` has no conflict member, and the route raises only 422 and 400 — there is no code path to a 409. Read `TOOLS` in `src/library/ask/engine.py` for §1.12's `used_tools` list (four entries, no `compare_to_series`) and `BACKEND_SURFACES` in `src/library/llm/backends.py` for the LLM-surfaces payload (one key, `ask`). The 28-citation count behind the no-renumber decision was taken by grepping `§1.1[6-9]`/`§1.2[0-4]` across `docs/`, `src/` and `frontend/src/`, not estimated. Nothing outside the series surface was re-checked; the rest carries forward the 2026-08-30 verification, whose method was: (facet vocabulary panel, Task 11) read `facet_label_counts`, `_FACET_COUNTS_SQL` and `facet_counts` in `src/library/api/facets.py`, and `label_counts`/`count_labels`/`delete_value` in `src/library/facets/vocabulary.py`, in full, and diffed new §1.23.6 and the amended §1.23.5 cross-reference against them; confirmed `delete_value` now calls `count_labels` rather than inlining its own count (`git log`/`git show a1d70cb` shows the inline query removed). Every claim in §1.23.6 is covered by an executed assertion in `tests/test_api_spending.py`: the three-way divergence by `test_label_counts_include_a_value_with_no_money_behind_it` (amountless), `test_label_counts_count_a_soft_deleted_document` (soft-deleted, excluded from `/api/facets/counts` but present here), and the split-line direction is the pre-existing `test_a_facet_split_resolves_value_keys_to_display_labels`/`test_a_split_document_counts_once_in_facet_counts` pair for `/api/facets/counts`, read against `label_counts`'s docstring rather than re-tested (it reads `document_labels` only, which the split fixtures never write to, so the asymmetry is a property of the query's `FROM` clause, not a behaviour to assert per fixture); the shown-number-equals-enforced-number claim by `test_the_displayed_count_is_the_count_delete_enforces`. Did not re-run the full backend suite in this pass — the last full green run is the one this document's own history records below; ran `uv run pytest tests/test_api_spending.py -q -k "label_count or displayed_count"` (4 passed) to confirm the four new-route tests are still green before writing this section, plus the docs gates (`uv run python scripts/check_docs.py`, `uv run python scripts/build_journal_index.py --check`), both clean. Nothing else in this document was re-checked this pass; the rest carries forward its previous verification below unchanged. Earlier the same day — method: added `tests/test_api_spending.py::test_a_split_document_counts_once_in_facet_counts` for §1.23.5's `is_canonical`/`DISTINCT` non-redundancy claim, closing the gap the entry below recorded as read-not-tested: seeded one document with a facet label, split it into two unlabelled spend lines (which inherit the document's label per migration 0035's `doc_labels || line_labels`), and asserted `documents == 1` against `GET /api/facets/counts`. Ran the mutation both ways: removing `DISTINCT` from `_FACET_COUNTS_SQL` turned the new test red (`assert alpha["documents"] == 1` failed with `2 == 1`) while the other three counts tests stayed green, then restoring `DISTINCT` turned it green again (`tests/test_api_spending.py -q -k counts` — 4 passed). The claim is now covered by an executed assertion rather than read from the query's structure alone. Also this pass: `GET /api/spending/{id}/footer/{bucket}` now 422s when `bucket=excluded` and `amount_kind` is omitted (previously an indistinguishable empty page), read against the new check in `chart_footer_bucket` in `src/library/api/spending.py` and covered by the new `tests/test_api_spending.py::test_excluded_without_amount_kind_is_a_422_not_an_empty_page`; this section's route table row updated to match. Full backend suite and both docs gates run green in this pass (see the journal entry for verbatim counts). Confirmed no real sender, amount or reference appears in the text added. Earlier the same day — method: read `get_chart` and `chart_footer_bucket` (with `FooterDocumentOut`/`FooterDocumentsOut`) in `src/library/api/spending.py` in full for new §1.25, and confirmed the pre-existing surface's route count with `grep -c '@router\.' src/library/api/spending.py` → 12 (10 documented in charts.md §11 already, 2 new here) rather than re-documenting it. Read `_FACET_COUNTS_SQL` and `facet_counts` in `src/library/api/facets.py` for new §1.23.5, and cross-checked the `is_canonical`/`DISTINCT` non-redundancy claim against `.superpowers/sdd/2026-08-30-spending-view-backend/task-7-report.md`, which records it as read from the query rather than exercised by a dedicated split-line facet-counts test — stated here the same way, not claimed as covered by an assertion that does not exist. §1.25's `GET /api/spending/{id}` is covered by `tests/test_api_spending.py::test_one_chart_can_be_read_by_id`/`test_reading_an_unknown_chart_is_a_404`; the footer-bucket route by `test_the_footer_route_lists_the_documents_behind_a_count`, `test_an_unknown_footer_bucket_is_a_422_naming_it`, `test_the_footer_route_caps_its_limit_at_100`, `test_the_footer_route_reports_the_buckets_full_size_before_paging`, `test_the_footer_route_and_the_footer_count_agree_after_a_window_narrows`, all in `tests/test_api_spending.py`. §1.23.5's ordering, date-span and absence claims are covered by `test_counts_are_ordered_by_document_count`, `test_counts_carry_the_date_span`, `test_a_value_with_no_money_behind_it_is_absent` and `test_a_merged_pair_counts_once`, also in `tests/test_api_spending.py`. §1.23.2's added `colour` field in the JSON example was checked against `ValueOut` in `src/library/api/facets.py`, which the earlier pass below verified but its own JSON example update was missed. Nothing else in this document was re-checked this pass. Earlier the same day — method: read `ValuePatch`/`patch_value` in `src/library/api/facets.py`, `set_value_colour`/`get_value`/`_resolve` in `src/library/facets/vocabulary.py`, and `SenderPatch`/`patch_sender` in `src/library/api/taxonomy.py` in full, and diffed §1.1's endpoint-summary rows, §1.23's value-PATCH row, and §1.8.4/new §1.8.4.0 against them. Confirmed the `model_fields_set` distinction (absent `colour` vs. explicit `null`) with a mutation check: flipping `patch_sender`'s `if "colour" in body.model_fields_set:` to `if body.colour is not None:` turned `test_a_sender_s_colour_can_be_set_and_cleared` red on the clear assertion (`assert '#d62728' is None` failed, the colour set earlier in the test survived the clear request), then restored. The sibling value-route sentinel in `patch_value` was not mutation-tested this pass; not claimed as covered. All new claims are covered by executed assertions in `tests/test_api_facets.py` (colour set-without-rename, absent-vs-null, malformed-colour 422 on both the value and sender routes, unknown-value/unknown-sender 404), run green as part of a full `tests/test_split_colour.py tests/test_api_facets.py tests/test_facet_crud.py` pass (67 passed). Nothing else in this document was re-checked this pass. Earlier (2026-08-29) — method: re-read `add_override` in `src/library/money/payments.py` (its `pg_insert(...).on_conflict_do_update(constraint="payment_overrides_unique", set_={"created_at": func.now()})`) and both `merge_payment`/`split_payment` routes in `src/library/api/payments.py` in full, and rewrote §1.24's closing note to what they actually do; the "defensive tie-break" claim was checked by enumerating every `add_override` call site under `src/` (`grep -rn add_override src/` — the two routes, each writing one row then committing). Both reversal directions and the third-correction case stay covered by executed assertions in `tests/test_api_payments.py` and `tests/test_payment_identity.py`, run green in this pass as part of a full backend run (1969 passed, 7 skipped). Nothing else in this document was re-checked this pass. Earlier the same day — method: re-read `_require_both_exist` and the two override routes in `src/library/api/payments.py` and `add_override` in `src/library/money/payments.py`, and diffed §1.24's table and closing note against them; the `404` claim and both reversal directions are covered by executed assertions in `tests/test_api_payments.py` (`test_merge_with_an_unknown_document_is_a_404_not_a_500`, `test_split_then_merge_round_trips`, and the new `test_merge_then_split_round_trips`, which was observed failing before the view fix), run green in this pass. Nothing else in this document was re-checked this pass. Earlier the same day — method: wrote new §1.24 by reading `src/library/api/payments.py` and `src/library/money/payments.py` in full and diffing every route, request/response field, and status code against them; every claim (the payment-group shape, the split-then-merge round trip, the `422` on `doc_a == doc_b`, the `404` on an unknown document, and the duplicates-group shape) is covered by an executed assertion in `tests/test_api_payments.py`, run green (`uv run pytest tests/test_api_payments.py -v`, 6 passed) as part of this pass. Ran `uv run pytest tests/test_check_docs.py -q`, green. Nothing else in this document was re-checked this pass; the rest carries forward the earlier verification below unchanged, whose method was: re-read `src/library/api/facets.py` and `src/library/facets/vocabulary.py` after the fix wave above and diffed §1.23's table, §1.23.1 and §1.23.3 against them; every changed claim is covered by an executed assertion in `tests/test_api_facets.py` (self-merge 409 in use and not in use, dry-run 404/409, the punctuation-heavy and over-long derived keys, the empty-key 422, and the unknown/soft-deleted document 404s), run green as part of this pass. Earlier the same day — method: read `src/library/api/facets.py` in full and diffed every route, status code and request/response shape in new §1.23 against it; read `src/library/facets/vocabulary.py` for the exception→status mapping (`UnknownFacetError`→404, `UnknownValueError`→422 on the labels PUT / 404 elsewhere, `ValueInUseError`→409); read the `facet` query-param parsing and its two 422 branches in `src/library/api/documents.py` and the filter's EXISTS-subquery construction in `src/library/search.py` for §1.3.1/§1.23.4; cross-checked every claim against the executed assertions in `tests/test_api_facets.py` and `tests/test_facet_search.py` (both read in full; not re-executed for this pass, which touched no application code — `uv run pytest tests/test_check_docs.py -q` was run for the docs gate itself). Ran `uv run python scripts/check_docs.py` and `uv run python scripts/build_journal_index.py --check` after the edit. The rest carries forward its previous verification: 2026-08-27 — method: read §1.13/§1.14 in full and diffed the new `coverage` field (JSON examples + field lists) against `serialise_summary`, `SeriesCoverage`, `summarize_series`, and the three call sites that emit it (`src/library/api/documents.py:399`, `src/library/api/charts.py:169,280`) in `src/library/series.py` and `src/library/api/*.py`; also checked `get_document_series`'s bespoke no-sender/kind short-circuit dict, which the docs now note omits `coverage` entirely. Ran `uv run python scripts/check_docs.py` and `uv run python scripts/build_journal_index.py --check` (both clean) after the edit; did not run the backend test suite against this file's claims, so that remains the controller's job. Note: this same pass also threaded a resolved `currency`/`other_currencies` through the post-bucketing `"insufficient"` path in `src/library/series.py` (previously hardcoded `null`/`[]` there); §1.13's own `"insufficient"` example predates that and predates this coverage feature, documents neither field, and was not rewritten here — out of scope for this pass, left as a known pre-existing gap. The rest carries forward its previous verification: 2026-08-25 — method: the new §1.10.11 wire shape, status codes and the `ask_profile` read-model key checked against `src/library/api/settings.py` and `src/library/schemas.py`, covered by executed tests (`tests/test_settings_api.py`, eight new cases incl. the 422, the garbage-blob fallback and the read-side clip) in a full backend run. The rest carries forward its previous verification: 2026-08-20 — method: the new §1.10.8–1.10.10 wire shapes and status codes checked against `src/library/api/settings.py` and `src/library/schemas.py`, and the §1.11 503 against `src/library/api/ask.py`; both covered by executed tests (`tests/test_llm_backends.py`, `tests/test_api_ask.py`) in a full run of 1632 passing. The rest of the document is unchanged since its previous verification, whose method was: 2026-08-12 — method: enumerated every `@router` decorator under `src/library/` and diffed it against the documented surface in both directions, then checked each endpoint's parameters, request/response fields, status codes and auth rules against `src/library/api/**`, `schemas.py`, `config.py` and `app.py`, all read in full; nothing was executed.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -46,7 +46,6 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | GET    | `/api/documents/{id}/original` | Download the original file |
 | GET    | `/api/documents/{id}/searchable.pdf` | Download the OCR searchable PDF |
 | GET    | `/api/documents/{id}/thumbnail` | First-page WebP thumbnail |
-| GET    | `/api/documents/{id}/series` | Recurring-series stats + comparison for this document |
 | GET    | `/api/documents/{id}/comments` | List a document's comments, newest first |
 | POST   | `/api/documents/{id}/comments` | Add a comment to a document |
 | PATCH  | `/api/documents/{id}/comments/{cid}` | Edit a comment's body |
@@ -55,21 +54,6 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | PATCH  | `/api/notes/{id}` | Edit a note's title/body in place (snapshots a version) |
 | GET    | `/api/notes/{id}/versions` | A note's version history (newest first) |
 | POST   | `/api/notes/{id}/versions/{version_no}/restore` | Restore a note to a previous version |
-| GET    | `/api/charts` | Every eligible recurring `(sender, kind)` series, summarised, plus near-threshold `candidates` |
-| GET    | `/api/charts/{series_id}` | One series by its stable id (single-chart deep link) |
-| PUT    | `/api/charts/{series_id}/meta` | Override a series' title and/or description |
-| POST   | `/api/charts/authored` | Create an authored (manual) series |
-| PATCH  | `/api/charts/authored/{id}` | Rename / re-describe an authored series |
-| DELETE | `/api/charts/authored/{id}` | Delete an authored series |
-| POST   | `/api/charts/authored/{id}/members` | Add a document to an authored series |
-| DELETE | `/api/charts/authored/{id}/members/{document_id}` | Remove a document from an authored series |
-| GET    | `/api/charts/authored/{id}/signature` | The authored series' mechanical `(sender, kind, currency)` signature |
-| GET    | `/api/charts/authored/{id}/suggestions` | Documents matching the signature, awaiting review |
-| POST   | `/api/charts/authored/{id}/suggestions/{document_id}/accept` | Accept a suggestion as a member |
-| POST   | `/api/charts/authored/{id}/suggestions/{document_id}/dismiss` | Dismiss a suggestion (tombstone) |
-| GET    | `/api/charts/authored/{id}/odd-ones-out` | Members that break the signature, with a reason |
-| POST   | `/api/series/{sender_id}/{kind_id}/members` | Pin a document into a series (or clear an exclude) |
-| DELETE | `/api/series/{sender_id}/{kind_id}/members/{document_id}` | Exclude a document from a series (or clear a pin) |
 | GET    | `/api/kinds` | Document kinds with counts |
 | POST   | `/api/kinds` | Create a document kind (dedupes / rejects near-duplicates) |
 | GET    | `/api/senders` | Senders with counts |
@@ -136,7 +120,7 @@ bearer token — see 1.9) except `POST /api/auth/login`. `/healthz` is open
 | PATCH  | `/api/admin/kinds/{slug}` | Rename a kind's display name; slug is immutable (admin only) |
 | DELETE | `/api/admin/kinds/{slug}` | Delete a kind, reassigning its documents (admin only) |
 | GET    | `/api/admin/currencies` | Distinct currency codes with counts (admin only) |
-| POST   | `/api/admin/currencies/normalize` | Rename a currency code store-wide (series-aware) (admin only) |
+| POST   | `/api/admin/currencies/normalize` | Rename a currency code store-wide (admin only) |
 | GET    | `/api/admin/fx-rates` | FX rates per in-use currency (base = USD) (admin only) |
 | POST   | `/api/admin/fx-rates` | Seed an FX rate (live fetch or manual) (admin only) |
 | GET    | `/api/saved-views` | List the caller's saved views |
@@ -406,7 +390,7 @@ of soft-deleted content are refused with `409`.
 document that is already in the trash on demand — the manual equivalent of the
 daily purge, for emptying Recently Deleted without waiting out the retention
 window. Removes the row (chunks, comments, pages, events, note versions, and
-series/tag/project links cascade), commits, then unlinks the on-disk original and
+tag/project links cascade), commits, then unlinks the on-disk original and
 derived artifacts (row committed gone *before* files are unlinked, so a failed
 unlink leaves at worst a reclaimable orphan file). Returns `204`. `404` unless the
 document exists and is *currently* soft-deleted — you must soft-delete first, so
@@ -415,7 +399,7 @@ this can never one-step nuke a live document (the same guard as restore).
 **Purge.** A daily worker task (`purge_deleted_documents`) hard-deletes documents
 whose `deleted_at` is older than `LIBRARY_DELETED_RETENTION_DAYS` (default 30):
 it removes the row (chunks, comments, pages, events, note versions, and
-series/tag/project links cascade) and unlinks the on-disk original and derived
+tag/project links cascade) and unlinks the on-disk original and derived
 artifacts — the same row-then-files ordering as the on-demand endpoint above. It
 is gated by `LIBRARY_DELETED_PURGE_ENABLED` (default on) — turn it off to keep the
 Recently-Deleted area indefinitely restorable. See
@@ -630,8 +614,8 @@ token is validated and cookies are ignored.
 
 **Authorization is authentication-only, by design.** Beyond the admin/non-admin
 split, there is no per-user resource ownership: any authenticated user can read
-and mutate the whole library (documents, notes, comments, tags, projects,
-series). Endpoints do not check the caller against a resource's creator, and
+and mutate the whole library (documents, notes, comments, tags, projects).
+Endpoints do not check the caller against a resource's creator, and
 `uploader_id`/`author_id` are provenance, not access control — this is a
 single-family shared library. See [architecture.md §1.5.1](architecture.md) for
 the full rationale (and what would have to change to support multiple tenants).
@@ -996,14 +980,6 @@ behind it.
       "default": "api",
       "overridden": true
     },
-    {
-      "surface": "series_insight",
-      "label": "Series descriptions",
-      "description": "The one-line prose description cached for each document series. …",
-      "backend": "api",
-      "default": "api",
-      "overridden": false
-    }
   ],
   "credentials_status": "healthy",
   "credentials_detail": "access token valid (7.5h), refresh token present",
@@ -1112,7 +1088,7 @@ unsupported `media_type`.
 - `citations` — documents the answer relied on (`document_id`, `title`,
   `page_number`); link these to `GET /api/documents/{id}`.
 - `used_tools` — which tools the engine invoked: the retrieval tools
-  (`semantic_search`, `query_documents`, `compare_to_series`, `get_document`)
+  (`semantic_search`, `query_documents`, `get_document`)
   and the metadata write tool (`update_document_metadata`) when the turn
   previewed or saved a metadata edit (see [ask.md §1.8](ask.md)).
 - `cost_usd` — estimated answer cost for this turn (recorded in `ask_turns`,
@@ -1176,379 +1152,16 @@ The raw replay `messages` blob is not returned to the client.
 Delete a conversation. Cascades to all its turns. Returns `204` on success;
 `404` if the thread does not exist or belongs to another user.
 
-## 1.13 Document series — `GET /api/documents/{id}/series`
-
-Returns statistical information about the recurring-document series this
-document belongs to, and where this specific document sits within it. The
-series is identified automatically from the document's own `sender_id` and
-`kind_id`; the document itself is the reference point.
-
-This endpoint supplies the data for the trend widget on the document detail
-view. See [ask.md §1.7](ask.md) for the series detection and statistics design.
-
-**Response `200` — `status:"ok"`:**
-
-```json
-{
-  "status": "ok",
-  "sender": "Vattenfall",
-  "kind": "utility-bill",
-  "sender_id": 7,
-  "kind_id": 2,
-  "currency": "EUR",
-  "other_currencies": [],
-  "cadence": "monthly",
-  "count": 7,
-  "coverage": {
-    "matched": 8,
-    "included": 7,
-    "excluded": {"other_currency": 1},
-    "needs_review": 0
-  },
-  "description": "Energy bills have crept up about 12% over the past year, peaking in winter.",
-  "mean": "145.00",
-  "median": "142.10",
-  "stdev": "8.20",
-  "min": "131.00",
-  "max": "159.40",
-  "reference": {
-    "value": "151.20",
-    "delta": "+9.10",
-    "vs_median_pct": "+6.4%",
-    "z_score": 1.11,
-    "verdict": "higher"
-  },
-  "trend": { "direction": "rising", "change_pct": "+12.0%" },
-  "year_over_year": {
-    "prior_value": "138.40",
-    "change_pct": "+9.2%",
-    "document_id": 41
-  },
-  "document_ids": [12, 19, 27, 33, 41, 55, 88],
-  "points": [
-    {"date": "2025-06-15", "amount": "138.40", "document_id": 41, "title": "June 2025 bill"},
-    {"date": "2026-05-15", "amount": "151.20", "document_id": 88, "title": "May 2026 bill"}
-  ]
-}
-```
-
-Fields:
-
-- `status` — `"ok"` when the series has enough members; `"insufficient"` otherwise (see below).
-- `sender`, `kind`, `currency` — the resolved series identity and reported currency bucket.
-- `sender_id`, `kind_id` — numeric ids of the resolved series (used as a stable key on `/charts`).
-- `description` — a cached, LLM-generated one- or two-sentence prose summary of the
-  series, precomputed in the background (see [ask.md §1.7](ask.md)). Absent until the
-  first description has been generated for the series.
-- `other_currencies` — currencies present in the series that are not being reported.
-  Skips a `NULL` currency by construction, unlike `coverage.excluded.other_currency`
-  below, which counts every document outside the chosen bucket including
-  amount-bearing, currency-`NULL` ones.
-- `coverage` — how much of the matching document set the statistics actually
-  cover: `matched` (documents meeting the resolved filters, union anything a
-  PIN override pulled in), `included` (what the statistics were computed
-  from), `excluded` (reason → count: `no_amount`, `other_series_group`,
-  `other_currency`, `manually_excluded` — a reason present only when it
-  dropped at least one document), and `needs_review` (of `included`, how many
-  carry a `needs_review` extraction flag). See [ask.md §1.7](ask.md) for the
-  full narrowing/override design. **Absent** — the key is omitted entirely,
-  not `null` — for an authored (user-curated) series, whose membership is
-  hand-curated rather than derived by filtering and does not report coverage
-  at all; also absent from this endpoint's own `status:"insufficient"` short
-  circuit when the document itself has no `sender_id`/`kind_id` (see below),
-  which returns before `summarize_series` runs. A *present* `coverage` with an
-  empty `excluded` means nothing was dropped; an absent `coverage` means
-  "not reported" — the two are different claims, not variations on the same
-  one.
-- `cadence` — inferred recurrence: `monthly`, `quarterly`, `yearly`, or `irregular`.
-- `count`, `mean`, `median`, `stdev`, `min`, `max` — distribution stats over `amount_total`
-  within the currency bucket. Money values are JSON strings (decimal precision preserved).
-- `reference` — where this document's amount sits: `value`, `delta` (vs median),
-  `vs_median_pct`, `z_score` (null when stdev is 0), and a `verdict` of
-  `higher`, `typical`, or `lower`.
-- `trend` — `direction` (`rising`/`falling`/`flat`) and `change_pct` (first→last).
-- `year_over_year` — the series member closest to 12 months prior (`prior_value`,
-  `change_pct`, `document_id`), or `null` when no match exists.
-- `document_ids` — ids of the series members that contributed to the stats (capped at 25).
-- `points` — all dated, amount-bearing series members in chronological order, each with
-  `date` (ISO), `amount` (string), `document_id`, and `title` (the document's title, or
-  `null`). Use `document_id` to highlight the current document in the chart and to link
-  each point to its document; `title` labels the citation.
-
-**Response `200` — `status:"insufficient"`:**
-
-Returned when the document has no `sender` or `kind`, or when the series has
-fewer than `LIBRARY_SERIES_MIN_DOCUMENTS` members (default 3). The UI should
-hide the trend widget rather than showing an error.
-
-```json
-{"status": "insufficient", "count": 1, "document_ids": [88]}
-```
-
-`count` is the number of series members found (0 when the document has no sender or kind).
-This bare shape — no `coverage` key — is what the document-has-no-sender/kind case
-returns. When instead the document *has* a sender and kind but the series has too
-few members, `summarize_series` still ran and the response carries a `coverage`
-block on the same terms as the `"ok"` body above — including the caveat that its
-numbers, and `status` itself, can predate an unresolved PIN/EXCLUDE override on a
-near-threshold series (see [ask.md §1.7](ask.md)).
-
-**Errors:** `404` when the document does not exist or is soft-deleted.
-
-## 1.14 Charts — `GET /api/charts`
-
-Enumerates every recurring `(sender, kind)` series with enough amount-bearing
-documents to summarise (at least `LIBRARY_SERIES_MIN_DOCUMENTS`, default 3), and
-returns each one fully summarised. Alongside them it returns `candidates` —
-near-threshold buckets one or more documents short of charting (see below). This
-backs the `/charts` aggregate view.
-
-**Response `200`:**
-
-```json
-{
-  "series": [
-    {
-      "status": "ok",
-      "sender": "Vattenfall",
-      "kind": "utility-bill",
-      "sender_id": 7,
-      "kind_id": 2,
-      "currency": "EUR",
-      "count": 7,
-      "coverage": {
-        "matched": 8,
-        "included": 7,
-        "excluded": {"other_currency": 1},
-        "needs_review": 0
-      },
-      "description": "Energy bills have crept up about 12% over the past year…",
-      "median": "142.10",
-      "trend": { "direction": "rising", "change_pct": "+12.0%" },
-      "document_ids": [12, 19, 27, 33, 41, 55, 88],
-      "points": [
-        {"date": "2025-06-15", "amount": "138.40", "document_id": 41, "title": "June 2025 bill"}
-      ]
-    }
-  ],
-  "candidates": [
-    {
-      "sender_id": 9,
-      "sender": "Anthropic",
-      "kind_id": 4,
-      "kind": "invoice",
-      "currency": "USD",
-      "count": 2,
-      "needed": 3,
-      "document_ids": [11, 12]
-    }
-  ]
-}
-```
-
-Each `series` entry has the **same shape** as the `status:"ok"` body of
-`GET /api/documents/{id}/series` (with `points` always included) — including
-`coverage` (§1.13), which is present on every emergent entry here (`/charts`
-only ever includes `status:"ok"` entries, and an emergent `"ok"` result always
-carries a populated `coverage`) but **absent** on an authored (user-curated)
-entry, which does not report it. Series whose
-dominant currency bucket is too small are omitted from `series`, so every entry
-there is `status:"ok"`. Entries are ordered by document count (busiest series
-first). There is no per-document reference point here, so
-`reference`/`year_over_year` are anchored on the latest member. Use
-`sender_id`-`kind_id`-`currency` as a stable key.
-
-**Candidates ("almost there").** `candidates` lists emergent
-`(sender, kind, currency)` buckets with `2 ≤ count < LIBRARY_SERIES_MIN_DOCUMENTS`
-— groupings one or more documents short of charting automatically. Grouping is
-per currency (the granularity at which an emergent series actually charts), so
-`count` of `needed` is an honest "N of min"; `document_ids` are the bucket's
-members and `needed` echoes the threshold. Pin/exclude overrides are **not**
-applied (they only matter once a series charts). The list is empty when
-`LIBRARY_SERIES_MIN_DOCUMENTS ≤ 2`. Candidates carry no `points`. The `/charts`
-view hides them behind an opt-in toggle and offers a one-click **promote**:
-`POST /api/charts/authored` (§1.14.2) seeded with the bucket's `document_ids`
-turns a candidate into a named authored series that charts immediately — no new
-endpoint is involved. A bucket already backed by an authored series is
-**excluded** from `candidates` (matched on that series' dominant
-`(sender, kind, currency)` signature), so a promoted candidate stops being
-offered — this prevents a reload from inviting a duplicate promote.
-
-### 1.14.1 Single series + editable meta — `/api/charts/{series_id}`
-
-A series has a **stable id** so a single chart can be deep-linked and shared. The
-id encodes the series identity as `{sender_id}-{kind_id}-{currency}`, where
-`currency` is the three-letter bucket code or the literal `none` for the `NULL`
-bucket — e.g. `7-2-EUR` or `7-2-none`. This matches the key the `/charts` grid
-uses per tile, so the two are interchangeable.
-
-| Method | Path | Effect |
-|--------|------|--------|
-| GET | `/api/charts/{series_id}` | The single series, summarised exactly like one `/api/charts` entry (`points` included). |
-| PUT | `/api/charts/{series_id}/meta` | Set a user override for the series `title` and/or `description`. |
-
-`GET` returns the same `status:"ok"` body as one element of `/api/charts`
-(§1.14). It is `404` when the id is malformed, the sender/kind do not exist, or
-the identity does not resolve to a chartable (`status:"ok"`) series.
-
-**Editable title & description.** A series' title is normally *derived*
-(`sender · cadence series`) and its description is the read-only cached LLM prose
-(`series_insights`, auto-refreshed). `PUT …/meta` lets a user override either,
-persisted in the `series_meta_overrides` table (keyed by the series identity,
-separate from the auto-managed `series_insights` so user edits are never
-clobbered by a background refresh).
-
-Body — both fields optional; **only the fields present are applied** (omit a
-field to leave it unchanged; send `null` to clear an existing override):
-
-```json
-{"title": "Energy — main flat", "description": "Switched tariff in March 2025."}
-```
-
-When a `title` override is set it is exposed as a `title` field on the series
-body (the chart tile prefers it over the derived heading); a `description`
-override **replaces** the cached LLM `description`. `PUT` returns the updated
-single-series body (same shape as `GET`) when the series is chartable; when the
-override persists but the series is too sparse to chart, it returns the reduced
-body `{sender_id, kind_id, currency, title, description}`. It is `404` when the id is malformed
-or the sender/kind do not exist; `401` when unauthenticated. Any authenticated
-user may edit, mirroring the series-membership endpoints (§1.15) that edit the
-same tile.
-
-### 1.14.2 Authored (manual) series — `/api/charts/authored`
-
-Emergent series are detected automatically; an **authored** series is one a user
-curates by hand — name it, pick an optional currency, and add documents
-explicitly — producing a chart even without a natural ≥3-document emergent seed
-(emergent detection is unchanged; authored series live alongside it). They are
-stored in `authored_series` (+ `authored_series_members`) and summarised by the
-same statistics as emergent series, so an authored series over the same
-documents as an emergent one yields the same distribution/trend.
-
-An authored series has its own **stable id** `a-{id}` (two-part, so it never
-collides with the three-part emergent `{sender}-{kind}-{currency}` scheme).
-`GET /api/charts/{series_id}` and the `/charts` grid resolve both. An authored
-entry carries `authored_id` (and `sender_id`/`kind_id` are `null`); its `title`
-is the authored name and `description` is the authored description. There is no
-minimum-document gate — a single amount-bearing member already charts.
-
-| Method | Path | Effect |
-|--------|------|--------|
-| POST | `/api/charts/authored` | Create. Body: `{name, currency?, description?, document_ids?, mode?, seed_document_ids?}`. Returns the summarised series (`201`). |
-| PATCH | `/api/charts/authored/{id}` | Update `name` and/or `description` (omit a field to leave it). |
-| DELETE | `/api/charts/authored/{id}` | Delete the series (membership cascades) — `204`. |
-| POST | `/api/charts/authored/{id}/members` | Add a document — body `{document_id}` (idempotent). |
-| DELETE | `/api/charts/authored/{id}/members/{document_id}` | Remove a document (idempotent). Also writes an **exclusion** (a negative example) that vetoes future re-adds and semantic auto-adds; adding the document back clears it. |
-
-Create body (`document_ids` optional initial membership; unknown/deleted ids are
-silently ignored):
-
-```json
-{"name": "Energy — main flat", "currency": "EUR", "document_ids": [12, 19, 27]}
-```
-
-**Smart Groups.** `mode` is `manual` (default) or `semantic`. A `semantic`
-create scores the archive against the documents in `seed_document_ids` only —
-never against the group's *name* — and returns an extra `backfill` key,
-`[{document_id, title, score}]`, staging the matches for review rather than
-adding them. The same request may also fill `description` with a generated
-blurb when the caller left it empty. The full model, including the
-suggestion/exclusion lifecycle, is in [smart-groups.md](smart-groups.md).
-
-Mutating endpoints return the refreshed single-series body (same shape as one
-`/api/charts` entry, with `authored_id` set) — except `DELETE
-/api/charts/authored/{id}`, which returns `204`, and the dismiss endpoint
-(§1.14.3), which returns `{count}`. The owner is recorded as the creating user
-(`owner_id`). `404` when the series id is unknown (or, for add, the document is
-unknown/deleted); `401` when unauthenticated.
-
-### 1.14.3 Authored-series smart features — signature, suggestions, odd-ones-out
-
-Each authored series has a mechanical **signature**: the dominant
-`(sender_id, kind_id, currency)` triple across its current members, plus a
-`dominance` fraction (`dominant_count / member_count`). Three features build on
-it (matching is purely mechanical; the LLM is used **only** to phrase one
-odd-one-out sentence):
-
-- **Suggestions (propose-for-review auto-continue).** Documents that match the
-  signature but aren't members yet. When a document is indexed, the
-  `evaluate_series_autocontinue` job records it as a `pending` row in
-  `authored_series_suggestions` for every series it matches — it is **never**
-  silently added as a member. The suggestion list is also computed live on read.
-- **Odd-ones-out.** Current members whose `(sender, kind, currency)` differs from
-  the dominant signature, each with a mechanical `axis` (`sender` → `kind` →
-  `currency`, first difference) and a **deterministic, grounded** one-sentence
-  `reason` built only from the documents' real sender/kind/currency values — **no
-  LLM** (`library.series.odd_ones_out`). An earlier LLM-written reason
-  hallucinated a sender name present in none of the documents; the reason can now
-  only ever name values actually in the series, so it cannot misattribute.
-
-Suggestions surface only when the signature is confident: a resolved sender/kind
-and `dominance ≥ series_autocontinue_min_dominance` (default `0.6`). A dismissed
-suggestion writes a `dismissed` tombstone so it is never re-proposed.
-
-| Method | Path | Effect |
-|--------|------|--------|
-| GET | `/api/charts/authored/{id}/signature` | The `{sender_id, kind_id, currency, member_count, dominant_count, dominance}` signature (nulls/zeros for an empty series). |
-| GET | `/api/charts/authored/{id}/suggestions` | `{suggestions: [{id, title, sender, kind, currency, document_date, amount}], count}` — signature-matching non-members, newest first, capped at `series_suggestion_limit` (default 20). |
-| POST | `/api/charts/authored/{id}/suggestions/{document_id}/accept` | Promote to a member (idempotent); clears the suggestion row; returns the refreshed series body. |
-| POST | `/api/charts/authored/{id}/suggestions/{document_id}/dismiss` | Write a `dismissed` tombstone, delete any existing membership, and write an **exclusion** so the scorer cannot re-add it; returns `{count}` — remaining live matches. |
-| GET | `/api/charts/authored/{id}/odd-ones-out` | `{members: [{id, title, sender, kind, currency, document_date, amount, axis, reason}]}` — members breaking the signature. `reason` is a deterministic, grounded sentence (no LLM), so it can never name a value absent from the series. |
-
-Additively, each **authored** entry in `GET /api/charts` and
-`GET /api/charts/{id}` carries extra keys the dashboard reads without a
-follow-up fetch: `signature` (object or `null`), `suggestion_count` (int, pending
-matches), `odd_one_out_count` (int), `mode` (`manual`/`semantic`) and
-`auto_added_count` (int). Individual `points` may additionally carry `origin`,
-recording how that member joined the group.
-
-## 1.15 Series membership overrides — `/api/series/{sender_id}/{kind_id}/members`
-
-Series are computed on the fly (no membership table). These two endpoints let a
-user **manually correct** that computation and have the correction persist:
-`pin` a document the grouping missed, or `exclude` one it wrongly grouped in.
-Overrides are stored in `series_membership_overrides`, keyed by the series
-identity `(sender_id, kind_id, currency)` plus `document_id`, and applied on
-every future `summarize_series` call (so both `GET /api/documents/{id}/series`
-and `GET /api/charts` reflect them). They mirror the per-document extraction
-`corrections` precedent, but as a first-class table so the LLM series matcher
-can read accumulated examples as hints.
-
-A `(series, document)` pair is in one of three states; both endpoints are
-idempotent toggles between them:
-
-- `pinned` — a `pin` override exists (force-include).
-- `excluded` — an `exclude` override exists (force-remove).
-- `cleared` — no override; the document follows the natural grouping.
-
-| Method | Path | Effect |
-|--------|------|--------|
-| POST   | `/api/series/{sender_id}/{kind_id}/members` | Add: clear an existing `exclude`, else `pin`. Body `{"document_id": int}` |
-| DELETE | `/api/series/{sender_id}/{kind_id}/members/{document_id}` | Remove: clear an existing `pin`, else `exclude` |
-
-Both accept an optional `?currency=` query parameter (the series currency
-bucket from the chart tile / document; omit it for the `NULL` bucket). Both
-return the resulting state:
-
-```json
-{"state": "pinned", "sender_id": 7, "kind_id": 2, "currency": "EUR", "document_id": 88}
-```
-
-**Cross-currency pins → FX conversion.** A pinned document whose own currency
-differs from the series is converted into the series currency using the seeded
-`fx_rates` reference table (base = USD), **date-aware**: the rate is the one
-with the greatest `as_of` on-or-before the document's date (falling back to the
-earliest). The seed is a researched *approximate* yearly snapshot (2015–2026)
-for the common currencies (EUR, GBP, CHF, JPY, CAD, AUD, SEK, NOK, DKK); add
-rows to refine it. A pinned document with no amount, or in a currency absent
-from `fx_rates`, stays out of the computed stats (it cannot contribute a
-meaningful point) and the omission is logged.
-
-**Notes & errors.** Excluding enough members can drop a series below
-`LIBRARY_SERIES_MIN_DOCUMENTS`, after which it reports `status:"insufficient"` —
-this is intended. With no overrides, output is byte-for-byte what it was before
-(additive, backward-compatible). `404` when the sender, kind, or document does
-not exist; `401` when unauthenticated.
+> **Sections 1.13–1.15 are gone, and the numbering deliberately does not
+> close up.** They documented `GET /api/documents/{id}/series`, the
+> `/api/charts` series surface and the `/api/series/.../members` override
+> routes — the legacy series stack, deleted on 2026-08-31 (see
+> [charts.md](charts.md) for what replaced it). Renumbering §1.16 onwards would
+> silently invalidate the 28 citations of those later sections spread across
+> nine documents and `AdminMetadataPanel.vue`, and nothing in the toolchain
+> checks a section-number citation — `check_docs.py` verifies stamps and index
+> reachability, not anchors. A stable gap costs this paragraph; renumbering
+> would cost 29 edits with link-rot as the failure mode.
 
 ## 1.16 Projects — `/api/projects`
 
@@ -1736,8 +1349,8 @@ edits (e.g. two merges into the same target) can't interleave.
 
 ### 1.18.6 Currencies — `GET /api/admin/currencies`, `POST /api/admin/currencies/normalize`
 
-Currency is free-text (no reference table) but is part of **series identity**, so
-normalising a code is a series-aware whole-store rewrite, not a table CRUD.
+Currency is free-text (no reference table) rather than a reference row, so
+normalising a code is a whole-store rewrite, not a table CRUD.
 
 - **`GET /api/admin/currencies`** → `[{code, document_count}, …]`: the distinct
   currency codes on non-deleted documents, with counts, ordered by code.
@@ -1747,30 +1360,27 @@ normalising a code is a series-aware whole-store rewrite, not a table CRUD.
   normalised (upper-case) codes. On success (**`200`**):
 
   ```json
-  {"from_code": "USD", "to_code": "EUR", "counts": {"documents": 12, "series_insights": 2,
-   "series_insights_merged": 1, "series_membership_overrides": 0, "series_meta_overrides": 1,
-   "authored_series": 1, "authored_series_suggestions": 0}, "fx_rate_missing": true}
+  {"from_code": "USD", "to_code": "EUR", "counts": {"documents": 12}, "fx_rate_missing": true}
   ```
 
-  What it touches (all in one transaction, under a dedicated advisory lock):
-  `documents`, `authored_series`, `authored_series_suggestions` are plain
-  updates; `series_insights` is a recomputable cache, so a `from_code` row that
-  would collide with an existing `to_code` bucket is **dropped** (survivor kept,
-  counted as `series_insights_merged`) and the rest updated; the two **override**
-  tables (`series_membership_overrides`, `series_meta_overrides`) hold
-  user-authored data, so if the rename would collide there the whole operation is
-  **refused** (see `409`) and nothing changes. `fx_rates` is **never** mutated;
-  `fx_rate_missing` is `true` when `to_code` has no rate row (FX conversion for it
-  is unavailable until one is seeded).
+  What it touches (in one transaction, under a dedicated advisory lock): a single
+  `UPDATE documents`. `fx_rates` is **never** mutated; `fx_rate_missing` is `true`
+  when `to_code` has no rate row (FX conversion for it is unavailable until one is
+  seeded).
 
   Errors: **`422`** a code is not `^[A-Z]{3}$`; **`400`** `from_code` and
-  `to_code` are the same; **`409`** the rename would collide with user-authored
-  series overrides — nothing is mutated, body
-  `{"detail": "…", "conflicts": [{"table": "series_meta_overrides", "sender_id": 3, "kind_id": 5}, …]}`.
+  `to_code` are the same. **There is no `409`.** Until 2026-08-31 the rename also
+  rewrote `authored_series`, `authored_series_suggestions` and the
+  `series_insights` cache, and **refused** with a `409` plus a `conflicts` list
+  when it would collide in `series_membership_overrides` or
+  `series_meta_overrides` — those held user-authored pins and titles, and a
+  currency was part of series identity. Those tables went with the legacy series
+  stack, `counts` now carries only `documents`, and the conflict case cannot
+  arise.
 
 ### 1.18.7 FX rates — `GET /api/admin/fx-rates`, `POST /api/admin/fx-rates`
 
-Cross-currency series conversion needs one `fx_rates` row per currency (base =
+Cross-currency conversion needs one `fx_rates` row per currency (base =
 USD, so `rate_to_base` is the value of one unit in USD; a single row suffices —
 `library.fx` falls back to the nearest-date rate). These endpoints report and
 seed those rows; the normalise flow above only *flags* a missing rate.
