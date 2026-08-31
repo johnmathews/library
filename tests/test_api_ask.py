@@ -1044,87 +1044,6 @@ def test_thread_lifecycle_list_get_delete(
     assert api_client.get(f"/api/ask/threads/{thread_id}").status_code == 404
 
 
-def _seed_utility_series(database_url: str) -> list[int]:
-    """Insert three utility-bill docs for sender Vattenfall, ascending dates and
-    amounts 100/100/130.  Returns ids oldest→newest."""
-    engine = create_engine(database_url.replace("+asyncpg", "+psycopg"))
-    try:
-        with engine.begin() as connection:
-            sender_id = connection.execute(
-                text(
-                    "INSERT INTO senders (name) VALUES ('Vattenfall')"
-                    " ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id"
-                )
-            ).scalar_one()
-            kind_id = connection.execute(
-                text("SELECT id FROM kinds WHERE slug = 'utility-bill'")
-            ).scalar_one()
-            ids: list[int] = []
-            bills = [
-                (date(2025, 1, 1), 100),
-                (date(2025, 2, 1), 100),
-                (date(2025, 3, 1), 130),
-            ]
-            for d, amount in bills:
-                sha = hashlib.sha256(f"vattenfall-{d}".encode()).hexdigest()
-                doc_id = connection.execute(
-                    text(
-                        "INSERT INTO documents"
-                        " (sha256, mime_type, status, source, sender_id, kind_id,"
-                        "  document_date, amount_total, currency)"
-                        " VALUES (:sha, 'application/pdf', 'indexed', 'upload',"
-                        "         :sid, :kid, :d, :amt, 'EUR')"
-                        " RETURNING id"
-                    ),
-                    {"sha": sha, "sid": sender_id, "kid": kind_id, "d": d, "amt": amount},
-                ).scalar_one()
-                ids.append(doc_id)
-        return ids
-    finally:
-        engine.dispose()
-
-
-def test_ask_uses_compare_to_series(
-    api_client: TestClient,
-    api_database_url: str,
-    with_api_key: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    doc_ids = _seed_utility_series(api_database_url)
-    _install_anthropic(
-        monkeypatch,
-        [
-            _Response(
-                stop_reason="tool_use",
-                content=[
-                    _ToolUseBlock(
-                        name="compare_to_series",
-                        input={
-                            "kind": "utility-bill",
-                            "sender_contains": "vattenfall",
-                            "reference": "latest",
-                        },
-                        id="c1",
-                    )
-                ],
-                usage=_Usage(120, 25),
-            ),
-            _Response(
-                stop_reason="end_turn",
-                content=[_TextBlock(text=f"Yes, higher than usual [#{doc_ids[-1]}].")],
-                usage=_Usage(140, 18),
-            ),
-        ],
-    )
-    response = api_client.post(
-        "/api/ask", json={"question": "is my latest bill higher than usual?"}
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["used_tools"] == ["compare_to_series"]
-    assert any(c["document_id"] == doc_ids[-1] for c in body["citations"])
-
-
 def test_thread_get_foreign_user_is_404(
     api_client: TestClient,
     api_database_url: str,
@@ -1603,9 +1522,9 @@ def test_query_documents_tool_description_explains_coverage() -> None:
 
 def test_ask_system_prompt_names_semantic_search_as_a_coverage_tool() -> None:
     """Task 4 gave semantic_search its own `coverage` block (`unembedded`), but
-    the prompt used to name only query_documents and compare_to_series as
-    coverage-carrying tools — so the strongest surface actively implied
-    semantic_search carried none. Pin both halves: the tool is named, and the
+    the prompt used to name only the structured tool(s) as coverage-carrying
+    — so the strongest surface actively implied semantic_search carried none.
+    Pin both halves: the tool is named, and the
     `unembedded` obligation is stated as a MUST, not left to the (weaker)
     tool-description surface alone."""
     from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
@@ -1628,49 +1547,10 @@ def test_ask_system_prompt_pins_the_disclosure_obligation_as_a_MUST() -> None:
     assert "MUST also say so" in ASK_SYSTEM_PROMPT_TEMPLATE
 
 
-def test_compare_to_series_tool_description_explains_coverage() -> None:
-    """Mirrors test_query_documents_tool_description_explains_coverage above,
-    for the tool Task 3 gives a coverage block to. Pins that the description
-    explains what `excluded` means for a SERIES specifically — narrowed to one
-    sender, one kind, one currency — not just that the word "coverage"
-    appears: a regression that watered the description down to "returns a
-    coverage block" with no explanation of what narrowed it would still fail
-    this, since the specific reason names would be gone too.
-
-    All FOUR real reason keys from ``SeriesCoverage``'s docstring
-    (``src/library/series.py``) are asserted individually, not just a subset:
-    an earlier version of this description enumerated only three and silently
-    dropped `manually_excluded`, which a review caught. Asserting all four
-    means a future addition or removal of a reason from `SeriesCoverage`
-    without a matching edit here fails loudly instead of passing on a
-    three-out-of-four coincidence.
-
-    It would NOT catch a rewrite that keeps all four substrings but garbles
-    the sentence connecting them, or inverts what they mean — this is still a
-    containment test, just over the complete vocabulary rather than a
-    sample of it."""
-    from library.ask.engine import TOOLS
-
-    tool = next(tool for tool in TOOLS if tool["name"] == "compare_to_series")
-    description = tool["description"]
-    assert "coverage" in description
-    assert "no_amount" in description
-    assert "other_series_group" in description
-    assert "other_currency" in description
-    assert "manually_excluded" in description
-
-
-def test_disclosure_rule_names_both_coverage_reporting_tools() -> None:
-    """The disclosure rule used to open by naming query_documents alone,
-    which left compare_to_series uncovered even once it started reporting
-    coverage too. Pins that the rule's opening clause now names both tools
-    and no longer claims the block is query_documents-exclusive. This test
-    would catch the rule reverting to single-tool scope (old phrase back, or
-    compare_to_series dropped from the new one); it would NOT catch the MUST
-    obligations later in the same bullet being softened — that regression is
-    covered separately by
-    test_ask_system_prompt_pins_the_disclosure_obligation_as_a_MUST, which
-    this change must leave passing unchanged."""
+def test_disclosure_rule_names_the_coverage_reporting_tools() -> None:
+    """Pins that the disclosure rule's opening clause names query_documents
+    and semantic_search (the two tools whose results carry a `coverage`
+    block) rather than claiming the block is query_documents-exclusive."""
     from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
 
     rules = ASK_SYSTEM_PROMPT_TEMPLATE.split("Rules:")[1]
@@ -1680,4 +1560,4 @@ def test_disclosure_rule_names_both_coverage_reporting_tools() -> None:
     disclosure = " ".join(lines[start:end])
     assert "query_documents results carry" not in disclosure
     assert "query_documents" in disclosure
-    assert "compare_to_series" in disclosure
+    assert "semantic_search" in disclosure

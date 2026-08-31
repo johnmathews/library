@@ -1,9 +1,8 @@
 """Agentic /ask: Claude orchestrates retrieval tools to answer with citations.
 
 Claude is given read tools — ``semantic_search`` (hybrid content retrieval),
-``query_documents`` (structured aggregation over metadata),
-``compare_to_series`` (statistical summary of a recurring-document series),
-and ``get_document`` (full text + comments for one located document) — plus a
+``query_documents`` (structured aggregation over metadata), and
+``get_document`` (full text + comments for one located document) — plus a
 confirmation-gated write tool, ``update_document_metadata``, and decides which
 to call for a question. It must answer only from tool results and cite the
 document ids it used. The loop is bounded (``ask_max_tool_turns``); the
@@ -18,8 +17,7 @@ import re
 from collections.abc import Awaitable, Callable, Iterator
 from dataclasses import dataclass, field, replace
 from datetime import date
-from decimal import Decimal, InvalidOperation
-from typing import Any, Literal, cast
+from typing import Any, cast
 
 from anthropic import AsyncAnthropic
 from anthropic.types import MessageParam, TextBlockParam, ToolParam
@@ -41,7 +39,6 @@ from library.llm import subscription
 from library.models import Document, DocumentComment, DocumentPage, ReviewStatus
 from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, search_reach, semantic_search
-from library.series import serialise_summary, summarize_series
 from library.structured_query import CONCEPT_TO_KIND, query_documents
 
 logger = logging.getLogger(__name__)
@@ -60,9 +57,6 @@ Use the tools to find evidence, then answer:
   provider last year", "how much did I spend on utilities in 2025"). Use for
   who/how-many/how-much/which-over-time questions. Filter by kind, sender,
   recipient, date range, and the user's own projects, matters and tags.
-- compare_to_series: compare a recurring bill to its usual values / last year /
-  trend (e.g. "is this electricity bill higher than usual?"). Takes the same
-  filters.
 - get_document: read one document in full (structured fields, the user's
   comments, and its text) once you have located it via another tool. A
   document's comments are the user's own notes about it and are authoritative
@@ -98,8 +92,8 @@ Rules:
 - Cite the document id(s) your answer relies on, inline like [#42]. If you
   cannot answer from the tool results, say so plainly and cite nothing — do
   not list the documents you looked at and rejected.
-- Some tool results carry a "coverage" block (query_documents,
-  compare_to_series, and semantic_search). If `excluded` is non-empty, the
+- Some tool results carry a "coverage" block (query_documents and
+  semantic_search). If `excluded` is non-empty, the
   rows do NOT account for every matching document, and you MUST say so in
   your answer with the reason and the count — e.g. "EUR 1,240 across 14
   bills; 3 more matched but no amount could be read from them". If
@@ -140,8 +134,9 @@ def _kind_hint() -> str:
     return f"Concept→kind hints: {pairs}."
 
 
-# Filter parameters shared by the two structured tools. They map 1:1 onto
-# ``DocumentFilters``; slugs are the ones the archive-context block lists.
+# Filter parameters shared by the structured tool (query_documents) and
+# semantic_search's scoping. They map 1:1 onto ``DocumentFilters``; slugs are
+# the ones the archive-context block lists.
 _FILTER_PROPERTIES: dict[str, Any] = {
     "kind": {"type": "string", "description": "Kind slug filter, e.g. utility-bill."},
     "sender_contains": {"type": "string", "description": "Substring of sender name."},
@@ -174,12 +169,7 @@ _FILTER_PROPERTIES: dict[str, Any] = {
 # `review_status` lives in its own dict rather than `_FILTER_PROPERTIES` because
 # only `query_documents` accepts it as a filter and can report the drop: its
 # `coverage` block discloses a `filtered_review_status` exclusion (see
-# `structured_query.py`). `compare_to_series` reports its own `coverage`
-# block too, but for a different set of reasons — `summarize_series` narrows
-# to one sender/kind/currency, so its `excluded` covers amountless documents,
-# non-dominant groups, and non-dominant currency buckets, none of which is a
-# `review_status` filter — so offering that property here would promise a
-# filter the tool cannot honour or explain.
+# `structured_query.py`).
 _REVIEW_STATUS_PROPERTY: dict[str, Any] = {
     "review_status": {
         "type": "string",
@@ -274,34 +264,6 @@ TOOLS: list[dict[str, Any]] = [
                 },
             },
             "required": ["aggregate"],
-        },
-    },
-    {
-        "name": "compare_to_series",
-        "description": (
-            "Compare a recurring document (same sender + kind) to its usual "
-            "values. Use for 'more/less than usual', 'compared to last year', "
-            "'are my bills going up'. Identify the series via kind + sender. "
-            "Returns distribution stats, a reference-vs-usual verdict, a trend, "
-            "and a year-over-year comparison. "
-            "The result carries a `coverage` block on the same terms as "
-            "query_documents: a series is deliberately narrowed to one sender, "
-            "one kind and one currency, so `excluded` reports the documents "
-            "that narrowing removed — `no_amount`, `other_series_group`, "
-            "`other_currency`, and `manually_excluded` (a user override). "
-            "A 'usual' band computed over 3 of 11 matching documents is not "
-            "a fact about all 11. " + _kind_hint()
-        ),
-        "input_schema": {
-            "type": "object",
-            "properties": {
-                **_FILTER_PROPERTIES,
-                "reference": {
-                    "type": "string",
-                    "description": "'latest' (default) to compare the newest bill, or a number.",
-                },
-            },
-            "required": [],
         },
     },
     {
@@ -642,10 +604,8 @@ def _review_status_arg(value: object) -> ReviewStatus | None:
 
     An unrecognised value degrades to "no filter" rather than raising: the JSON
     schema's ``enum`` steers the model but does not bind it, and a hallucinated
-    status must not turn into a 500 inside the tool loop. This keeps
-    ``_filters_from_args`` usable as-is by ``compare_to_series`` (whose schema
-    does not even offer ``review_status`` — see ``_REVIEW_STATUS_PROPERTY``).
-    ``query_documents`` additionally validates the raw value itself, via
+    status must not turn into a 500 inside the tool loop. ``query_documents``
+    additionally validates the raw value itself, via
     ``_invalid_review_status`` below, so a bad value there is surfaced to the
     model as an error instead of silently degrading like this.
     """
@@ -664,8 +624,9 @@ def _invalid_review_status(value: object) -> str | None:
     is not a valid :class:`ReviewStatus`, else ``None``.
 
     Only ``_run_query_documents`` calls this. Unlike ``_review_status_arg``
-    (used by ``_filters_from_args`` for both structured tools), this does not
-    swallow the bad value: ``query_documents`` has a `coverage` block that can
+    (used by ``_filters_from_args`` for every caller, structured or not),
+    this does not swallow the bad value: ``query_documents`` has a `coverage`
+    block that can
     describe what a filter removed, so it can also tell the model outright
     that ``review_status`` was not understood — silently returning "no
     filter" would hand back the entire archive under a filtered-sounding
@@ -725,26 +686,6 @@ async def _run_query_documents(
     # `dict[str, Any]` because a caller could insert a key the declaration
     # forbids.
     return dict(result)
-
-
-async def _run_compare_to_series(
-    session: AsyncSession, settings: Settings, args: dict[str, Any], cited: set[int]
-) -> dict[str, Any]:
-    filters = _filters_from_args(args)
-    raw_reference = args.get("reference", "latest")
-    reference: Decimal | Literal["latest"]
-    if raw_reference in (None, "latest", ""):
-        reference = "latest"
-    else:
-        try:
-            reference = Decimal(str(raw_reference))
-        except (InvalidOperation, ValueError):
-            reference = "latest"
-    summary = await summarize_series(
-        session, filters=filters, settings=settings, reference=reference
-    )
-    cited.update(summary.document_ids)
-    return serialise_summary(summary)
 
 
 def _preview_current(document: Document, field: str) -> Any:
@@ -939,10 +880,6 @@ async def _dispatch_tool(
         query_result = await _run_query_documents(session, args, cited)
         editable_ids.update(cited)
         return query_result
-    if name == "compare_to_series":
-        result = await _run_compare_to_series(session, settings, args, cited)
-        editable_ids.update(cited)
-        return result
     if name == "update_document_metadata":
         return await _run_update_document(session, settings, args, editable_ids, previewed_ids)
     if name == "get_document":

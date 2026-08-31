@@ -1,10 +1,10 @@
 """Synthetic scenarios that drive the disclosure eval's live command.
 
 Each :class:`Scenario` names a small set of synthetic documents to seed, a
-natural-language question expected to route to a coverage-carrying tool
-(``query_documents`` or ``compare_to_series`` — see ``ask/engine.py``), and
-whether the tool's ``coverage`` block is expected to force a disclosure in the
-answer. ``library.cli.eval_disclosure`` seeds each scenario's documents
+natural-language question expected to route to the coverage-carrying
+``query_documents`` tool (see ``ask/engine.py``), and whether the tool's
+``coverage`` block is expected to force a disclosure in the answer.
+``library.cli.eval_disclosure`` seeds each scenario's documents
 (``session.add`` + ``flush``, never ``commit`` — see that command's
 docstring), drives ``run_ask`` for real, and scores the answer with
 ``library.ask.disclosure_eval.score``.
@@ -16,9 +16,9 @@ a real archive's senders and so a human skimming query logs can tell at a
 glance these documents are synthetic.
 
 The exclusion-reason strings used below (``no_amount``, ``quote_not_spend``,
-``over_limit``, ``other_currency``) are the exact keys ``structured_query.py``
-and ``series.py`` write into ``Coverage.excluded`` — verified against that
-code, not assumed from the eval's own brief.
+``over_limit``) are the exact keys ``structured_query.py`` writes into
+``Coverage.excluded`` — verified against that code, not assumed from the
+eval's own brief.
 """
 
 from __future__ import annotations
@@ -45,11 +45,12 @@ _LIST_DEFAULT_LIMIT: int = inspect.signature(query_documents).parameters["limit"
 class SeedDoc:
     """One synthetic document to seed for a :class:`Scenario`.
 
-    Only the columns the eval's questions route on: ``structured_query.py``'s
-    filters (sender, kind, date, amount) and ``series.py``'s series identity
-    (sender + kind + currency). ``source`` is fixed to ``DocumentSource.UPLOAD``
-    by the CLI command for every seeded row — it plays no part in any
-    scenario's routing, so it is not worth varying here.
+    Only the columns the eval's questions route on — ``structured_query.py``'s
+    filters (sender, kind, date, amount) — plus ``currency``, which every
+    document needs a real value for but which no scenario here filters or
+    groups on. ``source`` is fixed to ``DocumentSource.UPLOAD`` by the CLI
+    command for every seeded row — it plays no part in any scenario's
+    routing, so it is not worth varying here.
     """
 
     sender_name: str
@@ -214,57 +215,8 @@ SCENARIOS: tuple[Scenario, ...] = (
         docs=_receipts("Voltway Records (disclosure-eval fixture)", _LIST_DEFAULT_LIMIT + 5),
         expect_disclosure=True,
     ),
-    # Exercises `SeriesCoverage`'s `other_currency` exclusion (series.py): the
-    # dominant currency bucket (3 EUR bills) meets `series_min_documents` and
-    # is summarised; the 2 USD bills are a different series identity and must
-    # be disclosed as dropped, not silently absorbed or silently ignored.
-    Scenario(
-        name="series-other-currency",
-        question=(
-            "Is my latest utility bill from Nimbus Power (disclosure-eval "
-            "fixture) higher than usual?"
-        ),
-        docs=(
-            SeedDoc(
-                "Nimbus Power (disclosure-eval fixture)",
-                "utility-bill",
-                date(2024, 10, 1),
-                "70.00",
-                "EUR",
-            ),
-            SeedDoc(
-                "Nimbus Power (disclosure-eval fixture)",
-                "utility-bill",
-                date(2025, 1, 1),
-                "75.00",
-                "EUR",
-            ),
-            SeedDoc(
-                "Nimbus Power (disclosure-eval fixture)",
-                "utility-bill",
-                date(2025, 4, 1),
-                "120.00",
-                "EUR",
-            ),
-            SeedDoc(
-                "Nimbus Power (disclosure-eval fixture)",
-                "utility-bill",
-                date(2024, 11, 1),
-                "90.00",
-                "USD",
-            ),
-            SeedDoc(
-                "Nimbus Power (disclosure-eval fixture)",
-                "utility-bill",
-                date(2025, 2, 1),
-                "95.00",
-                "USD",
-            ),
-        ),
-        expect_disclosure=True,
-    ),
     # Control: nothing is dropped for any reason, so a correct answer has
-    # nothing to disclose. Without this, an eval built only from the five
+    # nothing to disclose. Without this, an eval built only from the four
     # scenarios above would equally reward a model that hedges on every
     # answer regardless of whether anything was actually incomplete.
     Scenario(
