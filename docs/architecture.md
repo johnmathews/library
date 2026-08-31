@@ -376,7 +376,6 @@ top-level modules.
 | --- | --- |
 | `src/library/email_ingest.py` | Email-in ingestion: poll an IMAP mailbox and ingest its attachments. |
 | `src/library/models.py` | SQLAlchemy 2.0 declarative models — the data model in §1.3. |
-| `src/library/series.py` | Recurring-document series detection and comparative statistics. |
 | `src/library/schemas.py` | Pydantic request/response schemas for the HTTP API. |
 | `src/library/cli.py` | The `library` administration CLI (typer): accounts, imports, sweeps. |
 | `src/library/jobs.py` | Procrastinate job queue wiring and the document-processing pipeline (§1.2). |
@@ -384,7 +383,6 @@ top-level modules.
 | `src/library/mcp_server.py` | The MCP server: FastMCP tools over the archive (§1.4). |
 | `src/library/notifications.py` | Pushover push notifications (per-user, opt-in). |
 | `src/library/search.py` | Shared document query building for the REST API and the MCP server. |
-| `src/library/series_insight.py` | Precomputed, cached LLM prose description for a series. |
 | `src/library/consume.py` | Consume-folder watcher: ingest files dropped into a watched directory. |
 | `src/library/ingest.py` | Ingestion service: bytes in, `Document` row + queued job out. |
 | `src/library/config.py` | Settings, loaded from the environment with the `LIBRARY_` prefix. |
