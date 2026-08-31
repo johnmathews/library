@@ -375,12 +375,19 @@ def test_series_stack_tables_are_dropped(migrated_database_url: str) -> None:
 #: defaults, every constraint's rendered definition (so `NULLS NOT DISTINCT`,
 #: `ON DELETE` actions and CHECK bodies are all in scope), and every index.
 _SERIES_STACK_SCHEMA_QUERIES: dict[str, str] = {
+    # `ordinal_position` is **selected**, not just ordered by: without it in the
+    # row, two tables holding the same columns in a different order compare
+    # equal, and a reordered `create_table` slips through. `udt_name` and
+    # `collation_name` cost nothing and close the same class of gap (a `char(3)`
+    # rebuilt as `varchar(3)` shares a `data_type`; a column rebuilt under a
+    # different collation reorders text silently).
     "columns": """
-        SELECT table_name, column_name, data_type, is_nullable, column_default,
-               character_maximum_length, numeric_precision, numeric_scale
+        SELECT table_name, ordinal_position, column_name, data_type, udt_name,
+               is_nullable, column_default, character_maximum_length,
+               numeric_precision, numeric_scale, collation_name
         FROM information_schema.columns
         WHERE table_name = ANY(:tables)
-        ORDER BY 1, 2
+        ORDER BY table_name, ordinal_position
     """,
     "constraints": """
         SELECT rel.relname, con.conname, con.contype, pg_get_constraintdef(con.oid)

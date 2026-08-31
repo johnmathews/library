@@ -467,9 +467,9 @@ async def _defer_best_effort(
     These deferrals are correctly best-effort — the document's own work is
     already committed and a queue hiccup must never strand it in ``failed``. But
     a ``logger.warning`` is not a record: logs rotate, nobody greps them, and
-    the *observable* result was a document that quietly never got its thumbnail,
-    its matter classification or its Smart Group membership, with nothing on the
-    document to say so. The retry policy does not help here — the job never got
+    the *observable* result was a document that quietly never got its thumbnail
+    or its matter classification — the two deferrals that take this path — with
+    nothing on the document to say so. The retry policy does not help here — the job never got
     queued, so there is nothing to retry.
 
     So the failure is also written as a ``job_defer_failed`` ingestion event,
