@@ -1561,3 +1561,137 @@ def test_disclosure_rule_names_the_coverage_reporting_tools() -> None:
     assert "query_documents results carry" not in disclosure
     assert "query_documents" in disclosure
     assert "semantic_search" in disclosure
+
+
+def test_ask_refuses_an_allocated_documents_amount_edit_without_a_500(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal has to survive the whole turn, not just the tool call.
+
+    Editing `amount_total` on a document whose spend lines are allocated
+    against the old amount is refused by migration 0035's deferred mirror
+    trigger at COMMIT, and `ask/engine.py` translates that into a tool-result
+    error. Translating it is only half the job: the refusal path rolls the
+    session back, and a rollback expires every ORM object this request holds —
+    so the route must not read `thread.id` off the expired object afterwards.
+    Executed before this test existed, it did: the tool returned its refusal,
+    the model wrote an answer, and the request then died with MissingGreenlet
+    on `AskTurn(thread_id=thread.id)` — a 500 again, one line further on.
+
+    Two turns, because a confirmed write is only reachable once an EARLIER
+    turn's preview is in the thread history.
+    """
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            # Invented amounts — this repository is public.
+            document_id = connection.execute(
+                text(
+                    "INSERT INTO documents"
+                    " (sha256, mime_type, status, source, title, amount_total, currency,"
+                    "  document_date)"
+                    " VALUES (:sha, 'application/pdf', 'indexed', 'upload', 'Allocated',"
+                    "  CAST('100.00' AS numeric), 'EUR', :d) RETURNING id"
+                ),
+                {"sha": hashlib.sha256(b"ask-allocated").hexdigest(), "d": date(2025, 1, 1)},
+            ).scalar_one()
+            for amount in ("60.00", "40.00"):
+                connection.execute(
+                    text(
+                        "INSERT INTO spend_lines (document_id, amount, origin)"
+                        " VALUES (:doc, CAST(:amount AS numeric), 'manual')"
+                    ),
+                    {"doc": document_id, "amount": amount},
+                )
+    finally:
+        engine.dispose()
+
+    # Turn one: surface the document, then propose the edit. The preview lands
+    # in this turn's recorded messages, which is what authorises a confirm later.
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(name="get_document", input={"document_id": document_id}, id="r1")
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="update_document_metadata",
+                        input={
+                            "document_id": document_id,
+                            "amount_total": "250.00",
+                            "confirmed": False,
+                        },
+                        id="p1",
+                    )
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"Shall I change it? [#{document_id}]")],
+                usage=_Usage(6, 3),
+            ),
+        ],
+    )
+    first = api_client.post("/api/ask", json={"question": "the total looks wrong?"})
+    assert first.status_code == 200, first.text
+    thread_id = first.json()["thread_id"]
+
+    # Turn two: the user agrees, the model confirms, and the trigger refuses.
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="update_document_metadata",
+                        input={
+                            "document_id": document_id,
+                            "amount_total": "250.00",
+                            "confirmed": True,
+                        },
+                        id="w1",
+                    )
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"I could not change it. [#{document_id}]")],
+                usage=_Usage(6, 3),
+            ),
+        ],
+    )
+    second = api_client.post(
+        "/api/ask", json={"question": "yes, change it", "thread_id": thread_id}
+    )
+
+    assert second.status_code == 200, second.text
+    # The model was told why, in the tool result it got back.
+    assert "spend lines" in str(fake.messages.calls[1]["messages"])
+
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            still = connection.execute(
+                text("SELECT amount_total FROM documents WHERE id = :d"), {"d": document_id}
+            ).scalar_one()
+            assert str(still) == "100.00", "the refused edit must not have landed"
+            # The session survived the rollback well enough to record the turn.
+            turns = connection.execute(
+                text("SELECT count(*) FROM ask_turns WHERE thread_id = :t"), {"t": thread_id}
+            ).scalar_one()
+            assert turns == 2
+    finally:
+        engine.dispose()

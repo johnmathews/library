@@ -170,7 +170,17 @@ async def ask(
             raise HTTPException(status_code=404, detail="Conversation not found.")
         thread = existing
 
-    history = await _history_messages(session, thread.id, settings.ask_history_turns)
+    # Held as a plain int for the rest of the request. The write tool can roll
+    # the session back — an allocated document's `amount_total` edit is refused
+    # at COMMIT (`ask/engine.py`, docs/charts.md §10.1) — and a rollback expires
+    # every ORM object this request holds, `thread` included. Reading
+    # `thread.id` after that is a sync attribute load outside the greenlet
+    # context, which raises MissingGreenlet: it would turn a refusal the model
+    # has already explained to the user back into the 500 the guard exists to
+    # remove.
+    thread_id = thread.id
+
+    history = await _history_messages(session, thread_id, settings.ask_history_turns)
     # Who is asking and what the archive calls things — see library.ask.context.
     archive_context = render_archive_context(await load_archive_context(session, user))
 
@@ -267,7 +277,7 @@ async def ask(
 
     session.add(
         AskTurn(
-            thread_id=thread.id,
+            thread_id=thread_id,
             query=request.question,
             answer=result.answer,
             model=result.model,
@@ -293,7 +303,7 @@ async def ask(
         ],
         used_tools=result.used_tools,
         cost_usd=turn_cost,
-        thread_id=thread.id,
+        thread_id=thread_id,
     )
 
 
