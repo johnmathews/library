@@ -1,4 +1,5 @@
 import { beforeAll, beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter } from 'vue-router'
 
@@ -14,6 +15,13 @@ const fetchChartData = vi.fn()
 const fetchCell = vi.fn()
 const fetchFooterBucket = vi.fn()
 const listCharts = vi.fn()
+// `updateChart` and `postPreview` belong here for a reason that is not
+// obvious: the factory spreads `importOriginal()`, so a write function left
+// out of it is NOT undefined — it is the real one, which issues an `apiFetch`
+// under jsdom. A test asserting the editor saved would then pass or fail for
+// reasons unrelated to the editor.
+const updateChart = vi.fn()
+const postPreview = vi.fn()
 vi.mock('@/api/spending', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/api/spending')>()),
   fetchChart: (...args: unknown[]) => fetchChart(...args),
@@ -21,6 +29,8 @@ vi.mock('@/api/spending', async (importOriginal) => ({
   fetchCell: (...args: unknown[]) => fetchCell(...args),
   fetchFooterBucket: (...args: unknown[]) => fetchFooterBucket(...args),
   listCharts: (...args: unknown[]) => listCharts(...args),
+  updateChart: (...args: unknown[]) => updateChart(...args),
+  postPreview: (...args: unknown[]) => postPreview(...args),
 }))
 
 const fetchFacets = vi.fn()
@@ -218,6 +228,10 @@ function selectionLine(wrapper: VueWrapper) {
 
 describe('SpendingWorkspaceView', () => {
   beforeEach(() => {
+    // The drill panel's label editor reads the facet vocabulary through a
+    // Pinia-backed shared cache, so this view needs an active pinia. Fresh per
+    // test, so one test's cached vocabulary cannot satisfy the next one's load.
+    setActivePinia(createPinia())
     fetchChart.mockResolvedValue(chart())
     fetchChartData.mockResolvedValue(DATA)
     fetchFacets.mockResolvedValue([])
@@ -235,6 +249,8 @@ describe('SpendingWorkspaceView', () => {
       colour: null,
     })
     fetchFooterBucket.mockResolvedValue({ bucket: 'unclassified', total: 2, documents: [] })
+    updateChart.mockResolvedValue(chart())
+    postPreview.mockResolvedValue(DATA)
   })
 
   afterEach(() => {

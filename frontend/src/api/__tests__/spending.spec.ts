@@ -1,6 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import type { CellBody, ChartData } from '../spending'
-import { cellArgs, fetchCell, fetchChartData, fetchFooterBucket, listCharts } from '../spending'
+import {
+  cellArgs,
+  fetchCell,
+  fetchChartData,
+  fetchFooterBucket,
+  listCharts,
+  postPreview,
+} from '../spending'
 
 describe('spending API', () => {
   const fetchMock = vi.fn()
@@ -134,5 +141,36 @@ describe('spending API', () => {
     respondWith(CELL)
     await fetchCell(1, '2026-01-01', null, {})
     expect(String(fetchMock.mock.calls[0]![0])).not.toContain('split_value=')
+  })
+
+  // --- preview ---------------------------------------------------------------
+
+  const RULE = { all: [{ facet: 'category', op: 'in' as const, values: ['software'] }] }
+
+  it('posts a rule to the preview route and returns the chart data', async () => {
+    respondWith({ ...DATA, chart_id: null, total: '41.00' })
+    const data = await postPreview({ rule: RULE, display_currency: 'EUR' })
+    const [url, init] = fetchMock.mock.calls[0]!
+    expect(String(url)).toContain('/api/spending/preview')
+    expect((init as RequestInit).method).toBe('POST')
+    expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({ rule: RULE })
+    expect(data.total).toBe('41.00')
+  })
+
+  // The body-field counterpart of the `split=` query trap above. Here an absent
+  // key cannot be misread — there is no saved chart to default from — but the
+  // request should still state the axis rather than leave it implied.
+  it('sends split explicitly as null rather than omitting the key', async () => {
+    respondWith({ ...DATA, chart_id: null })
+    await postPreview({ rule: RULE, display_currency: 'EUR', split: null })
+    const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body))
+    expect('split' in body).toBe(true)
+    expect(body.split).toBeNull()
+  })
+
+  it('accepts a preview whose chart_id is null', async () => {
+    respondWith({ ...DATA, chart_id: null })
+    const data = await postPreview({ rule: RULE, display_currency: 'EUR' })
+    expect(data.chart_id).toBeNull()
   })
 })

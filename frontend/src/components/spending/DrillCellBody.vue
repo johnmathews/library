@@ -37,7 +37,8 @@ import { onMounted, ref, watch } from 'vue'
 import { RouterLink } from 'vue-router'
 import { fetchCell, type CellBody, type ChartArgs } from '@/api/spending'
 import { ApiError } from '@/api/client'
-import { fetchDocumentLabels, fetchFacets, type FacetRef } from '@/api/facets'
+import { fetchDocumentLabels } from '@/api/facets'
+import { useFacetVocabulary } from '@/composables/facetVocabulary'
 import { formatMoney } from '@/spending/money'
 import { formatDate } from '@/utils/documentFormat'
 import FacetEditor from '@/components/facets/FacetEditor.vue'
@@ -74,16 +75,13 @@ async function load(): Promise<void> {
 onMounted(load)
 watch(() => [props.chartId, props.period, props.splitValue, props.args], load)
 
-// The controlled facet vocabulary doesn't vary per document (mirrors
-// DocumentDetailView's own load), so it is fetched once.
-const facets = ref<FacetRef[]>([])
-onMounted(async () => {
-  try {
-    facets.value = await fetchFacets()
-  } catch {
-    // Best-effort: FacetEditor renders no facets when this fails.
-  }
-})
+// The controlled facet vocabulary doesn't vary per document, and this is not
+// the only consumer on the screen: the workspace's rule editor needs it too.
+// Sharing one cache means one request and — the part that matters — ONE
+// snapshot, so a value merged away mid-session cannot exist here and not
+// there. Best-effort as before: FacetEditor renders no facets on failure.
+const { facets, ensureLoaded: ensureVocabulary } = useFacetVocabulary()
+onMounted(ensureVocabulary)
 
 // Per-document labels, fetched lazily as documents appear in a loaded cell.
 const labelsByDoc = ref<Record<number, Record<string, string>>>({})

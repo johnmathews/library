@@ -297,3 +297,41 @@ export function fetchFooterBucket(
 export function draftQuestion(body: DraftIn): Promise<Draft> {
   return apiFetch<Draft>('/api/spending/draft', { method: 'POST', body })
 }
+
+/**
+ * A rule to answer without saving it — the rule editor's preview.
+ *
+ * `split` is the trap here too, but for the opposite reason to `windowQuery`'s.
+ * There it is a *query* parameter and an absent key means "use the chart's
+ * default"; here it is a body field and there is no saved chart to default
+ * from, so `null` unambiguously means "no split axis". Callers should still
+ * send the key explicitly (`split: draft || null`) rather than omitting it —
+ * not because the API would read an absent key differently, but so the request
+ * body always states the axis and never leaves a reader guessing which rule
+ * applies.
+ *
+ * `from`/`to` rather than `DraftIn`'s `since`/`until`: the editor hands through
+ * the workspace toolbar's own `from`/`to` refs, so a preview answers the window
+ * the owner is actually looking at. A preview computed over all time while the
+ * chart beneath it shows one quarter would report a different number for the
+ * same rule, which is the confusion this whole feature exists to remove.
+ */
+export interface PreviewIn {
+  rule: Rule
+  display_currency: string
+  grain?: Grain
+  split?: string | null
+  from?: string
+  to?: string
+}
+
+/**
+ * POST /api/spending/preview — answer a rule that has not been saved.
+ *
+ * Returns the same `ChartData` shape as `/data`, with `chart_id: null` because
+ * there is no chart behind it. Unlike `draftQuestion` this costs no model call:
+ * it answers a rule the caller already has rather than deriving one from words.
+ */
+export function postPreview(body: PreviewIn): Promise<ChartData> {
+  return apiFetch<ChartData>('/api/spending/preview', { method: 'POST', body })
+}
