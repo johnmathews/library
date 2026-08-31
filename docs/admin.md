@@ -1,7 +1,7 @@
 # Admin role & admin views
 
-**Status:** active. **Last updated:** 2026-08-31 (the legacy series stack was deleted: currency normalisation is now a single `UPDATE documents` with no conflict case, so the `409` and its conflict list are gone from §1.2.5; the confirm step stays). Earlier: 2026-08-12 (documentation verification sweep: `/matters` is a normal route with admin-gated *writes*, not an admin-only page; the Metadata tab covers senders, recipients, kinds, currencies and FX, not recipients alone).
-**Last verified:** 2026-08-31 — method: partial, scoped to §1.2.5 and the `/currencies/normalize` route-table row. Re-read `src/library/currencies.py` and `src/library/api/admin/fx.py` end to end (the handler now raises only 422 and 400; `NormalizeResult.status` has no conflict member) and the currency card in `frontend/src/views/admin/AdminMetadataPanel.vue` (the confirm box and its `currency-normalize-confirm` control still exist; nothing renders a conflict list). Nothing else was re-checked this pass; the rest carries forward the 2026-08-12 verification, whose method was: checked every endpoint, verb, status code and 409 body key against `src/library/api/admin/*.py`, `require_admin` and its mount in `app.py`, the `user`/`sweep-matters` CLI commands, and the router guard, tab list and per-row affordances in `frontend/src/views/admin/**` and `AppSidebar.vue`.
+**Status:** active. **Last updated:** 2026-08-31 (the legacy series stack was deleted: currency normalisation is now a single `UPDATE documents` with no conflict case, so the `409` and its conflict list are gone from §1.2.5; the confirm step stays. **Fix round 1:** §1.2.5 said the override tables "went with the legacy series stack", which reads as the drop migration having shipped — corrected to say the code that read them went, and that the tables are orphaned until the drop). Earlier: 2026-08-12 (documentation verification sweep: `/matters` is a normal route with admin-gated *writes*, not an admin-only page; the Metadata tab covers senders, recipients, kinds, currencies and FX, not recipients alone).
+**Last verified:** 2026-08-31 — method: partial, scoped to §1.2.5 and the `/currencies/normalize` route-table row. Re-read `src/library/currencies.py` and `src/library/api/admin/fx.py` end to end (the handler now raises only 422 and 400; `NormalizeResult.status` has no conflict member) and the currency card in `frontend/src/views/admin/AdminMetadataPanel.vue` (the confirm box and its `currency-normalize-confirm` control still exist; nothing renders a conflict list). **Fix round 1:** the corrected §1.2.5 sentence was checked against `architecture.md` §1.9's orphaned-tables note rather than rewritten from memory, and the "cannot collide however many rows they still hold" clause follows from `normalize_currency` issuing exactly one `UPDATE documents` — re-read to confirm it names no other table. Nothing else was re-checked this pass; the rest carries forward the 2026-08-12 verification, whose method was: checked every endpoint, verb, status code and 409 body key against `src/library/api/admin/*.py`, `require_admin` and its mount in `app.py`, the `user`/`sweep-matters` CLI commands, and the router guard, tab list and per-row affordances in `frontend/src/views/admin/**` and `AppSidebar.vue`.
 
 The library is a multi-user "named family accounts over one shared library"
 (see [architecture.md](architecture.md) §1.5). On top of that, a single boolean
@@ -185,10 +185,13 @@ There is no longer a conflict case. The rename used to also rewrite
 `authored_series`, `authored_series_suggestions` and the `series_insights` cache,
 and to **refuse with a `409`** when it would collide in the two user-authored
 override tables — a currency was part of series identity, so a rename could
-destroy a hand-pinned membership or title. Those tables and the series identity
-they keyed went with the legacy series stack, so the only remaining writer is
+destroy a hand-pinned membership or title. The **code** that read and rewrote
+those tables went with the legacy series stack, so the only remaining writer is
 `documents` and the operation cannot conflict: the `409` and its conflict list
-are gone from both the route and the UI.
+are gone from both the route and the UI. The tables themselves have not been
+dropped yet — they are orphaned until the drop migration, see
+[architecture.md](architecture.md) §1.9 — but nothing reads them, so a rename
+cannot collide in them however many rows they still hold.
 
 Codes are validated as `^[A-Z]{3}$` (upper-cased first); a no-op rename (same
 code) is a `400`, and a malformed code a `422`. The admin UI still shows a
