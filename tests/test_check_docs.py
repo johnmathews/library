@@ -507,20 +507,19 @@ class TestWorkUnitCitations:
             range(1, 18)
         )
 
-    def test_every_citation_in_the_repo_resolves(self) -> None:
-        """The W14 acceptance criterion, as a standing gate."""
-        units = check_docs.parse_plan_units(
-            (check_docs.REPO_ROOT / check_docs.WORK_UNIT_PLAN).read_text(encoding="utf-8")
-        )
-        offenders: list = []
-        for path in check_docs.gated_documents():
-            relative = str(path.relative_to(check_docs.REPO_ROOT))
-            offenders.extend(
-                check_docs.check_work_unit_citations(
-                    relative, path.read_text(encoding="utf-8"), units
-                )
-            )
-        assert offenders == [], [v.render() for v in offenders]
+    # `test_every_citation_in_the_repo_resolves` used to live here: it walked
+    # `gated_documents()` applying `check_work_unit_citations` to each, and
+    # asserted no offenders. That is precisely what `check_docs.py` itself does
+    # over the same document set, and `docs-stamps` runs it unconditionally on
+    # every push and PR — so the test was a second copy of a live gate, and the
+    # one it duplicated is the one that actually blocks a merge.
+    #
+    # Its name also promised far more than it delivered: "every citation in the
+    # repo" was really "every citation in the 21 stamped documents". A bogus
+    # `(W99)` in a journal entry passed it, and still does — journal entries are
+    # deliberately outside the citation gate, and the test's name was the only
+    # thing suggesting otherwise. Deleting it removed a duplicate; it did not
+    # remove coverage. See journal/260901-ci-gate-hardening.md.
 
 
 CONFIG_SOURCE = """
