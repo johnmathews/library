@@ -5,11 +5,15 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-175 entries.
+176 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
 CI checks it is current.
+
+## September 2026
+
+- **2026-09-01** — [Editing a saved chart's rule](260901-chart-rule-editor.md)
 
 ## August 2026
 
