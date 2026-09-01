@@ -143,6 +143,32 @@ describe('ChartRuleEditor', () => {
     expect(rows(wrapper)).toHaveLength(2)
   })
 
+  // Vue sets selectedIndex = -1 when the bound value matches no <option>, so a
+  // state with no matching option renders as a BLANK control. A newly added row
+  // holds facet '' — the most common thing this editor does — so that state
+  // needs an option of its own.
+  it('gives a newly added row a placeholder option rather than rendering blank', async () => {
+    const wrapper = await mountEditor()
+    await wrapper.get('[data-testid="rule-add-clause"]').trigger('click')
+    await flushPromises()
+
+    const select = wrapper.get('[data-testid="rule-row-1-facet"]')
+    expect(select.findAll('option')[0]!.element.value).toBe('')
+    expect((select.element as HTMLSelectElement).selectedIndex).toBe(0)
+  })
+
+  // The same staleness the clause rows handle, one control over: a chart's
+  // split axis can name a facet the vocabulary has since lost. Rendering blank
+  // would hide which axis is broken, and Apply would resend the stale key and
+  // earn a 422 naming something never shown.
+  it('renders a split axis missing from the vocabulary as a flagged option', async () => {
+    const wrapper = await mountEditor({ default_split: 'gone_facet' })
+
+    const select = wrapper.get('[data-testid="rule-editor-split"]')
+    expect(select.findAll('option')[0]!.text()).toContain('no longer in the vocabulary')
+    expect((select.element as HTMLSelectElement).value).toBe('gone_facet')
+  })
+
   it('removes a row without touching its siblings', async () => {
     const wrapper = await mountEditor({
       rule: {

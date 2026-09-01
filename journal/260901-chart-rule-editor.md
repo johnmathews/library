@@ -193,11 +193,24 @@ one proving a nested `frontend/` pathspec resolves against a real repository
 gated doc still names a `frontend/` path, so deleting a line to quiet CI reds a
 test instead of silently reopening the hole.
 
-`frontend.md`'s pathspec is deliberately narrow — `views/`, `router/index.ts`,
-`components/layout/` — not `frontend/src/**`. A pathspec that fires on every
-frontend PR trains people to re-stamp mechanically, which is the failure the
-gate's own source argues against. It buys the enumerations, not the whole
-1,092-line document, and its stamp says so.
+`frontend.md`'s pathspec is deliberately narrower than `frontend/src/**`, on the
+reasoning that a pathspec firing on every frontend PR trains people to re-stamp
+mechanically — the failure the gate's own source argues against. It buys the
+enumerations, not the whole document.
+
+**The first draft got that wrong in an instructive way.** It named `views/`,
+`router/index.ts` and `components/layout/` — and not one of those reaches
+`ChartRuleEditor.vue`, `spending/ruleText.ts` or `composables/facetVocabulary.ts`,
+which are precisely the three modules this change added to the enumerations the
+pathspec was chosen to protect. The line would have been decoration: the gate
+still could not have flagged this document for the edit it was making. Caught by
+the wrap-up's documentation audit, not by any check. `components/spending/`,
+`spending/` and `composables/` were added.
+
+Worth naming the shape, because "narrow on purpose" and "too narrow to work"
+look identical from inside: a pathspec has to be checked against the files the
+document actually *enumerates*, not against a general sense of the document's
+subject.
 
 **Then the gate was watched failing**, because a gate only ever seen green has
 not been seen:
@@ -248,7 +261,46 @@ with `expected 1 to be 2`; and filtering the editor's value list against the
 live vocabulary reddens the unresolvable-value test with the message *"the lost
 value must still be offered, not filtered away"*.
 
-## 11. What is not verified
+## 11. The preview ignored its window, and three tests agreed it did not
+
+The wrap-up's documentation audit found a **shipped defect**, not doc drift.
+
+`postPreview` sent `from`/`to`. `PreviewIn` declared `since`/`until`, with no
+alias. Pydantic's default is `extra="ignore"`, so both fields were dropped in
+silence and **every preview was answered over all time** — while the chart
+underneath it showed whatever range the owner had set. The two numbers would
+disagree for the same rule, which is the exact confusion the feature exists to
+remove, and the docblock on `postPreview` claimed the opposite in so many words.
+
+Why nothing caught it, which is the part worth keeping:
+
+1. The component test is named *"previews against the window the workspace is
+   showing"* — but it mocks `postPreview` and asserts the **argument object**.
+   It cannot see the wire, so it passes against a backend that ignores what it
+   sends. A test can name the property it is not testing.
+2. The API-client test asserted `rule` and `split` and never the dates.
+3. No backend test posted `from`/`to`; the one date test used the field names,
+   which bound correctly.
+4. The route returns **200 with a plausible chart** either way. There is no
+   error, no log line, and no shape difference — only a wrong number, and only
+   when the owner had set a range.
+
+The fix is aliases (`Field(alias="from")`) plus `extra="forbid"` on `PreviewIn`.
+The `forbid` is the load-bearing half: removing the aliases now turns the silent
+drop into `extra_forbidden` 422s naming `from` and `to`, which was observed. Two
+tests were added — one posting `from`/`to` and asserting the **answer** shrinks
+(not merely that the request was accepted), one asserting an unknown body field
+is a 422 — plus a client test asserting what reaches the wire.
+
+**It was flagged in the plan and not acted on.** W6's "External action" field
+carried exactly this question — *does the route take `from`/`to` or
+`since`/`until`?* — to be confirmed with the backend unit's implementer. Both
+units were implemented in the same session, so there was no hand-off to force
+the answer, and the field was never revisited. A question you write down for
+someone else and then answer implicitly, by writing both sides yourself, is not
+answered.
+
+## 12. What is not verified
 
 Two e2e steps were added — the arm/add/cancel journey in `spending-board.spec.ts`
 and an overflow assertion with the editor and its values popover open in
@@ -266,3 +318,30 @@ real — one failure each run, in a *different* spec the branch never touched
 repeated `Failed to start forks worker`. Running with `--maxWorkers=2` gives
 1409/1409 in 169s. A phantom failure in a spec you did not touch is worth one
 isolated re-run before believing it.
+
+## What is deliberately not done
+
+1. **`question_text` is not rewritten, and there is no "edited" marker either.**
+   §4 has the reasoning. A marker was the middle option and was rejected as
+   state nobody would maintain: it would need clearing on rename, and a stale
+   "edited" badge is worse than none.
+2. **Same-facet `in` clauses are refused, never merged.** Merging is the thing a
+   user might actually want, and the editor could offer it as a visible action.
+   It does not, because the refusal had to land first and an auto-merge is the
+   wrong default — it answers a different question from the one typed.
+3. **The four other `fetchFacets` call sites keep their local refs.**
+   `DocumentFilterBar`, `DocumentDetailView`, `FacetsPanel` and `ValueMergeView`
+   were left alone: four files and four specs of blast radius unrelated to this
+   change. The shared cache exists for the two consumers that share a screen.
+4. **`display_currency` and `default_grain` still have no UI.** `PATCH` persists
+   both. The toolbar's controls for them remain session view state, so a chart's
+   saved defaults can only be set at creation. Recorded in the roadmap entry
+   rather than fixed here — it is a different feature, not a loose end of this
+   one.
+5. **The e2e steps do not exercise the PATCH round trip.** The board spec must
+   pass against a database with no facet vocabulary, so it cannot choose a value
+   to save. The full apply path is covered in unit tests only.
+6. **No accessibility audit beyond this component.** The editor got focus
+   management and an `aria-live` row count because a dynamic add/remove list
+   demands them. The repo still has no a11y lint plugin and no axe integration,
+   which the evaluation recorded as an absent NFR; that stands.

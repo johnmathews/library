@@ -1346,10 +1346,58 @@ def test_previewing_with_an_empty_split_string_means_no_split_axis(
     assert response.json()["splits"] == []
 
 
+def test_previewing_honours_the_window_the_client_sends(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The editor forwards the workspace toolbar's `from`/`to`, so the wire
+    names have to be `from`/`to` — `/data` spells this window that way on the
+    query string and the two must not diverge.
+
+    This asserts the window reaches the ANSWER, not merely that the request was
+    accepted. That distinction is the whole point: a body whose date fields are
+    named something the model does not bind is silently ignored, and the route
+    still returns 200 with a plausible chart — one answering "all time" instead
+    of the range the owner is looking at. A test that only checked the status
+    code, or that mocked the client and asserted the argument object, would pass
+    against exactly that bug.
+    """
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        day=MARCH,
+        labels={"category": "software"},
+    )
+    _seed_document(
+        api_database_url,
+        amount="500.00",
+        kind=AmountKind.PAYMENT_MADE,
+        day=date(2020, 1, 15),
+        labels={"category": "software"},
+    )
+
+    unwindowed = _preview(api_client, SOFTWARE_RULE)
+    windowed = _preview(api_client, SOFTWARE_RULE, **{"from": "2026-01-01", "to": "2026-12-31"})
+
+    assert windowed.status_code == 200, windowed.text
+    assert windowed.json()["since"] == "2026-01-01"
+    assert windowed.json()["until"] == "2026-12-31"
+    assert Decimal(windowed.json()["total"]) < Decimal(unwindowed.json()["total"])
+
+
+def test_previewing_rejects_an_unknown_body_field(api_client: TestClient) -> None:
+    """`PreviewIn` forbids extras, so a renamed or misspelled field is a 422
+    rather than a silently-dropped one. Without this the window fields could go
+    missing again and the route would keep answering 200."""
+    response = _preview(api_client, {"all": []}, no_such_field="x")
+    assert response.status_code == 422
+
+
 def test_previewing_with_from_after_to_is_a_422(api_client: TestClient) -> None:
     """`/data` refuses a reversed window; `/spending/draft` does not, which is a
     small pre-existing gap. Preview follows `/data`, not its sibling."""
-    response = _preview(api_client, {"all": []}, since="2026-06-01", until="2026-03-01")
+    response = _preview(api_client, {"all": []}, **{"from": "2026-06-01", "to": "2026-03-01"})
     assert response.status_code == 422
 
 

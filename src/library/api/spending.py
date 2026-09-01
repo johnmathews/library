@@ -46,7 +46,7 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Annotated, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from pydantic import BaseModel, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -337,7 +337,15 @@ class PreviewIn(BaseModel):
     `display_currency` is required rather than defaulted for the same reason it
     is on `DraftIn`: a defaulted currency renders a plausible figure in the
     wrong denomination, which is worse than refusing.
+
+    Extras are **forbidden**. A preview whose window silently failed to arrive
+    still returns 200 and a plausible-looking chart — just one answering a
+    different question — so a misspelled or renamed field has to be a 422 rather
+    than a default. This is the one schema in the module where a dropped field
+    is indistinguishable from a working feature.
     """
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     rule: Rule
     display_currency: str = Field(pattern=r"^[A-Za-z]{3}$")
@@ -346,8 +354,15 @@ class PreviewIn(BaseModel):
     #: There is no saved chart to default from here, so unlike `/data` an absent
     #: key and an empty string may safely collapse to the same thing.
     split: str | None = None
-    since: date | None = None
-    until: date | None = None
+    #: Aliased to `from`/`to`, the names `/data` uses for the same window on the
+    #: query string — the editor previews the range the workspace is showing, so
+    #: it forwards the toolbar's own arguments and they have to be spelled the
+    #: same. `extra="forbid"` above is what makes that safe: without it a body
+    #: sending `from`/`to` against fields named `since`/`until` is silently
+    #: dropped and every preview is answered over all time, which looks like a
+    #: working feature.
+    since: date | None = Field(default=None, alias="from")
+    until: date | None = Field(default=None, alias="to")
 
 
 class DraftIn(BaseModel):

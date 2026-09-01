@@ -484,7 +484,7 @@ tidied away — it follows from who is speaking.
 | producer | mechanism | on an unusable term |
 | --- | --- | --- |
 | the draft flow (§9.1) | `filter_drafted_rule` | **drops it**, reports it as `unknown_terms` |
-| the rule editor (§9.2) | `_validate_rule` | **422 naming it**; nothing is saved |
+| the rule editor (§11) | `_validate_rule` | **422 naming it**; nothing is saved |
 
 The model is *guessing*, so its overreach is narrowed silently and reported —
 a drafted rule that named something real and something imaginary should still
@@ -717,12 +717,13 @@ Validation worth knowing about:
   prevent. A rotted chart is still **loadable** by `GET /spending/{id}`, which
   validates the rule's shape and not its vocabulary: the rule editor is the tool
   for repairing one, so it has to be able to open it.
-- **Two `in` clauses on one facet are a 422.** A document carries at most one
-  value per facet, so the conjunction can never match anything. Refused rather
-  than merged into a single `in` — merging turns the AND into an OR, which
-  answers a different question and moves money *into* the chart, the same
-  rewrite `draft.py` refuses to guess at for an unknown operator. Two `not_in`
-  clauses on one facet are a legitimate intersection and are accepted.
+- **Two `in` clauses on one facet are a 422**, on the same four paths — the
+  check lives inside `_validate_rule`. A document carries at most one value per
+  facet, so the conjunction can never match anything. Refused rather than merged
+  into a single `in` — merging turns the AND into an OR, which answers a
+  different question and moves money *into* the chart, the same rewrite
+  `draft.py` refuses to guess at for an unknown operator. Two `not_in` clauses
+  on one facet are a legitimate intersection and are accepted.
 - **An empty rule (`{"all": []}`) is accepted and means all spending**, on
   `PATCH` and `/preview` as at save: it is the seeded "All spending" chart's own
   state. Reaching it by deleting the last clause is guarded in the editor with a
@@ -855,13 +856,20 @@ Add it later in one line if a real workload ever says otherwise.
   from you spent nothing", and it is the one shape where the footer's own
   guarantee does not apply.
 
-  **This is now refused rather than merely possible:** `_validate_rule` 422s on
-  it at `POST`, `PATCH` and `/preview` (§11), and the rule editor warns before
-  you get that far. It stays on this list for two reasons — a chart saved
-  before the check existed still holds the shape (which is why the refusal is
-  not in a `Rule` validator: such a chart must still load, so the editor can
-  repair it), and the reasoning above is why the answer is a refusal rather
-  than a silent merge into one `in` clause.
+  **The state above is no longer reachable for a rule saved from now on**, and
+  a chart that already holds the shape refuses rather than rendering it.
+  `_refuse_unmatchable_conjunction` runs inside `_validate_rule`, so it fires on
+  all four paths that take a rule — `POST`, `PATCH`, `/preview` **and the read
+  path** — which means a legacy chart with this shape now 422s *when drawn*
+  rather than drawing empty. The rule editor warns before you get that far.
+
+  It stays on this list because the shape can still **exist** on a row saved
+  before the check did. Such a chart is still loadable by
+  `GET /spending/{id}` — the one route that does not call `_validate_rule` —
+  which is deliberate and is why the refusal lives there rather than in a `Rule`
+  validator: the editor has to be able to open the chart it exists to repair.
+  The footer reasoning above is preserved because it is *why* the answer is a
+  refusal rather than a silent merge into one `in` clause.
 - **Extraction does not propose spend lines yet.** `SpendLineOrigin.EXTRACTED`
   exists in the enum, but every line shipped today is `manual`.
 - **Re-extraction's skip is partial.** It skips `amount_total` on an allocated

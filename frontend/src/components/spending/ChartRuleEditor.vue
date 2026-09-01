@@ -97,18 +97,44 @@ const facetItems = computed<SelectItem[]>(() =>
   facets.value.map((facet) => ({ value: facet.key, text: facet.label })),
 )
 
-const splitItems = computed<SelectItem[]>(() => [
-  { value: '', text: 'No split' },
-  ...facetItems.value,
-])
+/**
+ * The split-axis options.
+ *
+ * `default_split` goes stale exactly the way a clause's facet does — the
+ * vocabulary can lose the facet after the chart was saved — so it gets the same
+ * treatment: a disabled option carrying the key, rather than a select rendering
+ * blank. Without it the owner sees an empty control, cannot tell which axis is
+ * broken, and pressing Apply resends the stale key and earns a 422 naming
+ * something the UI never showed them.
+ */
+const splitItems = computed<SelectItem[]>(() => {
+  const items: SelectItem[] = [{ value: '', text: 'No split' }, ...facetItems.value]
+  if (splitDraft.value !== '' && !facets.value.some((f) => f.key === splitDraft.value)) {
+    items.unshift({
+      value: splitDraft.value,
+      text: `${splitDraft.value} (no longer in the vocabulary)`,
+      disabled: true,
+    })
+  }
+  return items
+})
 
 /**
- * A row's facet options. When the row names a facet the vocabulary no longer
- * has, that key is offered as a DISABLED option so the select tells the truth
- * about what is stored rather than silently showing some other facet.
+ * A row's facet options.
+ *
+ * Every state the bound value can hold must have a matching `<option>`, or Vue
+ * sets `selectedIndex = -1` and the control renders **blank** — which on a
+ * freshly added row is the most common thing this editor does. So a row that
+ * has not chosen a facet yet gets a placeholder, and a row naming a facet the
+ * vocabulary no longer has gets a DISABLED option carrying its key, so the
+ * select tells the truth about what is stored rather than showing nothing or,
+ * worse, some other facet.
  */
 function facetItemsFor(row: ClauseRow): SelectItem[] {
-  if (row.facet === '' || facets.value.some((facet) => facet.key === row.facet)) {
+  if (row.facet === '') {
+    return [{ value: '', text: 'Choose a filter…' }, ...facetItems.value]
+  }
+  if (facets.value.some((facet) => facet.key === row.facet)) {
     return facetItems.value
   }
   return [

@@ -168,6 +168,26 @@ describe('spending API', () => {
     expect(body.split).toBeNull()
   })
 
+  // The editor forwards the workspace toolbar's window so a preview answers the
+  // range the owner is looking at. The component spec asserts the argument
+  // object it passes; only this asserts what reaches the wire, which is where
+  // the two ends can disagree about a field name — and a preview whose window
+  // was dropped still returns 200 and a plausible chart, so nothing else would
+  // have noticed.
+  it('sends the window as from/to on the wire', async () => {
+    respondWith({ ...DATA, chart_id: null })
+    await postPreview({
+      rule: RULE,
+      display_currency: 'EUR',
+      from: '2026-01-01',
+      to: '2026-03-31',
+    })
+    const body = JSON.parse(String((fetchMock.mock.calls[0]![1] as RequestInit).body))
+    expect(body).toMatchObject({ from: '2026-01-01', to: '2026-03-31' })
+    expect('since' in body).toBe(false)
+    expect('until' in body).toBe(false)
+  })
+
   it('accepts a preview whose chart_id is null', async () => {
     respondWith({ ...DATA, chart_id: null })
     const data = await postPreview({ rule: RULE, display_currency: 'EUR' })
