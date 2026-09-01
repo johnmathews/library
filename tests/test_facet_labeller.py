@@ -148,14 +148,20 @@ def test_malformed_json_yields_no_proposals_rather_than_raising() -> None:
 # so an unaccented "Skoda" still needs its own alias distinct from the
 # accented "Škoda" one — see `test_casefold_does_not_fold_diacritics` below.
 #
-# The key below, `koda`, is exactly what `derive_value_key`
-# (`src/library/api/facets.py`, the only function that manufactures a
-# vehicle/property/person key) would actually produce from the label
-# "Škoda": it lower-cases then drops every character outside `[a-z0-9_-]`
-# rather than transliterating it, so the leading `š` is deleted rather than
-# replaced (confirmed by running `derive_value_key("Škoda")` directly, which
-# returns `"koda"`, not `"skoda"`). Neither the key nor a casefold of it
-# reads as the marque — only the alias does.
+# The key below, `koda`, is a LEGACY mangled key: it is what
+# `derive_value_key` (`src/library/api/facets.py`, the only function that
+# manufactures a vehicle/property/person key) used to produce from the label
+# "Škoda", by dropping every character outside `[a-z0-9_-]` instead of
+# transliterating it. Since #113 it folds the accent instead and returns
+# `"skoda"`, but keys already in an archive are not rewritten, so a value in
+# exactly this shape remains reachable and worth testing against.
+#
+# It is deliberately NOT updated to `skoda` here: this fixture exists to give
+# `test_casefold_does_not_fold_diacritics` below a key that the unaccented
+# spelling "Skoda" fails to match, so that the test proves matching falls
+# through to a suggestion. A key of `skoda` would match directly and would
+# silently invert what that test checks. Neither this key nor a casefold of it
+# reads as the marque — only the alias does, which is the point.
 VEHICLE_VOCAB: tuple[VocabularyFacet, ...] = (
     VocabularyFacet(
         id=1,
