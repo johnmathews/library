@@ -11,6 +11,11 @@ const props = defineProps<{
   errorMessage?: string
   /** Visually hide the label (kept for screen readers); see AppInput. */
   hideLabel?: boolean
+  /** `data-testid` for the inner `<select>` itself (not the wrapper), so tests
+      and Playwright `.selectOption()`/`.setValue()` can target the control. A
+      bare `data-testid` attribute would fall through to the wrapper `<div>`,
+      and setting a value on a div fails. Mirrors AppInput's `testid`. */
+  testid?: string
 }>()
 
 const model = defineModel<string>({ default: '' })
@@ -40,6 +45,7 @@ const describedBy = computed(() => {
       :class="{ 'border-red-300': props.errorMessage }"
       :id="props.id"
       :name="props.name ?? props.id"
+      :data-testid="props.testid"
       :aria-describedby="describedBy"
       :aria-invalid="props.errorMessage ? 'true' : undefined"
     >

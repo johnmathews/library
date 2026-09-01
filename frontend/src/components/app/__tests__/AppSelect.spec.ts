@@ -23,6 +23,18 @@ describe('AppSelect', () => {
     expect(wrapper.find('select').attributes('id')).toBe('fruit')
   })
 
+  // A bare `data-testid` on <AppSelect> lands on the wrapper <div>, and
+  // `.setValue()` on a div fails. AppInput carries the same prop for the same
+  // reason; this pins the select's half of that contract.
+  it('puts testid on the inner select, not the wrapper', () => {
+    const wrapper = mount(AppSelect, {
+      props: { id: 'fruit', label: 'Fruit', items, testid: 'fruit-select' },
+    })
+
+    expect(wrapper.get('select').attributes('data-testid')).toBe('fruit-select')
+    expect(wrapper.element.getAttribute('data-testid')).toBeNull()
+  })
+
   it('renders the error message with red border styling', () => {
     const wrapper = mount(AppSelect, {
       props: { id: 'fruit', label: 'Fruit', items, errorMessage: 'Pick one' },

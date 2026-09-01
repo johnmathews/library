@@ -69,8 +69,9 @@ import { ApiError } from '@/api/client'
 import { useCurrencyOptions } from '@/composables/useCurrencyOptions'
 import { bands, OTHER_VALUE, type Band } from '@/spending/palette'
 import { formatMoney } from '@/spending/money'
-import { AppBackLink, PageHeader } from '@/components/app'
+import { AppBackLink, AppButton, PageHeader } from '@/components/app'
 import CurrencySelect from '@/components/CurrencySelect.vue'
+import ChartRuleEditor from '@/components/spending/ChartRuleEditor.vue'
 import SpendingChart from '@/components/spending/SpendingChart.vue'
 import SpendingLegend from '@/components/spending/SpendingLegend.vue'
 import SpendingFooter from '@/components/spending/SpendingFooter.vue'
@@ -93,6 +94,11 @@ const chartId = computed<number>(() => Number(route.params.chartId))
 const chart = ref<Chart | null>(null)
 const chartLoading = ref(true)
 const chartError = ref<string | null>(null)
+/** Whether the rule editor is armed. Its trigger lives in PageHeader's
+ * `#actions` slot rather than in `workspace-toolbar`, which is hidden below
+ * `@3xl/workspace` — editing what a chart matches must be reachable at every
+ * width, not only wide ones. */
+const editing = ref(false)
 
 const GRAIN_OPTIONS: { value: Grain; label: string }[] = [
   { value: 'week', label: 'Week' },
@@ -190,6 +196,19 @@ async function loadChart(): Promise<void> {
 
   // Set up only AFTER the first load, so hydrating the controls from the
   // chart's own defaults above never fires a redundant second fetch.
+  installArgsWatch()
+}
+
+/**
+ * Refetch whenever a toolbar argument changes.
+ *
+ * Extracted because `onRuleSaved` below has to stop it, mutate several
+ * controls, and start it again — assigning them with the watcher live would
+ * fire it AND the explicit `loadData()`, racing two requests for the same
+ * chart. `loadChart` establishes the same install-after-load ordering for the
+ * same reason.
+ */
+function installArgsWatch(): void {
   stopArgsWatch = watch(currentArgs, () => {
     drill.value = null // stale echoed args would answer the wrong question
     // A stale isolate/exclude filter must not survive a refetch: the split
@@ -202,6 +221,35 @@ async function loadChart(): Promise<void> {
     hiddenSplitValues.value = new Set()
     void loadData()
   })
+}
+
+/**
+ * A rule edit landed. Two things here are easy to get wrong and both are
+ * pinned by tests.
+ *
+ * **The refetch is explicit.** The args watcher fires on `currentArgs`, which
+ * is built from grain / split / currency / from / to — a rule change moves none
+ * of them, so nothing would refetch on its own and the view would show the new
+ * clauses over the old rule's numbers.
+ *
+ * **`initControlsFromChart` is deliberately NOT called.** It resets `from`/`to`
+ * to empty and grain/currency to the chart's defaults, which would silently
+ * throw away the range the owner was looking at. Only `splitValue` is
+ * re-derived, and only because it must be: it is bound to a `<select>` whose
+ * one non-empty option is `chart.default_split`, so if the edit changed the
+ * axis a stale value would leave the control showing one thing while
+ * `currentArgs` kept requesting another.
+ */
+async function onRuleSaved(updated: Chart): Promise<void> {
+  stopArgsWatch?.()
+  stopArgsWatch = null
+  chart.value = updated
+  splitValue.value = updated.default_split ?? ''
+  hiddenSplitValues.value = new Set()
+  drill.value = null
+  editing.value = false
+  await loadData()
+  installArgsWatch()
 }
 
 onMounted(loadChart)
@@ -375,6 +423,17 @@ const toolbarRowClass = computed<string>(() =>
 
     <template v-else-if="chart">
       <PageHeader :title="chart.name" :description="chart.question_text">
+        <template #actions>
+          <AppButton
+            size="sm"
+            variant="secondary"
+            data-testid="workspace-edit-rule"
+            @click="editing = !editing"
+          >
+            {{ editing ? 'Close editor' : 'Edit rule' }}
+          </AppButton>
+        </template>
+
         <template #controls>
           <div data-testid="workspace-toolbar-chip" class="@3xl/workspace:hidden">
             <button
@@ -435,6 +494,21 @@ const toolbarRowClass = computed<string>(() =>
           </div>
         </template>
       </PageHeader>
+
+      <!-- Above the chart, not below it: the editor is what the owner came
+           here to do, and putting it under a 384px-tall chart would mean
+           scrolling past the answer to correct the question. -->
+      <ChartRuleEditor
+        v-if="editing"
+        :chart="chart"
+        :grain="grain"
+        :from="from"
+        :to="to"
+        :currency="currency"
+        class="mb-4"
+        @saved="onRuleSaved"
+        @cancel="editing = false"
+      />
 
       <p v-if="dataError" data-testid="workspace-data-error" class="text-red-600 dark:text-red-400">
         {{ dataError }}

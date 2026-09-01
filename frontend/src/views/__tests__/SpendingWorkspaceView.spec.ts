@@ -64,6 +64,7 @@ import { ApiError } from '@/api/client'
 import { OTHER_VALUE } from '@/spending/palette'
 import SpendingWorkspaceView from '../SpendingWorkspaceView.vue'
 import SpendingChart from '@/components/spending/SpendingChart.vue'
+import ChartRuleEditor from '@/components/spending/ChartRuleEditor.vue'
 
 /**
  * jsdom implements HTMLDialogElement's `open` property only —
@@ -501,5 +502,99 @@ describe('SpendingWorkspaceView', () => {
     await wrapper.get('[data-testid="workspace-grain"]').setValue('year')
     await flushPromises()
     expect(fetchChartData.mock.calls.at(-1)![1]).toMatchObject({ grain: 'year' })
+  })
+
+  // --- the rule editor ------------------------------------------------------
+
+  async function openEditor(wrapper: VueWrapper): Promise<void> {
+    await wrapper.get('[data-testid="workspace-edit-rule"]').trigger('click')
+    await flushPromises()
+  }
+
+  /** Emit `saved` as the editor does, with the chart the server returned. */
+  async function saveRule(wrapper: VueWrapper, updated = chart()): Promise<void> {
+    wrapper.findComponent(ChartRuleEditor).vm.$emit('saved', updated)
+    await flushPromises()
+  }
+
+  it('arms the rule editor from the header actions, not the toolbar', async () => {
+    const wrapper = await mountedWorkspace()
+    // In `#actions` rather than `workspace-toolbar`, which is hidden below
+    // @3xl/workspace — editing must be reachable at every width.
+    expect(wrapper.get('[data-testid="page-header-actions"]').text()).toContain('Edit rule')
+    expect(wrapper.find('[data-testid="chart-rule-editor"]').exists()).toBe(false)
+
+    await openEditor(wrapper)
+
+    expect(wrapper.find('[data-testid="chart-rule-editor"]').exists()).toBe(true)
+  })
+
+  // Trap (i): the args watcher fires on `currentArgs`, which a rule change does
+  // not touch. Without an explicit refetch the view shows the new clauses over
+  // the old rule's numbers.
+  it('refetches the data after a rule edit, though no toolbar argument changed', async () => {
+    const wrapper = await mountedWorkspace()
+    await openEditor(wrapper)
+    const before = fetchChartData.mock.calls.length
+
+    await saveRule(wrapper)
+
+    expect(fetchChartData.mock.calls.length).toBe(before + 1)
+    expect(wrapper.find('[data-testid="chart-rule-editor"]').exists()).toBe(false)
+  })
+
+  // Trap (ii): `initControlsFromChart` would reset from/to and grain, silently
+  // discarding the range being looked at. This is the test that reddens if
+  // anyone reaches for it.
+  it('keeps the range the owner was looking at across a rule edit', async () => {
+    const wrapper = await mountedWorkspace()
+    await changeRange(wrapper, '2026-03-01', '2026-06-30')
+    await openEditor(wrapper)
+
+    await saveRule(wrapper)
+
+    expect(fetchChartData.mock.calls.at(-1)![1]).toMatchObject({
+      from: '2026-03-01',
+      to: '2026-06-30',
+    })
+  })
+
+  // The watcher must be stopped around the mutation, or assigning splitValue
+  // fires it AND the explicit loadData(), racing two requests.
+  it('refetches exactly once when the edit also changes the split axis', async () => {
+    const wrapper = await mountedWorkspace()
+    await openEditor(wrapper)
+    const before = fetchChartData.mock.calls.length
+
+    await saveRule(wrapper, chart({ default_split: 'sender' }))
+
+    expect(fetchChartData.mock.calls.length).toBe(before + 1)
+  })
+
+  // F4: a chart created without a split axis could never gain one, because the
+  // toolbar control is `v-if="chart.default_split"`. Replacing `chart.value`
+  // makes it appear with no toolbar change at all.
+  it('shows the toolbar split control for a chart that had none', async () => {
+    fetchChart.mockResolvedValue(chart({ default_split: null }))
+    const wrapper = await mountedWorkspace()
+    expect(wrapper.find('[data-testid="workspace-split"]').exists()).toBe(false)
+
+    await openEditor(wrapper)
+    await saveRule(wrapper, chart({ default_split: 'category' }))
+
+    expect(wrapper.find('[data-testid="workspace-split"]').exists()).toBe(true)
+  })
+
+  it('leaves the chart and its data untouched when the editor cancels', async () => {
+    const wrapper = await mountedWorkspace()
+    await openEditor(wrapper)
+    const before = fetchChartData.mock.calls.length
+
+    wrapper.findComponent(ChartRuleEditor).vm.$emit('cancel')
+    await flushPromises()
+
+    expect(wrapper.find('[data-testid="chart-rule-editor"]').exists()).toBe(false)
+    expect(fetchChartData.mock.calls.length).toBe(before)
+    expect(updateChart).not.toHaveBeenCalled()
   })
 })

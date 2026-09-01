@@ -1,4 +1,4 @@
-"""The spending API: the chart engine's twelve routes (spec §9.6, §8.4).
+"""The spending API: the chart engine's thirteen routes (spec §9.6, §8.4).
 
 Thin by design. Every number here is computed by `library.charts.query`,
 `library.charts.footer`, `library.charts.draft` or `library.spend_lines`; this
