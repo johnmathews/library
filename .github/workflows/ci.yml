@@ -370,6 +370,10 @@ jobs:
        needs.changes.outputs.frontend == 'true' ||
        needs.changes.outputs.ci == 'true')
     runs-on: ubuntu-latest
+    # Without this, GitHub names each leg from every matrix value — "e2e
+    # (desktop, chromium firefox webkit, chromium firefox webkit, 30)" — which
+    # is unreadable in the checks list.
+    name: e2e (${{ matrix.shard }})
     # SHARDED BY BROWSER PROJECT, one stack per shard. Playwright runs at
     # `workers: 1` because the specs share a backend and assert on library-wide
     # lists, so the five projects used to run end to end: 389s of a 407s step
