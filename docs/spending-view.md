@@ -1,7 +1,8 @@
 # The spending view
 
-**Status:** active. **Last updated:** 2026-08-31 (new: the user-facing guide to `/charts` — what a spending question is, the board and the workspace, asking in plain language, reading the footer, drilling through to documents, colour, and the current limits. Companion to [`charts.md`](charts.md), which documents the engine underneath).
-**Last verified:** 2026-08-31 — method: written against the shipped code and checked claim by claim rather than from the design spec. The toolbar's controls were enumerated from `SpendingWorkspaceView.vue`'s `data-testid`s and the split control confirmed to be a two-way toggle (`By <facet>` / `No split`) by reading its `<select>`; the card's menu actions from `SpendingCard.vue`'s testids (rename, move up, move down, delete — no rule editor); the six-band fold from `palette.ts`'s `MAX_BANDS = SPLIT_PALETTE.length`; the five drillable buckets from `FOOTER_BUCKETS` in `api/spending.ts`; the four grains from the `Grain` union. Deployed and running at `git_sha 6457684` (`/healthz` ok, alembic `0037`). Numbers and semantics carried from [`charts.md`](charts.md) rather than re-derived.
+**Status:** active. **Last updated:** 2026-09-01 (the rule editor, issue #135. New §4.1 "Editing what a chart matches" — the clause rows, the split-axis picker, preview-then-apply, the three things the editor warns about, and why the chart's question text is deliberately left alone. §4's toolbar list gains **Edit rule** and its **Split** entry now points at §4.1 for changing the axis; §2's card-menu paragraph says where rule editing lives, since a closed list of menu actions otherwise reads as "there is no such thing". §8 loses two entries that this change makes false — "a saved chart's rule cannot be edited" and "the split axis is a toggle, not a picker" — and gains the question-text limit in their place.) Earlier: 2026-08-31 (new: the user-facing guide to `/charts` — what a spending question is, the board and the workspace, asking in plain language, reading the footer, drilling through to documents, colour, and the current limits. Companion to [`charts.md`](charts.md), which documents the engine underneath).
+**Last verified:** 2026-09-01 — method: partial, scoped to §2, §4 and the new §4.1; checked against the shipped code claim by claim. Workspace controls re-enumerated from `SpendingWorkspaceView.vue`'s `data-testid`s — five in `workspace-toolbar` plus `workspace-edit-rule`, which is in `PageHeader`'s `#actions` slot and so is NOT inside the element hidden below `@3xl/workspace` (that placement is what §4's "there at every window width" rests on). The clause row's three controls read from `ChartRuleEditor.vue`'s template, with the operator `<select>`'s two options read verbatim as `is` / `is not`; the split picker's options confirmed to come from the facet vocabulary plus a "No split" entry, **not** from `chart.default_split` alone — that is the claim §4 and §8 changed, so it was read rather than assumed. `SpendingCard.vue`'s menu testids re-enumerated as rename / move up / move down / delete, stated here positively (rule editing is in the workspace) so the sentence cannot rot the way its predecessor did. "No language model" checked twice: the `preview_rule` handler in `src/library/api/spending.py` contains no model call, and `test_previewing_does_not_call_the_model` leaves the Anthropic stub unconfigured so any call would raise. "The question text is not rewritten" read at the call site — the editor's `apply()` sends only `rule` and `default_split` — and pinned by `test_patching_a_rule_leaves_question_text_untouched`. Carried forward unchanged and not re-checked: the six-band fold, the five drillable buckets, the four grains, and everything in §§5-7 and §9. **Not deployed:** this describes branch work, and the previous stamp's `git_sha` claim is withdrawn rather than copied — re-observe `/healthz` after the deploy.
+**Covers:** frontend/src/views/SpendingWorkspaceView.vue, frontend/src/views/SpendingBoardView.vue, frontend/src/components/spending/, src/library/api/spending.py
 
 > **Note on examples.** This repository is public. Every sender, category and
 > amount below is invented.
@@ -45,7 +46,8 @@ assert a judgement the archive cannot make.
 Cards are ordered by you, never by size. Reorder by dragging a card, or from
 its overflow menu — **Move up** / **Move down**, which is the keyboard-reachable
 path and does exactly the same thing. The menu also holds **Rename** and
-**Delete** (delete asks for confirmation first).
+**Delete** (delete asks for confirmation first). Changing *what a chart
+matches* is not on this menu: open the chart and use the rule editor (§4.1).
 
 If you have no charts yet, the board offers **proposals** instead: "All
 spending" first, then the facet values with the most money behind them, each
@@ -77,8 +79,12 @@ Opening a card gives you the chart at full size with a toolbar:
 
 - **Grain** — week, month, quarter or year.
 - **From / To** — the date range.
-- **Split** — the chart's split axis, or off.
+- **Split** — the chart's split axis, on or off. To change *which* facet it
+  splits by — or to give a chart a split axis it never had — use the rule
+  editor (§4.1).
 - **Currency** — the display currency.
+- **Edit rule** — opens the rule editor (§4.1). It sits beside the chart's
+  title rather than in the toolbar, so it is there at every window width.
 
 The range **filters the data** rather than clamping the axis, so the headline
 figure and the drawing can never disagree with each other.
@@ -94,6 +100,49 @@ it; modifier-clicking **excludes** it. This is a display filter only — the
 headline stays the number the archive reported, and a separate line tells you
 what you are currently looking at. An isolate that quietly rewrote the headline
 would break the one promise the chart makes.
+
+### 4.1 Editing what a chart matches
+
+**Edit rule** opens the chart's rule as a list of rows. Each row is a facet, an
+**is** / **is not**, and one or more values — for example *Category is Software
+or Services*. Add rows, remove them, change them. The values are a closed list
+you pick from: a value that is not in the vocabulary cannot be saved, so there
+is nothing to type and nothing to spell wrong. (If a value is genuinely missing,
+add it in `/vocabulary` first — that is a change to the archive's vocabulary,
+not to this chart.)
+
+The same panel sets the **split axis**, including on a chart that was created
+without one.
+
+**Preview, then apply.** Preview answers the edited rule and shows you the
+total and the bars it would produce. Nothing is written until you press Apply,
+and Cancel leaves the saved chart exactly as it was. Unlike asking a question in
+plain language (§3), previewing an edited rule involves no language model — it
+is just the archive, answered again.
+
+After you apply, the chart re-reads its numbers, so the rows you can see and the
+figures underneath them are never describing different rules.
+
+Three things it will tell you about rather than silently allow:
+
+- **Removing the last row** leaves a chart that matches *all* spending in the
+  archive. That is a legitimate chart — it is what "All spending" is — but it is
+  rarely what you meant by deleting a filter, so it asks you to confirm.
+- **Two "is" rows on the same facet** can never both be true: a document has one
+  category, one cost type, and so on. Such a rule matches nothing at all, and
+  the editor says so rather than letting you save a chart that reads "you spent
+  nothing".
+- **A value that has been deleted or merged** in the vocabulary since the chart
+  was saved shows as a flagged row you can fix. It is never quietly dropped —
+  quietly dropping it would change what the chart matches without telling you,
+  and this editor is how you repair exactly that situation.
+
+**The chart's question text is not rewritten.** The heading keeps the question
+you originally asked; the rows are the authoritative statement of what the chart
+matches. That is deliberate: only you can say whether a reworded rule still
+answers the same question, and a heading the system rewrote for you would be
+asserting something it cannot check. If the heading no longer reads right,
+rename the chart (§2).
 
 ## 5. The footer: nothing is excluded silently
 
@@ -182,11 +231,9 @@ panel; a stored colour always wins.
 
 Stated plainly, so you do not go looking:
 
-- **A saved chart's rule cannot be edited.** You can rename it, reorder it or
-  delete it; changing *what it matches* means creating a new one.
-- **The split axis is a toggle, not a picker.** In the workspace you can turn
-  the chart's split on or off, but not switch it to a different facet. That is
-  fixed when the chart is created.
+- **A chart's question text is not rewritten when you edit its rule** (§4.1).
+  The heading can end up describing a question the rule no longer answers;
+  renaming it is manual and deliberate.
 - **Unconvertible money has no drill-through.** It is a merge of two separately
   reported lists and does not carry document ids, so it shows as a figure with
   a count and no list. [`charts.md`](charts.md) §13 has the detail.
