@@ -5,9 +5,21 @@
  * `.form-select`, `flex flex-wrap items-end gap-3` — see
  * docs/frontend-view-principles.md §5).
  *
- * Facets with no values render nothing: the shipped vocabulary's `vehicle`,
- * `property` and `person` facets ship empty, and an empty select is worse
- * than an absent one.
+ * A facet renders only once it has **two or more** values. An empty select is
+ * worse than an absent one, and a one-option select is barely better: it is a
+ * filter you cannot use to compare anything, because every document it can
+ * show carries the same value. The shipped vocabulary's `vehicle`, `property`
+ * and `person` facets ship empty; in a real archive `property` is the one that
+ * tends to sit at exactly one value for years, and it is the reason the
+ * threshold is two rather than one. The rule is on the count, not on a named
+ * key, so a facet that grows a second value comes back on its own.
+ *
+ * Values are ordered by label, not by the vocabulary's stored `ordinal`. The
+ * ordinal is seed-insertion order — useful to the `/vocabulary` panel, which
+ * exists to expose it, and meaningless to someone hunting one of `category`'s
+ * nineteen entries in a dropdown. Sorting here rather than in
+ * `load_vocabulary` deliberately leaves the server's canonical order (and so
+ * the LLM labelling prompt) alone. FacetEditor.vue sorts the same way.
  */
 import { computed } from 'vue'
 import type { FacetRef } from '@/api/facets'
@@ -19,7 +31,15 @@ const props = defineProps<{
 
 const emit = defineEmits<{ 'update:modelValue': [Record<string, string>] }>()
 
-const usable = computed<FacetRef[]>(() => props.facets.filter((facet) => facet.values.length > 0))
+/** Facets worth offering, each with its values in label order. */
+const usable = computed<FacetRef[]>(() =>
+  props.facets
+    .filter((facet) => facet.values.length > 1)
+    .map((facet) => ({
+      ...facet,
+      values: [...facet.values].sort((a, b) => a.label.localeCompare(b.label)),
+    })),
+)
 const hasSelection = computed<boolean>(() => Object.keys(props.modelValue).length > 0)
 
 function onSelect(facetKey: string, event: Event): void {
