@@ -57,6 +57,21 @@ describe('FacetEditor', () => {
     expect(empty.attributes('disabled')).toBeDefined()
   })
 
+  // TWO_VALUE_FACETS stores category as Software, Hardware — so this fails
+  // against an editor that renders the vocabulary's own order. The sort is
+  // display-only: the value KEYS submitted on save are unaffected, which the
+  // dirty-tracking tests below still cover.
+  it("lists a facet's values alphabetically by label, not in stored order", () => {
+    const wrapper = mount(FacetEditor, {
+      props: { documentId: 7, facets: TWO_VALUE_FACETS, labels: {} },
+    })
+    const labels = wrapper
+      .get('[data-testid="facet-edit-category"]')
+      .findAll('option')
+      .map((option) => option.text())
+    expect(labels).toEqual(['—', 'Hardware', 'Software'])
+  })
+
   it('saves the changed label and emits what the server returned', async () => {
     const wrapper = mount(FacetEditor, {
       props: { documentId: 7, facets: FACETS, labels: {} },

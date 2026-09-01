@@ -1,7 +1,8 @@
 /**
- * End-to-end facet vocabulary journey (docs/facets.md): create a facet and a
- * value, apply the value to a document through the per-document editor, then
- * filter the document list by it.
+ * End-to-end facet vocabulary journey (docs/facets.md): create a facet and two
+ * values, apply one of them to a document through the per-document editor, then
+ * filter the document list by it. Two values because the filter bar only offers
+ * a facet that has at least two — see the comment at the creation site.
  *
  * Mirrors tags-editing.spec.ts / library.spec.ts: env-driven self-skip via
  * requireStack(), the shared sign-in helper, and the API-seeding trick (POST
@@ -65,11 +66,21 @@ test('a facet can be created, applied to a document, and filtered on', async ({
   // Create a facet and a value in the controlled vocabulary.
   const facet = await page.request.post('/api/facets', { headers, data: { key, label: 'E2E' } })
   expect(facet.ok()).toBeTruthy()
-  const value = await page.request.post(`/api/facets/${key}/values`, {
-    headers,
-    data: { key: 'alpha', label: 'Alpha' },
-  })
-  expect(value.ok()).toBeTruthy()
+  // TWO values, not one. The filter bar only offers a facet once it has two or
+  // more (see FacetFilterBar.vue): a one-option select cannot narrow anything,
+  // because every document it can show carries the same value. Only `alpha` is
+  // ever applied to a document, so the post-filter count of 1 below is
+  // unaffected — `beta` exists purely to clear that threshold.
+  for (const [valueKey, label] of [
+    ['alpha', 'Alpha'],
+    ['beta', 'Beta'],
+  ]) {
+    const value = await page.request.post(`/api/facets/${key}/values`, {
+      headers,
+      data: { key: valueKey, label },
+    })
+    expect(value.ok()).toBeTruthy()
+  }
 
   // Apply the value through the per-document editor. The editor card is
   // always attached (it renders every facet, disabled, even with no values
@@ -96,6 +107,8 @@ test('a facet can be created, applied to a document, and filtered on', async ({
 
   // Filter the document list by the new facet value. The key is unique to
   // this run, so exactly one document — the one just labelled — can match.
+  // The select is present because the facet carries two values; `beta` is
+  // unapplied, so choosing `alpha` still leaves exactly one match.
   // The dashboard is '/' — there is no '/documents' route (see
   // src/router/index.ts; only '/documents/:id' exists) and no catch-all.
   await page.goto('/')

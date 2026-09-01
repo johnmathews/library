@@ -9,6 +9,12 @@
  * facet such as `vehicle` exists before they can ask for a value to be added
  * to it.
  *
+ * Within a select, values are ordered by label rather than by the vocabulary's
+ * stored `ordinal`, matching FacetFilterBar.vue — `category`'s nineteen entries
+ * are unfindable in seed-insertion order. The sort is display-only on purpose:
+ * `load_vocabulary`'s canonical order still feeds the LLM labelling prompt and
+ * the `/vocabulary` panel, which exists to expose that very ordinal.
+ *
  * Only changed facets are sent to the server, and a cleared facet is sent as
  * an explicit `null` so the backend removes the label rather than silently
  * leaving the previous value in place. A failed save leaves the edit in the
@@ -25,6 +31,15 @@ const props = defineProps<{
 }>()
 
 const emit = defineEmits<{ saved: [Record<string, string>] }>()
+
+/** Every facet, empty ones included (see above), each with its values in
+ * label order. */
+const ordered = computed<FacetRef[]>(() =>
+  props.facets.map((facet) => ({
+    ...facet,
+    values: [...facet.values].sort((a, b) => a.label.localeCompare(b.label)),
+  })),
+)
 
 const draft = ref<Record<string, string>>({ ...props.labels })
 const saving = ref(false)
@@ -82,7 +97,7 @@ async function save(): Promise<void> {
     <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">Facets</h2>
     <div class="@container">
       <div class="flex flex-wrap items-end gap-3">
-        <div v-for="facet in facets" :key="facet.key">
+        <div v-for="facet in ordered" :key="facet.key">
           <label class="filter-label" :for="`facet-edit-${facet.key}`">{{ facet.label }}</label>
           <select
             :id="`facet-edit-${facet.key}`"
