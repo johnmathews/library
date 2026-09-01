@@ -2,11 +2,18 @@ name: CI
 
 on:
   push:
-    # Every branch, so feature work is gated before it reaches main. The heavy
-    # 3-browser e2e is scoped down below (it runs on PRs, main, and manual
-    # dispatch — not on every intermediate feature-branch push); the fast gates
-    # still run on branch pushes.
-    branches: ["**"]
+    # main only. This used to be `["**"]`, which ran CI on every feature-branch
+    # push as well — and since `pull_request` also fires for those branches,
+    # every push to a PR'd branch produced TWO runs, each emitting a check-run
+    # named `ci-gate` against the same SHA. That is not merely wasteful: the
+    # push run deliberately skips `e2e` (see its `if:` below) and the PR run
+    # does not, so the two disagree about what was actually verified, and the
+    # required check reflects whichever finished last.
+    #
+    # The PR run is the gate — it is what the `main` ruleset requires and the
+    # only one that runs e2e — so the push run's only unique job was giving
+    # feedback before a PR exists. Open the PR (or use workflow_dispatch).
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -54,9 +61,16 @@ jobs:
               - '.env.example'
               - 'Makefile'
               - 'scripts/**'
+              # docs/ only, NOT journal/ or a blanket '**/*.md'. The backend
+              # suite really does read four real documents — check_docs.py's
+              # WORK_UNIT_PLAN, MODULE_MAP_DOC and DOCS_INDEX, all under docs/ —
+              # so a docs change can legitimately red it. Nothing under tests/
+              # reads journal/ or any .md outside docs/, and the gates that DO
+              # cover them (`check_docs.py`, `build_journal_index.py --check`)
+              # live in `docs-stamps`, which is unconditional. Journal entries
+              # are this repo's most frequent commit; running the whole backend
+              # suite for one bought nothing.
               - 'docs/**'
-              - 'journal/**'
-              - '**/*.md'
             frontend:
               - 'frontend/**'
             ci:
@@ -697,9 +711,12 @@ jobs:
             --tag ghcr.io/johnmathews/library:latest \
             "ghcr.io/johnmathews/library:${GITHUB_SHA}"
 
-  # The single aggregator status check. TODO (repo owner): branch protection is
-  # NOT configured yet — point it at THIS job (`ci-gate`) as the sole required
-  # check, instead of the individual jobs.
+  # The single aggregator status check, and the ONLY required one: the `main`
+  # ruleset requires the `ci-gate` context and nothing else, with
+  # `strict_required_status_checks_policy` on so a branch must be up to date
+  # with main before it can merge. (That last part is not decoration — #143
+  # merged green against a base without #142, and the auto-merged
+  # `journal/README.md` failed `build_journal_index.py --check` on main.)
   #
   # Why the asymmetry the gate script enforces:
   #
