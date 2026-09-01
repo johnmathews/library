@@ -104,6 +104,13 @@ export const DEFAULT_PHONE_COLUMNS = 2
 export const DEFAULT_HIDE_SUMMARY_MOBILE = false
 
 /**
+ * Free-text "About you" notes Ask reads with every question (mirrors the
+ * backend's DEFAULT_ASK_PROFILE / MAX_ASK_PROFILE_CHARS).
+ */
+export const DEFAULT_ASK_PROFILE = ''
+export const ASK_PROFILE_MAX_CHARS = 4000
+
+/**
  * The built-in default tile-border colour for each document kind, by slug. Only
  * the kinds that meaningfully occur are coloured; every other kind (incl.
  * `other`) has no entry and renders with the tile's neutral default border.
@@ -198,6 +205,7 @@ export interface UserPreferences {
   notifications?: NotificationPreferences
   phone_columns?: number
   hide_summary_mobile?: boolean
+  ask_profile?: string
 }
 
 /** GET /api/settings — resolved display preferences. */
@@ -244,6 +252,14 @@ export function updateKindColors(
   return apiFetch<UserPreferences>('/api/settings/kind-colors', {
     method: 'PUT',
     body: { kind_colors: kindColors },
+  })
+}
+
+/** PUT /api/settings/ask-profile — persist the "About you" notes Ask reads. */
+export function updateAskProfile(profile: string): Promise<UserPreferences> {
+  return apiFetch<UserPreferences>('/api/settings/ask-profile', {
+    method: 'PUT',
+    body: { ask_profile: profile },
   })
 }
 
@@ -354,4 +370,59 @@ export interface EmailTriageRecentSkips {
  */
 export function getEmailTriageRecentSkips(): Promise<EmailTriageRecentSkips> {
   return apiFetch<EmailTriageRecentSkips>('/api/settings/email-triage/recent-skips')
+}
+
+// --- LLM backends (instance-wide; admin-editable) ---------------------------
+
+/** Which transport a surface uses to reach Claude. */
+export type LLMBackend = 'api' | 'subscription'
+
+/** One switchable surface, as Settings → LLM backend renders it. */
+export interface LLMSurface {
+  /** Stable key used in the PUT/DELETE path (e.g. `ask`). */
+  surface: string
+  label: string
+  description: string
+  /** The backend in force right now. */
+  backend: LLMBackend
+  /** What the deployed environment would give with no override stored. */
+  default: LLMBackend
+  /** True when an admin has overridden the deployed default. */
+  overridden: boolean
+}
+
+/**
+ * The instance-wide LLM backend configuration. Readable by any signed-in user
+ * (it explains why Ask behaves as it does); `editable` is false for non-admins
+ * so the UI renders read-only controls rather than letting them hit a 403.
+ */
+export interface LLMBackends {
+  surfaces: LLMSurface[]
+  /** `healthy` | `degraded` | `unhealthy` — anything but healthy needs a human. */
+  credentials_status: string
+  credentials_detail: string
+  /** Whether an Anthropic API key is configured. Never the key itself. */
+  api_key_configured: boolean
+  editable: boolean
+}
+
+export function getLLMBackends(): Promise<LLMBackends> {
+  return apiFetch<LLMBackends>('/api/settings/llm-backends')
+}
+
+/**
+ * Switch one surface's backend. Takes effect on the next request — no restart.
+ * Rejects with 409 when the chosen backend cannot authenticate (e.g. the
+ * subscription selected with no Claude credentials provisioned).
+ */
+export function updateLLMBackend(surface: string, backend: LLMBackend): Promise<LLMBackends> {
+  return apiFetch<LLMBackends>(`/api/settings/llm-backends/${surface}`, {
+    method: 'PUT',
+    body: { backend },
+  })
+}
+
+/** Drop the override so the surface follows the deployed default again. */
+export function resetLLMBackend(surface: string): Promise<LLMBackends> {
+  return apiFetch<LLMBackends>(`/api/settings/llm-backends/${surface}`, { method: 'DELETE' })
 }

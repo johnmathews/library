@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: §1.5.1 now names the two genuinely per-user resources — Ask threads and saved views — instead of claiming no ownership anywhere; Inter is CDN-loaded, not self-hosted; corrected the module-map gap wording). Earlier (2026-07-17, business matters: business matters: the `matters`/`document_matters` collection (migration 0028) and the separate best-effort matter-classification pass after extract; §1.2 step 3, §1.3). Earlier (2026-07-15, data model: `email_selection_traces`, the per-email skip audit, migration 0027). Earlier (2026-07-06): authorization model §1.5.1: shared library, no per-user ownership — deliberate. Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
-**Last verified:** 2026-08-12 — method: checked §1.6's module map against `wc -l` of every module and the floor rule in `scripts/check_docs.py`, the pipeline order against `_NEXT_STATUS` and each stage hook in `jobs.py`, the §1.3 table against `__tablename__` in `models.py` plus `migrations/versions/`, the §1.5 claims against every `/api` router's owner-scoping, and each model id against `config.py`.
+**Status:** active. **Last updated:** 2026-08-31 (the seven series tables were **dropped** by migration 0038, closing the gap the previous PR opened on purpose. §1.9's "Seven orphaned series tables" note becomes "Seven dropped series tables": the list stays, because it is how a reader makes sense of migrations 0009–0029, but it is now a map for reading history rather than part of the data model, and the note now states that 0038's `downgrade` restores the schema, empty, and never the rows.) Earlier the same day (the legacy series stack was deleted. §1.6's module map loses its six series rows — `series.py`, `series_insight.py`, `series_match.py`, `semantic_membership.py`, `api/series.py`, `api/charts.py`. §1.9's data model is reorganised: the **Ask & series** group becomes **Ask**, and the seven series tables move into an explicit "orphaned, awaiting the drop migration" note — they are still in the database on purpose, so a revert of this deploy has somewhere to land. The `api.md §1.15` citation on `series_membership_overrides` went with that row; §1.11's shared-corpus bullet says "matters and projects" where it said "matters and series".) Earlier: 2026-08-29 (§1.6's `src/library/charts/` row is unchanged and still accurate, but the note below it — added earlier the same day — described the package as "so far just the pure `rule.py`". **That is superseded:** the package now holds `rule.py`, `query.py`, `footer.py` and `draft.py`, i.e. the whole chart engine, and `src/library/spend_lines.py` and `src/library/api/spending.py` are its write path and HTTP surface. The engine is documented in the new [charts.md](charts.md). Earlier the same day (§1.6 module map: added the `src/library/charts/` row — the chart engine: rules, aggregate queries, footer accounting and question drafting; so far just the pure `rule.py` translation of a saved chart's rule into a SQL predicate over the `spend_facts` view, spec §9.1). Earlier the same day (§1.6 module map: added the `src/library/spend_lines.py` row — the manual allocation write path over the `spend_lines`/`line_labels` tables, migration 0035, whose two deferred constraint triggers keep `sum(lines.amount) = documents.amount_total` from both sides). Earlier the same day (§1.6 module map: added the `src/library/money/` row — payment identity: `amount_kind`/`reference` columns, the `payment_overrides` table, and the `payment_edges`/`payments` SQL views, migration 0033; new `/api/payments/*` endpoints documented in `docs/api.md` §1.24). Earlier (2026-08-28, new §1.3.1 Facet labels: `facets`/`facet_values`/`facet_value_aliases`/`document_labels`/`facet_value_suggestions`, migration 0032 — the composite primary key that enforces at most one value per facet, and the composite foreign key that stops a label pointing at another facet's value; see [facets.md](facets.md). Also corrected §1.6's `src/library/facets/` row from "Facet labeling" to "Facet labelling" for spelling consistency with the rest of this feature's prose). Earlier (2026-08-26, §1.6 module map: added `src/library/structured_query.py` — it crossed the 400-line module-map floor on the `feat/ask-answer-trustworthiness` branch, which added the `Coverage`/`Aggregated` machinery). Earlier (2026-08-20, §1.6 module map: added `src/library/llm/`, the subscription LLM backend — Agent SDK adapter + OAuth refresh; and §1.3 data model: `instance_settings`, migration 0030, the runtime override layer behind the LLM backend switch; see `llm-backends.md`). Earlier (2026-08-12, documentation verification sweep): §1.5.1 now names the two genuinely per-user resources — Ask threads and saved views — instead of claiming no ownership anywhere; Inter is CDN-loaded, not self-hosted; corrected the module-map gap wording). Earlier (2026-07-17, business matters: business matters: the `matters`/`document_matters` collection (migration 0028) and the separate best-effort matter-classification pass after extract; §1.2 step 3, §1.3). Earlier (2026-07-15, data model: `email_selection_traces`, the per-email skip audit, migration 0027). Earlier (2026-07-06): authorization model §1.5.1: shared library, no per-user ownership — deliberate. Earlier (2026-06-30): quote kind, chart title/description overrides, authored series, recipient↔user link.
+**Last verified:** 2026-08-31 — method: partial, scoped to §1.9's series-tables note. Read `migrations/versions/0038_drop_series_stack.py` end to end and confirmed its `_DROP_ORDER` names exactly the seven tables §1.9 lists, and that its `downgrade` recreates all seven. The claim that they are gone is executed, not asserted: `tests/test_migrations.py::test_series_stack_tables_are_dropped` queries `pg_tables` on a database migrated to head (and checks `documents`/`charts`/`spend_lines` are present, so it cannot pass on an empty schema), and `test_0038_downgrade_restores_the_exact_0037_schema` diffs the round-tripped schema against a second database migrated straight to 0037 — identical across `information_schema.columns`, every `pg_get_constraintdef` and every `pg_indexes` row. Both guards were mutation-checked red (dropping `postgresql_nulls_not_distinct`; dropping 0029's `origin` column). Nothing else in this document was re-checked this pass; the rest carries forward the verification below unchanged, whose method was: re-derived the module inventory from disk after the deletion (`wc -l` on every top-level `src/library/*.py`).
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -78,7 +78,9 @@ at any stage, with the reason in `ingestion_events`).
      land here) → OCRmyPDF + Tesseract `nld+eng` with deskew/clean/
      oversample; also produces a searchable-PDF artifact.
    - Raw photos → OpenCV perspective correction + RapidOCR (PP-OCRv5
-     latin model, CPU). One model covers Dutch and English together.
+     latin model, CPU). One model covers Dutch and English together. Its
+     ONNX weights are vendored in `models/ocr/` and copied into the
+     image, so no OCR path reaches the network at run time.
    - Confidence gate: a low-confidence Tesseract result is retried via
      the neural path and the better result kept.
 3. **Extract** — Claude (Haiku 4.5, structured outputs via
@@ -189,6 +191,26 @@ re-derivable artifact.
   classifier reads. Also soft-archivable via `archived_at`; documents survive a
   matter delete. Populated automatically (see §1.2 step 3) but hand-editable.
 
+### 1.3.1 Facet labels
+
+`facets` / `facet_values` / `facet_value_aliases` / `document_labels` /
+`facet_value_suggestions` — the controlled label vocabulary that replaced 771
+drifted free-form tags (migration 0032; module `src/library/facets/`, §1.6;
+full design in [facets.md](facets.md)). A facet (`category`, `scope`,
+`cost_type`, …) is a closed set of values; **labels live on the document**,
+one row per `(document_id, facet_id)` in `document_labels`.
+
+That composite **primary key** — `(document_id, facet_id)` — is what
+guarantees at most one value per facet per document: a second `INSERT` for a
+facet the document already has a value for is a primary-key conflict, not a
+second row, so the labelling code upserts rather than needing an application-
+level check. A composite **foreign key** on `document_labels(facet_value_id,
+facet_id)` referencing `facet_values(id, facet_id)` — backed by a redundant
+`UNIQUE (id, facet_id)` on `facet_values` — is what stops a label pointing at
+another facet's value: without it, nothing in the schema would prevent a row
+claiming facet `scope` while its `facet_value_id` actually names a `category`
+value, which would silently corrupt any `GROUP BY` over labels.
+
 **Derived artifacts** (rebuildable from the original):
 
 - `document_pages` — per-page markdown renderings, PK `(document_id, page_number)`.
@@ -211,29 +233,51 @@ re-derivable artifact.
   an in-app note (`source = note`, migration 0013, which also adds `note` to the
   `document_source` CHECK).
 
-**Ask & series:**
+**Ask:**
 
 - `ask_threads` — one conversation per owner.
 - `ask_turns` — one Q&A turn per thread; stores cost/provenance and the
   serialized Anthropic message blocks replayed into follow-up questions.
-- `series_insights` — cached per-series prose, one row per
-  `(sender_id, kind_id, currency)` (see [ask.md §1.7](ask.md)).
-- `series_membership_overrides` — durable manual `pin`/`exclude` keyed by
-  `(sender_id, kind_id, currency, document_id)`, applied on every series
-  computation (migration 0015; see [api.md §1.15](api.md)).
-- `series_meta_overrides` — user-set title/description override per emergent
-  series, keyed by `(sender_id, kind_id, currency)` (migration 0018). Powers
-  the editable chart title/description and the single-chart route
-  `/charts/:seriesId`.
-- `authored_series` + `authored_series_members` — user-curated ("manual")
-  series: a named, optionally-currency-scoped collection of documents that
-  produces its own chart even without a natural emergent seed (migration 0019).
-  Addressed as `a-{id}`; summarised through the same code path as emergent
-  series.
 - `fx_rates` — small reference FX snapshot (USD base, date-aware) for
-  converting cross-currency pins.
+  converting cross-currency amounts ([charts.md](charts.md), [admin.md](admin.md)
+  §1.2.6).
+
+**Seven dropped series tables.** The legacy series stack — the emergent and
+authored series that `/charts` used to draw — was deleted on 2026-08-31 (see
+[charts.md](charts.md) for what replaced it, and
+[archive/smart-groups.md](archive/smart-groups.md) for the semantic variant). It
+shipped in two halves: the code first, and then **migration 0038**, which drops
+the seven tables the code used to read. The gap between the two deploys existed
+so that a revert of the first still had its rows to come back to; it is closed,
+and the tables are gone from the schema. Nothing here is a live table any more,
+so this list is a map for reading old migrations, not part of the data model:
+
+`series_insights` (created 0009), `series_membership_overrides` (0015),
+`series_meta_overrides` (0018), `authored_series` and `authored_series_members`
+(0019), `authored_series_suggestions` (0021), `authored_series_exclusions`
+(0029) — all seven dropped by 0038.
+
+0038's `downgrade` recreates the seven **empty**, mirroring those six
+migrations' `create_table` calls (including the three columns 0029 added later,
+and the `NULLS NOT DISTINCT` uniques). It restores the schema so an older image
+can boot, never the rows: those are gone, and only a database backup returns
+them.
 
 **Auth:** `users`, `sessions`, `api_tokens`.
+
+**Instance configuration:**
+
+- `instance_settings` — key/value (JSONB) store for instance-wide operational
+  settings an admin can change at runtime, without a redeploy or restart
+  (migration 0030). Currently holds only `llm_backend.<surface>`, selecting the
+  metered API or a Claude subscription per LLM surface — see
+  [llm-backends.md](llm-backends.md). Deliberately an **override layer**: a
+  missing row means "use the environment value", so an empty table behaves
+  exactly as the deployed configuration says, and reverting a setting is
+  deleting its row. This is the third kind of configuration in the system,
+  alongside per-user display preferences (`users.preferences`) and startup
+  environment variables (`Settings`); it exists because a value that is both
+  instance-wide *and* mutable at runtime fits neither.
 
 ## 1.4 Interfaces
 
@@ -291,7 +335,7 @@ user has full read **and write** access to the *entire* library.
   so anonymous requests are rejected (`401`). But no *corpus* endpoint checks the
   caller against a resource's creator. Any signed-in user can view, edit, and
   delete **any** document, its metadata, notes, **comments**, tags, projects,
-  matters and series — not only the ones they created.
+  matters and projects — not only the ones they created.
 - `documents.uploader_id` and `document_comments.author_id` are **provenance /
   attribution** ("who added this"), surfaced for context. They are **not**
   authorization boundaries and are never enforced on read or mutation.
@@ -326,17 +370,20 @@ top-level modules.
 | `src/library/api/` | HTTP API routers, mounted under `/api` by the application factory. The admin surface is the nested `api/admin/` package. |
 | `src/library/ask/` | Natural-language question answering over the archive: retrieval, the agentic tool loop, citations. |
 | `src/library/auth/` | Argon2 passwords, cookie sessions, bearer API tokens. |
+| `src/library/charts/` | The chart engine: rules, aggregate queries, footer accounting and question drafting. |
 | `src/library/embedding/` | Local embedding (bge-m3 via a text-embeddings-inference sidecar). |
 | `src/library/extraction/` | Claude metadata extraction: schema, extractor, pricing, and pipeline glue. |
+| `src/library/facets/` | Facet labelling: vocabulary management and LLM-driven label proposals. |
 | `src/library/importer/` | paperless-ngx importer: REST client, payload mapper, batch runner. |
+| `src/library/llm/` | The subscription LLM backend: Claude Agent SDK adapter and OAuth credential refresh. See [`llm-backends.md`](llm-backends.md). |
 | `src/library/markdown/` | Vision-model page-to-markdown conversion and its storage. |
-| `src/library/ocr/` | Routed OCR: text-layer extraction, OCRmyPDF/Tesseract, OpenCV+RapidOCR. |
+| `src/library/money/` | Payment identity: which documents describe one real-world payment (`amount_kind`, `reference`, the `payment_edges`/`payments` SQL views, and the override write path). |
+| `src/library/ocr/` | Routed OCR: text-layer extraction, OCRmyPDF/Tesseract, OpenCV+RapidOCR, and the pinned RapidOCR weights (`weights.py`). |
 
 | Module | What it does |
 | --- | --- |
 | `src/library/email_ingest.py` | Email-in ingestion: poll an IMAP mailbox and ingest its attachments. |
 | `src/library/models.py` | SQLAlchemy 2.0 declarative models — the data model in §1.3. |
-| `src/library/series.py` | Recurring-document series detection and comparative statistics. |
 | `src/library/schemas.py` | Pydantic request/response schemas for the HTTP API. |
 | `src/library/cli.py` | The `library` administration CLI (typer): accounts, imports, sweeps. |
 | `src/library/jobs.py` | Procrastinate job queue wiring and the document-processing pipeline (§1.2). |
@@ -344,10 +391,11 @@ top-level modules.
 | `src/library/mcp_server.py` | The MCP server: FastMCP tools over the archive (§1.4). |
 | `src/library/notifications.py` | Pushover push notifications (per-user, opt-in). |
 | `src/library/search.py` | Shared document query building for the REST API and the MCP server. |
-| `src/library/series_insight.py` | Precomputed, cached LLM prose description for a series. |
 | `src/library/consume.py` | Consume-folder watcher: ingest files dropped into a watched directory. |
 | `src/library/ingest.py` | Ingestion service: bytes in, `Document` row + queued job out. |
 | `src/library/config.py` | Settings, loaded from the environment with the `LIBRARY_` prefix. |
+| `src/library/spend_lines.py` | Manual allocation of a document's amount across spend lines: the replace-whole write path behind the `spend_lines`/`line_labels` tables, whose sum against `documents.amount_total` is enforced by the deferred constraint triggers of migration 0035. |
+| `src/library/structured_query.py` | Structured aggregation over extracted metadata (`sum_amount`, `distinct_senders`, `list_documents`) behind the `/ask` `query_documents` tool; each result carries a `Coverage` object reporting what the rows leave out. |
 
 Everything else under `src/library/` is a single-purpose helper of under ~300
 lines — storage, FX, matters, projects, PDF unlock, the events broker and

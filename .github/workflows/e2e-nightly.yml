@@ -1,16 +1,14 @@
-# Nightly heartbeat for the Smart Groups full journey.
+# Nightly heartbeat for the retrieval-recall measurement.
 #
-# Why this is not in the PR gate, and must not be moved there: the journey needs
-# the embedder. The `e2e` job in ci.yml starts `db migrate api worker` only — no
-# embedder at all — so `smart-groups.spec.ts` cannot pass there by construction.
-# It also depends on the async OCR → chunk → embed pipeline having fully indexed
-# two freshly-seeded documents AND on the semantic sweep scoring them as a match,
-# neither of which is deterministic inside a merge gate.
+# Why this is not in the PR gate, and must not be moved there: `library
+# eval-recall` needs a warm embedder to produce real vectors. The `e2e` job in
+# ci.yml starts `db migrate api worker` only — no embedder at all — so recall
+# cannot pass there by construction. TEI (the bge-m3 sidecar) also publishes no
+# arm64 image, so it cannot be run on an Apple Silicon development machine
+# either — only a host with a reachable embedder (Linux/amd64, or the deployed
+# host) can drive it.
 #
-# So it runs here instead, nightly, with the embedder up and warm. The defect
-# this fixes is not that the spec was gated — the spec's own rationale for that
-# is sound — but that `E2E_SMART_GROUPS` was set nowhere, so it had never
-# executed anywhere, ever.
+# So it runs here instead, nightly, with the embedder up and warm.
 #
 # NOT part of `ci-gate` and NOT a `promote` gate: a nightly failure is a signal
 # to look, not a reason to block a merge. The honest cost of that choice is that
@@ -28,18 +26,11 @@ permissions:
   contents: read
 
 jobs:
-  smart-groups:
+  retrieval-recall:
+    name: Retrieval recall
     runs-on: ubuntu-latest
     env:
       COMPOSE_FILE: docker-compose.yml:frontend/e2e/compose.e2e.yml
-      E2E_BASE_URL: http://localhost:4173
-      # The opt-in the spec gates on. Set nowhere else in the repo — which is
-      # exactly why the journey had never run.
-      E2E_SMART_GROUPS: "1"
-      # One spec on one project, so the "did anything run?" floor is 1, not the
-      # 40 the full matrix uses. Still a floor: if the grep or the project filter
-      # stops matching, this job fails instead of passing having run nothing.
-      E2E_MIN_EXPECTED: "1"
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -59,8 +50,8 @@ jobs:
         run: timeout 180 bash -c 'until curl -fsS http://localhost:8000/healthz; do sleep 3; done'
       # The embedder downloads ~2GB of bge-m3 on a cold cache, so this waits far
       # longer than the API does. `/health` is TEI's own readiness endpoint: it
-      # reports ready only once the model is loaded, which is the state the sweep
-      # needs — a started container is not a warm embedder.
+      # reports ready only once the model is loaded, which is the state the
+      # recall measurement needs — a started container is not a warm embedder.
       #
       # Polled from inside the network, via the api container: the `embedder`
       # service publishes no ports (see docker-compose.yml), so it is reachable
@@ -73,53 +64,24 @@ jobs:
           import urllib.request
           urllib.request.urlopen(\"http://embedder:80/health\", timeout=5)
           "; do sleep 5; done'
-      - name: Create the e2e user
-        run: |
-          echo 'e2e-password-123' | docker compose exec -T api \
-            library user add e2e --display-name "E2E" --password-stdin
-      - uses: actions/setup-node@v7
-        with:
-          node-version: 22
-          cache: npm
-          cache-dependency-path: frontend/package-lock.json
-      - name: Install dependencies
-        working-directory: frontend
-        run: npm ci
-      - name: Cache Playwright browsers
-        uses: actions/cache@v6
-        with:
-          path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
-      - name: Install Playwright browsers
-        working-directory: frontend
-        run: npx playwright install --with-deps chromium
-      - name: Build the frontend
-        working-directory: frontend
-        run: npm run build-only
-      - name: Serve the build (vite preview proxies /api to :8000)
-        working-directory: frontend
-        run: |
-          nohup npm run preview -- --port 4173 --strictPort > preview.log 2>&1 &
-          timeout 60 bash -c 'until curl -fsS http://localhost:4173 > /dev/null; do sleep 1; done'
-      - name: Run the Smart Groups journey
-        working-directory: frontend
-        run: npx playwright test --project=chromium e2e/smart-groups.spec.ts
-      # Same gate as the PR job: a green run that executed nothing is the failure
-      # mode this whole suite is built against, and a nightly nobody watches is
-      # the easiest place for it to hide.
-      - name: Assert the spec actually ran
-        if: always()
-        working-directory: frontend
-        run: node scripts/assert-e2e-ran.mjs e2e-report.json
-      - name: Upload the Playwright report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: e2e-nightly-report
-          path: |
-            frontend/e2e-report.json
-            frontend/playwright-report/
-          if-no-files-found: ignore
+      # Retrieval recall (Plan B #15). Here rather than in the PR gate for the
+      # reason at the top of this file: it needs the embedder. `library
+      # eval-recall` runs as a CLI command inside the api container, seeding and
+      # querying the database directly — it needs no authenticated user and
+      # makes no HTTP call through the app, so it needs nothing this job used to
+      # set up for the (now-deleted) browser journey.
+      #
+      # `continue-on-error: true` so this step only ever REPORTS — it can never
+      # abort the job. It cannot gate today regardless: the corpus is
+      # deliberately built so some cases fail at baseline (see
+      # `library.ask.recall_scenarios`), and gating on it would reinstate an
+      # abort this workflow has already had to be fixed for once. Gating on a
+      # regression becomes possible once every case passes at baseline and stays
+      # that way; re-tightening this step is a deliberate follow-up, not done
+      # here.
+      - name: Measure retrieval recall
+        continue-on-error: true
+        run: docker compose exec -T api library eval-recall
       - name: Stack logs on failure
         if: failure()
         run: docker compose logs --tail 200

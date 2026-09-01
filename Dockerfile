@@ -84,10 +84,34 @@ ENV LIBRARY_GIT_SHA=$GIT_SHA
 # a real summary (or a null-pct placeholder) so the published image ships one.
 COPY --chown=app:app pyproject.toml coverage-summar[y].json /app/
 
+# The recorded retrieval-recall baseline, read by `library eval-recall` at
+# RECALL_BASELINE_PATH (`Path(__file__).parents[2]` → /app here). Without it the
+# command runs but prints no delta against the last recorded run, which is the
+# whole point of having recorded one. Same bracket-glob trick as above so a
+# checkout with no baseline yet still builds.
+COPY --chown=app:app recall-baselin[e].json /app/
+
+# The vendored RapidOCR weights (GH #109), read at run time from
+# /app/models/ocr via library.ocr.weights.MODEL_DIR. Without this COPY the
+# photo OCR path falls back to downloading them from modelscope.cn on the
+# first JPEG/PNG/HEIC after every container recreate — which is the failure
+# this replaced, and which no healthcheck saw until a document failed.
+# compose-smoke asserts these are present in the running container.
+COPY --chown=app:app models/ /app/models/
+
 # The markdown docs the admin Architecture view renders read-only at runtime
 # (Settings.docs_dir default `docs` → /app/docs). Top-level *.md only — the
 # heavy docs/ subtrees are kept out of the build context by .dockerignore.
 COPY --chown=app:app docs/*.md /app/docs/
+
+# The Claude Agent SDK ships a platform-native Claude Code CLI binary inside its
+# wheel (ELF here, ~317MB) and shells out to it — that subprocess *is* how the
+# subscription LLM backend authenticates, so it has to be executable. Some
+# build/copy paths strip the execute bit; restore it rather than discover the
+# loss as an opaque "command failed" at query time. The empty-string guard keeps
+# the build working if a future SDK release stops bundling the binary.
+RUN CLAUDE_BIN="$(find /app/.venv -path '*/claude_agent_sdk/_bundled/claude' -print -quit)" \
+    && if [ -n "$CLAUDE_BIN" ]; then chmod +x "$CLAUDE_BIN"; fi
 
 ENV PATH="/app/.venv/bin:$PATH"
 

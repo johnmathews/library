@@ -8,10 +8,14 @@ loop-bound connection.
 
 import asyncio
 import hashlib
+import json
 import sys
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
+from decimal import Decimal
+from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit, urlunsplit
 
 import typer
 from anthropic import AsyncAnthropic
@@ -19,9 +23,15 @@ from sqlalchemy import BigInteger, Select, cast, exists, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from library.ask.disclosure_eval import DisclosureVerdict, score
+from library.ask.disclosure_scenarios import SCENARIOS, Scenario
+from library.ask.engine import _tool_result_payloads, run_ask
+from library.ask.recall_eval import RecallVerdict, score_recall
+from library.ask.recall_scenarios import CASES, CORPUS
 from library.auth.passwords import hash_password
 from library.auth.service import revoke_all_credentials
 from library.config import get_settings
+from library.embedding.client import embed_query
 from library.extraction.apply import get_or_create_user_recipient
 from library.extraction.eval import (
     combine,
@@ -43,11 +53,13 @@ from library.jobs import (
     job_app,
     markdown_document,
     process_document,
+    run_embed,
 )
 from library.models import (
     Document,
     DocumentChunk,
     DocumentPage,
+    DocumentSource,
     DocumentStatus,
     EvalRun,
     IngestionEvent,
@@ -56,6 +68,7 @@ from library.models import (
     User,
 )
 from library.pdf_unlock import PdfLockedError, unlock_pdf
+from library.search import DocumentFilters, semantic_search
 from library.storage import path_for, remove, store
 
 app: typer.Typer = typer.Typer(
@@ -522,6 +535,103 @@ def backfill_summaries(
 
     count = _run(operation)
     typer.echo(f"queued extraction for {count} document(s)")
+
+
+@app.command("label-archive")
+def label_archive(
+    limit: int = typer.Option(0, "--limit", help="Stop after this many documents (0 = all)."),
+    only: int = typer.Option(0, "--only", help="Label just this document id."),
+    relabel: bool = typer.Option(
+        False, "--relabel", help="Also re-label documents that already carry labels."
+    ),
+) -> None:
+    """Seed the facet vocabulary if needed, then label documents that lack labels."""
+    from library.facets.apply import label_and_apply
+    from library.facets.backfill import run_backfill
+    from library.facets.seed import seed_vocabulary
+
+    settings = get_settings()
+
+    async def _operation(session: AsyncSession) -> tuple[int, int, int]:
+        created = await seed_vocabulary(session)
+        await session.commit()
+        if created:
+            typer.echo(f"seeded {created} facet values")
+        if only:
+            outcome = await label_and_apply(session, settings, only)
+            if outcome is None:
+                return 0, 0, 1
+            await session.commit()
+            typer.echo(f"document {only}: {outcome.applied}")
+            if not outcome.applied:
+                return 0, 1, 0
+            return 1, 0, 0
+        return await run_backfill(session, settings, relabel=relabel, limit=limit or None)
+
+    labelled, empty, skipped = _run(_operation)
+    typer.echo(f"labelled {labelled}, empty {empty}, skipped {skipped}")
+
+
+@app.command("recipients")
+def recipients_command(
+    list_duplicates: bool = typer.Option(False, "--list", help="Show duplicate groups."),
+    merge: str = typer.Option(
+        "", "--merge", help="KEEP_ID:DROP_ID[,DROP_ID...] — repoint and delete."
+    ),
+) -> None:
+    """Inspect and consolidate duplicate recipient rows."""
+    from library.facets.recipients import duplicate_recipient_groups, merge_recipients
+
+    async def _operation(session: AsyncSession) -> str | None:
+        if merge:
+            keep_raw, _, drops_raw = merge.partition(":")
+            if not drops_raw:
+                return "error: expected KEEP_ID:DROP_ID[,DROP_ID...]"
+            try:
+                keep_id = int(keep_raw)
+                drop_ids = [int(part) for part in drops_raw.split(",")]
+            except ValueError:
+                return "error: KEEP_ID and DROP_ID must be integers"
+            try:
+                moved = await merge_recipients(session, keep_id, drop_ids)
+            except ValueError as exc:
+                return f"error: {exc}"
+            await session.commit()
+            return f"moved {moved} documents"
+        if list_duplicates:
+            groups = await duplicate_recipient_groups(session)
+            if not groups:
+                return "no duplicate recipients"
+            lines = []
+            for key, members in groups:
+                rendered = ", ".join(f"{rid}={name!r} ({n} docs)" for rid, name, n in members)
+                lines.append(f"{key}: {rendered}")
+            return "\n".join(lines)
+        return None
+
+    result = _run(_operation)
+    if result is None:
+        typer.echo("(pass --list or --merge)")
+        return
+    typer.echo(result)
+    if result.startswith("error:"):
+        raise typer.Exit(code=1)
+
+
+@app.command("backfill-amounts")
+def backfill_amounts(
+    limit: int = typer.Option(0, "--limit", help="Stop after this many documents (0 = all)."),
+) -> None:
+    """Decide amount_kind (and capture reference) for documents that lack it."""
+    from library.money.backfill import run_amount_backfill
+
+    settings = get_settings()
+
+    async def _operation(session: AsyncSession) -> tuple[int, int, int]:
+        return await run_amount_backfill(session, settings, limit=limit or None)
+
+    classified, empty, skipped = _run(_operation)
+    typer.echo(f"classified {classified}, empty {empty}, skipped {skipped}")
 
 
 @app.command("sweep-matters")
@@ -1039,6 +1149,593 @@ def eval_extractions(
         fw = "-" if scores["flywheel_accuracy"] is None else f"{scores['flywheel_accuracy']:.0%}"
         jg = "-" if scores["judge_agreement"] is None else f"{scores['judge_agreement']:.0%}"
         typer.echo(f"{field:<18}{fw:>12}{jg:>12}{scores['n']:>6}")
+
+
+def _redact_database_url(url: str) -> str:
+    """``url`` with any embedded password blanked, safe to print to a terminal.
+
+    Deliberately NOT ``sqlalchemy.engine.make_url(url).render_as_string(
+    hide_password=True)``, despite that being the obvious "use the tested
+    library" fix for the regex this replaced. Verified by executing both
+    against ``postgresql+asyncpg://lib:p@ss@db/library`` (a password
+    containing an unencoded ``@``): SQLAlchemy's own URL parser
+    (``sqlalchemy.engine.url._parse_url``) uses a ``[^@]*`` password group in
+    its regex, which — exactly like the hand-rolled regex this function used
+    to use — stops at the FIRST unescaped ``@``, parsing password ``"p"`` and
+    host ``"ss@db"``. ``render_as_string(hide_password=True)`` then still
+    renders ``...lib:***@ss@db/library``, leaking the password's tail ``ss``
+    as part of what it thinks is the host — the exact bug this function
+    exists to fix, reproduced through the "fix".
+
+    ``urllib.parse.urlsplit`` does not have this problem: per RFC 3986 it
+    splits an authority's userinfo from its host at the LAST ``@``, so
+    ``rpartition("@")`` on the netloc always finds the real host boundary
+    regardless of how many literal ``@`` characters the password contains.
+    """
+    parts = urlsplit(url)
+    userinfo, sep, hostport = parts.netloc.rpartition("@")
+    if sep and ":" in userinfo:
+        user, _, _password = userinfo.partition(":")
+        userinfo = f"{user}:***"
+    return urlunsplit(parts._replace(netloc=f"{userinfo}{sep}{hostport}"))
+
+
+async def _seed_scenario(session: AsyncSession, scenario: Scenario) -> None:
+    """Seed one scenario's documents into ``session`` and flush — never commit.
+
+    Looks up each sender by name / each kind by slug rather than blindly
+    inserting, so a scenario re-run against the same (rolled-back-to) database
+    reuses rows instead of tripping ``Sender.name``'s unique constraint. Kinds
+    are never created here: they are seeded by migration, and a typo'd slug
+    should fail loudly (``scalar_one``) rather than silently invent a new kind.
+    """
+    senders: dict[str, Sender] = {}
+    kinds: dict[str, Kind] = {}
+    for index, seed_doc in enumerate(scenario.docs):
+        sender = senders.get(seed_doc.sender_name)
+        if sender is None:
+            sender = (
+                await session.execute(select(Sender).where(Sender.name == seed_doc.sender_name))
+            ).scalar_one_or_none()
+            if sender is None:
+                sender = Sender(name=seed_doc.sender_name)
+                session.add(sender)
+                await session.flush()
+            senders[seed_doc.sender_name] = sender
+
+        kind = kinds.get(seed_doc.kind_slug)
+        if kind is None:
+            kind = (
+                await session.execute(select(Kind).where(Kind.slug == seed_doc.kind_slug))
+            ).scalar_one()
+            kinds[seed_doc.kind_slug] = kind
+
+        marker = f"disclosure-eval:{scenario.name}:{index}"
+        session.add(
+            Document(
+                sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                mime_type="application/pdf",
+                source=DocumentSource.UPLOAD,
+                title=seed_doc.title,
+                sender=sender,
+                kind=kind,
+                document_date=seed_doc.document_date,
+                amount_total=Decimal(seed_doc.amount) if seed_doc.amount is not None else None,
+                currency=seed_doc.currency,
+                review_status=seed_doc.review_status,
+            )
+        )
+    await session.flush()
+
+
+async def _seed_corpus(session: AsyncSession) -> dict[str, int]:
+    """Seed the recall corpus and embed it; return marker -> document id.
+
+    Embeds through ``jobs.run_embed`` rather than inserting chunks directly, so
+    the eval measures the pipeline that actually runs in production — chunking
+    rules, comment handling, and (once Plan B Task 7 lands) the contextual
+    header. A hand-rolled insert here would quietly stop measuring #6 the moment
+    it shipped, which is the one thing this eval exists to measure.
+
+    Flushes but never commits: the caller runs inside ``_run_rolled_back``.
+    ``run_embed`` calls ``session.commit()`` internally to record its ingestion
+    event; under that binding a commit can only release a SAVEPOINT.
+    """
+    senders: dict[str, Sender] = {}
+    kinds: dict[str, Kind] = {}
+    ids_by_marker: dict[str, int] = {}
+
+    for doc in CORPUS:
+        sender = senders.get(doc.sender_name)
+        if sender is None:
+            sender = (
+                await session.execute(select(Sender).where(Sender.name == doc.sender_name))
+            ).scalar_one_or_none()
+            if sender is None:
+                sender = Sender(name=doc.sender_name)
+                session.add(sender)
+                await session.flush()
+            senders[doc.sender_name] = sender
+
+        kind = kinds.get(doc.kind_slug)
+        if kind is None:
+            kind = (
+                await session.execute(select(Kind).where(Kind.slug == doc.kind_slug))
+            ).scalar_one()
+            kinds[doc.kind_slug] = kind
+
+        marker = f"recall-eval:{doc.marker}"
+        document = Document(
+            sha256=hashlib.sha256(marker.encode()).hexdigest(),
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            title=doc.title,
+            sender=sender,
+            kind=kind,
+            document_date=doc.document_date,
+            ocr_text=doc.body,
+        )
+        session.add(document)
+        await session.flush()
+        ids_by_marker[doc.marker] = document.id
+
+    await session.flush()
+    for doc in CORPUS:
+        seeded_document = await session.get(Document, ids_by_marker[doc.marker])
+        if seeded_document is None:  # pragma: no cover - just flushed it
+            raise RuntimeError(f"seeded document for {doc.marker} vanished")
+        await run_embed(session, seeded_document)
+
+    # Post-condition: ``run_embed`` is fail-open by design (a disabled or
+    # unreachable embedder is recorded as an ``IngestionEvent`` and swallowed,
+    # never raised — see its docstring). Left unchecked, a seed that embedded
+    # nothing still "succeeds": every case's ``semantic_search`` call then
+    # falls back to the FTS leg of RRF alone and prints plausible-looking
+    # per-case numbers that are not measuring retrieval recall at all. The
+    # corpus guarantees exactly one chunk per document, so "every seeded
+    # document has at least one chunk" is the right — and cheap — assertion.
+    seeded_ids = list(ids_by_marker.values())
+    chunk_count_rows = (
+        await session.execute(
+            select(DocumentChunk.document_id, func.count())
+            .where(DocumentChunk.document_id.in_(seeded_ids))
+            .group_by(DocumentChunk.document_id)
+        )
+    ).all()
+    # NOT `dict(result.tuples())`: `Result` (and its `.tuples()`, which just
+    # returns `self`) exposes a `.keys()` method, so the plain `dict()`
+    # builtin takes that as a signal to use the MAPPING protocol — calling
+    # `result[key]` for each column name — rather than iterating (key, value)
+    # pairs, and raises exactly this `TypeError`. `.all()` first materialises
+    # plain `Row` objects with no `.keys()` of their own, so the comprehension
+    # below iterates pairs as intended. Verified by execution: the `dict(...
+    # .tuples())` form failed every seed-corpus test with this exact error.
+    counts_by_document_id: dict[int, int] = {  # noqa: C416 -- dict() rejects Row's tuple typing
+        document_id: count for document_id, count in chunk_count_rows
+    }
+    unembedded_markers = [
+        marker
+        for marker, document_id in ids_by_marker.items()
+        if not counts_by_document_id.get(document_id)
+    ]
+    if unembedded_markers:
+        raise RuntimeError(
+            f"_seed_corpus: {len(unembedded_markers)} of {len(ids_by_marker)} seeded "
+            f"documents produced no chunks after run_embed "
+            f"({', '.join(unembedded_markers[:5])}"
+            f"{', ...' if len(unembedded_markers) > 5 else ''}). run_embed is fail-open, "
+            "so this almost always means the embedder is disabled "
+            "(LIBRARY_EMBEDDING_ENABLED=false) or unreachable — check settings and "
+            "IngestionEvent rows before assuming the corpus or the retriever is at fault. "
+            "Left unraised, eval-recall would silently score the FTS leg of RRF alone and "
+            "report it as retrieval recall."
+        )
+
+    return ids_by_marker
+
+
+def _coverage_from_turn_messages(turn_messages: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Every ``coverage`` block a ``tool_result`` handed the model this turn,
+    merged into one ``{"excluded": ..., "needs_review": ...}`` block.
+
+    Reuses ``ask.engine._tool_result_payloads`` to decode ``tool_result``
+    blocks rather than re-implementing the unwrap here: that helper already
+    handles both backends' shapes (the ``api`` backend's single JSON-encoded
+    ``content`` string, and the ``subscription`` backend's double-wrapped
+    ``content`` — a JSON-encoded list of SDK content blocks whose inner
+    ``text`` holds the real payload). A second hand-rolled copy of this logic
+    is exactly how the two drifted apart before (it only handled the ``api``
+    shape, so this eval always reported "no coverage block reached the
+    model" against the ``subscription`` backend it actually drives).
+
+    Deliberately does NOT recompute coverage from the seeded rows: the eval
+    must grade what the model was actually shown and did with it, not
+    re-derive the arithmetic and grade that against itself.
+
+    **Merged, not last-wins.** A turn may call more than one coverage-carrying
+    tool before answering — e.g. `sum_amount` (which reports a real gap) then
+    a follow-up `list` to enumerate matches (whose own coverage can be empty,
+    since `list`'s only exclusion reason is `over_limit`). Keeping only the
+    final block would grade the model against the emptier one and pass the
+    scenario vacuously even though an earlier tool result DID carry a gap.
+    Merging takes, for each `excluded` reason, the maximum count reported by
+    any coverage-carrying result this turn, and the maximum `needs_review`
+    likewise — so a gap surfaced by an earlier call is never silently
+    overwritten by a later, unrelated one. ``matched``/``included`` are
+    dropped from the merged result: they are not aggregable across different
+    tools' different aggregates, and ``library.ask.disclosure_eval.score``
+    only ever reads ``excluded`` and ``needs_review``.
+    """
+    excluded: dict[str, int] = {}
+    needs_review = 0
+    seen_any = False
+    for payload in _tool_result_payloads(turn_messages):
+        if not (isinstance(payload, dict) and isinstance(payload.get("coverage"), dict)):
+            continue
+        seen_any = True
+        coverage = payload["coverage"]
+        raw_excluded = coverage.get("excluded")
+        if isinstance(raw_excluded, dict):
+            for reason, count in raw_excluded.items():
+                try:
+                    count_int = int(count)
+                except (TypeError, ValueError):
+                    continue
+                if count_int > excluded.get(reason, 0):
+                    excluded[reason] = count_int
+        try:
+            needs_review_candidate = int(coverage.get("needs_review") or 0)
+        except (TypeError, ValueError):
+            needs_review_candidate = 0
+        needs_review = max(needs_review, needs_review_candidate)
+    if not seen_any:
+        return None
+    return {"excluded": excluded, "needs_review": needs_review}
+
+
+def _run_rolled_back[T](operation: Callable[[AsyncSession], Awaitable[T]]) -> T:
+    """Run ``operation`` inside an outer, connection-level transaction that is
+    unconditionally rolled back — the standard SQLAlchemy "external
+    transaction" pattern for tests, used here (unlike plain ``_run``) because
+    this command's session touches the CONFIGURED database, which may be the
+    real archive, by default.
+
+    ``engine.connect()`` + ``conn.begin()`` opens one transaction on the
+    connection; the session is then bound to that connection with
+    ``join_transaction_mode="create_savepoint"``, so every ``session.begin()``
+    the ORM does internally (autobegin, and each explicit
+    ``session.commit()``/``session.rollback()``) opens and closes a SAVEPOINT
+    nested inside that outer transaction instead of touching it. A stray
+    ``commit()`` anywhere in the call graph — the write tool's confirmation-
+    gated ``_run_update_document``, a future code path, a bug in this eval
+    itself — can therefore only release a savepoint; it cannot make the outer
+    transaction's writes visible to any other connection, and the ``finally``
+    below rolls that outer transaction back regardless of how ``operation``
+    returns. This makes "nothing is committed" a structural property of HOW
+    the session is bound, rather than resting solely on the per-scenario
+    ``session.rollback()`` in the eval commands — which stays in place
+    below as a second, independent safety net that also clears each
+    scenario's savepoint so one scenario's seeded rows can never bleed into
+    the next scenario's query results.
+    """
+
+    async def _execute() -> T:
+        engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
+        try:
+            async with engine.connect() as conn:
+                outer_transaction = await conn.begin()
+                try:
+                    async with AsyncSession(
+                        bind=conn,
+                        expire_on_commit=False,
+                        join_transaction_mode="create_savepoint",
+                    ) as session:
+                        return await operation(session)
+                finally:
+                    await outer_transaction.rollback()
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_execute())
+
+
+@app.command("eval-disclosure")
+def eval_disclosure(
+    only: str | None = typer.Option(None, "--only", help="Run just this scenario by name."),
+) -> None:
+    """Measure whether Ask's model discloses incomplete coverage.
+
+    Seeds synthetic scenarios (``library.ask.disclosure_scenarios``), drives
+    the real Ask loop against each with ``run_ask(..., backend="subscription")``,
+    and scores the answer with ``library.ask.disclosure_eval.score`` for
+    whether it owned up to the gaps its own ``coverage`` block reported. Every
+    existing test asserts only that the *instruction* is present in the system
+    prompt; this checks that behaviour actually follows it.
+
+    **Nothing is committed**, structurally. ``_run_rolled_back`` binds the
+    session to a connection already holding an outer transaction
+    (``join_transaction_mode="create_savepoint"``), so ANY ``commit()``
+    reachable from ``run_ask`` — in practice only the confirmation-gated write
+    tool, ``_run_update_document`` in ``ask/engine.py``, which refuses
+    ``confirmed=true`` unless the target document was *previewed* in an
+    EARLIER turn that a single fresh question can never satisfy (verified by
+    reading ``ask/engine.py``, not assumed) — can only release a SAVEPOINT,
+    never the outer transaction. That outer transaction is rolled back
+    unconditionally once every scenario has run. Each scenario's seeded
+    documents are additionally ``session.add``ed, ``flush``ed and rolled back
+    per-scenario on top of that, so the configured database is left exactly
+    as it was on success or failure alike, by two independent mechanisms.
+
+    Requires working Claude credentials — CI has none, which is why this is a
+    command rather than a test. Point ``LIBRARY_CLAUDE_CONFIG_DIR`` at a
+    directory with valid credentials (e.g. ``~/.claude``) when running
+    locally.
+
+    Exits non-zero if any scenario fails, so it can gate a release by hand.
+    """
+    settings = get_settings()
+    typer.echo(
+        f"WARNING: eval-disclosure seeds synthetic documents into "
+        f"{_redact_database_url(settings.database_url)} to drive live Ask questions. "
+        "Every seed is flushed then rolled back — nothing is committed."
+    )
+
+    scenarios = [s for s in SCENARIOS if only is None or s.name == only]
+    if not scenarios:
+        typer.echo(f"error: no scenario named {only!r}")
+        raise typer.Exit(code=1)
+
+    async def operation(
+        session: AsyncSession,
+    ) -> list[tuple[dict[str, Any] | None, DisclosureVerdict | None]]:
+        client = AsyncAnthropic(api_key="unused")  # subscription backend never calls the API
+        results: list[tuple[dict[str, Any] | None, DisclosureVerdict | None]] = []
+        for scenario in scenarios:
+            try:
+                await _seed_scenario(session, scenario)
+                result = await run_ask(
+                    session,
+                    question=scenario.question,
+                    settings=settings,
+                    client=client,
+                    backend="subscription",
+                )
+                coverage = _coverage_from_turn_messages(result.turn_messages)
+                if coverage is None:
+                    typer.echo(
+                        f"SKIP {scenario.name} — no coverage block reached the model "
+                        f"(tools used: {result.used_tools or ['none']})"
+                    )
+                    results.append((None, None))
+                    continue
+                verdict = score(
+                    scenario.name,
+                    coverage,
+                    result.answer,
+                    expect_disclosure=scenario.expect_disclosure,
+                )
+                results.append((coverage, verdict))
+            finally:
+                # Runs on success, failure, and exception alike: no scenario's
+                # synthetic documents may ever reach the configured database.
+                await session.rollback()
+        return results
+
+    results = _run_rolled_back(operation)
+
+    failures = 0
+    skipped = 0
+    for scenario, (coverage, verdict) in zip(scenarios, results, strict=True):
+        if verdict is None:
+            skipped += 1
+            continue
+        # Coverage prints on PASS as well as FAIL: a recorded "N passed" line
+        # is otherwise unauditable after the fact — nothing distinguishes "the
+        # model disclosed a real gap" from "there was nothing to disclose".
+        excluded = coverage.get("excluded", {}) if coverage else {}
+        needs_review = coverage.get("needs_review", 0) if coverage else 0
+        status = "PASS" if verdict.passed else "FAIL"
+        typer.echo(
+            f"{status} {scenario.name}  coverage: excluded={excluded} needs_review={needs_review}"
+        )
+        if not verdict.passed:
+            failures += 1
+            if verdict.missing:
+                typer.echo(f"  missing disclosure: {', '.join(verdict.missing)}")
+            if verdict.unexpected:
+                typer.echo(f"  unexpected hedge: {', '.join(verdict.unexpected)}")
+            typer.echo(f"  answer: {verdict.answer}")
+
+    typer.echo(
+        f"{len(scenarios) - failures - skipped} passed, {failures} failed, {skipped} skipped"
+    )
+    if failures:
+        raise typer.Exit(code=1)
+
+
+#: Where the last recorded run is kept, so a retrieval change is a measured
+#: delta rather than a recollection. Repo root, not `docs/`: it is machine-
+#: written data, and `scripts/check_docs.py` scans `docs/` for prose.
+RECALL_BASELINE_PATH: Path = Path(__file__).resolve().parents[2] / "recall-baseline.json"
+
+
+#: A recorded baseline is only comparable to a run over a haystack of roughly the
+#: same size: every case scores against the WHOLE documents table, so the same
+#: corpus faces 259 competing archive documents on a populated instance and
+#: almost none on a fresh CI stack. Below this relative difference the drift is
+#: ordinary archive growth; above it, a delta says more about the haystack than
+#: about retrieval.
+BASELINE_ARCHIVE_TOLERANCE: float = 0.10
+
+
+def _warn_if_baseline_is_not_comparable(recorded: dict[str, Any], archive_documents: int) -> None:
+    """Say so when the baseline was measured against a different-sized archive."""
+    measured_against = recorded.get("measured_against")
+    if not isinstance(measured_against, dict):
+        typer.echo(
+            "note: the recorded baseline predates provenance, so the archive it was "
+            "measured against is unknown and the deltas below may not be comparable"
+        )
+        return
+
+    previous = measured_against.get("archive_documents")
+    if not isinstance(previous, int):
+        return
+
+    drift = abs(archive_documents - previous)
+    if drift > max(5, int(BASELINE_ARCHIVE_TOLERANCE * previous)):
+        typer.echo(
+            f"WARNING: baseline was measured against {previous} archive documents, "
+            f"this run against {archive_documents}. Every case scores over the whole "
+            "documents table, so the deltas below reflect the change in haystack as "
+            "much as any change in retrieval. Re-record the baseline here before "
+            "trusting them."
+        )
+
+
+def _report_recall(
+    verdicts: list[RecallVerdict], *, write_baseline: bool, archive_documents: int
+) -> None:
+    """Print each case, the mean, and the delta against the recorded baseline."""
+    baseline: dict[str, float] = {}
+    if RECALL_BASELINE_PATH.exists():
+        recorded = json.loads(RECALL_BASELINE_PATH.read_text())
+        baseline = recorded.get("cases", {})
+        _warn_if_baseline_is_not_comparable(recorded, archive_documents)
+
+    failures = 0
+    for verdict in verdicts:
+        status = "PASS" if verdict.passed else "FAIL"
+        previous = baseline.get(verdict.case)
+        delta = "" if previous is None else f"  ({verdict.recall - previous:+.2f} vs baseline)"
+        typer.echo(f"{status} {verdict.case}  recall@{verdict.k}={verdict.recall:.2f}{delta}")
+        if not verdict.passed:
+            failures += 1
+            typer.echo(f"  missed document ids: {list(verdict.missed)}")
+            typer.echo(f"  retrieved instead:   {list(verdict.retrieved)}")
+
+    mean = sum(v.recall for v in verdicts) / len(verdicts) if verdicts else 0.0
+    typer.echo(f"{len(verdicts) - failures} passed, {failures} failed, mean recall {mean:.3f}")
+
+    if write_baseline:
+        RECALL_BASELINE_PATH.write_text(
+            json.dumps(
+                {
+                    "mean": mean,
+                    "cases": {v.case: v.recall for v in verdicts},
+                    # Provenance, so a later reader can tell a real retrieval
+                    # delta from a change of haystack. Counts only: this file is
+                    # committed to a public repository.
+                    "measured_against": {
+                        "archive_documents": archive_documents,
+                        "corpus_documents": len(CORPUS),
+                    },
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+        typer.echo(f"wrote baseline to {RECALL_BASELINE_PATH}")
+
+    if failures:
+        raise typer.Exit(code=1)
+
+
+@app.command("eval-recall")
+def eval_recall(
+    only: str | None = typer.Option(None, "--only", help="Run just this case by name."),
+    ask: bool = typer.Option(
+        False,
+        "--ask",
+        help="Drive the full Ask loop and score its citations, not raw retrieval.",
+    ),
+    write_baseline: bool = typer.Option(
+        False, "--write-baseline", help="Overwrite recall-baseline.json with this run."
+    ),
+) -> None:
+    """Measure whether retrieval reaches the documents that answer a question.
+
+    Seeds the synthetic corpus (``library.ask.recall_scenarios``), embeds it
+    through the real pipeline, runs each case's question through
+    ``semantic_search``, and scores recall@k.
+
+    ``--ask`` drives the real Ask loop instead of calling the retriever
+    directly, and scores the document ids the answer CITED. This is the only
+    layer that can show whether the model actually uses the filters (#5) and
+    depth (#7) the tool schema offers it — layer 1 calls the retriever with
+    fixed arguments and so cannot tell a schema the model exploits from one it
+    ignores. It needs Claude credentials, which is why it is a flag rather than
+    the default: without it this command runs anywhere an embedder is reachable,
+    CI included.
+
+    **Nothing is committed**, structurally — see ``_run_rolled_back``.
+
+    Requires a reachable bge-m3 sidecar (``LIBRARY_EMBEDDING_SERVICE_URL``); it
+    does NOT require Claude credentials, which is why it can run in CI while
+    ``eval-disclosure`` cannot. Note TEI publishes no arm64 image, so this does
+    not run on an Apple Silicon laptop — use the deployed host or the nightly
+    workflow.
+
+    Exits non-zero if any case fails, so it can gate a release by hand.
+    """
+    if write_baseline and ask:
+        typer.echo("error: --write-baseline records retrieval recall; drop --ask")
+        raise typer.Exit(code=1)
+    if write_baseline and only is not None:
+        typer.echo(
+            "error: --write-baseline must cover every case; drop --only "
+            "(a filtered run would silently clobber the other cases' recorded recall)"
+        )
+        raise typer.Exit(code=1)
+
+    settings = get_settings()
+    typer.echo(
+        f"WARNING: eval-recall seeds {len(CORPUS)} synthetic documents into "
+        f"{_redact_database_url(settings.database_url)} and embeds them. "
+        "Every seed is flushed then rolled back — nothing is committed."
+    )
+
+    cases = [case for case in CASES if only is None or case.name == only]
+    if not cases:
+        typer.echo(f"error: no case named {only!r}")
+        raise typer.Exit(code=1)
+
+    async def operation(session: AsyncSession) -> tuple[list[RecallVerdict], int]:
+        # Counted BEFORE seeding, so it is the real archive this ran against and
+        # not the archive plus the fixtures.
+        archive_documents = int(
+            (await session.execute(select(func.count()).select_from(Document))).scalar_one()
+        )
+        ids_by_marker = await _seed_corpus(session)
+        client = AsyncAnthropic(api_key="unused")  # subscription backend never calls the API
+        verdicts: list[RecallVerdict] = []
+        for case in cases:
+            expected = [ids_by_marker[marker] for marker in case.expected_markers]
+            if ask:
+                result = await run_ask(
+                    session,
+                    question=case.question,
+                    settings=settings,
+                    client=client,
+                    backend="subscription",
+                )
+                retrieved = [citation.document_id for citation in result.citations]
+            else:
+                embedding = await embed_query(case.question, settings=settings)
+                hits = await semantic_search(
+                    session,
+                    query=case.question,
+                    query_embedding=embedding,
+                    filters=DocumentFilters(),
+                    top_k=case.k,
+                )
+                retrieved = [hit.document.id for hit in hits]
+            verdicts.append(score_recall(case.name, expected, retrieved, k=case.k))
+        return verdicts, archive_documents
+
+    verdicts, archive_documents = _run_rolled_back(operation)
+    _report_recall(verdicts, write_baseline=write_baseline, archive_documents=archive_documents)
 
 
 def main() -> None:

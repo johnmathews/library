@@ -2,6 +2,7 @@ import { computed, ref } from 'vue'
 import { defineStore } from 'pinia'
 import { ApiError, apiFetch } from '@/api/client'
 import {
+  DEFAULT_ASK_PROFILE,
   DEFAULT_BACKGROUND_TONE,
   DEFAULT_DOCK_POSITION,
   DEFAULT_HIDE_SUMMARY_MOBILE,
@@ -72,6 +73,9 @@ export const useAuthStore = defineStore('auth', () => {
   // Whether to hide each dashboard tile's description on phones (< 641px).
   // Server-synced; defaults (show it) when the user is absent or a payload
   // predates the preference.
+  const askProfile = computed<string>(
+    () => user.value?.preferences?.ask_profile ?? DEFAULT_ASK_PROFILE,
+  )
   const hideSummaryMobile = computed<boolean>(
     () => user.value?.preferences?.hide_summary_mobile ?? DEFAULT_HIDE_SUMMARY_MOBILE,
   )
@@ -141,6 +145,7 @@ export const useAuthStore = defineStore('auth', () => {
     dockPosition,
     phoneColumns,
     hideSummaryMobile,
+    askProfile,
     notificationSettings,
     kindColors,
     applyPreferences,

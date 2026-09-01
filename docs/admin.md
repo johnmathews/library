@@ -1,7 +1,7 @@
 # Admin role & admin views
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: `/matters` is a normal route with admin-gated *writes*, not an admin-only page; the Metadata tab covers senders, recipients, kinds, currencies and FX, not recipients alone).
-**Last verified:** 2026-08-12 — method: checked every endpoint, verb, status code and 409 body key against `src/library/api/admin/*.py`, `require_admin` and its mount in `app.py`, the `user`/`sweep-matters` CLI commands, and the router guard, tab list and per-row affordances in `frontend/src/views/admin/**` and `AppSidebar.vue`.
+**Status:** active. **Last updated:** 2026-08-31 (§1.2.5 said the override tables "have not been dropped yet". Migration 0038 dropped them, so the sentence now says the collision it describes cannot arise even in principle.) Earlier the same day (the legacy series stack was deleted: currency normalisation is now a single `UPDATE documents` with no conflict case, so the `409` and its conflict list are gone from §1.2.5; the confirm step stays. **Fix round 1:** §1.2.5 said the override tables "went with the legacy series stack", which reads as the drop migration having shipped — corrected to say the code that read them went, and that the tables are orphaned until the drop). Earlier: 2026-08-12 (documentation verification sweep: `/matters` is a normal route with admin-gated *writes*, not an admin-only page; the Metadata tab covers senders, recipients, kinds, currencies and FX, not recipients alone).
+**Last verified:** 2026-08-31 — method: partial, scoped to §1.2.5's closing paragraph. Checked the corrected sentence against `migrations/versions/0038_drop_series_stack.py` (both override tables are in `_DROP_ORDER`) and against `tests/test_migrations.py::test_series_stack_tables_are_dropped`, which asserts the drop on a migrated database. Nothing else was re-checked; the rest carries forward the verification below unchanged, whose method was: partial, scoped to §1.2.5 and the `/currencies/normalize` route-table row.
 
 The library is a multi-user "named family accounts over one shared library"
 (see [architecture.md](architecture.md) §1.5). On top of that, a single boolean
@@ -69,7 +69,7 @@ All under `require_admin`:
 | `POST` / `PATCH` / `DELETE /api/admin/senders[/{id}]` | senders: create / rename-or-merge / reassign-then-delete — identical contract to recipients (§1.2.3) |
 | `PATCH` / `DELETE /api/admin/kinds/{slug}` | kinds (slug-keyed): rename the display name only (no merge), or reassign-then-delete by slug (§1.2.3) |
 | `GET /api/admin/currencies` | distinct currency codes in use, with document counts (§1.2.5) |
-| `POST /api/admin/currencies/normalize` | rename a currency code across the whole store, series-aware (§1.2.5) |
+| `POST /api/admin/currencies/normalize` | rename a currency code across the whole store (§1.2.5) |
 | `GET /api/admin/fx-rates` | FX-rate seeding status per in-use currency (§1.2.6) |
 | `POST /api/admin/fx-rates` | seed an FX rate (live fetch or manual entry) so conversion resolves (§1.2.6) |
 
@@ -166,36 +166,41 @@ for a user under either of their names.
   stay addressed. Deletion of the user row itself is irreversible (sessions and
   API tokens cascade away with it).
 
-### 1.2.5 Currency normalisation (series-aware)
+### 1.2.5 Currency normalisation
 
-Currency is a free-text `CHAR(3)` code, not a reference table — but it is part
-of **series identity** (a series is one `(sender, kind, currency)` group), so it
-can't just be CRUDed. The Metadata tab's **Currencies** card lists the distinct
-codes in use (`GET /api/admin/currencies`) and offers a **normalise** action
-(`POST /api/admin/currencies/normalize`, `{from_code, to_code}`) that renames a
-code everywhere at once, in one transaction under a dedicated advisory lock:
+Currency is a free-text `CHAR(3)` code carried by `documents`, not a reference
+table, so it can't just be CRUDed. The Metadata tab's **Currencies** card lists
+the distinct codes in use (`GET /api/admin/currencies`) and offers a
+**normalise** action (`POST /api/admin/currencies/normalize`,
+`{from_code, to_code}`) that renames a code everywhere at once, in one
+transaction under a dedicated advisory lock:
 
-- **Plain rewrite** — `documents`, `authored_series`, and
-  `authored_series_suggestions` (`signature_currency`).
-- **Cache merge** — `series_insights` is a recomputable cache; a `from_code` row
-  that would collide with an existing `to_code` bucket is dropped (the survivor
-  is kept and regenerates on next indexing), the rest are moved.
-- **Refuse on user data** — `series_membership_overrides` and
-  `series_meta_overrides` hold user-authored pins/titles. If the rename would
-  collide there, the whole operation is **refused** (`409`, listing the
-  conflicts) and nothing changes — no user data is ever dropped.
+- **Plain rewrite** — a single `UPDATE documents`. `counts.documents` reports the
+  rows changed.
 - **`fx_rates` untouched** — FX rate rows are never merged across codes; if the
   target has no rate row the result flags `fx_rate_missing` so the admin knows FX
   conversion for it is unavailable until a rate is seeded.
 
+There is no longer a conflict case. The rename used to also rewrite
+`authored_series`, `authored_series_suggestions` and the `series_insights` cache,
+and to **refuse with a `409`** when it would collide in the two user-authored
+override tables — a currency was part of series identity, so a rename could
+destroy a hand-pinned membership or title. The **code** that read and rewrote
+those tables went with the legacy series stack, so the only remaining writer is
+`documents` and the operation cannot conflict: the `409` and its conflict list
+are gone from both the route and the UI. The tables themselves were dropped by
+migration 0038 shortly afterwards, see [architecture.md](architecture.md) §1.9 —
+so there is now nothing for a rename to collide in even in principle.
+
 Codes are validated as `^[A-Z]{3}$` (upper-cased first); a no-op rename (same
-code) is a `400`. The admin UI shows a confirm step before running, and surfaces
-the per-table result, the FX warning, or the conflict list. See
+code) is a `400`, and a malformed code a `422`. The admin UI still shows a
+confirm step before running — the rewrite spans every document and there is no
+per-document undo — and then surfaces the row count and the FX warning. See
 docs/api.md §1.18.6 for the exact response shapes.
 
 ### 1.2.6 FX rates (seeding conversion)
 
-Cross-currency series convert through a stored USD rate (`fx_rates`, base = USD;
+Cross-currency amounts convert through a stored USD rate (`fx_rates`, base = USD;
 `rate_to_base` is the value of one unit in USD). A **single** row per currency is
 enough — `library.fx` falls back to the nearest-date rate for any document. The
 Currencies card's **FX rates** subsection (`GET /api/admin/fx-rates`) lists every

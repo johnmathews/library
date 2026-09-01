@@ -27,6 +27,15 @@ works today (see [`CHANGELOG.md`](CHANGELOG.md) for notable changes and
   full provenance, and user edits always winning.
 - **Search:** Postgres FTS with both Dutch and English stemming,
   websearch syntax, filters, ranked snippets.
+- **Spending charts:** ask "how much am I spending on X" in plain
+  language, save it as a chart, and keep it answerable as new documents
+  arrive. Stacked bars per week/month/quarter/year, split by category or
+  sender, in a display currency of your choice — with a footer that
+  accounts for every amount the total did *not* count (excluded, undecided,
+  unconvertible) so nothing goes missing silently, and drill-through from
+  any bar or any footer count to the documents behind it, where labels and
+  payment merges can be corrected in place. See
+  [`docs/spending-view.md`](docs/spending-view.md).
 - **Web app:** Vue 3 SPA styled with the Mosaic design language (Cruip) —
   Tailwind 4, the Inter typeface, a violet accent, and dark mode —
   installable on iOS/Android, responsive to 320px.

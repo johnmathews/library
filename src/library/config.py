@@ -9,6 +9,13 @@ from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from library.extraction.pricing import MODEL_PRICING_USD_PER_MTOK
 
+# Which transport a given LLM surface uses. "api" is the metered Anthropic
+# Messages API (x-api-key, per-token billing). "subscription" reaches Claude
+# through the bundled Claude Code CLI using OAuth credentials from a Claude
+# subscription — see docs/llm-backends.md, and note the ~32k-token per-call
+# harness tax that makes it unsuitable for the batch pipeline.
+LLMBackend = Literal["api", "subscription"]
+
 # The ``*_model`` knobs whose value must have a row in
 # ``MODEL_PRICING_USD_PER_MTOK`` — an unpriced model would silently record a
 # cost of 0 and defeat the daily-spend budget gate, so we fail fast at startup.
@@ -72,6 +79,11 @@ class Settings(BaseSettings):
     pdf_unlock_passwords: Annotated[list[str], NoDecode] = []
     # Claude metadata extraction (see docs/ingestion.md, "Extraction" section).
     anthropic_api_key: SecretStr | None = None
+    # Where the Claude CLI's OAuth credentials are mounted, for any surface whose
+    # backend is "subscription". Must be writable: refreshed tokens are written
+    # back, and a read-only mount silently degrades to re-refreshing every call
+    # until the refresh token rotates out from under us.
+    claude_config_dir: Path = Path("/app/.claude")
     extraction_enabled: bool = True
     extraction_model: str = "claude-haiku-4-5"
     extraction_escalation_model: str = "claude-sonnet-4-6"
@@ -114,32 +126,71 @@ class Settings(BaseSettings):
     # short title for the sidebar history). One bounded call per new thread;
     # failure is non-fatal and falls back to the truncated question.
     ask_title_model: str = "claude-haiku-4-5"
-    ask_max_tool_turns: int = 4
-    ask_max_answer_tokens: int = 1024
+    # How many times round the tool loop before giving up. Measured on the
+    # deployed archive: 4 of 51 turns used all four calls, and none fell back to
+    # the no-answer message — so 4 was not yet failing, but had no headroom for
+    # a question needing search → read → compare → verify. Unused turns cost
+    # nothing; the loop exits as soon as the model stops asking for tools.
+    ask_max_tool_turns: int = 8
+    # Per-call output cap. **Thinking tokens count against this**, so it cannot
+    # stay at the old 1024 now that adaptive thinking is on: reasoning would eat
+    # the budget and truncate — or entirely displace — the answer. 5 of 51 turns
+    # already produced ≥1000 output tokens with thinking OFF, and the answers
+    # that crowd the cap are the table-heavy ones document view exists for.
+    ask_max_answer_tokens: int = 8192
     ask_history_turns: int = 3  # prior turns re-fed into the loop; 0 disables.
+    # Ceiling on the `top_k` Ask's semantic_search tool may request. The model
+    # can raise depth for "find every document mentioning X", but not without
+    # bound: top_k also drives semantic_search's candidate pool
+    # (`max(top_k * 5, 50)`), and every returned document costs
+    # retrieve_chunks_per_doc passages of context.
+    ask_search_max_top_k: int = 50
+
+    # --- OpenTelemetry (metrics only) --------------------------------------
+    #
+    # Both exporters are off by default and independent: Prometheus PULLS from
+    # GET /metrics, OTLP PUSHES to a collector. Enabling neither still leaves
+    # every instrument in place recording into a no-op provider, so the code
+    # path in production is the code path under test. See docs/observability.md.
+    otel_metrics_enabled: bool = False  # serve GET /metrics for Prometheus
+    otel_exporter_otlp_endpoint: str | None = None  # e.g. http://collector:4318/v1/metrics
+    otel_exporter_otlp_headers: str | None = None  # "k=v,k2=v2" per the OTel spec
+    otel_metric_export_interval_ms: int = 60_000  # OTLP push cadence
+
+    # Claude Code's OWN telemetry, for the subscription backend only. The CLI
+    # emits `claude_code.token.usage` broken down by input/output/cacheRead/
+    # cacheCreation, which is richer than anything this app can see from the
+    # outside — but it covers only the subscription path, so it complements the
+    # in-process metrics rather than replacing them.
+    #
+    # Content logging (OTEL_LOG_USER_PROMPTS, OTEL_LOG_RAW_API_BODIES,
+    # OTEL_LOG_TOOL_DETAILS, OTEL_LOG_TOOL_CONTENT) is NEVER enabled here and is
+    # actively refused at startup — Ask prompts and tool results carry the
+    # user's document text, and this app's contract is that document text does
+    # not leave the host. See `library.llm.subscription`.
+    claude_code_telemetry_enabled: bool = False
+    # Transport for the ask tool loop and its title call, and the *default* only:
+    # an admin can override it at runtime from Settings (instance_settings, see
+    # library.llm.backends), so nothing may read this field to decide a live
+    # request — call ``resolve_backend`` instead.
+    #
+    # Ask is the surface where the subscription backend pays: opus-4-8 is the
+    # priciest configured model, and calls are human-paced, so the fixed harness
+    # tax is amortised against a call that was already large. Deployments
+    # without Claude CLI credentials must set this back to "api" — the test
+    # suite does exactly that (see tests/conftest.py).
+    ask_llm_backend: LLMBackend = "subscription"
     ask_get_document_max_chars: int = 8000  # cap on get_document's returned text
     # Foreign-exchange rate seeding (see docs/admin.md, "FX rates"). The admin
     # "Fetch rate" affordance calls this keyless provider for the live USD-per-unit
     # rate; open.er-api.com returns USD->X rates, inverted to rate_to_base(X).
     fx_api_url: str = "https://open.er-api.com/v6/latest"
     fx_api_timeout_s: float = 10.0
-    # Document series + comparative queries (see docs/ask.md, "Document series").
-    series_min_documents: int = 3  # min members before stats are reported
-    series_typical_pct: float = 0.10  # half-width of the "typical" band vs median
-    series_flat_pct: float = 0.05  # |first→last change| at/below which trend is flat
-    # Authored-series auto-continue (propose-for-review). A newly-indexed
-    # document mechanically matching an authored series' dominant
-    # (sender, kind, currency) signature is recorded as a pending suggestion.
-    series_autocontinue_enabled: bool = True
-    series_autocontinue_min_dominance: float = 0.6  # min signature dominance to match
-    series_suggestion_limit: int = 20  # cap on suggested matches returned/considered
-    # Smart Groups (semantic authored series). Membership is learned from bge-m3
-    # embeddings: a document belongs when its nearest member (positive) is within
-    # `min_similarity` cosine AND closer than any pruned document (negative) by
-    # `neg_margin`. See docs/smart-groups.md.
-    semantic_group_enabled: bool = True
-    semantic_group_min_similarity: float = 0.55  # tau: min cosine to nearest positive
-    semantic_group_neg_margin: float = 0.02  # sim_pos must beat sim_neg by this margin
+    # Facet vocabulary labelling (see library.facets.labeller). Below this, a
+    # label is stored as `unknown` and queued for review rather than applied. A
+    # confidently wrong label silently moves money between charts, so the
+    # default is deliberately cautious.
+    facet_label_min_confidence: float = 0.6
     # Consume folder watcher (see docs/ingestion.md, "Consume folder" section).
     consume_dir: Path | None = None  # unset = watcher off
     consume_force_polling: bool = False  # required for NFS/SMB mounts (no inotify)

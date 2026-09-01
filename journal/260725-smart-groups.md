@@ -2,7 +2,10 @@
 
 Shipped the semantic-mode authored series ("Smart Groups") described in
 [docs/superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md](../docs/superpowers/specs/2026-07-24-smart-groups-semantic-series-design.md)
-and now documented at [docs/smart-groups.md](../docs/smart-groups.md). Commits
+and documented at the time in `docs/smart-groups.md`, since **archived**:
+[docs/archive/smart-groups.md](../docs/archive/smart-groups.md) (the feature
+was deleted on 2026-08-31 — see
+[260831-delete-series-stack.md](260831-delete-series-stack.md)). Commits
 `56624c8..5623541` on `feat/smart-groups-semantic-series`.
 
 ## Why this existed

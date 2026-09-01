@@ -103,6 +103,42 @@ def normalize_currency_code(value: str | None) -> str | None:
     return code if re.fullmatch(r"[A-Z]{3}", code) else None
 
 
+# Mirrors `library.models.AmountKind`'s values. Kept as a plain string tuple
+# here (rather than importing the enum) because this module is the Anthropic
+# structured-output schema and has no other dependency on the ORM models;
+# `apply.py` is what bridges a validated string to the real `AmountKind`.
+AMOUNT_KINDS: tuple[str, ...] = (
+    "payment_due",
+    "payment_made",
+    "assessment",
+    "refund",
+    "coverage_limit",
+    "balance",
+    "estimate",
+    "none",
+)
+
+
+def normalize_amount_kind(value: str | None) -> str | None:
+    """Map a model's answer onto one of ``AMOUNT_KINDS``, or None.
+
+    Anything unrecognised becomes None rather than a guess. None is treated as
+    not-summable downstream, so a misread can only ever cause a document to be
+    left out of a total — never wrongly added to one.
+    """
+    if value is None:
+        return None
+    candidate = value.strip().lower().replace(" ", "_").replace("-", "_")
+    return candidate if candidate in AMOUNT_KINDS else None
+
+
+# Mirrors ``library.models.Document.reference``'s column width
+# (``String(128)``). Truncating here, at the point the value is created,
+# keeps both the ingest path and the amount backfill safe without either
+# needing to know the column's width itself.
+MAX_REFERENCE_CHARS: int = 128
+
+
 class ExtractedMetadata(BaseModel):
     """Structured metadata Claude extracts from one document."""
 
@@ -156,6 +192,35 @@ class ExtractedMetadata(BaseModel):
     ]
     amount_total: str | None
     currency: str | None
+    amount_kind: str | None = Field(
+        default=None,
+        description=(
+            "What amount_total IS, not how much it is. One of: "
+            "payment_due (an invoice or bill the reader owes); "
+            "payment_made (a receipt or confirmation that money was paid); "
+            "assessment (a tax or levy demand); "
+            "refund (money returned to the reader, or an amount owed cancelled — a "
+            "credit note, refund receipt or reversal); "
+            "coverage_limit (an insurance sum insured or maximum payout — NOT "
+            "money anyone paid); "
+            "balance (an account or statement position); "
+            "estimate (a quote or indicative price, not yet owed); "
+            "none (the amount is incidental, or is zero because nothing is due). "
+            "Choose coverage_limit whenever the figure is a ceiling the insurer "
+            "would pay rather than a premium the reader paid. null if unsure — "
+            "an unsure answer leaves the amount out of totals, which is safe; a "
+            "confident wrong answer corrupts them."
+        ),
+    )
+    reference: str | None = Field(
+        default=None,
+        description=(
+            "The document's own invoice, order, booking or assessment number, "
+            "exactly as printed. This is what links an invoice to the receipt "
+            "that settles it, so copy it verbatim including any prefix or "
+            "punctuation. null when the document shows no such number."
+        ),
+    )
     due_date: Annotated[
         date | None,
         BeforeValidator(_coerce_date),
@@ -211,6 +276,7 @@ class ExtractedMetadata(BaseModel):
         "reasoning_note",
         "addressee_raw",
         "signer_raw",
+        "reference",
         mode="after",
     )
     @classmethod
@@ -218,6 +284,25 @@ class ExtractedMetadata(BaseModel):
         if value is not None and not value.strip():
             return None
         return value.strip() if value else value
+
+    @field_validator("reference", mode="after")
+    @classmethod
+    def _clamp_reference(cls, value: str | None) -> str | None:
+        """Truncate rather than discard an over-long reference.
+
+        A truncated reference is still useful evidence for matching an
+        invoice to its receipt, whereas dropping it loses the link
+        entirely. ``Document.reference`` is ``String(128)``; an unclamped
+        value from the model raises a ``DataError`` at commit time,
+        destroying the whole extraction — this keeps the value safe at the
+        point it is created, before any caller can write it to that column.
+        """
+        return value[:MAX_REFERENCE_CHARS] if value else value
+
+    @field_validator("amount_kind", mode="after")
+    @classmethod
+    def _normalize_amount_kind(cls, value: str | None) -> str | None:
+        return normalize_amount_kind(value)
 
     @field_validator("amount_total", mode="after")
     @classmethod

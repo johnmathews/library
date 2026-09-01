@@ -20,7 +20,7 @@ from sqlalchemy.ext.asyncio import (
 
 from library import jobs
 from library.config import Settings, get_settings
-from library.jobs import run_embed
+from library.jobs import compose_context_header, run_embed
 from library.models import (
     EMBEDDING_DIM,
     Document,
@@ -28,6 +28,7 @@ from library.models import (
     DocumentComment,
     DocumentSource,
     DocumentStatus,
+    Kind,
 )
 from library.search import semantic_search
 
@@ -141,6 +142,52 @@ async def test_run_embed_emits_one_chunk_per_comment(
     assert [c.chunk_index for c in chunks] == list(range(1, len(chunks) + 1))
     # Comment chunk(s) come after content chunks, still monotonic.
     assert comment_chunks[0].chunk_index == len(chunks)
+
+
+async def test_comment_chunks_receive_the_same_document_header(
+    session_factory: async_sessionmaker[AsyncSession],
+    enable_embedding: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spec §8.5: comment chunks receive the same document identity header as
+    content chunks — their own `User comment (date):` framing stays in
+    `text` and is complementary, not competing. Nothing previously asserted
+    this; `jobs.py` sets ``context_header=context_header or None`` on both the
+    content-chunk and comment-chunk branches identically, but only the
+    content-chunk branch had a test."""
+    monkeypatch.setattr(jobs, "embed_texts", _fake_embed_texts)
+
+    async with session_factory() as session:
+        kind = (await session.execute(select(Kind).where(Kind.slug == "utility-bill"))).scalar_one()
+        document = Document(
+            sha256=hashlib.sha256(b"embed-comment-header").hexdigest(),
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            ocr_text="area is 120 sqm",
+            kind=kind,
+            title="Jaarafrekening",
+        )
+        session.add(document)
+        await session.commit()
+        document_id = document.id
+        expected_header = compose_context_header(document)
+    assert expected_header  # the document carries enough metadata to have one
+
+    async with session_factory() as session:
+        session.add(DocumentComment(document_id=document_id, body="this is my current house"))
+        await session.commit()
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await run_embed(session, document)
+
+    chunks = await chunks_for(session_factory, document_id)
+    comment_chunks = [c for c in chunks if c.comment_id is not None]
+    content_chunks = [c for c in chunks if c.comment_id is None]
+    assert comment_chunks and content_chunks
+    for chunk in comment_chunks + content_chunks:
+        assert chunk.context_header == expected_header
 
 
 async def test_run_embed_comment_only_document_still_embeds(

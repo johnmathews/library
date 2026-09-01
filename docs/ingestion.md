@@ -1,7 +1,7 @@
 # Ingestion
 
 **Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: removed a stale `LIBRARY_PDF_UNLOCK_PASSWORDS` default that republished a withdrawn password, corrected the "no per-task retry policy" claim, the markdown grounding limit, the consume extension list and the `GET /api/jobs` contract; documented the email recipient hint and the missing ingestion events).
-**Last verified:** 2026-08-12 — method: traced each claim to source — settings and defaults against `config.py` and `.env.example`, pipeline/retry/guard behaviour against `jobs.py`, routing and thresholds against `ocr/`, limits against `extraction/` and `markdown/`, endpoint shapes against `api/` and `schemas.py` — plus a mechanical check that every `LIBRARY_*`, every `library.*` path and every emitted event name resolves.
+**Last verified:** 2026-08-28 — method: rewrote the photo-path section for the vendored RapidOCR weights (GH #109) and traced every new claim to source — the `models/ocr/` location, the three vendored files and the `Global.model_root_dir` pin against `src/library/ocr/weights.py`; the `COPY models/` against the Dockerfile; the `ocr_models` healthz key against `src/library/app.py`; the `--check` step against `.github/workflows/ci.yml`'s compose-smoke job; and the removal of the RapidOCR skip against `tests/test_ocr_real.py`. Ran the `slow_ocr` suite against the real engine, `scripts/fetch_ocr_models.py --check`, and `scripts/check_docs.py`, all clean. Only the photo-path and real-engine-test prose was re-checked this pass; the rest carries forward the 2026-08-12 verification below unchanged. That verification's method was: method: traced each claim to source — settings and defaults against `config.py` and `.env.example`, pipeline/retry/guard behaviour against `jobs.py`, routing and thresholds against `ocr/`, limits against `extraction/` and `markdown/`, endpoint shapes against `api/` and `schemas.py` — plus a mechanical check that every `LIBRARY_*`, every `library.*` path and every emitted event name resolves.
 
 How a file becomes a Document: upload → content-addressed storage →
 database row → background job → status lifecycle. This document covers
@@ -452,11 +452,55 @@ Boxes are sorted by (top-y, left-x) for reading order; text is joined
 line-per-box; confidence is the mean of per-box scores scaled to 0–100.
 This path produces no searchable PDF (`searchable_pdf=None`).
 
-RapidOCR downloads its models on first use and caches them; the worker
-image works offline after the first run.
+#### Where the weights come from
 
-`get_engine()` pins **every** axis rapidocr uses to select a model —
-`engine_type`, `ocr_version`, `lang_type` and `model_type`, for each of
+The three ONNX models this path runs (Det, Cls, Rec, ~13 MB total) are
+**committed to this repository** under `models/ocr/` and copied into the
+image by the Dockerfile. Nothing is downloaded — not at run time, not
+during the image build, not in CI. `library.ocr.weights` owns the pins
+and points rapidocr's `Global.model_root_dir` at that directory;
+rapidocr skips its download entirely when the file is already there with
+the expected SHA256.
+
+This replaced a first-use download from `modelscope.cn`. Two of the three
+pinned models are not the ones bundled in the rapidocr wheel, and nothing
+persisted what was fetched, so every `docker compose up --force-recreate`
+re-armed two downloads. The resulting failure was invisible until it hit
+a document: `get_engine()` is lazy and `lru_cache`d, so a deploy came up
+healthy and the first photo, PNG, HEIC or gate-retried scan ingested
+afterwards failed its OCR on its own. `modelscope.cn` being unreachable
+on 2026-08-28 is what surfaced it (GH #109).
+
+Two guards keep that from coming back quietly:
+
+- `/healthz` reports `ocr_models: "ok" | "missing"` and degrades the
+  overall status when a weight is absent — existence only, no hashing,
+  since the container healthcheck polls it every 10 seconds.
+- `compose-smoke` runs `python -m scripts.fetch_ocr_models --check`
+  inside both the `api` and `worker` containers. Committing a file ships
+  nothing without a Dockerfile `COPY`, and `--check` verifies checksums,
+  so a truncated layer is caught as well as a missing one.
+
+After a rapidocr bump that repoints a pinned stage,
+`tests/test_ocr_weights.py` goes red (the committed bytes no longer match
+what the pins resolve to). Recover with `python -m
+scripts.fetch_ocr_models` and commit the result — that is the only thing
+that needs network. **Delete the superseded `.onnx` in the same commit**:
+the same test asserts `models/ocr/` holds the pinned files and nothing
+else, because these barely compress and every distinct blob costs ~13 MiB
+in the pack permanently (measured: adding them took the pack from 2.69 MiB
+to 15.91 MiB).
+
+That cost is rarer than it sounds. The three models were introduced in
+rapidocr 3.8.0 and their checksums are unchanged in every release through
+3.9.2. Their upstream URL embeds the rapidocr version tag, so it moves on
+every release, but the pin check compares the file's SHA256 rather than
+its URL — a version bump on its own costs nothing. Contributors who never
+touch the weights can skip the history entirely with `git clone
+--filter=blob:none`.
+
+`library.ocr.weights` pins **every** axis rapidocr uses to select a model
+— `engine_type`, `ocr_version`, `lang_type` and `model_type`, for each of
 the Det, Cls and Rec stages — including axes whose value equals the
 library's current default. rapidocr resolves each stage from that
 4-tuple and raises `ValueError("Invalid OCR configuration.")` when the
@@ -470,15 +514,17 @@ call raised. Bumping rapidocr therefore fails loudly at the pins, which
 is a readable diff, instead of silently selecting models we never chose.
 
 Both real-engine paths are covered by the `slow_ocr` tests in
-`tests/test_ocr_real.py`, which run the actual binaries and models. Their
-guards skip when an engine is genuinely unavailable (no tesseract on a
-laptop, a blocked model hub) but **only** for that reason: a renamed enum,
-a changed constructor or a rejected params dict propagates and fails,
-because those are our bug rather than the environment's. Since pytest
-reports a skip as success, the backend CI job additionally runs
-`scripts/check_engine_skips.py` over the JUnit report and fails if any
-test skipped for a rapidocr or tesseract reason — CI provisions both, so
-a skip there means a broken engine, not a passing build.
+`tests/test_ocr_real.py`, which run the actual binaries and models. Only
+the Tesseract guard skips, and only for a missing binary (no tesseract on
+a laptop). The RapidOCR guard does not skip at all: vendoring the weights
+removed its one legitimate trigger — a blocked model hub — and a skip
+branch with no reachable cause is an invisible pass waiting to happen. A
+renamed enum, a changed constructor, a rejected params dict or a lost
+weight file all fail the test, because all of them are now our bug rather
+than the environment's. Since pytest reports a skip as success, the
+backend CI job additionally runs `scripts/check_engine_skips.py` over the
+JUnit report and fails if any test skipped for a rapidocr or tesseract
+reason.
 
 ### Confidence gate
 

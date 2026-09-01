@@ -70,6 +70,21 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('../views/SettingsView.vue'),
   },
   {
+    // The facet vocabulary: the closed set every chart splits by, plus the
+    // split colours. Its CRUD routes are authenticated but not admin-gated, so
+    // neither is this (docs/facets.md).
+    path: '/vocabulary',
+    name: 'vocabulary',
+    component: () => import('../views/VocabularyView.vue'),
+  },
+  {
+    // GOV.UK pattern, as on document-delete: a destructive, irreversible action
+    // gets a confirmation PAGE with its own URL, never a modal.
+    path: '/vocabulary/:facetKey/:valueKey/merge',
+    name: 'vocabulary-merge',
+    component: () => import('../views/vocabulary/ValueMergeView.vue'),
+  },
+  {
     path: '/jobs',
     name: 'jobs',
     component: () => import('../views/JobsView.vue'),
@@ -77,7 +92,15 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/charts',
     name: 'charts',
-    component: () => import('../views/ChartsView.vue'),
+    component: () => import('../views/SpendingBoardView.vue'),
+  },
+  {
+    // Digit-constrained as convention, matching `/ask/:threadId(\d+)` above;
+    // no other `/charts/*` route remains to collide with.
+    // router/__tests__/spending-routes.spec.ts pins the resolution.
+    path: '/charts/:chartId(\\d+)',
+    name: 'spending-workspace',
+    component: () => import('../views/SpendingWorkspaceView.vue'),
   },
   {
     path: '/projects',
@@ -93,12 +116,6 @@ export const routes: RouteRecordRaw[] = [
     path: '/saved-views',
     name: 'saved-views',
     component: () => import('../views/SavedViewsView.vue'),
-  },
-  {
-    // Single, shareable chart for one series (stable {sender}-{kind}-{currency} id).
-    path: '/charts/:seriesId',
-    name: 'series-chart',
-    component: () => import('../views/SeriesChartView.vue'),
   },
   {
     path: '/admin',

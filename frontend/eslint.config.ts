@@ -59,11 +59,7 @@ export default defineConfigWithVueTs(
       // was fixed rather than suppressed.
       'vuejs-accessibility/no-redundant-roles': 'off',
 
-      // form-control-has-label (4): three inputs in SeriesChartTile and one in
-      // AskView have no programmatic label. Real, and each needs a decision
-      // about visible vs visually-hidden labelling that belongs with whoever
-      // owns those views. EXIT: label the four controls, then enable.
-      'vuejs-accessibility/form-control-has-label': 'off',
+      'vuejs-accessibility/form-control-has-label': 'error',
 
       // click-events-have-key-events (4): the sites are a native <dialog>, a
       // modal backdrop, a delegated container click that closes the sidebar, and
@@ -73,11 +69,7 @@ export default defineConfigWithVueTs(
       // individually; the thread <li> is the one likely to need a real button.
       'vuejs-accessibility/click-events-have-key-events': 'off',
 
-      // mouse-events-have-key-events (2): SeriesChartTile's hover tooltip has no
-      // focus equivalent, so keyboard users cannot read it. Genuine gap, and
-      // fixing it means giving the chart focusable points. EXIT: add
-      // @focusin/@focusout alongside the hover handlers, then enable.
-      'vuejs-accessibility/mouse-events-have-key-events': 'off',
+      'vuejs-accessibility/mouse-events-have-key-events': 'error',
     },
   },
 

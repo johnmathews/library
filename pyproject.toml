@@ -3,6 +3,11 @@ name = "library"
 version = "0.1.0"
 description = "Self-hosted document archive"
 readme = "README.md"
+# The support floor. The interpreter dev, CI and the image all actually use is
+# pinned in `.python-version` (3.13), matching the `python:3.13-slim-bookworm`
+# runtime in the Dockerfile. Without that pin `uv` resolves the newest
+# interpreter satisfying this range, which put CI on 3.14 while production ran
+# 3.13 — the gating suite was not running on the Python being shipped.
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
@@ -30,6 +35,23 @@ dependencies = [
     "rapidocr>=3.9.2",
     "onnxruntime>=1.26.0",
     "anthropic>=0.109.1",
+    # Subscription LLM backend (see docs/llm-backends.md). Bundles a
+    # platform-native Claude Code CLI binary (~190MB) in the wheel, which is
+    # what makes OAuth/subscription auth reachable at all — the raw Messages
+    # API refuses non-Haiku models for a subscription token.
+    "claude-agent-sdk>=0.2.142",
+    # OpenTelemetry: metrics only (no traces/logs today). The API + SDK are the
+    # instrumentation surface; the two exporters are the two ways metrics leave
+    # the process, and both are optional at runtime — see docs/observability.md.
+    #   * prometheus — pull. Feeds GET /metrics for the existing Prometheus.
+    #   * otlp/http  — push. For an OTel collector. http/protobuf rather than
+    #     grpc so the dependency tree stays httpx-shaped and no C extension or
+    #     extra port is involved.
+    "opentelemetry-api>=1.30",
+    "opentelemetry-sdk>=1.30",
+    "opentelemetry-exporter-prometheus>=0.51b0",
+    "opentelemetry-exporter-otlp-proto-http>=1.30",
+    "prometheus-client>=0.21",
     "pgvector>=0.3.6",
     "httpx>=0.28",
     "pwdlib[argon2]>=0.2",
@@ -154,7 +176,7 @@ asyncio_mode = "auto"
 testpaths = ["tests"]
 markers = [
     "integration: tests that need Docker (ephemeral Postgres via testcontainers)",
-    "slow_ocr: real OCR engine runs (tesseract/ocrmypdf binaries, RapidOCR model download)",
+    "slow_ocr: real OCR engine runs (tesseract/ocrmypdf binaries, the vendored RapidOCR ONNX weights)",
     "golden_extraction: characterisation of extraction over the real corpus, replayed from cassettes (no API key, no DB)",
 ]
 filterwarnings = [

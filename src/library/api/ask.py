@@ -15,11 +15,15 @@ from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from library import telemetry
 from library.ask import run_ask
-from library.ask.engine import generate_thread_title
+from library.ask.context import load_archive_context, render_archive_context
+from library.ask.engine import _NO_ANSWER, generate_thread_title
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
+from library.llm.backends import resolve_backend
+from library.llm.subscription import SubscriptionBackendError
 from library.models import AskThread, AskTurn, User
 
 logger = logging.getLogger(__name__)
@@ -142,11 +146,14 @@ async def ask(
     """Answer a natural-language question from the document archive.
 
     Returns a prose answer grounded in retrieved documents plus the citations
-    it used. Requires an Anthropic API key (503 otherwise). The answer cost is
-    recorded but not budget-gated in this release.
+    it used. Requires an Anthropic API key on the ``api`` backend (503
+    otherwise); the ``subscription`` backend authenticates through the Claude
+    CLI instead. The answer cost is recorded but not budget-gated in this
+    release — under a subscription it is notional (see docs/llm-backends.md).
     """
     settings = get_settings()
-    if settings.anthropic_api_key is None:
+    ask_backend = await resolve_backend(session, "ask", settings)
+    if ask_backend == "api" and settings.anthropic_api_key is None:
         raise HTTPException(
             status_code=503, detail="Ask is unavailable: no Anthropic API key configured."
         )
@@ -163,18 +170,86 @@ async def ask(
             raise HTTPException(status_code=404, detail="Conversation not found.")
         thread = existing
 
-    history = await _history_messages(session, thread.id, settings.ask_history_turns)
+    # Held as a plain int for the rest of the request. The write tool can roll
+    # the session back — an allocated document's `amount_total` edit is refused
+    # at COMMIT (`ask/engine.py`, docs/charts.md §10.1) — and a rollback expires
+    # every ORM object this request holds, `thread` included. Reading
+    # `thread.id` after that is a sync attribute load outside the greenlet
+    # context, which raises MissingGreenlet: it would turn a refusal the model
+    # has already explained to the user back into the 500 the guard exists to
+    # remove.
+    thread_id = thread.id
+
+    # `thread` above is flushed, not committed, on the new-thread branch. That is
+    # safe only because a confirmed write requires a previewed id (`ask/engine.py`
+    # `_previewed_ids_from_history`), and previewed ids come solely from replayed
+    # thread history — a brand-new thread has none, so no rollback can happen on
+    # the turn that creates it.
+    history = await _history_messages(session, thread_id, settings.ask_history_turns)
+    # Who is asking and what the archive calls things — see library.ask.context.
+    archive_context = render_archive_context(await load_archive_context(session, user))
 
     images = [{"media_type": image.media_type, "data": image.data} for image in request.images]
     turn_cost = 0.0
-    async with AsyncAnthropic(api_key=settings.anthropic_api_key.get_secret_value()) as client:
-        result = await run_ask(
-            session,
-            question=request.question,
-            settings=settings,
-            client=client,
-            history_messages=history,
-            images=images,
+    # The subscription backend authenticates through the Claude CLI and never
+    # touches this client, but ``run_ask`` and ``generate_thread_title`` still
+    # take one. The placeholder cannot reach the wire: the guard above proves a
+    # real key exists whenever the backend is "api", and the subscription path
+    # issues no request through it.
+    api_key = (
+        settings.anthropic_api_key.get_secret_value()
+        if settings.anthropic_api_key is not None
+        else "unused-by-subscription-backend"
+    )
+    # Instrumented HERE rather than inside `run_ask` because this is where the
+    # two backends converge: whatever `ask_backend` is, the result has the same
+    # shape by this line, so one call site covers both and they stay comparable.
+    async with AsyncAnthropic(api_key=api_key) as client:
+        with telemetry.timed() as clock:
+            try:
+                result = await run_ask(
+                    session,
+                    question=request.question,
+                    settings=settings,
+                    client=client,
+                    history_messages=history,
+                    images=images,
+                    backend=ask_backend,
+                    archive_context=archive_context,
+                )
+            except SubscriptionBackendError as exc:
+                # 503, not 500: this is a configuration/credential problem an
+                # operator can fix, not a bug. Without this the caller gets a bare
+                # "Internal Server Error" and the actual reason — which names the
+                # command to run — stays buried in the container log.
+                telemetry.record_error(backend=ask_backend, kind="subscription_auth")
+                logger.warning("Ask failed on the subscription backend: %s", exc)
+                raise HTTPException(status_code=503, detail=f"Ask is unavailable: {exc}") from exc
+            except Exception:
+                # Anything else is a real fault. Recorded before re-raising so a
+                # spike in 500s is visible as a metric and not only in the logs.
+                telemetry.record_error(backend=ask_backend, kind="upstream")
+                raise
+
+        telemetry.record_tokens(
+            backend=ask_backend,
+            model=result.model,
+            fresh=result.fresh_input_tokens,
+            cache_read=result.cache_read_tokens,
+            cache_write=result.cache_write_tokens,
+            output=result.output_tokens,
+        )
+        telemetry.record_turn(
+            backend=ask_backend,
+            model=result.model,
+            duration_s=clock["elapsed"],
+            tool_calls=len(result.used_tools),
+            citations=len(result.citations),
+            # The engine substitutes a fixed apology when the tool loop runs out
+            # of turns without an answer. Distinguishing that from a real answer
+            # is the whole point of raising the ceiling from 4 to 8 — without it
+            # the metric cannot show whether the new headroom is enough.
+            outcome="no_answer" if result.answer == _NO_ANSWER else "ok",
         )
         turn_cost = result.cost_usd
         # A brand-new thread was seeded with the truncated question as a
@@ -188,6 +263,8 @@ async def ask(
                     model=settings.ask_title_model,
                     question=request.question,
                     answer=result.answer,
+                    settings=settings,
+                    backend=ask_backend,
                 )
                 if title.title:
                     thread.title = title.title
@@ -198,9 +275,14 @@ async def ask(
                     exc_info=True,
                 )
 
+    # After the title call, so the recorded cost matches `ask_turns.cost_usd`
+    # exactly. Two numbers that are supposed to be the same thing but are
+    # computed at different points is how they drift.
+    telemetry.record_cost(backend=ask_backend, model=result.model, usd=turn_cost)
+
     session.add(
         AskTurn(
-            thread_id=thread.id,
+            thread_id=thread_id,
             query=request.question,
             answer=result.answer,
             model=result.model,
@@ -226,7 +308,7 @@ async def ask(
         ],
         used_tools=result.used_tools,
         cost_usd=turn_cost,
-        thread_id=thread.id,
+        thread_id=thread_id,
     )
 
 

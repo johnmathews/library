@@ -61,7 +61,9 @@ const newDescription = ref('')
 const createError = ref<string | null>(null)
 const creating = ref(false)
 
-// Stable-identity list for AppErrorSummary (see ChartsView for the rationale).
+// A computed keeps this array's reference stable while createError is
+// unchanged, so AppErrorSummary's watch(() => props.errors) only re-focuses
+// the alert when the error message actually changes.
 const createErrorItems = computed<ErrorSummaryItem[]>(() =>
   createError.value ? [{ text: createError.value }] : [],
 )
@@ -170,7 +172,10 @@ async function confirmDelete(slug: string): Promise<void> {
 
 <template>
   <div id="projects-view">
-    <PageHeader title="Projects">
+    <PageHeader
+      title="Projects"
+      description="A project is a collection you put documents into yourself — a house purchase, a tax year — so everything about one undertaking stays together."
+    >
       <template #actions>
         <AppButton
           v-if="isAdmin && !showCreate"

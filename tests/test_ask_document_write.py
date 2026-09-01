@@ -6,6 +6,7 @@ propose-then-confirm ``update_document_metadata`` tool in the Ask engine
 dispatch driven by a stubbed Anthropic client).
 """
 
+import json
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import date
@@ -13,7 +14,8 @@ from decimal import Decimal
 from typing import Any, cast
 
 import pytest
-from sqlalchemy import select
+from procrastinate.testing import InMemoryConnector
+from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
@@ -23,6 +25,8 @@ from library.config import get_settings
 from library.documents_service import apply_document_update
 from library.models import Document, IngestionEvent, ReviewStatus
 from library.schemas import DocumentUpdate
+from library.spend_lines import LineInput, replace_lines
+from tests.conftest import DocumentFactory
 from tests.test_api_ask import _FakeAnthropic, _Response, _TextBlock, _ToolUseBlock, _Usage
 from tests.test_documents_api import _seed_document
 
@@ -124,7 +128,9 @@ async def test_update_tool_preview_does_not_write(api_database_url: str) -> None
 
 
 @pytest.mark.asyncio
-async def test_update_tool_commit_writes_with_ask_provenance(api_database_url: str) -> None:
+async def test_update_tool_commit_writes_with_ask_provenance(
+    api_database_url: str, job_connector: InMemoryConnector
+) -> None:
     document_id = await _seed_document(api_database_url, "askw-commit", title="Original title")
 
     async with _open_session(api_database_url) as session:
@@ -192,7 +198,9 @@ async def test_update_tool_writes_matters(api_database_url: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_update_tool_revalidates_and_clears_finding(api_database_url: str) -> None:
+async def test_update_tool_revalidates_and_clears_finding(
+    api_database_url: str, job_connector: InMemoryConnector
+) -> None:
     """An Ask-confirmed edit recomputes validation just like the PATCH route, so
     fixing a flagged field clears its warning and review_status."""
     document_id = await _seed_document(
@@ -290,6 +298,58 @@ async def test_update_tool_confirm_without_preview_is_refused(api_database_url: 
         assert (await _events(session, document_id)) == []
 
 
+@pytest.mark.asyncio
+async def test_update_tool_refuses_an_allocated_documents_amount_edit(
+    session: AsyncSession, document: DocumentFactory
+) -> None:
+    """Ask is the fifth `amount_total` writer, and must translate 0035's refusal.
+
+    A document whose spend lines are allocated against its current amount cannot
+    have that amount changed: the mirror trigger refuses it, and because the
+    trigger is DEFERRABLE INITIALLY DEFERRED the refusal arrives at COMMIT — as a
+    bare `DBAPIError` under asyncpg — rather than at the UPDATE. Unguarded that
+    escapes the whole Ask turn as a 500 with a poisoned session; guarded it is a
+    refusal the owner can act on.
+
+    So this drives the tool all the way through its own `commit`: a test that
+    stopped at a flush, or asserted against an already rolled-back session, would
+    pass against no guard and no trigger at all. `confirmed=true` **and** the id
+    in `previewed_ids` are both required to reach that commit; without either the
+    tool returns a preview or a "preview required first" error and the trigger is
+    never touched.
+    """
+    # Invented amounts — this repository is public.
+    doc = await document(amount_total=Decimal("100.00"))
+    # Held as a plain int: the refusal rolls the session back, which expires
+    # every ORM attribute, and reading `doc.id` afterwards would go to the
+    # database on a sync attribute access and raise MissingGreenlet instead of
+    # asserting anything.
+    document_id = doc.id
+    await replace_lines(
+        session,
+        document_id,
+        [LineInput(amount=Decimal("60.00")), LineInput(amount=Decimal("40.00"))],
+    )
+    await session.commit()
+
+    result = await _run_update_document(
+        session,
+        get_settings(),
+        {"document_id": document_id, "amount_total": "250.00", "confirmed": True},
+        {document_id},
+        {document_id},  # previewed earlier in the thread
+    )
+
+    assert "error" in result, f"expected a refusal, got {result!r}"
+    assert "spend lines" in result["error"]
+    # The session survived the refusal — a poisoned session is the actual damage
+    # the unguarded 500 does — and the rejected edit did not land.
+    still = await session.scalar(
+        text("SELECT amount_total FROM documents WHERE id = :d"), {"d": document_id}
+    )
+    assert still == Decimal("100.00"), "the refused edit must not have landed"
+
+
 # --- Engine-level dispatch --------------------------------------------------
 
 
@@ -316,7 +376,7 @@ def _surfaced_history(document_id: int) -> list[dict[str, Any]]:
 
 @pytest.mark.asyncio
 async def test_engine_confirm_after_prior_turn_preview_writes(
-    api_database_url: str,
+    api_database_url: str, job_connector: InMemoryConnector
 ) -> None:
     """A confirmed write succeeds when a PRIOR turn previewed the document (the
     preview tool_result is in the replayed history). This is the real
@@ -383,6 +443,152 @@ async def test_engine_confirm_after_prior_turn_preview_writes(
         user_edited = [e for e in await _events(session, document_id) if e.event == "user_edited"]
         assert len(user_edited) == 1
         assert user_edited[0].detail["edited_by"] == "ask"
+
+
+@pytest.mark.asyncio
+async def test_engine_confirmed_header_field_edit_defers_a_reembed(
+    api_database_url: str, job_connector: InMemoryConnector
+) -> None:
+    """The Ask write tool's re-embed hook (``ask/engine.py``, beside the
+    ``header_fields_changed`` check after ``session.commit()``): editing a
+    header field (``title``) through a confirmed ``update_document_metadata``
+    call must defer exactly one ``embed_document`` job for the edited
+    document, same as the PATCH route (``test_editing_a_header_field_defers_a_
+    reembed`` in ``tests/test_chunk_context_header.py``). That route's hook is
+    covered by a test; this one, proven by mutation, was not — deleting the
+    two-line hook in ``ask/engine.py`` left the whole suite green."""
+    document_id = await _seed_document(api_database_url, "askw-engine-reembed", title="Old")
+
+    history = _surfaced_history(document_id)
+    history += [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "p1", "name": "update_document_metadata", "input": {}}
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "p1",
+                    "content": f'{{"status": "preview", "document_id": {document_id}}}',
+                }
+            ],
+        },
+    ]
+
+    client = _FakeAnthropic(
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="update_document_metadata",
+                        input={"document_id": document_id, "title": "New", "confirmed": True},
+                        id="w1",
+                    )
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"Updated [#{document_id}].")],
+                usage=_Usage(6, 3),
+            ),
+        ]
+    )
+
+    settings = get_settings()
+    async with _open_session(api_database_url) as session:
+        await run_ask(
+            session,
+            question="yes, do it",
+            settings=settings,
+            client=cast(Any, client),
+            history_messages=history,
+        )
+
+    embed_jobs = [
+        job
+        for job in job_connector.jobs.values()
+        if job["task_name"] == "library.jobs.embed_document"
+        and job["args"] == {"document_id": document_id}
+    ]
+    assert len(embed_jobs) == 1
+
+
+@pytest.mark.asyncio
+async def test_engine_confirmed_non_header_field_edit_defers_nothing(
+    api_database_url: str, job_connector: InMemoryConnector
+) -> None:
+    """Companion to the test above: a confirmed edit that touches no header
+    field (``summary``) must defer no ``embed_document`` job at all."""
+    document_id = await _seed_document(api_database_url, "askw-engine-noembed", title="Old")
+
+    history = _surfaced_history(document_id)
+    history += [
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "tool_use", "id": "p1", "name": "update_document_metadata", "input": {}}
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "p1",
+                    "content": f'{{"status": "preview", "document_id": {document_id}}}',
+                }
+            ],
+        },
+    ]
+
+    client = _FakeAnthropic(
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="update_document_metadata",
+                        input={
+                            "document_id": document_id,
+                            "summary": "New summary",
+                            "confirmed": True,
+                        },
+                        id="w1",
+                    )
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"Updated [#{document_id}].")],
+                usage=_Usage(6, 3),
+            ),
+        ]
+    )
+
+    settings = get_settings()
+    async with _open_session(api_database_url) as session:
+        await run_ask(
+            session,
+            question="yes, do it",
+            settings=settings,
+            client=cast(Any, client),
+            history_messages=history,
+        )
+
+    embed_jobs = [
+        job
+        for job in job_connector.jobs.values()
+        if job["task_name"] == "library.jobs.embed_document"
+        and job["args"] == {"document_id": document_id}
+    ]
+    assert embed_jobs == []
 
 
 @pytest.mark.asyncio
@@ -518,3 +724,99 @@ def _is_json_primitive(value: Any) -> bool:
     # Decimal and date are deliberately allowed: default=str renders them
     # correctly and readably ("12.00", "2026-01-02"), unlike an ORM object.
     return isinstance(value, Decimal | date)
+
+
+# --- tool_result history decoding: both backends' shapes -------------------
+#
+# The write gate (editable_ids / previewed_ids) is only as good as the history
+# it's read from. The `api` backend's tool_result.content is a single
+# JSON-encoded string. The `subscription` backend — the production default —
+# double-wraps it: content is a JSON-encoded LIST of SDK content blocks, whose
+# inner "text" holds the real payload. Before the fix, `_tool_result_payloads`
+# only undid one layer, so on the subscription backend both `_ids_from_history`
+# and `_previewed_ids_from_history` silently returned `set()`: previews worked,
+# but a confirmed write could never find its own preview, and a document
+# surfaced by a read tool in an earlier turn could never be edited.
+
+
+def _api_shaped_tool_result(tool_use_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """A tool_result block shaped as the `api` backend stores it (`_run_api_turn`):
+    content is `json.dumps(output, default=str)` directly — one level of JSON."""
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": json.dumps(payload),
+    }
+
+
+def _subscription_shaped_tool_result(tool_use_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    """A tool_result block shaped as the `subscription` backend stores it
+    (`llm/subscription.py`): the SDK's tool result content is itself a list of
+    content blocks (`[{"type": "text", "text": ...}]`), and since that list
+    isn't a `str` it gets `json.dumps`-ed again on top — two levels of JSON."""
+    return {
+        "type": "tool_result",
+        "tool_use_id": tool_use_id,
+        "content": json.dumps([{"type": "text", "text": json.dumps(payload)}]),
+    }
+
+
+def test_history_decoding_finds_ids_in_api_shaped_history() -> None:
+    """Regression guard for the working path: the `api` backend's single-wrapped
+    shape must keep decoding correctly after the subscription-shape fix."""
+    document_id = 42
+    history = [
+        {
+            "role": "user",
+            "content": [
+                _api_shaped_tool_result("a1", {"document_id": document_id}),
+                _api_shaped_tool_result("a2", {"status": "preview", "document_id": document_id}),
+            ],
+        }
+    ]
+
+    assert ask_engine._ids_from_history(history) == {document_id}
+    assert ask_engine._previewed_ids_from_history(history) == {document_id}
+
+
+def test_history_decoding_finds_ids_in_subscription_shaped_history() -> None:
+    """The bug: on subscription-shaped (double-wrapped) history, both helpers
+    must still find the document id — this is what was silently broken in
+    production (both returned `set()` before the fix)."""
+    document_id = 42
+    history = [
+        {
+            "role": "user",
+            "content": [
+                _subscription_shaped_tool_result("s1", {"document_id": document_id}),
+                _subscription_shaped_tool_result(
+                    "s2", {"status": "preview", "document_id": document_id}
+                ),
+            ],
+        }
+    ]
+
+    assert ask_engine._ids_from_history(history) == {document_id}
+    assert ask_engine._previewed_ids_from_history(history) == {document_id}
+
+
+def test_history_decoding_tolerates_malformed_inner_text() -> None:
+    """A subscription-shaped block whose inner `text` is not valid JSON is
+    skipped, not raised — matching the outer decode's existing tolerance for
+    malformed history (`except (ValueError, TypeError): continue`)."""
+    history = [
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "s1",
+                    "content": json.dumps([{"type": "text", "text": "not valid json"}]),
+                }
+            ],
+        }
+    ]
+
+    assert list(ask_engine._tool_result_payloads(history)) == []
+    assert ask_engine._ids_from_history(history) == set()
+    assert ask_engine._previewed_ids_from_history(history) == set()

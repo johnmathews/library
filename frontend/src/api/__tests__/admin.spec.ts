@@ -350,20 +350,6 @@ describe('admin API', () => {
       expect(JSON.parse(String(init.body))).toEqual({ from_code: 'usd', to_code: 'USD' })
       expect(result.to_code).toBe('USD')
     })
-
-    it('surfaces a 409 override conflict from normalizeCurrency', async () => {
-      respondWith(
-        {
-          detail: 'rename would collide with user overrides',
-          conflicts: [{ table: 'series_overrides', sender_id: 2, kind_id: null }],
-        },
-        409,
-      )
-      await expect(normalizeCurrency('usd', 'USD')).rejects.toMatchObject({
-        status: 409,
-        detail: 'rename would collide with user overrides',
-      })
-    })
   })
 
   describe('fx rates', () => {

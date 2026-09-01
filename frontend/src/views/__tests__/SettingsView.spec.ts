@@ -4,6 +4,7 @@ import { createPinia, setActivePinia } from 'pinia'
 import SettingsView from '../SettingsView.vue'
 import { useAuthStore } from '@/stores/auth'
 import { NEUTRAL_KIND_COLOR } from '@/api/settings'
+import { usePageTitle } from '@/composables/usePageTitle'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
@@ -38,22 +39,27 @@ describe('SettingsView', () => {
     fetchMock.mockReset()
   })
 
-  it('renders the page heading', () => {
+  it('claims the page title for the app bar', () => {
     const auth = useAuthStore()
     auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
     stubFetch({ dashboard_fields: ['kind'] })
     const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
-    expect(wrapper.find('h1').text()).toBe('Settings')
+    // The page title is claimed for the app bar rather than rendered in the
+    // view — see composables/usePageTitle.ts.
+    expect(wrapper.find('h1').exists()).toBe(false)
+    expect(usePageTitle().pageTitle.value).toBe('Settings')
   })
 
-  it('uses the shared PageHeader for the title', () => {
+  it('uses the shared PageHeader, which renders no band of its own for a bare title', () => {
     const auth = useAuthStore()
     auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
     stubFetch({ dashboard_fields: ['kind'] })
     const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
-    const header = wrapper.find('[data-testid="page-header"]')
-    expect(header.exists()).toBe(true)
-    expect(header.find('h1').text()).toBe('Settings')
+    // Settings passes a title and nothing else, so PageHeader renders nothing
+    // — an empty mb-6 band above the tabs is exactly what moving the title out
+    // was meant to reclaim.
+    expect(wrapper.find('[data-testid="page-header"]').exists()).toBe(false)
+    expect(usePageTitle().pageTitle.value).toBe('Settings')
   })
 
   it('does not cap the page width on the view root', () => {
@@ -431,6 +437,60 @@ describe('SettingsView', () => {
     expect(wrapper.find('[data-testid="appearance-error"]').exists()).toBe(true)
     expect((wrapper.find('[data-testid="hide-summary-mobile"]').element as HTMLInputElement).checked).toBe(false)
     expect(auth.hideSummaryMobile).toBe(false)
+  })
+
+  describe('Ask tab (About you)', () => {
+    function mountWithProfile(profile: string) {
+      const auth = useAuthStore()
+      auth.user = {
+        id: 1,
+        username: 'a',
+        display_name: 'A',
+        is_admin: false,
+        preferences: { dashboard_fields: ['kind'], ask_profile: profile },
+      }
+      const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+      return { auth, wrapper }
+    }
+
+    it('prefills the About-you text from the stored profile and saves it with an explicit Save', async () => {
+      stubFetch({ dashboard_fields: ['kind'], ask_profile: 'The Volvo is the family car.' })
+      const { auth, wrapper } = mountWithProfile('Old notes')
+      await wrapper.find('[data-testid="tab-ask-btn"]').trigger('click')
+
+      const textarea = wrapper.find('[data-testid="ask-profile"]')
+      expect((textarea.element as HTMLTextAreaElement).value).toBe('Old notes')
+
+      await textarea.setValue('The Volvo is the family car.')
+      // Typing alone must not save: this is free text, not a toggle.
+      expect(fetchMock.mock.calls.some(([url]) => String(url) === '/api/settings/ask-profile')).toBe(false)
+
+      await wrapper.find('[data-testid="ask-profile-form"]').trigger('submit')
+      await flushPromises()
+
+      const [url, init] = fetchMock.mock.calls.at(-1)!
+      expect(String(url)).toBe('/api/settings/ask-profile')
+      expect(init.method).toBe('PUT')
+      expect(JSON.parse(init.body)).toEqual({ ask_profile: 'The Volvo is the family car.' })
+      expect(wrapper.find('[data-testid="ask-profile-saved"]').exists()).toBe(true)
+      expect(auth.askProfile).toBe('The Volvo is the family car.')
+    })
+
+    it('shows an error and keeps the typed text when the save fails', async () => {
+      stubFetch({ detail: 'boom' }, 500)
+      const { auth, wrapper } = mountWithProfile('Old notes')
+      await wrapper.find('[data-testid="tab-ask-btn"]').trigger('click')
+
+      await wrapper.find('[data-testid="ask-profile"]').setValue('Typed but unsaved')
+      await wrapper.find('[data-testid="ask-profile-form"]').trigger('submit')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="ask-profile-error"]').exists()).toBe(true)
+      expect((wrapper.find('[data-testid="ask-profile"]').element as HTMLTextAreaElement).value).toBe(
+        'Typed but unsaved',
+      )
+      expect(auth.askProfile).toBe('Old notes')
+    })
   })
 
   describe('Notifications tab', () => {

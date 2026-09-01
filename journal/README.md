@@ -5,14 +5,52 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-141 entries.
+176 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
 CI checks it is current.
 
+## September 2026
+
+- **2026-09-01** — [Editing a saved chart's rule](260901-chart-rule-editor.md)
+
 ## August 2026
 
+- **2026-08-31** — [Deleting the series stack](260831-delete-series-stack.md)
+- **2026-08-30** — [The spending view's board](260830-spending-view-board.md)
+- **2026-08-30** — [The spending view's backend](260830-spending-view-backend.md)
+- **2026-08-30** — [The facet vocabulary panel](260830-facet-vocabulary-panel.md)
+- **2026-08-30** — [The chart engine meets the live archive](260830-chart-engine.md)
+- **2026-08-29** — [Amount semantics and payment identity](260829-money-facts.md)
+- **2026-08-29** — [What the archive said when we finally asked it](260829-first-live-amount-backfill.md)
+- **2026-08-29** — [The amount classifier could not read its own answers](260829-amount-classifier-fence.md)
+- **2026-08-28** — [The OCR weights were never in the image](260828-vendored-ocr-weights.md)
+- **2026-08-28** — [A controlled label vocabulary, in place of 771 drifted tags](260828-facet-vocabulary.md)
+- **2026-08-27** — [Retrieval reach](260827-retrieval-reach.md)
+- **2026-08-27** — [Retrieval reach — final fix wave](260827-retrieval-reach-fix-wave.md)
+- **2026-08-27** — [The number a random retriever would get](260827-recall-corpus-blind-floor.md)
+- **2026-08-27** — [CI was testing on a Python production doesn't run](260827-pin-python-313.md)
+- **2026-08-27** — [A CLI help test that only rich's colour decision could fail](260827-help-test-ansi-ci-divergence.md)
+- **2026-08-27** — [The recall corpus failed its own acceptance criterion](260827-harden-recall-corpus.md)
+- **2026-08-27** — [The first recall baseline, and the first evidence for #6](260827-first-recall-baseline.md)
+- **2026-08-27** — [Disclosure eval](260827-disclosure-eval.md)
+- **2026-08-27** — [Committed is not shipped](260827-baseline-not-in-image.md)
+- **2026-08-26** — [Series comparisons report what they narrow away](260826-series-coverage.md)
+- **2026-08-26** — [Ask answer trustworthiness](260826-ask-answer-trustworthiness.md)
+- **2026-08-25** — [Ask learns who is asking and what the archive calls things](260825-ask-archive-context.md)
+- **2026-08-22** — [Page title in the app bar](260822-page-title-in-the-app-bar.md)
+- **2026-08-22** — [Matters and Projects get a one-sentence lede](260822-matters-projects-ledes.md)
+- **2026-08-22** — [One header toolbar instead of two bands](260822-header-toolbar.md)
+- **2026-08-22** — [Ask composer — one flat bar instead of a pill in a box](260822-ask-composer-flat-bar.md)
+- **2026-08-21** — [OpenTelemetry metrics for Ask](260821-otel-metrics-for-ask.md)
+- **2026-08-21** — [Ask: two fixes that only a screenshot could find](260821-ask-ui-polish-from-screenshots.md)
+- **2026-08-21** — [Ask: cache the tool loop's growing prefix, and count cached tokens](260821-ask-prompt-cache-and-token-accounting.md)
+- **2026-08-21** — [Ask: verifying the caching and reasoning changes against the live API](260821-ask-post-deploy-verification.md)
+- **2026-08-21** — [Ask: a document view for the transcript](260821-ask-document-view.md)
+- **2026-08-21** — [Ask: document mode becomes the default, and the collapsed rail's actions come back](260821-ask-document-default-and-rail-actions.md)
+- **2026-08-21** — [Ask: turn reasoning on](260821-ask-adaptive-thinking.md)
+- **2026-08-20** — [Routing Ask through the Claude subscription](260820-subscription-llm-backend.md)
 - **2026-08-13** — [Three drifts, and a staleness rule that answers differently before and after lunch](260813-three-drifts-and-a-timezone.md)
 - **2026-08-13** — [Forty errors from one getattr, and a ratchet that finally fails downward](260813-mypy-ratchet-two-directional.md)
 - **2026-08-13** — [Clearing the quarantine, and what it had been hiding](260813-clearing-the-mypy-quarantine.md)

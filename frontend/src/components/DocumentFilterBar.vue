@@ -10,7 +10,7 @@
  * `clear()` to drop every filter. Changing any filter resets to page 1, so the
  * emitted query never carries a page. Taxonomy names come from the shared cache.
  */
-import { computed, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { MatterOption } from '@/api/matters'
 import type { LocationQueryRaw } from 'vue-router'
 import { AppCheckboxes, AppDateInput, FilterPill } from '@/components/app'
@@ -21,6 +21,8 @@ import {
   type DocumentLanguage,
   type DocumentStatus,
 } from '@/api/documents'
+import { fetchFacets, type FacetRef } from '@/api/facets'
+import FacetFilterBar from '@/components/facets/FacetFilterBar.vue'
 import { useTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { buildDocumentQuery, type AppliedFilters } from '@/utils/documentQuery'
 
@@ -34,6 +36,26 @@ const emit = defineEmits<{
 
 const { kinds, senders, recipients, tags, projects, matters, ensureLoaded } = useTaxonomyOptions()
 void ensureLoaded()
+
+// --- Facet filters (controlled vocabulary, docs/facets.md) ----------------
+//
+// Unlike the fetch above (which loads the *vocabulary*, not a selection), the
+// active facet *selection* is carried in the URL exactly like every other
+// filter here — `applied.facets` / `emitWith({ facets: ... })` — so it
+// survives refresh, back/forward and "Save view" the same way tags/projects/
+// matters do. `onFacetChange` is the FacetFilterBar → emitWith adapter.
+const facets = ref<FacetRef[]>([])
+onMounted(async () => {
+  try {
+    facets.value = await fetchFacets()
+  } catch {
+    // Best-effort: the facet bar just renders no selects when this fails.
+  }
+})
+
+function onFacetChange(next: Record<string, string>): void {
+  emitWith({ facets: next })
+}
 
 // Which pill popover is open (only one at a time); null = all closed.
 const openPill = ref<string | null>(null)
@@ -617,6 +639,14 @@ const statusOptions = DOCUMENT_STATUSES
         {{ m.name }}
         <span class="text-xs opacity-70">{{ m.document_count }}</span>
       </button>
+    </div>
+
+    <!-- Facet filters (controlled vocabulary): one select per facet that has
+         values, in the mosaic `items-end gap-3` field-row pattern (§5,
+         docs/frontend-view-principles.md). URL-driven like every other filter
+         here — see the `onFacetChange` comment above. -->
+    <div class="mt-2">
+      <FacetFilterBar :model-value="applied.facets" :facets="facets" @update:modelValue="onFacetChange" />
     </div>
 
     <!-- Active-filter chips -->

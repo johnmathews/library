@@ -19,9 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
-from library.documents_service import apply_document_update, revalidate_after_edit
+from library.documents_service import (
+    apply_document_update,
+    header_fields_changed,
+    revalidate_after_edit,
+)
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
-from library.jobs import extract_document
+from library.jobs import embed_document, extract_document
 from library.models import (
     Document,
     DocumentComment,
@@ -63,7 +67,11 @@ from library.search import (
     SortDirection,
     build_document_query,
 )
-from library.series import serialise_summary, summarize_series
+from library.spend_lines import (
+    AMOUNT_ALLOCATED_REFUSAL,
+    AllocationError,
+    commit_allocation,
+)
 from library.storage import derived_path, path_for
 from library.storage import remove as remove_stored_files
 from library.thumbnails import THUMBNAIL_NAME
@@ -209,6 +217,10 @@ async def list_documents(
         list[str] | None,
         Query(description="Matter slug; repeat the parameter for OR (documents in any of them)."),
     ] = None,
+    facet: Annotated[
+        list[str] | None,
+        Query(description="Repeatable `facet=key:value` filter; AND-composes."),
+    ] = None,
     language: Annotated[DocumentLanguage | None, Query()] = None,
     status_filter: Annotated[DocumentStatus | None, Query(alias="status")] = None,
     review_status: Annotated[ReviewStatus | None, Query()] = None,
@@ -236,6 +248,25 @@ async def list_documents(
     newest first, unknown dates last, then created_at). With `q`, by search rank
     (`sort`/`direction` are ignored).
     """
+    parsed_facets: dict[str, str] = {}
+    for pair in facet or []:
+        key, separator, value = pair.partition(":")
+        if not separator or not key or not value:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=f"facet must be 'key:value', got {pair!r}",
+            )
+        if key in parsed_facets and parsed_facets[key] != value:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=(
+                    f"facet {key!r} given twice with different values "
+                    f"({parsed_facets[key]!r}, {value!r}); a document holds at "
+                    "most one value per facet"
+                ),
+            )
+        parsed_facets[key] = value
+
     query = build_document_query(
         q,
         DocumentFilters(
@@ -245,6 +276,7 @@ async def list_documents(
             tag_slugs=tuple(tag or []),
             project_slugs=tuple(project or []),
             matter_slugs=tuple(matter or []),
+            facets=parsed_facets,
             language=language,
             status=status_filter,
             review_status=review_status,
@@ -368,42 +400,12 @@ async def get_document_markdown(
     return MarkdownResponse(page_count=len(pages), pages=pages)
 
 
-@router.get(
-    "/documents/{document_id}/series",
-    summary="Recurring-series stats + comparison for this document",
-    responses={404: {"description": "Unknown or deleted document"}},
-)
-async def get_document_series(
-    document_id: int,
-    session: Annotated[AsyncSession, Depends(get_session)],
-) -> dict[str, object]:
-    """Summarise the (sender, kind) series this document belongs to and where
-    this document sits within it. ``status:"insufficient"`` when the document
-    has no sender/kind or too few siblings."""
-    document = await _get_document_or_404(session, document_id)
-    settings = get_settings()
-    if document.sender_id is None or document.kind_id is None:
-        return {"status": "insufficient", "count": 0, "document_ids": [document_id]}
-    filters = DocumentFilters(
-        sender_id=document.sender_id,
-        kind_slug=document.kind.slug if document.kind else None,
-    )
-    summary = await summarize_series(
-        session,
-        filters=filters,
-        settings=settings,
-        reference=document.amount_total,
-        reference_date=document.document_date,
-        reference_currency=document.currency,
-    )
-    return serialise_summary(summary, include_points=True)
-
-
 @router.patch(
     "/documents/{document_id}",
     response_model=DocumentDetail,
     summary="Edit document metadata",
     responses={
+        400: {"description": "The new amount would orphan the document's spend lines"},
         404: {"description": "Unknown or deleted document"},
         422: {"description": "Unknown kind slug or invalid field value"},
     },
@@ -427,7 +429,23 @@ async def update_document(
     # re-run the deterministic rules and update review_status before committing —
     # this is what clears a fixed "implausible date" warning on save.
     await revalidate_after_edit(session, document, get_settings())
-    await session.commit()
+    # Committed through the allocation helper, not `session.commit()`. Editing
+    # ``amount_total`` on a document whose spend lines are allocated against the
+    # old amount is refused by migration 0035's mirror trigger, at COMMIT and as
+    # a bare ``DBAPIError`` — a 500 telling the owner nothing about what stopped
+    # the edit or how to proceed. The refusal itself is deliberate (an amount
+    # that no longer matches its lines makes every chart total for the document
+    # quietly wrong); being unable to explain it was not.
+    try:
+        await commit_allocation(session, refusal=AMOUNT_ALLOCATED_REFUSAL)
+    except AllocationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    # A chunk's context_header embeds the sender/date/kind/title, so editing one
+    # makes every stored header for this document stale. Deferred only when a
+    # header field actually changed — a summary or tags edit must not wake the
+    # embedder. Mirrors how api/comments.py re-embeds on a comment write.
+    if header_fields_changed(edited):
+        await embed_document.defer_async(document_id=document.id)
     await _refresh_for_detail(session, document)
     return await _detail(session, document)
 
@@ -497,8 +515,8 @@ async def purge_document(
 
     404s unless the document exists and is *currently* soft-deleted — you must
     soft-delete first, so this can never one-step nuke a live document (mirrors
-    restore's guard). Chunks, comments, pages, events, note versions, and
-    series/tag/project links cascade at the DB level. The row is committed gone
+    restore's guard). Chunks, comments, pages, events, note versions, spend lines,
+    and tag/project/matter links cascade at the DB level. The row is committed gone
     *before* files are unlinked, so an unlink failure leaves at worst an orphaned
     file (harmless, reclaimable) rather than a live row whose file has vanished —
     identical ordering to ``purge_deleted_documents`` in jobs.py.

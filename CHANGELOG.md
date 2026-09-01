@@ -15,7 +15,9 @@ Allego) that share no `(sender, kind, currency)` seed. Creating one stages a
 one-time backfill sweep over the library for review; afterwards matching
 documents auto-add silently and a dismissal writes a negative example. Membership
 is decided by a deterministic scorer, never by the LLM. See
-[`docs/smart-groups.md`](docs/smart-groups.md).
+[`docs/archive/smart-groups.md`](docs/archive/smart-groups.md) (archived — the
+feature was removed on 2026-08-31; see
+[`journal/260831-delete-series-stack.md`](journal/260831-delete-series-stack.md)).
 
 **Business matters (auto-filed subject categories)** (`#27`, `#28`) — an
 evergreen many-to-many dimension (`matters` + `document_matters`): a document

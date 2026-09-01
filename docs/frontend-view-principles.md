@@ -1,7 +1,7 @@
 # Frontend view design principles
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim; labelled the 2026-06-28 `max-w` block as since-fixed; stopped pointing new views at `DocumentDetailView`'s hand-rolled header).
-**Last verified:** 2026-08-12 — method: resolved every file path, component name, CSS class and design token it names against `frontend/src/`, read `assets/main.css` and `assets/utility-patterns.css`, and re-checked each behavioural claim at its call site.
+**Status:** active. **Last updated:** 2026-08-31 (the legacy series stack was deleted, taking `components/charts/ChartControls.vue` — this document's reference implementation — with it. The recipe is unchanged; §3, §5 and §5.1 now name `views/JobsView.vue`'s `jobs-filter-bar` as the reference, because it fills both `PageHeader` slots and is the route `e2e/header-toolbar.spec.ts` now drives, with `SpendingWorkspaceView.vue`'s `workspace-toolbar` as the native-date exemplar. §5.1's geometry table and its code example move to `/jobs` with it.) Earlier: 2026-08-30 (§4: registered `library:charts-board-currency` — `SpendingBoardView.vue`'s display-currency preference — alongside `library:currency-options`, so the two don't drift). Earlier (2026-08-22): §1.2 and new §5.1: a view's filter bar moves into `PageHeader`'s `#controls` slot, merging into one toolbar via a **container** query; `/jobs`' bar rebuilt to the §5 label recipe. Earlier (2026-08-22): §1.2 and §7: the page title moves to the app bar; the description stays as a lede at the top of `#app-page`. Earlier (2026-08-21): §4: relocate what a hidden container held, and test the capability rather than the mechanism. Earlier (2026-08-21): registered `library:ask-view-mode` and the wide-only mode pattern — store the preference, clamp the render, hide the control with `v-if`. Earlier (2026-08-12, documentation verification sweep): corrected the `AppButton` variant/size vocabulary, the sidebar storage key and the unsupported 44px claim.
+**Last verified:** 2026-08-31 — method: partial, scoped to the four sites that named `ChartControls.vue` plus §5.1's geometry table. Read `views/JobsView.vue`'s template in full before naming it: its `#controls` slot holds `<div class="flex flex-wrap items-end gap-3" data-testid="jobs-filter-bar">` with `.filter-label` + raw `.form-select`/`.form-input` and no `App*` form component, and its `#actions` slot holds `jobs-show-system` and `jobs-columns-button` — so it exhibits both the §5 label recipe and the §5.1 two-group merge. Read `views/SpendingWorkspaceView.vue`'s `workspace-toolbar` likewise: same row class, same label recipe, two native `<input type="date">` fields, but `#controls` only, which is why it is the secondary exemplar and not the reference. The geometry numbers were not re-measured in this pass — they carry forward from the re-measurement recorded in `e2e/header-toolbar.spec.ts`'s own header, which was taken against the real stack on 2026-08-31 when that spec was repointed off the deleted `/charts/legacy`. Earlier the same day — method: re-stamp only. The #130 squash-merge landed on 2026-08-31, dating this file's last edit a day after its stamp, which `check_docs` reports as `stale-doc-edit` (the known date jump, issue #126 — the same re-stamp #122 made after #121). No prose changed; the verification below stands as performed. Previously verified 2026-08-30 — method: partial re-verification, scoped to the new §4 bullet: read `useCurrencyOptions.ts` for `CURRENCY_OPTIONS_STORAGE_KEY = 'library:currency-options'` and `SpendingBoardView.vue` for `useStorage<string>('library:charts-board-currency', ...)`, confirming both key literals against the prose. The rest of the document carries forward its 2026-08-22 verification, scoped to the new §5.1 and the §1.2 sentence pointing at it. These are **geometry** claims and were measured in the real stack (docker compose + the Vite dev server + Playwright) rather than read off class lists: the 1280px sidebar-expanded/collapsed table is the measured `#app-page` width and the observed merge outcome at each, and the container-vs-viewport claim was confirmed by swapping `@5xl:` for `lg:` and watching `e2e/header-toolbar.spec.ts` go red. Backed by 1102 frontend unit tests and the header-toolbar spec (5 tests). The rest of the document carries forward its 2026-08-22 verification, whose method was: the relocated title checked as a visual claim in the real stack via Playwright screenshots at 1440px and 375px.
 
 How to build a Library view that looks **right the first time** — using the
 Mosaic design language already in the app. This is a checklist plus the reasoning
@@ -20,8 +20,21 @@ Before a view is "done", every box is ticked:
    controlled by *content* (cards, grids, prose), never by an arbitrary outer
    wrapper. The model view is `DocumentDetailView.vue` (no root cap, internal
    two-column grid).
-2. **Use a `PageHeader`.** Title + description + right-aligned primary/secondary
-   actions, full width, at the top. Never hand-roll `<h1>`+`<p>`+buttons.
+2. **Use a `PageHeader`.** Declare the title, the optional one-line description
+   and any right-aligned primary/secondary actions there. Never hand-roll
+   `<h1>`+`<p>`+buttons.
+
+   A view's filter/control bar goes in the header's **`#controls` slot** rather
+   than in a band of its own below it (§5.1).
+
+   Note where each part lands. The **title goes to the app bar**, not to the top
+   of the page body — `PageHeader` claims it through `usePageTitle` and
+   `AppHeader` renders the page's one `<h1>` beside the hamburger (the standard
+   contextual top-app-bar pattern). The **description stays at the top of
+   `#app-page`** as a muted, measure-capped *lede*, since with no title above it
+   a full-width paragraph would read as body copy. A `PageHeader` given only a
+   title renders **nothing at all** — don't add an empty description to "keep
+   the spacing".
 3. **Primary action is reachable without scrolling.** Save / Edit / Delete /
    Cancel live in the page header (or a sticky bar), not at the bottom of a long
    form. The user should never scroll down to commit.
@@ -102,7 +115,7 @@ Defined in `assets/main.css` (`@theme` tokens) and
 - **Field rows / filter bars:** the `.filter-label` recipe + `.form-*` controls
   in a `flex flex-wrap items-end gap-3` row; prefer native `<input type="date">` /
   `<select>` over hand-rolled widgets. See §5 and the reference implementation
-  `components/charts/ChartControls.vue`.
+  `views/JobsView.vue` (`data-testid="jobs-filter-bar"`).
 
 Full `App*` inventory: `components/app/index.ts`.
 
@@ -113,9 +126,37 @@ Established pattern (mirror it — don't invent a new one):
 - `AppSidebar.vue` persists `library:sidebar-expanded` (the bare
   `sidebar-expanded` key is a legacy read-once fallback, not the pattern).
 - `JobsView.vue` persists table column visibility under `library:jobs-columns`.
+- `useAskViewMode.ts` persists the Ask transcript layout under
+  `library:ask-view-mode` (`conversation` | `document`).
+- `useCurrencyOptions.ts` persists the custom-currency-code list under
+  `library:currency-options`. `SpendingBoardView.vue` persists a DIFFERENT
+  thing — the board's own selected display currency — under
+  `library:charts-board-currency`; the two are deliberately separate keys
+  (one is the shared list of codes to offer, the other is which one is
+  currently picked) and both are catalogued here together so a future rename
+  of either doesn't drift out of step with the other.
 - `@vueuse/core` `useStorage` is already a dependency — prefer it over raw
   `localStorage.getItem/setItem` for new keys.
 - Naming: `library:<feature>-<thing>` (e.g. `library:doc-grid-cols`).
+
+**Modes that only make sense on a wide screen** (the note editor's Split, the
+Ask transcript's Document) store the *preference* and clamp the *render*
+separately: the stored value survives a visit on a phone, while a derived
+`effective*` computed falls back to the narrow layout. Do not clamp by writing
+the fallback back into storage — that silently discards the user's choice the
+first time they open the app on a small screen. And hide a wide-only control
+with `v-if`, not a `hidden`/`lg:` utility: a CSS-hidden button stays in the tab
+order and the accessibility tree.
+
+**If a wide-only mode hides a container, relocate what the container held.**
+Hiding a rail to buy back its width also removes every control inside it. The
+Ask transcript's document mode hid the conversation rail — and with it the only
+`lg+` "New conversation" button — and the tests still passed, because they
+asserted the rail *disappeared* and never asked whether its capabilities were
+still reachable. **Test the capability, not the mechanism:** assert the action
+can still be performed, by a selector that does not care which container
+currently hosts it. Keeping the moved control's original `data-testid` is the
+cheap way to get that.
 
 Per-machine (display-size) preferences = `localStorage`. Account-level
 preferences (what *fields* show on a tile, notification settings) = server-side
@@ -142,8 +183,9 @@ eye compares them directly. Use one pattern for all of them.
     **forms** use the *different* label baked into the `App*` input components
     (`text-sm font-medium text-gray-700`, §3) — do not hand-roll or override it.
     A filter bar is therefore built from raw `.form-input`/`.form-select` +
-    `.filter-label` (as `ChartControls` does), **not** from `App*` form
-    components, because those carry the stacked-form label. The two recipes are
+    `.filter-label` (as `jobs-filter-bar` and `workspace-toolbar` both do),
+    **not** from `App*` form components, because those carry the stacked-form
+    label. The two recipes are
     intentional: uppercase-xs reads as a compact control legend; sentence-case
     reads better down a long form.
 - **The controls:** `.form-input` / `.form-select` already carry border, bg,
@@ -152,14 +194,72 @@ eye compares them directly. Use one pattern for all of them.
 - **Prefer native inputs where they suffice.** A native `<input type="date">`
   styled with `.form-input` gives a calendar popup, correct locale display, and
   accessibility for free — and is *less* code than a hand-rolled widget. The
-  `/charts` From/To fields were three cramped Day/Month/Year boxes (`AppDateInput`);
-  replacing them with native date inputs matched the look and deleted logic. Reach
+  old `/charts` From/To fields were three cramped Day/Month/Year boxes
+  (`AppDateInput`); replacing them with native date inputs matched the look and
+  deleted logic. That bar is gone, but the shape it settled on survives verbatim
+  in `SpendingWorkspaceView.vue`'s `workspace-toolbar` — two `<input type="date">`
+  fields carrying `.form-input`, each with a `.filter-label` above it. Reach
   for a bespoke multi-field control only when the native one genuinely can't do the
   job (`AppDateInput` remains for partial-date entry, e.g. `DocumentFilterBar`).
 
-**Reference implementation:** `components/charts/ChartControls.vue` (2026-07-01).
-The sister project `journal/webapp` (same Mosaic stack) uses the identical pattern
-in its Search view; when a Library bar looks off, compare against it.
+### 5.1 The bar belongs in the header, not in a band below it
+
+Pass the bar to `PageHeader`'s **`#controls`** slot. The header then renders one
+toolbar — **view-state controls left, page commands right** — instead of a
+mostly-empty actions row above a mostly-empty filter row:
+
+```vue
+<PageHeader title="Jobs">
+  <template #controls><div class="flex flex-wrap items-end gap-3">…</div></template>
+  <template #actions><AppButton>Columns</AppButton></template>
+</PageHeader>
+```
+
+Three rules, each of which cost something to learn:
+
+1. **The merge is a container query (`@5xl`), never a viewport one.** The
+   content column is the viewport minus a sidebar the user collapses
+   independently, so the same viewport width offers different amounts of room.
+   Measured on `/charts/legacy` on 2026-08-22 and re-measured on `/jobs` on
+   2026-08-31, with identical numbers — the `@5xl` threshold lives on
+   `PageHeader`'s own container, not on the view filling its slots:
+
+   | viewport | sidebar | `#app-page` | merged? |
+   |---|---|---|---|
+   | 1280 | expanded | 1024 | no |
+   | 1280 | collapsed | 1200 | **yes** |
+
+   No `lg:` rule can produce that row. `e2e/header-toolbar.spec.ts` asserts both
+   halves, and goes red if the container query is swapped for a viewport one. It
+   drives `/jobs`: it used to drive `/charts/legacy`, and that route went with
+   the series stack on 2026-08-31.
+2. **Below the threshold the two groups stack**, reproducing the pre-slot
+   layout. The merge is a wide-screen gain and a phone no-op. DOM order is
+   visual order at both widths — controls, then actions — so focus order never
+   disagrees with the screen.
+3. **The row is `items-end`.** A lede-and-buttons row aligns on centres, but a
+   row of labelled fields aligns on the *inputs'* bottom edge, and the buttons
+   join that edge. `PageHeader` switches between the two on the slot's presence.
+
+This is also why §5's one-recipe-per-bar rule got sharper: the bar now shares a
+row with the header's own controls, so a second label recipe is visible side by
+side rather than a band apart. `/jobs` was rebuilt from `AppSelect`/`AppInput`
+to raw `.form-*` + `.filter-label` for exactly that reason, and its document
+field's hint became a placeholder — a hint line under one field breaks the row's
+shared bottom edge.
+
+**Reference implementation:** `views/JobsView.vue`'s `jobs-filter-bar`. It is the
+bar to copy because it is the one this section's geometry is asserted against —
+it fills **both** slots (`jobs-filter-bar` in `#controls`, `jobs-show-system` /
+`jobs-columns-button` in `#actions`), which is what makes the merge observable at
+all. For the native-date half of §5, see `SpendingWorkspaceView.vue`'s
+`workspace-toolbar`; it is `#controls`-only, so it cannot demonstrate the merge,
+but it is the closest surviving descendant of the bar that established the
+recipe. The original reference, `components/charts/ChartControls.vue`
+(2026-07-01), was deleted with the legacy series stack on 2026-08-31 — the recipe
+is unchanged, only its exemplar moved. The sister project `journal/webapp` (same
+Mosaic stack) uses the identical pattern in its Search view; when a Library bar
+looks off, compare against it.
 
 **Why this holds.** The design language's quality is *systemic*, not per-view
 inspiration: tokens defined once (`@theme` in `main.css`), a small shared CSS
@@ -201,7 +301,10 @@ panels) are the one deliberate exception — they stay next to their row.
    and hand-rolls its own `<h1>`s, so copying it reproduces exactly the defect
    §1 tells you to avoid. Its *layout* (no root cap, `grid-cols-1
    lg:grid-cols-2`) is still the reference; its header is not.
-2. Drop in `PageHeader` with the title, one-line description, and actions.
+2. Drop in `PageHeader` with the title, one-line description, and actions —
+   remembering the title surfaces in the app bar (§1.2). A view with its own
+   hero title (document detail) deliberately claims none, so the bar stays empty
+   rather than naming a section you are not on.
 3. Lay out content as cards in a responsive grid; default to filling the width.
 4. Wire any per-machine preference through `localStorage` (§4).
 5. Add/adjust unit tests; if you touch a responsive contract, update the e2e

@@ -14,6 +14,7 @@ from library.api import ask as ask_module
 from library.ask import engine as ask_engine
 from library.config import get_settings
 from library.models import EMBEDDING_DIM
+from library.search import SearchReach
 
 pytestmark = pytest.mark.integration
 
@@ -25,12 +26,29 @@ pytestmark = pytest.mark.integration
 class _Usage:
     input_tokens: int
     output_tokens: int
+    # Anthropic reports cached tokens separately from `input_tokens`; default 0
+    # so existing fixtures keep meaning "nothing was cached".
+    cache_read_input_tokens: int = 0
+    cache_creation_input_tokens: int = 0
 
 
 @dataclass
 class _TextBlock:
     text: str
     type: str = "text"
+
+
+@dataclass
+class _ThinkingBlock:
+    """A thinking block as the SDK returns one under adaptive thinking.
+
+    `display` defaults to omitted, so `thinking` comes back empty while
+    `signature` carries the payload that must be replayed unmodified.
+    """
+
+    signature: str
+    thinking: str = ""
+    type: str = "thinking"
 
 
 @dataclass
@@ -69,8 +87,14 @@ class _FakeAnthropic:
         return False
 
 
-def _install_anthropic(monkeypatch: pytest.MonkeyPatch, responses: list[_Response]) -> None:
-    monkeypatch.setattr(ask_module, "AsyncAnthropic", lambda api_key: _FakeAnthropic(responses))
+def _install_anthropic(
+    monkeypatch: pytest.MonkeyPatch, responses: list[_Response]
+) -> _FakeAnthropic:
+    """Install the fake SDK and return it, so a test can assert on the kwargs
+    each `messages.create` actually received."""
+    fake = _FakeAnthropic(responses)
+    monkeypatch.setattr(ask_module, "AsyncAnthropic", lambda api_key: fake)
+    return fake
 
 
 @pytest.fixture
@@ -91,7 +115,19 @@ def _stub_thread_title(monkeypatch: pytest.MonkeyPatch) -> None:
     behavior these tests already assert. Titling-specific tests override this.
     """
 
-    async def _no_title(client: Any, *, model: str, question: str, answer: str) -> Any:
+    async def _no_title(
+        client: Any,
+        *,
+        model: str,
+        question: str,
+        answer: str,
+        settings: Any = None,
+        backend: str = "api",
+    ) -> Any:
+        # Keep this signature in step with `generate_thread_title`. Titling is
+        # deliberately non-fatal, so a stale stub does not fail a test — it
+        # raises a TypeError that the caller swallows, and every test quietly
+        # exercises the error path instead of the stub. It drifted once already.
         return ask_engine.TitleResult(title="", cost_usd=0.0)
 
     monkeypatch.setattr(ask_module, "generate_thread_title", _no_title)
@@ -155,6 +191,250 @@ def test_system_prompt_includes_current_date() -> None:
     assert "2026-06-16" in prompt
     assert "The current year is 2026" in prompt
     assert '"last year" means 2025' in prompt
+
+
+# --- prompt-cache accounting -----------------------------------------------
+#
+# The tool loop re-sends the whole conversation each iteration, so a tool result
+# fetched on pass 2 is paid for again on passes 3 and 4. Top-level
+# `cache_control` makes those re-reads bill at ~0.1x. The accounting has to move
+# with it: Anthropic reports cached tokens in fields SEPARATE from
+# `input_tokens`, so counting only `input_tokens` makes spend appear to collapse
+# the moment caching starts working — partly because tokens stopped being
+# counted, not because they stopped being sent.
+
+
+def test_cached_usage_counts_nothing_extra_when_cache_is_cold() -> None:
+    total, billable = ask_engine._cached_usage(_Usage(input_tokens=1000, output_tokens=50))
+    assert (total, billable) == (1000, 1000)
+
+
+def test_cached_usage_totals_include_cached_tokens() -> None:
+    """`total` answers "how much context went in", cached or not."""
+    usage = _Usage(
+        input_tokens=100,
+        output_tokens=50,
+        cache_read_input_tokens=9000,
+        cache_creation_input_tokens=900,
+    )
+    total, _ = ask_engine._cached_usage(usage)
+    assert total == 10_000
+
+
+def test_cached_usage_prices_reads_at_a_tenth_and_writes_at_1_25x() -> None:
+    """A cache read must not cost the same as a fresh token, or the whole point
+    of caching is invisible in the recorded cost."""
+    usage = _Usage(
+        input_tokens=100,
+        output_tokens=50,
+        cache_read_input_tokens=9000,
+        cache_creation_input_tokens=900,
+    )
+    _, billable = ask_engine._cached_usage(usage)
+    # 100 fresh + 900 read-equivalent (9000 * 0.1) + 1125 write-equivalent
+    assert billable == 100 + 900 + 1125
+
+
+def test_cached_usage_billable_is_far_below_total_when_the_cache_hits() -> None:
+    """The property that matters: a warm cache is cheaper than a cold one for
+    identical context. Asserting the relationship, not just the arithmetic."""
+    context = 20_000
+    cold = ask_engine._cached_usage(_Usage(input_tokens=context, output_tokens=10))
+    warm = ask_engine._cached_usage(
+        _Usage(input_tokens=0, output_tokens=10, cache_read_input_tokens=context)
+    )
+    assert cold[0] == warm[0] == context  # same context either way
+    assert warm[1] < cold[1] / 5  # but far cheaper when served from cache
+
+
+def test_cached_usage_tolerates_a_usage_object_without_cache_fields() -> None:
+    """Older SDKs, and any provider shim, may not carry the cache fields at all.
+    Missing must read as "nothing cached", never raise."""
+
+    @dataclass
+    class _Bare:
+        input_tokens: int
+        output_tokens: int
+
+    assert ask_engine._cached_usage(_Bare(input_tokens=7, output_tokens=1)) == (7, 7)
+
+
+def test_ask_requests_prompt_caching_on_every_tool_loop_call(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Without this the growing tool-result tail is re-read at full price on
+    every iteration of the loop — the dominant cost of a turn."""
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[_ToolUseBlock(name="query_documents", input={}, id="t1")],
+                usage=_Usage(100, 20),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="An answer.")],
+                usage=_Usage(150, 30),
+            ),
+        ],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "anything?"})
+    assert response.status_code == 200
+
+    # Both loop iterations, not just the first: the tail grows every pass, so a
+    # breakpoint on only the opening call would cache the cheapest request.
+    assert len(fake.messages.calls) == 2
+    for call in fake.messages.calls:
+        assert call["cache_control"] == {"type": "ephemeral"}
+
+
+# --- reasoning configuration ------------------------------------------------
+#
+# On this model family, OMITTING `thinking` means no extended reasoning at all —
+# the absence of the parameter is not a neutral default. These pin the three
+# coupled settings so a future edit cannot silently turn reasoning back off or
+# re-starve its token budget.
+
+
+def test_ask_enables_adaptive_thinking_on_every_call(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[_ToolUseBlock(name="query_documents", input={}, id="t1")],
+                usage=_Usage(100, 20),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="An answer.")],
+                usage=_Usage(150, 30),
+            ),
+        ],
+    )
+
+    assert api_client.post("/api/ask", json={"question": "anything?"}).status_code == 200
+
+    assert len(fake.messages.calls) == 2
+    for call in fake.messages.calls:
+        assert call["thinking"] == {"type": "adaptive"}
+
+
+def test_ask_answer_budget_leaves_room_for_thinking(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Thinking tokens are billed against `max_tokens`. At the old 1024 the
+    reasoning could consume the budget and truncate the answer, so the cap and
+    the thinking flag are one decision, not two."""
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="An answer.")],
+                usage=_Usage(100, 20),
+            )
+        ],
+    )
+
+    assert api_client.post("/api/ask", json={"question": "anything?"}).status_code == 200
+    assert fake.messages.calls[0]["max_tokens"] >= 4096
+
+
+def test_ask_replays_thinking_blocks_unmodified_to_later_calls(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The API requires thinking blocks to come back byte-identical on the next
+    call of the same turn. Dropping or rewriting the signature is rejected, and
+    the tool loop re-sends the whole assistant turn every pass — so this is the
+    path most likely to break when reasoning is switched on."""
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ThinkingBlock(signature="sig-abc123"),
+                    _ToolUseBlock(name="query_documents", input={}, id="t1"),
+                ],
+                usage=_Usage(100, 20),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="An answer.")],
+                usage=_Usage(150, 30),
+            ),
+        ],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "anything?"})
+    assert response.status_code == 200
+    # Reasoning must not leak into the user-visible answer.
+    assert response.json()["answer"] == "An answer."
+
+    # The second call must carry the first call's thinking block, signature intact.
+    second_call_messages = fake.messages.calls[1]["messages"]
+    replayed = [
+        block
+        for message in second_call_messages
+        if isinstance(message.get("content"), list)
+        for block in message["content"]
+        if isinstance(block, dict) and block.get("type") == "thinking"
+    ]
+    assert len(replayed) == 1
+    assert replayed[0]["signature"] == "sig-abc123"
+
+
+def test_ask_tool_loop_has_headroom_beyond_four_calls(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """4 of 51 production turns used all four calls. This asserts the loop can
+    now go further — a question needing search -> read -> compare -> verify."""
+    tool_calls = [
+        _Response(
+            stop_reason="tool_use",
+            content=[_ToolUseBlock(name="query_documents", input={}, id=f"t{i}")],
+            usage=_Usage(100, 20),
+        )
+        for i in range(5)
+    ]
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            *tool_calls,
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="Reached after five tool calls.")],
+                usage=_Usage(150, 30),
+            ),
+        ],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "anything?"})
+    assert response.status_code == 200
+    # Six calls total: the old cap of 4 would have bailed out with the
+    # no-answer fallback before ever reaching the real answer.
+    assert len(fake.messages.calls) == 6
+    assert response.json()["answer"] == "Reached after five tool calls."
 
 
 def test_ask_without_api_key_returns_503(api_client: TestClient) -> None:
@@ -419,11 +699,22 @@ async def test_run_ask_captures_turn_messages(monkeypatch: pytest.MonkeyPatch) -
     monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
 
     async def fake_search(
-        session: Any, *, query: str, query_embedding: Any, top_k: int, chunks_per_doc: int = 1
+        session: Any,
+        *,
+        query: str,
+        query_embedding: Any,
+        top_k: int,
+        chunks_per_doc: int = 1,
+        filters: Any = None,
     ) -> list[Any]:
         return []
 
     monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+
+    async def fake_reach(session: Any, filters: Any) -> Any:
+        return SearchReach(matched=0, unembedded=0)
+
+    monkeypatch.setattr(ask_engine, "search_reach", fake_reach)
 
     client = _FakeAnthropic(
         [
@@ -508,12 +799,23 @@ async def test_run_ask_turn_messages_replayable_when_tool_limit_hit(
         return _unit_vector(0)
 
     async def fake_search(
-        session: Any, *, query: str, query_embedding: Any, top_k: int, chunks_per_doc: int = 1
+        session: Any,
+        *,
+        query: str,
+        query_embedding: Any,
+        top_k: int,
+        chunks_per_doc: int = 1,
+        filters: Any = None,
     ) -> list[Any]:
         return []
 
     monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
     monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+
+    async def fake_reach(session: Any, filters: Any) -> Any:
+        return SearchReach(matched=0, unembedded=0)
+
+    monkeypatch.setattr(ask_engine, "search_reach", fake_reach)
 
     settings = get_settings()
     # Every round returns a tool_use, so the loop never reaches a final answer.
@@ -667,8 +969,11 @@ def test_ask_follow_up_replays_prior_turn(
         client: Any,
         history_messages: list[dict[str, Any]] | None = None,
         images: list[dict[str, str]] | None = None,
+        backend: str = "api",
+        archive_context: str | None = None,
     ):
         captured["history"] = history_messages
+        captured["backend"] = backend
         from library.ask.engine import AskResult
 
         return AskResult(
@@ -739,87 +1044,6 @@ def test_thread_lifecycle_list_get_delete(
     assert api_client.get(f"/api/ask/threads/{thread_id}").status_code == 404
 
 
-def _seed_utility_series(database_url: str) -> list[int]:
-    """Insert three utility-bill docs for sender Vattenfall, ascending dates and
-    amounts 100/100/130.  Returns ids oldest→newest."""
-    engine = create_engine(database_url.replace("+asyncpg", "+psycopg"))
-    try:
-        with engine.begin() as connection:
-            sender_id = connection.execute(
-                text(
-                    "INSERT INTO senders (name) VALUES ('Vattenfall')"
-                    " ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id"
-                )
-            ).scalar_one()
-            kind_id = connection.execute(
-                text("SELECT id FROM kinds WHERE slug = 'utility-bill'")
-            ).scalar_one()
-            ids: list[int] = []
-            bills = [
-                (date(2025, 1, 1), 100),
-                (date(2025, 2, 1), 100),
-                (date(2025, 3, 1), 130),
-            ]
-            for d, amount in bills:
-                sha = hashlib.sha256(f"vattenfall-{d}".encode()).hexdigest()
-                doc_id = connection.execute(
-                    text(
-                        "INSERT INTO documents"
-                        " (sha256, mime_type, status, source, sender_id, kind_id,"
-                        "  document_date, amount_total, currency)"
-                        " VALUES (:sha, 'application/pdf', 'indexed', 'upload',"
-                        "         :sid, :kid, :d, :amt, 'EUR')"
-                        " RETURNING id"
-                    ),
-                    {"sha": sha, "sid": sender_id, "kid": kind_id, "d": d, "amt": amount},
-                ).scalar_one()
-                ids.append(doc_id)
-        return ids
-    finally:
-        engine.dispose()
-
-
-def test_ask_uses_compare_to_series(
-    api_client: TestClient,
-    api_database_url: str,
-    with_api_key: None,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    doc_ids = _seed_utility_series(api_database_url)
-    _install_anthropic(
-        monkeypatch,
-        [
-            _Response(
-                stop_reason="tool_use",
-                content=[
-                    _ToolUseBlock(
-                        name="compare_to_series",
-                        input={
-                            "kind": "utility-bill",
-                            "sender_contains": "vattenfall",
-                            "reference": "latest",
-                        },
-                        id="c1",
-                    )
-                ],
-                usage=_Usage(120, 25),
-            ),
-            _Response(
-                stop_reason="end_turn",
-                content=[_TextBlock(text=f"Yes, higher than usual [#{doc_ids[-1]}].")],
-                usage=_Usage(140, 18),
-            ),
-        ],
-    )
-    response = api_client.post(
-        "/api/ask", json={"question": "is my latest bill higher than usual?"}
-    )
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert body["used_tools"] == ["compare_to_series"]
-    assert any(c["document_id"] == doc_ids[-1] for c in body["citations"])
-
-
 def test_thread_get_foreign_user_is_404(
     api_client: TestClient,
     api_database_url: str,
@@ -879,7 +1103,13 @@ async def test_run_semantic_search_excerpt_concatenates_passages(
     )
 
     async def fake_search(
-        session: Any, *, query: str, query_embedding: Any, top_k: int, chunks_per_doc: int = 1
+        session: Any,
+        *,
+        query: str,
+        query_embedding: Any,
+        top_k: int,
+        chunks_per_doc: int = 1,
+        filters: Any = None,
     ) -> list[Any]:
         return [
             SemanticHit(
@@ -902,6 +1132,11 @@ async def test_run_semantic_search_excerpt_concatenates_passages(
 
     monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
     monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+
+    async def fake_reach(session: Any, filters: Any) -> Any:
+        return SearchReach(matched=0, unembedded=0)
+
+    monkeypatch.setattr(ask_engine, "search_reach", fake_reach)
 
     cited: set[int] = set()
     pages: dict[int, int] = {}
@@ -949,7 +1184,15 @@ def test_new_thread_gets_generated_title(
 ) -> None:
     """A new conversation is named by the title model, not the raw question."""
 
-    async def _titler(client: Any, *, model: str, question: str, answer: str) -> Any:
+    async def _titler(
+        client: Any,
+        *,
+        model: str,
+        question: str,
+        answer: str,
+        settings: Any = None,
+        backend: str = "api",
+    ) -> Any:
         return ask_engine.TitleResult(title="Tax return locations", cost_usd=0.002)
 
     monkeypatch.setattr(ask_module, "generate_thread_title", _titler)
@@ -1061,3 +1304,394 @@ def test_rename_rejects_blank_or_oversized_title(
         api_client.patch(f"/api/ask/threads/{thread_id}", json={"title": "x" * 121}).status_code
         == 422
     )
+
+
+def test_ask_returns_503_when_the_subscription_cannot_authenticate(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A credential problem is an operator problem, not a 500.
+
+    Before this, an unauthenticated subscription backend raised out of run_ask
+    unhandled and FastAPI answered "Internal Server Error", with the reason —
+    which names the command to run — visible only in the container log.
+    """
+    from library.llm.subscription import SubscriptionBackendError
+
+    async def fake_run_ask(*args: Any, **kwargs: Any) -> Any:
+        raise SubscriptionBackendError(
+            "the Claude subscription backend could not authenticate: no credentials. "
+            "Run `CLAUDE_CONFIG_DIR=/app/.claude claude auth login --claudeai` on the host"
+        )
+
+    monkeypatch.setattr(ask_module, "run_ask", fake_run_ask)
+
+    response = api_client.post("/api/ask", json={"question": "where is my gas bill"})
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert "claude auth login --claudeai" in detail
+    assert "could not authenticate" in detail
+
+
+# --- archive context ---------------------------------------------------------
+#
+# The system prompt carries a block naming the user and the archive's vocabulary
+# (kinds, matters, projects, tags, frequent senders). Without it the model has to
+# guess slugs and cannot tell "my" bills from a housemate's.
+
+
+def test_system_prompt_appends_archive_context() -> None:
+    plain = ask_engine._system_prompt(date(2026, 6, 16))
+    with_context = ask_engine._system_prompt(
+        date(2026, 6, 16), archive_context='Archive context:\n- The user is "Ada Example".'
+    )
+    assert with_context.startswith(plain)
+    assert with_context.endswith('- The user is "Ada Example".')
+    assert ask_engine._system_prompt(date(2026, 6, 16), archive_context=None) == plain
+
+
+@pytest.mark.asyncio
+async def test_run_ask_sends_archive_context_in_the_cached_system_block() -> None:
+    from typing import cast
+
+    from library.ask.engine import run_ask
+
+    client = _FakeAnthropic(
+        [_Response(stop_reason="end_turn", content=[_TextBlock(text="ok")], usage=_Usage(1, 1))]
+    )
+    await run_ask(
+        cast(Any, None),
+        question="anything?",
+        settings=get_settings(),
+        client=cast(Any, client),
+        archive_context='- The user is "Ada Example".',
+    )
+    system = client.messages.calls[0]["system"]
+    assert 'The user is "Ada Example"' in system[0]["text"]
+    # Same block as the static prompt, so one breakpoint caches both.
+    assert system[0]["cache_control"] == {"type": "ephemeral"}
+
+
+def test_ask_route_tells_the_model_who_the_user_is(
+    api_client: TestClient,
+    api_database_url: str,
+    auth_user: Any,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            connection.execute(
+                text("UPDATE users SET display_name = 'Ada Example' WHERE id = :id"),
+                {"id": auth_user.id},
+            )
+    finally:
+        engine.dispose()
+    fake = _install_anthropic(
+        monkeypatch,
+        [_Response(stop_reason="end_turn", content=[_TextBlock(text="ok")], usage=_Usage(1, 1))],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "what do I have?"})
+
+    assert response.status_code == 200, response.text
+    system_text = fake.messages.calls[0]["system"][0]["text"]
+    assert 'The user is "Ada Example"' in system_text
+    # The seeded kind vocabulary rides along so tool calls use real slugs.
+    assert "utility-bill" in system_text
+
+
+def test_ask_cites_nothing_when_the_loop_produces_no_answer(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`cited` holds every candidate a read tool surfaced, including ones the
+    model looked at and rejected. Attaching them to "I couldn't find an answer"
+    presents rejected candidates as sources for a non-answer."""
+
+    # Real rows, so a lingering fallback-to-`cited` bug would actually surface
+    # them as citations rather than being masked by an empty `IN (...)` match.
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            doc_ids = [
+                connection.execute(
+                    text(
+                        "INSERT INTO documents (sha256, mime_type, status, source, ocr_text, title)"
+                        " VALUES (:sha, 'application/pdf', 'indexed', 'upload', :ocr, :title)"
+                        " RETURNING id"
+                    ),
+                    {
+                        "sha": hashlib.sha256(f"no-answer-candidate-{index}".encode()).hexdigest(),
+                        "ocr": "noise",
+                        "title": title,
+                    },
+                ).scalar_one()
+                for index, title in enumerate(["Unrelated", "Also unrelated"])
+            ]
+    finally:
+        engine.dispose()
+
+    async def fake_embed_query(
+        text_value: str, *, settings: Any, client: Any = None
+    ) -> list[float]:
+        return _unit_vector(0)
+
+    async def fake_search(session: Any, **kwargs: Any) -> list[Any]:
+        from dataclasses import dataclass as _dataclass
+
+        @_dataclass
+        class _Doc:
+            id: int
+            title: str | None
+            sender: Any = None
+            recipient: Any = None
+            document_date: Any = None
+
+        @_dataclass
+        class _Hit:
+            document: Any
+            score: float
+            chunk_index: int | None
+            chunk_text: str | None
+            page_number: int | None
+            chunk_texts: tuple[str, ...]
+
+        return [
+            _Hit(_Doc(id=doc_ids[0], title="Unrelated"), 0.1, 0, "noise", None, ("noise",)),
+            _Hit(_Doc(id=doc_ids[1], title="Also unrelated"), 0.1, 0, "noise", None, ("noise",)),
+        ]
+
+    monkeypatch.setattr(ask_engine, "embed_query", fake_embed_query)
+    monkeypatch.setattr(ask_engine, "semantic_search", fake_search)
+
+    async def fake_reach(session: Any, filters: Any) -> Any:
+        return SearchReach(matched=0, unembedded=0)
+
+    monkeypatch.setattr(ask_engine, "search_reach", fake_reach)
+
+    # Every response is a tool_use, so the loop exhausts ask_max_tool_turns
+    # without ever producing text and falls back to the _NO_ANSWER sentinel.
+    settings = get_settings()
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(name="semantic_search", input={"query": "tax"}, id=f"t{index}")
+                ],
+                usage=_Usage(100, 10),
+            )
+            for index in range(settings.ask_max_tool_turns)
+        ],
+    )
+
+    response = api_client.post("/api/ask", json={"question": "Where are my tax returns?"})
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["answer"] == "I couldn't find an answer to that in the archive."
+    assert body["citations"] == []
+
+
+def test_ask_system_prompt_requires_disclosing_partial_coverage() -> None:
+    """The coverage block is only worth computing if the model is obliged to
+    act on it."""
+    from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
+
+    assert "coverage" in ASK_SYSTEM_PROMPT_TEMPLATE
+    assert "needs_review" in ASK_SYSTEM_PROMPT_TEMPLATE
+    assert "excluded" in ASK_SYSTEM_PROMPT_TEMPLATE
+
+
+def test_query_documents_tool_description_explains_coverage() -> None:
+    from library.ask.engine import TOOLS
+
+    tool = next(tool for tool in TOOLS if tool["name"] == "query_documents")
+    assert "coverage" in tool["description"]
+    assert "needs_review" in tool["description"]
+    assert "excluded" in tool["description"]
+
+
+def test_ask_system_prompt_names_semantic_search_as_a_coverage_tool() -> None:
+    """Task 4 gave semantic_search its own `coverage` block (`unembedded`), but
+    the prompt used to name only the structured tool(s) as coverage-carrying
+    — so the strongest surface actively implied semantic_search carried none.
+    Pin both halves: the tool is named, and the
+    `unembedded` obligation is stated as a MUST, not left to the (weaker)
+    tool-description surface alone."""
+    from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
+
+    assert "semantic_search" in ASK_SYSTEM_PROMPT_TEMPLATE.split("Rules:")[1]
+    assert "unembedded" in ASK_SYSTEM_PROMPT_TEMPLATE
+    assert "MUST say your answer is incomplete" in ASK_SYSTEM_PROMPT_TEMPLATE
+
+
+def test_ask_system_prompt_pins_the_disclosure_obligation_as_a_MUST() -> None:
+    """The other coverage/needs_review/excluded assertions are pure vocabulary
+    containment checks: 'you MUST say so' could be reworded to 'you may
+    mention it' and every one of them would still pass. The modal is the
+    actual mechanism forcing disclosure, so pin its literal strength here too
+    — a reword that softens it is a silent regression on this branch's whole
+    point, not a wording tweak."""
+    from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
+
+    assert "MUST say so" in ASK_SYSTEM_PROMPT_TEMPLATE
+    assert "MUST also say so" in ASK_SYSTEM_PROMPT_TEMPLATE
+
+
+def test_disclosure_rule_names_the_coverage_reporting_tools() -> None:
+    """Pins that the disclosure rule's opening clause names query_documents
+    and semantic_search (the two tools whose results carry a `coverage`
+    block) rather than claiming the block is query_documents-exclusive."""
+    from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
+
+    rules = ASK_SYSTEM_PROMPT_TEMPLATE.split("Rules:")[1]
+    lines = rules.splitlines()
+    start = next(i for i, line in enumerate(lines) if line.startswith("- ") and "coverage" in line)
+    end = next((i for i in range(start + 1, len(lines)) if lines[i].startswith("- ")), len(lines))
+    disclosure = " ".join(lines[start:end])
+    assert "query_documents results carry" not in disclosure
+    assert "query_documents" in disclosure
+    assert "semantic_search" in disclosure
+
+
+def test_ask_refuses_an_allocated_documents_amount_edit_without_a_500(
+    api_client: TestClient,
+    api_database_url: str,
+    with_api_key: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The refusal has to survive the whole turn, not just the tool call.
+
+    Editing `amount_total` on a document whose spend lines are allocated
+    against the old amount is refused by migration 0035's deferred mirror
+    trigger at COMMIT, and `ask/engine.py` translates that into a tool-result
+    error. Translating it is only half the job: the refusal path rolls the
+    session back, and a rollback expires every ORM object this request holds —
+    so the route must not read `thread.id` off the expired object afterwards.
+    Executed before this test existed, it did: the tool returned its refusal,
+    the model wrote an answer, and the request then died with MissingGreenlet
+    on `AskTurn(thread_id=thread.id)` — a 500 again, one line further on.
+
+    Two turns, because a confirmed write is only reachable once an EARLIER
+    turn's preview is in the thread history.
+    """
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            # Invented amounts — this repository is public.
+            document_id = connection.execute(
+                text(
+                    "INSERT INTO documents"
+                    " (sha256, mime_type, status, source, title, amount_total, currency,"
+                    "  document_date)"
+                    " VALUES (:sha, 'application/pdf', 'indexed', 'upload', 'Allocated',"
+                    "  CAST('100.00' AS numeric), 'EUR', :d) RETURNING id"
+                ),
+                {"sha": hashlib.sha256(b"ask-allocated").hexdigest(), "d": date(2025, 1, 1)},
+            ).scalar_one()
+            for amount in ("60.00", "40.00"):
+                connection.execute(
+                    text(
+                        "INSERT INTO spend_lines (document_id, amount, origin)"
+                        " VALUES (:doc, CAST(:amount AS numeric), 'manual')"
+                    ),
+                    {"doc": document_id, "amount": amount},
+                )
+    finally:
+        engine.dispose()
+
+    # Turn one: surface the document, then propose the edit. The preview lands
+    # in this turn's recorded messages, which is what authorises a confirm later.
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(name="get_document", input={"document_id": document_id}, id="r1")
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="update_document_metadata",
+                        input={
+                            "document_id": document_id,
+                            "amount_total": "250.00",
+                            "confirmed": False,
+                        },
+                        id="p1",
+                    )
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"Shall I change it? [#{document_id}]")],
+                usage=_Usage(6, 3),
+            ),
+        ],
+    )
+    first = api_client.post("/api/ask", json={"question": "the total looks wrong?"})
+    assert first.status_code == 200, first.text
+    thread_id = first.json()["thread_id"]
+
+    # Turn two: the user agrees, the model confirms, and the trigger refuses.
+    fake = _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="update_document_metadata",
+                        input={
+                            "document_id": document_id,
+                            "amount_total": "250.00",
+                            "confirmed": True,
+                        },
+                        id="w1",
+                    )
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"I could not change it. [#{document_id}]")],
+                usage=_Usage(6, 3),
+            ),
+        ],
+    )
+    second = api_client.post(
+        "/api/ask", json={"question": "yes, change it", "thread_id": thread_id}
+    )
+
+    assert second.status_code == 200, second.text
+    # The model was told why, in the tool result it got back.
+    assert "spend lines" in str(fake.messages.calls[1]["messages"])
+
+    engine = create_engine(api_database_url.replace("+asyncpg", "+psycopg"))
+    try:
+        with engine.begin() as connection:
+            still = connection.execute(
+                text("SELECT amount_total FROM documents WHERE id = :d"), {"d": document_id}
+            ).scalar_one()
+            assert str(still) == "100.00", "the refused edit must not have landed"
+            # The session survived the rollback well enough to record the turn.
+            turns = connection.execute(
+                text("SELECT count(*) FROM ask_turns WHERE thread_id = :t"), {"t": thread_id}
+            ).scalar_one()
+            assert turns == 2
+    finally:
+        engine.dispose()

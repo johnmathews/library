@@ -104,7 +104,7 @@ export const METADATA_CARD_IDS = [
 /** Stable card ids, split into their default column and default in-column order. */
 export const DEFAULT_CARD_COLUMNS: CardColumns = {
   left: ['notes', ...METADATA_CARD_IDS, 'comments', 'actions', 'history'],
-  right: ['preview', 'markdown', 'series-chart'],
+  right: ['preview', 'markdown'],
 }
 
 /** Fresh, mutable copy of a hero-field list (never share the constant's refs). */
@@ -194,7 +194,7 @@ export function reconcileCardColumns(
 
 /** Cards that lived in the (now-removed) flat order's preview column — used
  * only to split a legacy flat order into the new two-column shape. */
-const LEGACY_RIGHT = new Set(['preview', 'markdown', 'series-chart'])
+const LEGACY_RIGHT = new Set(['preview', 'markdown'])
 
 /**
  * Migrate an old flat card order (pre-column model) into the two-column

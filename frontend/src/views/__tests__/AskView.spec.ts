@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { nextTick } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import AskView from '../AskView.vue'
 import { askQuestion, getThread, listThreads, type AskResponse } from '@/api/ask'
 import { ApiError } from '@/api/client'
+import { usePageTitle } from '@/composables/usePageTitle'
 
 vi.mock('@/api/ask', () => ({
   askQuestion: vi.fn(),
@@ -87,9 +89,12 @@ describe('AskView', () => {
     await flushPromises()
   }
 
-  it('renders the page heading', () => {
+  it('claims the page title for the app bar', () => {
     const w = mountView()
-    expect(w.find('h1').text()).toBe('Ask')
+    // The page title is claimed for the app bar rather than rendered in the
+    // view — see composables/usePageTitle.ts.
+    expect(w.find('h1').exists()).toBe(false)
+    expect(usePageTitle().pageTitle.value).toBe('Ask')
   })
 
   it('disables New conversation in the fresh state and enables it after an ask (item 2)', async () => {
@@ -171,6 +176,85 @@ describe('AskView', () => {
     expect(w.text()).toContain('Vattenfall')
   })
 
+  // --- transcript scroll position -----------------------------------------
+  //
+  // Two different intents share one scroll container. A turn ARRIVING should
+  // pull you to the bottom — you want the new thing. OPENING a thread to read
+  // it should start at the top, or the transcript lands mid-answer with your
+  // own question scrolled off, which is the first thing needed to make sense of
+  // what follows. Screenshot review caught this; nothing asserted it.
+  //
+  // jsdom has no layout, so `scrollHeight`/`clientHeight` are 0 and the real
+  // geometry cannot be tested here. What CAN be pinned is the direction the
+  // code drives the container, which is the part that regressed.
+
+  it('starts an opened conversation at the top, not scrolled into the answer', async () => {
+    getThreadMock.mockResolvedValue({
+      id: 7,
+      title: 'Energy',
+      turns: [
+        {
+          id: 1,
+          query: 'who is my supplier?',
+          answer: 'Vattenfall [#3].',
+          citations: [],
+          used_tools: ['query_documents'],
+          cost_usd: 0.02,
+          created_at: '',
+        },
+      ],
+    })
+    await router.push('/ask/7')
+    const w = mountView()
+    const transcript = w.get('[data-testid="ask-transcript"]').element as HTMLElement
+
+    // Give the element real geometry BEFORE the load resolves. Without this the
+    // test is vacuous: jsdom reports scrollHeight/clientHeight as 0, so
+    // scrollToBottom's overflow branch is false, it falls through to a
+    // scrollIntoView that jsdom no-ops, and scrollTop stays 0 whichever
+    // function ran. Verified by reverting the fix and watching this fail.
+    let scrollTop = 0
+    Object.defineProperty(transcript, 'scrollTop', {
+      configurable: true,
+      get: () => scrollTop,
+      set: (v: number) => {
+        scrollTop = v
+      },
+    })
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, get: () => 5000 })
+    Object.defineProperty(transcript, 'clientHeight', { configurable: true, get: () => 400 })
+
+    await flushPromises()
+    await nextTick()
+
+    expect(scrollTop).toBe(0)
+  })
+
+  it('drives the transcript downward when a new answer arrives', async () => {
+    // The counterpart: scroll-to-bottom must survive the change above. Written
+    // as "did it try to move down" rather than a pixel assertion, because jsdom
+    // reports zero height and a pixel test here would pass vacuously.
+    askQuestionMock.mockResolvedValueOnce(sampleResponse())
+    const w = mountView()
+    const transcript = w.get('[data-testid="ask-transcript"]').element as HTMLElement
+
+    let maxRequested = 0
+    Object.defineProperty(transcript, 'scrollTop', {
+      configurable: true,
+      get: () => maxRequested,
+      set: (v: number) => {
+        maxRequested = Math.max(maxRequested, v)
+      },
+    })
+    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, get: () => 5000 })
+    Object.defineProperty(transcript, 'clientHeight', { configurable: true, get: () => 400 })
+
+    await typeAndSubmit(w, 'which invoices are due?')
+    await nextTick()
+
+    expect(maxRequested).toBeGreaterThan(0)
+  })
+
   it('shows a friendly error summary when the API returns 503', async () => {
     askQuestionMock.mockRejectedValue(new ApiError(503, 'no API key configured'))
     const w = mountView()
@@ -227,6 +311,241 @@ describe('AskView', () => {
     expect(surface.classes()).not.toContain('border')
     // The answer body lives inside it either way.
     expect(surface.find('[data-testid="ask-answer"]').exists()).toBe(true)
+    // These class strings are the CONVERSATION-mode contract. Stated
+    // explicitly because this test doesn't stub the viewport, so it relies on
+    // the mobile default to stay in conversation mode — if the default ever
+    // changed, the assertions above would start describing a layout nobody
+    // meant to pin.
+    expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('conversation')
+  })
+
+  // --- Document view mode -------------------------------------------------
+  //
+  // The transcript can render as chat bubbles (default) or as full-width
+  // role-labelled document blocks. Document mode is clamped to lg+, so every
+  // test here that expects it must stub the desktop viewport AND seed the
+  // stored preference; the ones that omit either are asserting the clamp.
+  describe('document view mode', () => {
+    beforeEach(() => {
+      localStorage.clear()
+    })
+
+    /** Opt OUT of the default (document) before mounting. */
+    function preferConversationMode(): void {
+      localStorage.setItem('library:ask-view-mode', 'conversation')
+    }
+
+    it('renders document blocks by DEFAULT on a desktop viewport', async () => {
+      stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('document')
+      expect(w.find('[data-testid="ask-doc-block"]').exists()).toBe(true)
+    })
+
+    it('renders bubbles on a desktop viewport when the user opts out', async () => {
+      stubDesktopViewport()
+      preferConversationMode()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('conversation')
+      expect(w.find('[data-testid="ask-doc-block"]').exists()).toBe(false)
+    })
+
+    it('renders role-labelled document blocks when selected on a desktop viewport', async () => {
+      stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      const turn = w.get('[data-testid="ask-turn"]')
+      expect(turn.attributes('data-view-mode')).toBe('document')
+      expect(turn.find('[data-testid="ask-doc-block"]').exists()).toBe(true)
+      // Both roles are named, so the speaker is stated rather than implied by
+      // alignment — which is the whole point of dropping the right-aligned bubble.
+      expect(turn.findAll('[data-testid="ask-doc-role"]').map((r) => r.text())).toEqual([
+        'You',
+        'Agent',
+      ])
+    })
+
+    it('drops the right-aligned bubble cap in document mode', async () => {
+      stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      // The bubble's max-w-[85%] is the thing document mode exists to remove.
+      expect(w.get('[data-testid="ask-turn"]').html()).not.toContain('max-w-[85%]')
+    })
+
+    it('ignores a stored document preference below lg', async () => {
+      // No stubDesktopViewport(): jsdom leaves matchMedia undefined, which
+      // vueuse reads as "no match", i.e. a phone. A desktop user's preference
+      // must not follow them onto a phone.
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('conversation')
+      expect(w.find('[data-testid="ask-doc-block"]').exists()).toBe(false)
+    })
+
+    it('offers the layout toggle only at lg+', async () => {
+      askQuestionMock.mockResolvedValue(sampleResponse())
+      const mobile = mountView()
+      await typeAndSubmit(mobile, 'which invoices are due?')
+      // v-if, not a `hidden` utility: a CSS-hidden button stays focusable and
+      // stays in the accessibility tree, so it must not be in the DOM at all.
+      expect(mobile.find('[data-testid="ask-view-mode"]').exists()).toBe(false)
+      mobile.unmount()
+
+      stubDesktopViewport()
+      const desktop = mountView()
+      await typeAndSubmit(desktop, 'which invoices are due?')
+      expect(desktop.find('[data-testid="ask-view-mode"]').exists()).toBe(true)
+    })
+
+    it('marks the active layout with aria-pressed on exactly one button', async () => {
+      stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      const conversation = w.get('[data-testid="ask-view-mode-conversation"]')
+      const document_ = w.get('[data-testid="ask-view-mode-document"]')
+      // Document is the default, so it starts pressed.
+      expect(document_.attributes('aria-pressed')).toBe('true')
+      expect(conversation.attributes('aria-pressed')).toBe('false')
+
+      await conversation.trigger('click')
+      expect(document_.attributes('aria-pressed')).toBe('false')
+      expect(conversation.attributes('aria-pressed')).toBe('true')
+    })
+
+    it('switches layout and persists the choice when the toggle is clicked', async () => {
+      stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      await w.get('[data-testid="ask-view-mode-document"]').trigger('click')
+      expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('document')
+      expect(localStorage.getItem('library:ask-view-mode')).toContain('document')
+
+      await w.get('[data-testid="ask-view-mode-conversation"]').trigger('click')
+      expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('conversation')
+    })
+
+    it('collapses the conversation rail by default and restores it in conversation mode', async () => {
+      // The rail is 288px. Without giving that back, document mode at 1024px
+      // leaves 332px of answer text — narrower than the phone layout it
+      // replaces — so the collapse is what makes the mode worth defaulting to.
+      stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(false)
+
+      await w.get('[data-testid="ask-view-mode-conversation"]').trigger('click')
+      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
+
+      await w.get('[data-testid="ask-view-mode-document"]').trigger('click')
+      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(false)
+    })
+
+    // --- the rail's actions, when the rail is not on screen ----------------
+    //
+    // These exist because the first cut of document mode shipped without them:
+    // the rail was hidden and with it the ONLY lg+ way to start or switch a
+    // conversation. The unit tests passed, because they asserted the rail
+    // disappeared and never asked whether what it carried was still reachable.
+    // Testing the mechanism instead of the capability is what let it through.
+
+    it('keeps New conversation reachable while the rail is collapsed', async () => {
+      stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      // Rail gone, capability still addressable by the same selector.
+      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(false)
+      const newBtn = w.find('[data-testid="new-conversation"]')
+      expect(newBtn.exists()).toBe(true)
+      await newBtn.trigger('click')
+      await flushPromises()
+      expect(router.currentRoute.value.name).toBe('ask-new')
+    })
+
+    it('offers a way back to the conversation list while the rail is collapsed', async () => {
+      stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      const back = w.find('[data-testid="ask-show-conversations"]')
+      expect(back.exists()).toBe(true)
+      await back.trigger('click')
+      await flushPromises()
+      expect(router.currentRoute.value.name).toBe('ask')
+      // Landing on the list restores the rail, so a thread can be picked.
+      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
+    })
+
+    it('never shows the rail and its relocated actions at the same time', async () => {
+      stubDesktopViewport()
+      preferConversationMode()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      // Conversation mode: rail present, so the thread-bar duplicates must not be.
+      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
+      expect(w.find('[data-testid="ask-show-conversations"]').exists()).toBe(false)
+      // Exactly one New button in the DOM, wherever it lives.
+      expect(w.findAll('[data-testid="new-conversation"]')).toHaveLength(1)
+    })
+
+    it('does not put the relocated actions in a phone tab order', async () => {
+      // Below lg the rail is the list SCREEN, not a collapsed rail, so these
+      // buttons would be duplicates. v-if keeps them out of the DOM entirely.
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      expect(w.find('[data-testid="ask-show-conversations"]').exists()).toBe(false)
+    })
+
+    it('keeps the rail when document mode is on but no conversation is open', async () => {
+      // Otherwise the empty state says "select a conversation from the
+      // sidebar" with no sidebar on screen and no way to select one.
+      stubDesktopViewport()
+      const w = mountView()
+      await flushPromises()
+
+      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
+    })
+
+    it('preserves the e2e selector contract in document mode', async () => {
+      // These are pinned by e2e specs that gate deploy; document mode must not
+      // rename or drop any of them.
+      stubDesktopViewport()
+      askQuestionMock.mockResolvedValueOnce(sampleResponse())
+      const w = mountView()
+      await typeAndSubmit(w, 'which invoices are due?')
+
+      for (const id of ['ask-form', 'ask-transcript', 'ask-submit', 'ask-answer', 'ask-turn']) {
+        expect(w.find(`[data-testid="${id}"]`).exists()).toBe(true)
+      }
+      // Depended on as a DOM id, not a testid.
+      expect(w.find('#ask-question').exists()).toBe(true)
+      // Matched by rendered text against /^Citations \(\d+\)$/.
+      expect(w.get('[data-testid="ask-citations-disclosure"]').text()).toContain('Citations (2)')
+    })
   })
 
   it('validates an empty question without calling the API', async () => {
@@ -250,6 +569,66 @@ describe('AskView', () => {
     expect(answer.find('strong').text()).toBe('PWN')
     expect(answer.html()).not.toContain('**PWN**')
     expect(answer.findAll('li')).toHaveLength(2)
+  })
+
+  // Wide GFM tables used to pan the entire transcript sideways: the transcript
+  // is overflow-y-auto, which makes the browser compute overflow-x to auto too,
+  // so a table wider than the column dragged every question bubble with it.
+  // Each table now gets its own scroll container. These assert the DOM contract
+  // the CSS hangs off; the geometry itself is asserted in e2e, where there is a
+  // layout engine.
+  const TABLE_ANSWER =
+    '| Disk | Serial | Standby % | Active % | Cycles | Baseline | Status |\n' +
+    '| --- | --- | --- | --- | --- | --- | --- |\n' +
+    '| sdf | K3S04BKQ | 1.0% | 99.0% | 2 | 3.1 | Normal |'
+
+  it('wraps a rendered table in its own scroll container', async () => {
+    askQuestionMock.mockResolvedValueOnce(sampleResponse({ answer: TABLE_ANSWER, thread_id: 1 }))
+    const w = mountView()
+    await typeAndSubmit(w, 'disk report?')
+
+    const answer = w.get('[data-testid="ask-answer"]')
+    const wrap = answer.get('.ask-table-wrap')
+    // The table must be INSIDE the wrapper, not a sibling — a sibling would
+    // scroll nothing.
+    expect(wrap.find('table').exists()).toBe(true)
+    expect(answer.findAll('table')).toHaveLength(1)
+  })
+
+  it('keeps the table wrapper keyboard-reachable through DOMPurify', async () => {
+    askQuestionMock.mockResolvedValueOnce(sampleResponse({ answer: TABLE_ANSWER, thread_id: 1 }))
+    const w = mountView()
+    await typeAndSubmit(w, 'disk report?')
+
+    // tabindex is not in DOMPurify's default allow-list. Without the explicit
+    // ADD_ATTR it is stripped and the scrollable region becomes unreachable by
+    // keyboard — silently, since the table still looks fine.
+    const wrap = w.get('[data-testid="ask-answer"]').get('.ask-table-wrap')
+    expect(wrap.attributes('tabindex')).toBe('0')
+    expect(wrap.attributes('role')).toBe('region')
+    expect(wrap.attributes('aria-label')).toBe('Table')
+  })
+
+  it('wraps every table when an answer contains more than one', async () => {
+    askQuestionMock.mockResolvedValueOnce(
+      sampleResponse({ answer: `${TABLE_ANSWER}\n\nAnd another:\n\n${TABLE_ANSWER}`, thread_id: 1 }),
+    )
+    const w = mountView()
+    await typeAndSubmit(w, 'both pools?')
+
+    const answer = w.get('[data-testid="ask-answer"]')
+    expect(answer.findAll('.ask-table-wrap')).toHaveLength(2)
+    expect(answer.findAll('table')).toHaveLength(2)
+  })
+
+  it('leaves an answer with no table untouched', async () => {
+    askQuestionMock.mockResolvedValueOnce(
+      sampleResponse({ answer: 'No tables here, just **prose**.', thread_id: 1 }),
+    )
+    const w = mountView()
+    await typeAndSubmit(w, 'anything?')
+
+    expect(w.get('[data-testid="ask-answer"]').find('.ask-table-wrap').exists()).toBe(false)
   })
 
   it('collapses citations behind a disclosure showing the count by default', async () => {

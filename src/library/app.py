@@ -14,22 +14,23 @@ from library.api import (
     admin,
     ask,
     auth,
-    charts,
     comments,
     documents,
     events,
+    facets,
     held_emails,
     jobs,
     matters,
     notes,
+    payments,
     projects,
     saved_views,
-    series,
     settings,
+    spending,
     taxonomy,
 )
 from library.auth.deps import csrf_protect, current_user, require_admin
-from library.config import get_settings
+from library.config import Settings, get_settings
 from library.events_broker import EventsBroker
 from library.jobs import job_app, procrastinate_conninfo
 from library.mcp_server import create_mcp_http_app
@@ -128,7 +129,12 @@ OPENAPI_TAGS: list[dict[str, str]] = [
 
 # Path heads that belong to the backend, never the SPA. A request for an
 # unknown path under these gets the normal JSON 404, not index.html.
-_BACKEND_PREFIXES = frozenset({"api", "mcp", "healthz", "docs", "redoc", "openapi.json"})
+_BACKEND_PREFIXES = frozenset(
+    # "metrics" belongs here for the same reason as "healthz": without it the
+    # SPA catch-all below answers a Prometheus scrape with index.html, which
+    # is a 200 — so the scrape looks healthy while collecting nothing.
+    {"api", "mcp", "healthz", "metrics", "docs", "redoc", "openapi.json"}
+)
 
 
 def warn_if_no_public_base_url(public_base_url: str | None) -> None:
@@ -183,6 +189,25 @@ def _mount_spa(app: FastAPI, dist: Path) -> None:
         return FileResponse(index_file, headers={"Cache-Control": "no-cache"})
 
 
+def _configure_telemetry_from_settings(settings: Settings) -> None:
+    """Install the OTel MeterProvider from configuration, at startup.
+
+    Called from the lifespan rather than at import so that tests and CLI entry
+    points that merely import the app do not install a global provider. It is
+    idempotent, so a second app instance in the same process is harmless.
+    """
+    from library.telemetry import configure_telemetry
+
+    configure_telemetry(
+        service_name="library",
+        service_version=library.__version__,
+        prometheus_enabled=settings.otel_metrics_enabled,
+        otlp_endpoint=settings.otel_exporter_otlp_endpoint,
+        otlp_headers=settings.otel_exporter_otlp_headers,
+        export_interval_ms=settings.otel_metric_export_interval_ms,
+    )
+
+
 def create_app() -> FastAPI:
     """Build and return the Library FastAPI application."""
     # Built per app instance: the MCP ASGI app's session manager is created
@@ -196,6 +221,7 @@ def create_app() -> FastAPI:
         process-wide SSE events broker (one shared Postgres LISTEN connection
         fanned out to all clients), and run the mounted MCP app's lifespan."""
         warn_if_no_public_base_url(get_settings().public_base_url)
+        _configure_telemetry_from_settings(get_settings())
         broker = EventsBroker(procrastinate_conninfo(get_settings().database_url))
         await broker.start()
         app.state.events_broker = broker
@@ -229,9 +255,10 @@ def create_app() -> FastAPI:
     )
     api_router.include_router(documents.router)
     api_router.include_router(notes.router)
+    api_router.include_router(payments.router)
+    api_router.include_router(spending.router)
     api_router.include_router(comments.router)
-    api_router.include_router(charts.router)
-    api_router.include_router(series.router)
+    api_router.include_router(facets.router)
     api_router.include_router(taxonomy.router)
     api_router.include_router(projects.router)
     api_router.include_router(matters.router)
@@ -250,6 +277,24 @@ def create_app() -> FastAPI:
     # session doesn't exist yet, and the password itself proves intent).
     app.include_router(auth.login_router, prefix="/api")
 
+    @app.get("/metrics", include_in_schema=False)
+    def metrics_endpoint() -> Response:
+        """Prometheus scrape target. Unauthenticated, like /healthz.
+
+        Returns 404 when metrics are disabled rather than an empty 200: an
+        empty exposition is indistinguishable from "the app is running and
+        recording nothing", and a scrape that silently collects zero series is
+        the failure this endpoint exists to make visible.
+
+        Deliberately carries no per-user or per-document labels — see the
+        cardinality and privacy notes in `library.telemetry`.
+        """
+        if not get_settings().otel_metrics_enabled:
+            raise HTTPException(status_code=404, detail="metrics are not enabled")
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
     @app.get("/healthz")
     def healthz() -> dict[str, str | None]:
         """Container healthcheck: no auth, no database access.
@@ -259,11 +304,58 @@ def create_app() -> FastAPI:
         here, unauthenticated, so a deploy can be verified with a single curl:
         compare it to the commit CI promoted (see docs/deployment.md).
         """
-        return {
+        settings = get_settings()
+        payload: dict[str, str | None] = {
             "status": "ok",
             "version": library.__version__,
-            "git_sha": get_settings().git_sha,
+            "git_sha": settings.git_sha,
         }
+        # Only meaningful where subscription credentials are actually in play. A
+        # dead refresh token cannot self-heal — it needs a human — and without
+        # this the symptom is every question failing while /healthz says "ok".
+        #
+        # Keyed on the credentials *existing*, not on the configured backend.
+        # The live backend is an instance setting resolved from the database
+        # (library.llm.backends), and this endpoint is deliberately DB-free — so
+        # reading `settings.ask_llm_backend` here reported on the environment
+        # default while the toggle said otherwise, and the alarm stayed silent
+        # for exactly the deployments that enabled the backend through the UI.
+        # Presence is the right trigger anyway: credentials on disk are there to
+        # be used, and the write-time guard means a surface cannot be switched
+        # to `subscription` without them.
+        from library.llm.oauth import credentials_path, token_health
+
+        if (
+            credentials_path(settings.claude_config_dir).exists()
+            or settings.ask_llm_backend == "subscription"
+        ):
+            status, detail = token_health(settings.claude_config_dir)
+            payload["claude_credentials"] = status
+            payload["claude_credentials_detail"] = detail
+            if status != "healthy":
+                payload["status"] = "degraded"
+        # The photo OCR weights (GH #109). They ship in the image under
+        # models/ocr/, but a file read at run time from inside the image needs
+        # a Dockerfile COPY to actually be there, and this is the class of
+        # absence that otherwise stays invisible: photo.get_engine() is lazy
+        # and lru_cached, so a deploy with no weights passes every healthcheck
+        # and only fails on the first JPEG/PNG/HEIC someone uploads, hours
+        # later, one document at a time. Report it at deploy time instead.
+        #
+        # Existence only, never checksums — ~13 MB of hashing does not belong
+        # on an unauthenticated endpoint polled every 10 seconds by the
+        # container healthcheck. `scripts/fetch_ocr_models.py --check` is the
+        # checksum-verifying counterpart, and compose-smoke runs it.
+        from library.ocr.weights import missing_models
+
+        missing = missing_models()
+        payload["ocr_models"] = "missing" if missing else "ok"
+        if missing:
+            payload["ocr_models_detail"] = "not found: " + ", ".join(
+                str(model.path) for model in missing
+            )
+            payload["status"] = "degraded"
+        return payload
 
     # MCP server (W13): bearer-token-authenticated tools at /mcp/ — see
     # docs/mcp.md. Auth is enforced inside the mounted app (FastMCP bearer

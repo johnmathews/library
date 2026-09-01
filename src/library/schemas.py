@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 from enum import StrEnum
-from typing import Annotated, Any, Final
+from typing import Annotated, Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator
 
@@ -294,6 +294,15 @@ CurrencyCode = Annotated[
     str, StringConstraints(min_length=3, max_length=3, pattern=r"^[A-Za-z]{3}$", to_upper=True)
 ]
 
+#: Six-digit hex with a leading hash — a chart split value's stored colour
+#: override (spec §2.5), on both `facet_values` and `senders`. The same shape
+#: the database CHECK enforces (migration 0037), stated here so a malformed
+#: colour is a 422 the owner can read rather than an `IntegrityError`
+#: translated after the fact. Shared by `library.api.facets` and
+#: `library.api.taxonomy` so the two PATCH routes cannot drift apart on the
+#: one contract they both owe the same database constraint.
+Colour = Annotated[str, StringConstraints(pattern=r"^#[0-9a-fA-F]{6}$")]
+
 
 class DocumentUpdate(BaseModel):
     """PATCH /api/documents/{id} body; only fields present in the body change.
@@ -545,6 +554,43 @@ def _resolve_hide_summary_mobile(blob: dict[str, Any]) -> bool:
     """
     raw = blob.get("hide_summary_mobile")
     return raw if isinstance(raw, bool) else DEFAULT_HIDE_SUMMARY_MOBILE
+
+
+DEFAULT_ASK_PROFILE: Final[str] = ""
+# Hard cap on the "About you" notes Ask reads every turn. Generous for a
+# household (a few dozen lines) and small next to the tool results a turn
+# already ships; the point is that a runaway paste cannot become a prompt.
+MAX_ASK_PROFILE_CHARS: Final[int] = 4000
+
+
+def _resolve_ask_profile(blob: dict[str, Any]) -> str:
+    """Pick the stored Ask profile ("About you" notes), stripped.
+
+    Tolerant like the other resolvers: only a real ``str`` counts; anything
+    else (absent key, a hand-edited number/list) resolves to the empty default
+    rather than raising. Over-long stored text is clipped to the cap so a
+    blob written before the cap existed cannot exceed it on read.
+    """
+    raw = blob.get("ask_profile")
+    if not isinstance(raw, str):
+        return DEFAULT_ASK_PROFILE
+    return raw.strip()[:MAX_ASK_PROFILE_CHARS]
+
+
+class AskProfilePreferences(BaseModel):
+    """Body of PUT /api/settings/ask-profile — the user's "About you" notes.
+
+    Unlike the appearance flags this is **not** coerced on failure: the text is
+    the user's own words, so an over-long body is a ``422`` they can act on,
+    not a silent truncation.
+    """
+
+    ask_profile: str = Field(default=DEFAULT_ASK_PROFILE, max_length=MAX_ASK_PROFILE_CHARS)
+
+    @field_validator("ask_profile", mode="after")
+    @classmethod
+    def _strip(cls, value: str) -> str:
+        return value.strip()
 
 
 class DockPosition(StrEnum):
@@ -844,6 +890,43 @@ def get_notification_credentials(
     )
 
 
+class LLMSurfaceOut(BaseModel):
+    """One switchable LLM surface, as the Settings view renders it."""
+
+    surface: str
+    label: str
+    description: str
+    backend: Literal["api", "subscription"]
+    # What the environment would give if the override row were deleted, so the
+    # UI can show "overridden" rather than leaving the admin guessing whether a
+    # value is deployed config or something a person changed.
+    default: Literal["api", "subscription"]
+    overridden: bool
+
+
+class LLMBackendsOut(BaseModel):
+    """The LLM backend section of the Settings view.
+
+    Instance-wide, not per-user. Readable by any signed-in user (it explains why
+    Ask behaves as it does); only an admin may change it.
+    """
+
+    surfaces: list[LLMSurfaceOut]
+    # "healthy" / "degraded" / "unhealthy" plus a human-readable reason. Present
+    # regardless of the current backend so an admin can tell *before* switching
+    # whether the subscription would work.
+    credentials_status: str
+    credentials_detail: str
+    api_key_configured: bool
+    editable: bool
+
+
+class LLMBackendIn(BaseModel):
+    """Set one surface's backend."""
+
+    backend: Literal["api", "subscription"]
+
+
 class UserPreferences(BaseModel):
     """All resolved per-user display preferences (read model).
 
@@ -861,6 +944,8 @@ class UserPreferences(BaseModel):
     hide_summary_mobile: bool
     kind_colors: dict[str, str]
     notifications: NotificationSettingsOut
+    # Free-text "About you" notes appended to the Ask prompt (docs/ask.md §1.2).
+    ask_profile: str
 
 
 def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
@@ -879,6 +964,7 @@ def resolve_preferences(preferences: dict[str, Any] | None) -> UserPreferences:
         hide_summary_mobile=_resolve_hide_summary_mobile(blob),
         kind_colors=_resolve_kind_colors(blob),
         notifications=resolve_notification_settings(blob),
+        ask_profile=_resolve_ask_profile(blob),
     )
 
 

@@ -18,8 +18,10 @@ Design notes
 """
 
 import enum
+from collections.abc import Mapping
 from datetime import date, datetime
 from decimal import Decimal
+from types import MappingProxyType
 from typing import Any
 
 from pgvector.sqlalchemy import Vector
@@ -27,6 +29,7 @@ from sqlalchemy import (
     CHAR,
     BigInteger,
     Boolean,
+    CheckConstraint,
     Column,
     Computed,
     Date,
@@ -34,6 +37,7 @@ from sqlalchemy import (
     Enum,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     MetaData,
@@ -109,43 +113,49 @@ class ReviewStatus(enum.StrEnum):
     UNREVIEWED = "unreviewed"
 
 
-class OverrideAction(enum.StrEnum):
-    """Direction of a manual series-membership override (see ``SeriesMembershipOverride``)."""
+class AmountKind(enum.StrEnum):
+    """What a document's ``amount_total`` actually is.
 
-    PIN = "pin"
-    EXCLUDE = "exclude"
-
-
-class SuggestionState(enum.StrEnum):
-    """Lifecycle of a proposed authored-series membership (see ``AuthoredSeriesSuggestion``).
-
-    A signature-matching document is recorded as a ``pending`` suggestion for the
-    owner to review; ``dismiss``-ing it writes a ``dismissed`` tombstone so the
-    same document is never re-suggested for that series.
+    ``amount_total`` is always a magnitude. The sign of a document's
+    contribution to a spending total is a property of what the number
+    *means*, so it is carried here and nowhere else — see ``AMOUNT_SIGN``.
+    The non-contributing values exist so that a coverage ceiling, an opening
+    balance, a quote or a nil-return confirmation can be recorded faithfully
+    without contaminating a total.
     """
 
-    PENDING = "pending"
-    DISMISSED = "dismissed"
+    PAYMENT_DUE = "payment_due"
+    PAYMENT_MADE = "payment_made"
+    ASSESSMENT = "assessment"
+    REFUND = "refund"
+    COVERAGE_LIMIT = "coverage_limit"
+    BALANCE = "balance"
+    ESTIMATE = "estimate"
+    NONE = "none"
 
 
-class SeriesMode(enum.StrEnum):
-    """Whether an authored series is hand-curated or membership-learned (Smart Group)."""
+#: How each contributing kind enters a spending total. A kind absent from this
+#: map never enters one, so "summable" and "signed" are the same predicate and
+#: cannot drift apart. A refund is the only negative: money returned, or an
+#: amount owed cancelled.
+AMOUNT_SIGN: Mapping[AmountKind, int] = MappingProxyType(
+    {
+        AmountKind.PAYMENT_DUE: 1,
+        AmountKind.PAYMENT_MADE: 1,
+        AmountKind.ASSESSMENT: 1,
+        AmountKind.REFUND: -1,
+    }
+)
 
+SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(AMOUNT_SIGN)
+
+
+class SpendLineOrigin(enum.StrEnum):
+    """Where a line came from. Only ``MANUAL`` is produced today; extraction
+    proposing lines is deferred (spec §14, open question 3)."""
+
+    EXTRACTED = "extracted"
     MANUAL = "manual"
-    SEMANTIC = "semantic"
-
-
-class MemberOrigin(enum.StrEnum):
-    """How a document became a member of an authored series.
-
-    ``manual`` — added by hand; ``accepted_suggestion`` — promoted from a staged
-    backfill suggestion; ``auto`` — silently added by the semantic auto-add job
-    (surfaced with the "added automatically" affordance so the user can prune it).
-    """
-
-    MANUAL = "manual"
-    ACCEPTED_SUGGESTION = "accepted_suggestion"
-    AUTO = "auto"
 
 
 class HeldEmailStatus(enum.StrEnum):
@@ -159,6 +169,15 @@ class HeldEmailStatus(enum.StrEnum):
     HELD = "held"
     INGESTED = "ingested"
     DISMISSED = "dismissed"
+
+
+class Grain(enum.StrEnum):
+    """The time bucket a chart's x-axis uses (spec §9.2)."""
+
+    WEEK = "week"
+    MONTH = "month"
+    QUARTER = "quarter"
+    YEAR = "year"
 
 
 class Base(DeclarativeBase):
@@ -264,6 +283,11 @@ class Sender(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     name: Mapped[str] = mapped_column(String(255), unique=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    #: A stored colour for this sender as a chart split value (spec §10.3).
+    #: NULL means "derive a palette slot from the id" — the normal state.
+    colour: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+    __table_args__ = (CheckConstraint("colour ~ '^#[0-9a-fA-F]{6}$'", name="colour_hex"),)
 
 
 class Recipient(Base):
@@ -307,6 +331,157 @@ document_tags: Table = Table(
     ),
     Column("tag_id", ForeignKey("tags.id", ondelete="CASCADE"), primary_key=True),
 )
+
+
+class Facet(Base):
+    """A named label dimension. A document carries at most one value per facet."""
+
+    __tablename__ = "facets"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    key: Mapped[str] = mapped_column(String(64), unique=True)
+    label: Mapped[str] = mapped_column(String(255))
+    ordinal: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+
+
+class FacetValue(Base):
+    """One allowed value of a facet.
+
+    ``parent_id`` is unused at ship; it exists so a flat facet can gain a second
+    level as a data change rather than a migration. The redundant
+    ``UNIQUE (id, facet_id)`` is what lets label tables hold a composite foreign
+    key and so cannot point at another facet's value.
+    """
+
+    __tablename__ = "facet_values"
+    __table_args__ = (
+        UniqueConstraint("facet_id", "key", name="facet_values_facet_key"),
+        UniqueConstraint("id", "facet_id", name="facet_values_id_facet"),
+        CheckConstraint("colour ~ '^#[0-9a-fA-F]{6}$'", name="colour_hex"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    facet_id: Mapped[int] = mapped_column(ForeignKey("facets.id", ondelete="RESTRICT"))
+    key: Mapped[str] = mapped_column(String(64))
+    label: Mapped[str] = mapped_column(String(255))
+    parent_id: Mapped[int | None] = mapped_column(
+        ForeignKey("facet_values.id", ondelete="RESTRICT"), nullable=True
+    )
+    ordinal: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    #: A stored colour for this value as a chart split value (spec §10.3).
+    #: NULL means "derive a palette slot from the key" — the normal state.
+    colour: Mapped[str | None] = mapped_column(String(32), nullable=True)
+
+
+class FacetValueAlias(Base):
+    """A surface form that resolves to a value: a plate, a marque, a misspelling."""
+
+    __tablename__ = "facet_value_aliases"
+
+    facet_value_id: Mapped[int] = mapped_column(
+        ForeignKey("facet_values.id", ondelete="CASCADE"), primary_key=True
+    )
+    alias: Mapped[str] = mapped_column(String(255), primary_key=True)
+
+
+class DocumentLabel(Base):
+    """One document's value for one facet. The PK enforces at-most-one."""
+
+    __tablename__ = "document_labels"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["facet_value_id", "facet_id"],
+            ["facet_values.id", "facet_values.facet_id"],
+            name="document_labels_value_facet",
+        ),
+    )
+
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), primary_key=True
+    )
+    facet_id: Mapped[int] = mapped_column(
+        ForeignKey("facets.id", ondelete="RESTRICT"), primary_key=True
+    )
+    facet_value_id: Mapped[int] = mapped_column(Integer)
+
+
+class SpendLine(Base):
+    """One part of a document's amount, when the money divides.
+
+    A document has either no lines at all — the common case, and the one
+    ``spend_facts`` synthesises a row for — or a complete set summing to
+    ``amount_total``. There is no partial state; the sum is enforced by a pair
+    of deferred constraint triggers (migration 0035) rather than by application
+    code, and from both sides: editing ``documents.amount_total`` out from under
+    an allocation is refused just as an unbalanced line set is.
+    """
+
+    __tablename__ = "spend_lines"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    document_id: Mapped[int] = mapped_column(
+        ForeignKey("documents.id", ondelete="CASCADE"), index=True
+    )
+    amount: Mapped[Decimal] = mapped_column(Numeric(14, 2))
+    note: Mapped[str | None] = mapped_column(Text, nullable=True)
+    origin: Mapped[SpendLineOrigin] = mapped_column(
+        Enum(
+            SpendLineOrigin,
+            name="spend_line_origin",
+            native_enum=False,
+            length=16,
+            # Without this SQLAlchemy persists the member *name* ("MANUAL"),
+            # which the migration's `origin IN ('extracted','manual')` CHECK
+            # rejects. Same treatment as every other enum column here.
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        default=SpendLineOrigin.MANUAL,
+        server_default=SpendLineOrigin.MANUAL.value,
+    )
+
+
+class LineLabel(Base):
+    """One line's value for one facet. Overrides the document's, if any."""
+
+    __tablename__ = "line_labels"
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["facet_value_id", "facet_id"],
+            ["facet_values.id", "facet_values.facet_id"],
+            name="line_labels_value_facet",
+        ),
+    )
+
+    line_id: Mapped[int] = mapped_column(
+        ForeignKey("spend_lines.id", ondelete="CASCADE"), primary_key=True
+    )
+    facet_id: Mapped[int] = mapped_column(
+        ForeignKey("facets.id", ondelete="RESTRICT"), primary_key=True
+    )
+    facet_value_id: Mapped[int] = mapped_column(Integer)
+
+
+class FacetValueSuggestion(Base):
+    """A value the labeller wanted but the closed vocabulary does not contain.
+
+    Queued for approval rather than created. This is the mechanism that keeps
+    the vocabulary closed while still letting it grow deliberately.
+    """
+
+    __tablename__ = "facet_value_suggestions"
+    __table_args__ = (
+        UniqueConstraint(
+            "facet_id", "document_id", "suggested_label", name="facet_value_suggestions_unique"
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    facet_id: Mapped[int] = mapped_column(ForeignKey("facets.id", ondelete="CASCADE"))
+    document_id: Mapped[int] = mapped_column(ForeignKey("documents.id", ondelete="CASCADE"))
+    suggested_label: Mapped[str] = mapped_column(String(255))
+    reason: Mapped[str] = mapped_column(Text)
+    state: Mapped[str] = mapped_column(String(16), default="pending", server_default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class Project(Base):
@@ -432,6 +607,21 @@ class Document(Base):
         server_default=DocumentLanguage.UNKNOWN.value,
     )
     amount_total: Mapped[Decimal | None] = mapped_column(Numeric(14, 2))
+    # What amount_total means. NULL = not yet decided; consumers treat NULL as
+    # not summable, so an un-backfilled archive under-reports rather than over-.
+    amount_kind: Mapped[AmountKind | None] = mapped_column(
+        Enum(
+            AmountKind,
+            name="amount_kind",
+            native_enum=False,
+            length=16,
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        nullable=True,
+    )
+    # The document's own invoice / order / booking number. The only evidence
+    # that pairs an invoice with its receipt across an arbitrary date gap.
+    reference: Mapped[str | None] = mapped_column(String(128), nullable=True)
     currency: Mapped[str | None] = mapped_column(CHAR(3))
     due_date: Mapped[date | None] = mapped_column(Date)
     expiry_date: Mapped[date | None] = mapped_column(Date)
@@ -555,6 +745,15 @@ class DocumentChunk(Base):
     chunk_index: Mapped[int] = mapped_column(Integer)
     page_number: Mapped[int | None] = mapped_column(Integer)
     text: Mapped[str] = mapped_column(Text)
+    #: The document-identity line prepended to ``text`` before embedding, so a
+    #: chunk retrieves on its sender/date/kind/title as well as its content.
+    #: Stored separately rather than baked into ``text`` because ``text`` is
+    #: also what Ask reads back as an excerpt: with three passages per document
+    #: and ten documents per search, a baked-in header would repeat the same
+    #: metadata up to thirty times per tool result, duplicating fields the
+    #: result rows already carry. NULL for chunks written before this column
+    #: existed, and for documents with no metadata at all.
+    context_header: Mapped[str | None] = mapped_column(Text)
     embedding: Mapped[list[float]] = mapped_column(Vector(EMBEDDING_DIM))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     comment_id: Mapped[int | None] = mapped_column(
@@ -738,306 +937,6 @@ class EvalRun(Base):
     overall: Mapped[dict[str, Any]] = mapped_column(JSONB, server_default=text("'{}'::jsonb"))
 
 
-class SeriesInsight(Base):
-    """Cached, LLM-generated natural-language description of a recurring series.
-
-    A *series* is one ``(sender_id, kind_id, currency)`` — e.g. EUR utility
-    bills from one provider (see ``library.series``). The series statistics are
-    computed on the fly, but the prose summary ("bills have crept up ~12% over
-    the last year, with a seasonal winter peak") costs an LLM call, so it is
-    precomputed by a background job whenever a new document joins the series and
-    cached here. ``member_count`` records how many documents the description was
-    generated over, so a description left behind by series growth can be spotted
-    and regenerated. One row per series: the unique key treats a NULL currency
-    as a single bucket (``NULLS NOT DISTINCT``) rather than allowing duplicates.
-    """
-
-    __tablename__ = "series_insights"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    sender_id: Mapped[int] = mapped_column(ForeignKey("senders.id", ondelete="CASCADE"), index=True)
-    kind_id: Mapped[int] = mapped_column(ForeignKey("kinds.id", ondelete="CASCADE"), index=True)
-    currency: Mapped[str | None] = mapped_column(CHAR(3))
-    description: Mapped[str] = mapped_column(Text)
-    model: Mapped[str] = mapped_column(String(64))
-    member_count: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
-    input_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
-    output_tokens: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
-    cost_usd: Mapped[float] = mapped_column(Float, default=0.0, server_default=text("0"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "sender_id",
-            "kind_id",
-            "currency",
-            name="series_insights_sender_kind_currency",
-            postgresql_nulls_not_distinct=True,
-        ),
-    )
-
-
-class SeriesMembershipOverride(Base):
-    """A durable manual edit to a recurring series' computed membership.
-
-    Series are computed on the fly as ``(sender_id, kind_id, currency)`` groups
-    (see ``library.series``). A user can nudge that computation: ``pin`` a
-    document the grouping missed, or ``exclude`` one it wrongly included. The
-    override is keyed by series identity + ``document_id`` and applied on every
-    future ``summarize_series`` call, mirroring the ``document.extra["corrections"]``
-    precedent for extraction edits — but as a first-class table so all overrides
-    for a series can be queried (the LLM matcher in W9 reads them as hints).
-
-    A pinned document whose own currency differs from the series is
-    FX-converted (see ``library.fx``) into the series currency. One override per
-    ``(series, document)``: the unique key treats NULL currency as one bucket.
-    """
-
-    __tablename__ = "series_membership_overrides"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    sender_id: Mapped[int] = mapped_column(ForeignKey("senders.id", ondelete="CASCADE"), index=True)
-    kind_id: Mapped[int] = mapped_column(ForeignKey("kinds.id", ondelete="CASCADE"), index=True)
-    currency: Mapped[str | None] = mapped_column(CHAR(3))
-    document_id: Mapped[int] = mapped_column(
-        ForeignKey("documents.id", ondelete="CASCADE"), index=True
-    )
-    action: Mapped[OverrideAction] = mapped_column(
-        Enum(
-            OverrideAction,
-            name="series_override_action",
-            native_enum=False,
-            length=16,
-            values_callable=lambda obj: [member.value for member in obj],
-        ),
-    )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    __table_args__ = (
-        UniqueConstraint(
-            "sender_id",
-            "kind_id",
-            "currency",
-            "document_id",
-            name="series_membership_overrides_series_document",
-            postgresql_nulls_not_distinct=True,
-        ),
-    )
-
-
-class SeriesMetaOverride(Base):
-    """A user override for a recurring series' *title* and/or *description*.
-
-    A series is one ``(sender_id, kind_id, currency)`` group (see
-    ``library.series``). Its title is normally derived (``sender · cadence
-    series``) and its description is the read-only, auto-refreshed cached LLM
-    prose (``SeriesInsight``). This table lets a user pin their own title and/or
-    description for a series, applied on every ``summarize_series`` call. It is
-    kept deliberately separate from ``SeriesInsight`` so user edits are never
-    clobbered by the background insight refresh (W12). One row per series
-    identity: the unique key treats a NULL currency as a single bucket.
-    """
-
-    __tablename__ = "series_meta_overrides"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    sender_id: Mapped[int] = mapped_column(ForeignKey("senders.id", ondelete="CASCADE"), index=True)
-    kind_id: Mapped[int] = mapped_column(ForeignKey("kinds.id", ondelete="CASCADE"), index=True)
-    currency: Mapped[str | None] = mapped_column(CHAR(3))
-    title: Mapped[str | None] = mapped_column(Text)
-    description: Mapped[str | None] = mapped_column(Text)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    __table_args__ = (
-        UniqueConstraint(
-            "sender_id",
-            "kind_id",
-            "currency",
-            name="series_meta_overrides_series",
-            postgresql_nulls_not_distinct=True,
-        ),
-    )
-
-
-class AuthoredSeries(Base):
-    """A user-curated (*authored*) recurring series (W14).
-
-    Emergent series are detected on the fly as ``(sender_id, kind_id, currency)``
-    groups (see ``library.series``). An authored series instead lets a user name
-    a series, pick a currency, and add documents explicitly — producing a chart
-    even without a natural ≥3-document emergent seed. The membership is the
-    explicit set of ``AuthoredSeriesMember`` rows; the statistics are computed on
-    the fly by ``summarize_authored_series`` using the authored ``name`` as the
-    series title and ``description`` as its prose.
-    """
-
-    __tablename__ = "authored_series"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    name: Mapped[str] = mapped_column(String(255))
-    description: Mapped[str | None] = mapped_column(Text)
-    currency: Mapped[str | None] = mapped_column(CHAR(3))
-    mode: Mapped[SeriesMode] = mapped_column(
-        Enum(
-            SeriesMode,
-            name="series_mode",
-            native_enum=False,
-            length=16,
-            values_callable=lambda obj: [member.value for member in obj],
-        ),
-        default=SeriesMode.MANUAL,
-        server_default=SeriesMode.MANUAL.value,
-    )
-    owner_id: Mapped[int | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    members: Mapped[list["AuthoredSeriesMember"]] = relationship(
-        back_populates="series", cascade="all, delete-orphan", lazy="selectin"
-    )
-    suggestions: Mapped[list["AuthoredSeriesSuggestion"]] = relationship(
-        back_populates="series", cascade="all, delete-orphan", lazy="selectin"
-    )
-    exclusions: Mapped[list["AuthoredSeriesExclusion"]] = relationship(
-        back_populates="series", cascade="all, delete-orphan", lazy="selectin"
-    )
-
-
-class AuthoredSeriesMember(Base):
-    """One document's membership in an :class:`AuthoredSeries` (deduped per series)."""
-
-    __tablename__ = "authored_series_members"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    authored_series_id: Mapped[int] = mapped_column(
-        ForeignKey("authored_series.id", ondelete="CASCADE"), index=True
-    )
-    document_id: Mapped[int] = mapped_column(
-        ForeignKey("documents.id", ondelete="CASCADE"), index=True
-    )
-    origin: Mapped[MemberOrigin] = mapped_column(
-        Enum(
-            MemberOrigin,
-            name="member_origin",
-            native_enum=False,
-            length=24,
-            values_callable=lambda obj: [member.value for member in obj],
-        ),
-        default=MemberOrigin.MANUAL,
-        server_default=MemberOrigin.MANUAL.value,
-    )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    series: Mapped[AuthoredSeries] = relationship(back_populates="members")
-
-    __table_args__ = (
-        UniqueConstraint(
-            "authored_series_id",
-            "document_id",
-            name="authored_series_members_series_document",
-        ),
-    )
-
-
-class AuthoredSeriesSuggestion(Base):
-    """A proposed (auto-continue) membership for an :class:`AuthoredSeries`.
-
-    When a newly-indexed document mechanically matches an authored series'
-    *signature* — the dominant ``(sender_id, kind_id, currency)`` triple of its
-    existing members (see ``library.series.derive_signature``) — it is recorded
-    here as a ``pending`` suggestion rather than silently added as a member
-    (PROPOSE-FOR-REVIEW). The owner then accepts (promoting it to an
-    ``AuthoredSeriesMember``) or dismisses it (leaving a ``dismissed`` tombstone
-    so it is never re-suggested for this series). The ``signature_*`` columns
-    snapshot the matched signature at proposal time; the LLM ``reason``/token
-    columns are reserved for the odd-one-out rationale flow and are normally
-    NULL for a plain match. One row per ``(series, document)``.
-    """
-
-    __tablename__ = "authored_series_suggestions"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    authored_series_id: Mapped[int] = mapped_column(
-        ForeignKey("authored_series.id", ondelete="CASCADE"), index=True
-    )
-    document_id: Mapped[int] = mapped_column(
-        ForeignKey("documents.id", ondelete="CASCADE"), index=True
-    )
-    state: Mapped[SuggestionState] = mapped_column(
-        Enum(
-            SuggestionState,
-            name="suggestion_state",
-            native_enum=False,
-            length=16,
-            values_callable=lambda obj: [member.value for member in obj],
-        ),
-        default=SuggestionState.PENDING,
-        server_default=SuggestionState.PENDING.value,
-    )
-    reason: Mapped[str | None] = mapped_column(Text)
-    signature_sender_id: Mapped[int | None] = mapped_column(Integer)
-    signature_kind_id: Mapped[int | None] = mapped_column(Integer)
-    signature_currency: Mapped[str | None] = mapped_column(CHAR(3))
-    score: Mapped[float | None] = mapped_column(Float)
-    model: Mapped[str | None] = mapped_column(String(64))
-    input_tokens: Mapped[int | None] = mapped_column(Integer)
-    output_tokens: Mapped[int | None] = mapped_column(Integer)
-    cost_usd: Mapped[float | None] = mapped_column(Float)
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-    updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
-    )
-
-    series: Mapped[AuthoredSeries] = relationship(back_populates="suggestions")
-
-    __table_args__ = (
-        UniqueConstraint(
-            "authored_series_id",
-            "document_id",
-            name="authored_series_suggestions_series_document",
-        ),
-    )
-
-
-class AuthoredSeriesExclusion(Base):
-    """A document the user pruned from a semantic authored series — a negative example.
-
-    Written when a member is removed (or a backfill suggestion dismissed). The
-    membership scorer treats these as vetoes so the document is neither re-added
-    by the auto-add job nor re-proposed by a later sweep. Re-adding the document
-    as a member clears its exclusion. One row per ``(series, document)``.
-    """
-
-    __tablename__ = "authored_series_exclusions"
-
-    id: Mapped[int] = mapped_column(primary_key=True)
-    authored_series_id: Mapped[int] = mapped_column(
-        ForeignKey("authored_series.id", ondelete="CASCADE"), index=True
-    )
-    document_id: Mapped[int] = mapped_column(
-        ForeignKey("documents.id", ondelete="CASCADE"), index=True
-    )
-    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-    series: Mapped[AuthoredSeries] = relationship(back_populates="exclusions")
-
-    __table_args__ = (
-        UniqueConstraint(
-            "authored_series_id",
-            "document_id",
-            name="authored_series_exclusions_series_document",
-        ),
-    )
-
-
 class HeldEmail(Base):
     """An email the mailbox poller held for human review instead of auto-filing.
 
@@ -1154,3 +1053,94 @@ class FxRate(Base):
     rate_to_base: Mapped[Decimal] = mapped_column(Numeric(18, 8))
 
     __table_args__ = (UniqueConstraint("currency", "as_of", name="fx_rates_currency_as_of"),)
+
+
+class InstanceSetting(Base):
+    """One instance-wide operational setting, changeable at runtime.
+
+    The third kind of configuration in library, alongside per-user display
+    preferences (``User.preferences``) and environment variables read once at
+    startup into ``Settings``. This one is instance-wide *and* mutable without a
+    restart — which is what an operational toggle like the LLM backend needs.
+
+    An **override layer**, not a replacement: a missing row means "use the
+    ``Settings`` value", so an empty table behaves exactly as the environment
+    says. That is also what every existing deployment gets on upgrade, and what
+    makes reverting a setting equivalent to deleting its row.
+
+    Deliberately key/value with a JSON ``value`` rather than a typed column per
+    setting: the alternative costs a migration for every new toggle.
+    """
+
+    __tablename__ = "instance_settings"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[Any] = mapped_column(JSONB)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    # SET NULL on user delete, not CASCADE: removing a user must never silently
+    # revert an instance-wide setting to its environment default.
+    updated_by_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class PaymentOverride(Base):
+    """A human correction to the derived payment identity.
+
+    ``MERGE`` joins two documents the rules kept apart; ``SPLIT`` separates two
+    the rules joined. ``doc_a < doc_b`` is enforced by a check constraint so a
+    pair has one canonical representation.
+    """
+
+    __tablename__ = "payment_overrides"
+    __table_args__ = (
+        CheckConstraint("kind IN ('MERGE','SPLIT')", name="payment_overrides_kind"),
+        CheckConstraint("doc_a < doc_b", name="payment_overrides_ordered"),
+        UniqueConstraint("kind", "doc_a", "doc_b", name="payment_overrides_unique"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(8))
+    doc_a: Mapped[int] = mapped_column(BigInteger, ForeignKey("documents.id", ondelete="CASCADE"))
+    doc_b: Mapped[int] = mapped_column(BigInteger, ForeignKey("documents.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class Chart(Base):
+    """A saved question over ``spend_facts``.
+
+    ``rule`` is a serialised :class:`library.charts.rule.Rule`. The two axes
+    are independent by design: ``default_grain`` and ``default_split`` are
+    only starting positions, and changing either at request time never alters
+    the total (spec §9.2).
+    """
+
+    __tablename__ = "charts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    name: Mapped[str] = mapped_column(String(120), unique=True)
+    question_text: Mapped[str] = mapped_column(Text)
+    rule: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict)
+    default_grain: Mapped[Grain] = mapped_column(
+        Enum(
+            Grain,
+            name="chart_grain",
+            native_enum=False,
+            length=16,
+            # Without this SQLAlchemy persists the member *name* ("MONTH"),
+            # which the migration's `default_grain IN ('week',...)` CHECK
+            # rejects. Same treatment as every other enum column here.
+            values_callable=lambda obj: [member.value for member in obj],
+        ),
+        default=Grain.MONTH,
+        server_default=Grain.MONTH.value,
+    )
+    default_split: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    display_currency: Mapped[str] = mapped_column(String(3))
+    ordinal: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

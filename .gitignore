@@ -10,7 +10,11 @@ htmlcov/
 samples/
 *.pem
 *.key
+*.secret
 credentials.json
+# The Claude CLI writes its OAuth tokens here when CLAUDE_CONFIG_DIR points
+# at a checkout (see docs/llm-backends.md). Access token AND refresh token.
+.credentials.json
 
 # CI coverage summary (generated)
 /coverage.md

@@ -1,0 +1,331 @@
+# Facet vocabulary
+
+**Status:** active. **Last updated:** 2026-08-30 (final fix wave: §8's alias-refusal quote corrected — it read "already an alias", a paraphrase that does not appear anywhere in the code; the string `FacetsPanel.vue`'s `saveAlias` actually renders is `Already covered by the alias '<x>' — aliases match case-insensitively.`, and §8 now quotes that verbatim.) Earlier the same day (facet vocabulary panel, Task 11: new §8 documents the `/vocabulary` panel — its three tabs, the target-specific merge preview, the verbatim delete-refusal reason, the validated six-slot palette with null-means-derived colour, and that a new facet carries no documents until `library label-archive` runs; §4's cost table gains a row pointing every operation at the panel; §6 gains a paragraph on `GET /api/facets/label-counts` and how it differs from `/api/facets/counts`. See [api.md](api.md) §1.23.6 for the wire contract. Earlier the same day (spending-view backend, Task 8: new §4.1 documents a value's optional stored `colour` (migration 0037) — null is the normal state and means the client derives a palette slot from the value's `key`; set or cleared through `PATCH /api/facets/{facet_key}/values/{value_key}`, independently of `label`, told apart by presence in the request body rather than by value; a new row in §4's cost table; §6 updated to say `GET /api/facets` carries `colour` and the value-PATCH route edits it. See [charts.md](charts.md) §4 and §11 for the split axis this exists for, and [api.md](api.md) §1.23/§1.8.4.0 for the full wire contract on both the facet-value and sender routes.)) Earlier (2026-08-29): the `category` facet grew 4 values — `vehicle-purchase`, `dining`, `employment`, `equipment-certification` — after a full labelling run over 258 real documents left 8 uncategorised and the model's own suggestion queue named all four; §3's description of value/alias matching corrected to say casefolded (case-insensitive), not exact-match, since `parse_label_response` now casefolds — and corrected again same day after a review caught the first correction overclaiming accent-insensitivity too: casefold does not strip diacritics, so `Škoda` and `Skoda` still do not match one another.) Earlier (2026-08-28): (initial version: the closed-set facet vocabulary that replaces free-form tags for the axes charts and search need — `category`, `scope`, `cost_type`, plus `vehicle`/`property`/`person`, which ship empty. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §6–7.5, plan: [superpowers/plans/2026-08-28-charts-facet-vocabulary.md](superpowers/plans/2026-08-28-charts-facet-vocabulary.md)).
+**Last verified:** 2026-08-30 — method: (final fix wave) re-read `saveAlias` in `frontend/src/views/vocabulary/FacetsPanel.vue` and confirmed the exact string it renders on a duplicate alias is `` `Already covered by the alias '${existingMatch}' — aliases match case-insensitively.` `` — §8's quote is corrected to match verbatim. That string is covered by an executed assertion in `FacetsPanel.spec.ts`'s `'refuses to add an alias the value already has ...'` test, run green as part of this pass's full `npm run test:unit`. Nothing else in this document was re-checked this pass. Earlier the same day — method: (facet vocabulary panel, Task 11) read `VocabularyView.vue`, `views/vocabulary/{FacetsPanel,SendersPanel,SuggestionsPanel,ValueMergeView}.vue`, `components/vocabulary/SplitColourPicker.vue`, `utils/{splitPalette,slugify}.ts` and `router/index.ts`'s two `vocabulary*` route entries in full, and diffed new §8 against them line by line. The target-specific merge-preview invalidation is `ValueMergeView.vue`'s `watch(target, ...)` (nulls `moved`/`previewFor` synchronously before the new dry run resolves) plus `canApply`'s `previewFor.value === target.value` clause; the four-part diff (only `moved` server-sourced) is its `gainedAliases`/`sharedAliases`/`losesColour` computed properties. The verbatim-409 claim is `FacetsPanel.vue`'s `err instanceof ApiError ? err.detail : ...` catch pattern on delete, cross-checked against the server string in `src/library/facets/vocabulary.py`'s `delete_value`. The case-insensitive alias pre-check with its diacritic carve-out is `FacetsPanel.vue`'s duplicate-alias comment and `.toLowerCase()` compare. The six-slot palette and null-default are `splitPalette.ts`'s `SPLIT_PALETTE`/`deriveSlot`/`resolveSplitColour`, and "no free hex field" was confirmed by reading the whole of `SplitColourPicker.vue` (a `<select>`-free swatch grid plus a Default button, no text input). All of it is covered by executed assertions, run green this pass: `cd frontend && npx vitest run splitPalette FacetsPanel ValueMergeView SendersPanel SuggestionsPanel VocabularyView slugify SplitColourPicker` — 8 files, 66 tests passed. The container-query claim (§8 doesn't restate it directly but §4's new panel row implies the layout works at all three e2e widths) carries forward [frontend.md](frontend.md)'s own verification of that same code, not re-tested here. Nothing else in this document was re-checked this pass; the rest carries forward its previous verification below unchanged. Earlier the same day — method: read the `colour` columns on `FacetValue` and `Sender` and their `CheckConstraint` in `src/library/models.py`, `migrations/versions/0037_split_colour.py` in full, `ValuePatch`/`Colour`/`patch_value` and the `colour` field on `ValueOut` in `src/library/api/facets.py`, and `set_value_colour`/`get_value` in `src/library/facets/vocabulary.py`. New §4.1's nullability, `model_fields_set` absent-vs-null distinction, and the CHECK/column-width design are covered by executed assertions in `tests/test_api_facets.py` (`test_get_facets_returns_colour`, `test_a_value_s_colour_can_be_set_without_renaming_it`, `test_an_explicit_null_clears_a_colour_and_an_absent_field_does_not`, `test_a_malformed_colour_is_a_422_not_a_500`) and `tests/test_split_colour.py`, run green as part of a full backend pass (see the journal entry for the count). §6's sentence on the sender route is covered by `test_get_senders_returns_colour`, `test_a_sender_s_colour_can_be_set_and_cleared` and `test_a_malformed_sender_colour_is_a_422`. Nothing else in this document was re-checked this pass; the rest carries forward its previous verification below unchanged. Earlier (2026-08-29) — method: diffed the new `category` row (19 values, order and keys) and §3's matching description against `SEED_VOCABULARY` in `src/library/facets/seed.py` and `parse_label_response` in `src/library/facets/labeller.py` — the four new keys/labels/aliases match `seed.py` exactly. §3's matching prose was re-checked a second time same day after a review caught it overclaiming accent-insensitivity: confirmed by executing `'Skoda'.casefold() == 'Škoda'.casefold()` (`False`) and `'SKODA'.casefold() == 'Škoda'.casefold()` (`False`) that `str.casefold()` folds case only, not diacritics, so the doc now says case-insensitive and gives a same-script (`Skoda`/`SKODA`/`skoda`) example rather than a cross-accent one; covered by executed assertions in `tests/test_facet_labeller.py` (`test_an_alias_resolves_regardless_of_case_including_non_ascii_letters`, `test_a_value_key_differing_only_in_case_resolves`, `test_casefold_does_not_fold_diacritics`) and `tests/test_facet_seed.py`. Earlier (2026-08-28) — method: re-verified after a fix wave. §3 now describes the sanitisation `accept` applies to the key it derives and its 422, and §4 the 409 on merging a value into itself — both diffed against `derive_value_key`/`accept_suggestion` in `src/library/api/facets.py` and `merge_values` in `src/library/facets/vocabulary.py`, and covered by executed assertions in `tests/test_api_facets.py` and `tests/test_facet_crud.py`. §5's `--only` sentence is corrected (it bypasses the relabel skip-check entirely; `--relabel`/`--limit` do nothing alongside it) against `label_archive` in `src/library/cli.py`, and carries a new warning that `PATCH /api/admin/recipients/{id}` with `merge=true` (`rename_recipient` in `src/library/taxonomy.py`, read in full) drops the losing recipient's `user_id` link — an unfixed follow-up, not a claim about this branch's CLI path. Original method: read every module in `src/library/facets/` (`vocabulary.py`, `seed.py`, `labeller.py`, `apply.py`, `backfill.py`, `recipients.py`) and `src/library/api/facets.py` in full; the `Facet`/`FacetValue`/`FacetValueAlias`/`DocumentLabel`/`FacetValueSuggestion` models and the `document_labels`/`facet_values` constraints in `src/library/models.py`; the `facet` query parameter and its 422 paths in `src/library/api/documents.py` and `src/library/search.py`; the `label-archive` and `recipients` commands in `src/library/cli.py`; and the wire-behaviour assertions in `tests/test_api_facets.py`, `tests/test_facet_search.py`, `tests/test_facet_crud.py` and `tests/test_facet_backfill.py`. No tests were executed as part of writing this document; a full `uv run pytest -q` run is recorded in the journal entry for this work.
+
+## 1. What a facet is, and why it is not a tag
+
+A **facet** is one closed dimension of classification — `category`, `scope`,
+`cost_type` — and a document carries **at most one value per facet**. A
+**tag** is an open, free-form string a document can carry any number of, with
+no dimension attached.
+
+The archive shipped with 771 distinct tags, 454 of them used exactly once.
+Four things drove that: several spellings of the same concept living as
+separate tags, encoding/spelling variants of the same word, unrelated axes
+(place, person, year, scope, vendor) sharing one flat namespace, and tags that
+duplicate a column the archive already has (`document_date`, `sender`,
+`kind`). A free-form field has no way to stop any of that — every new tag is a
+new possible synonym for an old one. A facet does, because a document can
+only choose from a fixed list of values it was given: there is no field to
+type a fifth spelling of "vehicle service" into.
+
+The 771 tags were not migrated into the new vocabulary. They were read as
+**evidence of which dimensions matter** (the design principle: tags inform
+the vocabulary, documents determine the labels) and then discarded — mapping
+a corrupt tag onto a clean-looking value would just launder the old drift
+into the new system. Every document is labelled fresh, from its own title,
+summary, sender, kind, amount and OCR text, against the closed vocabulary
+below.
+
+## 2. The shipped vocabulary
+
+Seeded by `library.facets.seed.seed_vocabulary`, which the `label-archive`
+CLI command runs automatically before it labels anything. Seeding is
+additive and idempotent: it only ever creates a facet or value that is
+missing, so it is safe to run again after adding a facet by hand, and it
+never touches a value an owner has since renamed.
+
+| facet | values |
+| --- | --- |
+| `category` | 19 values: accountancy, tax, vehicle-service, ev-charging, insurance, healthcare, software, energy, water, housing, parking, fines, pension, banking, travel, vehicle-purchase, dining, employment, equipment-certification |
+| `scope` | business, personal |
+| `cost_type` | subscription, usage, one-off |
+| `vehicle` | *(ships with no values)* |
+| `property` | *(ships with no values)* |
+| `person` | *(ships with no values)* |
+
+`vehicle`, `property` and `person` are created as facets with **zero
+values**. A value in any of those three would have to name a real vehicle
+registration, a real address, or a real person — and this repository is
+public. Those values are created at runtime (`POST /api/facets/{key}/values`,
+or `library`'s administration surface), once, on a live instance, and never
+committed here. Several `category` values carry aliases (e.g. `accountancy`
+also matches "accounting", "bookkeeping", "fiscal services") so the closed-set
+match in §3 recognises a document's own wording without a human pre-cleaning
+it.
+
+`person` exists as a facet even though a `recipients` table already exists,
+because they answer different questions: `recipient` is who a document was
+*addressed to*; `person` is *whose cost it is*. A household's costs and
+recipient addressing diverge often enough — one member addressed on most
+household mail, a second member named only in body text on a handful of
+documents — that collapsing the two would lose information neither `sender`
+nor `recipient` can recover.
+
+## 3. The closed-set rule and the suggestion queue
+
+The labeller (`library.facets.labeller`) sends the model the full vocabulary
+— every facet, every value, every alias — inside the prompt and asks for at
+most one value per facet, by key, plus a confidence and a short reason. The
+model is never shown a way to invent a value: `parse_label_response` looks up
+whatever the model returns against the facet's known values and aliases,
+case-insensitively (casefolded, so `Skoda`, `SKODA` and `skoda` all resolve
+to a value keyed `skoda` without needing a separate alias per casing
+variant — only the comparison folds case, never the stored key/alias/label
+text itself). Casefolding does not fold diacritics: `Škoda` is a distinct
+string from `Skoda` under this comparison, so a value whose canonical
+spelling carries an accent (a real `vehicle` value, e.g. a marque like
+`Škoda` — §2 covers why those values are never committed here) still needs
+its unaccented spelling listed as a separate alias if the model might emit
+it, alongside its casing variants. Anything that still matches nothing
+becomes `value: null` plus a *suggested label* rather than a fabricated key.
+That mapping is pure — no model call — so the closed-set guarantee is
+unit-tested without one.
+
+`library.facets.apply.apply_proposals` (the only module in this package that
+both calls the model and writes to the database) then does three things per
+facet, and the three-way split is the point:
+
+- a proposal at or above `settings.facet_label_min_confidence` (default 0.6)
+  with a resolved value is **applied** — written as a label;
+- a proposal below the confidence floor, or with no resolved value, is
+  **withheld** and the facet is reported unlabelled — a document is never
+  guessed at;
+- a value the model wanted but the vocabulary does not contain is queued as a
+  **pending suggestion** (`facet_value_suggestions`), one row per
+  `(facet, document, suggested_label)`.
+
+`POST /api/facet-suggestions/{id}/accept` is the **only** sanctioned path
+that widens the vocabulary. It derives a value key from the suggested label,
+creates the value, and labels the originating document with it in the same
+call — and answers `409` if that derived key already exists, whether checked
+ahead of the insert or caught as a race between two concurrent accepts.
+Because this is the only route that widens the set, the derived key is held
+to the same contract `POST /api/facets/{key}/values` enforces: lower-cased,
+spaces to hyphens, anything outside `[a-z0-9_-]` dropped, runs of `-`/`_`
+collapsed, trimmed to 64 characters (`"EV charging (home)!"` →
+`ev-charging-home`); the label itself is stored unchanged as the value's
+display text. A label leaving nothing usable is a `422`, not a value with an
+unusable key. `POST
+/api/facet-suggestions/{id}/dismiss` rejects a suggestion without creating
+anything. Every other write path in `src/library/facets/vocabulary.py`
+refuses to create a value implicitly: naming a value that is not already in
+the facet raises `UnknownValueError`, which the API turns into a `404` (on a
+facet-value path) or a `422` (on a document label, since the value came from
+a client's request body — see [api.md](api.md)).
+
+## 4. Vocabulary edits, and what each one costs
+
+| operation | cost |
+| --- | --- |
+| rename a value's display label | free — labels reference `facet_value_id`, never the display text |
+| set or clear a value's stored colour | free — a display-only override on the value row itself, independent of the label |
+| add an alias | free |
+| merge two values | cheap — repoints every label from the source to the target in one `UPDATE`, keeps the source key as an alias of the target |
+| create a facet or a value | free to create; a labelling pass is needed before any document actually carries it |
+| split one value into two | **not an operation** — there is no `split` call. It is `create_value` for the new value, followed by re-labelling the affected documents (`library label-archive --relabel`, or `--only <id>` per document) so the model re-decides which of the two each one belongs to |
+| delete a value | blocked (`409`) while any document still carries it |
+| do any of the above from the UI | the vocabulary panel, `/vocabulary` (§8) — every operation in this table now has a client; before this, only the CLI and raw HTTP could reach it |
+
+Rename and alias are free because nothing in the schema stores a value's
+text anywhere except `facet_values.label` itself — every label row and every
+search filter addresses a value by its `facet_value_id`, so changing the
+display string moves nothing. Merge is a bulk repoint (`UPDATE
+document_labels SET facet_value_id = :into WHERE facet_value_id = :from`)
+plus folding the merged-away value's aliases onto the survivor, so it costs
+one query regardless of how many documents carry the value — `POST
+/api/facets/{key}/values/{value}/merge` also accepts `dry_run: true`, which
+runs the same count the real merge would move and returns it without writing
+anything, so an owner can preview a merge before committing to it. Merging a
+value into itself is refused with a `409` (real run and dry run alike): the
+fold is a copy-then-delete, so with both sides equal it would delete the
+value and every alias it had.
+
+Split has no dedicated call because there is nothing mechanical to do: the
+system does not know which of the new two values each existing document
+belongs to, only a model re-reading each document's content can decide that.
+
+### 4.1 A value's colour
+
+Every value carries an optional `colour` (migration 0037): a stored six-digit
+`#rrggbb` hex string, or `null`. **Null is the normal state**, not an unset
+default waiting to be filled in — it means the client derives a stable
+palette slot from the value's `key` instead of reading a stored one, which is
+what lets a chart's legend be coloured consistently before anyone has picked
+a colour by hand. Setting one is how an owner overrides that derived slot for
+a value they want to stand out or match an external convention (e.g. a
+vehicle's own brand colour, once `vehicle` carries values).
+
+Set or cleared through `PATCH /api/facets/{facet_key}/values/{value_key}`
+(`{"colour": "#rrggbb"}` or `{"colour": null}`), independently of the label —
+an **absent** `colour` in the request body leaves the stored value untouched,
+while an **explicit `null`** clears it back to the derived slot; the two are
+told apart by whether the key is present in the request body at all, not by
+its value, since `null` must mean something different from "not sent" (see
+[api.md](api.md) §1.23). The same optional-`colour`-with-the-same-nullability
+shape exists on `senders` (`PATCH /api/senders/{id}`, api.md §1.8.4.0), since
+`split=sender` is a chart split axis exactly like a facet ([charts.md](charts.md)
+§4) and needs the same stable-legend-colour treatment; a sender is not part of
+this vocabulary and has no label to go with the colour, only a name.
+
+The format is enforced by an explicit `CHECK (colour ~ '^#[0-9a-fA-F]{6}$')`
+in the database, not only by the API's own pattern validation: the column
+itself is a plain `String(32)`, deliberately wider than a hex value needs, so
+the CHECK is the sole judge of format on any writer that is not this API (a
+future admin script, a data migration) — a tightly-sized column would refuse
+an over-length value as a Postgres `DataError` rather than the `IntegrityError`
+this schema's other constraints raise, a second and differently-shaped
+enforcer.
+
+## 5. `library label-archive`
+
+```bash
+library label-archive                  # seed the vocabulary if needed, label every unlabelled document
+library label-archive --limit 50       # stop after 50 documents
+library label-archive --only 412       # label (or re-label) just document 412
+library label-archive --relabel        # also re-label documents that already carry labels
+```
+
+Seeds any missing vocabulary rows first (idempotent, see §2), then selects
+documents to label: without `--relabel`, a document carrying **any** existing
+label is skipped, which is what makes the command safe to re-run — after
+adding a facet or a value, re-running it only reaches documents that have
+never been touched. `--relabel` reconsiders every document against the
+current vocabulary, and `--limit` caps how many documents a run touches.
+`--only <id>` is a separate path: it labels exactly that document, always,
+bypassing the skip-check above — so `--relabel` and `--limit` have no effect
+alongside it.
+
+Each document commits on its own, so a run interrupted partway through
+leaves everything already labelled in place — the command is safe to
+re-invoke rather than needing a rollback. The same labelling path
+(`library.facets.apply.label_and_apply`) also runs automatically at the end
+of extraction for every newly ingested document, best-effort: a missing API
+key or an unparseable model response leaves a document unlabelled rather than
+failing ingestion.
+
+`library recipients --list` and `library recipients --merge
+KEEP_ID:DROP_ID[,DROP_ID...]` live in the same package
+(`library.facets.recipients`) for the same reason facets exist: the
+`recipients` table had the identical drift as the tags — several rows
+spelling one person's name several ways. `--list` groups recipients whose
+names normalise alike (lower-cased, punctuation stripped, whitespace
+collapsed) and shows each group's document count; `--merge` repoints every
+document from the drop ids onto the keep id and deletes the drop rows. A
+recipient can carry a `user_id` link (auto-created when a user's display name
+matches a recipient); the merge transfers that link onto the survivor when
+exactly one unambiguous link exists among the ids being merged, and refuses —
+naming the conflicting recipient ids, moving nothing — when the keep id and
+the drop ids disagree about which user is linked. This is a distinct, CLI-only
+bulk tool; the interactive per-recipient rename/merge admins do day to day is
+still `PATCH /api/admin/recipients/{id}` (see [admin.md](admin.md)) — but
+**prefer `library recipients --merge` for anything carrying a `user_id`
+link**: `PATCH .../recipients/{id}` with `merge=true`
+(`library.taxonomy.rename_recipient`) has the `user_id`-loss bug the CLI path
+fixes — it deletes the losing recipient without transferring the link and
+without refusing on a conflict. Tracked as a follow-up; unchanged here.
+
+## 6. REST surface
+
+The full wire contract — every route, status code and JSON shape — is in
+[api.md](api.md); this is the shape of it. `GET /api/facets` returns the
+whole vocabulary in one call (a few dozen rows; every facet, value and
+alias, plus each value's stored `colour` — §4.1). `POST /api/facets` and
+`POST /api/facets/{key}/values` create a facet or a value. `PATCH
+.../values/{value}` edits a value's label and/or its `colour` (§4.1),
+independently of each other; `POST
+.../values/{value}/aliases` adds an alias; `POST .../values/{value}/merge`
+folds one value into another (with `dry_run`); `DELETE .../values/{value}`
+removes an unused value. `GET`/`PUT /api/documents/{id}/labels` read and set
+one document's labels — a label is not embedded in the document list or
+detail response, so a caller that needs it fetches it separately.
+`GET /api/facet-suggestions` and the `accept`/`dismiss` actions on
+`/api/facet-suggestions/{id}` work the pending queue from §3. Documents are
+filterable by facet with a repeatable `?facet=key:value` query parameter on
+`GET /api/documents`, AND-composed with every other filter.
+
+`GET /api/facets/label-counts` sits beside `GET /api/facets/counts` and
+answers a different question: it counts rows in `document_labels` directly,
+unfiltered, so it includes every value a document carries whether or not
+that document has an amount — the number the vocabulary panel (§8) shows and
+`DELETE .../values/{value}` enforces, not the number `/api/facets/counts`
+proposes charts from ([api.md](api.md) §1.23.6).
+
+## 7. `parent_id` — reserved, not used
+
+`facet_values.parent_id` is a nullable, self-referencing foreign key on
+`facet_values`, present in the schema since the first migration and unused by
+every module in `src/library/facets/` and every route in
+`src/library/api/facets.py` today — every value returned by `GET /api/facets`
+carries `parent_id: null`. It exists so that if a facet ever needs a second
+level (a `category` value that should itself have sub-values, say) that can
+be added as a **data change** — populate `parent_id` on the existing rows —
+rather than a schema migration.
+
+## 8. The vocabulary panel
+
+`/vocabulary` (sidebar entry above Settings; authenticated, not admin-gated,
+matching `/api/facets/*`) is the client for §4's whole cost table plus the
+suggestion queue from §3. Before this it had none — the CRUD routes, the
+suggestion-queue routes and the colour routes all shipped and deployed with
+nothing to call them but a script or `/docs`.
+
+Three tabs, local state (no sub-routes):
+
+- **Facets** — every facet's values: rename, alias, merge, delete, colour,
+  and creating a new facet or value.
+- **Senders** — a sender's chart split colour only; renaming, merging or
+  deleting a sender is an admin taxonomy operation with its own panel
+  ([admin.md](admin.md)), not this one.
+- **Suggestions** — the pending queue from §3: accept (shows the key it will
+  derive before creating it) or dismiss.
+
+**A merge previews before it applies, and the preview is target-specific.**
+Reached from a value's Merge action, `/vocabulary/:facetKey/:valueKey/merge`
+is a full confirmation page rather than a modal (the same GOV.UK
+confirmation-page-for-a-destructive-action convention `router/index.ts`
+already uses for document delete). It runs `POST .../merge` with `dry_run:
+true` for whichever target is currently selected and shows the diff only once
+that dry run has returned **for that same target** — changing the target
+selector invalidates the previous count immediately, before the new dry run
+resolves, so the page can never show a count for target A beside an Apply
+button that would merge into target B. Of the diff's four parts, only the
+moved-document count comes from that response; the other three — the target
+gaining the source's key as an alias, gaining the source's other aliases
+(skipping any it already has), and the source row being deleted along with
+its own colour override — are computed from the vocabulary already loaded in
+the browser, since a merge's own SQL doesn't need to report anything the
+client can't already derive.
+
+**A blocked delete renders the server's reason verbatim.** `DELETE
+.../values/{value}`'s `409` `detail` — `"{facet}={value} is on N documents"`
+(§1.23.6's `label-counts` number) — is shown as-is, not replaced with a
+generic message; that string is the only thing that tells the owner how many
+documents to relabel before the value can go. Adding an alias the value
+already has is checked client-side first (case-insensitively, matching the
+labeller's own casefolded resolution — §3) and reported as `Already covered
+by the alias '<x>' — aliases match case-insensitively.` rather than let
+through to the server's idempotent `200`, which would otherwise look like a
+successful addition of something new.
+
+**Colour is a validated six-slot palette, not a free field, and null is the
+normal state** (§4.1). The picker offers the six `SPLIT_PALETTE` swatches
+plus a Default choice that clears the override back to the slot the value
+would derive anyway; there is no hex input, because the column's `CHECK`
+constraint already makes storage safe and a free field's only remaining risk
+is legibility — a colour invisible in dark mode or indistinguishable from its
+neighbour, which a constrained choice prevents and a validated storage format
+cannot. Two values deriving the same colour within one facet is expected —
+six slots against `category`'s nineteen values guarantees it — and the panel
+marks that collision rather than hiding it, since a picker alone can show
+what colour a value has but never that two of them are the same. The
+picker component ships wired into this panel only; mounting it on a chart
+legend's swatch is later work (charts-view design §4.7).
+
+**Creating a facet or a value is free and carries no documents until a
+labelling pass runs.** `library label-archive` is CLI-only (§5) — no route
+exposes it — so the panel's create-facet success state says so plainly
+rather than implying the new facet is immediately in use, following the
+`docs/charts.md` §13 rule that nothing is excluded, or in this case
+populated, silently.

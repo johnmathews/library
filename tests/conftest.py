@@ -1,11 +1,14 @@
 """Shared test fixtures for the Library backend."""
 
 import asyncio
+import hashlib
 import uuid
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
+from decimal import Decimal
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 from alembic import command
@@ -14,7 +17,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 from procrastinate import PsycopgConnector
 from procrastinate.testing import InMemoryConnector
-from sqlalchemy import text
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 from testcontainers.postgres import PostgresContainer
@@ -24,10 +27,40 @@ from library.auth.deps import CSRF_COOKIE, CSRF_HEADER
 from library.auth.passwords import hash_password
 from library.config import get_settings
 from library.db import get_session
+from library.extraction import apply as extraction_apply_module
+from library.facets.vocabulary import create_facet, create_value, set_document_label
 from library.jobs import job_app, procrastinate_conninfo
-from library.models import Base, User
+from library.models import (
+    AmountKind,
+    Base,
+    Document,
+    DocumentSource,
+    DocumentStatus,
+    FxRate,
+    Sender,
+    User,
+)
 
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
+
+
+@pytest.fixture(autouse=True)
+def _llm_backend_is_the_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep the suite on the metered-API backend, whatever the default is.
+
+    ``ask_llm_backend`` ships defaulting to "subscription" so the deployed app
+    uses the Claude subscription. Tests must not: that path shells out to the
+    bundled Claude CLI and would make real network calls against real
+    credentials. Pin it here rather than in each test, so a new test that
+    exercises ask cannot silently start billing someone's subscription.
+
+    Tests covering the subscription path set the backend explicitly and stub the
+    SDK (see tests/test_ask_backend.py).
+    """
+    monkeypatch.setenv("LIBRARY_ASK_LLM_BACKEND", "api")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
 
 
 @pytest.fixture(autouse=True)
@@ -42,6 +75,31 @@ def _embedding_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> Iterator[
     get_settings.cache_clear()
     yield
     get_settings.cache_clear()
+
+
+@pytest.fixture(autouse=True)
+def _facet_labelling_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """Keep the suite hermetic: the ingest facet-labelling hook is a no-op by default.
+
+    ``apply_extraction``'s success path calls ``label_and_apply``, which reaches
+    the Anthropic API. Several extraction tests build a ``Settings`` with a
+    *fake* API key (``anthropic_api_key="test-key"``, see
+    ``test_extraction_apply.py::settings``) so ``extract`` itself can be
+    monkeypatched — but that same fake key is enough for ``label_and_apply`` to
+    open a real connection to api.anthropic.com and get a 401 back. The broad
+    ``except Exception`` in the hook swallows that, so tests still pass, but the
+    suite is no longer hermetic and now depends on network access. Default the
+    hook to a no-op here, the same way embeddings are defaulted off above; a
+    test exercising the hook itself monkeypatches
+    ``library.extraction.apply.label_and_apply`` back to a stub (see
+    ``test_extraction_apply.py::test_apply_extraction_calls_the_facet_labeller``).
+    """
+
+    async def _noop_label_and_apply(*args: object, **kwargs: object) -> None:
+        return None
+
+    monkeypatch.setattr(extraction_apply_module, "label_and_apply", _noop_label_and_apply)
+    yield
 
 
 @dataclass(frozen=True)
@@ -360,3 +418,472 @@ async def _fetch_all(database_url: str, query: str, **params: object) -> list[tu
 def fetch_all(database_url: str, query: str, **params: object) -> list[tuple[object, ...]]:
     """Run a query against the given database from sync test code."""
     return asyncio.run(_fetch_all(database_url, query, **params))
+
+
+@pytest.fixture
+def seeded_document_id(api_database_url: str) -> int:
+    """One indexed document, for tests that only need a valid documents.id."""
+    import asyncio
+    import hashlib
+    import uuid as _uuid
+
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from library.models import Document, DocumentSource, DocumentStatus
+
+    async def _seed() -> int:
+        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                marker = f"facet-fixture:{_uuid.uuid4()}"
+                doc = Document(
+                    sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    status=DocumentStatus.INDEXED,
+                    title=marker,
+                )
+                session.add(doc)
+                await session.flush()
+                await session.commit()
+                return doc.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_seed())
+
+
+@pytest.fixture
+def payment_pair(api_database_url: str) -> tuple[int, int]:
+    """Two documents the R1 rule merges into one payment: same sender, date,
+    amount and currency, with complementary amount kinds."""
+    import asyncio
+    import hashlib
+    import uuid as _uuid
+    from datetime import date
+    from decimal import Decimal
+
+    from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
+    from sqlalchemy.pool import NullPool
+
+    from library.models import (
+        AmountKind,
+        Document,
+        DocumentSource,
+        DocumentStatus,
+        Sender,
+    )
+
+    async def _seed() -> tuple[int, int]:
+        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                sender = Sender(name=f"PayVendor-{_uuid.uuid4().hex[:8]}")
+                session.add(sender)
+                await session.flush()
+                ids: list[int] = []
+                for kind in (AmountKind.PAYMENT_DUE, AmountKind.PAYMENT_MADE):
+                    marker = f"paypair:{_uuid.uuid4()}"
+                    doc = Document(
+                        sha256=hashlib.sha256(marker.encode()).hexdigest(),
+                        mime_type="application/pdf",
+                        source=DocumentSource.UPLOAD,
+                        status=DocumentStatus.INDEXED,
+                        title=marker,
+                        sender_id=sender.id,
+                        document_date=date(2026, 8, 4),
+                        amount_total=Decimal("48.00"),
+                        currency="EUR",
+                        amount_kind=kind,
+                    )
+                    session.add(doc)
+                    await session.flush()
+                    ids.append(doc.id)
+                await session.commit()
+                return ids[0], ids[1]
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_seed())
+
+
+# --- The charts-engine fixture vocabulary -----------------------------------
+#
+# `session`, `facets` and `document` are the shared building blocks for the
+# spend-lines / spend-facts / chart-query work. They live here rather than in
+# one test file because seven later tasks build on exactly this shape.
+
+#: The date every fixture document carries unless the caller names another.
+#: A real date rather than NULL on purpose: the R1 payment rule (same sender,
+#: same currency, same amount, *same day*) can only ever merge two documents
+#: that share a date, so a NULL default would make merge behaviour untestable
+#: from these fixtures.
+FIXTURE_DOCUMENT_DATE: date = date(2026, 3, 15)
+
+#: The vocabulary the `facets` fixture creates. Deliberately contains two
+#: facets carrying values that could be confused for each other's — `scope`
+#: has no `services`, `category` does — so a test can prove a line label
+#: cannot claim one facet while pointing at another facet's value.
+FIXTURE_VOCABULARY: dict[str, tuple[str, ...]] = {
+    "category": ("software", "services", "supplies", "accountancy"),
+    "scope": ("business", "personal"),
+    "cost_type": ("subscription", "usage"),
+}
+
+
+@pytest.fixture
+async def session(api_database_url: str) -> AsyncIterator[AsyncSession]:
+    """An ``AsyncSession`` on the shared API database.
+
+    Requesting ``api_database_url`` is what arms the autouse truncation, so a
+    test using this fixture leaves nothing behind. ``expire_on_commit=False``
+    matches the app's own session factory, so an ORM object read after a commit
+    does not go looking for a fresh connection.
+
+    **Do not copy a local ``session`` fixture from another test file.** Six-plus
+    files define their own over ``migrated_database_url``, which is *not*
+    truncated between tests; copying one shadows this fixture and silently
+    leaves rows behind for every later test in the run.
+    """
+    engine = create_async_engine(api_database_url, poolclass=NullPool)
+    try:
+        async with AsyncSession(engine, expire_on_commit=False) as db_session:
+            yield db_session
+    finally:
+        await engine.dispose()
+
+
+@pytest.fixture
+async def facets(session: AsyncSession) -> dict[str, tuple[str, ...]]:
+    """Create ``FIXTURE_VOCABULARY`` and return it.
+
+    Committed rather than flushed: other sessions (an API client, a second
+    engine) must be able to see the vocabulary a test's documents are labelled
+    against.
+    """
+    for ordinal, (facet_key, value_keys) in enumerate(FIXTURE_VOCABULARY.items()):
+        await create_facet(session, facet_key, facet_key.replace("_", " ").title(), ordinal)
+        for value_key in value_keys:
+            await create_value(session, facet_key, value_key, value_key.title())
+    await session.commit()
+    return FIXTURE_VOCABULARY
+
+
+class DocumentFactory(Protocol):
+    """Signature of the `document` fixture. See its docstring for the defaults."""
+
+    async def __call__(
+        self,
+        *,
+        amount_total: Decimal | str | None = None,
+        amount_kind: AmountKind | None = None,
+        document_date: date | None = FIXTURE_DOCUMENT_DATE,
+        currency: str | None = "EUR",
+        labels: Mapping[str, str] | None = None,
+        deleted: bool = False,
+        title: str | None = None,
+        sender: str | None = None,
+        reference: str | None = None,
+    ) -> Document: ...
+
+
+@pytest.fixture
+async def document(session: AsyncSession, facets: dict[str, tuple[str, ...]]) -> DocumentFactory:
+    """Make a document, committed, with everything the chart work needs on it.
+
+    Depends on `facets` so `labels=` always resolves; the vocabulary is cheap
+    and truncated with everything else, and making the dependency implicit
+    removes an ordering trap from every later task.
+
+    `sender` defaults to **None**, so two fixture documents never merge into one
+    payment by accident — the payment rules all require a non-NULL, matching
+    `sender_id`. A test that wants a merge names the sender on both documents;
+    senders are created on demand and shared by name within a test.
+    """
+
+    async def _sender_id(name: str) -> int:
+        existing = await session.scalar(select(Sender.id).where(Sender.name == name))
+        if existing is not None:
+            return int(existing)
+        row = Sender(name=name)
+        session.add(row)
+        await session.flush()
+        return row.id
+
+    async def _make(
+        *,
+        amount_total: Decimal | str | None = None,
+        amount_kind: AmountKind | None = None,
+        document_date: date | None = FIXTURE_DOCUMENT_DATE,
+        currency: str | None = "EUR",
+        labels: Mapping[str, str] | None = None,
+        deleted: bool = False,
+        title: str | None = None,
+        sender: str | None = None,
+        reference: str | None = None,
+    ) -> Document:
+        marker = uuid.uuid4().hex
+        row = Document(
+            sha256=hashlib.sha256(marker.encode()).hexdigest(),
+            mime_type="application/pdf",
+            source=DocumentSource.UPLOAD,
+            status=DocumentStatus.INDEXED,
+            title=title if title is not None else f"fixture-{marker[:8]}",
+            document_date=document_date,
+            amount_total=Decimal(amount_total) if amount_total is not None else None,
+            amount_kind=amount_kind,
+            # R2 (same sender + same reference, any date gap) is the strongest
+            # merge rule and the one 0034's sign guard exists for, so a
+            # canonicality test needs to be able to set this.
+            reference=reference,
+            currency=currency,
+            sender_id=await _sender_id(sender) if sender is not None else None,
+            deleted_at=datetime.now(UTC) if deleted else None,
+        )
+        session.add(row)
+        await session.flush()
+        for facet_key, value_key in (labels or {}).items():
+            await set_document_label(session, row.id, facet_key, value_key)
+        await session.commit()
+        return row
+
+    return _make
+
+
+class FxRateFactory(Protocol):
+    """Signature of the `fx_rates` fixture. See its docstring for the direction."""
+
+    async def __call__(self, rows: Sequence[tuple[str | date, str, str | Decimal]]) -> None: ...
+
+
+@pytest.fixture
+async def fx_rates(session: AsyncSession) -> AsyncIterator[FxRateFactory]:
+    """Write reference FX rows for a test, and take exactly those out again.
+
+    ``fx_rates`` is in ``_SEEDED_TABLES``: migration 0015 fills it with a yearly
+    snapshot and the autouse truncation deliberately leaves the table alone. So
+    a test adding rows must remove its own, or it silently changes every later
+    test's conversions. Only the ids inserted here are deleted; the seeded
+    snapshot is never touched, and a collision with a seeded ``(currency,
+    as_of)`` raises on insert rather than overwriting it.
+
+    **Direction.** ``rate_to_base`` is the value of ONE UNIT of ``currency`` in
+    USD (``library.fx``: base = USD, USD itself is 1.0 in code and not stored).
+    So ``("2026-04-01", "GBP", "1.20")`` means GBP 1 buys USD 1.20, and GBP 100
+    converts to USD 120. ``test_the_fixture_writes_usd_per_unit_not_the_inverse``
+    pins that so a flipped fixture cannot quietly make a conversion test pass.
+    """
+    inserted: list[int] = []
+
+    async def _add(rows: Sequence[tuple[str | date, str, str | Decimal]]) -> None:
+        for as_of, currency, rate in rows:
+            row = FxRate(
+                currency=currency,
+                as_of=date.fromisoformat(as_of) if isinstance(as_of, str) else as_of,
+                rate_to_base=Decimal(rate),
+            )
+            session.add(row)
+            await session.flush()
+            inserted.append(row.id)
+        await session.commit()
+
+    yield _add
+    if inserted:
+        # Unconditional: a test body that left the session in a failed
+        # transaction would make the DELETE raise `PendingRollbackError`, and
+        # because `fx_rates` is never truncated the inserted rates would then
+        # survive into every later test in the run.
+        await session.rollback()
+        await session.execute(delete(FxRate).where(FxRate.id.in_(inserted)))
+        await session.commit()
+
+
+#: Invented vendors for the `seeded` corpus. Distinct senders are what make
+#: `split="sender"` a non-trivial axis; none of these names is real.
+SEEDED_SENDERS: tuple[str, str, str] = (
+    "Cygnus Test Software",
+    "Draco Test Services",
+    "Eridanus Test Supplies",
+)
+
+
+@pytest.fixture
+async def seeded(document: DocumentFactory) -> Sequence[Document]:
+    """A small corpus that varies across `category`, `scope` AND `sender`.
+
+    Shaped for the split-invariance property (spec §9.2), which is asserted by
+    comparing series to each other rather than against a literal — so the
+    fixture has to be able to *break* that comparison if the split were applied
+    as a filter. It therefore contains, deliberately:
+
+    * a document unlabelled for every facet and with no sender, which a
+      filtering split would drop from all three axes;
+    * a document labelled for `category` but not `scope`, which a filtering
+      split would drop from one axis only — so the three axes disagree rather
+      than all being wrong together;
+    * a refund, which must lower a bucket rather than vanish;
+    * a non-contributing kind (a coverage ceiling), large enough that its
+      accidental inclusion is unmissable;
+    * two months, so the time axis has more than one bucket.
+
+    Everything is EUR, so a chart drawn in EUR converts one-to-one and the
+    invariance under test is not entangled with FX.
+    """
+    software, services, supplies = SEEDED_SENDERS
+    return [
+        await document(
+            amount_total=Decimal("120.00"),
+            amount_kind=AmountKind.PAYMENT_MADE,
+            document_date=date(2026, 3, 4),
+            labels={"category": "software", "scope": "business"},
+            sender=software,
+        ),
+        await document(
+            amount_total=Decimal("60.00"),
+            amount_kind=AmountKind.PAYMENT_MADE,
+            document_date=date(2026, 3, 20),
+            labels={"category": "supplies", "scope": "personal"},
+            sender=supplies,
+        ),
+        await document(
+            amount_total=Decimal("80.00"),
+            amount_kind=AmountKind.PAYMENT_MADE,
+            document_date=date(2026, 4, 2),
+            labels={"category": "services", "scope": "personal"},
+            sender=services,
+        ),
+        await document(
+            amount_total=Decimal("45.50"),
+            amount_kind=AmountKind.PAYMENT_DUE,
+            document_date=date(2026, 4, 10),
+            # Labelled for `category` only: unlabelled for `scope`.
+            labels={"category": "software"},
+            sender=software,
+        ),
+        await document(
+            amount_total=Decimal("15.00"),
+            amount_kind=AmountKind.REFUND,
+            document_date=date(2026, 4, 20),
+            labels={"category": "services", "scope": "personal"},
+            sender=services,
+        ),
+        # Unlabelled entirely, and no sender: NULL on all three axes.
+        await document(
+            amount_total=Decimal("30.00"),
+            amount_kind=AmountKind.PAYMENT_MADE,
+            document_date=date(2026, 4, 18),
+        ),
+        # Never summed, whatever the split.
+        await document(
+            amount_total=Decimal("9000.00"),
+            amount_kind=AmountKind.COVERAGE_LIMIT,
+            document_date=date(2026, 4, 22),
+            labels={"category": "accountancy", "scope": "business"},
+            sender=services,
+        ),
+    ]
+
+
+class _StubMessages:
+    """The ``client.messages`` namespace, recording which method was called."""
+
+    def __init__(self, stub: "StubAnthropic") -> None:
+        self._stub = stub
+
+    async def parse(self, **kwargs: Any) -> Any:
+        self._stub.record("parse", kwargs)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            parsed_output=self._stub.parsed_output(),
+            usage=SimpleNamespace(input_tokens=101, output_tokens=17),
+        )
+
+    async def create(self, **kwargs: Any) -> Any:
+        """Deliberately usable.
+
+        A stub whose ``create`` raised would make
+        ``test_the_backend_uses_messages_parse_not_messages_create`` pass for the
+        wrong reason: the mutant would die on the exception rather than on the
+        assertion. This returns a well-formed message so a
+        ``create`` + ``json.loads`` implementation passes every *behavioural*
+        test — which is exactly what happened in GH #108 and #116 — and only the
+        call-shape assertion catches it.
+        """
+        self._stub.record("create", kwargs)
+        from types import SimpleNamespace
+
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text=self._stub.payload_json())],
+            usage=SimpleNamespace(input_tokens=101, output_tokens=17),
+        )
+
+
+class StubAnthropic:
+    """Stands in for ``AsyncAnthropic`` in ``library.charts.draft``.
+
+    Is both the *class* (called with ``api_key=``), the async context manager it
+    yields, and the client — so the production path under test is the real one,
+    including its API-key branch. ``used`` is the point of the whole fixture: it
+    records which ``messages`` method the implementation invoked.
+    """
+
+    def __init__(self) -> None:
+        self.used: str | None = None
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+        self.messages = _StubMessages(self)
+        self._payload: dict[str, Any] | None = None
+
+    # -- test-facing ---------------------------------------------------------
+    def returns(self, *, rule: Mapping[str, Any], proposed_split: str | None = None) -> None:
+        """Set the rule the stubbed model will draft."""
+        self._payload = {**dict(rule), "split": proposed_split}
+
+    # -- client-facing -------------------------------------------------------
+    def __call__(self, **kwargs: Any) -> "StubAnthropic":
+        return self
+
+    async def __aenter__(self) -> "StubAnthropic":
+        return self
+
+    async def __aexit__(self, *exc: object) -> None:
+        return None
+
+    def record(self, method: str, kwargs: dict[str, Any]) -> None:
+        self.used = method
+        self.calls.append((method, kwargs))
+
+    def _require_payload(self) -> dict[str, Any]:
+        if self._payload is None:
+            raise RuntimeError("stub_anthropic.returns(...) was never called")
+        return self._payload
+
+    def payload_json(self) -> str:
+        import json as _json
+
+        return _json.dumps(self._require_payload())
+
+    def parsed_output(self) -> Any:
+        from library.charts.draft import DraftedRule
+
+        return DraftedRule.model_validate(self._require_payload())
+
+
+@pytest.fixture
+def stub_anthropic(monkeypatch: pytest.MonkeyPatch) -> StubAnthropic:
+    """A stubbed Anthropic client for ``library.charts.draft``.
+
+    Patched over the module's ``AsyncAnthropic`` name (not passed in as an
+    argument) so the test drives ``draft_rule``'s real two-argument signature,
+    and over ``get_settings`` so the key branch is satisfied without an env var.
+    """
+    from library.charts import draft as draft_module
+    from library.config import Settings
+
+    stub = StubAnthropic()
+    monkeypatch.setattr(draft_module, "AsyncAnthropic", stub)
+    monkeypatch.setattr(
+        draft_module, "get_settings", lambda: Settings(anthropic_api_key="stub-key")
+    )
+    return stub

@@ -14,15 +14,15 @@ two retrieval paths share one filter vocabulary.
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import date
 from decimal import Decimal
 from typing import Any, Literal, TypedDict
 
-from sqlalchemy import func, select
+from sqlalchemy import ColumnElement, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.models import Document, Kind, Sender
+from library.models import Document, Kind, ReviewStatus, Sender
 from library.search import DocumentFilters, filter_conditions
 
 # How many contributing document ids to attach to each aggregated row.
@@ -64,6 +64,7 @@ class DocumentRef:
     document_date: date | None
     amount_total: str | None
     currency: str | None
+    review_status: str  # "verified" | "needs_review" | "unreviewed"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,10 +87,134 @@ class AmountGroup:
     document_ids: list[int]
 
 
+@dataclass(frozen=True, slots=True)
+class Coverage:
+    """How much of the filtered set a result's rows actually account for.
+
+    Every aggregate silently drops documents — a spend total cannot include a
+    bill whose amount never extracted, a sender breakdown cannot include a
+    document with no sender, a list cannot exceed its limit. Reporting the
+    result without reporting the drop is how a partial number gets presented as
+    a complete one, so every aggregate returns this alongside its rows.
+
+    ``matched`` is what met the caller's filters, ``included`` is what the rows
+    account for, and ``excluded`` says why the difference was dropped —
+    ``included + sum(excluded.values()) == matched`` is an invariant, pinned by
+    a test. Reasons that dropped nothing are omitted, so an empty ``excluded``
+    reads as "the rows are the whole story".
+
+    ``needs_review`` is a *trust* signal, not a coverage one: those documents are
+    counted in ``included``. It is the number of them whose extracted metadata
+    ``library.extraction.validation`` flagged as untrustworthy — most often an
+    ``amount_grounding`` finding, meaning the amount being summed here does not
+    appear anywhere in the document's text.
+    """
+
+    matched: int
+    included: int
+    excluded: dict[str, int]
+    needs_review: int
+
+
+@dataclass(frozen=True, slots=True)
+class Aggregated[T]:
+    """An aggregate's rows plus the coverage of the set they were drawn from."""
+
+    rows: list[T]
+    coverage: Coverage
+
+
+async def count_coverage(
+    session: AsyncSession,
+    *,
+    filters: DocumentFilters,
+    include_condition: ColumnElement[bool],
+    exclusions: dict[str, ColumnElement[bool]],
+) -> Coverage:
+    """Count a result's coverage in one round-trip, using conditional aggregates.
+
+    ``include_condition`` selects the documents the caller's rows are built
+    from; ``exclusions`` maps a reason name to the condition identifying the
+    documents dropped for it. The conditions must partition the matched set —
+    the caller owns that, and the invariant is asserted by the caller's tests
+    rather than here, so a legitimate partial count (``list_documents``, whose
+    over-limit drop is positional and has no SQL predicate) is still expressible.
+
+    One ``SELECT`` with Postgres ``FILTER (WHERE ...)`` clauses rather than N+1
+    counts: this runs on every structured tool call, so it must not multiply
+    the query cost of asking a question.
+
+    ``filters.review_status`` gets special treatment: if it were left in the
+    conditions below, ``matched`` would already have every document of the
+    "wrong" trust state removed before the include/exclude gates ever ran —
+    so ``review_status="verified"`` could return ``{matched: 14, included: 14,
+    excluded: {}, needs_review: 0}``, the exact signature of "complete,
+    nothing flagged", while every flagged document was silently dropped from
+    the denominator. ``matched`` is therefore always computed against the
+    filters MINUS ``review_status`` (everything that met the *other*
+    filters), and the trust filter itself becomes the first exclusion reason,
+    ``filtered_review_status``. Because it is orthogonal to amount/quote/
+    sender/kind, it composes as the first gate in the include-chain: the
+    caller's own ``include_condition``/``exclusions`` are additionally gated
+    on "review_status matches", so a document that fails the trust filter is
+    counted there and nowhere else — the partition invariant survives.
+    """
+    conditions = filter_conditions(replace(filters, review_status=None))
+
+    review_status_ok: ColumnElement[bool] | None = None
+    if filters.review_status is not None:
+        review_status_ok = Document.review_status == filters.review_status
+
+    gated_include: ColumnElement[bool]
+    if review_status_ok is not None:
+        gated_include = review_status_ok & include_condition
+        gated_exclusions: dict[str, ColumnElement[bool]] = {
+            "filtered_review_status": ~review_status_ok,
+            **{name: review_status_ok & condition for name, condition in exclusions.items()},
+        }
+    else:
+        gated_include = include_condition
+        gated_exclusions = exclusions
+
+    columns = [
+        func.count(Document.id),
+        func.count(Document.id).filter(gated_include),
+        func.count(Document.id).filter(
+            gated_include, Document.review_status == ReviewStatus.NEEDS_REVIEW
+        ),
+        *(func.count(Document.id).filter(condition) for condition in gated_exclusions.values()),
+    ]
+    row = (await session.execute(select(*columns).where(*conditions))).one()
+    matched, included, needs_review = int(row[0]), int(row[1]), int(row[2])
+    excluded = {
+        reason: int(count)
+        for reason, count in zip(gated_exclusions, row[3:], strict=True)
+        # A reason that dropped nothing is noise in the model's context and
+        # would read as a caveat where there is none.
+        if int(count) > 0
+    }
+    return Coverage(
+        matched=matched, included=included, excluded=excluded, needs_review=needs_review
+    )
+
+
 async def list_documents(
     session: AsyncSession, *, filters: DocumentFilters, limit: int = 50
-) -> list[DocumentRef]:
-    """Matching documents, newest first (unknown dates last)."""
+) -> Aggregated[DocumentRef]:
+    """Matching documents, newest first (unknown dates last), with coverage.
+
+    The over-limit drop is positional, not predicated: which documents fall off
+    depends on the ORDER BY, so there is no SQL condition to hand
+    ``count_coverage``. It is therefore computed here from ``matched`` and the
+    page size, and ``needs_review`` is counted over the returned page — the rows
+    the caller can actually see — rather than over the whole match.
+
+    ``filters.review_status`` gets the same treatment as in ``count_coverage``:
+    ``matched`` is computed against the filters MINUS ``review_status``, and the
+    trust filter's drop is reported as its own ``filtered_review_status``
+    exclusion rather than silently shrinking ``matched`` before ``over_limit``
+    is even computed.
+    """
     statement = (
         select(Document)
         .where(*filter_conditions(filters))
@@ -101,7 +226,7 @@ async def list_documents(
         .limit(limit)
     )
     documents = (await session.execute(statement)).scalars().all()
-    return [
+    refs = [
         DocumentRef(
             id=document.id,
             title=document.title,
@@ -111,13 +236,61 @@ async def list_documents(
             document_date=document.document_date,
             amount_total=str(document.amount_total) if document.amount_total is not None else None,
             currency=document.currency,
+            review_status=document.review_status.value,
         )
         for document in documents
     ]
 
+    baseline_conditions = filter_conditions(replace(filters, review_status=None))
+    if filters.review_status is not None:
+        review_status_ok = Document.review_status == filters.review_status
+        row = (
+            await session.execute(
+                select(
+                    func.count(Document.id),
+                    func.count(Document.id).filter(review_status_ok),
+                ).where(*baseline_conditions)
+            )
+        ).one()
+        matched, filtered_matched = int(row[0]), int(row[1])
+    else:
+        matched = int(
+            (
+                await session.execute(select(func.count(Document.id)).where(*baseline_conditions))
+            ).scalar_one()
+        )
+        filtered_matched = matched
 
-async def distinct_senders(session: AsyncSession, *, filters: DocumentFilters) -> list[SenderGroup]:
-    """Distinct senders among matching documents, most documents first."""
+    filtered_out = matched - filtered_matched
+    over_limit = max(0, filtered_matched - len(refs))
+    excluded: dict[str, int] = {}
+    if filtered_out:
+        excluded["filtered_review_status"] = filtered_out
+    if over_limit:
+        excluded["over_limit"] = over_limit
+
+    return Aggregated(
+        rows=refs,
+        coverage=Coverage(
+            matched=matched,
+            included=len(refs),
+            excluded=excluded,
+            needs_review=sum(
+                1 for document in documents if document.review_status is ReviewStatus.NEEDS_REVIEW
+            ),
+        ),
+    )
+
+
+async def distinct_senders(
+    session: AsyncSession, *, filters: DocumentFilters
+) -> Aggregated[SenderGroup]:
+    """Distinct senders among matching documents, most documents first.
+
+    The join to ``Sender`` is inner, so a document whose sender never extracted
+    is absent from the breakdown entirely — reported as ``no_sender`` rather
+    than left for the reader to notice the counts do not add up.
+    """
     statement = (
         select(
             Sender.name,
@@ -130,28 +303,66 @@ async def distinct_senders(session: AsyncSession, *, filters: DocumentFilters) -
         .order_by(func.count(Document.id).desc(), Sender.name)
     )
     rows = (await session.execute(statement)).all()
-    return [
+    groups = [
         SenderGroup(sender=name, document_count=count, document_ids=sorted(ids)[:MAX_CITED_IDS])
         for name, count, ids in rows
     ]
+    coverage = await count_coverage(
+        session,
+        filters=filters,
+        include_condition=Document.sender_id.isnot(None),
+        exclusions={"no_sender": Document.sender_id.is_(None)},
+    )
+    return Aggregated(rows=groups, coverage=coverage)
 
 
 async def sum_amount(
     session: AsyncSession, *, filters: DocumentFilters, group_by: GroupBy | None = None
-) -> list[AmountGroup]:
-    """Sum ``amount_total`` over matching documents.
+) -> Aggregated[AmountGroup]:
+    """Sum ``amount_total`` over matching documents, with coverage.
 
     Always grouped by currency (amounts in different currencies cannot be
-    added); optionally also by sender or kind. Documents without an amount are
-    excluded.
+    added); optionally also by sender or kind. Three things drop documents from
+    the total, and all three are reported in ``coverage.excluded`` rather than
+    happening silently:
 
-    Quotes/estimates are **not** actual expenditure, so documents of kind
-    ``quote`` are excluded from spend totals unless the caller explicitly
-    filters for ``kind="quote"`` (e.g. "how much have my quotes come to?").
+    * ``no_amount`` — extraction found no total. The dominant case, and the one
+      that used to make a partial sum indistinguishable from a complete one.
+    * ``quote_not_spend`` — quotes/estimates are not actual expenditure, so kind
+      ``quote`` is excluded unless the caller explicitly filters for it (e.g.
+      "how much have my quotes come to?"). Correct, but surprising enough that
+      the answer should be able to say it happened.
+    * ``no_sender`` / ``no_kind`` — only when grouping by that column, whose
+      INNER JOIN drops documents that lack it.
     """
-    conditions = [*filter_conditions(filters), Document.amount_total.isnot(None)]
+    # Explicitly correlated to Document: group_by="kind" joins Kind into the
+    # outer query too, and without this SQLAlchemy auto-correlates the two
+    # Kind references and strips this subquery of its FROM entirely.
+    is_quote = (
+        select(1)
+        .where(Kind.id == Document.kind_id, Kind.slug == "quote")
+        .correlate(Document)
+        .exists()
+    )
+    has_amount = Document.amount_total.isnot(None)
+
+    # Each exclusion is "survived every earlier gate, but fails this one", so the
+    # reasons partition the matched set instead of overlapping. A quote with an
+    # amount and no sender must land in exactly one bucket, not two.
+    include: ColumnElement[bool] = has_amount
+    exclusions: dict[str, ColumnElement[bool]] = {"no_amount": Document.amount_total.is_(None)}
     if filters.kind_slug != "quote":
-        is_quote = select(1).where(Kind.id == Document.kind_id, Kind.slug == "quote").exists()
+        exclusions["quote_not_spend"] = include & is_quote
+        include = include & ~is_quote
+    if group_by == "sender":
+        exclusions["no_sender"] = include & Document.sender_id.is_(None)
+        include = include & Document.sender_id.isnot(None)
+    elif group_by == "kind":
+        exclusions["no_kind"] = include & Document.kind_id.is_(None)
+        include = include & Document.kind_id.isnot(None)
+
+    conditions = [*filter_conditions(filters), has_amount]
+    if filters.kind_slug != "quote":
         conditions.append(~is_quote)
     key_column = None
     statement = select(
@@ -187,7 +398,10 @@ async def sum_amount(
                 document_ids=sorted(ids)[:MAX_CITED_IDS],
             )
         )
-    return groups
+    coverage = await count_coverage(
+        session, filters=filters, include_condition=include, exclusions=exclusions
+    )
+    return Aggregated(rows=groups, coverage=coverage)
 
 
 class QueryResult(TypedDict):
@@ -200,10 +414,16 @@ class QueryResult(TypedDict):
     ``result_type`` reuses ``Aggregate`` rather than widening to ``str``, so a
     new aggregate cannot be echoed back under a name the dispatcher does not
     know about.
+
+    ``coverage`` is a serialised :class:`Coverage`. It is present on every
+    branch — an aggregate that has nothing to disclose reports
+    ``excluded == {}`` rather than omitting the key, so the model never has to
+    distinguish "nothing was dropped" from "this tool does not say".
     """
 
     result_type: Aggregate
     rows: list[dict[str, Any]]
+    coverage: dict[str, Any]
 
 
 async def query_documents(
@@ -217,16 +437,29 @@ async def query_documents(
     """Dispatch a structured query and return a JSON-friendly result.
 
     The single entry point the ``/ask`` tool-use loop calls. ``result_type``
-    echoes the aggregate so the caller can interpret ``rows``.
+    echoes the aggregate so the caller can interpret ``rows``; ``coverage``
+    says how much of the filtered set those rows account for.
     """
     if aggregate == "distinct_senders":
         senders = await distinct_senders(session, filters=filters)
-        return {"result_type": "distinct_senders", "rows": [asdict(group) for group in senders]}
+        return {
+            "result_type": "distinct_senders",
+            "rows": [asdict(group) for group in senders.rows],
+            "coverage": asdict(senders.coverage),
+        }
     if aggregate == "sum_amount":
         amounts = await sum_amount(session, filters=filters, group_by=group_by)
-        return {"result_type": "sum_amount", "rows": [asdict(group) for group in amounts]}
+        return {
+            "result_type": "sum_amount",
+            "rows": [asdict(group) for group in amounts.rows],
+            "coverage": asdict(amounts.coverage),
+        }
     documents = await list_documents(session, filters=filters, limit=limit)
-    return {"result_type": "list", "rows": [_serialise_ref(ref) for ref in documents]}
+    return {
+        "result_type": "list",
+        "rows": [_serialise_ref(ref) for ref in documents.rows],
+        "coverage": asdict(documents.coverage),
+    }
 
 
 def _serialise_ref(ref: DocumentRef) -> dict[str, object]:

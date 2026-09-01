@@ -62,6 +62,7 @@ import { refreshTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { ApiError } from '@/api/client'
 import AdminView from '../AdminView.vue'
 import { useAuthStore } from '@/stores/auth'
+import { usePageTitle } from '@/composables/usePageTitle'
 
 const systemInfo = {
   version: '1.2.3',
@@ -162,9 +163,9 @@ const recipientList = [
 ]
 
 const senderList = [
-  { id: 20, name: 'Acme', document_count: 0 },
-  { id: 21, name: 'Globex', document_count: 4 },
-  { id: 22, name: 'Initech', document_count: 2 },
+  { id: 20, name: 'Acme', document_count: 0, colour: null },
+  { id: 21, name: 'Globex', document_count: 4, colour: null },
+  { id: 22, name: 'Initech', document_count: 2, colour: null },
 ]
 
 const kindList = [
@@ -242,7 +243,9 @@ describe('AdminView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    expect(wrapper.find('h1').text()).toBe('Admin')
+    // The title is claimed for the app bar, so the view's first h1 is the
+    // active tab's own heading — see composables/usePageTitle.ts.
+    expect(usePageTitle().pageTitle.value).toBe('Admin')
     expect(wrapper.find('[data-testid="system-version"]').text()).toBe('1.2.3')
     expect(wrapper.find('[data-testid="system-git-sha"]').text()).toBe('abc123')
     expect(wrapper.find('[data-testid="system-deployment-row"]').text()).toContain('library-webserver')
@@ -843,12 +846,9 @@ describe('AdminView', () => {
     expect(listCurrencies).toHaveBeenCalledTimes(2)
   })
 
-  it('refuses on an override collision and lists the conflicts (nothing reloaded)', async () => {
+  it('surfaces a normalize error inline (nothing reloaded)', async () => {
     vi.mocked(normalizeCurrency).mockRejectedValue(
-      new ApiError(409, 'would collide with overrides', {
-        detail: 'would collide with overrides',
-        conflicts: [{ table: 'series_meta_overrides', sender_id: 3, kind_id: 5 }],
-      }),
+      new ApiError(400, 'from_code and to_code are the same'),
     )
     const wrapper = await openMetadataTab()
 
@@ -859,9 +859,9 @@ describe('AdminView', () => {
     await wrapper.find('[data-testid="currency-normalize-confirm"]').trigger('click')
     await flushPromises()
 
-    const conflict = wrapper.find('[data-testid="currency-conflict"]')
-    expect(conflict.exists()).toBe(true)
-    expect(conflict.text()).toContain('series_meta_overrides')
+    const err = wrapper.find('[data-testid="currency-normalize-error"]')
+    expect(err.exists()).toBe(true)
+    expect(err.text()).toContain('from_code and to_code are the same')
     // A refused rename must not have reloaded the list (still just the open call).
     expect(listCurrencies).toHaveBeenCalledTimes(1)
   })

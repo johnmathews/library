@@ -27,7 +27,12 @@ import {
   TILE_PREVIEWS,
   getEmailTriage,
   getEmailTriageRecentSkips,
+  getLLMBackends,
+  resetLLMBackend,
+  ASK_PROFILE_MAX_CHARS,
   updateAppearance,
+  updateAskProfile,
+  updateLLMBackend,
   updateKindColors,
   updateNotifications,
   updateSettings,
@@ -36,6 +41,8 @@ import {
   type DockPosition,
   type EmailTriageConfig,
   type EmailTriageRecentSkip,
+  type LLMBackend,
+  type LLMBackends,
   type TilePreview,
 } from '@/api/settings'
 import { listKinds, type KindOption } from '@/api/taxonomy'
@@ -46,7 +53,7 @@ import { useAuthStore } from '@/stores/auth'
 
 const auth = useAuthStore()
 
-type Tab = 'dashboard' | 'appearance' | 'notifications' | 'email-triage'
+type Tab = 'dashboard' | 'appearance' | 'ask' | 'notifications' | 'email-triage' | 'llm-backend'
 const tab = ref<Tab>('dashboard')
 
 // --- Dashboard fields --------------------------------------------------------
@@ -361,6 +368,36 @@ async function onNotificationsSubmit(): Promise<void> {
   }
 }
 
+// --- Ask (About you) ---------------------------------------------------------
+
+// Free text, so an explicit Save rather than the appearance tab's save-per-click:
+// nobody wants a network round-trip per keystroke, and a half-typed note must
+// never reach the prompt. The draft is seeded from the store once; the store
+// is only updated from the server's echo on a successful save.
+const askProfile = ref(auth.askProfile)
+const askProfileSaving = ref(false)
+const askProfileSaved = ref(false)
+const askProfileError = ref<string | null>(null)
+
+async function onAskProfileSubmit(): Promise<void> {
+  askProfileSaving.value = true
+  askProfileSaved.value = false
+  askProfileError.value = null
+  try {
+    const result = await updateAskProfile(askProfile.value)
+    auth.applyPreferences(result)
+    askProfile.value = result.ask_profile ?? ''
+    askProfileSaved.value = true
+  } catch (error) {
+    askProfileError.value =
+      error instanceof ApiError && error.status === 422
+        ? `Keep the notes under ${ASK_PROFILE_MAX_CHARS} characters.`
+        : 'Sorry, your notes could not be saved. Try again.'
+  } finally {
+    askProfileSaving.value = false
+  }
+}
+
 // --- Email triage (read-only pipeline view) ----------------------------------
 
 // Loaded lazily on the tab's first show: the config is instance-wide and
@@ -394,7 +431,94 @@ async function loadTriage(): Promise<void> {
 
 watch(tab, (current) => {
   if (current === 'email-triage' && !triage.value && !triageLoading.value) void loadTriage()
+  if (current === 'llm-backend' && !llm.value && !llmLoading.value) void loadLLMBackends()
 })
+
+// --- LLM backend (instance-wide; only an admin may change it) ---------------
+// Loaded lazily like the triage tab: instance config nobody looks at most
+// visits, and the payload includes a credential check.
+const llm = ref<LLMBackends | null>(null)
+const llmLoading = ref(false)
+const llmError = ref<string | null>(null)
+const llmSaved = ref(false)
+// Which surface is mid-save, so only its own controls disable. A single
+// boolean would freeze every row while one is saving.
+const llmSaving = ref<string | null>(null)
+
+async function loadLLMBackends(): Promise<void> {
+  llmLoading.value = true
+  llmError.value = null
+  try {
+    llm.value = await getLLMBackends()
+  } catch {
+    llmError.value = 'Sorry, the LLM backend settings could not be loaded. Try again.'
+  } finally {
+    llmLoading.value = false
+  }
+}
+
+async function onLLMBackendChange(surface: string, backend: LLMBackend): Promise<void> {
+  llmSaving.value = surface
+  llmError.value = null
+  llmSaved.value = false
+  try {
+    llm.value = await updateLLMBackend(surface, backend)
+    llmSaved.value = true
+  } catch (error) {
+    // The server's message is the useful one here: a 409 explains exactly what
+    // is missing (e.g. run `claude auth login` on the host). Surfacing a
+    // generic string instead would strip the one actionable detail.
+    const detail =
+      error instanceof ApiError
+        ? error.detail
+        : 'Sorry, that change could not be saved. Try again.'
+    // Re-read so the controls show what is actually stored, not the rejected
+    // selection the user just clicked — then set the error, because the reload
+    // clears it and the message would otherwise never reach the screen.
+    await loadLLMBackends()
+    llmError.value = detail
+  } finally {
+    llmSaving.value = null
+  }
+}
+
+async function onLLMBackendReset(surface: string): Promise<void> {
+  llmSaving.value = surface
+  llmError.value = null
+  llmSaved.value = false
+  try {
+    llm.value = await resetLLMBackend(surface)
+    llmSaved.value = true
+  } catch (error) {
+    llmError.value =
+      error instanceof ApiError
+        ? error.detail
+        : 'Sorry, that change could not be saved. Try again.'
+  } finally {
+    llmSaving.value = null
+  }
+}
+
+// Badge tone for the credential line: green only when nothing needs doing.
+// AppBadge takes `colour` (the GOV.UK-derived palette), NOT `variant` — passing
+// `variant` is silently ignored and every badge falls back to grey, which is
+// exactly what shipped and made "healthy" indistinguishable from a problem.
+const llmCredentialColour = computed<'green' | 'yellow' | 'red'>(() => {
+  const status = llm.value?.credentials_status
+  if (status === 'healthy') return 'green'
+  if (status === 'degraded') return 'yellow'
+  return 'red'
+})
+
+/** Sentence-case a raw status for display ("healthy" -> "Healthy"). */
+function titleCase(value: string): string {
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : value
+}
+
+/** The human label for a backend id, shared by the select and the reset button. */
+function backendLabel(backend: LLMBackend): string {
+  return backend === 'subscription' ? 'Claude subscription' : 'Metered API'
+}
 
 /** The LLM label pass status line — distinguishes WHY it is inactive. */
 const triageLabelState = computed<string>(() => {
@@ -451,6 +575,18 @@ const tabClass = (active: boolean): string =>
         Appearance
       </button>
       <button
+        id="settings-tab-ask"
+        role="tab"
+        type="button"
+        :aria-selected="tab === 'ask'"
+        :tabindex="tab === 'ask' ? 0 : -1"
+        :class="tabClass(tab === 'ask')"
+        data-testid="tab-ask-btn"
+        @click="tab = 'ask'"
+      >
+        Ask
+      </button>
+      <button
         id="settings-tab-notifications"
         role="tab"
         type="button"
@@ -473,6 +609,18 @@ const tabClass = (active: boolean): string =>
         @click="tab = 'email-triage'"
       >
         Email triage
+      </button>
+      <button
+        id="settings-tab-llm-backend"
+        role="tab"
+        type="button"
+        :aria-selected="tab === 'llm-backend'"
+        :tabindex="tab === 'llm-backend' ? 0 : -1"
+        :class="tabClass(tab === 'llm-backend')"
+        data-testid="tab-llm-backend-btn"
+        @click="tab = 'llm-backend'"
+      >
+        LLM backend
       </button>
     </div>
 
@@ -760,6 +908,49 @@ const tabClass = (active: boolean): string =>
             </button>
           </div>
         </fieldset>
+      </div>
+    </section>
+
+    <!-- Ask tab -->
+    <section id="settings-panel-ask" v-show="tab === 'ask'" role="tabpanel" data-testid="tab-ask">
+      <AppErrorSummary
+        v-if="askProfileError"
+        :errors="[{ text: askProfileError }]"
+        data-testid="ask-profile-error"
+      />
+
+      <div v-if="askProfileSaved" class="mb-6">
+        <AppBanner variant="success" data-testid="ask-profile-saved">
+          <p>Your notes have been saved. Ask uses them from your next question.</p>
+        </AppBanner>
+      </div>
+
+      <div id="settings-card-ask-profile" :class="cardClass">
+        <form data-testid="ask-profile-form" @submit.prevent="onAskProfileSubmit">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">About you</h2>
+          <p class="text-sm text-gray-500 dark:text-gray-400 mt-1">
+            Ask reads these notes with every question, as facts about you and your
+            household that the documents themselves never state: who lives with
+            you, your current address, which car is the family car, where you
+            work, when you moved. Plain sentences are fine. Ask treats them as
+            authoritative — if a document and your notes disagree, your notes win.
+            Only you can see them.
+          </p>
+          <div class="mt-5">
+            <AppTextarea
+              id="ask-profile"
+              label="Notes about you and your household"
+              :rows="8"
+              autocomplete="off"
+              :hint="`Up to ${ASK_PROFILE_MAX_CHARS} characters.`"
+              testid="ask-profile"
+              v-model="askProfile"
+            />
+          </div>
+          <div class="mt-6">
+            <AppButton type="submit" :disabled="askProfileSaving">Save changes</AppButton>
+          </div>
+        </form>
       </div>
     </section>
 
@@ -1119,6 +1310,115 @@ const tabClass = (active: boolean): string =>
               </ul>
             </li>
           </ul>
+        </div>
+      </template>
+    </section>
+
+    <!-- LLM backend tab: instance-wide, admin-editable. -->
+    <section
+      id="settings-panel-llm-backend"
+      v-show="tab === 'llm-backend'"
+      role="tabpanel"
+      data-testid="tab-llm-backend"
+    >
+      <AppErrorSummary
+        v-if="llmError"
+        :errors="[{ text: llmError }]"
+        data-testid="llm-backend-error"
+      />
+
+      <div v-if="llmSaved && !llmError" class="mb-6">
+        <AppBanner variant="success" data-testid="llm-backend-saved">
+          <p>Saved. The change applies to the next request — no restart needed.</p>
+        </AppBanner>
+      </div>
+
+      <div v-if="llmLoading" :class="cardClass" data-testid="llm-backend-loading">
+        <p class="text-sm text-gray-500 dark:text-gray-400">Loading the LLM backend settings…</p>
+      </div>
+
+      <template v-else-if="llm">
+        <div id="settings-card-llm-credentials" :class="cardClass" data-testid="llm-credentials">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">How Claude is reached</h2>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+            These settings are instance-wide, not per-user. The metered API bills per token
+            against an Anthropic API key; the Claude subscription bills nothing but spends
+            subscription quota, and carries a large fixed overhead on every call.
+          </p>
+
+          <div class="mt-4 flex flex-wrap items-center gap-3">
+            <span :class="triageLabelClass">Anthropic API key</span>
+            <AppBadge :colour="llm.api_key_configured ? 'green' : 'yellow'" data-testid="llm-api-key-status">
+              {{ llm.api_key_configured ? 'Configured' : 'Not configured' }}
+            </AppBadge>
+          </div>
+
+          <div class="mt-4 flex flex-wrap items-center gap-3">
+            <span :class="triageLabelClass">Subscription credentials</span>
+            <AppBadge :colour="llmCredentialColour" data-testid="llm-credentials-status">
+              {{ titleCase(llm.credentials_status) }}
+            </AppBadge>
+          </div>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400" data-testid="llm-credentials-detail">
+            {{ llm.credentials_detail }}
+          </p>
+        </div>
+
+        <div id="settings-card-llm-surfaces" :class="cardClass" data-testid="llm-surfaces">
+          <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100">Per-feature backend</h2>
+          <p v-if="!llm.editable" class="mt-1 text-sm text-gray-500 dark:text-gray-400" data-testid="llm-readonly-note">
+            Read-only — only an admin can change these.
+          </p>
+
+          <div
+            v-for="surface in llm.surfaces"
+            :key="surface.surface"
+            class="mt-6 border-t border-gray-200 pt-6 first:mt-4 first:border-0 first:pt-0 dark:border-gray-700"
+            :data-testid="`llm-surface-${surface.surface}`"
+          >
+            <div class="flex flex-wrap items-center gap-3">
+              <h3 class="text-sm font-semibold text-gray-800 dark:text-gray-100">{{ surface.label }}</h3>
+              <AppBadge
+                v-if="surface.overridden"
+                colour="blue"
+                :data-testid="`llm-overridden-${surface.surface}`"
+              >
+                Changed here
+              </AppBadge>
+            </div>
+            <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">{{ surface.description }}</p>
+
+            <div class="mt-3 flex flex-wrap items-end gap-3">
+              <label class="flex flex-col gap-1">
+                <span :class="triageLabelClass">Backend</span>
+                <select
+                  class="form-select"
+                  :value="surface.backend"
+                  :disabled="!llm.editable || llmSaving === surface.surface"
+                  :data-testid="`llm-backend-select-${surface.surface}`"
+                  @change="
+                    onLLMBackendChange(
+                      surface.surface,
+                      ($event.target as HTMLSelectElement).value as LLMBackend,
+                    )
+                  "
+                >
+                  <option value="api">Metered API (per-token billing)</option>
+                  <option value="subscription">Claude subscription (quota)</option>
+                </select>
+              </label>
+
+              <AppButton
+                v-if="llm.editable && surface.overridden"
+                variant="secondary"
+                :disabled="llmSaving === surface.surface"
+                :data-testid="`llm-reset-${surface.surface}`"
+                @click="onLLMBackendReset(surface.surface)"
+              >
+                Reset to {{ backendLabel(surface.default) }}
+              </AppButton>
+            </div>
+          </div>
         </div>
       </template>
     </section>

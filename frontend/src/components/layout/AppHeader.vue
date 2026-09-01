@@ -3,6 +3,7 @@ import { computed, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import ThemeToggle from './ThemeToggle.vue'
 import { AppPopover } from '@/components/app'
+import { usePageTitle } from '@/composables/usePageTitle'
 import { useAuthStore } from '@/stores/auth'
 import { useJobsStore } from '@/stores/jobs'
 
@@ -17,6 +18,9 @@ defineEmits<{
 
 const authStore = useAuthStore()
 const jobsStore = useJobsStore()
+// The page title lives here now, not at the top of the page body — see
+// composables/usePageTitle.ts. Views claim it through PageHeader.
+const { pageTitle, pageTitleId } = usePageTitle()
 const router = useRouter()
 const userMenuOpen = ref(false)
 const jobsMenuOpen = ref(false)
@@ -53,11 +57,19 @@ async function handleSignOut() {
       <div
         class="flex items-center justify-between h-16 lg:border-b border-gray-200 dark:border-gray-700/60"
       >
-        <!-- Left: hamburger (mobile) -->
-        <div class="flex">
+        <!-- Left: hamburger (mobile) + the current page's title.
+
+             The title is the page's one `<h1>`, claimed by the view's
+             PageHeader and rendered here rather than at the top of `#app-page`
+             (see composables/usePageTitle.ts). `min-w-0` + `truncate` make it
+             the element that yields when the bar is tight, so a long title
+             never pushes the search/theme/user cluster off a phone. Detail
+             views claim no title and this collapses to just the hamburger,
+             which is the pre-existing layout. -->
+        <div class="flex items-center gap-3 min-w-0">
           <button
             id="header-sidebar-toggle"
-            class="text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 lg:hidden"
+            class="shrink-0 text-gray-500 hover:text-gray-600 dark:hover:text-gray-400 lg:hidden"
             aria-controls="sidebar"
             :aria-expanded="sidebarOpen"
             @click.stop="$emit('toggle-sidebar')"
@@ -73,10 +85,19 @@ async function handleSignOut() {
               <rect x="4" y="17" width="16" height="2" />
             </svg>
           </button>
+
+          <h1
+            v-if="pageTitle"
+            :id="pageTitleId"
+            data-testid="app-bar-title"
+            class="truncate text-lg lg:text-xl font-bold text-gray-800 dark:text-gray-100"
+          >
+            {{ pageTitle }}
+          </h1>
         </div>
 
         <!-- Right: jobs indicator + search + theme toggle + user menu -->
-        <div class="flex items-center space-x-3">
+        <div class="flex shrink-0 items-center space-x-3">
           <!-- Background-jobs indicator: only present while work is in flight -->
           <div
             v-if="jobsStore.activeCount > 0"

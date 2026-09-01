@@ -17,22 +17,26 @@ Search semantics (see docs/api.md §1.3.3)
   interpret only the ``<b>`` markers.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import date
 from enum import StrEnum
 from typing import Any
 
-from sqlalchemy import Select, case, cast, func, or_, select
+from sqlalchemy import Select, case, cast, exists, func, literal, or_, select
 from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
 from library.models import (
     Document,
     DocumentChunk,
+    DocumentLabel,
     DocumentLanguage,
     DocumentSource,
     DocumentStatus,
+    Facet,
+    FacetValue,
     Kind,
     Matter,
     Project,
@@ -108,6 +112,10 @@ class DocumentFilters:
     date_from: date | None = None
     date_to: date | None = None
     review_status: ReviewStatus | None = None
+    # Facet labels AND-compose: a document holds one value per facet, so two
+    # values of the SAME facet intersect to nothing by construction, while two
+    # DIFFERENT facets are the narrowing a user means by selecting both.
+    facets: Mapping[str, str] = field(default_factory=dict)
     # Ordering for the non-search branch. Ignored when a query ``q`` is present,
     # where relevance rank always wins.
     sort: DocumentSort = DEFAULT_DOCUMENT_SORT
@@ -170,6 +178,24 @@ def filter_conditions(filters: DocumentFilters) -> list[Any]:
         conditions.append(Document.document_date <= filters.date_to)
     if filters.source is not None:
         conditions.append(Document.source == filters.source)
+    for facet_key, value_key in filters.facets.items():
+        # Aliased per iteration: two facet filters produce two EXISTS clauses
+        # over the same three tables, and unaliased references would collide.
+        label = aliased(DocumentLabel)
+        facet = aliased(Facet)
+        value = aliased(FacetValue)
+        conditions.append(
+            select(literal(1))
+            .select_from(label)
+            .join(facet, facet.id == label.facet_id)
+            .join(value, value.id == label.facet_value_id)
+            .where(
+                label.document_id == Document.id,
+                facet.key == facet_key,
+                value.key == value_key,
+            )
+            .exists()
+        )
     return conditions
 
 
@@ -426,6 +452,41 @@ async def _chunks_per_document(
     for document_id, text in (await session.execute(statement)).all():
         texts.setdefault(document_id, []).append(text)
     return texts
+
+
+@dataclass(frozen=True, slots=True)
+class SearchReach:
+    """How much of the archive a filtered content search could even see.
+
+    ``matched`` counts documents passing the caller's filters. ``unembedded``
+    counts how many of those have no chunks at all — they are invisible to the
+    vector retriever no matter what the query says, so a caller that reports
+    only ``matched`` cannot distinguish "the archive does not say this" from
+    "the documents exist but were never indexed" (finding #14).
+    """
+
+    matched: int
+    unembedded: int
+
+
+async def search_reach(session: AsyncSession, filters: DocumentFilters) -> SearchReach:
+    """Both counts in one round trip, via a conditional aggregate.
+
+    Same shape as ``structured_query.count_coverage``: ``count(*)`` for the
+    denominator and a ``FILTER``ed ``count(*)`` for the subset, so the two can
+    never disagree by being computed against different snapshots.
+    """
+    has_chunk = exists().where(DocumentChunk.document_id == Document.id)
+    statement = (
+        select(
+            func.count().label("matched"),
+            func.count().filter(~has_chunk).label("unembedded"),
+        )
+        .select_from(Document)
+        .where(*filter_conditions(filters))
+    )
+    row = (await session.execute(statement)).one()
+    return SearchReach(matched=int(row.matched), unembedded=int(row.unembedded))
 
 
 async def semantic_search(

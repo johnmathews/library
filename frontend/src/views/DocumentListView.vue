@@ -179,6 +179,7 @@ function buildFilters(
     project: state.projects.length ? state.projects : undefined,
     matter: state.matters.length ? state.matters : undefined,
     tag: state.tags.length ? state.tags : undefined,
+    facet: Object.keys(state.facets).length ? state.facets : undefined,
     language: (state.language || undefined) as DocumentLanguage | undefined,
     status: (state.status || undefined) as DocumentListItem['status'] | undefined,
     review_status: (state.review || undefined) as DocumentListItem['review_status'] | undefined,

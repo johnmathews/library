@@ -67,9 +67,6 @@ from library.notifications import (
 )
 from library.ocr import router as ocr_router
 from library.schemas import NotificationEvent
-from library.semantic_membership import auto_add_document
-from library.series_insight import refresh_series_insight
-from library.series_match import propose_authored_matches
 from library.storage import derived_dir, path_for
 from library.storage import remove as remove_stored_files
 
@@ -302,6 +299,31 @@ async def run_markdown(session: AsyncSession, document: Document) -> None:
     await maybe_repair_extraction(session, document, settings)
 
 
+def compose_context_header(document: Document) -> str:
+    """The document-identity line prepended to every chunk before embedding.
+
+    ``sender · date · kind · title``, omitting whatever the document lacks. A
+    chunk reading only ``Bedrag EUR 0,00`` otherwise carries no trace of who
+    sent it, when, or what it is, so a question naming any of those cannot
+    match it on meaning (finding #6).
+
+    Returns ``""`` for a document with none of the four — the caller must then
+    embed the bare text rather than a leading blank line.
+
+    Safe to read these attributes here: ``sender`` and ``kind`` are
+    ``lazy="selectin"`` and ``get_sessionmaker()`` sets ``expire_on_commit=
+    False``, so they survive the commits ``_record_embed_event`` performs.
+    Verified by execution, not assumed — do not "defensively" re-fetch.
+    """
+    parts = (
+        document.sender.name if document.sender else None,
+        document.document_date.isoformat() if document.document_date else None,
+        document.kind.slug if document.kind else None,
+        document.title,
+    )
+    return " · ".join(part for part in parts if part)
+
+
 async def _record_embed_event(
     session: AsyncSession, document: Document, event: str, detail: dict[str, object]
 ) -> None:
@@ -374,9 +396,13 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
         await _record_embed_event(session, document, "embedding_skipped", {"reason": "no_text"})
         return
 
+    # The header is embedded WITH each chunk but stored beside it, so retrieval
+    # matches on document identity while Ask's excerpt stays the raw passage.
+    context_header = compose_context_header(document)
     texts = [text for text, _ in chunk_records] + [text for text, _ in comment_records]
+    embed_inputs = [f"{context_header}\n\n{text}" if context_header else text for text in texts]
     try:
-        vectors = await embed_texts(texts, settings=settings)
+        vectors = await embed_texts(embed_inputs, settings=settings)
     except EmbeddingError as exc:
         await _record_embed_event(
             session, document, "embedding_failed", {"error": str(exc), "chunks": len(texts)}
@@ -396,6 +422,7 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
                 chunk_index=index,
                 page_number=page_number,
                 text=text,
+                context_header=context_header or None,
                 embedding=vector,
                 comment_id=None,
             )
@@ -409,6 +436,7 @@ async def run_embed(session: AsyncSession, document: Document) -> None:
                 chunk_index=len(chunk_records) + offset,
                 page_number=None,
                 text=text,
+                context_header=context_header or None,
                 embedding=vector,
                 comment_id=comment_id,
             )
@@ -439,9 +467,9 @@ async def _defer_best_effort(
     These deferrals are correctly best-effort — the document's own work is
     already committed and a queue hiccup must never strand it in ``failed``. But
     a ``logger.warning`` is not a record: logs rotate, nobody greps them, and
-    the *observable* result was a document that quietly never got its thumbnail,
-    its matter classification or its Smart Group membership, with nothing on the
-    document to say so. The retry policy does not help here — the job never got
+    the *observable* result was a document that quietly never got its thumbnail
+    or its matter classification — the two deferrals that take this path — with
+    nothing on the document to say so. The retry policy does not help here — the job never got
     queued, so there is nothing to retry.
 
     So the failure is also written as a ``job_defer_failed`` ingestion event,
@@ -592,39 +620,6 @@ async def advance_pipeline(
                 document.id,
                 needs_review=document.review_status == ReviewStatus.NEEDS_REVIEW,
                 document_url_base=get_settings().public_base_url,
-            )
-            # This document may have joined (or grown) a recurring series; refresh
-            # its cached LLM description out of band. Best-effort: a queue hiccup
-            # must never strand an already-indexed document.
-            sender_id, kind_id = document.sender_id, document.kind_id
-            if sender_id is not None and kind_id is not None:
-                await _defer_best_effort(
-                    session,
-                    document.id,
-                    "series insight",
-                    # Bound to locals, not read off `document` inside the lambda:
-                    # the guard above cannot narrow an attribute across a nested
-                    # scope, and the lambda would otherwise re-read it at call time.
-                    lambda: generate_series_insight.defer_async(
-                        sender_id=sender_id, kind_id=kind_id
-                    ),
-                )
-                # It may also match an authored series' signature: propose it for
-                # review (never a silent membership). Best-effort, same as above.
-                await _defer_best_effort(
-                    session,
-                    document.id,
-                    "series autocontinue",
-                    lambda: evaluate_series_autocontinue.defer_async(document_id=document.id),
-                )
-            # Smart Groups: silently add this document to any semantic group it
-            # matches. Unlike the two blocks above, this doesn't require a
-            # sender or kind. Best-effort, same as above.
-            await _defer_best_effort(
-                session,
-                document.id,
-                "semantic-group eval",
-                lambda: evaluate_semantic_groups.defer_async(document_id=document.id),
             )
         except Exception as exc:
             failed_in = document.status
@@ -797,41 +792,6 @@ async def markdown_document(document_id: int) -> None:
         await run_embed(session, document)
 
 
-@job_app.task(name="library.jobs.generate_series_insight", retry=TRANSIENT_RETRY)
-async def generate_series_insight(sender_id: int, kind_id: int) -> None:
-    """Background task: (re-)generate the cached LLM description for one series.
-
-    Deferred when a document reaches ``indexed`` with both a sender and a kind.
-    Best-effort and idempotent (upserts the single ``series_insights`` row);
-    skips quietly when the series is too small or extraction is disabled.
-    """
-    async with get_sessionmaker()() as session:
-        await refresh_series_insight(session, get_settings(), sender_id, kind_id)
-
-
-@job_app.task(name="library.jobs.evaluate_series_autocontinue", retry=TRANSIENT_RETRY)
-async def evaluate_series_autocontinue(document_id: int) -> None:
-    """Background task: propose an indexed document for any authored series it matches.
-
-    Deferred when a document reaches ``indexed`` with both a sender and a kind.
-    PROPOSE-FOR-REVIEW: records pending suggestions only, never adds a member.
-    Best-effort and idempotent (skips docs already suggested/dismissed/member).
-    """
-    async with get_sessionmaker()() as session:
-        await propose_authored_matches(session, get_settings(), document_id)
-
-
-@job_app.task(name="library.jobs.evaluate_semantic_groups", retry=TRANSIENT_RETRY)
-async def evaluate_semantic_groups(document_id: int) -> None:
-    """Background task: auto-add an indexed document to any Smart Group it matches.
-
-    Deferred when a document reaches ``indexed``. Silent membership by design;
-    the tile's "added automatically" affordance keeps it prunable. Best-effort.
-    """
-    async with get_sessionmaker()() as session:
-        await auto_add_document(session, get_settings(), document_id)
-
-
 def _every_n_minutes_cron(minutes: int) -> str:
     """A cron expression firing every ``minutes`` minutes.
 
@@ -935,8 +895,8 @@ async def purge_deleted_documents(timestamp: int) -> None:
 
     Selects documents whose ``deleted_at`` is older than
     ``deleted_retention_days``, deletes their rows (chunks, comments, pages,
-    events, note versions, and series/tag/project links all cascade at the DB
-    level), then removes their on-disk originals and derived artifacts. Rows are
+    events, note versions, spend lines, and tag/project/matter links all cascade
+    at the DB level), then removes their on-disk originals and derived artifacts. Rows are
     committed gone *before* files are unlinked, so an unlink failure leaves at
     worst an orphaned file (harmless, reclaimable) rather than a live row whose
     file has vanished. Kill switch: an instant no-op unless

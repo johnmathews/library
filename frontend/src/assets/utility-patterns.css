@@ -407,3 +407,38 @@ input[type='search']::-webkit-search-results-decoration {
   margin: auto;
   border-radius: 0.5rem; /* rounded-lg — a soft edge to match the app's cards */
 }
+
+/*
+ * Drill-through panel (SpendingDrillPanel.vue, spec §4.6/§4.13). Same native
+ * <dialog> + showModal() story as the two rules above, but this dialog is
+ * never centred: it pins to an edge of the viewport in one of two fixed
+ * presentations, chosen by the `data-presentation` attribute the component
+ * sets from its `sheet` prop (a decision made by the workspace's own
+ * container query, not by this dialog, which has no ambient container to
+ * query — see the component's own comment). Preflight's `margin: 0` is left
+ * alone here, unlike the two rules above, because a pinned dialog is never
+ * auto-centred in the first place.
+ */
+.app-drill-panel {
+  padding: 0;
+  max-width: none;
+  max-height: none;
+  border: none;
+}
+
+.app-drill-panel[data-presentation='panel'] {
+  position: fixed;
+  inset: 0 0 0 auto;
+  width: min(28rem, 100vw);
+  height: 100vh;
+  border-radius: 0;
+}
+
+.app-drill-panel[data-presentation='sheet'] {
+  position: fixed;
+  inset: auto 0 0 0;
+  width: 100vw;
+  max-height: 70vh;
+  border-top-left-radius: 0.75rem;
+  border-top-right-radius: 0.75rem;
+}

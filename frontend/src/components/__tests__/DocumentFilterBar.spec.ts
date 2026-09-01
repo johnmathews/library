@@ -16,6 +16,7 @@ const EMPTY: AppliedFilters = {
   projects: [],
   matters: [],
   tags: [],
+  facets: {},
   language: '',
   status: '',
   dateFrom: '',
@@ -57,6 +58,20 @@ const MATTERS = [
   { slug: 'estate', name: 'Estate', document_count: 9 },
   { slug: 'dormant', name: 'Dormant', document_count: 0 },
 ]
+const FACETS = {
+  facets: [
+    {
+      key: 'category',
+      label: 'Category',
+      ordinal: 0,
+      values: [
+        { key: 'software', label: 'Software', parent_id: null, aliases: [] },
+        { key: 'energy', label: 'Energy', parent_id: null, aliases: [] },
+      ],
+    },
+    { key: 'vehicle', label: 'Vehicle', ordinal: 1, values: [] },
+  ],
+}
 
 function mountBar(applied: AppliedFilters = EMPTY): VueWrapper {
   return mount(DocumentFilterBar, {
@@ -81,6 +96,7 @@ describe('DocumentFilterBar', () => {
       if (url === '/api/tags') return Promise.resolve(jsonResponse(TAGS))
       if (url === '/api/projects') return Promise.resolve(jsonResponse(PROJECTS))
       if (url === '/api/matters') return Promise.resolve(jsonResponse(MATTERS))
+      if (url === '/api/facets') return Promise.resolve(jsonResponse(FACETS))
       return Promise.resolve(jsonResponse({ detail: `unexpected ${url}` }, 500))
     })
   })
@@ -246,6 +262,36 @@ describe('DocumentFilterBar', () => {
     await w.get('[data-testid="pill-tag"]').get('input[value="energie"]').setValue(true)
     await w.get('[data-testid="pill-tag"]').get('input[value="wonen"]').setValue(true)
     expect(w.emitted('apply')!.at(-1)![0]).toEqual({ tag: ['energie', 'wonen'] })
+  })
+
+  it('renders the facet select from the fetched vocabulary and initialises it from applied.facets', async () => {
+    const w = mountBar({ ...EMPTY, facets: { category: 'software' } })
+    await flushPromises() // GET /api/facets
+    const select = w.get('[data-testid="facet-select-category"]')
+    expect((select.element as HTMLSelectElement).value).toBe('software')
+    // vehicle ships with no values and must not render a select.
+    expect(w.find('[data-testid="facet-select-vehicle"]').exists()).toBe(false)
+  })
+
+  it('selecting a facet value emits apply with facet=key:value', async () => {
+    const w = mountBar()
+    await flushPromises() // GET /api/facets
+    await w.get('[data-testid="facet-select-category"]').setValue('software')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ facet: ['category:software'] })
+  })
+
+  it('choosing the blank option on an already-selected facet emits apply without it', async () => {
+    const w = mountBar({ ...EMPTY, facets: { category: 'software' } })
+    await flushPromises()
+    await w.get('[data-testid="facet-select-category"]').setValue('')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({})
+  })
+
+  it('a facet selection survives alongside another active filter (both round-trip)', async () => {
+    const w = mountBar({ ...EMPTY, kind: 'invoice', facets: { category: 'software' } })
+    await flushPromises()
+    await w.get('[data-testid="facet-select-category"]').setValue('energy')
+    expect(w.emitted('apply')!.at(-1)![0]).toEqual({ kind: 'invoice', facet: ['category:energy'] })
   })
 
   it('renders a removable chip per active filter and emits apply without that filter on remove', async () => {

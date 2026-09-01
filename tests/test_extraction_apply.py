@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 from procrastinate.testing import InMemoryConnector
-from sqlalchemy import func, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
     AsyncSession,
@@ -35,15 +35,19 @@ from library.extraction.extractor import (
     ExtractionOutcome,
 )
 from library.extraction.schema import ExtractedMetadata
+from library.facets.apply import LabellingOutcome
 from library.jobs import advance_pipeline, extract_document, job_app
 from library.models import (
     Document,
     DocumentLanguage,
     DocumentSource,
     DocumentStatus,
+    Facet,
+    FacetValueSuggestion,
     IngestionEvent,
     Recipient,
     Sender,
+    SpendLine,
     Tag,
     User,
 )
@@ -240,6 +244,184 @@ async def test_dutch_invoice_outcome_populates_metadata(
     assert completed[0]["model"] == "claude-haiku-4-5"
     assert completed[0]["cost_usd"] == pytest.approx(0.002)
     assert completed[0]["input_tokens"] == 1_000
+
+
+async def test_an_allocated_amount_survives_re_extraction_and_the_skip_is_reported(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Spend lines outrank a re-read of the page, and the skip is on the record.
+
+    Migration 0035's mirror trigger refuses an ``amount_total`` write that would
+    orphan an allocation. On the API path that becomes a named 400; here there
+    is nobody to tell, and the refusal would arrive at the commit that writes
+    ``extraction_completed`` — failing the whole document, and losing a good
+    extraction, over one field it had no business changing.
+
+    So the amount is treated exactly like a user-edited field: left alone. The
+    part that is not optional is that it is *reported* — silence here would be
+    the same defect in a different costume — hence ``skipped_fields``.
+    """
+    patch_extract(monkeypatch, make_outcome(make_metadata(amount_total="123.45")))
+    document_id = await make_document(
+        session_factory, "apply-allocated-amount", amount_total=Decimal("100.00")
+    )
+    async with session_factory() as session:
+        session.add(SpendLine(document_id=document_id, amount=Decimal("100.00")))
+        await session.commit()
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.amount_total == Decimal("100.00"), "the allocation's amount stood"
+        extraction = document.extra["extraction"]
+        assert extraction["skipped_fields"] == ["amount_total"]
+        assert "amount_total" not in extraction["fields_set"]
+        # The rest of the extraction still landed — the point of skipping the
+        # one field rather than letting the job die on it.
+        assert document.title == "Energierekening mei 2026"
+
+    events = await get_events(session_factory, document_id)
+    assert [event for event, _ in events] == ["extraction_completed"]
+
+
+async def test_an_unallocated_amount_is_still_overwritten_and_nothing_is_reported(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The control. A skip that fired for every document would satisfy the test
+    above while quietly stopping re-extraction from ever correcting an amount."""
+    patch_extract(monkeypatch, make_outcome(make_metadata(amount_total="123.45")))
+    document_id = await make_document(
+        session_factory, "apply-unallocated-amount", amount_total=Decimal("100.00")
+    )
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.amount_total == Decimal("123.45")
+        assert "skipped_fields" not in document.extra["extraction"]
+
+
+async def test_apply_extraction_calls_the_facet_labeller(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The success path hands the freshly-persisted document to the labeller.
+
+    ``conftest._facet_labelling_disabled_by_default`` makes this a no-op for
+    every other test in the suite; here we monkeypatch it back to a stub (the
+    same technique ``patch_extract`` uses for ``extract``) to prove
+    ``apply_extraction`` actually calls it, with the document's own id, after
+    the extracted fields have already been written.
+    """
+    calls: list[int] = []
+
+    async def fake_label_and_apply(
+        session: AsyncSession,
+        settings: Settings,
+        document_id: int,
+        *,
+        client: Any = None,
+        backend: str = "api",
+    ) -> LabellingOutcome:
+        # The document must already carry its extracted fields by the time the
+        # labeller runs, or it would be labelling on stale/empty data.
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.title == "Energierekening mei 2026"
+        calls.append(document_id)
+        return LabellingOutcome(
+            document_id=document_id, applied={"category": "invoice"}, unknown=(), suggested=()
+        )
+
+    monkeypatch.setattr(apply_module, "label_and_apply", fake_label_and_apply)
+    patch_extract(monkeypatch, make_outcome(make_metadata()))
+    document_id = await make_document(session_factory, "apply-facet-hook")
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    assert calls == [document_id]
+
+
+async def test_facet_labelling_failure_never_fails_the_document(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A labelling error is logged and swallowed; extraction still completes.
+
+    The failure injected here is a **database** error, not a ``RuntimeError``:
+    an over-long ``suggested_label`` (the column is VARCHAR(255)) is the way
+    this hook actually breaks in production, and it is the only kind of failure
+    that tests the guard. A pure-Python exception never touches the
+    transaction, so a try/except alone passes it whether or not the transaction
+    survives; a statement-level Postgres error aborts the transaction, and the
+    very next statement — ``_record_event``, which is also what commits — then
+    raises InFailedSqlTransaction and the extracted metadata is lost.
+    """
+    facet_key = f"c1-{uuid.uuid4().hex[:8]}"
+
+    async def broken_label_and_apply(
+        session: AsyncSession,
+        settings: Settings,
+        document_id: int,
+        *,
+        client: Any = None,
+        backend: str = "api",
+    ) -> None:
+        facet = Facet(key=facet_key, label="C1")
+        session.add(facet)
+        await session.flush()
+        await session.execute(
+            insert(FacetValueSuggestion).values(
+                facet_id=facet.id,
+                document_id=document_id,
+                suggested_label="x" * 400,  # VARCHAR(255): StringDataRightTruncation
+                reason="an over-long suggestion the model returned",
+                state="pending",
+            )
+        )
+
+    monkeypatch.setattr(apply_module, "label_and_apply", broken_label_and_apply)
+    patch_extract(monkeypatch, make_outcome(make_metadata()))
+    document_id = await make_document(session_factory, "apply-facet-hook-failure")
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        # The extracted fields still landed — the labelling failure did not
+        # roll anything back or otherwise disturb the success path.
+        assert document.title == "Energierekening mei 2026"
+        # The savepoint rolled back the labelling's own writes, and only those.
+        facet_id = (
+            await session.execute(select(Facet.id).where(Facet.key == facet_key))
+        ).scalar_one_or_none()
+        assert facet_id is None
+
+    events = await get_events(session_factory, document_id)
+    completed = [detail for event, detail in events if event == "extraction_completed"]
+    assert len(completed) == 1
 
 
 async def test_sender_upsert_is_case_insensitive(

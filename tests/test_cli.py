@@ -4,8 +4,11 @@ import asyncio
 import datetime
 import hashlib
 import io
+import json
+import re
 import uuid
 from collections.abc import Iterator
+from pathlib import Path
 
 import pikepdf
 import pytest
@@ -16,6 +19,8 @@ from sqlalchemy.pool import NullPool
 from typer.testing import CliRunner
 
 import library.cli as cli_module
+from library.ask.recall_eval import RecallVerdict, score_recall
+from library.ask.recall_scenarios import CORPUS
 from library.auth.passwords import verify_password
 from library.cli import app
 from library.config import get_settings
@@ -30,6 +35,7 @@ from library.models import (
     DocumentStatus,
     IngestionEvent,
     Kind,
+    Recipient,
     ReviewStatus,
 )
 from library.storage import path_for, store
@@ -101,6 +107,34 @@ def cli_database_url(api_database_url: str, monkeypatch: pytest.MonkeyPatch) -> 
     get_settings.cache_clear()
     yield api_database_url
     get_settings.cache_clear()
+
+
+def test_redact_database_url_blanks_a_present_password() -> None:
+    redacted = cli_module._redact_database_url(
+        "postgresql+asyncpg://library:secret@db:5432/library"
+    )
+    assert "secret" not in redacted
+    assert redacted == "postgresql+asyncpg://library:***@db:5432/library"
+
+
+def test_redact_database_url_tolerates_no_password() -> None:
+    redacted = cli_module._redact_database_url("postgresql+asyncpg://library@db:5432/library")
+    assert redacted == "postgresql+asyncpg://library@db:5432/library"
+
+
+def test_redact_database_url_does_not_leak_a_password_containing_an_unencoded_at() -> None:
+    """The regex this replaced anchored on the first unencoded '@', so a
+    password containing one leaked its own tail: 'lib:p@ss@db/library'
+    redacted to '...lib:***@ss@db/library'. `_redact_database_url` uses
+    `urlsplit`'s `rpartition("@")` (the LAST '@' in the netloc, per RFC 3986)
+    instead, so the whole password is blanked regardless of what characters
+    it contains. (`sqlalchemy.engine.make_url` was tried first and rejected:
+    its own URL parser has the identical "first @" bug, verified by executing
+    it against this exact string — see the function's docstring.)"""
+    redacted = cli_module._redact_database_url("postgresql+asyncpg://lib:p@ss@db/library")
+    assert "p@ss" not in redacted
+    assert "ss@db" not in redacted
+    assert redacted == "postgresql+asyncpg://lib:***@db/library"
 
 
 def unique_username() -> str:
@@ -1121,3 +1155,289 @@ def test_sweep_encrypted_apply_skips_collision(
     # The locked document is untouched (still the encrypted sha).
     rows = fetch_all(cli_data_dir, "SELECT sha256 FROM documents WHERE id = :id", id=document_id)
     assert rows == [(old_sha,)]
+
+
+# CSI sequences (colour/style) and OSC sequences (hyperlinks), which is
+# everything rich emits into help output.
+_ANSI = re.compile(r"\x1b(?:\[[0-9;?]*[ -/]*[@-~]|\][^\x07\x1b]*(?:\x07|\x1b\\))")
+
+
+def _unstyled(output: str) -> str:
+    """Strip ANSI escapes so an option name is one contiguous run of text.
+
+    Typer renders ``--help`` through rich, and rich's ``OptionHighlighter``
+    matches BOTH of its patterns on the same token: ``--only`` as an option and
+    ``-only`` as a short switch. The two spans overlap, so rich closes and
+    reopens a style between the hyphens and the rendered bytes read
+    ``-\x1b[...m-only``. A plain ``"--only" in output`` check therefore depends
+    on whether rich decided to style at all — which is a property of the
+    environment, not of the CLI.
+    """
+    return _ANSI.sub("", output)
+
+
+def test_unstyled_strips_the_escapes_rich_emits() -> None:
+    """`_unstyled` removes CSI styling and OSC hyperlinks, and nothing else."""
+    assert _unstyled("\x1b[1m--only\x1b[0m") == "--only"
+    assert _unstyled("-\x1b[36m-only\x1b[0m TEXT") == "--only TEXT"
+    assert _unstyled("\x1b]8;;http://x\x1b\\link\x1b]8;;\x1b\\") == "link"
+    assert _unstyled("plain --only text") == "plain --only text"
+
+
+def test_eval_recall_help_lists_ask_and_write_baseline() -> None:
+    """``--help`` lists every flag, whatever rich decides about styling.
+
+    Asserted against de-styled text because rich's ``OptionHighlighter`` matches
+    both of its patterns on the same token — ``--only`` as a long option and
+    ``-only`` as a short switch — and the overlapping spans put an escape
+    sequence between the two hyphens when styling is on. Checking the raw output
+    for ``"--only"`` therefore tests rich's environment detection rather than the
+    CLI, which is how the first version of this test passed here and failed on CI.
+    """
+    result = runner.invoke(app, ["eval-recall", "--help"])
+    assert result.exit_code == 0, result.output
+    output = _unstyled(result.output)
+    assert "--only" in output
+    assert "--ask" in output
+    assert "--write-baseline" in output
+
+
+def test_eval_recall_help_lists_its_flags_when_rich_is_styling(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same, with styling forced on — the rendering CI actually produces.
+
+    Deliberately one-directional. Forcing styling ON is reliable; forcing it OFF
+    is not, because ``NO_COLOR`` suppresses colour while rich still emits bold
+    and dim, so there is no portable way to demand escape-free output. This test
+    asserts styling happened and that the flags survive stripping; the test above
+    covers whatever the ambient environment does.
+    """
+    monkeypatch.setenv("FORCE_COLOR", "1")
+    monkeypatch.delenv("NO_COLOR", raising=False)
+    # rich refuses to style a dumb terminal even under FORCE_COLOR, and CI
+    # runners vary in what they set TERM to, so pin all three inputs rather
+    # than leaving the assertion below at the mercy of the ambient value.
+    monkeypatch.setenv("TERM", "xterm-256color")
+
+    result = runner.invoke(app, ["eval-recall", "--help"])
+    assert result.exit_code == 0, result.output
+    assert "\x1b[" in result.output, "FORCE_COLOR did not make rich style its output"
+
+    output = _unstyled(result.output)
+    assert "--only" in output
+    assert "--ask" in output
+    assert "--write-baseline" in output
+
+
+def test_eval_recall_ask_with_write_baseline_exits_without_seeding(
+    cli_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--ask and --write-baseline measure different things (Ask citations vs raw
+    retrieval); combining them must be refused before any seeding happens, not
+    merely before the baseline file is overwritten."""
+
+    async def _fail_if_called(session: object) -> dict[str, int]:
+        raise AssertionError("_seed_corpus must not run when the guard rejects the flags")
+
+    monkeypatch.setattr(cli_module, "_seed_corpus", _fail_if_called)
+
+    result = runner.invoke(app, ["eval-recall", "--ask", "--write-baseline"])
+    assert result.exit_code == 1, result.output
+    assert "--write-baseline records retrieval recall; drop --ask" in result.output
+
+
+def test_eval_recall_only_with_write_baseline_exits_without_seeding(
+    cli_database_url: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """--write-baseline writes ``{v.case: v.recall for v in verdicts}`` over
+    the FILTERED case list, so combining it with --only would silently
+    clobber every other case's recorded recall with nothing — must be
+    refused before any seeding happens, same as the --ask guard above."""
+
+    async def _fail_if_called(session: object) -> dict[str, int]:
+        raise AssertionError("_seed_corpus must not run when the guard rejects the flags")
+
+    monkeypatch.setattr(cli_module, "_seed_corpus", _fail_if_called)
+
+    result = runner.invoke(
+        app, ["eval-recall", "--only", "sender-named-bare-chunk", "--write-baseline"]
+    )
+    assert result.exit_code == 1, result.output
+    assert "--write-baseline must cover every case; drop --only" in result.output
+
+
+def _passing_verdict(case: str = "control-unique-term") -> RecallVerdict:
+    return score_recall(case, [1], [1], k=10)
+
+
+def test_report_recall_records_the_archive_it_measured_against(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The baseline carries the haystack size, not just the scores.
+
+    Every case scores over the whole documents table, so the same corpus is
+    much harder on a populated archive than on a fresh CI stack. Without this,
+    a delta between the two reads as a retrieval change.
+    """
+    baseline = tmp_path / "recall-baseline.json"
+    monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
+
+    cli_module._report_recall([_passing_verdict()], write_baseline=True, archive_documents=259)
+
+    recorded = json.loads(baseline.read_text())
+    assert recorded["measured_against"]["archive_documents"] == 259
+    assert recorded["measured_against"]["corpus_documents"] == len(CORPUS)
+    # Counts only — this file is committed to a public repository.
+    assert "database" not in recorded["measured_against"]
+    assert "@" not in baseline.read_text()
+
+
+def test_report_recall_warns_when_the_baseline_archive_differs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline = tmp_path / "recall-baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "mean": 1.0,
+                "cases": {"control-unique-term": 1.0},
+                "measured_against": {"archive_documents": 259, "corpus_documents": 90},
+            }
+        )
+    )
+    monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
+
+    cli_module._report_recall([_passing_verdict()], write_baseline=False, archive_documents=3)
+
+    output = capsys.readouterr().out
+    assert "WARNING: baseline was measured against 259 archive documents" in output
+    assert "this run against 3" in output
+
+
+def test_report_recall_is_quiet_when_the_archive_only_drifted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Ordinary archive growth must not cry wolf, or the warning gets ignored."""
+    baseline = tmp_path / "recall-baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "mean": 1.0,
+                "cases": {"control-unique-term": 1.0},
+                "measured_against": {"archive_documents": 259, "corpus_documents": 90},
+            }
+        )
+    )
+    monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
+
+    cli_module._report_recall([_passing_verdict()], write_baseline=False, archive_documents=272)
+
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_report_recall_notes_a_baseline_recorded_before_provenance(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    baseline = tmp_path / "recall-baseline.json"
+    baseline.write_text(json.dumps({"mean": 1.0, "cases": {"control-unique-term": 1.0}}))
+    monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
+
+    cli_module._report_recall([_passing_verdict()], write_baseline=False, archive_documents=259)
+
+    assert "predates provenance" in capsys.readouterr().out
+
+
+def _seed_recipient_with_document(
+    database_url: str, name: str, *, user_id: int | None = None
+) -> tuple[int, int]:
+    """Insert a recipient (optionally user-linked) and one document addressed to it.
+
+    Returns ``(recipient_id, document_id)``.
+    """
+
+    async def _insert() -> tuple[int, int]:
+        engine = create_async_engine(database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                recipient = Recipient(name=name, user_id=user_id)
+                session.add(recipient)
+                await session.flush()
+                document = Document(
+                    sha256=uuid.uuid4().hex * 2,
+                    mime_type="application/pdf",
+                    source=DocumentSource.UPLOAD,
+                    status=DocumentStatus.INDEXED,
+                    recipient_id=recipient.id,
+                    title=f"recipient-cli:{name}:{uuid.uuid4()}",
+                )
+                session.add(document)
+                await session.commit()
+                return recipient.id, document.id
+        finally:
+            await engine.dispose()
+
+    return asyncio.run(_insert())
+
+
+def test_recipients_merge_moves_documents_via_cli(cli_database_url: str) -> None:
+    tag = uuid.uuid4().hex[:6].upper()
+    keep, keep_doc = _seed_recipient_with_document(cli_database_url, f"{tag} A")
+    drop, drop_doc = _seed_recipient_with_document(cli_database_url, f"{tag} B")
+
+    result = runner.invoke(app, ["recipients", "--merge", f"{keep}:{drop}"])
+    assert result.exit_code == 0, result.output
+    assert "moved 1 documents" in result.output
+
+    rows = fetch_all(
+        cli_database_url,
+        "SELECT recipient_id FROM documents WHERE id IN (:a, :b)",
+        a=keep_doc,
+        b=drop_doc,
+    )
+    assert rows == [(keep,), (keep,)]
+    assert fetch_all(cli_database_url, "SELECT 1 FROM recipients WHERE id = :d", d=drop) == []
+
+
+def test_recipients_merge_malformed_argument_errors_cleanly(cli_database_url: str) -> None:
+    result = runner.invoke(app, ["recipients", "--merge", "not-an-int:also-not"])
+    assert result.exit_code != 0
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    assert "error:" in result.output
+
+
+def test_recipients_merge_missing_drops_errors_cleanly(cli_database_url: str) -> None:
+    result = runner.invoke(app, ["recipients", "--merge", "1"])
+    assert result.exit_code != 0
+    assert "KEEP_ID:DROP_ID" in result.output
+
+
+def test_recipients_merge_conflicting_user_links_errors_and_exits_nonzero(
+    cli_database_url: str,
+) -> None:
+    user_a = create_user(cli_database_url)
+    user_b = create_user(cli_database_url)
+    tag = uuid.uuid4().hex[:6].upper()
+    keep, _ = _seed_recipient_with_document(cli_database_url, f"{tag} A", user_id=user_a.id)
+    drop, _ = _seed_recipient_with_document(cli_database_url, f"{tag} B", user_id=user_b.id)
+
+    result = runner.invoke(app, ["recipients", "--merge", f"{keep}:{drop}"])
+    assert result.exit_code != 0
+    assert "error:" in result.output
+    assert fetch_all(cli_database_url, "SELECT 1 FROM recipients WHERE id = :d", d=drop) == [(1,)]
+
+
+def test_recipients_list_shows_duplicate_groups(cli_database_url: str) -> None:
+    tag = uuid.uuid4().hex[:6].upper()
+    _seed_recipient_with_document(cli_database_url, f"{tag} Smith")
+    _seed_recipient_with_document(cli_database_url, f"{tag}. Smith")
+
+    result = runner.invoke(app, ["recipients", "--list"])
+    assert result.exit_code == 0, result.output
+    assert tag.lower() in result.output.lower()
+
+
+def test_recipients_no_flags_prints_hint_only(cli_database_url: str) -> None:
+    result = runner.invoke(app, ["recipients"])
+    assert result.exit_code == 0, result.output
+    assert result.output.strip() == "(pass --list or --merge)"

@@ -70,7 +70,9 @@ const newHint = ref('')
 const createError = ref<string | null>(null)
 const creating = ref(false)
 
-// Stable-identity list for AppErrorSummary (see ChartsView for the rationale).
+// A computed keeps this array's reference stable while createError is
+// unchanged, so AppErrorSummary's watch(() => props.errors) only re-focuses
+// the alert when the error message actually changes.
 const createErrorItems = computed<ErrorSummaryItem[]>(() =>
   createError.value ? [{ text: createError.value }] : [],
 )
@@ -179,7 +181,24 @@ async function confirmDelete(slug: string): Promise<void> {
 
 <template>
   <div id="matters-view">
-    <PageHeader title="Matters">
+    <PageHeader
+      title="Matters"
+      description="A matter is an evergreen subject — car insurance, health insurance, subscriptions — that documents are filed into automatically, so everything on one topic stays together."
+    >
+      <!-- One lone checkbox does not deserve a full-width band of its own, so
+           it rides in the header toolbar beside "+ New matter". -->
+      <template #controls>
+        <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300">
+          <input
+            v-model="includeArchived"
+            type="checkbox"
+            class="form-checkbox"
+            data-testid="matter-archived-toggle"
+            @change="load"
+          />
+          Show archived
+        </label>
+      </template>
       <template #actions>
         <AppButton
           v-if="isAdmin && !showCreate"
@@ -240,17 +259,6 @@ async function confirmDelete(slug: string): Promise<void> {
         </AppButton>
       </div>
     </form>
-
-    <label class="inline-flex items-center gap-2 text-sm text-gray-600 dark:text-gray-300 mb-4">
-      <input
-        v-model="includeArchived"
-        type="checkbox"
-        class="form-checkbox"
-        data-testid="matter-archived-toggle"
-        @change="load"
-      />
-      Show archived
-    </label>
 
     <p v-if="loading" data-testid="matters-loading" class="text-gray-500 dark:text-gray-400">
       Loading…

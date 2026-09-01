@@ -7,6 +7,7 @@
  */
 
 import { ApiError, apiFetch, getCookie, CSRF_COOKIE, CSRF_HEADER } from './client'
+import { facetQueryParams } from './facets'
 
 export type DocumentLanguage = 'nld' | 'eng' | 'mixed' | 'unknown'
 export type DocumentStatus = 'received' | 'ocr' | 'extract' | 'indexed' | 'failed'
@@ -188,6 +189,8 @@ export interface DocumentFilters {
   matter?: string[]
   /** Repeatable: every slug must match (AND). */
   tag?: string[]
+  /** `facet=key:value`; every entry must match (AND) — see docs/facets.md. */
+  facet?: Record<string, string>
   language?: DocumentLanguage
   status?: DocumentStatus
   date_from?: string
@@ -291,18 +294,20 @@ export const DOCUMENT_STATUSES: readonly { value: DocumentStatus; text: string }
 
 /**
  * Serialise filters to a query string. Built by hand (not apiFetch's
- * `query` option) because `tag`, `project` and `matter` repeat: ?tag=a&tag=b
- * ANDs both; ?project=a&project=b and ?matter=a&matter=b OR both.
+ * `query` option) because `tag`, `project`, `matter` and `facet` repeat:
+ * ?tag=a&tag=b ANDs both; ?project=a&project=b and ?matter=a&matter=b OR
+ * both; ?facet=k:v&facet=k2:v2 ANDs across keys (docs/facets.md).
  */
 export function documentQueryString(filters: DocumentFilters): string {
   const params = new URLSearchParams()
-  const { tag, project, matter, ...scalars } = filters
+  const { tag, project, matter, facet, ...scalars } = filters
   for (const [key, value] of Object.entries(scalars)) {
     if (value !== undefined && value !== '') params.set(key, String(value))
   }
   for (const slug of tag ?? []) params.append('tag', slug)
   for (const slug of project ?? []) params.append('project', slug)
   for (const slug of matter ?? []) params.append('matter', slug)
+  for (const [key, value] of facetQueryParams(facet ?? {})) params.append(key, value)
   return params.toString()
 }
 
@@ -552,318 +557,6 @@ export function uploadDocument(
     form.append('file', file, file.name)
     xhr.send(form)
   })
-}
-
-/** One point on a series trend; carries enough metadata for a citation link. */
-export interface SeriesPoint {
-  date: string
-  amount: string
-  document_id: number
-  title?: string | null
-  /** Authored series only: how this member joined (Smart Groups). Present only
-   *  when the backend has an origin recorded for the point's document. */
-  origin?: 'manual' | 'accepted_suggestion' | 'auto'
-}
-
-/** Body of GET /api/documents/{id}/series (optional blocks omitted when N/A). */
-export interface DocumentSeries {
-  status: 'ok' | 'insufficient'
-  sender: string | null
-  kind: string | null
-  sender_id?: number | null
-  kind_id?: number | null
-  /** Present only for authored (user-curated) series (W14). When set the tile
-   *  edits this series via the authored endpoints (PATCH) rather than the
-   *  emergent meta-override endpoint. */
-  authored_id?: number | null
-  currency: string | null
-  other_currencies: string[]
-  cadence: 'monthly' | 'quarterly' | 'yearly' | 'irregular'
-  count: number
-  document_ids: number[]
-  /** User title override (SeriesMetaOverride); absent unless set. The chart tile
-   *  prefers it over the derived `sender · cadence series` heading. */
-  title?: string | null
-  /** Cached LLM prose summary, or a user description override when set. */
-  description?: string | null
-  mean?: string
-  median?: string
-  stdev?: string
-  min?: string
-  max?: string
-  reference?: {
-    value: string
-    delta: string
-    vs_median_pct: string
-    z_score: number | null
-    verdict: 'higher' | 'typical' | 'lower'
-  }
-  trend?: { direction: 'rising' | 'falling' | 'flat'; change_pct: string }
-  year_over_year?: { prior_value: string; change_pct: string; document_id: number }
-  points?: SeriesPoint[]
-  /** Authored series only: the dominant (sender, kind, currency) signature of the
-   *  current membership, or null for an empty series. Drives the smart features. */
-  signature?: SeriesSignature | null
-  /** Authored series only: how many non-member documents match the signature and
-   *  are awaiting review (propose-for-review auto-continue). */
-  suggestion_count?: number
-  /** Authored series only: how many current members break the signature. */
-  odd_one_out_count?: number
-  /** Authored series only: 'manual' (curated by hand) or 'semantic' (Smart
-   *  Group — seeded then auto-populated by embedding similarity). Absent for
-   *  emergent series, which have no mode concept. */
-  mode?: 'manual' | 'semantic'
-  /** Authored series only: how many current members were added by the
-   *  semantic backfill sweep (origin === 'auto'), driving the auto-added badge. */
-  auto_added_count?: number
-}
-
-/** The mechanical identity of an authored series (backend `SeriesSignature`). */
-export interface SeriesSignature {
-  sender_id: number | null
-  kind_id: number | null
-  currency: string | null
-  member_count: number
-  dominant_count: number
-  dominance: number
-}
-
-/** GET /api/documents/{id}/series — recurring-series stats + comparison. */
-export function fetchDocumentSeries(id: number, signal?: AbortSignal): Promise<DocumentSeries> {
-  return apiFetch<DocumentSeries>(`/api/documents/${id}/series`, { signal })
-}
-
-/** Result of a series-membership toggle (POST/DELETE …/members). */
-export interface SeriesMemberResult {
-  state: 'pinned' | 'excluded' | 'cleared'
-  sender_id: number
-  kind_id: number
-  currency: string | null
-  document_id: number
-}
-
-/**
- * POST /api/series/{senderId}/{kindId}/members — add a document to a series
- * (clears an existing exclude, else pins). `currency` is the series bucket.
- */
-export function addSeriesMember(
-  senderId: number,
-  kindId: number,
-  documentId: number,
-  currency?: string | null,
-): Promise<SeriesMemberResult> {
-  return apiFetch<SeriesMemberResult>(`/api/series/${senderId}/${kindId}/members`, {
-    method: 'POST',
-    body: { document_id: documentId },
-    query: { currency: currency ?? undefined },
-  })
-}
-
-/**
- * DELETE /api/series/{senderId}/{kindId}/members/{documentId} — remove a
- * document from a series (clears an existing pin, else excludes).
- */
-export function removeSeriesMember(
-  senderId: number,
-  kindId: number,
-  documentId: number,
-  currency?: string | null,
-): Promise<SeriesMemberResult> {
-  return apiFetch<SeriesMemberResult>(
-    `/api/series/${senderId}/${kindId}/members/${documentId}`,
-    { method: 'DELETE', query: { currency: currency ?? undefined } },
-  )
-}
-
-/** A near-threshold emergent bucket: a `(sender, kind, currency)` group with
- *  `2 ≤ docs < series_min_documents`. Not yet a chart; one more matching
- *  document promotes it. The `/charts` view can reveal these on demand and
- *  "promote" one into an authored series right away. */
-export interface CandidateSeries {
-  sender_id: number
-  sender: string
-  kind_id: number
-  /** The document kind's slug (e.g. `invoice`), as on a charted series entry. */
-  kind: string
-  currency: string | null
-  /** How many amount-bearing documents the bucket has so far (≥ 2, < needed). */
-  count: number
-  /** The threshold (`series_min_documents`) the bucket must reach to chart. */
-  needed: number
-  document_ids: number[]
-}
-
-/** Body of GET /api/charts — every eligible series plus near-threshold candidates. */
-export interface ChartsResponse {
-  series: DocumentSeries[]
-  /** Emergent buckets one or more documents short of charting (`2 ≤ docs < min`). */
-  candidates: CandidateSeries[]
-}
-
-/** GET /api/charts — all chartable (sender, kind) series. */
-export function fetchCharts(signal?: AbortSignal): Promise<ChartsResponse> {
-  return apiFetch<ChartsResponse>('/api/charts', { signal })
-}
-
-/**
- * The stable, URL-safe id for a series identity: `{sender}-{kind}-{currency}`,
- * with `none` for the NULL-currency bucket. Mirrors the backend's
- * `encode_series_id`, so it round-trips through `/api/charts/{seriesId}`.
- */
-export function seriesId(s: Pick<DocumentSeries, 'sender_id' | 'kind_id' | 'currency'>): string {
-  return `${s.sender_id}-${s.kind_id}-${s.currency ?? 'none'}`
-}
-
-/** GET /api/charts/{seriesId} — one series by its stable id (single-chart page). */
-export function fetchChart(id: string, signal?: AbortSignal): Promise<DocumentSeries> {
-  return apiFetch<DocumentSeries>(`/api/charts/${id}`, { signal })
-}
-
-/** Body of PUT /api/charts/{seriesId}/meta (omit a field to leave it unchanged). */
-export interface SeriesMetaUpdate {
-  title?: string | null
-  description?: string | null
-}
-
-/**
- * PUT /api/charts/{seriesId}/meta — override a series' title and/or description.
- * Returns the refreshed single-series body.
- */
-export function updateSeriesMeta(id: string, body: SeriesMetaUpdate): Promise<DocumentSeries> {
-  return apiFetch<DocumentSeries>(`/api/charts/${id}/meta`, { method: 'PUT', body })
-}
-
-/** The stable, URL-safe id for an authored (user-curated) series: `a-{id}`. */
-export function authoredSeriesId(id: number): string {
-  return `a-${id}`
-}
-
-/** Body of POST /api/charts/authored. */
-export interface AuthoredSeriesCreate {
-  name: string
-  currency?: string | null
-  description?: string | null
-  document_ids?: number[]
-  /** 'semantic' creates a Smart Group: `seed_document_ids` anchor a backfill
-   *  sweep (scored against the whole library) whose matches come back staged
-   *  under `backfill` for review, rather than added outright. Omit (or
-   *  'manual') for the plain hand-curated flow. */
-  mode?: 'manual' | 'semantic'
-  /** Semantic mode only: documents that anchor the backfill sweep. Falls back
-   *  to `document_ids` server-side when omitted. */
-  seed_document_ids?: number[]
-}
-
-/** One staged Smart Group backfill hit (`POST /api/charts/authored` with
- *  `mode: 'semantic'`): a document the sweep scored as a likely member,
- *  awaiting accept/dismiss via the suggestion endpoints below. `title` is
- *  `null` when the document has none yet (no extraction has named it) — show
- *  `Document #{document_id}` in that case, matching `SeriesSuggestion`. */
-export interface BackfillMatch {
-  document_id: number
-  title: string | null
-  score: number
-}
-
-/** DocumentSeries plus the staged backfill returned when mode==='semantic'
- *  (only present, and only non-empty, right after a semantic create). */
-export type CreateSeriesResult = DocumentSeries & { backfill?: BackfillMatch[] }
-
-/**
- * POST /api/charts/authored — create an authored series, optionally seeding
- * its membership. Returns the series summarised like one /api/charts entry,
- * plus (semantic mode) the staged `backfill` matches for review.
- */
-export function createAuthoredSeries(body: AuthoredSeriesCreate): Promise<CreateSeriesResult> {
-  return apiFetch<CreateSeriesResult>('/api/charts/authored', { method: 'POST', body })
-}
-
-/** Body of PATCH /api/charts/authored/{id} (omit a field to leave it unchanged). */
-export interface AuthoredSeriesUpdate {
-  name?: string
-  description?: string | null
-}
-
-/** PATCH /api/charts/authored/{id} — rename / re-describe an authored series. */
-export function updateAuthoredSeries(
-  id: number,
-  body: AuthoredSeriesUpdate,
-): Promise<DocumentSeries> {
-  return apiFetch<DocumentSeries>(`/api/charts/authored/${id}`, { method: 'PATCH', body })
-}
-
-/** DELETE /api/charts/authored/{id} — delete an authored series (204). */
-export function deleteAuthoredSeries(id: number): Promise<void> {
-  return apiFetch<void>(`/api/charts/authored/${id}`, { method: 'DELETE' })
-}
-
-/** POST /api/charts/authored/{id}/members — add a document (idempotent). */
-export function addAuthoredMember(id: number, documentId: number): Promise<DocumentSeries> {
-  return apiFetch<DocumentSeries>(`/api/charts/authored/${id}/members`, {
-    method: 'POST',
-    body: { document_id: documentId },
-  })
-}
-
-/** DELETE /api/charts/authored/{id}/members/{documentId} — remove a document. */
-export function removeAuthoredMember(id: number, documentId: number): Promise<DocumentSeries> {
-  return apiFetch<DocumentSeries>(`/api/charts/authored/${id}/members/${documentId}`, {
-    method: 'DELETE',
-  })
-}
-
-// --- Authored-series smart features: suggestions & odd-ones-out --------------
-
-/** One candidate document proposed for an authored series (GET …/suggestions). */
-export interface SeriesSuggestion {
-  id: number
-  title: string | null
-  sender: string | null
-  kind: string | null
-  currency: string | null
-  document_date: string | null
-  amount: string
-}
-
-/** A member that breaks the signature, with a one-sentence reason (…/odd-ones-out). */
-export interface SeriesOddOneOut extends SeriesSuggestion {
-  /** The first differing axis: 'sender' | 'kind' | 'currency'. */
-  axis: string
-  /** LLM-generated rationale, or null when extraction is disabled. */
-  reason: string | null
-}
-
-/** GET /api/charts/authored/{id}/suggestions — docs matching the signature. */
-export function fetchAuthoredSuggestions(
-  id: number,
-  signal?: AbortSignal,
-): Promise<{ suggestions: SeriesSuggestion[]; count: number }> {
-  return apiFetch(`/api/charts/authored/${id}/suggestions`, { signal })
-}
-
-/** POST …/suggestions/{documentId}/accept — add the doc; returns refreshed series. */
-export function acceptAuthoredSuggestion(id: number, documentId: number): Promise<DocumentSeries> {
-  return apiFetch<DocumentSeries>(`/api/charts/authored/${id}/suggestions/${documentId}/accept`, {
-    method: 'POST',
-  })
-}
-
-/** POST …/suggestions/{documentId}/dismiss — tombstone; returns remaining count. */
-export function dismissAuthoredSuggestion(
-  id: number,
-  documentId: number,
-): Promise<{ count: number }> {
-  return apiFetch(`/api/charts/authored/${id}/suggestions/${documentId}/dismiss`, {
-    method: 'POST',
-  })
-}
-
-/** GET …/odd-ones-out — members that break the signature (lazy: may trigger LLM). */
-export function fetchAuthoredOddOnesOut(
-  id: number,
-  signal?: AbortSignal,
-): Promise<{ members: SeriesOddOneOut[] }> {
-  return apiFetch(`/api/charts/authored/${id}/odd-ones-out`, { signal })
 }
 
 function parseDetail(text: string, status: number): string {

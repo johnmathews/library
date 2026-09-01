@@ -123,6 +123,19 @@ const RECIPIENTS = [
 ]
 const PROJECTS = [{ slug: 'house-purchase', name: 'House purchase', document_count: 4 }]
 
+// The controlled facet vocabulary (docs/facets.md): one facet with values, one
+// shipped empty (mirrors production's `vehicle`/`property`/`person`) so the
+// disabled-select behaviour is exercised through the real mounted view.
+const FACETS_VOCAB = [
+  {
+    key: 'category',
+    label: 'Category',
+    ordinal: 0,
+    values: [{ key: 'utility', label: 'Utility', parent_id: null, aliases: [] }],
+  },
+  { key: 'vehicle', label: 'Vehicle', ordinal: 1, values: [] },
+]
+
 const Stub = { template: '<div />' }
 
 /** Minimal IntersectionObserver stand-in: jsdom has none. Captures the
@@ -203,6 +216,20 @@ describe('DocumentDetailView', () => {
   /** Ordered ids the documents-list endpoint returns for prev/next; tests
    * mutate this. Default puts the current doc (12) between 8 and 20. */
   let neighborsList: { id: number }[]
+  /** This document's current facet labels; tests mutate this, and the PUT
+   * handler below mutates it too so a save round-trips like the real API. */
+  let documentLabels: Record<string, string>
+  /** What GET /api/documents/12/payment returns; defaults to just this
+   * document (no collapse), so PaymentGroup renders nothing in every test
+   * that doesn't opt into a payment group. The split handler above mutates
+   * this so a split round-trips like the real API. */
+  let paymentDocuments: {
+    id: number
+    title: string | null
+    document_date: string | null
+    amount_kind: string | null
+    reference: string | null
+  }[]
 
   beforeEach(async () => {
     // useDocumentLayout is a module singleton — reset its persisted state and
@@ -223,6 +250,10 @@ describe('DocumentDetailView', () => {
     markdownResponse = () =>
       jsonResponse({ page_count: 1, pages: [{ page_number: 1, markdown: '# Invoice\n\nTotal: €123.45' }] } satisfies DocumentMarkdownResponse)
     neighborsList = [{ id: 8 }, { id: 12 }, { id: 20 }]
+    documentLabels = {}
+    paymentDocuments = [
+      { id: 12, title: detail.title, document_date: detail.document_date, amount_kind: 'payment_due', reference: null },
+    ]
     capturedSortables.length = 0
     FakeIntersectionObserver.instances = []
     vi.stubGlobal('IntersectionObserver', FakeIntersectionObserver)
@@ -269,6 +300,34 @@ describe('DocumentDetailView', () => {
       }
       if (path === '/api/documents/12/markdown' && method === 'GET') {
         return Promise.resolve(markdownResponse())
+      }
+      if (path === '/api/facets' && method === 'GET') {
+        return Promise.resolve(jsonResponse({ facets: FACETS_VOCAB }))
+      }
+      if (path === '/api/documents/12/labels' && method === 'GET') {
+        return Promise.resolve(jsonResponse({ labels: documentLabels }))
+      }
+      if (path === '/api/documents/12/labels' && method === 'PUT') {
+        const putBody = JSON.parse(String(init?.body ?? '{}')) as {
+          labels: Record<string, string | null>
+        }
+        for (const [key, value] of Object.entries(putBody.labels)) {
+          if (value === null) delete documentLabels[key]
+          else documentLabels[key] = value
+        }
+        return Promise.resolve(jsonResponse({ labels: documentLabels }))
+      }
+      if (path === '/api/documents/12/payment' && method === 'GET') {
+        // As the real endpoint does: a soft-deleted document has no payment
+        // group to return. The view must therefore not ask for one — see the
+        // trash describe block below.
+        if (detail.deleted_at) return Promise.resolve(jsonResponse({ detail: 'Not found' }, 404))
+        return Promise.resolve(jsonResponse({ payment_id: 900, documents: paymentDocuments }))
+      }
+      if (url === '/api/payments/split' && method === 'POST') {
+        const splitBody = JSON.parse(String(init?.body ?? '{}')) as { doc_a: number; doc_b: number }
+        paymentDocuments = paymentDocuments.filter((doc) => doc.id === splitBody.doc_a)
+        return Promise.resolve(jsonResponse({ payment_id: 900, documents: paymentDocuments }))
       }
       return Promise.resolve(jsonResponse({ detail: `unexpected ${method} ${url}` }, 500))
     })
@@ -1424,21 +1483,6 @@ describe('DocumentDetailView', () => {
     expect(w.find('[data-testid="preview-fallback"]').exists()).toBe(false)
   })
 
-  it('renders DocumentSeriesTrend with the loaded document id', async () => {
-    const DocumentSeriesTrendStub = { template: '<div />', props: ['documentId'] }
-    await router.push('/documents/12')
-    wrapper = mount(DocumentDetailView, {
-      global: {
-        plugins: [router, pinia],
-        stubs: { DocumentSeriesTrend: DocumentSeriesTrendStub },
-      },
-    })
-    await flushPromises()
-    const trend = wrapper.findComponent(DocumentSeriesTrendStub)
-    expect(trend.exists()).toBe(true)
-    expect(trend.props('documentId')).toBe(detail.id)
-  })
-
   function detailGetCount(): number {
     return fetchMock.mock.calls.filter(
       (call) => String(call[0]) === '/api/documents/12' && ((call[1] as RequestInit | undefined)?.method ?? 'GET') === 'GET',
@@ -1730,62 +1774,13 @@ describe('DocumentDetailView', () => {
     })
 
     it('renders section cards in the saved order within a column', async () => {
-      useDocumentLayout().setColumn('right', ['markdown', 'preview', 'series-chart'])
+      useDocumentLayout().setColumn('right', ['markdown', 'preview'])
       const w = await mountView()
       const ids = w
         .find('#document-preview-column')
         .findAll('[data-testid^="section-card-"]')
         .map((el) => el.attributes('data-testid') ?? '')
       expect(ids.indexOf('section-card-markdown')).toBeLessThan(ids.indexOf('section-card-preview'))
-    })
-
-    /** A DocumentSeriesTrend stand-in that reports its presence on mount, the
-     * same way the real component does once its `load()` resolves. */
-    function makeSeriesTrendStub(presence: boolean): Record<string, unknown> {
-      return {
-        props: ['documentId'],
-        emits: ['presence'],
-        template: '<div data-testid="series-trend-stub" />',
-        mounted(this: { $emit: (event: string, value: boolean) => void }) {
-          this.$emit('presence', presence)
-        },
-      }
-    }
-
-    it('hides the series-chart card, even in edit mode, once DocumentSeriesTrend reports no series', async () => {
-      // Regression test: the wrapper's `empty:hidden` can't hide the card in
-      // edit mode because the drag handle keeps it non-empty — cardPresent
-      // must gate it instead.
-      await router.push('/documents/12')
-      wrapper = mount(DocumentDetailView, {
-        global: {
-          plugins: [router, pinia],
-          stubs: { DocumentSeriesTrend: makeSeriesTrendStub(false) },
-        },
-      })
-      await flushPromises()
-      await wrapper.find('[data-testid="edit-layout-toggle"]').trigger('click')
-      await flushPromises()
-
-      expect(wrapper.find('[data-testid="section-card-series-chart"]').exists()).toBe(false)
-      // Unaffected sibling cards still render normally.
-      expect(wrapper.find('[data-testid="card-drag-handle-preview"]').exists()).toBe(true)
-    })
-
-    it('shows the series-chart card in edit mode once DocumentSeriesTrend reports a present series', async () => {
-      await router.push('/documents/12')
-      wrapper = mount(DocumentDetailView, {
-        global: {
-          plugins: [router, pinia],
-          stubs: { DocumentSeriesTrend: makeSeriesTrendStub(true) },
-        },
-      })
-      await flushPromises()
-      await wrapper.find('[data-testid="edit-layout-toggle"]').trigger('click')
-      await flushPromises()
-
-      expect(wrapper.find('[data-testid="section-card-series-chart"]').exists()).toBe(true)
-      expect(wrapper.find('[data-testid="card-drag-handle-series-chart"]').exists()).toBe(true)
     })
 
     it('reorders the metadata column independently of the preview column', async () => {
@@ -1978,6 +1973,46 @@ describe('DocumentDetailView', () => {
       expect(w.find('#edit-title').exists()).toBe(false)
       expect(rowValue(w, 'title')).toBe('Doc B')
     })
+
+    it('a drop landing past the real cards degrades safely, even though the non-draggable FacetEditor sibling inflates the DOM index Sortable would report', async () => {
+      // FacetEditor renders as a real DOM child of #document-metadata-column,
+      // the same element the metadata-column Sortable instance is bound to
+      // (see the comment at its mount point in DocumentDetailView.vue). It
+      // has no [data-card-drag-handle], so Sortable never lets it be the
+      // *dragged* item — but Sortable still counts it as an ordinary sibling
+      // when computing evt.newIndex for an actual card drag. For this
+      // (non-note) document the rendered/present left column is exactly:
+      // metadata-content, metadata-parties, metadata-financial,
+      // metadata-system, comments, actions, history (7 cards) — plus the
+      // FacetEditor sibling makes 8 real DOM children. A drop positioned
+      // after everything therefore reports newIndex 8, one past what the
+      // 7-card present list alone would suggest.
+      const layout = useDocumentLayout()
+      layout.resetLayout()
+      const w = await mountView() // default (non-note) doc
+      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await flushPromises()
+
+      const onEnd = cardColumnOnEnd()
+      const evt = {
+        from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
+        to: { dataset: { col: 'left' } },
+        item: {},
+        oldIndex: 4, // 'comments' — 5th present card (0-based index 4)
+        newIndex: 8, // inflated by the uncounted FacetEditor sibling
+      } as unknown as Sortable.SortableEvent
+      onEnd(evt)
+      await flushPromises()
+
+      // Safe degradation: presentIndexToFullIndex's out-of-range branch
+      // (presentIndex >= present.length) treats any overshoot — 7 or 8 or
+      // 99 — identically, as "append at the very end". No crash, no
+      // duplicate, no dropped card; 'comments' simply lands after 'history'.
+      expect(layout.cardColumns.value.left.filter((id) => id === 'comments')).toHaveLength(1)
+      expect(layout.cardColumns.value.left.at(-1)).toBe('comments')
+      expect(new Set(layout.cardColumns.value.left)).toEqual(new Set(DEFAULT_CARD_COLUMNS.left))
+      expect(layout.cardColumns.value.right).toEqual(DEFAULT_CARD_COLUMNS.right)
+    })
   })
 
   // --- ActionDock (Ask + lifted metadata Edit/Done) ----------------------------
@@ -2070,6 +2105,22 @@ describe('DocumentDetailView', () => {
       expect(w.find('[data-testid="delete-link"]').exists()).toBe(false)
     })
 
+    it('shows no payment panel or payment error on a trashed document', async () => {
+      // Regression: the metadata column mounted PaymentGroup unconditionally,
+      // but /api/documents/{id}/payment 404s a deleted document — so every
+      // document opened from Recently Deleted carried a red "Could not load
+      // this payment" alert. The fix is to not ask, not to soften the error.
+      detail = makeDetail({ deleted_at: '2026-07-01T09:00:00Z' })
+      const w = await mountView()
+
+      expect(w.find('[data-testid="payment-error"]').exists()).toBe(false)
+      expect(w.find('[data-testid="payment-group"]').exists()).toBe(false)
+      const paymentCalls = fetchMock.mock.calls.filter((call) =>
+        String(call[0]).startsWith('/api/documents/12/payment'),
+      )
+      expect(paymentCalls).toHaveLength(0)
+    })
+
     it('has no trash banner for a live document', async () => {
       const w = await mountView()
       expect(w.find('[data-testid="trash-banner"]').exists()).toBe(false)
@@ -2159,6 +2210,89 @@ describe('DocumentDetailView', () => {
       const w = await mountView()
 
       expect(w.find('[data-testid="preview-download-original"]').exists()).toBe(false)
+    })
+  })
+
+  describe('facet editor (docs/facets.md)', () => {
+    it('mounts in the metadata column, fetches the vocabulary + this document\'s labels, and saves an edit end-to-end', async () => {
+      documentLabels = { category: 'utility' }
+      const w = await mountView()
+
+      // Mounted for real inside the metadata column, not just in isolation.
+      const metadataColumn = w.find('#document-metadata-column')
+      expect(metadataColumn.exists()).toBe(true)
+      const editor = metadataColumn.find('[data-testid="facet-editor"]')
+      expect(editor.exists()).toBe(true)
+
+      // The GET /api/documents/12/labels response hydrated the select with
+      // this document's current label.
+      const categorySelect = editor.get('[data-testid="facet-edit-category"]')
+      expect((categorySelect.element as HTMLSelectElement).value).toBe('utility')
+      // The empty `vehicle` facet still renders, disabled, with its hint —
+      // proving the view really is fetching the full vocabulary (not just
+      // whichever facets this document happens to have labels for).
+      const vehicleSelect = editor.get('[data-testid="facet-edit-vehicle"]')
+      expect(vehicleSelect.attributes('disabled')).toBeDefined()
+      expect(editor.text()).toContain('No values yet')
+
+      // Clearing the label and saving PUTs an explicit null and re-renders
+      // from the server's response (the select drops back to "—").
+      await categorySelect.setValue('')
+      await editor.get('[data-testid="facet-save"]').trigger('click')
+      await flushPromises()
+
+      const putCall = fetchMock.mock.calls.find(
+        (call) =>
+          String(call[0]) === '/api/documents/12/labels' &&
+          (call[1] as RequestInit | undefined)?.method === 'PUT',
+      )
+      expect(putCall).toBeTruthy()
+      expect(JSON.parse(String((putCall![1] as RequestInit).body))).toEqual({
+        labels: { category: null },
+      })
+      expect((categorySelect.element as HTMLSelectElement).value).toBe('')
+      expect(editor.find('[data-testid="facet-error"]').exists()).toBe(false)
+    })
+  })
+
+  describe('payment group (docs/money-facts.md)', () => {
+    it('renders nothing in the metadata column when this document is alone in its payment', async () => {
+      const w = await mountView()
+      const metadataColumn = w.find('#document-metadata-column')
+      expect(metadataColumn.find('[data-testid="payment-group"]').exists()).toBe(false)
+      expect(metadataColumn.find('[data-testid="payment-error"]').exists()).toBe(false)
+    })
+
+    it('mounts in the metadata column and lists both documents when this one was collapsed with another', async () => {
+      paymentDocuments = [
+        { id: 12, title: detail.title, document_date: detail.document_date, amount_kind: 'payment_due', reference: null },
+        { id: 20, title: 'Betaalbevestiging', document_date: '2026-05-16', amount_kind: 'payment_made', reference: null },
+      ]
+      const w = await mountView()
+
+      // Mounted for real inside the metadata column, not just in isolation.
+      const metadataColumn = w.find('#document-metadata-column')
+      const group = metadataColumn.find('[data-testid="payment-group"]')
+      expect(group.exists()).toBe(true)
+      expect(group.findAll('[data-testid="payment-group-row"]')).toHaveLength(2)
+      expect(group.text()).toContain('Betaalbevestiging')
+
+      // Splitting posts doc_a/doc_b to the real endpoint and re-renders from
+      // the response — the panel disappears once only one document remains.
+      await group.get('[data-testid="payment-split"]').trigger('click')
+      await flushPromises()
+
+      const splitCall = fetchMock.mock.calls.find(
+        (call) =>
+          String(call[0]) === '/api/payments/split' &&
+          (call[1] as RequestInit | undefined)?.method === 'POST',
+      )
+      expect(splitCall).toBeTruthy()
+      expect(JSON.parse(String((splitCall![1] as RequestInit).body))).toEqual({
+        doc_a: 12,
+        doc_b: 20,
+      })
+      expect(metadataColumn.find('[data-testid="payment-group"]').exists()).toBe(false)
     })
   })
 })
