@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## September 2026
 
+- **2026-09-01** — [Sharding the e2e matrix](260901-e2e-sharding.md)
 - **2026-09-01** — [Editing a saved chart's rule](260901-chart-rule-editor.md)
 - **2026-09-01** — [Making the backend suite 3x faster](260901-backend-ci-3x-faster.md)
 

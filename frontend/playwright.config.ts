@@ -1,4 +1,7 @@
-import { defineConfig, devices } from '@playwright/test'
+import { defineConfig, devices, type Project } from '@playwright/test'
+
+/** A project whose `name` is required — sharding selects projects by name. */
+type NamedProject = Project & { name: string }
 
 /**
  * E2E tests against the REAL stack (docker compose backend + built
@@ -15,6 +18,72 @@ import { defineConfig, devices } from '@playwright/test'
  * all three browser engines — the exact gap that let the original native-iframe
  * browser-specific bugs ship.
  */
+const ALL_PROJECTS: NamedProject[] = [
+  {
+    name: 'chromium',
+    use: { ...devices['Desktop Chrome'] },
+  },
+  {
+    name: 'mobile-webkit',
+    use: {
+      ...devices['iPhone 14'],
+      viewport: { width: 375, height: 667 }, // acceptance: usable at 375px
+    },
+  },
+  {
+    name: 'tablet-webkit',
+    use: { ...devices['iPad (gen 11)'] }, // portrait
+  },
+  // Desktop Firefox + WebKit exist to prove the self-rendered (pdf.js) PDF
+  // preview behaves identically across engines — the bug the native <iframe>
+  // got wrong three different ways. They run ONLY pdf-preview.spec.ts; the
+  // rest of the suite stays on the chromium/mobile/tablet matrix above so
+  // adding these engines doesn't silently put every spec on Firefox.
+  {
+    name: 'firefox',
+    use: { ...devices['Desktop Firefox'] },
+    testMatch: /pdf-preview\.spec\.ts/,
+  },
+  {
+    name: 'webkit',
+    use: { ...devices['Desktop Safari'] },
+    testMatch: /pdf-preview\.spec\.ts/,
+  },
+]
+
+/**
+ * The projects this run should execute, from `E2E_PROJECTS` (space- or
+ * comma-separated). Unset — the local default — runs all five.
+ *
+ * CI sets it to shard the matrix across parallel jobs, each with its own
+ * stack, because at `workers: 1` the five projects took 389s of a 407s step.
+ * Sharding rather than raising `workers` is deliberate: the specs assert on
+ * library-wide state (`.first()` of the dashboard grid, facet counts), so two
+ * running concurrently against one backend would interfere. A shard still runs
+ * its projects' specs one at a time, exactly as before; it just no longer also
+ * waits for the other projects.
+ *
+ * An unknown name throws rather than silently selecting nothing: a typo in the
+ * workflow's matrix would otherwise produce a job that runs zero tests, and
+ * "ran nothing" must never look like "nothing was wrong". (The floor in
+ * `scripts/assert-e2e-ran.mjs` is the second net under the same hole.)
+ */
+function selectedProjects(): NamedProject[] {
+  const raw = process.env.E2E_PROJECTS?.trim()
+  if (!raw) return ALL_PROJECTS
+
+  const wanted = raw.split(/[\s,]+/).filter(Boolean)
+  const known = ALL_PROJECTS.map((project) => project.name)
+  const unknown = wanted.filter((name) => !known.includes(name))
+  if (unknown.length > 0) {
+    throw new Error(
+      `E2E_PROJECTS names unknown project(s): ${unknown.join(', ')}. ` +
+        `Known projects: ${known.join(', ')}.`,
+    )
+  }
+  return ALL_PROJECTS.filter((project) => wanted.includes(project.name))
+}
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 180_000,
@@ -28,8 +97,9 @@ export default defineConfig({
   // gate. Each spec seeds a unique `Date.now()` marker, so a retry is isolated
   // even under workers:1. Locally retries stay off so flakes surface immediately.
   retries: process.env.CI ? 1 : 0,
-  // The projects share one backend: run them serially so the later projects
-  // deterministically hit the duplicate-upload path.
+  // Serial within a run: the specs share one backend and assert on library-wide
+  // lists, so concurrent workers would see each other's documents. Parallelism
+  // comes from sharding across CI jobs instead — see `selectedProjects` above.
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
@@ -44,36 +114,5 @@ export default defineConfig({
     baseURL: process.env.E2E_BASE_URL ?? 'http://localhost:4173',
     trace: 'retain-on-failure',
   },
-  projects: [
-    {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
-    },
-    {
-      name: 'mobile-webkit',
-      use: {
-        ...devices['iPhone 14'],
-        viewport: { width: 375, height: 667 }, // acceptance: usable at 375px
-      },
-    },
-    {
-      name: 'tablet-webkit',
-      use: { ...devices['iPad (gen 11)'] }, // portrait
-    },
-    // Desktop Firefox + WebKit exist to prove the self-rendered (pdf.js) PDF
-    // preview behaves identically across engines — the bug the native <iframe>
-    // got wrong three different ways. They run ONLY pdf-preview.spec.ts; the
-    // rest of the suite stays on the chromium/mobile/tablet matrix above so
-    // adding these engines doesn't silently put every spec on Firefox.
-    {
-      name: 'firefox',
-      use: { ...devices['Desktop Firefox'] },
-      testMatch: /pdf-preview\.spec\.ts/,
-    },
-    {
-      name: 'webkit',
-      use: { ...devices['Desktop Safari'] },
-      testMatch: /pdf-preview\.spec\.ts/,
-    },
-  ],
+  projects: selectedProjects(),
 })
