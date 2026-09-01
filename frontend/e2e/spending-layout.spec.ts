@@ -181,6 +181,23 @@ test('the workspace toolbar is one row above the threshold and a chip below', as
     }
 
     await expectNoHorizontalOverflow(page, `workspace toolbar @${testInfo.project.name}`)
+
+    // The rule editor's clause row is the widest thing this view renders: a
+    // facet select, an is/is-not select, a values pill and a Remove button.
+    // At 343px (mobile) it MUST have stacked — `@lg/workspace` is 512px — and
+    // the values list must stay inside its popover rather than in flow. This
+    // assertion is the only check on that breakpoint number; nothing in jsdom
+    // can measure it, per §1.7.3.
+    await page.getByTestId('workspace-edit-rule').click()
+    await expect(page.getByTestId('chart-rule-editor')).toBeVisible()
+    await page.getByTestId('rule-add-clause').click()
+    await expect(page.getByTestId('rule-editor-row')).toHaveCount(1)
+    await expectNoHorizontalOverflow(page, `rule editor row @${testInfo.project.name}`)
+
+    // With the values popover open too — its panel is `max-w-[calc(100vw-1rem)]`,
+    // and that cap is what a long vocabulary would otherwise defeat.
+    await page.getByTestId('filter-pill-button').first().click()
+    await expectNoHorizontalOverflow(page, `rule editor values open @${testInfo.project.name}`)
   } finally {
     await cleanup(page, null, chartId)
   }

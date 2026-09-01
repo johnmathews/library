@@ -157,6 +157,25 @@ class TestCoveredCode:
             v.message for v in violations if v.rule == "stale-covered-code"
         )
 
+    def test_a_frontend_path_is_covered_like_any_other(self) -> None:
+        """`Covers:` is language-agnostic, and that had never been asserted.
+
+        Until 2026-09-01 every `Covers:` line in the repository named a path
+        under `src/library/`, `migrations/` or `scripts/` — so `stale-covered-code`
+        had never once run against a `frontend/` pathspec, and a frontend-only
+        change could leave `spending-view.md` or `frontend.md` asserting the
+        opposite of the shipped tree with CI green. This pins the rule half.
+        """
+        violations = check(
+            doc(covers="frontend/src/views/SpendingWorkspaceView.vue"),
+            last_commit="2026-07-10",
+            covered=("frontend/src/views/SpendingWorkspaceView.vue",),
+        )
+        assert "stale-covered-code" in rules(violations)
+        assert "frontend/src/views/SpendingWorkspaceView.vue" in next(
+            v.message for v in violations if v.rule == "stale-covered-code"
+        )
+
     def test_covers_is_optional(self) -> None:
         """Omitting it is allowed; it costs the precise signal, not a failure."""
         assert check(doc(covers=None)) == []
@@ -248,6 +267,71 @@ class TestCoveredChangeDetectionIsClockIndependent:
             verdicts.add(check_docs.git_changed_since(stamped, ("covered.py",)))
 
         assert len(verdicts) == 1, f"verdict depends on the commit's hour: {verdicts}"
+
+
+class TestPathspecsResolveForEveryLanguage:
+    """`git_changed_since` must resolve a nested `frontend/` pathspec.
+
+    The sibling test above pins the *rule*: given a changed path, the violation
+    fires. That is not the same claim as this one, and only this one would have
+    caught the gap it was written for — every `Covers:` line in the repository
+    named `src/library/`, `migrations/` or `scripts/`, so the pathspec half had
+    only ever been exercised against top-level Python directories. A doc
+    covering `frontend/src/views/` is worthless if the lookup behind it silently
+    matches nothing, and a lookup that matches nothing is indistinguishable from
+    a doc that is up to date.
+    """
+
+    def test_a_nested_frontend_pathspec_matches_a_real_commit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        repo = tmp_path / "repo"
+        repo.mkdir()
+
+        def run(*args: str, **dates: str) -> None:
+            subprocess.run(
+                args, cwd=repo, check=True, capture_output=True, env={**os.environ, **dates}
+            )
+
+        when = "2026-07-30T12:00:00+00:00"
+        run("git", "init", "-q", ".")
+        run("git", "config", "user.email", "t@example.com")
+        run("git", "config", "user.name", "T")
+        nested = repo / "frontend" / "src" / "views"
+        nested.mkdir(parents=True)
+        (nested / "SomeView.vue").write_text("<template />\n")
+        run("git", "add", "-A")
+        run("git", "commit", "-q", "-m", "c", GIT_AUTHOR_DATE=when, GIT_COMMITTER_DATE=when)
+        monkeypatch.setattr(check_docs, "REPO_ROOT", repo)
+
+        # The exact file, the directory prefix, and a glob — the three shapes a
+        # `Covers:` line actually uses.
+        for pattern in (
+            "frontend/src/views/SomeView.vue",
+            "frontend/src/views/",
+            "frontend/src/**",
+        ):
+            assert check_docs.git_changed_since(date(2026, 7, 29), (pattern,)) == (pattern,), (
+                f"pathspec {pattern!r} matched nothing"
+            )
+
+    def test_at_least_one_gated_doc_covers_a_frontend_path(self) -> None:
+        """The blind spot is closed and must stay closed.
+
+        Deleting a `Covers:` line to quiet a red build would silently restore
+        the state where a frontend-only change cannot make any document stale.
+        That should cost a red test, not nothing.
+        """
+        covering_frontend = [
+            path
+            for path in check_docs.gated_documents()
+            if (stamp := check_docs.parse_stamp(path.read_text())) is not None
+            and any(pattern.startswith("frontend/") for pattern in stamp.covers)
+        ]
+        assert covering_frontend, (
+            "no gated document names a frontend/ path in Covers: — "
+            "stale-covered-code cannot fire for any frontend-only change"
+        )
 
 
 class TestNotYet:

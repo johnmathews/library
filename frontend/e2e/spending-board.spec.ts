@@ -138,6 +138,22 @@ test('create "All spending" from the empty state, open it, and delete it', async
   await expect(page.getByTestId('spending-footer-attention')).toBeVisible()
   await expect(page.getByTestId('spending-footer-unconvertible')).toBeVisible()
 
+  // The rule editor: arm, add a row, cancel. Deliberately no facet is chosen
+  // and nothing is applied — this spec runs against a database that may never
+  // have had `library label-archive` run on it (see the file header), so no
+  // step here may assume a particular facet or value exists. What it does
+  // assert is the part that is only true in a real browser: the trigger is
+  // reachable WITHOUT revealWorkspaceToolbar, because it lives in PageHeader's
+  // #actions rather than in `workspace-toolbar`, which is hidden below
+  // @3xl/workspace. The full PATCH round trip is covered in the unit specs.
+  await page.getByTestId('workspace-edit-rule').click()
+  await expect(page.getByTestId('chart-rule-editor')).toBeVisible()
+  await page.getByTestId('rule-add-clause').click()
+  await expect(page.getByTestId('rule-editor-row')).toHaveCount(1)
+  await page.getByTestId('rule-editor-cancel').click()
+  await expect(page.getByTestId('chart-rule-editor')).toBeHidden()
+  await expect(page.getByTestId('workspace-chart-region')).toBeVisible()
+
   // Back to the board, then delete via the overflow menu — now a two-step
   // confirm (spec review finding 4): the menu item only ARMS a Confirm/
   // Cancel pair, so a stray click on "Delete" cannot destroy the chart.

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 class RuleError(ValueError):
@@ -17,12 +17,37 @@ class RuleError(ValueError):
 
 
 class Clause(BaseModel):
+    """One `facet in/not_in values` test.
+
+    `extra="forbid"` is load-bearing rather than tidiness. `op` has a default,
+    so under Pydantic's default `extra="ignore"` a mis-named field — `operator`
+    instead of `op` — validates to `op="in"` and an exclusion silently becomes
+    an inclusion. `draft.py` refuses an unrecognised operator for the same
+    reason, spelled out there: it is the one rewrite that moves money *into* a
+    chart. This model is reachable from a browser, so it needs the refusal too.
+
+    Safe to forbid on the read path as well as the write path: every stored
+    rule was written by `model_dump()` on this class, and the charts migration
+    seeds no rows, so no persisted rule carries a key this would now reject.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     facet: str
     op: Literal["in", "not_in"] = "in"
     values: list[str]
 
 
 class Rule(BaseModel):
+    """A conjunction of clauses.
+
+    Forbids extras for the same reason `Clause` does, one level up:
+    `DraftedRule` carries a `split` beside its `all`, so a caller posting the
+    drafted shape verbatim would otherwise have its split silently discarded.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
     #: ANDed. Empty matches every row — that is the "All spending" chart.
     all: list[Clause] = []
 

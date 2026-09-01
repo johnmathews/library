@@ -29,9 +29,14 @@
  * defect §2.2 rejected in the seed migration.
  */
 import { computed, ref } from 'vue'
-import { createChart, draftQuestion, type Chart, type Draft, type Rule } from '@/api/spending'
+import { createChart, draftQuestion, type Chart, type Draft } from '@/api/spending'
 import { ApiError } from '@/api/client'
 import { bands, type Band } from '@/spending/palette'
+// Rendered without a vocabulary, so this prints facet and value keys — the
+// wording this component has always shown. The editor passes the vocabulary
+// and gets labels; both read the same function so they cannot disagree about
+// what a rule says.
+import { ruleSummary, splitSummary } from '@/spending/ruleText'
 import { AppButton, AppInput } from '@/components/app'
 import SpendingChart from './SpendingChart.vue'
 import SpendingLegend from './SpendingLegend.vue'
@@ -74,17 +79,6 @@ const previewBands = computed<Band[]>(() => {
   const preview = draft.value?.preview
   return preview ? bands(preview.splits, preview.cells) : []
 })
-
-function ruleSummary(rule: Rule): string {
-  if (rule.all.length === 0) return 'Every document.'
-  return rule.all
-    .map((clause) => `${clause.facet} ${clause.op === 'in' ? 'is' : 'is not'} ${clause.values.join(' or ')}`)
-    .join(' and ')
-}
-
-function splitSummary(split: string | null): string {
-  return split ? `Split by ${split}.` : 'Not split.'
-}
 
 async function submit(): Promise<void> {
   const text = question.value.trim()

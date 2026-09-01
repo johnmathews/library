@@ -1,7 +1,7 @@
 # The chart engine
 
-**Status:** active. **Last updated:** 2026-08-31 (§10.1's Ask row said the tool returns "the same wording the `PATCH` route gives" — true, but nothing enforced it: the two-line refusal was typed out in full in both `api/documents.py` and `ask/engine.py`. It is now a single `spend_lines.AMOUNT_ALLOCATED_REFUSAL` that both pass, and the row says so. The wording itself is unchanged.) Earlier the same day (the legacy series stack was deleted, and three claims here changed together: §10.1's opening ("four of them answer; the fifth does not" → all five answer), its Ask row, and §13's "the fifth `amount_total` writer is unguarded" bullet, now removed — Ask's document-edit tool commits through `spend_lines.commit_allocation` and returns the refusal as a tool result. §11's opening paragraph withdraws the promise to inherit `/api/charts`: the router stays at `/api/spending` deliberately. **Fix round 1:** this stamp's own evidence sentence cited `grep -rn 'api/charts' src/` returning nothing, which the same pass falsified by writing that string into `spending.py`'s docstring; replaced with a check that actually reproduces.) Earlier: 2026-08-30 (spending-view backend, final fix wave: §7.1 documents the `422` on `bucket=excluded` with no `amount_kind`, and §11's `CellOutBody` sentence gains the `label == ""` on an unsplit chart clause. Earlier the same day, Task 8: §11's route table gains `GET /spending/{id}` and `GET /spending/{id}/footer/{bucket}`, now **twelve** routes not ten; new §7.1 documents the footer drill route — `_accounted_rows` as the one shared classify/convert/sign step, the split-document-emits-one-row-per-line shape and why the drill list deduplicates by `document_id` and sums a document's rows, and `FooterDocumentsOut.total` reporting the bucket's full size before paging; §11 gains `DataOut.splits`/`SplitValueOut` and `CellOutBody`'s `label`/`colour`; §13 drops "a sender split emits ids, not names" — fixed by Task 5 — and gains "`unconvertible` has no drill-through" in its place. `migrations/versions/0037_split_colour.py` joins **Covers**. The live-archive verification of the pre-existing engine is in [journal/260830-chart-engine.md](../journal/260830-chart-engine.md); this branch's own work is in [journal/260830-spending-view-backend.md](../journal/260830-spending-view-backend.md).) Earlier the same day — §10.1 now enumerates **five** writers of `amount_total`, not four — Ask's document-edit tool is the fifth, and the only one that does not translate the trigger's refusal into an answer the owner can act on; §13 gains that limit and the two adjacent ones found in the same review, re-extraction's partial skip of `amount_total` while still writing `currency`, and `skipped_fields` landing outside the `extraction_completed` event detail. The live-archive verification of this engine is [journal/260830-chart-engine.md](../journal/260830-chart-engine.md). Earlier (2026-08-29) — initial version — the `spend_facts` relation and the canonical-document rule, the `spend_lines`/`line_labels` write path and its two deferred sum triggers, rule translation, the two orthogonal axes and the invariant total, per-document-date conversion, the footer's **eight** categories, the drill-through, LLM rule drafting against the closed vocabulary, the ten `/api/spending` + `/api/documents/{id}/spend-lines` routes, and the `line_labels` index measured and declined. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §5, §8.4 and §9; plan: [superpowers/plans/2026-08-29-charts-engine.md](superpowers/plans/2026-08-29-charts-engine.md). What an amount *means* is [money-facts.md](money-facts.md); this document is what a chart does with it.)
-**Last verified:** 2026-08-31 — method: partial, scoped to §10.1's writer table. Read the new `AMOUNT_ALLOCATED_REFUSAL` constant in `src/library/spend_lines.py` and both call sites (`src/library/api/documents.py`'s `PATCH` handler and `_run_update_document` in `src/library/ask/engine.py`) — each now passes the constant to `commit_allocation`, and `grep -rn "spend lines that sum to" src/` returns the one definition rather than three occurrences. The wording is byte-identical to what both sites held, so the tests asserting on it are unchanged and pass. The other four rows of §10.1 were not re-checked and carry forward the verification below unchanged, whose method was: partial, scoped to §10.1, §11's opening and §13.
+**Status:** active. **Last updated:** 2026-09-01 (the chart rule editor, issue #135. §11 gains `POST /api/spending/preview` and the count reads **thirteen** routes, not twelve; §9 is retitled "Where a rule comes from" and now opens with the two producers of a `Rule` — the draft flow's drop-and-report filter and the editor's 422 — because presenting LLM drafting as the only path would leave a reader looking for `filter_drafted_rule` on a path that does not use it; the old §9 body is now §9.1. §3's model block gains `extra="forbid"` and why it is load-bearing. §11's validation list gains the same-facet refusal, the empty-rule acceptance and the unknown-clause-key 422, and says a rotted chart still loads by id. §13 gains two limits that were previously stated nowhere — a rule edit not rewriting `question_text`, and a chart naming a deleted value refusing when drawn — and its same-facet bullet now records that the shape is refused rather than merely possible.) Earlier: 2026-08-31 (§10.1's Ask row said the tool returns "the same wording the `PATCH` route gives" — true, but nothing enforced it: the two-line refusal was typed out in full in both `api/documents.py` and `ask/engine.py`. It is now a single `spend_lines.AMOUNT_ALLOCATED_REFUSAL` that both pass, and the row says so. The wording itself is unchanged.) Earlier the same day (the legacy series stack was deleted, and three claims here changed together: §10.1's opening ("four of them answer; the fifth does not" → all five answer), its Ask row, and §13's "the fifth `amount_total` writer is unguarded" bullet, now removed — Ask's document-edit tool commits through `spend_lines.commit_allocation` and returns the refusal as a tool result. §11's opening paragraph withdraws the promise to inherit `/api/charts`: the router stays at `/api/spending` deliberately. **Fix round 1:** this stamp's own evidence sentence cited `grep -rn 'api/charts' src/` returning nothing, which the same pass falsified by writing that string into `spending.py`'s docstring; replaced with a check that actually reproduces.) Earlier: 2026-08-30 (spending-view backend, final fix wave: §7.1 documents the `422` on `bucket=excluded` with no `amount_kind`, and §11's `CellOutBody` sentence gains the `label == ""` on an unsplit chart clause. Earlier the same day, Task 8: §11's route table gains `GET /spending/{id}` and `GET /spending/{id}/footer/{bucket}`, now **twelve** routes not ten; new §7.1 documents the footer drill route — `_accounted_rows` as the one shared classify/convert/sign step, the split-document-emits-one-row-per-line shape and why the drill list deduplicates by `document_id` and sums a document's rows, and `FooterDocumentsOut.total` reporting the bucket's full size before paging; §11 gains `DataOut.splits`/`SplitValueOut` and `CellOutBody`'s `label`/`colour`; §13 drops "a sender split emits ids, not names" — fixed by Task 5 — and gains "`unconvertible` has no drill-through" in its place. `migrations/versions/0037_split_colour.py` joins **Covers**. The live-archive verification of the pre-existing engine is in [journal/260830-chart-engine.md](../journal/260830-chart-engine.md); this branch's own work is in [journal/260830-spending-view-backend.md](../journal/260830-spending-view-backend.md).) Earlier the same day — §10.1 now enumerates **five** writers of `amount_total`, not four — Ask's document-edit tool is the fifth, and the only one that does not translate the trigger's refusal into an answer the owner can act on; §13 gains that limit and the two adjacent ones found in the same review, re-extraction's partial skip of `amount_total` while still writing `currency`, and `skipped_fields` landing outside the `extraction_completed` event detail. The live-archive verification of this engine is [journal/260830-chart-engine.md](../journal/260830-chart-engine.md). Earlier (2026-08-29) — initial version — the `spend_facts` relation and the canonical-document rule, the `spend_lines`/`line_labels` write path and its two deferred sum triggers, rule translation, the two orthogonal axes and the invariant total, per-document-date conversion, the footer's **eight** categories, the drill-through, LLM rule drafting against the closed vocabulary, the ten `/api/spending` + `/api/documents/{id}/spend-lines` routes, and the `line_labels` index measured and declined. Design: [superpowers/specs/2026-08-28-charts-redesign-design.md](superpowers/specs/2026-08-28-charts-redesign-design.md) §5, §8.4 and §9; plan: [superpowers/plans/2026-08-29-charts-engine.md](superpowers/plans/2026-08-29-charts-engine.md). What an amount *means* is [money-facts.md](money-facts.md); this document is what a chart does with it.)
+**Last verified:** 2026-09-01 — method: partial, scoped to §3's model block, §9, §11 and §13's two new limits. Route count re-derived rather than trusted: `grep -c '@router\.\(get\|post\|patch\|delete\|put\)' src/library/api/spending.py` returns 13, matching §11's table and this module's own docstring. Read the new `preview_rule` handler in full and confirmed it calls `_validate_rule`, `_validate_split` and `_answer(session, None, query)` and reaches no model — the last pinned by `test_previewing_does_not_call_the_model`, which leaves `stub_anthropic` unconfigured so any call raises. Dropping the `_validate_rule` line was observed to turn `test_previewing_an_unknown_facet_is_a_422_naming_it` from red to a 200 with an empty answer, which is what §11's claim rests on. §3's block is byte-compared against `src/library/charts/rule.py`. §13's `question_text` limit read off the `PATCH` handler's two independent branches and pinned by `test_patching_a_rule_leaves_question_text_untouched`; the same-facet refusal read off `_refuse_unmatchable_conjunction`, and its "still loadable" clause verified by `test_a_chart_with_two_in_clauses_on_one_facet_still_loads_by_id`. §§1-2, 4-8, 10 and 12 were not re-checked and carry forward unchanged.
 **Covers:** src/library/charts/, src/library/api/spending.py, src/library/spend_lines.py, migrations/versions/0035_spend_facts.py, migrations/versions/0036_charts.py, migrations/versions/0037_split_colour.py
 
 > **Note on examples.** This repository is public. Every sender name, amount and
@@ -139,17 +139,27 @@ is exhaustively testable without a database.
 
 ```python
 class Clause(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     facet: str
     op: Literal["in", "not_in"] = "in"
     values: list[str]
 
 class Rule(BaseModel):
+    model_config = ConfigDict(extra="forbid")
     all: list[Clause] = []      # ANDed; empty matches every row
 ```
 
 `rule_predicate(rule)` returns a SQL fragment over the alias `sf` plus its bind
 parameters. Facet and value keys are **always bound, never interpolated** —
 they reach this function from an LLM draft as readily as from the owner.
+
+`extra="forbid"` is load-bearing rather than tidiness. `op` has a default, so
+under Pydantic's default an unknown key is ignored and a mis-named field —
+`operator` for `op` — validates to `op="in"`, silently turning an exclusion into
+an inclusion. That is the same rewrite `draft.py` refuses to guess at (§9.1),
+and this model is reachable from a browser. It is safe on the read path too:
+every stored rule was written by `model_dump()` on these classes and the charts
+migration seeds no rows, so no persisted rule carries a key this would reject.
 
 An empty `Rule` returns `TRUE`: that is the "all spending" chart, and it is also
 why a *failed* draft must never be saved as one (§9). A clause with no values is
@@ -465,7 +475,33 @@ a group member outside the cell's period or split bucket is still listed, and an
 unconvertible member is listed but not counted. `CellPayment.total` is the only
 number that matches.
 
-## 9. Drafting a rule from a question
+## 9. Where a rule comes from
+
+A `Rule` has **two producers**, and they enforce the closed vocabulary by
+deliberately different means. The difference is not an inconsistency to be
+tidied away — it follows from who is speaking.
+
+| producer | mechanism | on an unusable term |
+| --- | --- | --- |
+| the draft flow (§9.1) | `filter_drafted_rule` | **drops it**, reports it as `unknown_terms` |
+| the rule editor (§11) | `_validate_rule` | **422 naming it**; nothing is saved |
+
+The model is *guessing*, so its overreach is narrowed silently and reported —
+a drafted rule that named something real and something imaginary should still
+produce the real half. The owner is *asserting*, so their rule is refused with
+the offending key named, because silently dropping a clause they chose would
+edit their question rather than report a problem.
+
+Two consequences for anyone building on this: **never run `filter_drafted_rule`
+on an editor-sourced rule**, and render the 422's `detail` verbatim rather than
+replacing it with a generic message — it names the facet or value to fix.
+
+There is one asymmetry worth knowing. The draft path is casefold- and
+alias-tolerant (`Groceries` and a registered alias both resolve), while the
+write path matches facet and value keys **exactly**. An editor must therefore
+emit keys copied from `GET /api/facets`, never text a person typed.
+
+### 9.1 Drafting a rule from a question
 
 `src/library/charts/draft.py` turns plain language into a `Rule` against the
 **current** vocabulary. Two structural decisions carry the guarantee:
@@ -588,7 +624,7 @@ is the silence this feature exists to remove.
 
 ## 11. The API
 
-Twelve routes, mounted at **`/api/spending`**. The design called for
+Thirteen routes, mounted at **`/api/spending`**. The design called for
 `/api/charts`, which the legacy series stack owned across thirteen routes at the
 time this router was written; the intention was to inherit the prefix once that
 stack was deleted. **It was deleted on 2026-08-31 and the prefix was not taken.**
@@ -604,12 +640,13 @@ accepted knowingly, not overlooked.
 | `GET` | `/api/spending` | saved questions; `limit` ≤ 100, `offset` |
 | `POST` | `/api/spending` | save (201); duplicate `name` → 409 |
 | `GET` | `/api/spending/{id}` | one saved question |
-| `PATCH` | `/api/spending/{id}` | every field optional |
+| `PATCH` | `/api/spending/{id}` | every field optional; the rule editor's write path |
 | `DELETE` | `/api/spending/{id}` | 204 |
 | `GET` | `/api/spending/{id}/data` | `?grain&split&from&to&currency` |
 | `GET` | `/api/spending/{id}/cell` | `?period&split_value` + all of `/data`'s |
 | `GET` | `/api/spending/{id}/footer/{bucket}` | the documents behind a footer count; `limit` ≤ 100 |
-| `POST` | `/api/spending/draft` | question → rule, split, preview |
+| `POST` | `/api/spending/draft` | question → rule, split, preview; **calls the model** |
+| `POST` | `/api/spending/preview` | rule → answer, unsaved; **no model call** |
 | `GET` | `/api/documents/{id}/spend-lines` | a document's allocation |
 | `PUT` | `/api/documents/{id}/spend-lines` | replace the whole allocation |
 | `DELETE` | `/api/documents/{id}/spend-lines` | return to unsplit (204) |
@@ -617,6 +654,15 @@ accepted knowingly, not overlooked.
 `GET /spending/{id}` exists so the workspace can load a chart directly by id
 rather than paging the list — a page-scoped `GET /spending?limit=…` would stop
 finding a chart as soon as there are more of them than the page size.
+
+`POST /spending/preview` takes a rule plus a window and returns the same
+`DataOut` shape as `/data`, with `chart_id: null` — there is no chart behind
+it. It exists so the rule editor can show what an edit *would* do before it is
+applied; the alternative was to `PATCH` first and undo on cancel, which writes
+to the archive to answer a question. It is **not** `/spending/draft`: that one
+takes a question and spends a model call turning it into a rule, this one takes
+a rule the caller already has. Nothing is written and no model is called, and
+both halves of that are pinned by tests.
 
 **No router builds SQL.** Every number comes from `charts/query.py`,
 `charts/footer.py`, `charts/draft.py` or `spend_lines.py`; this module parses,
@@ -663,11 +709,29 @@ a blank title.
 Validation worth knowing about:
 
 - A rule naming a facet or value that is not in the vocabulary is a **422 naming
-  it**, on the **read** path as well as at save. Facet values are deletable at
-  runtime, so a saved chart can rot; an empty chart is indistinguishable from
-  "you spent nothing on that". For the same reason the vocabulary read is
-  **uncached** — a cache would resurrect a deleted value and hand back exactly
-  the empty chart this check exists to prevent.
+  it** on all four paths that take one — `POST`, `PATCH`, `/preview` and the
+  **read** path. Facet values are deletable at runtime, so a saved chart can
+  rot; an empty chart is indistinguishable from "you spent nothing on that". For
+  the same reason the vocabulary read is **uncached** — a cache would resurrect
+  a deleted value and hand back exactly the empty chart this check exists to
+  prevent. A rotted chart is still **loadable** by `GET /spending/{id}`, which
+  validates the rule's shape and not its vocabulary: the rule editor is the tool
+  for repairing one, so it has to be able to open it.
+- **Two `in` clauses on one facet are a 422**, on the same four paths — the
+  check lives inside `_validate_rule`. A document carries at most one value per
+  facet, so the conjunction can never match anything. Refused rather than merged
+  into a single `in` — merging turns the AND into an OR, which answers a
+  different question and moves money *into* the chart, the same rewrite
+  `draft.py` refuses to guess at for an unknown operator. Two `not_in` clauses
+  on one facet are a legitimate intersection and are accepted.
+- **An empty rule (`{"all": []}`) is accepted and means all spending**, on
+  `PATCH` and `/preview` as at save: it is the seeded "All spending" chart's own
+  state. Reaching it by deleting the last clause is guarded in the editor with a
+  confirmation, deliberately not with a 422 here — a preview that refused it
+  would be useless at the one moment it is most needed.
+- **A clause with an unknown key is a 422.** `Clause` forbids extras: `op` has a
+  default, so a mis-named field would otherwise validate to `op="in"` and turn
+  an exclusion into an inclusion.
 - `split=""` (the empty string) means "no split axis" on a chart that defaults
   to one; an omitted `split` takes the chart's default. An unknown split axis is
   a 422.
@@ -749,6 +813,21 @@ Add it later in one line if a real workload ever says otherwise.
 
 ## 13. Known limits
 
+- **A rule edit does not rewrite `question_text`.** A chart's heading is the
+  plain-language question its rule was drafted from, and editing the clauses
+  leaves it untouched — so a chart can end up headed by a question its rule no
+  longer answers. Deliberate: the clause rows are the authoritative statement of
+  what a chart matches, and only the owner can say whether a reworded rule still
+  answers the same question. The backend cannot detect the mismatch at all — the
+  `rule` and `question_text` branches of the `PATCH` handler are independent —
+  so the remedy is to rename the chart. Pinned by a test, so changing the policy
+  means deleting that test on purpose.
+- **A chart whose rule names a deleted vocabulary value 422s when drawn.** The
+  value can be removed after the chart was saved (§11), and `/data`, `/cell` and
+  `/footer` then refuse rather than render an empty chart. The chart is still
+  **loadable** by id and the rule editor renders the lost value as a flagged,
+  removable chip — that is the repair path, and it is why the vocabulary checks
+  live where they do.
 - **A payment group with two signs.** The sign precondition
   ([money-facts.md](money-facts.md) §4, §5) does not constrain the manual
   `MERGE` override arm, so a human merge of two undecided documents followed by
@@ -769,13 +848,28 @@ Add it later in one line if a real workload ever says otherwise.
   no archive-wide backlog count and no way to set `amount_kind` by hand
   ([money-facts.md](money-facts.md) §5.1).
 - **Two `in` clauses on one facet** are ANDed into a permanently empty chart,
-  since a document takes at most one value per facet. The draft filter does not
-  collapse them. **The footer cannot explain it either.** Its `uncategorised`
-  arm is scoped by `WHERE ((rule) OR unlabelled)`, and a rule no labelled row
-  can satisfy leaves only the unlabelled rows admitted — so every labelled
-  document is absent from the total *and* from the accounting under it. That is
-  §12's "indistinguishable from you spent nothing", reached through the draft
-  path: the one shape where the footer's own guarantee does not apply.
+  since a document takes at most one value per facet. **The footer cannot
+  explain it either.** Its `uncategorised` arm is scoped by
+  `WHERE ((rule) OR unlabelled)`, and a rule no labelled row can satisfy leaves
+  only the unlabelled rows admitted — so every labelled document is absent from
+  the total *and* from the accounting under it. That is §12's "indistinguishable
+  from you spent nothing", and it is the one shape where the footer's own
+  guarantee does not apply.
+
+  **The state above is no longer reachable for a rule saved from now on**, and
+  a chart that already holds the shape refuses rather than rendering it.
+  `_refuse_unmatchable_conjunction` runs inside `_validate_rule`, so it fires on
+  all four paths that take a rule — `POST`, `PATCH`, `/preview` **and the read
+  path** — which means a legacy chart with this shape now 422s *when drawn*
+  rather than drawing empty. The rule editor warns before you get that far.
+
+  It stays on this list because the shape can still **exist** on a row saved
+  before the check did. Such a chart is still loadable by
+  `GET /spending/{id}` — the one route that does not call `_validate_rule` —
+  which is deliberate and is why the refusal lives there rather than in a `Rule`
+  validator: the editor has to be able to open the chart it exists to repair.
+  The footer reasoning above is preserved because it is *why* the answer is a
+  refusal rather than a silent merge into one `in` clause.
 - **Extraction does not propose spend lines yet.** `SpendLineOrigin.EXTRACTED`
   exists in the enum, but every line shipped today is `manual`.
 - **Re-extraction's skip is partial.** It skips `amount_total` on an allocated

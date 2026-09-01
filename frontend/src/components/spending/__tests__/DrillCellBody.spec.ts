@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
 import { mount, flushPromises, type VueWrapper } from '@vue/test-utils'
 import DrillCellBody from '../DrillCellBody.vue'
 import FacetEditor from '@/components/facets/FacetEditor.vue'
@@ -245,6 +246,11 @@ function documentAmounts(wrapper: VueWrapper): (string | undefined)[] {
 }
 
 beforeEach(() => {
+  // The vocabulary is read through a Pinia-backed shared cache, and there is no
+  // global `setupFiles`, so each test needs a fresh pinia. Fresh also means the
+  // cache is empty per test, which is what we want — a leaked cache would let
+  // one test's vocabulary satisfy the next test's `ensureLoaded`.
+  setActivePinia(createPinia())
   fetchCell.mockReset()
   fetchFacets.mockReset().mockResolvedValue([])
   fetchDocumentLabels.mockReset().mockResolvedValue({})
