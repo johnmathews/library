@@ -111,12 +111,42 @@ where nothing was wrong. `selectedProjects()` throws on an unknown name, listing
 the known ones. Verified by running `playwright test --list` for each shard
 value (58 / 56 / 56 of 170 collected) and with a deliberate typo.
 
-## 6. What is left
+## 6. Measured, and what is left
 
-Expected: the longest shard is tablet at ~149s of tests plus ~200s of fixed
-setup, so `e2e` should land near 6 minutes against 11.3 — and the fixed setup is
-then **most of the job**, with the 111s image bake the biggest single item, paid
-three times over now.
+Two runs on the PR (33494844387, 33496082090). Per-shard job time:
+
+| shard | run 1 | run 2 | tests, run 2 |
+|---|---|---|---|
+| desktop | 5.8m | 4.7m | 97.4s (53 executed) |
+| tablet | 7.1m | 5.6m | 159.6s (40 executed) |
+| mobile | 5.2m | 8.8m | 346.6s (45 executed) |
+
+So `e2e` goes from 11.3m to **the longest shard**: 7.1m, then 5.6m — except run
+2's mobile shard, which took 8.8m. That one is worth reading carefully, because
+the headline number is not the interesting part.
+
+The executed counts came out at exactly the predicted 53 / 45 / 40 against
+floors of 30 / 25 / 22, so §5's derivation holds.
+
+Fixed setup is now ~135s per shard — image bake ~80s, stack ~22s, node/npm
+~10s, browsers ~30s. The browser step is the one that moved: **82.3s → ~30s**,
+and the desktop shard installing all three engines also takes ~30s, which says
+the original 82s was mostly a cold cache rather than the extra two browsers.
+The 80s bake is now the biggest fixed item, paid three times over.
+
+**The mobile outlier is one flaky spec, not the sharding.**
+`facets.spec.ts:41` timed out at the full 180s test timeout and then passed on
+retry in 3.3s. Take that one flake out and mobile is ~166s of tests and ~5.0m
+of job — in line with the others.
+
+This is pre-existing and unrelated to this change: the same flake would have
+burned the same 180s in the old single job, where it was invisible inside a
+407s step. But it matters more now. A flake that costs 180s used to be 44% of
+one step; it is now the difference between a 5m and a 9m critical path, and it
+is the *only* thing between this job and a predictable ~5.5m. Worth its own
+investigation, with the caveat that a 3-minute timeout followed by a 3-second
+pass is the signature of a wait that has no business being that patient rather
+than of a slow machine.
 
 Three ways to attack that were considered and rejected, recorded so they are not
 re-litigated from scratch:
