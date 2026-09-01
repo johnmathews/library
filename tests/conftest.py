@@ -44,6 +44,32 @@ from library.models import (
 PROJECT_ROOT: Path = Path(__file__).resolve().parent.parent
 
 
+@pytest.fixture(scope="session", autouse=True)
+def _cheap_password_hashing() -> Iterator[None]:
+    """Argon2id at throwaway cost parameters for the whole test session.
+
+    Production parameters (t=3, m=64 MiB, p=4) are deliberately ~30 ms per
+    hash *and* per verify. Nearly every API test pays both — ``auth_user``
+    inserts a user and ``api_client`` logs it in — so at ~500 client tests
+    that is ~30 s of pure key-stretching. The algorithm and both code paths
+    are unchanged; only the work factor drops, so a test can still prove that
+    a wrong password fails and a right one succeeds.
+    """
+    from pwdlib import PasswordHash
+    from pwdlib.hashers.argon2 import Argon2Hasher
+
+    import library.auth.passwords as passwords
+
+    original = passwords._password_hash
+    passwords._password_hash = PasswordHash(
+        (Argon2Hasher(time_cost=1, memory_cost=8, parallelism=1),)
+    )
+    try:
+        yield
+    finally:
+        passwords._password_hash = original
+
+
 @pytest.fixture(autouse=True)
 def _llm_backend_is_the_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Keep the suite on the metered-API backend, whatever the default is.
@@ -259,9 +285,38 @@ def _truncate_api_database(
         cursor.execute(f"TRUNCATE TABLE {', '.join(targets)} CASCADE")
 
 
+@pytest.fixture(scope="session")
+def _api_app_instance(api_database_url: str) -> FastAPI:
+    """The single FastAPI instance shared by the whole API suite.
+
+    ``create_app()`` costs ~110 ms — almost all of it FastAPI rebuilding the
+    dependant graph and Pydantic TypeAdapters for ~250 routes — and it reads no
+    settings at construction time (every ``get_settings()`` call in the app
+    happens inside a request or the lifespan). So the object is identical for
+    every test, and building it 559 times was ~27% of the suite's wall clock.
+    Per-test state that used to ride on a fresh app (env vars, the settings
+    cache) is reset by the function-scoped ``api_app`` wrapper below.
+    """
+    application = create_app()
+
+    async def override_session() -> AsyncIterator[AsyncSession]:
+        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        try:
+            async with AsyncSession(engine, expire_on_commit=False) as session:
+                yield session
+        finally:
+            await engine.dispose()
+
+    application.dependency_overrides[get_session] = override_session
+    return application
+
+
 @pytest.fixture
 def api_app(
-    api_database_url: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    _api_app_instance: FastAPI,
+    api_database_url: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> Iterator[FastAPI]:
     """An app wired to the test database, with data_dir pointed at tmp_path.
 
@@ -275,18 +330,7 @@ def api_app(
     # be sent back, so tests run with the dev override.
     monkeypatch.setenv("LIBRARY_COOKIE_SECURE", "false")
     get_settings.cache_clear()
-    application = create_app()
-
-    async def override_session() -> AsyncIterator[AsyncSession]:
-        engine = create_async_engine(api_database_url, poolclass=NullPool)
-        try:
-            async with AsyncSession(engine, expire_on_commit=False) as session:
-                yield session
-        finally:
-            await engine.dispose()
-
-    application.dependency_overrides[get_session] = override_session
-    yield application
+    yield _api_app_instance
     get_settings.cache_clear()
 
 
