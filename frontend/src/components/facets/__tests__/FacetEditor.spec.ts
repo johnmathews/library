@@ -128,4 +128,80 @@ describe('FacetEditor', () => {
     expect(Object.keys(payload)).toEqual(['priority'])
     expect(payload).not.toHaveProperty('category')
   })
+  // --- The late-labels race (#144) ------------------------------------------
+  //
+  // DocumentDetailView feeds this component from TWO independent fetches:
+  // `facets` from `fetchFacets` in onMounted, `labels` from
+  // `fetchDocumentLabels` in the route watcher. Nothing orders them, so on a
+  // cold backend the label map can land AFTER the user has already picked a
+  // value. Every test above mounts with both props already settled, so none of
+  // them exercises that ordering — which is exactly how the bug shipped.
+  //
+  // The user-visible failure is silent: the selection disappears and Save goes
+  // disabled with no error, permanently. In CI the same race burned the full
+  // 180s e2e timeout roughly once per run.
+
+  it('keeps the user selection when the label map arrives after it', async () => {
+    const wrapper = mount(FacetEditor, {
+      props: { documentId: 7, facets: FACETS, labels: {} },
+    })
+    await wrapper.get('[data-testid="facet-edit-category"]').setValue('software')
+
+    // The detail fetch finally resolves — with the server's (empty) labels.
+    await wrapper.setProps({ labels: {} })
+
+    const select = wrapper.get('[data-testid="facet-edit-category"]')
+      .element as HTMLSelectElement
+    expect(select.value).toBe('software')
+    expect(wrapper.get('[data-testid="facet-save"]').attributes('disabled')).toBeUndefined()
+  })
+
+  it('still saves the selection that a late label map tried to clobber', async () => {
+    // The observable outcome that matters: not merely that the select still
+    // shows the value, but that clicking Save actually PUTs it.
+    const wrapper = mount(FacetEditor, {
+      props: { documentId: 7, facets: FACETS, labels: {} },
+    })
+    await wrapper.get('[data-testid="facet-edit-category"]').setValue('software')
+    await wrapper.setProps({ labels: {} })
+    await wrapper.get('[data-testid="facet-save"]').trigger('click')
+    await flushPromises()
+    expect(updateDocumentLabels).toHaveBeenCalledWith(7, { category: 'software' })
+  })
+
+  it('re-hydrates from the server after a save, rather than staying pinned to the draft', async () => {
+    // The flip side of not clobbering: once a save round-trips, the parent's
+    // label map IS the truth again and the draft must follow it. Otherwise the
+    // fix for the race would freeze the editor on the first edit.
+    updateDocumentLabels.mockResolvedValue({ category: 'software' })
+    const wrapper = mount(FacetEditor, {
+      props: { documentId: 7, facets: FACETS, labels: {} },
+    })
+    await wrapper.get('[data-testid="facet-edit-category"]').setValue('software')
+    await wrapper.get('[data-testid="facet-save"]').trigger('click')
+    await flushPromises()
+
+    // The parent assigns what `saved` carried; a later refresh then clears it
+    // server-side. The editor must reflect that, not the stale draft.
+    await wrapper.setProps({ labels: { category: 'software' } })
+    await wrapper.setProps({ labels: {} })
+    const select = wrapper.get('[data-testid="facet-edit-category"]')
+      .element as HTMLSelectElement
+    expect(select.value).toBe('')
+  })
+
+  it('drops the previous document\'s draft when the document changes', async () => {
+    // Navigating to another document must not carry an unsaved selection over
+    // onto it — that would offer to save one document's label onto another.
+    const wrapper = mount(FacetEditor, {
+      props: { documentId: 7, facets: FACETS, labels: {} },
+    })
+    await wrapper.get('[data-testid="facet-edit-category"]').setValue('software')
+    await wrapper.setProps({ documentId: 8, labels: {} })
+
+    const select = wrapper.get('[data-testid="facet-edit-category"]')
+      .element as HTMLSelectElement
+    expect(select.value).toBe('')
+    expect(wrapper.get('[data-testid="facet-save"]').attributes('disabled')).toBeDefined()
+  })
 })
