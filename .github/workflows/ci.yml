@@ -354,12 +354,12 @@ jobs:
     # wall-clock. The deploy gate stays safe — `promote` still needs all of
     # backend/frontend/e2e/compose-smoke to pass (see its `needs` below).
     #
-    # SCOPE: the full 3-browser e2e is the pipeline's long pole (~25-30 min), so
-    # it runs only where it earns its cost — pull requests, main, and manual
-    # dispatch — not on every intermediate feature-branch push. A PR re-runs it
-    # before merge, and main runs it as the promote gate, so nothing reaches
-    # production un-e2e'd. Path-gated too: skipped when only docs/config changed
-    # with no code (backend/frontend/ci all false).
+    # SCOPE: e2e is the pipeline's long pole, so it runs only where it earns its
+    # cost — pull requests, main, and manual dispatch — not on every intermediate
+    # feature-branch push. A PR re-runs it before merge, and main runs it as the
+    # promote gate, so nothing reaches production un-e2e'd. Path-gated too:
+    # skipped when only docs/config changed with no code (backend/frontend/ci
+    # all false).
     needs: changes
     if: >-
       (github.event_name == 'pull_request' ||
@@ -370,6 +370,52 @@ jobs:
        needs.changes.outputs.frontend == 'true' ||
        needs.changes.outputs.ci == 'true')
     runs-on: ubuntu-latest
+    # Without this, GitHub names each leg from every matrix value — "e2e
+    # (desktop, chromium firefox webkit, chromium firefox webkit, 30)" — which
+    # is unreadable in the checks list.
+    name: e2e (${{ matrix.shard }})
+    # SHARDED BY BROWSER PROJECT, one stack per shard. Playwright runs at
+    # `workers: 1` because the specs share a backend and assert on library-wide
+    # lists, so the five projects used to run end to end: 389s of a 407s step
+    # (tablet-webkit 149s, mobile-webkit 144s, chromium 84s, firefox 6s,
+    # webkit 6s). Splitting them across parallel jobs keeps that serial
+    # execution exactly — a shard still runs its own specs one at a time — while
+    # cutting the step to its longest single project.
+    #
+    # Each shard brings up its own stack, so every shard is now "the first
+    # project" and uploads land as fresh content rather than duplicates. The
+    # specs already accept both outcomes (`indexed.or(duplicate)` in
+    # library.spec.ts and markdown-reader.spec.ts), and separate stacks are
+    # strictly more isolated than one shared one, so nothing regresses.
+    #
+    # `browsers` is per-shard on purpose: mobile/tablet are WebKit descriptors,
+    # so downloading and apt-installing Chromium and Firefox for them is pure
+    # waste — and those two are the long shards, so it comes straight off the
+    # critical path.
+    #
+    # `min-executed` is each shard's floor for scripts/assert-e2e-ran.mjs, set
+    # below the observed count with headroom (desktop 53, mobile 44, tablet 40
+    # on the run this was measured from). They sum to 77 against the old
+    # single-job floor of 40, so sharding tightens the "did it actually run"
+    # gate rather than loosening it.
+    strategy:
+      # One shard's failure must not cancel the others: a red mobile shard
+      # should still tell you whether desktop and tablet are green.
+      fail-fast: false
+      matrix:
+        include:
+          - shard: desktop
+            projects: chromium firefox webkit
+            browsers: chromium firefox webkit
+            min-executed: 30
+          - shard: mobile
+            projects: mobile-webkit
+            browsers: webkit
+            min-executed: 25
+          - shard: tablet
+            projects: tablet-webkit
+            browsers: webkit
+            min-executed: 22
     env:
       # Both compose files for every compose invocation (up/exec/logs/down).
       COMPOSE_FILE: docker-compose.yml:frontend/e2e/compose.e2e.yml
@@ -378,6 +424,10 @@ jobs:
       # normal `e2e` user (created below).
       E2E_ADMIN_USERNAME: e2e-admin
       E2E_ADMIN_PASSWORD: e2e-admin-password-123
+      # Read by frontend/playwright.config.ts, which throws on an unknown name
+      # so a typo here fails loudly instead of running zero tests.
+      E2E_PROJECTS: ${{ matrix.projects }}
+      E2E_MIN_EXPECTED: ${{ matrix.min-executed }}
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-buildx-action@v4
@@ -416,14 +466,21 @@ jobs:
       - name: Install dependencies
         working-directory: frontend
         run: npm ci
+      # Keyed by shard as well as lockfile: the shards cache different browser
+      # sets, and a shared key would hand a WebKit-only cache to the shard that
+      # needs all three.
       - name: Cache Playwright browsers
         uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
+          key: playwright-${{ runner.os }}-${{ matrix.shard }}-${{ hashFiles('frontend/package-lock.json') }}
+      # --with-deps is kept even though the cache above usually hits: the
+      # browser binaries are cached, their apt dependencies are not, and every
+      # run gets a fresh VM. Installing only this shard's browsers is what makes
+      # it cheaper.
       - name: Install Playwright browsers
         working-directory: frontend
-        run: npx playwright install --with-deps chromium firefox webkit
+        run: npx playwright install --with-deps ${{ matrix.browsers }}
       - name: Build the frontend
         working-directory: frontend
         run: npm run build-only
@@ -436,9 +493,10 @@ jobs:
       # scripts/assert-e2e-ran.mjs, which fails when the suite reported success
       # without executing anything. `playwright test` exits 0 when every test
       # skips and offers no --fail-on-skip, so deleting E2E_BASE_URL above used
-      # to make all 19 specs skip and this job report green having launched
-      # nothing. Local `npm run test:e2e` is deliberately left alone, so running
-      # it without a stack still skips cleanly.
+      # to make every spec skip and this job report green having launched
+      # nothing. The floor is per-shard (E2E_MIN_EXPECTED, set from the matrix).
+      # Local `npm run test:e2e` is deliberately left alone, so running it
+      # without a stack still skips cleanly.
       - name: Run Playwright tests
         working-directory: frontend
         run: npm run test:e2e:ci
@@ -446,7 +504,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-json-report
+          name: playwright-json-report-${{ matrix.shard }}
           path: frontend/e2e-report.json
           if-no-files-found: ignore
           retention-days: 7
@@ -454,7 +512,7 @@ jobs:
         if: failure()
         uses: actions/upload-artifact@v7
         with:
-          name: playwright-report
+          name: playwright-report-${{ matrix.shard }}
           path: frontend/playwright-report/
           retention-days: 7
       - name: Backend logs on failure

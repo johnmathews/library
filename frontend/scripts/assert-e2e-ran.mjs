@@ -27,12 +27,13 @@ import process from 'node:process'
 /**
  * Floor on executed tests, taken from a real green run and deliberately set
  * BELOW it so adding or removing a test does not red the gate — it is a
- * "did the suite run at all" check, not a test-count assertion. A real run
- * executes well over 100 across the five-project matrix; anything under 40
- * means the matrix or the stack collapsed.
+ * "did the suite run at all" check, not a test-count assertion. The unset
+ * default of 40 is the floor for a whole five-project run (which executes ~137).
  *
- * Overridable because the nightly Smart Groups job runs exactly one spec on one
- * project, where the honest floor is 1. The override is a floor, never a
+ * Overridable because CI shards the matrix across parallel jobs, and a shard
+ * that runs one project honestly executes far fewer than the whole matrix — so
+ * each shard sets its own floor (see `e2e` in .github/workflows/ci.yml, where
+ * they sum to more than this default). The override is a floor, never a
  * disable: an unparseable or missing value exits 2 rather than falling back to
  * something permissive, so a typo in the workflow cannot quietly turn the gate
  * off — which is the failure mode this whole script exists for.
