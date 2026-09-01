@@ -101,9 +101,24 @@ export const METADATA_CARD_IDS = [
   'metadata-system',
 ] as const
 
-/** Stable card ids, split into their default column and default in-column order. */
+/**
+ * Stable card ids, split into their default column and default in-column order.
+ *
+ * `facets` is deliberately LAST in `left`. It became a card in #139, having
+ * previously been a fixed element rendered after every card in that column —
+ * so last IS where it already appeared, and defaulting it anywhere else would
+ * move the card for every existing user as a side effect of making it movable.
+ *
+ * That choice is also what makes a migration unnecessary. Every stored layout
+ * predates the `facets` id, and `reconcileCardColumns` appends a
+ * known-but-unplaced card to the end of its default column — which, for this
+ * card alone, coincides with its intended position. Contrast
+ * `migrateMetadataCard` below, where the two did NOT coincide (the split tiles
+ * had to land wherever the user had put the old Details card) and a real
+ * in-place migration was required. Tested in useDocumentLayout.spec.ts.
+ */
 export const DEFAULT_CARD_COLUMNS: CardColumns = {
-  left: ['notes', ...METADATA_CARD_IDS, 'comments', 'actions', 'history'],
+  left: ['notes', ...METADATA_CARD_IDS, 'comments', 'actions', 'history', 'facets'],
   right: ['preview', 'markdown'],
 }
 
