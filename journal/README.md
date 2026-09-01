@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-180 entries.
+181 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -14,6 +14,7 @@ CI checks it is current.
 ## September 2026
 
 - **2026-09-01** — [Sorting the facet dropdowns, and hiding a facet that cannot filter](260901-facet-dropdown-tidy.md)
+- **2026-09-01** — [The facet Save button that could be disabled forever](260901-facet-draft-clobber.md)
 - **2026-09-01** — [Sharding the e2e matrix](260901-e2e-sharding.md)
 - **2026-09-01** — [Hardening the CI gates](260901-ci-gate-hardening.md)
 - **2026-09-01** — [Editing a saved chart's rule](260901-chart-rule-editor.md)

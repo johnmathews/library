@@ -19,6 +19,10 @@
  * an explicit `null` so the backend removes the label rather than silently
  * leaving the previous value in place. A failed save leaves the edit in the
  * draft (never silently discarded) and shows an error.
+ *
+ * The draft is never discarded silently: neither by a failed save, nor by a
+ * label fetch that resolves after the user has already chosen a value (see
+ * `touched` below).
  */
 import { computed, ref, watch } from 'vue'
 import { updateDocumentLabels, type FacetRef } from '@/api/facets'
@@ -45,14 +49,47 @@ const draft = ref<Record<string, string>>({ ...props.labels })
 const saving = ref(false)
 const error = ref<string | null>(null)
 
-// Re-hydrate the draft whenever the parent hands in a fresh label map — after
-// a save round-trips through `saved`, or when the parent swaps in a different
-// document's labels. The draft itself only ever changes via onSelect below,
-// so this never clobbers an in-progress edit with itself.
+/**
+ * Whether the user has edited the draft since it was last hydrated from the
+ * server. This exists because `labels` can arrive AFTER a selection.
+ *
+ * DocumentDetailView feeds this component from two independent fetches —
+ * `facets` from `fetchFacets` in onMounted, `labels` from `fetchDocumentLabels`
+ * in the route watcher — and nothing orders them. On a cold backend the label
+ * map lands second, so a watch that re-hydrated unconditionally would reset the
+ * draft to the server's (usually empty) map: the selection vanished, and since
+ * Save is disabled on `!hasChanges`, the button went dead permanently with
+ * nothing on screen explaining why. That is a silent data loss for the user,
+ * and in CI the same race burned the full 180s e2e timeout about once per run
+ * (#144).
+ *
+ * Cleared in exactly the two places the server becomes the truth again: after a
+ * save round-trips, and when the parent swaps in a different document.
+ */
+const touched = ref(false)
+
+// Re-hydrate the draft whenever the parent hands in a fresh label map — after a
+// save round-trips through `saved`, or on a late-arriving initial fetch. Skipped
+// once the user has touched the draft, so a slow fetch can never overwrite an
+// edit in progress; `dirty` below still diffs against the newly-arrived
+// `props.labels`, so a late map is accounted for without clobbering anything.
 watch(
   () => props.labels,
   (next) => {
+    if (touched.value) return
     draft.value = { ...next }
+  },
+)
+
+// A different document is a different draft: drop any unsaved edit rather than
+// carrying it across, which would otherwise offer to save one document's label
+// onto another. `labels` for the new document may not have arrived yet, so
+// clearing `touched` is what lets the watch above hydrate it when it does.
+watch(
+  () => props.documentId,
+  () => {
+    touched.value = false
+    draft.value = { ...props.labels }
   },
 )
 
@@ -75,6 +112,7 @@ const hasChanges = computed(() => Object.keys(dirty.value).length > 0)
 function onSelect(facetKey: string, event: Event): void {
   const value = (event.target as HTMLSelectElement).value
   draft.value = { ...draft.value, [facetKey]: value }
+  touched.value = true
 }
 
 async function save(): Promise<void> {
@@ -83,6 +121,10 @@ async function save(): Promise<void> {
   error.value = null
   try {
     const saved = await updateDocumentLabels(props.documentId, dirty.value)
+    // Before the emit, not after: the parent assigns `labels` synchronously in
+    // its handler, so leaving `touched` set here would make the watch above skip
+    // the very re-hydration this save exists to produce.
+    touched.value = false
     emit('saved', saved)
   } catch {
     error.value = 'Could not save these labels. Try again.'
