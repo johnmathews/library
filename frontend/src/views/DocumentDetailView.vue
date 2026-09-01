@@ -1463,6 +1463,20 @@ watch(
           v-else-if="cardId === 'history'"
           :events="doc.events"
         />
+
+        <!-- Facet labels (controlled vocabulary, docs/facets.md). An ordinary
+             card since #139: it is edited on the same page, in the same column,
+             for the same reasons as the metadata tiles, and it is the primary
+             editing surface for the charts feature, so wanting it above the
+             fold is a normal thing to want. FacetEditor supplies its own
+             `.card` root, like every other branch here. -->
+        <FacetEditor
+          v-else-if="cardId === 'facets'"
+          :document-id="doc.id"
+          :facets="facets"
+          :labels="facetLabels"
+          @saved="facetLabels = $event"
+        />
     </DefineCard>
 
     <div id="document-detail-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -1504,42 +1518,31 @@ watch(
           <ReuseCard :card-id="cardId" />
         </div>
 
-        <!-- Facet labels (controlled vocabulary, docs/facets.md): a fixed,
-             non-draggable card alongside the reorderable metadata tiles above.
-             It isn't part of that drag/reorder set (useDocumentLayout's
-             persisted card-columns model) since a facet label is a distinct
-             concept from the per-field Details metadata those tiles edit.
+        <!-- Payment group (docs/money-facts.md): the one remaining
+             non-draggable sibling in this column — a real DOM child of
+             `#document-metadata-column`, the exact element `metadataColumnEl`
+             binds a live Sortable instance to (see `buildSortables` above),
+             carrying no `[data-card-drag-handle]` (Sortable's configured
+             `handle`). SortableJS therefore never lets it be dragged, but does
+             still count it as an ordinary sibling when computing `evt.newIndex`
+             for a real card drag.
 
-             IMPORTANT — SortableJS coupling: this element is a REAL DOM CHILD
-             of `#document-metadata-column`, the exact element `metadataColumnEl`
-             binds a live Sortable instance to (see `buildSortables` above). It
-             is excluded from being dragged ONLY because it carries no
-             `[data-card-drag-handle]` (Sortable's configured `handle`) — it is
-             still counted as an ordinary sibling when Sortable computes
-             `evt.newIndex` for an actual card drag, so a drop positioned at or
-             after this card inflates that index by one relative to the
-             `metadataCards` present-card list. `presentIndexToFullIndex`'s
-             out-of-range branch (`presentIndex >= present.length` → append at
-             the end) is what makes that inflation harmless today; if this
-             card's markup ever moves to BEFORE the `v-for` (or another
-             non-card sibling is added here), re-check that index math — see
-             the "layout customisation" describe block in
-             DocumentDetailView.spec.ts for a test pinning this degradation. -->
-        <FacetEditor
-          :document-id="doc.id"
-          :facets="facets"
-          :labels="facetLabels"
-          @saved="facetLabels = $event"
-        />
+             IMPORTANT — SortableJS coupling: because it renders AFTER the
+             `v-for`, the only index it can inflate is one already past the end
+             of the `metadataCards` present-card list, which
+             `presentIndexToFullIndex`'s out-of-range branch (`presentIndex >=
+             present.length` → append at the end) absorbs. That is what keeps
+             the arithmetic safe. If this markup ever moves to BEFORE the
+             `v-for`, or another non-card sibling is added ahead of one, re-check
+             the index math — see the "layout customisation" describe block in
+             DocumentDetailView.spec.ts for a test pinning this degradation.
+             (FacetEditor was a second such sibling until #139 made it an
+             ordinary card; indices within the card list are now exact.)
 
-        <!-- Payment group (docs/money-facts.md): same non-draggable-sibling
-             deal as FacetEditor above — a real DOM child of
-             `#document-metadata-column` with no `[data-card-drag-handle]`, so
-             SortableJS counts it as a sibling but never lets it be dragged.
-             Unlike FacetEditor it often renders NOTHING at all (no root
-             element) when this document isn't part of a collapsed payment,
-             which only shrinks the sibling count SortableJS sees — the
-             out-of-range append behaviour documented above still holds.
+             It often renders NOTHING at all (no root element) when this
+             document isn't part of a collapsed payment, which only shrinks the
+             sibling count SortableJS sees — the append behaviour above holds
+             either way.
 
              `!isDeleted` because a trashed document opens read-only here (the
              detail fetch carries `include_deleted`), but

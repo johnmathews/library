@@ -69,6 +69,54 @@ describe('reconcileHeroFields', () => {
 })
 
 describe('reconcileCardColumns', () => {
+  // --- The facets card (#139) ------------------------------------------------
+  //
+  // Before #139 the Facets editor was a fixed, non-draggable element rendered
+  // AFTER every card in the left column. Making it a card means every existing
+  // user has a persisted layout with no `facets` entry, so where it lands on
+  // their next visit is a migration question.
+  //
+  // It is answered by the choice of default rather than by a migration
+  // function: `facets` is LAST in DEFAULT_CARD_COLUMNS.left, which is exactly
+  // where it already rendered, and `reconcileCardColumns` appends a
+  // known-but-unplaced card to the end of its default column. The two coincide,
+  // so no stored layout moves — see `migrateMetadataCard` for the case where
+  // they do NOT coincide and a real migration was needed.
+
+  it('appends facets to the end of the left column for a layout saved before it existed', () => {
+    const stored = {
+      left: ['notes', 'metadata-content', 'metadata-parties', 'metadata-financial', 'metadata-system', 'comments', 'actions', 'history'],
+      right: ['preview', 'markdown'],
+    }
+    const merged = reconcileCardColumns(stored, DEFAULT_CARD_COLUMNS)
+    expect(merged.left.at(-1)).toBe('facets')
+    // Nothing else moved: the stored order is preserved ahead of it.
+    expect(merged.left.slice(0, -1)).toEqual(stored.left)
+    expect(merged.right).toEqual(stored.right)
+  })
+
+  it('still puts facets last for a user who had rearranged their cards', () => {
+    // The position it lands in must not depend on the user's saved order —
+    // pre-#139 it rendered after every card no matter how they were arranged.
+    const stored = {
+      left: ['history', 'comments', 'metadata-system', 'notes'],
+      right: ['markdown', 'preview'],
+    }
+    const merged = reconcileCardColumns(stored, DEFAULT_CARD_COLUMNS)
+    expect(merged.left.at(-1)).toBe('facets')
+    expect(merged.left.slice(0, 4)).toEqual(stored.left)
+    expect(merged.right).toEqual(stored.right)
+  })
+
+  it('keeps a facets position the user has already chosen', () => {
+    // Once they move it, reconciliation must respect that rather than
+    // re-appending it to the bottom on every read.
+    const stored = { left: ['facets', 'notes'], right: ['preview'] }
+    const merged = reconcileCardColumns(stored, DEFAULT_CARD_COLUMNS)
+    expect(merged.left[0]).toBe('facets')
+    expect(merged.left.filter((id) => id === 'facets')).toHaveLength(1)
+  })
+
   it('returns the defaults when nothing is stored', () => {
     expect(reconcileCardColumns(null, DEFAULT_CARD_COLUMNS)).toEqual(DEFAULT_CARD_COLUMNS)
     expect(reconcileCardColumns({}, DEFAULT_CARD_COLUMNS)).toEqual(DEFAULT_CARD_COLUMNS)
@@ -156,6 +204,10 @@ describe('legacy card-order migration (module init)', () => {
       'notes',
       'actions',
       'comments',
+      // The legacy order predates the facets card entirely; it appends to the
+      // end of its default column, which is exactly where it used to render
+      // as a fixed element (#139).
+      'facets',
     ])
   })
 
@@ -177,6 +229,10 @@ describe('legacy card-order migration (module init)', () => {
       'notes',
       'actions',
       'comments',
+      // The legacy order predates the facets card entirely; it appends to the
+      // end of its default column, which is exactly where it used to render
+      // as a fixed element (#139).
+      'facets',
     ])
   })
 
@@ -198,6 +254,7 @@ describe('legacy card-order migration (module init)', () => {
       'comments',
       'actions',
       'history',
+      'facets',
     ])
     expect(layout.cardColumns.value.left).not.toContain('metadata')
   })
@@ -336,7 +393,10 @@ describe('useDocumentLayout', () => {
     const hero = reconcileHeroFields(storedHero, DEFAULT_HERO_FIELDS)
     const columns = reconcileCardColumns(storedColumns, DEFAULT_CARD_COLUMNS)
     expect(hero.find((f) => f.key === 'kind')?.visible).toBe(false)
-    expect(columns.left[0]).toBe('history')
+    // Assert the reversal round-tripped in full rather than probing index 0,
+    // which silently encoded whichever card happened to be last in the
+    // defaults (and so broke when #139 appended one).
+    expect(columns.left).toEqual([...DEFAULT_CARD_COLUMNS.left].reverse())
   })
 
   it('resetLayout restores the defaults', () => {
