@@ -1,7 +1,7 @@
 # Admin role & admin views
 
-**Status:** active. **Last updated:** 2026-08-31 (§1.2.5 said the override tables "have not been dropped yet". Migration 0038 dropped them, so the sentence now says the collision it describes cannot arise even in principle.) Earlier the same day (the legacy series stack was deleted: currency normalisation is now a single `UPDATE documents` with no conflict case, so the `409` and its conflict list are gone from §1.2.5; the confirm step stays. **Fix round 1:** §1.2.5 said the override tables "went with the legacy series stack", which reads as the drop migration having shipped — corrected to say the code that read them went, and that the tables are orphaned until the drop). Earlier: 2026-08-12 (documentation verification sweep: `/matters` is a normal route with admin-gated *writes*, not an admin-only page; the Metadata tab covers senders, recipients, kinds, currencies and FX, not recipients alone).
-**Last verified:** 2026-08-31 — method: partial, scoped to §1.2.5's closing paragraph. Checked the corrected sentence against `migrations/versions/0038_drop_series_stack.py` (both override tables are in `_DROP_ORDER`) and against `tests/test_migrations.py::test_series_stack_tables_are_dropped`, which asserts the drop on a migrated database. Nothing else was re-checked; the rest carries forward the verification below unchanged, whose method was: partial, scoped to §1.2.5 and the `/currencies/normalize` route-table row.
+**Status:** active. **Last updated:** 2026-09-01 (§1.4's re-baseline note said the coverage tracer "was corrected" without saying how, which pointed a reader at the `concurrency = ["greenlet", "thread"]` line that no longer exists. It now names `core = "sysmon"`, records that the two report the same 95% but the old one cost ~75% of the backend suite's wall clock, and points at the guard test.) Earlier: 2026-08-31 (§1.2.5 said the override tables "have not been dropped yet". Migration 0038 dropped them, so the sentence now says the collision it describes cannot arise even in principle.) Earlier the same day (the legacy series stack was deleted: currency normalisation is now a single `UPDATE documents` with no conflict case, so the `409` and its conflict list are gone from §1.2.5; the confirm step stays. **Fix round 1:** §1.2.5 said the override tables "went with the legacy series stack", which reads as the drop migration having shipped — corrected to say the code that read them went, and that the tables are orphaned until the drop). Earlier: 2026-08-12 (documentation verification sweep: `/matters` is a normal route with admin-gated *writes*, not an admin-only page; the Metadata tab covers senders, recipients, kinds, currencies and FX, not recipients alone).
+**Last verified:** 2026-09-01 — method: partial, scoped to §1.4's coverage-tracer paragraph. Checked the new sentence against `pyproject.toml` (`core = "sysmon"` under `[tool.coverage.run]`, no `concurrency` key) and against two full-suite runs on this machine: 551s with `concurrency = ["greenlet", "thread"]` and 310s with `core = "sysmon"`, whose `coverage report` output was byte-identical (11284 statements, 601 missing, 95%). `tests/test_coverage_config.py` was proved to go red with the old setting restored. Nothing else was re-checked; the rest carries forward the verification below unchanged, whose method was: partial, scoped to §1.2.5's closing paragraph. Checked the corrected sentence against `migrations/versions/0038_drop_series_stack.py` (both override tables are in `_DROP_ORDER`) and against `tests/test_migrations.py::test_series_stack_tables_are_dropped`, which asserts the drop on a migrated database. Nothing else was re-checked; the rest carries forward the verification below unchanged, whose method was: partial, scoped to §1.2.5 and the `/currencies/normalize` route-table row.
 
 The library is a multi-user "named family accounts over one shared library"
 (see [architecture.md](architecture.md) §1.5). On top of that, a single boolean
@@ -318,10 +318,15 @@ into the image:
    (`fail_under` in `pyproject.toml`), frontend **85%** lines/statements/functions
    and 75% branches (`frontend/vitest.config.ts`). The backend figure was
    re-baselined from 85 once its coverage tracer was corrected — SQLAlchemy's
-   asyncio layer runs ORM work inside a greenlet and coverage lost the tracer
-   across the switch, so async handler bodies read as uncovered and the real
-   total was ~6 points higher than reported. At 85 the gate had ten points of
-   slack.
+   asyncio layer runs ORM work inside a greenlet and the old C tracer lost
+   coverage across the switch, so async handler bodies read as uncovered and the
+   real total was ~6 points higher than reported. At 85 the gate had ten points
+   of slack. The correction is now `core = "sysmon"` in `pyproject.toml`, not
+   the `concurrency = ["greenlet", "thread"]` it originally shipped as: both
+   report the same 95%, but declaring a concurrency mode forces the C tracer and
+   made the backend suite take ~75% longer (551s against 310s over the full
+   suite). `tests/test_coverage_config.py` guards the setting, since losing it
+   changes no test result and shows up only in CI wall clock.
    The summary also carries `test_types` — the four kinds of test the CI
    pipeline runs (`backend`/`frontend` unit suites with line coverage, plus
    `e2e` (Playwright) and `compose-smoke`, which are pass/fail gates with no line

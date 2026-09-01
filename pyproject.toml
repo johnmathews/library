@@ -191,22 +191,29 @@ filterwarnings = [
 
 [tool.coverage.run]
 source = ["src/library"]
-# SQLAlchemy's asyncio layer runs ORM and DBAPI work inside a greenlet, and
-# coverage loses the tracer across the greenlet switch unless `greenlet` is a
-# declared concurrency mode — so async handler bodies read as "missing" even
-# though the tests execute them. Without this, api/documents.py measured 55%
-# against a true 99%, and the whole-suite total read 89% against a true 95%.
+# SQLAlchemy's asyncio layer runs ORM and DBAPI work inside a greenlet, and the
+# old C tracer loses coverage across the greenlet switch — async handler bodies
+# read as "missing" though the tests execute them (api/documents.py measured 55%
+# against a true 99%, the whole-suite total 89% against a true 95%). That used
+# to be fixed with `concurrency = ["greenlet", "thread"]`, which works but forces
+# coverage onto the C tracer and costs +75% on the suite's wall clock: 314s
+# without coverage, 551s with it.
 #
-# An earlier version of this comment blamed FastAPI's TestClient anyio blocking
-# portal. That was wrong: a minimal FastAPI app with a real suspending await
-# traces to 100% under TestClient with the default tracer. The greenlet bridge
-# is the cause, and it is one config line, not a follow-up project.
-concurrency = ["greenlet", "thread"]
+# `sys.monitoring` (CPython 3.12+, coverage's `sysmon` core) fixes the same
+# blindness for free — it attaches to code objects, so a greenlet switch is
+# invisible to it and no concurrency declaration is needed. Measured over the
+# full suite: 551s -> 310s, with a byte-identical per-file coverage report
+# (11284 statements, 601 missing, 95% both ways).
+#
+# Do not re-add `concurrency` here to "be safe": naming any concurrency mode
+# other than thread sends coverage back to the C tracer and silently restores
+# the 4-minute tax.
+core = "sysmon"
 
 [tool.coverage.report]
 # Coverage gate: `coverage report` exits non-zero below this, failing CI.
 #
-# Re-baselined from 85 once the greenlet tracer above was fixed. The suite
+# Re-baselined from 85 once the tracer blindness above was fixed. The suite
 # measures 95% honestly; at 85 the gate carried ten points of slack and a whole
 # subsystem could have landed untested without turning it red. 93 leaves ~2
 # points of headroom — roughly one new 200-statement module at 0% — which is a
