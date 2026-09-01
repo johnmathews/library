@@ -9,6 +9,7 @@ app.py, like every other router.
 """
 
 import re
+import unicodedata
 from datetime import date
 from typing import Annotated
 
@@ -42,6 +43,26 @@ _DISALLOWED = re.compile(r"[^a-z0-9_-]+")
 _REPEATED_SEPARATORS = re.compile(r"([_-])\1+")
 
 
+def _strip_diacritics(text_value: str) -> str:
+    """Replace accented letters with their base letters (``Škoda`` -> ``Skoda``).
+
+    NFKD splits a composed letter into its base character plus separate
+    combining marks, which are then dropped — so the base letter survives into
+    the key instead of the whole character being deleted by ``_DISALLOWED``.
+
+    Only decomposable characters transliterate. A letter with no Latin base
+    (Greek, Japanese, and the German ``ß``, which NFKD leaves whole) still falls
+    through to ``_DISALLOWED``; for an entirely non-Latin label that yields the
+    empty string, which is the 422 contract below and is the right answer — a
+    guessed key would be worse than a refusal the user can respond to.
+    """
+    return "".join(
+        char
+        for char in unicodedata.normalize("NFKD", text_value)
+        if not unicodedata.combining(char)
+    )
+
+
 def derive_value_key(label: str) -> str:
     """Turn a free-text suggested label into a key meeting the ``Key`` contract.
 
@@ -51,8 +72,23 @@ def derive_value_key(label: str) -> str:
     label over 64 characters reaches Postgres as a ``DBAPIError`` (not an
     ``IntegrityError``), surfacing as a 500. Returns ``""`` when nothing usable
     is left, which the caller answers with a 422.
+
+    Accents are transliterated, not dropped. ``_DISALLOWED`` deletes anything
+    outside ``[a-z0-9_-]``, so applying it to a raw accented label silently ate
+    the letter itself — ``Škoda`` became ``koda`` and ``Citroën`` became
+    ``citron``, a different word. A value's label can be renamed later at no
+    cost; its key cannot (every rule and every stored label references it), so
+    the mangling was effectively permanent once accepted. Folding first yields
+    ``skoda`` / ``citroen``, which is both readable and what a person would have
+    picked.
+
+    Note this deliberately does NOT change how labels are *matched* against the
+    vocabulary — ``parse_label_response`` remains case-insensitive but
+    accent-sensitive by design (``docs/facets.md`` §3), so an accented canonical
+    spelling still needs its unaccented form as an explicit alias. This is key
+    derivation only.
     """
-    key = label.strip().lower().replace(" ", "-")
+    key = _strip_diacritics(label.strip()).lower().replace(" ", "-")
     key = _DISALLOWED.sub("", key)
     key = _REPEATED_SEPARATORS.sub(r"\1", key)
     return key.strip("-_")[:KEY_MAX_LENGTH].strip("-_")

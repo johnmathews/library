@@ -13,7 +13,7 @@ from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
-from library.api.facets import KEY_MAX_LENGTH, KEY_PATTERN
+from library.api.facets import KEY_MAX_LENGTH, KEY_PATTERN, derive_value_key
 from library.models import (
     Document,
     DocumentSource,
@@ -372,6 +372,85 @@ def test_accepting_a_suggestion_with_no_usable_characters_is_422(
     response = api_client.post(f"/api/facet-suggestions/{suggestion_id}/accept")
     assert response.status_code == 422, response.text
     assert "!!! ??? ***" in response.json()["detail"]
+
+
+# --- Accented labels (#113) --------------------------------------------------
+#
+# `accept_suggestion` is the only sanctioned path that widens the closed
+# vocabulary, so the key it manufactures is the one place key quality matters
+# most: a value's LABEL can be renamed freely afterwards, but its KEY is the
+# stable identifier every rule and every stored document label references, so
+# changing one later is a migration rather than an edit.
+#
+# Dropping a non-ASCII character rather than transliterating it produced keys
+# that read as nothing at all (`Škoda` -> `koda`, `Citroën` -> `citron` — which
+# is not even the same word). The archive is explicitly a Dutch/English one and
+# the labelling run has queued accented marques, so this is a normal case.
+
+
+@pytest.mark.parametrize(
+    ("label", "expected"),
+    [
+        ("Škoda", "skoda"),
+        ("Citroën", "citroen"),
+        # Every diacritic in the two languages this archive actually holds.
+        ("Citroën C4 Grand Picasso", "citroen-c4-grand-picasso"),
+        ("Ångström", "angstrom"),
+        # Mixed scripts: the transliterable part survives, the rest is dropped
+        # as before — the result must still be a readable, contract-shaped key.
+        ("Škoda 日本", "skoda"),
+        # Unchanged behaviour, restated here so a regression in the ASCII path
+        # is caught by the same parametrize that covers the new one.
+        ("EV charging (home)!", "ev-charging-home"),
+    ],
+)
+def test_derive_value_key_transliterates_rather_than_dropping_accents(
+    label: str, expected: str
+) -> None:
+    """A pure check on the derivation itself, so a failure points at the
+    function rather than at the route that calls it."""
+    assert derive_value_key(label) == expected
+
+
+@pytest.mark.parametrize("label", ["日本語", "Ελλάδα", "!!! ??? ***"])
+def test_derive_value_key_still_returns_empty_when_nothing_transliterates(label: str) -> None:
+    """The empty-string contract is what `accept_suggestion` turns into a 422.
+    Transliteration must not quietly rescue a label with no Latin form —
+    NFKD decomposes a Greek or Japanese string without producing ASCII, so it
+    still yields nothing usable and must still be refused rather than
+    truncated into some arbitrary key."""
+    assert derive_value_key(label) == ""
+
+
+def test_accepting_an_accented_suggestion_derives_a_readable_key(
+    api_client: TestClient, api_database_url: str, seeded_document_id: int
+) -> None:
+    """End-to-end through the one route that widens the vocabulary: the derived
+    key must be readable AND still satisfy the ``^[a-z0-9_-]+$`` contract, while
+    the label keeps its diacritics verbatim."""
+    key = _make_facet(api_client)
+    suggestion_id = _seed_suggestion(api_database_url, key, seeded_document_id, "Škoda")
+    response = api_client.post(f"/api/facet-suggestions/{suggestion_id}/accept")
+    assert response.status_code == 200, response.text
+    assert response.json() == {"facet": key, "value": "skoda"}
+    assert re.fullmatch(KEY_PATTERN, response.json()["value"])
+
+    facet = next(f for f in api_client.get("/api/facets").json()["facets"] if f["key"] == key)
+    value = next(v for v in facet["values"] if v["key"] == "skoda")
+    # The accent belongs in the label; only the key is transliterated.
+    assert value["label"] == "Škoda"
+
+
+def test_accepting_an_entirely_non_latin_suggestion_is_422(
+    api_client: TestClient, api_database_url: str, seeded_document_id: int
+) -> None:
+    """Transliteration must not turn the 422 into a 500 or an empty key: a
+    label with no Latin form still has no usable key."""
+    key = _make_facet(api_client)
+    suggestion_id = _seed_suggestion(api_database_url, key, seeded_document_id, "日本語")
+    response = api_client.post(f"/api/facet-suggestions/{suggestion_id}/accept")
+    assert response.status_code == 422, response.text
+    assert "日本語" in response.json()["detail"]
 
 
 def test_putting_labels_on_an_unknown_document_is_404(api_client: TestClient) -> None:
