@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { ValidationFindingSummary } from '@/api/documents'
 import {
+  fieldLabel,
   resolveReviewReason,
   resolveReviewReasons,
   summarizeReviewReasons,
@@ -116,5 +117,32 @@ describe('summarizeReviewReasons', () => {
       finding('ocr_confidence_gate'),
     ]
     expect(summarizeReviewReasons(many, 2)).toBe('Unlikely date, Little information found +1 more')
+  })
+})
+
+describe('fieldLabel', () => {
+  it('maps a known storage column to its friendly label', () => {
+    expect(fieldLabel('amount_total')).toBe('Amount')
+    expect(fieldLabel('amount_kind')).toBe('Amount kind')
+  })
+
+  it('falls back to the raw name for an unmapped field', () => {
+    // Deliberately NOT null, unlike `resolveReviewReason`'s `fieldLabel`: a
+    // finding can omit an attribute chip, but a list of withheld fields cannot
+    // omit its members. Silence about a write that did not happen is the whole
+    // defect this helper was exported to fix.
+    expect(fieldLabel('some_future_column')).toBe('some_future_column')
+  })
+
+  it('is not fooled by inherited Object keys', () => {
+    // The reason the map is a `Map` and not an object literal. On a literal,
+    // `LABELS['constructor']` is a FUNCTION and `LABELS['__proto__']` is the
+    // prototype — neither nullish, so a `?? field` fallback never fires and the
+    // timeline renders `function Object() { [native code] }`. These names reach
+    // the helper from API JSON, and `Record<string, string>` hides it from
+    // vue-tsc, so only a test can hold this.
+    for (const key of ['constructor', '__proto__', 'toString', 'valueOf', 'hasOwnProperty']) {
+      expect(fieldLabel(key)).toBe(key)
+    }
   })
 })

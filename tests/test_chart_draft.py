@@ -360,3 +360,53 @@ async def test_an_in_clause_survives_beside_a_not_in_on_the_same_facet(
     result = filter_drafted_rule(drafted, vocabulary)
     assert len(result.rule.all) == 2
     assert result.unmatchable_terms == []
+
+
+@pytest.mark.asyncio
+async def test_a_repeated_unmatchable_clause_is_reported_once(
+    session: AsyncSession, facets: dict[str, tuple[str, ...]]
+) -> None:
+    """`unknown_terms` is de-duplicated by `report()`; this list must be too.
+
+    The client renders these terms in a `v-for` keyed on the term itself
+    (`QuestionDraft.vue`), so a duplicate string is a duplicate Vue key — and
+    telling the owner the same clause was dropped twice is noise either way.
+    """
+    vocabulary = await load_vocabulary(session)
+    drafted = DraftedRule.model_validate(
+        {
+            "all": [
+                {"facet": "category", "op": "in", "values": ["software"]},
+                {"facet": "category", "op": "in", "values": ["services"]},
+                {"facet": "category", "op": "in", "values": ["services"]},
+            ],
+            "split": None,
+        }
+    )
+    result = filter_drafted_rule(drafted, vocabulary)
+    assert result.unmatchable_terms == ["category in [services]"]
+
+
+@pytest.mark.asyncio
+async def test_distinct_unmatchable_clauses_are_all_reported(
+    session: AsyncSession, facets: dict[str, tuple[str, ...]]
+) -> None:
+    """The other half of the de-dup: collapsing by facet rather than by term
+    would hide that TWO different filters were dropped, not one."""
+    vocabulary = await load_vocabulary(session)
+    drafted = DraftedRule.model_validate(
+        {
+            "all": [
+                {"facet": "category", "op": "in", "values": ["software"]},
+                {"facet": "category", "op": "in", "values": ["services"]},
+                {"facet": "category", "op": "in", "values": ["supplies"]},
+            ],
+            "split": None,
+        }
+    )
+    result = filter_drafted_rule(drafted, vocabulary)
+    assert result.unmatchable_terms == [
+        "category in [services]",
+        "category in [supplies]",
+    ]
+    assert result.rule.all == [Clause(facet="category", op="in", values=["software"])]

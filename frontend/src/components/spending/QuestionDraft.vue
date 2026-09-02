@@ -8,7 +8,7 @@
  * | state | wire | render |
  * | --- | --- | --- |
  * | expressible | `expressible: true`, `rule`/`preview` present | rule, split, preview, save enabled |
- * | partly expressible | `expressible: false`, `rule`/`preview` **present** | the same, labelled an approximation, plus `unknown_terms` |
+ * | partly expressible | `expressible: false`, `rule`/`preview` **present** | the same, labelled an approximation, plus `message` and `unknown_terms` |
  * | collapsed | `expressible: false`, `rule`/`preview` **null** | `unknown_terms` + message only, **no preview**, save disabled |
  *
  * The collapsed case is the one that matters: every clause was dropped, so
@@ -20,8 +20,13 @@
  * button.
  *
  * `unknown_terms` is model-authored text — capped in count and length
- * server-side — and is rendered via ordinary text interpolation, never
- * `v-html`, so it can never execute as markup.
+ * server-side, as one list across both drop causes — and is rendered via
+ * ordinary text interpolation, never `v-html`, so it can never execute as
+ * markup. It carries two different kinds of drop: a term the vocabulary does
+ * not contain, and a clause whose values it DOES contain but which cannot be
+ * combined with one already there (a document takes at most one value per
+ * facet). The list itself is neutral chips; `message` is what distinguishes
+ * them, which is why both states render it.
  *
  * `currency` is a prop, not a choice this component makes: the board reads
  * it from `useCurrencyOptions()` and hands it down, exactly as the seed
@@ -158,6 +163,21 @@ async function save(): Promise<void> {
           data-testid="question-draft-approximate"
         >
           This is an approximation of your question.
+        </p>
+        <!-- The message says WHY each term was dropped, and the two reasons are
+             not interchangeable: a term can be absent from the vocabulary, or
+             present in it but impossible to combine. Rendering the bare list
+             without it leaves every entry reading as the first, which is the
+             wrong explanation for the second. Previously this only rendered in
+             the collapsed branch below — and an unmatchable-only draft can
+             never be collapsed, since its first clause always survives, so the
+             sentence existed on the wire and reached nobody. -->
+        <p
+          v-if="draft.message"
+          class="text-sm text-gray-700 dark:text-gray-200"
+          data-testid="question-draft-message"
+        >
+          {{ draft.message }}
         </p>
         <ul
           v-if="draft.unknown_terms.length > 0"

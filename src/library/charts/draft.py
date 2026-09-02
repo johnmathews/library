@@ -248,7 +248,14 @@ def filter_drafted_rule(drafted: DraftedRule, vocabulary: Sequence[VocabularyFac
                 # Reported with its values so the owner can see what the chart
                 # is NOT filtered by; `unknown_terms`' phrasing would claim
                 # these values are missing from the vocabulary, and they are not.
-                unmatchable.append(f"{facet.key} in [{', '.join(kept)}]")
+                #
+                # De-duplicated like `report()` does for `unknown_terms`: a
+                # model that drafts the same redundant clause twice would
+                # otherwise emit the same string twice, and the client renders
+                # this list with the term as its `v-for` key.
+                term = f"{facet.key} in [{', '.join(kept)}]"
+                if term not in unmatchable:
+                    unmatchable.append(term)
                 continue
             claimed_by_in.add(facet.key)
         clauses.append(Clause(facet=facet.key, op=op, values=kept))

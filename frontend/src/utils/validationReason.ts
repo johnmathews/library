@@ -28,13 +28,21 @@ export interface ReviewReason {
 }
 
 /**
- * Storage field name → friendly attribute label. Findings carry the raw column
+ * Storage field name → friendly attribute label.
+ *
+ * A `Map`, not an object literal, and that is load-bearing rather than taste:
+ * an object literal inherits `Object.prototype`, so `LABELS['constructor']`
+ * returns a *function* and `LABELS['__proto__']` the prototype — neither is
+ * nullish, so a `?? fallback` never fires and the caller renders
+ * `function Object() { [native code] }`. The keys here come from API JSON, and
+ * `Record<string, string>` hides that from the type checker. A `Map` has no
+ * inherited keys, so `.get()` is `undefined` for anything not put in it. Findings carry the raw column
  * name (`document_date`, `amount_total`); the panel shows the label so a reader
  * knows which field to look at. Mirrors the labels in DocumentMetadataEditor's
  * rowConfigs. Unknown/unmapped fields fall through to `null` (no attribute
  * chip) rather than leaking a storage name.
  */
-const FIELD_LABELS: Record<string, string> = {
+const FIELD_LABELS = new Map<string, string>(Object.entries({
   title: 'Title',
   // Findings target either the FK id (`sender_id`) or the resolved name field
   // (`sender`), depending on the rule — see extraction/validation.py.
@@ -50,7 +58,7 @@ const FIELD_LABELS: Record<string, string> = {
   // Reached via `fieldLabel()` rather than a finding: no validation rule
   // targets `amount_kind`, but re-extraction can report withholding it.
   amount_kind: 'Amount kind',
-}
+}))
 
 /**
  * Storage field name → friendly label, or the raw name when unmapped.
@@ -66,7 +74,7 @@ const FIELD_LABELS: Record<string, string> = {
  * beats silence about a write that did not happen.
  */
 export function fieldLabel(field: string): string {
-  return FIELD_LABELS[field] ?? field
+  return FIELD_LABELS.get(field) ?? field
 }
 
 /** Short title per validation rule code. Unknown rules get a safe generic. */
@@ -94,7 +102,7 @@ export function resolveReviewReason(finding: ValidationFindingSummary): ReviewRe
     rule: finding.rule,
     field: finding.field,
     title: RULE_TITLES[finding.rule] ?? GENERIC_TITLE,
-    fieldLabel: finding.field ? (FIELD_LABELS[finding.field] ?? null) : null,
+    fieldLabel: finding.field ? (FIELD_LABELS.get(finding.field) ?? null) : null,
     detail: finding.message,
   }
 }

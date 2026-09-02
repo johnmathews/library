@@ -754,6 +754,14 @@ def _refuse_unbucketable_split_value(query: _ChartQuery, split_value: str | None
     """
     if split_value is None:
         return
+    if split_value == "":
+        # `?split_value=` is the empty string, not an omitted argument, and no
+        # axis can bucket it: a facet value key is a slug, a sender id is
+        # digits, and the "no value" bucket is `None` rather than `""`. Checked
+        # before the axis branches because it is unbucketable on every axis —
+        # the sender branch would catch it via `int("")` anyway, the facet
+        # branch would not.
+        raise _unprocessable("split_value is empty; omit it entirely for the unlabelled bucket")
     if query.split is None:
         raise _unprocessable(
             f"this chart has no split axis, so split_value {split_value!r} names no bucket; omit it"
@@ -1339,9 +1347,16 @@ async def draft_chart(
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc
-    unknown = [term[:MAX_TERM_CHARS] for term in result.unknown_terms[:MAX_UNKNOWN_TERMS]]
-    unmatchable = [term[:MAX_TERM_CHARS] for term in result.unmatchable_terms[:MAX_UNKNOWN_TERMS]]
-    dropped = unknown + unmatchable
+    # The cap is on what the RESPONSE carries, so it is applied to the union —
+    # capping each list at MAX_UNKNOWN_TERMS separately would let the field hold
+    # twice what the constant says, and the constant is what the client's own
+    # docs promise. `unknown` keeps priority: a term the vocabulary does not
+    # contain is the more actionable report, since the owner can add it.
+    unknown = [term[:MAX_TERM_CHARS] for term in result.unknown_terms]
+    unmatchable = [term[:MAX_TERM_CHARS] for term in result.unmatchable_terms]
+    dropped = (unknown + unmatchable)[:MAX_UNKNOWN_TERMS]
+    unknown = [term for term in unknown if term in dropped]
+    unmatchable = [term for term in unmatchable if term in dropped]
     collapsed = not result.rule.all and bool(dropped)
     # Two causes, two sentences. A clause dropped for being unmatchable names
     # only vocabulary that exists, so folding it into "not in the vocabulary"
