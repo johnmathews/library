@@ -143,6 +143,37 @@ describe('QuestionDraft', () => {
     expect(saveButton(wrapper).attributes('disabled')).toBeUndefined()
   })
 
+  it('explains WHY a term was dropped on a partial draft, not just which', async () => {
+    // The bug this covers: `message` used to render only in the collapsed
+    // branch, and an unmatchable-only draft can never be collapsed — its first
+    // clause always survives — so the sentence reached the wire and no one
+    // else. The user saw a raw rule fragment in a grey list whose every other
+    // entry has always meant "not in your vocabulary": the wrong explanation,
+    // replaced by no explanation.
+    const wrapper = await drafted({
+      expressible: false,
+      rule: RULE,
+      preview: PREVIEW,
+      unknown_terms: ['category in [services]'],
+      message:
+        'could not be combined, since a document takes at most one value per facet: ' +
+        'category in [services]',
+    })
+    expect(previewChart(wrapper).exists()).toBe(true)
+    const message = wrapper.find('[data-testid="question-draft-message"]')
+    expect(message.exists()).toBe(true)
+    expect(message.text()).toContain('could not be combined')
+    // And the term itself is still listed, so the two are complementary.
+    expect(wrapper.text()).toContain('category in [services]')
+  })
+
+  it('renders no message element when the draft carries none', async () => {
+    // The control: a `v-if` on a falsy message, not an always-present empty
+    // paragraph that pushes the layout around on every clean draft.
+    const wrapper = await drafted({ expressible: true, rule: RULE, preview: PREVIEW })
+    expect(wrapper.find('[data-testid="question-draft-message"]').exists()).toBe(false)
+  })
+
   // The one that matters: an empty rule matches the whole archive, so
   // previewing it answers a narrow question with the archive's total.
   it('shows NO preview and disables save when every clause was dropped', async () => {

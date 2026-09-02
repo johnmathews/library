@@ -1030,6 +1030,39 @@ def test_a_split_value_on_a_chart_with_no_split_axis_is_a_422(
     assert "no split axis" in response.text
 
 
+def test_an_empty_split_value_is_a_422_on_a_facet_split_too(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """`?split_value=` is the empty string, not an omitted argument.
+
+    The sender branch catches it incidentally, via `int("")`. The facet branch
+    did not, so it reached the SQL and produced the `0.00` silence — a facet
+    value key is a slug and the "no value" bucket is NULL, so `""` can bucket
+    nothing on any axis. Checked ahead of the axis branches for that reason.
+
+    MUTATION: move the check inside the sender branch and this reddens with a
+    200 and an empty panel.
+    """
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="10.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+    chart_id = _save_chart(
+        api_client, f"api-splits-empty-{uuid.uuid4()}", {}, default_split="category"
+    )
+
+    response = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={"period": "2026-03-01", "split": "category", "split_value": ""},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "empty" in response.text
+
+
 def test_an_unsplit_chart_still_opens_its_cell_when_no_split_value_is_sent(
     api_client: TestClient, api_database_url: str
 ) -> None:
@@ -1623,6 +1656,54 @@ def test_a_drafted_same_facet_pair_saves_without_the_422_it_used_to_hit(
     )
 
     assert saved.status_code == 201, saved.text
+
+
+def test_the_reported_drop_list_is_capped_across_BOTH_causes(
+    api_client: TestClient, api_database_url: str, stub_anthropic: StubAnthropic
+) -> None:
+    """`MAX_UNKNOWN_TERMS` bounds the response field, not each internal list.
+
+    The two causes are collected separately and concatenated into one wire
+    field. Capping each at `MAX_UNKNOWN_TERMS` before the join would let the
+    field carry twice the constant — and the constant is what
+    `QuestionDraft.vue`'s own docstring promises the client. This is
+    model-authored text that gets rendered, which is why there is a cap at all.
+
+    MUTATION: apply the slice to `unknown` and `unmatchable` separately and this
+    reddens with 30 terms.
+    """
+    from library.api.spending import MAX_UNKNOWN_TERMS
+
+    # Four values, not the default two: the same-facet run needs three DISTINCT
+    # surviving-vocabulary values to produce three unmatchable terms, and a
+    # value the vocabulary lacks would be reported as unknown instead, quietly
+    # testing the wrong cause.
+    _seed_vocabulary(api_database_url, values=("software", "services", "supplies", "accountancy"))
+    # 18 facets the vocabulary does not contain, plus a same-facet run naming
+    # values it does. Both lists are de-duplicated, so the counts are exactly
+    # 18 + 3 = 21 distinct drops — one more than the cap, with both causes
+    # represented, which is the only shape that can tell a union cap from two
+    # separate ones.
+    unknown_clauses = [
+        {"facet": f"no_such_facet_{i}", "op": "in", "values": ["x"]} for i in range(18)
+    ]
+    same_facet = [
+        {"facet": "category", "op": "in", "values": [v]}
+        for v in ("software", "services", "supplies", "accountancy")
+    ]
+    stub_anthropic.returns(rule={"all": unknown_clauses + same_facet}, proposed_split=None)
+
+    body = _draft(api_client, "a question naming far too many things").json()
+
+    assert len(body["unknown_terms"]) == MAX_UNKNOWN_TERMS, (
+        f"the response field must be bounded by the constant, got {len(body['unknown_terms'])}"
+    )
+    # Vocabulary misses keep priority: they are the actionable report, since the
+    # owner can add the missing value. So all 18 survive and the unmatchable
+    # list is what gets truncated.
+    assert body["unknown_terms"][0] == "no_such_facet_0"
+    assert sum(1 for term in body["unknown_terms"] if term.startswith("no_such_facet")) == 18
+    assert sum(1 for term in body["unknown_terms"] if term.startswith("category in")) == 2
 
 
 def test_a_draft_that_expresses_nothing_previews_nothing(
