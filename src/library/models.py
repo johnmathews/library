@@ -65,10 +65,23 @@ NAMING_CONVENTION: dict[str, str] = {
 
 # Expression shared by both generated FTS columns, parameterised on the
 # Postgres text-search config ('dutch' / 'english').
+# Accent-folded: `public.immutable_unaccent` wraps the concatenated source so
+# `Škoda` and `Skoda` produce the SAME lexeme. `library.search` folds the query
+# side identically — index-side folding alone would just move the mismatch.
+#
+# The function is defined by migration 0039 (`unaccent()` itself is STABLE, not
+# IMMUTABLE, so it cannot appear in a generated column). It is fully
+# schema-qualified so `search_path` cannot change what this expression means.
+#
+# This string must stay in step with the expression the migrations actually
+# applied — they are two copies by necessity, since a migration must be frozen
+# at the schema it shipped and so cannot import this constant. The drift is
+# caught by `test_fts_expression_matches_the_generated_columns`, which reads the
+# definition back out of the live database rather than comparing code to code.
 FTS_EXPRESSION: str = (
-    "to_tsvector('{config}', coalesce(title, '') || ' ' "
+    "to_tsvector('{config}', public.immutable_unaccent(coalesce(title, '') || ' ' "
     "|| coalesce(summary, '') || ' ' || coalesce(pages_markdown, ocr_text, '') || ' ' "
-    "|| coalesce(topics::text, ''))"
+    "|| coalesce(topics::text, '')))"
 )
 
 

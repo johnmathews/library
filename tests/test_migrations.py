@@ -8,6 +8,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 
 from library.extraction.schema import KIND_SLUGS
+from library.models import FTS_EXPRESSION
 from tests.conftest import alembic_config, create_database, fetch_all
 
 pytestmark = pytest.mark.integration
@@ -147,6 +148,81 @@ def test_vector_extension_enabled(migrated_database_url: str) -> None:
         _fetch_scalars(migrated_database_url, "SELECT extname FROM pg_extension")
     )
     assert "vector" in {str(name) for name in extensions}
+
+
+# --- Accent folding (#138 / migration 0039) ----------------------------------
+
+
+def test_unaccent_extension_and_immutable_wrapper_exist(migrated_database_url: str) -> None:
+    """0039 installs the extension itself rather than leaving it a manual host
+    step: `unaccent` is TRUSTED from PG13 on and the application role owns the
+    database, so no superuser is involved. If that ever stops being true this
+    fails at migration time rather than as a mysterious search bug."""
+    extensions = asyncio.run(
+        _fetch_scalars(migrated_database_url, "SELECT extname FROM pg_extension")
+    )
+    assert "unaccent" in {str(name) for name in extensions}
+
+    functions = asyncio.run(
+        _fetch_scalars(
+            migrated_database_url,
+            "SELECT proname FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "WHERE n.nspname = 'public' AND p.proname = 'immutable_unaccent'",
+        )
+    )
+    assert [str(name) for name in functions] == ["immutable_unaccent"]
+
+
+def test_immutable_unaccent_is_actually_immutable(migrated_database_url: str) -> None:
+    """The whole reason the wrapper exists. `unaccent()`'s one-argument form is
+    STABLE (it looks the dictionary up at runtime), and Postgres refuses a
+    STABLE function in a generated column or an index. Declaring the wrapper
+    IMMUTABLE is what makes 0039's generated columns legal — so assert the
+    declared volatility rather than trusting that the migration said so."""
+    volatility = asyncio.run(
+        _fetch_scalars(
+            migrated_database_url,
+            "SELECT provolatile::text FROM pg_proc p "
+            "JOIN pg_namespace n ON n.oid = p.pronamespace "
+            "WHERE n.nspname = 'public' AND p.proname = 'immutable_unaccent'",
+        )
+    )
+    assert [str(v) for v in volatility] == ["i"]  # i = immutable
+
+
+def test_fts_expression_matches_the_generated_columns(migrated_database_url: str) -> None:
+    """`library.models.FTS_EXPRESSION` and the migrations are two copies of one
+    expression, by necessity — a migration must be frozen at the schema it
+    shipped, so it cannot import the constant.
+
+    This closes that gap without a code-to-code comparison that could fail
+    open: it reads the definition back out of the LIVE database and compares it
+    to the constant the ORM believes in. If a future migration changes one and
+    not the other, this goes red.
+    """
+    rows = fetch_all(
+        migrated_database_url,
+        "SELECT a.attname, pg_get_expr(d.adbin, d.adrelid) "
+        "FROM pg_attrdef d "
+        "JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum "
+        "WHERE d.adrelid = 'documents'::regclass "
+        "AND a.attname IN ('search_vector_nl', 'search_vector_en')",
+    )
+    found = {str(name): str(expr) for name, expr in rows}
+    assert set(found) == {"search_vector_nl", "search_vector_en"}
+
+    for column, config in (("search_vector_nl", "dutch"), ("search_vector_en", "english")):
+        rendered = FTS_EXPRESSION.format(config=config)
+        # Postgres normalises whitespace and adds its own casts/parens when it
+        # stores an expression, so compare on the load-bearing tokens rather
+        # than the exact string: the fold must be present, applied to the
+        # concatenated source, under the right config.
+        expr = found[column]
+        assert "immutable_unaccent" in expr, f"{column} is not accent-folded: {expr}"
+        assert config in expr
+        for source_column in ("title", "summary", "pages_markdown", "ocr_text", "topics"):
+            assert source_column in expr, f"{column} lost {source_column}: {expr}"
+            assert source_column in rendered
 
 
 def test_document_chunks_indexes_exist(migrated_database_url: str) -> None:
