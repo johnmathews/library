@@ -16,6 +16,7 @@ from library.models import (
     Document,
     DocumentChunk,
     DocumentSource,
+    Facet,
     Kind,
     ReviewStatus,
 )
@@ -195,3 +196,44 @@ async def test_negative_top_k_does_not_leak_a_near_complete_set(
     )
     assert len(result["results"]) == 1
     assert result["coverage"] == {"matched": 7, "returned": 1, "unembedded": 0}
+
+
+async def test_a_facet_filter_narrows_the_search(
+    session: AsyncSession, stub_embedder: None
+) -> None:
+    """`facets` reaches this tool too, not only `query_documents` (#136).
+
+    Asserted on the ANSWER — `coverage.matched` — rather than on the
+    `DocumentFilters` object handed to the retriever. `_run_semantic_search`
+    builds its filters with `replace(_filters_from_args(args), ...)`, so a future
+    edit to that `replace` could strip `facets` while every schema and
+    argument-coercion test stayed green: the property would be declared, the
+    model would send it, and the search would quietly ignore it.
+    """
+    from library.facets.vocabulary import create_facet, create_value, set_document_label
+
+    if await session.scalar(select(Facet.id).where(Facet.key == "search_scope")) is None:
+        await create_facet(session, "search_scope", "Search Scope", 90)
+        await create_value(session, "search_scope", "included", "Included")
+        await create_value(session, "search_scope", "excluded", "Excluded")
+        await session.commit()
+
+    wanted = await seed(session, "facet-search-wanted", chunks=(("alpha", vec(0)),))
+    other = await seed(session, "facet-search-other", chunks=(("alpha", vec(0)),))
+    await set_document_label(session, wanted, "search_scope", "included")
+    await set_document_label(session, other, "search_scope", "excluded")
+    await session.commit()
+
+    unfiltered = await _run_semantic_search(session, get_settings(), {"query": "alpha"}, set(), {})
+    filtered = await _run_semantic_search(
+        session,
+        get_settings(),
+        {"query": "alpha", "facets": {"search_scope": "included"}},
+        set(),
+        {},
+    )
+
+    # The filter must actually remove something, or the assertion below is
+    # satisfied by a filter that was never applied.
+    assert unfiltered["coverage"]["matched"] >= 2
+    assert filtered["coverage"]["matched"] == 1

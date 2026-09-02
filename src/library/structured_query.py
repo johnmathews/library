@@ -357,9 +357,23 @@ def _signed_amount(kinds: frozenset[AmountKind]) -> ColumnElement[Decimal]:
     ``AMOUNT_SIGN.get(kind, 1)`` covers ``estimate``, which is summable only for
     the quote question above and carries no sign of its own: an estimate is
     money that would go out, so it counts positively.
+
+    Sorted, though the branches are mutually exclusive and the total does not
+    depend on their order: ``kinds`` is a **set**, so unsorted iteration emits a
+    differently-ordered CASE on each process, and SQLAlchemy's compiled-statement
+    cache is keyed on the statement's structure. Same answer, a fresh cache miss
+    every run.
+
+    ``else_`` is unreachable — the caller's WHERE restricts ``amount_kind`` to
+    this same ``kinds`` — and is 0 rather than NULL so that if it ever became
+    reachable it would fail as a wrong total rather than as a NULL that
+    propagates through ``sum()`` and erases the whole group.
     """
     return spend_facts.c.amount * case(
-        *((spend_facts.c.amount_kind == kind.value, AMOUNT_SIGN.get(kind, 1)) for kind in kinds),
+        *(
+            (spend_facts.c.amount_kind == kind.value, AMOUNT_SIGN.get(kind, 1))
+            for kind in sorted(kinds, key=lambda kind: kind.value)
+        ),
         else_=0,
     )
 

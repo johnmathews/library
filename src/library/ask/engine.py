@@ -61,7 +61,8 @@ Use the tools to find evidence, then answer:
 - query_documents: aggregate over structured metadata (e.g. "who was my energy
   provider last year", "how much did I spend on utilities in 2025"). Use for
   who/how-many/how-much/which-over-time questions. Filter by kind, sender,
-  recipient, date range, and the user's own projects, matters and tags.
+  recipient, date range, the curated facet labels, and the user's own
+  projects, matters and tags.
 - get_document: read one document in full (structured fields, the user's
   comments, and its text) once you have located it via another tool. A
   document's comments are the user's own notes about it and are authoritative
@@ -84,7 +85,8 @@ results when answering.
 
 The "Archive context" block at the end of this prompt names the user, the
 recipient names that are theirs, and the archive's vocabulary: kind, matter,
-project and tag slugs, and the most frequent senders. Use those exact slugs and
+project and tag slugs, the curated facets with their allowed values, and the
+most frequent senders. Use those exact slugs and
 names in tool calls instead of guessing; when a question says "my"/"me"/"I",
 it means that user. If it carries an "About the user" note, that is the user's
 own account of their household and circumstances — authoritative personal

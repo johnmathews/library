@@ -172,14 +172,15 @@ SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(AMOUNT_SIGN)
 #: it to ``create_all``/``drop_all`` and to Alembic's autogenerate as though it
 #: were a table the ORM owns. Migration 0035 is the one definition of its shape.
 #:
-#: ``library.charts.query`` reads the view through ``text()`` SQL, which is
-#: right there — it builds whole statements and needs none of SQLAlchemy's
+#: The view's other readers — ``library.charts.query``, ``library.charts.footer``
+#: and ``library.api.facets`` — reach it through ``text()`` SQL, which is right
+#: for them: they build whole statements and need none of SQLAlchemy's
 #: composition. ``structured_query.sum_amount`` is the opposite case: it has to
 #: AND the view against ``search.filter_conditions``, a list of ORM expressions
-#: over ``Document`` covering fourteen filters. A text query cannot compose with
-#: those, so the alternative is a second, hand-written copy of the whole filter
-#: vocabulary in SQL — the kind of second copy this repo deletes rather than
-#: tests.
+#: over ``Document`` covering every field of ``DocumentFilters``. A text query
+#: cannot compose with those, so the alternative is a second, hand-written copy
+#: of the whole filter vocabulary in SQL — the kind of second copy this repo
+#: deletes rather than tests.
 #:
 #: Only the columns a caller actually reads are declared; a ``table()`` need not
 #: be exhaustive, and an undeclared column is a clear ``AttributeError`` rather
