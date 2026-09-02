@@ -1001,6 +1001,34 @@ describe('DocumentListView', () => {
     listResponse = () => jsonResponse(listBody([makeItem({ snippet: '<b>rekening</b>' })]))
     await router.push('/?q=rekening')
     const w = await mountView()
+    const href = w.find('.app-doc-card__title a').attributes('href') ?? ''
+    // The path is what this test is about; the query is asserted separately
+    // below, since #140 made the link deliberately carry the active filter.
+    expect(href.split('?')[0]).toBe('/documents/12')
+  })
+
+  // --- The link carries the active filter (#140) ------------------------------
+  //
+  // Previous/Next on the detail page walks the set the user was looking at, and
+  // the ONLY way it learns that set is from the query on the link that opened
+  // it. So this is not cosmetic: without it the whole feature is inert.
+
+  it('carries the active filter on a result link, so detail navigation can follow it', async () => {
+    listResponse = () => jsonResponse(listBody([makeItem({ snippet: '<b>rekening</b>' })]))
+    await router.push('/?q=rekening&tag=post')
+    const w = await mountView()
+    const href = w.find('.app-doc-card__title a').attributes('href') ?? ''
+    expect(href).toContain('q=rekening')
+    expect(href).toContain('tag=post')
+  })
+
+  it('leaves the link bare when no filter is active', async () => {
+    // An unfiltered dashboard would otherwise put sort/page params on every
+    // link for no gain, and the detail page treats their absence as the
+    // whole-archive fallback.
+    listResponse = () => jsonResponse(listBody([makeItem({})]))
+    await router.push('/')
+    const w = await mountView()
     expect(w.find('.app-doc-card__title a').attributes('href')).toBe('/documents/12')
   })
 

@@ -1332,6 +1332,50 @@ describe('DocumentDetailView', () => {
       expect(next.attributes('href')).toBe('/documents/20')
     })
 
+    // --- Following the active filter (#140) ---------------------------------
+
+    it('shows the position within a filtered set, so scoped navigation is visible', async () => {
+      // Without this the two modes are indistinguishable and the failure is a
+      // silent one — which is the specific thing #140 asks to avoid.
+      neighborsList = [{ id: 8 }, { id: 12 }, { id: 20 }]
+      const w = await mountView('/documents/12?q=rekening')
+      await flushPromises()
+      expect(w.get('[data-testid="doc-neighbors-scope"]').text()).toBe('2 of 3')
+    })
+
+    it('says nothing about scope when no filter is active', async () => {
+      // "2 of 263" for the whole archive is noise, not orientation.
+      neighborsList = [{ id: 8 }, { id: 12 }, { id: 20 }]
+      const w = await mountView('/documents/12')
+      await flushPromises()
+      expect(w.find('[data-testid="doc-neighbors-scope"]').exists()).toBe(false)
+    })
+
+    it('carries the filter onto both neighbour links, so stepping keeps following it', async () => {
+      // The set has to survive each hop; dropping the query on the first step
+      // would silently revert to whole-archive navigation mid-walk.
+      neighborsList = [{ id: 8 }, { id: 12 }, { id: 20 }]
+      const w = await mountView('/documents/12?q=rekening')
+      await flushPromises()
+      expect(w.get('[data-testid="doc-prev"]').attributes('href')).toContain('q=rekening')
+      expect(w.get('[data-testid="doc-next"]').attributes('href')).toContain('q=rekening')
+    })
+
+    it('says the document no longer matches, rather than claiming a false position', async () => {
+      // Relabelling from this page is the workflow filtered navigation exists
+      // for, so dropping out of your own filter set is expected. Navigation
+      // continues; the claim of a position does not.
+      neighborsList = [{ id: 8 }, { id: 20 }] // 12 is absent from the set
+      const w = await mountView('/documents/12?facet=category%3Asoftware')
+      await flushPromises()
+      expect(w.get('[data-testid="doc-neighbors-scope"]').text()).toBe(
+        'No longer matches this filter',
+      )
+      // Still navigable — it must not strand the reader.
+      expect(w.get('[data-testid="doc-prev"]').attributes('href')).toContain('/documents/8')
+      expect(w.get('[data-testid="doc-next"]').attributes('href')).toContain('/documents/20')
+    })
+
     it('omits the previous link for the first document', async () => {
       neighborsList = [{ id: 12 }, { id: 20 }]
       const w = await mountView('/documents/12')

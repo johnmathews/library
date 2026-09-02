@@ -3,6 +3,7 @@ import { flushPromises } from '@vue/test-utils'
 import { ref } from 'vue'
 import { useDocumentNeighbors } from '@/composables/useDocumentNeighbors'
 import { listDocuments, type DocumentListResponse } from '@/api/documents'
+import { parseDocumentQuery, type AppliedFilters } from '@/utils/documentQuery'
 
 vi.mock('@/api/documents', () => ({ listDocuments: vi.fn() }))
 const listMock = vi.mocked(listDocuments)
@@ -108,5 +109,129 @@ describe('useDocumentNeighbors', () => {
     expect(listMock).toHaveBeenCalledWith(
       expect.objectContaining({ sort: 'added_date', direction: 'desc' }),
     )
+  })
+
+  // --- Following the active filter set (#140) --------------------------------
+  //
+  // The set the user is walking, not the whole archive. Order WITHIN the set is
+  // unchanged (still id-ascending) — this changes membership, not direction,
+  // which is why it does not reopen the settled decision against following the
+  // list's SORT.
+
+  /** Applied filters parsed from a URL query, as the detail route supplies. */
+  function filtersFor(query: Record<string, string>): AppliedFilters {
+    return parseDocumentQuery(query)
+  }
+
+  it('scans the filter set, not the whole archive, when a filter is active', async () => {
+    listMock.mockResolvedValue(page([30, 20, 10], 3))
+    const filters = ref(filtersFor({ q: 'rekening' }))
+    const { prevId, nextId } = useDocumentNeighbors(ref(20), filters)
+    await flushPromises()
+
+    // The observable outcome that matters: the request actually carried the
+    // filter. Asserting only prev/next would pass against an unfiltered scan
+    // that happened to return the same ids.
+    expect(listMock).toHaveBeenCalledWith(expect.objectContaining({ q: 'rekening' }))
+    expect(prevId.value).toBe(10)
+    expect(nextId.value).toBe(30)
+  })
+
+  it('falls back to the unfiltered scan when the route carries no filter', async () => {
+    // A cold deep-link or a shared URL: the old whole-archive behaviour, with
+    // no special-casing — empty filters simply read as "not filtered".
+    listMock.mockResolvedValue(page([30, 20, 10], 3))
+    const { prevId, nextId } = useDocumentNeighbors(ref(20), ref(filtersFor({})))
+    await flushPromises()
+
+    const sent = listMock.mock.calls.at(-1)?.[0] ?? {}
+    expect(sent).not.toHaveProperty('q')
+    expect(sent).toMatchObject({ sort: 'added_date', direction: 'desc' })
+    expect(prevId.value).toBe(10)
+    expect(nextId.value).toBe(30)
+  })
+
+  it('reports position and total within a single-page filter set', async () => {
+    // The motivating case in #140: "a search returning three documents should
+    // let you page through those three". Position counts id-ASCENDING so that
+    // Next (higher id) increases it.
+    listMock.mockResolvedValue(page([30, 20, 10], 3))
+    const { position, total, inSet } = useDocumentNeighbors(
+      ref(20),
+      ref(filtersFor({ q: 'rekening' })),
+    )
+    await flushPromises()
+    expect(inSet.value).toBe(true)
+    expect(position.value).toBe(2)
+    expect(total.value).toBe(3)
+  })
+
+  it('states no position when there is no filter, however small the archive', async () => {
+    // "Document 2 of 3" for the whole archive is noise, not orientation.
+    listMock.mockResolvedValue(page([30, 20, 10], 3))
+    const { position, total, inSet } = useDocumentNeighbors(ref(20))
+    await flushPromises()
+    expect(position.value).toBeNull()
+    expect(total.value).toBeNull()
+    expect(inSet.value).toBeNull()
+  })
+
+  it('reports the current document as out of the set without losing navigation', async () => {
+    // Relabelling from the detail page is the workflow filtered navigation
+    // exists for, so a document dropping out of its own filter set is expected
+    // rather than exceptional. #140 asks specifically that this not be silent:
+    // keep walking the set, but do not claim a position within it.
+    listMock.mockResolvedValue(page([30, 10], 2))
+    const { prevId, nextId, inSet, position } = useDocumentNeighbors(
+      ref(20), // not among the returned ids
+      ref(filtersFor({ facet: 'category:software' })),
+    )
+    await flushPromises()
+    expect(inSet.value).toBe(false)
+    expect(position.value).toBeNull()
+    // Navigation still works — it does not strand the user.
+    expect(prevId.value).toBe(10)
+    expect(nextId.value).toBe(30)
+  })
+
+  it('omits a position for a filter set larger than one page', async () => {
+    // Counting a multi-page set would cost round-trips the neighbour scan does
+    // not otherwise need. Neighbours still follow the filter; only the
+    // indicator is withheld, rather than being guessed at.
+    listMock.mockResolvedValue(page(Array.from({ length: 100 }, (_, i) => 300 - i), 250))
+    const { position, total, nextId } = useDocumentNeighbors(
+      ref(250),
+      ref(filtersFor({ q: 'invoice' })),
+    )
+    await flushPromises()
+    expect(position.value).toBeNull()
+    expect(total.value).toBeNull()
+    expect(nextId.value).toBe(251)
+  })
+
+  it('re-scans when the filter changes, not only when the id does', async () => {
+    listMock.mockResolvedValue(page([30, 20, 10], 3))
+    const filters = ref(filtersFor({ q: 'first' }))
+    const { nextId } = useDocumentNeighbors(ref(20), filters)
+    await flushPromises()
+    expect(nextId.value).toBe(30)
+
+    listMock.mockResolvedValue(page([40, 20], 2))
+    filters.value = filtersFor({ q: 'second' })
+    await flushPromises()
+    expect(listMock).toHaveBeenLastCalledWith(expect.objectContaining({ q: 'second' }))
+    expect(nextId.value).toBe(40)
+  })
+
+  it('keeps the early exit while filtered', async () => {
+    // A filter is a WHERE, not an ORDER BY, so a filtered scan is still
+    // id-descending and crossing below the current id still settles both
+    // neighbours. If this regressed, the scan would page through the whole set
+    // on every detail view.
+    listMock.mockResolvedValue(page(Array.from({ length: 100 }, (_, i) => 300 - i), 500))
+    const { prevId } = useDocumentNeighbors(ref(250), ref(filtersFor({ q: 'invoice' })))
+    await flushPromises()
+    expect(prevId.value).toBe(249)
+    expect(listMock).toHaveBeenCalledTimes(1) // stopped after the first page
   })
 })

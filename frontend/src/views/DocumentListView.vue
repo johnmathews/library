@@ -39,6 +39,7 @@ import {
   parseDocumentQuery,
   hasActiveFilters,
   buildDocumentQuery,
+  toDocumentFilters,
   DEFAULT_SORT,
   DEFAULT_SORT_DIRECTION,
   type SortField,
@@ -76,6 +77,22 @@ const sortPref = useStorage<SortPreference>('library:doc-sort-v1', {
 })
 
 const applied = computed(() => parseDocumentQuery(route.query, sortPref.value))
+
+/**
+ * The query to hand a document tile's link, so the detail page's Previous/Next
+ * can walk the set the user is looking at rather than the whole archive (#140).
+ *
+ * Passed only when a filter is actually active: an unfiltered dashboard would
+ * otherwise put sort/page params on every link for no gain, and the detail
+ * page treats "no filter params" as the whole-archive fallback anyway.
+ *
+ * `route.query` is forwarded as-is rather than rebuilt, so the detail page
+ * parses byte-identical input to what the dashboard itself parsed — there is no
+ * second serialisation that could round-trip differently.
+ */
+const detailQuery = computed(() =>
+  hasActiveFilters(applied.value) ? { ...route.query } : {},
+)
 const isFiltered = computed(() => hasActiveFilters(applied.value))
 
 // The canonical URL query for the current applied state — what the "Save view"
@@ -163,36 +180,19 @@ const showAttentionRow = computed(() => showReviewButton.value || heldEmails.cou
 let abortController: AbortController | null = null
 let generation = 0
 
-/** Build the API filters for the current applied state at a given window. */
+/**
+ * Build the API filters for the current applied state at a given window.
+ *
+ * The mapping itself lives in `utils/documentQuery.ts` because the neighbour
+ * scan on the detail page must reproduce THIS result set exactly; a second copy
+ * would drift and the two would silently disagree (#140).
+ */
 function buildFilters(
   state: typeof applied.value,
   limit: number,
   offset: number,
 ): DocumentFilters {
-  const senderId = Number.parseInt(state.senderId, 10)
-  const recipientId = Number.parseInt(state.recipientId, 10)
-  return {
-    q: state.q || undefined,
-    kind: state.kind || undefined,
-    sender_id: Number.isInteger(senderId) ? senderId : undefined,
-    recipient_id: Number.isInteger(recipientId) ? recipientId : undefined,
-    project: state.projects.length ? state.projects : undefined,
-    matter: state.matters.length ? state.matters : undefined,
-    tag: state.tags.length ? state.tags : undefined,
-    facet: Object.keys(state.facets).length ? state.facets : undefined,
-    language: (state.language || undefined) as DocumentLanguage | undefined,
-    status: (state.status || undefined) as DocumentListItem['status'] | undefined,
-    review_status: (state.review || undefined) as DocumentListItem['review_status'] | undefined,
-    date_from: state.dateFrom || undefined,
-    date_to: state.dateTo || undefined,
-    // Always send sort + direction explicitly: the frontend's default
-    // (added_date) differs from the API's default (document_date), so omitting
-    // them at the frontend default would silently order by the wrong field.
-    sort: state.sort,
-    direction: state.dir,
-    limit,
-    offset,
-  }
+  return toDocumentFilters(state, { limit, offset })
 }
 
 /** Append the next PAGE_SIZE batch from the current offset (items.length). */
@@ -711,7 +711,7 @@ function toggleSortDirection(): void {
                  anchor (better on touch), without nesting extra links. -->
             <RouterLink
               class="text-violet-600 font-semibold hover:underline after:absolute after:inset-0 after:content-['']"
-              :to="{ name: 'document-detail', params: { id: item.id } }"
+              :to="{ name: 'document-detail', params: { id: item.id }, query: detailQuery }"
             >
               {{ item.title ?? 'Untitled document' }}
             </RouterLink>
