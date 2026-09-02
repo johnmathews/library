@@ -232,8 +232,12 @@ def build_document_query(q: str | None, filters: DocumentFilters) -> DocumentQue
     if q:
         dutch = cast("dutch", REGCONFIG)
         english = cast("english", REGCONFIG)
-        tsq_nl = func.websearch_to_tsquery(dutch, q)
-        tsq_en = func.websearch_to_tsquery(english, q)
+        # Fold the query's accents the same way the generated columns fold the
+        # document's (migration 0039). Both sides or neither: unaccenting only
+        # one moves the mismatch rather than removing it.
+        folded = func.public.immutable_unaccent(q)
+        tsq_nl = func.websearch_to_tsquery(dutch, folded)
+        tsq_en = func.websearch_to_tsquery(english, folded)
         rank_nl = func.ts_rank(Document.search_vector_nl, tsq_nl, FTS_RANK_NORMALIZATION)
         rank_en = func.ts_rank(Document.search_vector_en, tsq_en, FTS_RANK_NORMALIZATION)
         conditions.append(
@@ -246,7 +250,9 @@ def build_document_query(q: str | None, filters: DocumentFilters) -> DocumentQue
         # Prefer the vision "understood layer" (pages_markdown) and fall back to
         # raw OCR — the same source the generated tsvector columns index — so an
         # image-PDF snippet shows real body text, not just the thin letterhead.
-        snippet_source = func.coalesce(Document.pages_markdown, Document.ocr_text, "")
+        snippet_source = func.public.immutable_unaccent(
+            func.coalesce(Document.pages_markdown, Document.ocr_text, "")
+        )
         snippet = case(
             (rank_nl >= rank_en, func.ts_headline(dutch, snippet_source, tsq_nl, HEADLINE_OPTIONS)),
             else_=func.ts_headline(english, snippet_source, tsq_en, HEADLINE_OPTIONS),
@@ -391,8 +397,10 @@ async def _fts_candidates(
     """Document ids matching the bilingual FTS query, best rank first."""
     dutch = cast("dutch", REGCONFIG)
     english = cast("english", REGCONFIG)
-    tsq_nl = func.websearch_to_tsquery(dutch, query)
-    tsq_en = func.websearch_to_tsquery(english, query)
+    # Fold as above — this is the second of the two query-side sites.
+    folded = func.public.immutable_unaccent(query)
+    tsq_nl = func.websearch_to_tsquery(dutch, folded)
+    tsq_en = func.websearch_to_tsquery(english, folded)
     rank = func.greatest(
         func.ts_rank(Document.search_vector_nl, tsq_nl, FTS_RANK_NORMALIZATION),
         func.ts_rank(Document.search_vector_en, tsq_en, FTS_RANK_NORMALIZATION),

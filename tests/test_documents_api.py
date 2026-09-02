@@ -457,6 +457,125 @@ def test_search_snippet_comes_from_page_markdown(
     assert "<b>grachtenpand</b>" in snippet
 
 
+# --- Accent folding (#138) ---------------------------------------------------
+#
+# Before 0039 a document carrying a diacritic could ONLY be found by typing the
+# diacritic; the plain-ASCII spelling returned "No documents match your search",
+# which is indistinguishable from the document not existing. The archive is
+# explicitly a Dutch/English one and 7 of 110 live senders carry a diacritic, so
+# this is a normal case rather than an exotic one.
+#
+# The fold has to happen on BOTH sides — the generated tsvector columns
+# (migration 0039) and the query (`library.search`). A test that only covered
+# one direction would pass with the mismatch merely moved, so both spellings are
+# asserted against both spellings below.
+
+
+@pytest.mark.parametrize(
+    ("stored", "queried"),
+    [
+        # The bug: ASCII spelling must now find the accented document.
+        ("Škoda", "Skoda"),
+        # The direction that already worked, which the fix must not break.
+        ("Škoda", "Škoda"),
+        # And the mirror: an accented query must find a plain-ASCII document,
+        # which is what proves the fold is applied to the query and not merely
+        # baked into the index.
+        ("Skoda", "Škoda"),
+        ("Skoda", "Skoda"),
+    ],
+)
+def test_search_folds_accents_in_both_directions(
+    api_client: TestClient, api_database_url: str, stored: str, queried: str
+) -> None:
+    tag = f"w138-fold-{stored}-{queried}".lower()
+    seed_document(
+        api_database_url,
+        tag,
+        tag_slugs=[tag],
+        ocr_text=f"Onderhoudsfactuur voor de {stored} bestelwagen.",
+    )
+    body = list_docs(api_client, q=queried, tag=tag)
+    assert body["total"] == 1, f"stored {stored!r} was not found by {queried!r}"
+
+
+def test_search_folds_accents_in_the_dutch_and_english_vectors_alike(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """Both configs need the fold. The query ORs the two vectors together, so
+    folding only one silently half-works: the unfolded leg contributes nothing
+    and the folded leg carries the match, which looks like success."""
+    seed_document(
+        api_database_url,
+        "w138-en",
+        tag_slugs=["w138-en"],
+        # English-language text, so the `english` vector is the one that can
+        # plausibly match its stemming.
+        ocr_text="Annual maintenance invoice for the Citroën delivery van.",
+    )
+    assert list_docs(api_client, q="Citroen", tag="w138-en")["total"] == 1
+
+
+def test_search_snippet_shows_the_matching_passage_for_an_ascii_query(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The snippet source is accent-folded too, so `ts_headline` can find the
+    match — at the cost of rendering the passage without its diacritics.
+
+    This is a deliberate trade-off, and both halves of it are pinned here
+    because it is user-visible. Measured, not reasoned about: with the RAW
+    (still-accented) source, a query of `Skoda` against a document reading
+    `Škoda` gives `ts_headline` no lexeme to mark up, and it returns the
+    leading fragment — `"De reparatie aan de"` — which does not contain the
+    matched term at all. The result row is then a document with no visible
+    reason for being there, in exactly the case #138 exists to enable.
+
+    A snippet's job is to show WHY this result matched; the detail page is the
+    source of truth for what the document actually says. So the fold wins, and
+    the diacritic loss is confined to the preview.
+
+    Note the cost lands only on documents that carry a diacritic — 7 of 110
+    live senders. For every other document the folded and unfolded sources are
+    byte-identical and nothing changes.
+    """
+    seed_document(
+        api_database_url,
+        "w138-snippet",
+        tag_slugs=["w138-snippet"],
+        ocr_text="De reparatie aan de Škoda is afgerond en betaald.",
+    )
+
+    ascii_hit = list_docs(api_client, q="Skoda", tag="w138-snippet")
+    assert ascii_hit["total"] == 1
+    snippet = ascii_hit["items"][0]["snippet"]
+    # The matching passage, highlighted — not a leading fragment.
+    assert "<b>Skoda</b>" in snippet
+    assert "reparatie" in snippet and "afgerond" in snippet
+    # The accepted cost: the preview is folded, so the diacritic is not shown.
+    assert "Škoda" not in snippet
+
+    # The direction that already worked still highlights, via the same fold.
+    accented_hit = list_docs(api_client, q="Škoda", tag="w138-snippet")
+    assert accented_hit["total"] == 1
+    assert "<b>Skoda</b>" in accented_hit["items"][0]["snippet"]
+
+
+def test_search_snippet_is_unchanged_for_a_document_without_diacritics(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The fold is a no-op on unaccented text, so the overwhelming majority of
+    snippets are byte-for-byte what they were before #138."""
+    seed_document(
+        api_database_url,
+        "w138-plain",
+        tag_slugs=["w138-plain"],
+        ocr_text="De totale huur voor het grachtenpand bedraagt 1800 euro.",
+    )
+    body = list_docs(api_client, q="grachtenpand", tag="w138-plain")
+    assert body["total"] == 1
+    assert "<b>grachtenpand</b>" in body["items"][0]["snippet"]
+
+
 def test_search_falls_back_to_ocr_text_when_no_page_markdown(
     api_client: TestClient, api_database_url: str
 ) -> None:
