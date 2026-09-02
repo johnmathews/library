@@ -717,6 +717,59 @@ async def _resolve_splits(
     ]
 
 
+def _refuse_unbucketable_split_value(query: _ChartQuery, split_value: str | None) -> None:
+    """Refuse a ``split_value`` that no bucket of this chart could ever carry.
+
+    The same class the ``period`` check above fixes, on the same route: a value
+    that cannot match makes ``_CELL_NARROWING``'s ``IS NOT DISTINCT FROM`` false
+    for every row, and the panel comes back ``total: "0.00"`` with no payments —
+    "you spent nothing here", the silence §12 exists to remove — instead of
+    saying the question was malformed.
+
+    **Two shape checks only, and the omission is the design.** Both are decided
+    from the resolved split axis alone; neither asks whether the value *exists*:
+
+    * an **unsplit** chart. ``query.py``'s ``_SPLIT_NONE`` is
+      ``CAST(NULL AS text)``, so every non-null value is unmatchable by
+      construction. Exact, and free.
+    * a **sender** split whose value is not a ``senders.id``-shaped integer.
+      ``_resolve_splits`` computes exactly this predicate already; today a
+      malformed id silently means "no bucket". Parsed rather than
+      pattern-matched, so non-canonical spellings of a real id (``"007"``) keep
+      working — pinned by a test.
+
+    **Membership is deliberately NOT checked**, and it is the tempting third
+    check. A facet value can be deleted from the vocabulary while
+    ``spend_facts.labels`` still carries it on already-labelled rows, so that
+    bucket is genuinely drawn by ``/data`` — ``_resolve_splits`` falls back to
+    the raw value for exactly this case rather than raising, because raising
+    would be a 500 on every chart in range of one such row. Refusing a cell the
+    chart has just drawn is a worse failure than the ``0.00`` this replaces, and
+    the reverse holds too: a sender that exists but contributed nothing to this
+    window is an honest empty bucket. Existence of the value and existence of
+    the bucket are independent in both directions, so only the shape is safe to
+    judge here. The exact test is the set of ``split_value``s ``chart_series``
+    returned for the period, which means running the series — which is the one
+    thing this route exists not to do.
+    """
+    if split_value is None:
+        return
+    if query.split is None:
+        raise _unprocessable(
+            f"this chart has no split axis, so split_value {split_value!r} names no bucket; omit it"
+        )
+    if query.split == SENDER_SPLIT:
+        try:
+            parsed = int(split_value)
+        except ValueError:
+            raise _unprocessable(
+                f"split_value {split_value!r} is not a sender id; a sender split's "
+                "value is the id `/data` returned, as text"
+            ) from None
+        if not 0 <= parsed <= _MAX_SENDER_ID:
+            raise _unprocessable(f"split_value {split_value!r} is outside the range of a sender id")
+
+
 def _label_of(value: VocabularyValue | None, fallback: str) -> str:
     return fallback if value is None else value.label
 
@@ -1058,6 +1111,7 @@ async def chart_cell_data(
         raise _unprocessable(
             f"period {period} is not the start of a {query.grain.value}; use {start}"
         )
+    _refuse_unbucketable_split_value(query, split_value)
     resolved = await _resolve_splits(session, query, [split_value])
     bucket = resolved[0] if resolved else None
     payments: list[CellPayment] = await chart_cell(
@@ -1286,22 +1340,34 @@ async def draft_chart(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)
         ) from exc
     unknown = [term[:MAX_TERM_CHARS] for term in result.unknown_terms[:MAX_UNKNOWN_TERMS]]
-    collapsed = not result.rule.all and bool(result.unknown_terms)
-    message: str | None = None
+    unmatchable = [term[:MAX_TERM_CHARS] for term in result.unmatchable_terms[:MAX_UNKNOWN_TERMS]]
+    dropped = unknown + unmatchable
+    collapsed = not result.rule.all and bool(dropped)
+    # Two causes, two sentences. A clause dropped for being unmatchable names
+    # only vocabulary that exists, so folding it into "not in the vocabulary"
+    # would explain a real drop with a false reason — the failure §12 is about,
+    # one layer up.
+    parts: list[str] = []
     if unknown:
-        message = "not in the vocabulary: " + ", ".join(unknown)
-        if collapsed:
-            message += (
-                " — nothing in this question could be expressed, so no rule is "
-                "proposed (an empty rule would mean all spending)"
-            )
+        parts.append("not in the vocabulary: " + ", ".join(unknown))
+    if unmatchable:
+        parts.append(
+            "could not be combined, since a document takes at most one value "
+            "per facet: " + ", ".join(unmatchable)
+        )
+    message: str | None = "; ".join(parts) if parts else None
+    if message is not None and collapsed:
+        message += (
+            " — nothing in this question could be expressed, so no rule is "
+            "proposed (an empty rule would mean all spending)"
+        )
     if collapsed:
         return DraftOut(
             question=body.question,
             expressible=False,
             rule=None,
             proposed_split=result.proposed_split,
-            unknown_terms=unknown,
+            unknown_terms=dropped,
             message=message,
             preview=None,
         )
@@ -1318,10 +1384,10 @@ async def draft_chart(
     )
     return DraftOut(
         question=body.question,
-        expressible=not unknown,
+        expressible=not dropped,
         rule=result.rule,
         proposed_split=result.proposed_split,
-        unknown_terms=unknown,
+        unknown_terms=dropped,
         message=message,
         preview=await _answer(session, None, query),
     )
