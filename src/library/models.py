@@ -46,7 +46,9 @@ from sqlalchemy import (
     Table,
     Text,
     UniqueConstraint,
+    column,
     func,
+    table,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TSVECTOR
@@ -161,6 +163,41 @@ AMOUNT_SIGN: Mapping[AmountKind, int] = MappingProxyType(
 )
 
 SUMMABLE_AMOUNT_KINDS: frozenset[AmountKind] = frozenset(AMOUNT_SIGN)
+
+
+#: The ``spend_facts`` view (migration 0035) as a composable selectable.
+#:
+#: A lightweight ``table()`` rather than a ``Table`` on ``Base.metadata``,
+#: deliberately: this is a **view**, and putting it in the metadata would offer
+#: it to ``create_all``/``drop_all`` and to Alembic's autogenerate as though it
+#: were a table the ORM owns. Migration 0035 is the one definition of its shape.
+#:
+#: ``library.charts.query`` reads the view through ``text()`` SQL, which is
+#: right there — it builds whole statements and needs none of SQLAlchemy's
+#: composition. ``structured_query.sum_amount`` is the opposite case: it has to
+#: AND the view against ``search.filter_conditions``, a list of ORM expressions
+#: over ``Document`` covering fourteen filters. A text query cannot compose with
+#: those, so the alternative is a second, hand-written copy of the whole filter
+#: vocabulary in SQL — the kind of second copy this repo deletes rather than
+#: tests.
+#:
+#: Only the columns a caller actually reads are declared; a ``table()`` need not
+#: be exhaustive, and an undeclared column is a clear ``AttributeError`` rather
+#: than a wrong result.
+spend_facts = table(
+    "spend_facts",
+    column("document_id", BigInteger),
+    column("line_id", BigInteger),
+    column("payment_id", BigInteger),
+    column("is_canonical", Boolean),
+    column("sender_id", Integer),
+    column("date", Date),
+    column("amount", Numeric(14, 2)),
+    column("currency", String),
+    # Written by 0033 as `sa.Enum(..., native_enum=False)`, i.e. a VARCHAR with
+    # a CHECK — so it compares against `AmountKind`'s *values*, not the enum.
+    column("amount_kind", String),
+)
 
 
 class SpendLineOrigin(enum.StrEnum):

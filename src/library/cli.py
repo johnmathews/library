@@ -1221,6 +1221,8 @@ async def _seed_scenario(session: AsyncSession, scenario: Scenario) -> None:
                 kind=kind,
                 document_date=seed_doc.document_date,
                 amount_total=Decimal(seed_doc.amount) if seed_doc.amount is not None else None,
+                # Only meaningful alongside an amount; harmless without one.
+                amount_kind=seed_doc.amount_kind if seed_doc.amount is not None else None,
                 currency=seed_doc.currency,
                 review_status=seed_doc.review_status,
             )
