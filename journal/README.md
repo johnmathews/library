@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-186 entries.
+189 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,9 +13,12 @@ CI checks it is current.
 
 ## September 2026
 
+- **2026-09-02** — [Telling the owner what extraction refused to write](260902-skipped-writes-made-visible.md)
 - **2026-09-02** — [Folding accents in full-text search](260902-fts-accent-folding.md)
 - **2026-09-02** — [Previous/next follows the filter you were looking at](260902-filtered-neighbours.md)
+- **2026-09-02** — [Two ways a chart said "you spent nothing"](260902-draft-narrowing-and-cell-guards.md)
 - **2026-09-02** — [Ask's money answers move onto spend_facts](260902-ask-money-spend-facts.md)
+- **2026-09-02** — [A disclosure rule that spans a comparison](260902-ask-cross-call-disclosure.md)
 - **2026-09-01** — [Making the Facets card movable without moving it](260901-facets-card-draggable.md)
 - **2026-09-01** — [Sorting the facet dropdowns, and hiding a facet that cannot filter](260901-facet-dropdown-tidy.md)
 - **2026-09-01** — [The facet Save button that could be disabled forever](260901-facet-draft-clobber.md)

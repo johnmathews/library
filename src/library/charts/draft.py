@@ -117,6 +117,12 @@ class DraftResult:
     #: Facet keys, value keys and operators the model named that the vocabulary
     #: does not contain. Ordered as the model produced them, de-duplicated.
     unknown_terms: list[str] = field(default_factory=list)
+    #: Clauses dropped because they could not be COMBINED, not because anything
+    #: in them was unknown. Kept separate from ``unknown_terms`` because the two
+    #: have different causes and the API says which: every value in one of these
+    #: is in the vocabulary, so reporting it as "not in the vocabulary" would be
+    #: a false explanation of a real drop.
+    unmatchable_terms: list[str] = field(default_factory=list)
 
 
 def build_draft_prompt(vocabulary: Sequence[VocabularyFacet], question: str) -> str:
@@ -161,24 +167,57 @@ def _resolve_value(facet: VocabularyFacet, raw: str) -> str | None:
 def filter_drafted_rule(drafted: DraftedRule, vocabulary: Sequence[VocabularyFacet]) -> DraftResult:
     """Map a drafted rule onto the closed vocabulary, reporting what it dropped.
 
-    Pure, so the closed-set guarantee is tested without a model. Three drops:
+    Pure, so the closed-set guarantee is tested without a model. Four drops:
 
     * an unknown **value** — dropped, the clause survives on its other values;
     * an unknown **facet** (or operator) — the whole clause is dropped, because
       nothing about it can be trusted to mean what it says;
     * a clause left with **no values** — dropped entirely. ``rule_predicate``
       raises ``RuleError`` on an empty ``values`` list, so leaving one behind
-      would turn a drafting miss into a 500 at query time.
+      would turn a drafting miss into a 500 at query time;
+    * a **second ``in`` clause on a facet that already has one** — dropped, and
+      reported in ``unmatchable_terms`` rather than ``unknown_terms``.
+
+    That last drop is the odd one out and is worth its own paragraph. Everything
+    else here is dropped because the vocabulary does not contain it; this one is
+    dropped although every part of it is perfectly valid. A document carries at
+    most one value per facet, so ``category in [software] AND category in
+    [services]`` is a conjunction no row can satisfy — it draws an empty chart,
+    which reads as "you spent nothing" (`docs/charts.md` §12).
+
+    Every *other* path that takes a rule refuses this shape outright
+    (``api/spending.py::_refuse_unmatchable_conjunction``, on ``POST``,
+    ``PATCH``, ``/preview`` and the read path). The draft path is deliberately
+    different, because its contract is different: it answers what it can and
+    reports what it dropped, and a 422 on a plain-language question is not the
+    kind of answer that surface exists to give. Before this drop existed, such a
+    rule survived here with ``unknown_terms == []``, previewed as an all-zero
+    chart, and then 422'd the moment the owner pressed Save.
+
+    **Dropped, still not merged.** Rewriting the pair to ``category in
+    [software, services]`` turns the AND into an OR, which answers a different
+    question from the one the owner asked and moves money into the chart — the
+    same reasoning that makes ``_refuse_unmatchable_conjunction`` a refusal
+    rather than a merge, and that refuses an unrecognised operator above.
+    Keeping the first clause and reporting the second is narrowing, never
+    widening, and the report is what lets the owner see it happened.
     """
     by_key = {facet.key: facet for facet in vocabulary}
     folded_keys = {facet.key.casefold(): facet for facet in vocabulary}
     unknown: list[str] = []
+    unmatchable: list[str] = []
 
     def report(term: str) -> None:
         cleaned = term.strip() or BLANK_TERM
         if cleaned not in unknown:
             unknown.append(cleaned)
 
+    #: Facet keys that already carry an `in` clause. Only `in` is tracked: two
+    #: `not_in` clauses on one facet are a legitimate intersection of
+    #: exclusions, and a mixed pair is unanswerable only when the exclusion
+    #: covers the inclusion — set arithmetic, not a shape, and not what this
+    #: guards. Same narrowness as `_refuse_unmatchable_conjunction`.
+    claimed_by_in: set[str] = set()
     clauses: list[Clause] = []
     for drafted_clause in drafted.all:
         facet = by_key.get(drafted_clause.facet) or folded_keys.get(
@@ -204,6 +243,14 @@ def filter_drafted_rule(drafted: DraftedRule, vocabulary: Sequence[VocabularyFac
                 kept.append(resolved)
         if not kept:
             continue
+        if op == "in":
+            if facet.key in claimed_by_in:
+                # Reported with its values so the owner can see what the chart
+                # is NOT filtered by; `unknown_terms`' phrasing would claim
+                # these values are missing from the vocabulary, and they are not.
+                unmatchable.append(f"{facet.key} in [{', '.join(kept)}]")
+                continue
+            claimed_by_in.add(facet.key)
         clauses.append(Clause(facet=facet.key, op=op, values=kept))
 
     proposed_split: str | None = None
@@ -216,7 +263,12 @@ def filter_drafted_rule(drafted: DraftedRule, vocabulary: Sequence[VocabularyFac
         else:
             report(raw_split)
 
-    return DraftResult(rule=Rule(all=clauses), proposed_split=proposed_split, unknown_terms=unknown)
+    return DraftResult(
+        rule=Rule(all=clauses),
+        proposed_split=proposed_split,
+        unknown_terms=unknown,
+        unmatchable_terms=unmatchable,
+    )
 
 
 async def draft_rule(

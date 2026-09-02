@@ -112,6 +112,17 @@ Rules:
   zero, matching documents exist but are not in the search index, and you
   MUST say your answer is incomplete for that technical reason — never
   report this as the archive being silent on the topic.
+- The rule above is about ONE result. When you compare two or more results —
+  two periods, two senders, before and after — their coverage must be
+  compared too, because each one can be individually complete-looking while
+  the comparison between them is an artefact. Before you state any
+  comparison, difference, percentage or trend, check whether the results
+  have DIFFERENT `excluded` reasons or counts. If they do, you MUST say so
+  and say which side is affected — e.g. "the 2026 total is 20% lower, but 5
+  of its bills had no readable amount while 2025 had none, so the fall may
+  not be real". Never describe a change as a rise, a fall or a trend when
+  one side excluded more than the other without naming that difference, and
+  never pick the more complete side to quote and drop the other.
 - Be concise and direct. Dutch terms may answer English questions and vice
   versa (e.g. "reiskostenvergoeding" = travel allowance).
 """

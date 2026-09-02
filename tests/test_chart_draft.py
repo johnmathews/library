@@ -18,7 +18,7 @@ from library.charts.draft import (
     filter_drafted_rule,
 )
 from library.charts.query import SENDER_SPLIT
-from library.charts.rule import rule_predicate
+from library.charts.rule import Clause, rule_predicate
 from library.config import Settings
 from library.facets.vocabulary import add_alias, load_vocabulary
 from tests.conftest import StubAnthropic
@@ -247,3 +247,116 @@ async def test_a_blank_facet_is_still_reported(
     result = filter_drafted_rule(drafted, vocabulary)
     assert result.rule.all == []
     assert result.unknown_terms == [BLANK_TERM]
+
+
+@pytest.mark.asyncio
+async def test_a_second_in_clause_on_one_facet_is_dropped_and_reported(
+    session: AsyncSession, facets: dict[str, tuple[str, ...]]
+) -> None:
+    """A document carries at most one value per facet, so `category in
+    [software] AND category in [services]` is a conjunction no row can satisfy.
+
+    Before this drop, such a draft survived here with `unknown_terms == []`,
+    previewed as an all-zero chart — "you spent nothing", the reading §12 exists
+    to remove — and then 422'd the moment the owner pressed Save, because every
+    other rule-taking path refuses the shape.
+
+    The FIRST clause survives: dropping is narrowing, and the owner asked for
+    `software` before they asked for `services`.
+    """
+    vocabulary = await load_vocabulary(session)
+    drafted = DraftedRule.model_validate(
+        {
+            "all": [
+                {"facet": "category", "op": "in", "values": ["software"]},
+                {"facet": "category", "op": "in", "values": ["services"]},
+            ],
+            "split": None,
+        }
+    )
+    result = filter_drafted_rule(drafted, vocabulary)
+    assert result.rule.all == [Clause(facet="category", op="in", values=["software"])]
+    assert result.unmatchable_terms == ["category in [services]"]
+    # NOT `unknown_terms`: every value here is in the vocabulary, and the API
+    # renders that list under "not in the vocabulary". Reporting it there would
+    # explain a real drop with a false reason.
+    assert result.unknown_terms == []
+
+
+@pytest.mark.asyncio
+async def test_the_second_in_clause_is_dropped_not_merged_into_the_first(
+    session: AsyncSession, facets: dict[str, tuple[str, ...]]
+) -> None:
+    """The rejected alternative, pinned so it cannot arrive by accident.
+
+    Merging the pair into `category in [software, services]` turns the AND into
+    an OR, which answers a different question from the one the owner asked and
+    moves money *into* the chart. `_refuse_unmatchable_conjunction` refuses for
+    this reason and `filter_drafted_rule` refuses an unrecognised operator for
+    it; issue #127 proposed the merge, and docs/charts.md §13 rules it out.
+
+    MUTATION: implement the merge and this reddens while the test above stays
+    green — that one only checks the second clause is absent from `rule.all`.
+    """
+    vocabulary = await load_vocabulary(session)
+    drafted = DraftedRule.model_validate(
+        {
+            "all": [
+                {"facet": "category", "op": "in", "values": ["software"]},
+                {"facet": "category", "op": "in", "values": ["services"]},
+            ],
+            "split": None,
+        }
+    )
+    result = filter_drafted_rule(drafted, vocabulary)
+    (clause,) = result.rule.all
+    assert clause.values == ["software"], "the surviving clause must not have widened"
+
+
+@pytest.mark.asyncio
+async def test_two_not_in_clauses_on_one_facet_both_survive_the_draft(
+    session: AsyncSession, facets: dict[str, tuple[str, ...]]
+) -> None:
+    """The narrowness guard, matching `_refuse_unmatchable_conjunction`'s.
+
+    Two exclusions on one facet are a legitimate intersection — "not software
+    and not services" is answerable and a document can satisfy it. A drop keyed
+    on the facet alone rather than on the operator would silently narrow this
+    to one exclusion and quietly admit the other's spending.
+    """
+    vocabulary = await load_vocabulary(session)
+    drafted = DraftedRule.model_validate(
+        {
+            "all": [
+                {"facet": "category", "op": "not_in", "values": ["software"]},
+                {"facet": "category", "op": "not_in", "values": ["services"]},
+            ],
+            "split": None,
+        }
+    )
+    result = filter_drafted_rule(drafted, vocabulary)
+    assert len(result.rule.all) == 2
+    assert result.unmatchable_terms == []
+
+
+@pytest.mark.asyncio
+async def test_an_in_clause_survives_beside_a_not_in_on_the_same_facet(
+    session: AsyncSession, facets: dict[str, tuple[str, ...]]
+) -> None:
+    """A mixed pair is unanswerable only when the exclusion covers the
+    inclusion — set arithmetic, not a shape, and outside what this guards. Here
+    they name different values, so the rule is perfectly satisfiable and
+    nothing may be dropped."""
+    vocabulary = await load_vocabulary(session)
+    drafted = DraftedRule.model_validate(
+        {
+            "all": [
+                {"facet": "category", "op": "in", "values": ["software"]},
+                {"facet": "category", "op": "not_in", "values": ["services"]},
+            ],
+            "split": None,
+        }
+    )
+    result = filter_drafted_rule(drafted, vocabulary)
+    assert len(result.rule.all) == 2
+    assert result.unmatchable_terms == []

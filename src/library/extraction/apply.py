@@ -299,10 +299,30 @@ async def _amount_is_allocated(session: AsyncSession, document: Document) -> boo
     ).first() is not None
 
 
+#: Fields re-extraction must leave alone on a document whose amount is split
+#: across spend lines. `amount_total` is the one the deferred trigger actually
+#: guards; `currency` and `amount_kind` are here because they **denominate and
+#: interpret** that number, and writing them while the amount stays pinned to
+#: the lines produces a document that disagrees with itself.
+#:
+#: The currency case is the concrete one, and it is silent: a re-read that finds
+#: a different currency leaves `amount_total` matching the lines and `currency`
+#: describing something else, and `amount_currency_coupling` cannot fire, because
+#: that rule is an XOR on *presence* and both fields are set. Nothing else would
+#: report it. Previously only `amount_total` was skipped, which is what
+#: docs/charts.md §13 recorded as "re-extraction's skip is partial".
+_ALLOCATION_LOCKED_FIELDS: tuple[str, ...] = ("amount_total", "currency", "amount_kind")
+
+
 async def _apply_outcome(
     session: AsyncSession, document: Document, outcome: ExtractionOutcome
-) -> list[str]:
-    """Write extracted values onto the document; return the fields set.
+) -> tuple[list[str], list[str]]:
+    """Write extracted values onto the document; return (fields set, fields skipped).
+
+    The second half is returned rather than left in ``extra["extraction"]`` alone
+    because the caller has to put it in the ``extraction_completed`` **event**:
+    ``extra`` is not a surface anyone reads, and a withheld write that is only
+    recorded there is indistinguishable from one that never happened.
 
     Skips any field listed in ``extra["user_edited_fields"]`` (user edits
     win over re-extraction) and never nulls out existing data with a None
@@ -397,24 +417,33 @@ async def _apply_outcome(
         "reference": metadata.reference,
     }
     skipped_fields: list[str] = []
+    # Resolved at most once per document, and only if some locked field would
+    # really move. `None` means "not asked yet".
+    allocated: bool | None = None
     for field, value in scalar_values.items():
         if not settable(field, value):
             continue
-        # Ordered so the extra query runs only when the amount would really
-        # move: an unchanged (or unextracted) amount cannot orphan anything.
-        if (
-            field == "amount_total"
-            and value != document.amount_total
-            and await _amount_is_allocated(session, document)
-        ):
-            skipped_fields.append(field)
-            logger.warning(
-                "extraction left amount_total alone on document %s: it is allocated "
-                "across spend lines summing to %s",
-                document.id,
-                document.amount_total,
-            )
-            continue
+        # Ordered so the extra query runs only when a write would really move
+        # something: an unchanged (or unextracted) value cannot orphan anything.
+        # `is not None` is load-bearing: FILLING a blank contradicts nothing —
+        # a document whose currency was never extracted gains one safely, and
+        # the trigger only ever guards a *change*. Only an existing value that
+        # would move is withheld. (`amount_total` cannot be NULL on an allocated
+        # document, so this leaves its behaviour exactly as it was.)
+        current = getattr(document, field)
+        if field in _ALLOCATION_LOCKED_FIELDS and current is not None and value != current:
+            if allocated is None:
+                allocated = await _amount_is_allocated(session, document)
+            if allocated:
+                skipped_fields.append(field)
+                logger.warning(
+                    "extraction left %s alone on document %s: its amount is allocated "
+                    "across spend lines summing to %s",
+                    field,
+                    document.id,
+                    document.amount_total,
+                )
+                continue
         setattr(document, field, value)
         fields_set.append(field)
 
@@ -457,7 +486,7 @@ async def _apply_outcome(
             "signer_raw": metadata.signer_raw,
         },
     }
-    return fields_set
+    return fields_set, skipped_fields
 
 
 async def revalidate_document(
@@ -656,7 +685,7 @@ async def apply_extraction(
         )
         return
 
-    fields_set = await _apply_outcome(session, document, outcome)
+    fields_set, skipped_fields = await _apply_outcome(session, document, outcome)
     try:
         await _apply_validation(session, document, settings)
     except Exception:  # validation is best-effort; never fail the document
@@ -693,6 +722,12 @@ async def apply_extraction(
             "escalated": outcome.escalated,
             "input_mode": outcome.input_mode,
             "fields_set": fields_set,
+            # Present only when something was withheld, so an ordinary
+            # extraction's event shape is unchanged. This is the surface the
+            # document timeline renders, and the whole premise of the
+            # allocation guard is that nothing is excluded silently — a skip
+            # recorded only in `extra` is exactly that.
+            **({"skipped_fields": skipped_fields} if skipped_fields else {}),
         },
     )
     logger.info(

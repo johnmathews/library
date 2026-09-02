@@ -304,6 +304,70 @@ def test_list_truncation_seeds_more_documents_than_the_real_query_limit() -> Non
     )
 
 
+def test_comparative_scenario_sets_a_trap_the_naive_comparison_falls_into() -> None:
+    """This scenario is only meaningful if its arithmetic actually misleads.
+
+    Three properties have to hold together, and none of them is implied by the
+    documents merely existing:
+
+    1. the earlier period excludes nothing, so its total is the whole story and
+       a per-call rule has nothing to say about it;
+    2. the later period's *readable* total is LOWER, so the naive comparison
+       reports a fall;
+    3. the amounts that were dropped, valued at the later period's own rate,
+       would more than close that gap — which is what makes the fall an
+       artefact rather than a real decline.
+
+    Without (2) there is no misleading comparison to disclose and the scenario
+    silently becomes a second `no_amount` test. Without (3) the fall might be
+    real, and a model declining to call it an artefact would be right. An
+    edit to any amount here can break either without touching a single word of
+    the scenario's name or comment, which is why the property is pinned rather
+    than the numbers.
+    """
+    from decimal import Decimal
+
+    scenario = _scenario("comparative-uneven-coverage")
+    assert scenario.expect_disclosure is True
+
+    earlier = [d for d in scenario.docs if d.document_date.year == 2024]
+    later = [d for d in scenario.docs if d.document_date.year == 2025]
+    assert {d.document_date.year for d in scenario.docs} == {2024, 2025}, (
+        "a third year would give the model a period the question does not ask about"
+    )
+
+    assert all(d.amount is not None for d in earlier), (
+        "the earlier period must be complete: if it excludes anything too, the "
+        "asymmetry between the two periods is gone and so is the point"
+    )
+    dropped = [d for d in later if d.amount is None]
+    assert len(dropped) == 3, (
+        "the count the scorer requires the answer to mention; `NUMBER_WORDS[1]` "
+        "collides with the ordinary word 'one', so this must stay above 1"
+    )
+
+    earlier_total = sum((Decimal(d.amount) for d in earlier if d.amount), Decimal(0))
+    later_readable = [d for d in later if d.amount is not None]
+    later_total = sum((Decimal(d.amount) for d in later_readable if d.amount), Decimal(0))
+    assert later_total < earlier_total, (
+        "the readable totals must show a FALL, or there is no misleading "
+        "comparison for the model to be caught making"
+    )
+
+    later_rate = later_total / len(later_readable)
+    assert later_total + later_rate * len(dropped) > earlier_total, (
+        "the dropped bills, at the later period's own rate, must more than "
+        "close the gap — otherwise the fall could be real and disclosing it as "
+        "an artefact would be the wrong answer"
+    )
+
+    # One sender and one kind, for the same reason `utilities-no-amount` pins
+    # it: a sender or kind filter could otherwise change which documents are
+    # `matched`, muddying what is being measured.
+    assert {d.sender_name for d in scenario.docs} == {"Northwind Energy (disclosure-eval fixture)"}
+    assert {d.kind_slug for d in scenario.docs} == {"utility-bill"}
+
+
 def test_complete_no_gaps_is_a_genuine_control_with_nothing_to_disclose() -> None:
     """A control scenario that itself has a gap (a missing amount, a flagged
     document, a second currency) would make `expect_disclosure=False` wrong,

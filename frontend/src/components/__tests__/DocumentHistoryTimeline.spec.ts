@@ -148,6 +148,51 @@ describe('DocumentHistoryTimeline — extraction breakdown', () => {
     expect(t).toContain('ocr text')
   })
 
+  it('names the fields an extraction withheld, in the CURATED timeline', () => {
+    // The whole point. A backend-only change would have put `skipped_fields`
+    // in the raw JSON dump behind "Show all events" and nowhere else — not
+    // silent, but not visible either. This asserts the rendered line.
+    const w = extractionItem({
+      model: 'claude-opus-4-8',
+      escalated: false,
+      input_mode: 'text',
+      skipped_fields: ['amount_total', 'currency'],
+    })
+    const skipped = w.find('[data-testid="history-extraction-skipped"]')
+    expect(skipped.exists()).toBe(true)
+    // Friendly labels from the shared map, not storage column names.
+    expect(skipped.text()).toContain('Amount')
+    expect(skipped.text()).toContain('Currency')
+    expect(skipped.text()).not.toContain('amount_total')
+    // Amber, like the vision-fallback line is violet: a withheld write is a
+    // caveat the reader has to notice, not a statistic.
+    expect(skipped.classes().some((c) => c.includes('amber'))).toBe(true)
+  })
+
+  it('says nothing about skipped fields on an ordinary extraction', () => {
+    // The control. A line that rendered unconditionally — or on an empty array
+    // — would tell every reader something was withheld from every document.
+    const w = extractionItem({ escalated: false, input_mode: 'text', confidence: 'high' })
+    expect(w.find('[data-testid="history-extraction-skipped"]').exists()).toBe(false)
+
+    const empty = extractionItem({ escalated: false, input_mode: 'text', skipped_fields: [] })
+    expect(empty.find('[data-testid="history-extraction-skipped"]').exists()).toBe(false)
+  })
+
+  it('falls back to the raw field name rather than dropping an unmapped field', () => {
+    // Silence about a write that did not happen is the failure being fixed, so
+    // an unmapped column must still appear — a reader can look up a storage
+    // name, but cannot look up a field that was never mentioned.
+    const w = extractionItem({
+      escalated: false,
+      input_mode: 'text',
+      skipped_fields: ['some_future_column'],
+    })
+    expect(w.find('[data-testid="history-extraction-skipped"]').text()).toContain(
+      'some_future_column',
+    )
+  })
+
   it('shows model, confidence and cost as chips (but not raw token counts)', () => {
     const w = extractionItem({
       model: 'claude-opus-4-8',

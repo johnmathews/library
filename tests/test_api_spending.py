@@ -925,32 +925,76 @@ def test_a_split_value_with_no_sender_row_falls_back_to_the_raw_value(
     assert body["label"] == "999999"
 
 
-#: Every input class that has crashed `_resolve_splits`'s sender branch, or
-#: that a narrower guard than `int()` itself would still let through:
+#: Sender-split `split_value`s that are not a `senders.id`-shaped integer, and
+#: are therefore now **refused** rather than answered with `0.00`. These
+#: previously came back 200 with the raw string as their label; that assertion
+#: was rewritten deliberately, not deleted, when
+#: `_refuse_unbucketable_split_value` landed. What has NOT changed is the
+#: property this list was built for — none of them may 500 — and a 422 honours
+#: it as fully as the old 200 did.
+#:
+#: The classes, each of which has crashed `_resolve_splits`'s sender branch or
+#: would slip past a guard narrower than `int()`:
 #: - a Unicode "digit" `str.isdigit()` accepts but `int()` rejects (superscript
 #:   two, category No) — the guard `isdigit() and int(value) <= MAX` still
 #:   raises on this one;
-#: - the empty string and a `+`-prefixed value, both edge cases of `int()`'s
-#:   own grammar;
+#: - the empty string, an edge case of `int()`'s own grammar;
 #: - a non-integer string;
-#: - a value out of `senders.id`'s `int4` range;
-#: - fullwidth and Arabic-indic decimal digits, which `int()` *does* accept —
-#:   included so a fix that over-corrects to ASCII-only parsing is not
-#:   mistaken for covering this class.
-_MALFORMED_SPLIT_VALUES = ["²", "", "+5", "not-an-id", "99999999999", "１２３", "٣"]  # noqa: RUF001
+#: - a value out of `senders.id`'s `int4` range.
+_REFUSED_SPLIT_VALUES = ["²", "", "not-an-id", "99999999999"]
+
+#: The other half, and the reason the guard **parses** rather than pattern-
+#: matches. `int()` accepts every one of these, so each names a sender id that
+#: could genuinely exist, and refusing them would be a false refusal: a
+#: `+`-prefixed value, and fullwidth and Arabic-indic decimal digits — forms
+#: `senders.id` never renders on the wire but `int()` reads. Kept so a fix that
+#: over-corrects to ASCII-only parsing reds here instead of quietly refusing
+#: cells the chart drew.
+_PARSEABLE_SPLIT_VALUES = ["+5", "１２３", "٣"]  # noqa: RUF001
 
 
-@pytest.mark.parametrize("split_value", _MALFORMED_SPLIT_VALUES)
-def test_a_malformed_split_value_resolves_to_itself_rather_than_500ing(
+@pytest.mark.parametrize("split_value", _REFUSED_SPLIT_VALUES)
+def test_a_split_value_that_is_not_a_sender_id_is_a_422_naming_it(
     api_client: TestClient, api_database_url: str, split_value: str
 ) -> None:
-    """`split_value` is an unvalidated `/cell` query parameter — the one
-    surface a client actually controls. Every value in this class must come
-    back 200 with itself as the label (no sender is seeded, so nothing here
-    can resolve to a real name), never 500."""
+    """`split_value` is the one `/cell` argument a client fully controls, and an
+    unbucketable one used to answer `total: "0.00"` with no payments — "you
+    spent nothing here", the same silence the `period` check removed from this
+    very route.
+
+    The refusal names the offending value, as `period`'s does, so the caller can
+    see what it sent. Never a 500: that is the property this input list was
+    originally written to pin, and it still holds.
+    """
     _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
     chart_id = _save_chart(
-        api_client, f"api-splits-malformed-{uuid.uuid4()}", {}, default_split="sender"
+        api_client, f"api-splits-refused-{uuid.uuid4()}", {}, default_split="sender"
+    )
+
+    response = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={"period": "2026-03-01", "split": "sender", "split_value": split_value},
+    )
+
+    assert response.status_code == 422, response.text
+    if split_value:
+        assert split_value in response.text
+
+
+@pytest.mark.parametrize("split_value", _PARSEABLE_SPLIT_VALUES)
+def test_a_split_value_int_can_parse_is_still_answered(
+    api_client: TestClient, api_database_url: str, split_value: str
+) -> None:
+    """The accepted half of the pair, and the guard's narrowness check.
+
+    Each of these parses to an in-range integer, so each names a sender id that
+    could exist. The guard judges the *shape* and never whether the bucket was
+    drawn, so it must let them through and answer with the raw value as the
+    label — a guard tightened to ASCII digits reds here, which is the point.
+    """
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(
+        api_client, f"api-splits-parseable-{uuid.uuid4()}", {}, default_split="sender"
     )
 
     response = api_client.get(
@@ -960,6 +1004,44 @@ def test_a_malformed_split_value_resolves_to_itself_rather_than_500ing(
 
     assert response.status_code == 200, response.text
     assert response.json()["label"] == split_value
+
+
+def test_a_split_value_on_a_chart_with_no_split_axis_is_a_422(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The cheapest exact check, and one issue #127 did not mention.
+
+    An unsplit chart's split expression is `_SPLIT_NONE` — `CAST(NULL AS text)`
+    — so `IS NOT DISTINCT FROM` is false for *any* non-null value, whatever it
+    says. No query is needed to know that, and no false refusal is possible.
+
+    MUTATION: delete the `query.split is None` branch and this reddens with a
+    200 and `total: "0.00"` — a drill reporting the chart's own money as nothing.
+    """
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, f"api-splits-unsplit-{uuid.uuid4()}", {})
+
+    response = api_client.get(
+        f"/api/spending/{chart_id}/cell",
+        params={"period": "2026-03-01", "split_value": "anything-at-all"},
+    )
+
+    assert response.status_code == 422, response.text
+    assert "no split axis" in response.text
+
+
+def test_an_unsplit_chart_still_opens_its_cell_when_no_split_value_is_sent(
+    api_client: TestClient, api_database_url: str
+) -> None:
+    """The accepted half of the check above: omitting `split_value` is how an
+    unsplit chart's single bucket is addressed, and it must keep working."""
+    _seed_document(api_database_url, amount="10.00", kind=AmountKind.PAYMENT_MADE)
+    chart_id = _save_chart(api_client, f"api-splits-unsplit-ok-{uuid.uuid4()}", {})
+
+    response = api_client.get(f"/api/spending/{chart_id}/cell", params={"period": "2026-03-01"})
+
+    assert response.status_code == 200, response.text
+    assert response.json()["total"] == "10.00"
 
 
 def test_a_split_value_in_non_canonical_form_still_resolves_to_the_senders_name(
@@ -1472,6 +1554,75 @@ def test_drafting_a_question_the_vocabulary_can_express_previews_it(
     assert body["rule"] == SOFTWARE_RULE
     assert body["proposed_split"] == "category"
     assert body["preview"]["total"] == "60.00"
+
+
+def test_a_drafted_same_facet_pair_narrows_and_says_so_instead_of_previewing_zero(
+    api_client: TestClient, api_database_url: str, stub_anthropic: StubAnthropic
+) -> None:
+    """The end-to-end shape of issue #127's live remnant.
+
+    `/spending/draft` is the one rule-taking path that does not call
+    `_validate_rule`, and rightly so — `filter_drafted_rule` guarantees
+    vocabulary membership by construction. But that guarantee says nothing about
+    whether the surviving clauses can be *combined*, so before this fix a model
+    drafting two `in` clauses on one facet produced `expressible: true`, a 200
+    preview of an all-zero chart — "you spent nothing", the reading §12 exists
+    to remove — and then a 422 the instant the owner pressed Save.
+
+    Now the second clause is dropped and reported: the preview answers the
+    narrower question truthfully, `expressible` is false so the client labels it
+    an approximation, and the message gives the real reason rather than the
+    vocabulary one (every value here is in the vocabulary).
+    """
+    _seed_vocabulary(api_database_url)
+    _seed_document(
+        api_database_url,
+        amount="60.00",
+        kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+    stub_anthropic.returns(rule=_SAME_FACET_TWICE, proposed_split=None)
+
+    response = _draft(api_client, "software and services spending")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["rule"] == {"all": [{"facet": "category", "op": "in", "values": ["software"]}]}
+    # The point of the whole fix: a real number, not the 0.00 an unmatchable
+    # conjunction would have drawn.
+    assert body["preview"]["total"] == "60.00"
+    assert body["expressible"] is False, "a narrowed rule is an approximation, and must say so"
+    assert body["unknown_terms"] == ["category in [services]"]
+    assert "could not be combined" in body["message"]
+    assert "not in the vocabulary" not in body["message"], (
+        "every value here IS in the vocabulary; the old wording would explain a "
+        "real drop with a false reason"
+    )
+
+
+def test_a_drafted_same_facet_pair_saves_without_the_422_it_used_to_hit(
+    api_client: TestClient, api_database_url: str, stub_anthropic: StubAnthropic
+) -> None:
+    """The other half, and the part a preview assertion cannot reach: the rule
+    the draft proposes must be one the save path accepts.
+
+    `_refuse_unmatchable_conjunction` runs on `POST`, so a draft that handed
+    back the unmatchable pair sent the owner into a refusal they had no way to
+    anticipate from the preview they were shown."""
+    _seed_vocabulary(api_database_url)
+    stub_anthropic.returns(rule=_SAME_FACET_TWICE, proposed_split=None)
+
+    drafted = _draft(api_client, "software and services spending").json()["rule"]
+    saved = api_client.post(
+        "/api/spending",
+        json={
+            "name": f"drafted-narrowed-{uuid.uuid4()}",
+            "rule": drafted,
+            "display_currency": "EUR",
+        },
+    )
+
+    assert saved.status_code == 201, saved.text
 
 
 def test_a_draft_that_expresses_nothing_previews_nothing(

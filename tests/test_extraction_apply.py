@@ -38,6 +38,7 @@ from library.extraction.schema import ExtractedMetadata
 from library.facets.apply import LabellingOutcome
 from library.jobs import advance_pipeline, extract_document, job_app
 from library.models import (
+    AmountKind,
     Document,
     DocumentLanguage,
     DocumentSource,
@@ -289,6 +290,70 @@ async def test_an_allocated_amount_survives_re_extraction_and_the_skip_is_report
 
     events = await get_events(session_factory, document_id)
     assert [event for event, _ in events] == ["extraction_completed"]
+    # ...and on the surface the owner actually reads. `extra["extraction"]` is
+    # not one: the document timeline renders the EVENT detail, so a skip that
+    # stopped at `extra` was still silent to the person it concerns.
+    (_, detail) = events[0]
+    assert detail["skipped_fields"] == ["amount_total"]
+
+
+async def test_a_re_extracted_currency_cannot_drift_from_the_allocated_amount(
+    session_factory: async_sessionmaker[AsyncSession],
+    settings: Settings,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`currency` and `amount_kind` are locked alongside `amount_total`.
+
+    They share the `scalar_values` loop, so skipping only the amount left a
+    re-read free to write a different currency while the number stayed pinned to
+    the lines — a document whose amount is denominated in something other than
+    what its spend lines are in.
+
+    Nothing would have reported it. `amount_currency_coupling` is an XOR on
+    *presence* (`extraction/validation.py`), so it cannot fire when both fields
+    are set, which is exactly this state. That is why the fix is a wider skip
+    rather than a new validation rule: the rule has no way to see it.
+    """
+    patch_extract(
+        monkeypatch,
+        make_outcome(make_metadata(amount_total="123.45", currency="USD", amount_kind="refund")),
+    )
+    document_id = await make_document(
+        session_factory,
+        "apply-allocated-currency",
+        amount_total=Decimal("100.00"),
+        # The document must ALREADY carry a currency and a kind: the guard
+        # withholds a *change*, not a fill, so a blank one here would be
+        # written and this test would pass for the wrong reason.
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+    async with session_factory() as session:
+        session.add(SpendLine(document_id=document_id, amount=Decimal("100.00")))
+        await session.commit()
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        await apply_extraction(session, document, settings)
+
+    async with session_factory() as session:
+        document = await session.get(Document, document_id)
+        assert document is not None
+        assert document.amount_total == Decimal("100.00")
+        assert document.currency == "EUR", (
+            "the currency must not describe a number it no longer denominates"
+        )
+        assert document.amount_kind is AmountKind.PAYMENT_MADE
+        extraction = document.extra["extraction"]
+        assert set(extraction["skipped_fields"]) == {"amount_total", "currency", "amount_kind"}
+        # The rest of the re-extraction still landed: the skip is scoped to the
+        # three fields the allocation owns, not a refusal of the whole document.
+        assert document.title == "Energierekening mei 2026"
+
+    events = await get_events(session_factory, document_id)
+    (_, detail) = events[0]
+    assert set(detail["skipped_fields"]) == {"amount_total", "currency", "amount_kind"}
 
 
 async def test_an_unallocated_amount_is_still_overwritten_and_nothing_is_reported(

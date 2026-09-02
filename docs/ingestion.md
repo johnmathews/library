@@ -1,7 +1,7 @@
 # Ingestion
 
-**Status:** active. **Last updated:** 2026-08-12 (documentation verification sweep: removed a stale `LIBRARY_PDF_UNLOCK_PASSWORDS` default that republished a withdrawn password, corrected the "no per-task retry policy" claim, the markdown grounding limit, the consume extension list and the `GET /api/jobs` contract; documented the email recipient hint and the missing ingestion events).
-**Last verified:** 2026-08-28 — method: rewrote the photo-path section for the vendored RapidOCR weights (GH #109) and traced every new claim to source — the `models/ocr/` location, the three vendored files and the `Global.model_root_dir` pin against `src/library/ocr/weights.py`; the `COPY models/` against the Dockerfile; the `ocr_models` healthz key against `src/library/app.py`; the `--check` step against `.github/workflows/ci.yml`'s compose-smoke job; and the removal of the RapidOCR skip against `tests/test_ocr_real.py`. Ran the `slow_ocr` suite against the real engine, `scripts/fetch_ocr_models.py --check`, and `scripts/check_docs.py`, all clean. Only the photo-path and real-engine-test prose was re-checked this pass; the rest carries forward the 2026-08-12 verification below unchanged. That verification's method was: method: traced each claim to source — settings and defaults against `config.py` and `.env.example`, pipeline/retry/guard behaviour against `jobs.py`, routing and thresholds against `ocr/`, limits against `extraction/` and `markdown/`, endpoint shapes against `api/` and `schemas.py` — plus a mechanical check that every `LIBRARY_*`, every `library.*` path and every emitted event name resolves.
+**Status:** active. **Last updated:** 2026-09-02 (re-extraction's allocated-amount skip is documented, and widened. The `extra["extraction"]` bullet gains `skipped_fields`, the `extraction_completed` row in the event table gains it too, and a new paragraph states which three fields are withheld on an allocated document and why `currency`/`amount_kind` join `amount_total` — they denominate and interpret that number, and `amount_currency_coupling` is an XOR on presence so it cannot see the disagreement. Also states the fill/change distinction: a blank currency is still filled. This page carries **no `Covers:` line**, so `check_docs` could not have reded for any of it.) Earlier: 2026-08-12 (documentation verification sweep: removed a stale `LIBRARY_PDF_UNLOCK_PASSWORDS` default that republished a withdrawn password, corrected the "no per-task retry policy" claim, the markdown grounding limit, the consume extension list and the `GET /api/jobs` contract; documented the email recipient hint and the missing ingestion events).
+**Last verified:** 2026-09-02 — method: partial, scoped to the two extraction bullets and the event-table row. The field list is byte-compared against `_ALLOCATION_LOCKED_FIELDS` and the event payload in `extraction/apply.py`. Both behavioural claims are pinned by tests confirmed to red when the fix is reverted: narrowing `_ALLOCATION_LOCKED_FIELDS` back to `("amount_total",)` reds `test_a_re_extracted_currency_cannot_drift_from_the_allocated_amount`, and removing `skipped_fields` from the event payload (leaving it in `extra`) reds two tests. The fill-versus-change claim is pinned by the pre-existing `test_an_allocated_amount_survives_re_extraction_and_the_skip_is_reported`, whose fixture has a NULL currency and which reds if the guard withholds a fill. The timeline half was confirmed in a **browser** (local stack, a seeded `extraction_completed` event, Chromium): the "Left unchanged" line renders in the curated timeline in both themes. Nothing else on this page was re-checked. Earlier: 2026-08-28 — method: rewrote the photo-path section for the vendored RapidOCR weights (GH #109) and traced every new claim to source — the `models/ocr/` location, the three vendored files and the `Global.model_root_dir` pin against `src/library/ocr/weights.py`; the `COPY models/` against the Dockerfile; the `ocr_models` healthz key against `src/library/app.py`; the `--check` step against `.github/workflows/ci.yml`'s compose-smoke job; and the removal of the RapidOCR skip against `tests/test_ocr_real.py`. Ran the `slow_ocr` suite against the real engine, `scripts/fetch_ocr_models.py --check`, and `scripts/check_docs.py`, all clean. Only the photo-path and real-engine-test prose was re-checked this pass; the rest carries forward the 2026-08-12 verification below unchanged. That verification's method was: method: traced each claim to source — settings and defaults against `config.py` and `.env.example`, pipeline/retry/guard behaviour against `jobs.py`, routing and thresholds against `ocr/`, limits against `extraction/` and `markdown/`, endpoint shapes against `api/` and `schemas.py` — plus a mechanical check that every `LIBRARY_*`, every `library.*` path and every emitted event name resolves.
 
 How a file becomes a Document: upload → content-addressed storage →
 database row → background job → status lifecycle. This document covers
@@ -744,9 +744,22 @@ On success:
   in `fields_set`.
 - `extra["extraction"]` records `{prompt_version, model, confidence,
   input_tokens, output_tokens, cost_usd, escalated, input_mode,
-  fields_set, reasoning_note, addressee_raw, signer_raw}`. The last two are
-  the verbatim salutation/sign-off names the model read; they power the
-  deterministic recipient/sender cross-checks in `validation.py`.
+  fields_set, reasoning_note, addressee_raw, signer_raw}`, plus
+  `skipped_fields` when anything was withheld. The `raw` pair are the verbatim
+  salutation/sign-off names the model read; they power the deterministic
+  recipient/sender cross-checks in `validation.py`.
+
+**Allocated amounts are withheld, and said so.** On a document whose amount is
+split across spend lines, re-extraction leaves `amount_total`, `currency` and
+`amount_kind` alone — migration 0035's deferred trigger refuses an
+`amount_total` write that would orphan the allocation, and the other two
+denominate and interpret that number, so writing them while the amount stays
+pinned to the lines makes the document disagree with itself (and
+`amount_currency_coupling` cannot catch it, being an XOR on *presence*). The
+skip withholds a **change**, never a fill: a document whose currency was never
+extracted still gains one. Withheld fields are listed in `skipped_fields`, in
+`extra["extraction"]` **and** in the `extraction_completed` event, which is
+what the document timeline renders as its "Left unchanged" line.
 
 **User edits win.** Re-extraction overwrites previous *extraction*
 values but never user-edited ones: any field name listed in
@@ -2050,7 +2063,7 @@ Append-only audit trail in `ingestion_events`:
 | `status_changed` | pipeline | `{from, to}` |
 | `ocr_completed` | OCR stage | `{engine, confidence, pages, characters}`; plus `gate: {tesseract_confidence, rapidocr_confidence}` when the confidence gate retried |
 | `ocr_failed` | OCR stage | `{error}` |
-| `extraction_completed` | extraction stage | `{model, prompt_version, confidence, input_tokens, output_tokens, cost_usd, escalated, input_mode, fields_set}` |
+| `extraction_completed` | extraction stage | `{model, prompt_version, confidence, input_tokens, output_tokens, cost_usd, escalated, input_mode, fields_set}`, plus `skipped_fields` when a write was withheld (see "Allocated amounts are withheld") |
 | `extraction_skipped` | extraction stage | `{reason, ...}` — `disabled`, `missing_api_key`, `already_extracted`, `budget`, `input_unusable`, `file_too_large` |
 | `extraction_failed` | extraction stage | `{error, prompt_version}` |
 | `markdown_completed` | markdown stage | `{model, prompt_version, pages, input_tokens, output_tokens, cost_usd}`; born-digital text instead records `{engine: "passthrough", model: null, pages: 1, cost_usd: 0.0}` |

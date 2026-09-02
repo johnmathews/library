@@ -19,10 +19,21 @@ The exclusion-reason strings used below (``no_amount``, ``quote_not_spend``,
 ``over_limit``) are the exact keys ``structured_query.py`` writes into
 ``Coverage.excluded`` — verified against that code, not assumed from the
 eval's own brief. Two further keys exist there and are **not** exercised by any
-scenario here — ``not_summable_kind`` and ``duplicate_payment``, both added
-with #136 — because seeding either needs a shape ``SeedDoc`` does not yet
-express (a second document sharing a payment). See ``docs/ask.md``'s
-"What it measures, exactly".
+scenario here: ``not_summable_kind`` and ``duplicate_payment``, both added with
+#136. Both are now *seedable* and simply have no scenario yet — an earlier
+version of this docstring said seeding them "needs a shape ``SeedDoc`` does not
+yet express", which stopped being true in that same change and is corrected
+here. ``SeedDoc`` gained ``amount_kind``, which is all ``not_summable_kind``
+needs; and payment-identity rule R1 merges two documents sharing sender,
+currency, amount and ``document_date``, all of which ``SeedDoc`` expresses, so
+``duplicate_payment`` is reachable with two identical seeds. See
+``docs/ask.md``'s "What it measures, exactly" and ``docs/money-facts.md`` §4.
+
+One scenario here — ``comparative-uneven-coverage`` — is not about a single
+exclusion reason at all. It asks a question spanning two totals, where each
+total's coverage is disclosed correctly and the *comparison* between them is
+the artefact. See its comment for why the existing scorer catches it and what
+it cannot distinguish.
 """
 
 from __future__ import annotations
@@ -245,8 +256,106 @@ SCENARIOS: tuple[Scenario, ...] = (
         docs=_receipts("Voltway Records (disclosure-eval fixture)", _LIST_DEFAULT_LIMIT + 5),
         expect_disclosure=True,
     ),
+    # The only scenario whose question spans TWO totals rather than one, and
+    # the only one whose failure is invisible to a per-call rule. Both years
+    # are individually disclosed correctly by a model following the prompt to
+    # the letter: 2024's coverage is empty and 2025's names its three
+    # amountless bills. The comparison built on top of them — "spending fell
+    # about 20%" — is an artefact of the three missing amounts, and no rule
+    # scoped to a single tool result says anything about it. Any one of the
+    # three, at 2025's own rate, more than closes the gap.
+    #
+    # Numbers chosen so the naive comparison is both clean and wrong: 2024 is
+    # 4 x 300.00 = 1200.00 with nothing excluded, 2025 is 3 x 320.00 = 960.00
+    # with three bills dropped — a 20% "fall" in a year whose bills went UP.
+    #
+    # Scored through the existing screen without a scorer change:
+    # `cli._coverage_from_turn_messages` merges every coverage block the turn
+    # produced, per reason, taking the maximum — so whether the model makes one
+    # `sum_amount` call or two, `no_amount: 3` reaches `score()` and
+    # `expect_disclosure=True` requires the answer to say "3".
+    #
+    # Known limit: because that merge flattens the turn, this scenario cannot
+    # distinguish "disclosed the asymmetry between the two periods" from
+    # "disclosed the exclusion at all". It reds when the model says nothing,
+    # which is the failure #155 describes; a model that mentions the three
+    # bills but still calls the fall a trend would pass. Tightening that needs
+    # a scorer that sees per-call coverage, which is a bigger change than the
+    # rule it exists to measure.
+    Scenario(
+        name="comparative-uneven-coverage",
+        question=(
+            "How did my spending with Northwind Energy (disclosure-eval fixture) "
+            "in 2025 compare with 2024?"
+        ),
+        docs=(
+            # 2024 — complete, four bills, nothing to exclude.
+            SeedDoc(
+                "Northwind Energy (disclosure-eval fixture)",
+                "utility-bill",
+                date(2024, 1, 20),
+                "300.00",
+            ),
+            SeedDoc(
+                "Northwind Energy (disclosure-eval fixture)",
+                "utility-bill",
+                date(2024, 4, 20),
+                "300.00",
+            ),
+            SeedDoc(
+                "Northwind Energy (disclosure-eval fixture)",
+                "utility-bill",
+                date(2024, 7, 20),
+                "300.00",
+            ),
+            SeedDoc(
+                "Northwind Energy (disclosure-eval fixture)",
+                "utility-bill",
+                date(2024, 10, 20),
+                "300.00",
+            ),
+            # 2025 — same cadence, higher bills, but half of them unreadable.
+            SeedDoc(
+                "Northwind Energy (disclosure-eval fixture)",
+                "utility-bill",
+                date(2025, 1, 20),
+                "320.00",
+            ),
+            SeedDoc(
+                "Northwind Energy (disclosure-eval fixture)",
+                "utility-bill",
+                date(2025, 4, 20),
+                "320.00",
+            ),
+            SeedDoc(
+                "Northwind Energy (disclosure-eval fixture)",
+                "utility-bill",
+                date(2025, 7, 20),
+                "320.00",
+            ),
+            SeedDoc(
+                "Northwind Energy (disclosure-eval fixture)",
+                "utility-bill",
+                date(2025, 2, 20),
+                None,
+            ),
+            SeedDoc(
+                "Northwind Energy (disclosure-eval fixture)",
+                "utility-bill",
+                date(2025, 8, 20),
+                None,
+            ),
+            SeedDoc(
+                "Northwind Energy (disclosure-eval fixture)",
+                "utility-bill",
+                date(2025, 11, 20),
+                None,
+            ),
+        ),
+        expect_disclosure=True,
+    ),
     # Control: nothing is dropped for any reason, so a correct answer has
-    # nothing to disclose. Without this, an eval built only from the four
+    # nothing to disclose. Without this, an eval built only from the five
     # scenarios above would equally reward a model that hedges on every
     # answer regardless of whether anything was actually incomplete.
     Scenario(

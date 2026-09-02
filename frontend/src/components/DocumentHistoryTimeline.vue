@@ -3,6 +3,7 @@ import { computed } from 'vue'
 
 import AppDetails from '@/components/app/AppDetails.vue'
 import type { IngestionEvent } from '@/api/documents'
+import { fieldLabel } from '@/utils/validationReason'
 
 const props = defineProps<{ events: IngestionEvent[] }>()
 
@@ -68,6 +69,9 @@ type ExtractionBreakdown = {
   method: string
   isVisionFallback: boolean
   chips: { label: string; value: string }[]
+  /** Fields the extraction deliberately did NOT write, friendly-labelled.
+   * Empty for an ordinary extraction. */
+  skipped: string[]
 }
 
 function titleCase(value: string): string {
@@ -103,7 +107,15 @@ function extractionBreakdown(event: IngestionEvent): ExtractionBreakdown | null 
     chips.push({ label: 'Cost', value: `$${detail.cost_usd.toFixed(4)}` })
   }
 
-  return { method, isVisionFallback, chips }
+  // A withheld write is a caveat, not a statistic, so it gets its own line
+  // rather than a chip beside Model and Cost. `skipped_fields` is present only
+  // when something was actually withheld.
+  const raw = detail.skipped_fields
+  const skipped = Array.isArray(raw)
+    ? raw.filter((f): f is string => typeof f === 'string').map(fieldLabel)
+    : []
+
+  return { method, isVisionFallback, chips, skipped }
 }
 
 // --- Email triage breakdown -------------------------------------------------
@@ -267,6 +279,18 @@ const milestones = computed(() => ordered.value.filter((event) => !isNoise(event
             "
           >
             {{ extractionBreakdown(event)!.method }}
+          </div>
+          <!-- A field the extraction refused to overwrite. The whole premise of
+               the allocation guard is that nothing is excluded silently, so this
+               must render in the curated timeline — not only in the raw detail
+               dump under "Show all events", which is where a backend-only change
+               would have left it. -->
+          <div
+            v-if="extractionBreakdown(event)!.skipped.length"
+            data-testid="history-extraction-skipped"
+            class="text-xs mt-0.5 break-words text-amber-700 dark:text-amber-300 font-medium"
+          >
+            Left unchanged: {{ extractionBreakdown(event)!.skipped.join(', ') }}
           </div>
           <div
             v-if="extractionBreakdown(event)!.chips.length"
