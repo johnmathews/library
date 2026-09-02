@@ -1444,6 +1444,11 @@ def _run_rolled_back[T](operation: Callable[[AsyncSession], Awaitable[T]]) -> T:
 @app.command("eval-disclosure")
 def eval_disclosure(
     only: str | None = typer.Option(None, "--only", help="Run just this scenario by name."),
+    show_answer: bool = typer.Option(
+        False,
+        "--show-answer",
+        help="Print the model's answer for every scenario, not only failures.",
+    ),
 ) -> None:
     """Measure whether Ask's model discloses incomplete coverage.
 
@@ -1546,6 +1551,14 @@ def eval_disclosure(
                 typer.echo(f"  missing disclosure: {', '.join(verdict.missing)}")
             if verdict.unexpected:
                 typer.echo(f"  unexpected hedge: {', '.join(verdict.unexpected)}")
+        # On a failure the answer is the evidence. On a PASS it is the only way
+        # to tell a scenario that discriminates from one that would pass either
+        # way — which the verdict cannot show you, and which is exactly how
+        # `comparative-uneven-coverage` was found to pass with the system
+        # prompt's cross-call rule reverted. The scorer is a screen, not a judge
+        # (disclosure_eval's module docstring), so reading the answer is part of
+        # using this command, not an optional extra.
+        if show_answer or not verdict.passed:
             typer.echo(f"  answer: {verdict.answer}")
 
     typer.echo(
