@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-190 entries.
+191 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## September 2026
 
+- **2026-09-02** — [The scenario that passed either way](260902-the-scenario-that-passed-either-way.md)
 - **2026-09-02** — [Telling the owner what extraction refused to write](260902-skipped-writes-made-visible.md)
 - **2026-09-02** — [The review found the fix reached nobody](260902-review-found-the-fix-reached-nobody.md)
 - **2026-09-02** — [Folding accents in full-text search](260902-fts-accent-folding.md)

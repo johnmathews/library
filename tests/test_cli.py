@@ -1202,6 +1202,25 @@ def test_eval_recall_help_lists_ask_and_write_baseline() -> None:
     assert "--write-baseline" in output
 
 
+def test_eval_disclosure_help_lists_show_answer() -> None:
+    """`--show-answer` prints the model's answer on a PASS as well as a FAIL.
+
+    It exists because a passing disclosure scenario tells you nothing about
+    whether it *discriminates*. `comparative-uneven-coverage` was found to pass
+    with the system prompt's cross-call rule reverted, which was only visible by
+    reading the two answers side by side — the verdict was `PASS` both times.
+
+    De-styled for the same reason as the `eval-recall` tests above: rich puts an
+    escape between the two hyphens when styling is on, so a raw `"--show-answer"
+    in output` check tests rich's environment detection rather than the CLI.
+    """
+    result = runner.invoke(app, ["eval-disclosure", "--help"])
+    assert result.exit_code == 0, result.output
+    output = _unstyled(result.output)
+    assert "--only" in output
+    assert "--show-answer" in output
+
+
 def test_eval_recall_help_lists_its_flags_when_rich_is_styling(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
