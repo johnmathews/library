@@ -58,6 +58,7 @@ import ActionDock from '@/components/ActionDock.vue'
 import { useDocumentLayout, HERO_FIELD_LABELS } from '@/composables/useDocumentLayout'
 import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 import { useDocumentNeighbors } from '@/composables/useDocumentNeighbors'
+import { parseDocumentQuery, hasActiveFilters } from '@/utils/documentQuery'
 
 const props = withDefaults(
   defineProps<{
@@ -129,7 +130,51 @@ const currentDocId = computed<number | null>(() => {
   const n = Number(route.params.id)
   return Number.isInteger(n) && n > 0 ? n : null
 })
-const { prevId: prevDocId, nextId: nextDocId } = useDocumentNeighbors(currentDocId)
+/**
+ * The list filter this document was opened from, carried on the detail route so
+ * Previous/Next can walk the set the user was actually looking at (#140).
+ *
+ * `parseDocumentQuery` is the SAME parser the dashboard uses, so the two cannot
+ * disagree about what a query string means. Absent params parse to empty
+ * filters, which `hasActiveFilters` reads as "no filter" — so a cold deep-link
+ * or a shared URL falls back to the whole-archive scan with no special case.
+ *
+ * `queue` and the router's own params are simply not filter keys, so they are
+ * ignored by the parser rather than needing to be stripped.
+ */
+const neighbourFilters = computed(() => parseDocumentQuery(route.query))
+const filterIsActive = computed(() => hasActiveFilters(neighbourFilters.value))
+
+const {
+  prevId: prevDocId,
+  nextId: nextDocId,
+  position: neighbourPosition,
+  total: neighbourTotal,
+  inSet: currentIsInFilterSet,
+} = useDocumentNeighbors(currentDocId, neighbourFilters)
+
+/** Carry the filter forward, so stepping through the set keeps following it. */
+const neighbourQuery = computed(() => (filterIsActive.value ? { ...route.query } : {}))
+
+/**
+ * What to say about the filtered set, or `null` to say nothing.
+ *
+ * Two states are worth distinguishing, and conflating them would make the
+ * failure silent — which is the thing #140 explicitly asks to avoid:
+ *  - a stated position ("2 of 3"), so it is visible that navigation is scoped
+ *    rather than global;
+ *  - this document having dropped OUT of the set, which happens naturally when
+ *    you relabel it from this very page. Navigation still walks the set, but
+ *    saying "2 of 3" would be a lie, so it says the set changed instead.
+ */
+const neighbourScopeLabel = computed<string | null>(() => {
+  if (!filterIsActive.value) return null
+  if (currentIsInFilterSet.value === false) return 'No longer matches this filter'
+  if (neighbourPosition.value !== null && neighbourTotal.value !== null) {
+    return `${neighbourPosition.value} of ${neighbourTotal.value}`
+  }
+  return 'In your filtered results'
+})
 const restoringFromTrash = ref(false)
 const pendingPurge = ref(false)
 const purging = ref(false)
@@ -853,26 +898,39 @@ watch(
 
   <template v-if="doc">
     <!-- Previous/next document links: below the back link, above the hero.
-         Walks the user's remembered list order (unfiltered). Hidden while
-         reviewing a queue (that bar owns navigation) and for trashed docs
-         (which are excluded from the list, so they have no neighbours). -->
+         Walks the ACTIVE FILTER SET when the route carries one (#140), and the
+         whole archive in id order otherwise — always in id order either way.
+         The filter rides along on each link, so stepping keeps following it.
+         Hidden while reviewing a queue (that bar owns navigation) and for
+         trashed docs (excluded from the list, so they have no neighbours).
+
+         The scope label is deliberately rendered even when both links are
+         absent, so a single-result filter still says so rather than showing
+         nothing at all. -->
     <nav
-      v-if="!inQueue && !isDeleted && (prevDocId || nextDocId)"
+      v-if="!inQueue && !isDeleted && (prevDocId || nextDocId || neighbourScopeLabel)"
       data-testid="doc-neighbors"
       class="mb-4 flex items-center justify-between gap-3 text-sm"
     >
       <RouterLink
         v-if="prevDocId"
-        :to="{ name: 'document-detail', params: { id: prevDocId } }"
+        :to="{ name: 'document-detail', params: { id: prevDocId }, query: neighbourQuery }"
         data-testid="doc-prev"
         class="text-violet-600 hover:underline dark:text-violet-300"
       >
         ← Previous document
       </RouterLink>
       <span v-else></span>
+      <span
+        v-if="neighbourScopeLabel"
+        data-testid="doc-neighbors-scope"
+        class="text-gray-500 dark:text-gray-400"
+      >
+        {{ neighbourScopeLabel }}
+      </span>
       <RouterLink
         v-if="nextDocId"
-        :to="{ name: 'document-detail', params: { id: nextDocId } }"
+        :to="{ name: 'document-detail', params: { id: nextDocId }, query: neighbourQuery }"
         data-testid="doc-next"
         class="text-violet-600 hover:underline dark:text-violet-300"
       >

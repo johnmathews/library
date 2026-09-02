@@ -14,6 +14,7 @@
  * hence `facets: Record<string, string>`.
  */
 import type { LocationQuery, LocationQueryRaw } from 'vue-router'
+import type { DocumentFilters, DocumentLanguage, DocumentStatus, ReviewStatus } from '@/api/documents'
 
 export const SORT_FIELDS = ['document_date', 'added_date'] as const
 export const SORT_DIRECTIONS = ['asc', 'desc'] as const
@@ -152,6 +153,46 @@ export function buildDocumentQuery(
   if (applied.dir !== DEFAULT_SORT_DIRECTION) query.dir = applied.dir
   if (page > 1) query.page = String(page)
   return query
+}
+
+/**
+ * Turn applied (URL) state into the API's `DocumentFilters`, at a given window.
+ *
+ * This lives here rather than in the list view because two callers need the
+ * exact same translation: the list itself, and `useDocumentNeighbors`, which
+ * has to scan *the same result set* the user is looking at. Two copies of this
+ * mapping would drift silently — the neighbour scan would quietly follow a
+ * slightly different set from the list, which is the class of bug that is
+ * almost impossible to see from the UI.
+ */
+export function toDocumentFilters(
+  applied: AppliedFilters,
+  window: { limit: number; offset: number },
+): DocumentFilters {
+  const senderId = Number.parseInt(applied.senderId, 10)
+  const recipientId = Number.parseInt(applied.recipientId, 10)
+  return {
+    q: applied.q || undefined,
+    kind: applied.kind || undefined,
+    sender_id: Number.isInteger(senderId) ? senderId : undefined,
+    recipient_id: Number.isInteger(recipientId) ? recipientId : undefined,
+    project: applied.projects.length ? applied.projects : undefined,
+    matter: applied.matters.length ? applied.matters : undefined,
+    tag: applied.tags.length ? applied.tags : undefined,
+    facet: Object.keys(applied.facets).length ? applied.facets : undefined,
+    language: (applied.language || undefined) as DocumentLanguage | undefined,
+    status: (applied.status || undefined) as DocumentStatus | undefined,
+    review_status: (applied.review || undefined) as ReviewStatus | undefined,
+    date_from: applied.dateFrom || undefined,
+    date_to: applied.dateTo || undefined,
+    // Always send sort + direction explicitly: the frontend's default
+    // (added_date) differs from the API's default (document_date), so omitting
+    // them at the frontend default would silently order by the wrong field.
+    sort: applied.sort,
+    direction: applied.dir,
+    limit: window.limit,
+    offset: window.offset,
+  }
 }
 
 /** True when any filter (incl. the search text) is applied. */
