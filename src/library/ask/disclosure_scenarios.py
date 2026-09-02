@@ -18,7 +18,11 @@ glance these documents are synthetic.
 The exclusion-reason strings used below (``no_amount``, ``quote_not_spend``,
 ``over_limit``) are the exact keys ``structured_query.py`` writes into
 ``Coverage.excluded`` — verified against that code, not assumed from the
-eval's own brief.
+eval's own brief. Two further keys exist there and are **not** exercised by any
+scenario here — ``not_summable_kind`` and ``duplicate_payment``, both added
+with #136 — because seeding either needs a shape ``SeedDoc`` does not yet
+express (a second document sharing a payment). See ``docs/ask.md``'s
+"What it measures, exactly".
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ import inspect
 from dataclasses import dataclass
 from datetime import date, timedelta
 
-from library.models import ReviewStatus
+from library.models import AmountKind, ReviewStatus
 from library.structured_query import query_documents
 
 #: `structured_query.query_documents`'s default page size (the `list`
@@ -60,6 +64,14 @@ class SeedDoc:
     currency: str | None = "EUR"
     review_status: ReviewStatus = ReviewStatus.UNREVIEWED
     title: str | None = None
+    #: What the amount MEANS. Not optional in practice: since #136
+    #: ``sum_amount`` totals only ``SUMMABLE_AMOUNT_KINDS``, so a seeded amount
+    #: left undecided is excluded as ``not_summable_kind`` and every spend
+    #: scenario here would total nothing — while still running, and still
+    #: scoring. ``payment_due`` is the default because these fixtures are bills
+    #: and invoices; a ``quote`` overrides it with ``estimate``, which is the
+    #: kind ``sum_amount`` totals when the caller asks about quotes.
+    amount_kind: AmountKind = AmountKind.PAYMENT_DUE
 
 
 @dataclass(frozen=True, slots=True)
@@ -152,9 +164,27 @@ SCENARIOS: tuple[Scenario, ...] = (
             SeedDoc(
                 "Ledger Movers (disclosure-eval fixture)", "invoice", date(2025, 6, 1), "225.00"
             ),
-            SeedDoc("Ledger Movers (disclosure-eval fixture)", "quote", date(2025, 2, 1), "500.00"),
-            SeedDoc("Ledger Movers (disclosure-eval fixture)", "quote", date(2025, 5, 1), "475.00"),
-            SeedDoc("Ledger Movers (disclosure-eval fixture)", "quote", date(2025, 8, 1), "610.00"),
+            SeedDoc(
+                "Ledger Movers (disclosure-eval fixture)",
+                "quote",
+                date(2025, 2, 1),
+                "500.00",
+                amount_kind=AmountKind.ESTIMATE,
+            ),
+            SeedDoc(
+                "Ledger Movers (disclosure-eval fixture)",
+                "quote",
+                date(2025, 5, 1),
+                "475.00",
+                amount_kind=AmountKind.ESTIMATE,
+            ),
+            SeedDoc(
+                "Ledger Movers (disclosure-eval fixture)",
+                "quote",
+                date(2025, 8, 1),
+                "610.00",
+                amount_kind=AmountKind.ESTIMATE,
+            ),
         ),
         expect_disclosure=True,
     ),

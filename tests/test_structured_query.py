@@ -1,16 +1,28 @@
 """Tests for structured/analytical queries over extracted metadata."""
 
 import hashlib
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Sequence
 from datetime import date
 from decimal import Decimal
+from typing import Any
 
 import pytest
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
-from library.models import Document, DocumentSource, Kind, ReviewStatus, Sender
+from library.facets.vocabulary import create_facet, create_value, set_document_label
+from library.models import (
+    AmountKind,
+    Document,
+    DocumentSource,
+    Facet,
+    FacetValue,
+    Kind,
+    ReviewStatus,
+    Sender,
+)
 from library.search import DocumentFilters
+from library.spend_lines import LineInput, replace_lines
 from library.structured_query import (
     Coverage,
     count_coverage,
@@ -19,6 +31,7 @@ from library.structured_query import (
     query_documents,
     sum_amount,
 )
+from tests.conftest import FIXTURE_VOCABULARY
 
 pytestmark = pytest.mark.integration
 
@@ -51,6 +64,24 @@ async def _sender(session: AsyncSession, name: str) -> Sender:
     return sender
 
 
+#: What ``seed`` gives an amount-bearing document when the caller says nothing.
+#: ``sum_amount`` reads ``amount_kind``, so a document seeded without one is
+#: *undecided* and never enters a total — which would silently empty the
+#: fixtures of every pre-existing case here. Defaulting keeps those cases
+#: meaning what they meant; the undecided state is asked for explicitly, by
+#: passing ``amount_kind=None`` to a seed that also passes an ``amount``.
+#:
+#: A quote defaults to ``estimate`` because that is what a quote's amount *is*
+#: (``docs/money-facts.md`` §2) and it is the kind ``sum_amount`` totals when the
+#: caller asks about quotes specifically. Defaulting it to a spend kind instead
+#: would make the quote cases pass while describing a document the archive
+#: would never produce.
+_DEFAULT_AMOUNT_KIND = AmountKind.PAYMENT_DUE
+_DEFAULT_QUOTE_AMOUNT_KIND = AmountKind.ESTIMATE
+
+_UNSET: Any = object()
+
+
 async def seed(
     session: AsyncSession,
     marker: str,
@@ -60,11 +91,22 @@ async def seed(
     document_date: date | None = None,
     amount: str | None = None,
     currency: str | None = None,
+    amount_kind: AmountKind | None = _UNSET,
+    reference: str | None = None,
+    labels: dict[str, str] | None = None,
+    lines: Sequence[tuple[str, dict[str, str] | None]] | None = None,
 ) -> int:
     sender = await _sender(session, sender_name) if sender_name else None
     kind = None
     if kind_slug is not None:
         kind = (await session.execute(select(Kind).where(Kind.slug == kind_slug))).scalar_one()
+    if amount_kind is _UNSET:
+        if amount is None:
+            amount_kind = None
+        elif kind_slug == "quote":
+            amount_kind = _DEFAULT_QUOTE_AMOUNT_KIND
+        else:
+            amount_kind = _DEFAULT_AMOUNT_KIND
     document = Document(
         sha256=hashlib.sha256(marker.encode()).hexdigest(),
         mime_type="application/pdf",
@@ -73,11 +115,67 @@ async def seed(
         kind=kind,
         document_date=document_date,
         amount_total=Decimal(amount) if amount is not None else None,
+        amount_kind=amount_kind,
+        reference=reference,
         currency=currency,
     )
     session.add(document)
     await session.commit()
+    for facet_key, value_key in (labels or {}).items():
+        await set_document_label(session, document.id, facet_key, value_key)
+    if labels:
+        await session.commit()
+    if lines is not None:
+        await replace_lines(
+            session,
+            document.id,
+            [
+                LineInput(amount=Decimal(line_amount), labels=line_labels or {})
+                for line_amount, line_labels in lines
+            ],
+        )
+        await session.commit()
     return document.id
+
+
+@pytest.fixture
+async def vocabulary(session: AsyncSession) -> dict[str, tuple[str, ...]]:
+    """``FIXTURE_VOCABULARY``, created once for the facet-filter cases.
+
+    The module's own ``session`` fixture truncates documents and senders but not
+    the facet tables, so creation is get-or-create rather than unconditional.
+    """
+    for ordinal, (facet_key, value_keys) in enumerate(FIXTURE_VOCABULARY.items()):
+        existing = await session.scalar(select(Facet.id).where(Facet.key == facet_key))
+        if existing is None:
+            await create_facet(session, facet_key, facet_key.replace("_", " ").title(), ordinal)
+        for value_key in value_keys:
+            already = await session.scalar(
+                select(FacetValue.id)
+                .join(Facet, Facet.id == FacetValue.facet_id)
+                .where(Facet.key == facet_key, FacetValue.key == value_key)
+            )
+            if already is None:
+                await create_value(session, facet_key, value_key, value_key.title())
+    await session.commit()
+    return FIXTURE_VOCABULARY
+
+
+async def _fact_rows(session: AsyncSession, document_id: int) -> list[tuple[int | None, bool]]:
+    """``(line_id, is_canonical)`` for a document's ``spend_facts`` rows.
+
+    Read directly, so a test that means to exercise the view's *line* branch can
+    say so rather than infer it from a total the document branch would also
+    produce.
+    """
+    rows = await session.execute(
+        text(
+            "SELECT line_id, is_canonical FROM spend_facts "
+            "WHERE document_id = :document_id ORDER BY line_id NULLS FIRST"
+        ),
+        {"document_id": document_id},
+    )
+    return [(row[0], row[1]) for row in rows.all()]
 
 
 async def test_distinct_senders_ranked_by_document_count(session: AsyncSession) -> None:
@@ -586,3 +684,399 @@ async def test_sum_amount_quote_group_by_sender_partition_holds(
         result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
     )
     assert {(row.key, row.total) for row in result.rows} == {("Acme", "150.00")}
+
+
+# --- sum_amount over `spend_facts` (#136) ------------------------------------
+#
+# Every case below was observed FAILING against the pre-#136 aggregate, which
+# summed `documents.amount_total` directly. That matters more here than usual:
+# the three defects were documents wrongly *included*, and `coverage.excluded`
+# has no bucket that reports an over-count — so a fixture that merely contains
+# the awkward document, without asserting the total it must not reach, passes
+# against both the broken and the fixed query. Each assertion below is written
+# against the NUMBER, not against the document's presence.
+
+
+async def test_sum_amount_refund_reduces_the_total(session: AsyncSession) -> None:
+    """A refund is money returned: it must subtract, not add.
+
+    The sign lives in `amount_kind`, never in `amount_total` (which is always a
+    magnitude), so summing the column directly gets this exactly backwards —
+    115.00 instead of 85.00, a number wrong by twice the refund.
+    """
+    await seed(
+        session,
+        "paid",
+        kind_slug="receipt",
+        amount="100.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+    await seed(
+        session,
+        "refunded",
+        kind_slug="receipt",
+        amount="15.00",
+        currency="EUR",
+        amount_kind=AmountKind.REFUND,
+    )
+
+    result = await sum_amount(session, filters=DocumentFilters())
+
+    assert {(row.currency, row.total) for row in result.rows} == {("EUR", "85.00")}
+    # The refund is *included*, not excluded: it contributed, negatively.
+    assert result.coverage.included == 2
+    assert result.coverage.excluded == {}
+
+
+async def test_sum_amount_counts_one_payment_once_across_an_invoice_and_a_receipt(
+    session: AsyncSession,
+) -> None:
+    """One payment documented twice must be totalled once, and say so.
+
+    The pair merges under rule R2 (same sender, same reference), so `spend_facts`
+    marks exactly one of them canonical. Summing `documents.amount_total` reads
+    neither, and returns 200.00 for a single 100.00 payment.
+    """
+    invoice = await seed(
+        session,
+        "inv",
+        sender_name="Acme",
+        kind_slug="invoice",
+        amount="100.00",
+        currency="EUR",
+        reference="AC-4471",
+        amount_kind=AmountKind.PAYMENT_DUE,
+    )
+    receipt = await seed(
+        session,
+        "rec",
+        sender_name="Acme",
+        kind_slug="receipt",
+        amount="100.00",
+        currency="EUR",
+        reference="AC-4471",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+
+    result = await sum_amount(session, filters=DocumentFilters())
+
+    assert {(row.currency, row.total) for row in result.rows} == {("EUR", "100.00")}
+    # The rows account for one document, and coverage names the other one's fate
+    # rather than leaving the reader to notice 2 documents made a 1-document sum.
+    assert [row.document_count for row in result.rows] == [1]
+    assert result.coverage.matched == 2
+    assert result.coverage.included == 1
+    assert result.coverage.excluded == {"duplicate_payment": 1}
+    # Exactly one of the pair contributed; which one is the view's call.
+    assert result.rows[0].document_ids in ([invoice], [receipt])
+
+
+async def test_sum_amount_excludes_a_coverage_limit_and_a_balance(
+    session: AsyncSession,
+) -> None:
+    """A policy's cover ceiling and an account balance are not expenditure.
+
+    Both are legitimate `amount_total` values with no place in a spend total —
+    the failure this makes visible is a total nearly two hundred times the money
+    actually spent, presented with an empty `excluded` block.
+    """
+    await seed(
+        session,
+        "spend",
+        kind_slug="receipt",
+        amount="50.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+    await seed(
+        session,
+        "ceiling",
+        kind_slug="certificate",
+        amount="9000.00",
+        currency="EUR",
+        amount_kind=AmountKind.COVERAGE_LIMIT,
+    )
+    await seed(
+        session,
+        "balance",
+        kind_slug="other",
+        amount="1200.00",
+        currency="EUR",
+        amount_kind=AmountKind.BALANCE,
+    )
+
+    result = await sum_amount(session, filters=DocumentFilters())
+
+    assert {(row.currency, row.total) for row in result.rows} == {("EUR", "50.00")}
+    assert result.coverage.excluded == {"not_summable_kind": 2}
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+
+
+async def test_sum_amount_excludes_a_document_whose_amount_kind_is_undecided(
+    session: AsyncSession,
+) -> None:
+    """An undecided `amount_kind` is not a licence to guess the number means spend.
+
+    `amount_kind` is NULL until the classifier or a human decides it, and NULL
+    must fall out under a named reason rather than being summed on the assumption
+    that an unclassified amount is expenditure.
+    """
+    await seed(
+        session,
+        "decided",
+        kind_slug="receipt",
+        amount="40.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+    await seed(
+        session,
+        "undecided",
+        kind_slug="receipt",
+        amount="999.00",
+        currency="EUR",
+        amount_kind=None,
+    )
+
+    result = await sum_amount(session, filters=DocumentFilters())
+
+    assert {(row.currency, row.total) for row in result.rows} == {("EUR", "40.00")}
+    assert result.coverage.excluded == {"not_summable_kind": 1}
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+
+
+async def test_sum_amount_totals_an_itemised_document_from_its_lines_exactly_once(
+    session: AsyncSession,
+) -> None:
+    """The view's LINE branch, not its document branch, and one document either way.
+
+    A split document is emitted as one `spend_facts` row *per line*, so a naive
+    aggregate over the view double-counts the document in `document_count` and
+    lists it twice in `document_ids` even though the money is right. Merging the
+    itemised invoice with its receipt makes the case red against the old query
+    too — the canonical slot goes to the line-bearing document, so the rows that
+    contribute are line rows.
+    """
+    invoice = await seed(
+        session,
+        "itemised",
+        sender_name="Acme",
+        kind_slug="invoice",
+        amount="100.00",
+        currency="EUR",
+        reference="AC-8820",
+        amount_kind=AmountKind.PAYMENT_DUE,
+        lines=[("60.00", None), ("40.00", None)],
+    )
+    await seed(
+        session,
+        "itemised-receipt",
+        sender_name="Acme",
+        kind_slug="receipt",
+        amount="100.00",
+        currency="EUR",
+        reference="AC-8820",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+
+    # Stated, not assumed: the contributing document really is represented by two
+    # canonical LINE rows. Without this the test would still pass for a view that
+    # emitted one synthetic document row, and the line branch would be untested.
+    fact_rows = await _fact_rows(session, invoice)
+    assert len(fact_rows) == 2
+    assert all(line_id is not None for line_id, _ in fact_rows)
+    assert all(is_canonical for _, is_canonical in fact_rows)
+
+    result = await sum_amount(session, filters=DocumentFilters())
+
+    assert {(row.currency, row.total) for row in result.rows} == {("EUR", "100.00")}
+    assert [row.document_count for row in result.rows] == [1]
+    assert result.rows[0].document_ids == [invoice]
+    assert result.coverage.excluded == {"duplicate_payment": 1}
+
+
+async def test_sum_amount_partitions_every_new_reason_in_order(
+    session: AsyncSession,
+) -> None:
+    """All five drop reasons at once, each document landing in exactly one.
+
+    The exclusions are successive refinements of one include chain, so a document
+    that fails several gates must be reported under the FIRST one it fails. This
+    is the case that would go red if a later gate were widened to stand on its own
+    rather than on everything before it.
+    """
+    await seed(session, "kept", kind_slug="receipt", amount="10.00", currency="EUR")
+    # No amount at all — and also a quote, and also senderless. `no_amount` wins.
+    await seed(session, "amountless", kind_slug="quote", currency="EUR")
+    # A quote with an amount and an unsummable kind: `quote_not_spend` wins.
+    await seed(session, "quoted", kind_slug="quote", amount="500.00", currency="EUR")
+    # Not a quote, has an amount, undecided kind: `not_summable_kind`.
+    await seed(
+        session, "undecided", kind_slug="receipt", amount="70.00", currency="EUR", amount_kind=None
+    )
+    # A merged twin: passes every earlier gate, fails only canonicality.
+    await seed(
+        session,
+        "twin-a",
+        sender_name="Globex",
+        kind_slug="invoice",
+        amount="33.00",
+        currency="EUR",
+        reference="GX-1",
+        amount_kind=AmountKind.PAYMENT_DUE,
+    )
+    await seed(
+        session,
+        "twin-b",
+        sender_name="Globex",
+        kind_slug="receipt",
+        amount="33.00",
+        currency="EUR",
+        reference="GX-1",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+
+    result = await sum_amount(session, filters=DocumentFilters())
+
+    assert result.coverage.matched == 6
+    assert result.coverage.excluded == {
+        "no_amount": 1,
+        "quote_not_spend": 1,
+        "not_summable_kind": 1,
+        "duplicate_payment": 1,
+    }
+    assert result.coverage.included == 2
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+    assert {(row.currency, row.total) for row in result.rows} == {("EUR", "43.00")}
+
+
+async def test_sum_amount_totals_quotes_from_their_estimate_kind(
+    session: AsyncSession,
+) -> None:
+    """'How much have my quotes come to?' sums `estimate`, not the spend kinds.
+
+    A quote's amount IS an `estimate` — the kind that exists precisely so it
+    cannot contaminate a spend total. When the caller asks about quotes, that is
+    the kind being asked for, so the summable set follows the question.
+    """
+    await seed(session, "spend", kind_slug="receipt", amount="10.00", currency="EUR")
+    await seed(session, "q1", kind_slug="quote", amount="800.00", currency="EUR")
+    await seed(session, "q2", kind_slug="quote", amount="150.00", currency="EUR")
+
+    result = await sum_amount(session, filters=DocumentFilters(kind_slug="quote"))
+
+    assert {(row.currency, row.total) for row in result.rows} == {("EUR", "950.00")}
+    assert result.coverage.excluded == {}
+
+
+async def test_sum_amount_quote_total_excludes_a_quote_that_is_not_an_estimate(
+    session: AsyncSession,
+) -> None:
+    """The quote branch is a kind gate too, not an unconditional pass.
+
+    A document filed under kind `quote` but carrying a cover ceiling is not an
+    estimate of anything the user asked to total, and must fall out under a named
+    reason rather than inflate the quote total by two orders of magnitude.
+    """
+    await seed(session, "real-quote", kind_slug="quote", amount="150.00", currency="EUR")
+    await seed(
+        session,
+        "misfiled",
+        kind_slug="quote",
+        amount="9000.00",
+        currency="EUR",
+        amount_kind=AmountKind.COVERAGE_LIMIT,
+    )
+
+    result = await sum_amount(session, filters=DocumentFilters(kind_slug="quote"))
+
+    assert {(row.currency, row.total) for row in result.rows} == {("EUR", "150.00")}
+    assert result.coverage.excluded == {"not_summable_kind": 1}
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+
+
+async def test_sum_amount_narrows_by_facet(
+    session: AsyncSession, vocabulary: dict[str, tuple[str, ...]]
+) -> None:
+    """A facet filter reaches the money aggregate.
+
+    `DocumentFilters` has carried `facets` since the vocabulary shipped; nothing
+    in Ask could express one, so the curated `category` vocabulary was invisible
+    to every money question.
+    """
+    await seed(
+        session,
+        "sw",
+        kind_slug="receipt",
+        amount="120.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "software"},
+    )
+    await seed(
+        session,
+        "sup",
+        kind_slug="receipt",
+        amount="60.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+        labels={"category": "supplies"},
+    )
+
+    result = await sum_amount(session, filters=DocumentFilters(facets={"category": "software"}))
+
+    assert {(row.currency, row.total) for row in result.rows} == {("EUR", "120.00")}
+    assert result.coverage.matched == 1
+
+
+async def test_sum_amount_grouped_by_sender_still_partitions_with_the_new_reasons(
+    session: AsyncSession,
+) -> None:
+    """`no_sender` remains the LAST gate, after the two new ones.
+
+    A senderless document that also carries an unsummable kind must be reported
+    as `not_summable_kind`, not as `no_sender`: the chain's order is the contract,
+    and swapping two links leaves both totals right and both reasons wrong.
+    """
+    await seed(
+        session,
+        "has-sender",
+        sender_name="Acme",
+        kind_slug="receipt",
+        amount="25.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+    await seed(
+        session,
+        "senderless-and-unsummable",
+        kind_slug="other",
+        amount="4000.00",
+        currency="EUR",
+        amount_kind=AmountKind.BALANCE,
+    )
+    await seed(
+        session,
+        "senderless-but-summable",
+        kind_slug="receipt",
+        amount="5.00",
+        currency="EUR",
+        amount_kind=AmountKind.PAYMENT_MADE,
+    )
+
+    result = await sum_amount(session, filters=DocumentFilters(), group_by="sender")
+
+    assert result.coverage.excluded == {"not_summable_kind": 1, "no_sender": 1}
+    assert (
+        result.coverage.included + sum(result.coverage.excluded.values()) == result.coverage.matched
+    )
+    assert {(row.key, row.total) for row in result.rows} == {("Acme", "25.00")}

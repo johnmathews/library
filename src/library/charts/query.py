@@ -1,6 +1,12 @@
 """Aggregate queries over `spend_facts`.
 
-Every SELECT against `spend_facts` lives here; no router builds SQL.
+Every SELECT against `spend_facts` **that a chart makes** lives here, and
+`api/spending.py` — this engine's router — builds no SQL of its own.
+
+That is a rule about where the chart engine's queries live, not a claim that the
+view is the chart engine's alone: it has two readers outside this package,
+`api/facets.py`'s label counts and `structured_query.sum_amount` (Ask's money
+totals, #136). Neither holds the invariants below.
 
 Two invariants this module exists to hold:
 

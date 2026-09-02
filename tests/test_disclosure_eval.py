@@ -317,3 +317,27 @@ def test_complete_no_gaps_is_a_genuine_control_with_nothing_to_disclose() -> Non
     assert len({d.currency for d in scenario.docs}) == 1
     assert len({d.kind_slug for d in scenario.docs}) == 1
     assert len({d.sender_name for d in scenario.docs}) == 1
+
+
+def test_every_seeded_amount_carries_a_kind_sum_amount_would_total() -> None:
+    """A seeded amount with no `amount_kind` is money `sum_amount` ignores.
+
+    Since #136 the aggregate reads `amount_kind`, so an undecided (NULL) one is
+    excluded as `not_summable_kind`. Left unset, every amount in every scenario
+    here would fall out and each spend total would come back empty — the eval
+    would still RUN, and would still score, while measuring disclosure of a
+    number that no longer exists. That is the failure this guard exists for: the
+    eval needs live credentials, so nothing in CI would have noticed.
+    """
+    from library.ask.disclosure_scenarios import SCENARIOS
+    from library.models import SUMMABLE_AMOUNT_KINDS, AmountKind
+
+    for scenario in SCENARIOS:
+        for doc in scenario.docs:
+            if doc.amount is None:
+                continue
+            expected = {AmountKind.ESTIMATE} if doc.kind_slug == "quote" else SUMMABLE_AMOUNT_KINDS
+            assert doc.amount_kind in expected, (
+                f"{scenario.name}: a {doc.kind_slug} seeded with an amount carries "
+                f"amount_kind={doc.amount_kind!r}, which sum_amount will not total"
+            )

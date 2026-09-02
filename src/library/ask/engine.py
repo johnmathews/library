@@ -61,7 +61,8 @@ Use the tools to find evidence, then answer:
 - query_documents: aggregate over structured metadata (e.g. "who was my energy
   provider last year", "how much did I spend on utilities in 2025"). Use for
   who/how-many/how-much/which-over-time questions. Filter by kind, sender,
-  recipient, date range, and the user's own projects, matters and tags.
+  recipient, date range, the curated facet labels, and the user's own
+  projects, matters and tags.
 - get_document: read one document in full (structured fields, the user's
   comments, and its text) once you have located it via another tool. A
   document's comments are the user's own notes about it and are authoritative
@@ -84,7 +85,8 @@ results when answering.
 
 The "Archive context" block at the end of this prompt names the user, the
 recipient names that are theirs, and the archive's vocabulary: kind, matter,
-project and tag slugs, and the most frequent senders. Use those exact slugs and
+project and tag slugs, the curated facets with their allowed values, and the
+most frequent senders. Use those exact slugs and
 names in tool calls instead of guessing; when a question says "my"/"me"/"I",
 it means that user. If it carries an "About the user" note, that is the user's
 own account of their household and circumstances — authoritative personal
@@ -169,6 +171,18 @@ _FILTER_PROPERTIES: dict[str, Any] = {
     },
     "date_from": {"type": "string", "description": "Inclusive ISO date lower bound."},
     "date_to": {"type": "string", "description": "Inclusive ISO date upper bound."},
+    "facets": {
+        "type": "object",
+        "additionalProperties": {"type": "string"},
+        "description": (
+            "Curated facet labels as {facet_key: value_key}, using the exact "
+            "keys from the archive context's Facets line. Facets AND-compose: "
+            "two different facets narrow, and a document holds one value per "
+            "facet. This is the archive's own hand-curated vocabulary — prefer "
+            "it over guessing at a sender or a kind when the question names a "
+            "category the context lists."
+        ),
+    },
 }
 
 # `review_status` lives in its own dict rather than `_FILTER_PROPERTIES` because
@@ -255,9 +269,14 @@ TOOLS: list[dict[str, Any]] = [
                     "enum": ["list", "distinct_senders", "sum_amount"],
                     "description": (
                         "distinct_senders: unique senders (e.g. providers). "
-                        "sum_amount: total amounts (real expenditure — quotes/"
-                        "estimates are excluded automatically; pass kind='quote' "
-                        "to total quotes instead). list: matching documents."
+                        "sum_amount: total real expenditure. It reads what each "
+                        "amount MEANS, so a refund reduces the total, a policy's "
+                        "cover limit or an account balance is left out, and one "
+                        "payment documented as both an invoice and a receipt is "
+                        "counted once — each reported in `coverage.excluded` as "
+                        "not_summable_kind, duplicate_payment or quote_not_spend. "
+                        "Pass kind='quote' to total quotes instead. "
+                        "list: matching documents."
                     ),
                 },
                 **_FILTER_PROPERTIES,
@@ -604,6 +623,24 @@ def _slug_args(value: object) -> tuple[str, ...]:
     return tuple(slug for slug in (_text_arg(item) for item in items) if slug is not None)
 
 
+def _facet_args(value: object) -> dict[str, str]:
+    """A ``{facet_key: value_key}`` argument, dropping anything unusable.
+
+    The model writes this object freehand, so both halves are validated rather
+    than coerced. An entry that survives as ``""`` would be a filter matching no
+    document, which narrows a total to zero and reads exactly like a real answer
+    of nothing — worse than no filter, and invisible in ``coverage``, whose
+    reasons only describe documents that were matched and then dropped.
+
+    A non-object argument degrades to "no facet filter" rather than raising,
+    matching :func:`_slug_args`: a hallucinated shape must not 500 the tool loop.
+    """
+    if not isinstance(value, dict):
+        return {}
+    pairs = ((_text_arg(key), _text_arg(item)) for key, item in value.items())
+    return {key: item for key, item in pairs if key is not None and item is not None}
+
+
 def _review_status_arg(value: object) -> ReviewStatus | None:
     """A ``ReviewStatus`` from a tool argument, or None.
 
@@ -658,6 +695,7 @@ def _filters_from_args(args: dict[str, Any]) -> DocumentFilters:
         tag_slugs=_slug_args(args.get("tags")),
         date_from=_parse_date(args.get("date_from")),
         date_to=_parse_date(args.get("date_to")),
+        facets=_facet_args(args.get("facets")),
         review_status=_review_status_arg(args.get("review_status")),
     )
 

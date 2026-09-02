@@ -19,10 +19,19 @@ from datetime import date
 from decimal import Decimal
 from typing import Any, Literal, TypedDict
 
-from sqlalchemy import ColumnElement, func, select
+from sqlalchemy import ColumnElement, case, distinct, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from library.models import Document, Kind, ReviewStatus, Sender
+from library.models import (
+    AMOUNT_SIGN,
+    SUMMABLE_AMOUNT_KINDS,
+    AmountKind,
+    Document,
+    Kind,
+    ReviewStatus,
+    Sender,
+    spend_facts,
+)
 from library.search import DocumentFilters, filter_conditions
 
 # How many contributing document ids to attach to each aggregated row.
@@ -316,22 +325,97 @@ async def distinct_senders(
     return Aggregated(rows=groups, coverage=coverage)
 
 
+def _summable_kinds(filters: DocumentFilters) -> frozenset[AmountKind]:
+    """Which ``amount_kind`` values this call is asking to total.
+
+    ``SUMMABLE_AMOUNT_KINDS`` — real expenditure — for every question but one.
+    A caller filtering ``kind='quote'`` is asking "how much have my quotes come
+    to?", and a quote's amount is an ``estimate``: the kind that exists
+    *precisely* so a quote cannot contaminate a spend total, and therefore the
+    only kind that can answer a question about quotes. The summable set follows
+    the question rather than being fixed, which is what keeps the quote total
+    working after the move onto ``spend_facts`` — under the fixed set it would
+    have quietly become zero.
+
+    It stays a **kind gate** either way: a document filed under kind ``quote``
+    but carrying, say, a coverage ceiling still falls out, under
+    ``not_summable_kind``.
+    """
+    if filters.kind_slug == "quote":
+        return frozenset({AmountKind.ESTIMATE})
+    return SUMMABLE_AMOUNT_KINDS
+
+
+def _signed_amount(kinds: frozenset[AmountKind]) -> ColumnElement[Decimal]:
+    """A ``spend_facts`` row's signed contribution to a total.
+
+    ``amount`` is always a magnitude; the sign is a property of what the number
+    *means* and lives in ``AMOUNT_SIGN``. A refund is the only negative, and
+    getting this wrong is invisible in the result — a refund that adds produces
+    a plausible number that is wrong by twice the refund.
+
+    ``AMOUNT_SIGN.get(kind, 1)`` covers ``estimate``, which is summable only for
+    the quote question above and carries no sign of its own: an estimate is
+    money that would go out, so it counts positively.
+
+    Sorted, though the branches are mutually exclusive and the total does not
+    depend on their order: ``kinds`` is a **set**, so unsorted iteration emits a
+    differently-ordered CASE on each process, and SQLAlchemy's compiled-statement
+    cache is keyed on the statement's structure. Same answer, a fresh cache miss
+    every run.
+
+    ``else_`` is unreachable — the caller's WHERE restricts ``amount_kind`` to
+    this same ``kinds`` — and is 0 rather than NULL so that if it ever became
+    reachable it would fail as a wrong total rather than as a NULL that
+    propagates through ``sum()`` and erases the whole group.
+    """
+    return spend_facts.c.amount * case(
+        *(
+            (spend_facts.c.amount_kind == kind.value, AMOUNT_SIGN.get(kind, 1))
+            for kind in sorted(kinds, key=lambda kind: kind.value)
+        ),
+        else_=0,
+    )
+
+
 async def sum_amount(
     session: AsyncSession, *, filters: DocumentFilters, group_by: GroupBy | None = None
 ) -> Aggregated[AmountGroup]:
-    """Sum ``amount_total`` over matching documents, with coverage.
+    """Sum matching documents' money over ``spend_facts``, with coverage.
 
     Always grouped by currency (amounts in different currencies cannot be
-    added); optionally also by sender or kind. Three things drop documents from
-    the total, and all three are reported in ``coverage.excluded`` rather than
-    happening silently:
+    added); optionally also by sender or kind.
+
+    **The rows are built from the ``spend_facts`` view, not from
+    ``documents.amount_total``.** That view is the one relation that gets money
+    right, and reading it is what buys three things the column cannot give:
+
+    * **Sign.** ``amount_total`` is a magnitude; ``amount_kind`` says what it
+      means. A refund reduces a total instead of adding to it.
+    * **Kind.** Only ``SUMMABLE_AMOUNT_KINDS`` are expenditure, so a policy's
+      cover limit, an account balance, an estimate and an undecided (NULL) kind
+      stay out of "what did I spend".
+    * **Payment identity.** ``is_canonical`` picks exactly one document per
+      payment, so one payment documented as an invoice *and* a receipt is
+      totalled once.
+
+    Coverage is still counted over ``documents`` by :func:`count_coverage`, and
+    deliberately: every new exclusion is expressible as a document-level
+    predicate — ``amount_kind`` is a column on ``documents``, and canonicality is
+    an ``EXISTS`` against the view — so only the row-building query moved.
+
+    The reasons a document is dropped, each meaning "survived every earlier
+    gate, fails this one" so that they partition the matched set:
 
     * ``no_amount`` — extraction found no total. The dominant case, and the one
       that used to make a partial sum indistinguishable from a complete one.
-    * ``quote_not_spend`` — quotes/estimates are not actual expenditure, so kind
-      ``quote`` is excluded unless the caller explicitly filters for it (e.g.
-      "how much have my quotes come to?"). Correct, but surprising enough that
-      the answer should be able to say it happened.
+    * ``quote_not_spend`` — quotes are not actual expenditure, so kind ``quote``
+      is excluded unless the caller explicitly filters for it. Correct, but
+      surprising enough that the answer should be able to say it happened.
+    * ``not_summable_kind`` — the amount is real but is not spending: a
+      ``coverage_limit``, a ``balance``, an ``estimate``, a ``none``, or an
+      ``amount_kind`` nothing has decided yet.
+    * ``duplicate_payment`` — a second document for a payment already counted.
     * ``no_sender`` / ``no_kind`` — only when grouping by that column, whose
       INNER JOIN drops documents that lack it.
     """
@@ -345,15 +429,40 @@ async def sum_amount(
         .exists()
     )
     has_amount = Document.amount_total.isnot(None)
+    kinds = _summable_kinds(filters)
+    kind_values = sorted(kind.value for kind in kinds)
+    # `notin_` alone is NULL for a NULL `amount_kind`, and a NULL never satisfies
+    # a FILTER clause — so an undecided document would be counted under no reason
+    # at all and silently break the partition. The NULL arm is what makes
+    # "undecided" a reportable state rather than a hole.
+    summable_kind = Document.amount_kind.in_(kind_values)
+    unsummable_kind = Document.amount_kind.is_(None) | Document.amount_kind.notin_(kind_values)
+    # `payments` seeds its reachability from every live document, so a document
+    # with an amount always has at least one `spend_facts` row. Having none that
+    # is canonical therefore means exactly one thing: another document holds the
+    # payment's canonical slot.
+    is_canonical = (
+        select(1)
+        .select_from(spend_facts)
+        .where(spend_facts.c.document_id == Document.id, spend_facts.c.is_canonical)
+        .correlate(Document)
+        .exists()
+    )
 
     # Each exclusion is "survived every earlier gate, but fails this one", so the
     # reasons partition the matched set instead of overlapping. A quote with an
-    # amount and no sender must land in exactly one bucket, not two.
+    # amount and no sender must land in exactly one bucket, not two. The ORDER is
+    # the contract: swapping two links leaves every total right and every reason
+    # wrong, which no total-based assertion would catch.
     include: ColumnElement[bool] = has_amount
     exclusions: dict[str, ColumnElement[bool]] = {"no_amount": Document.amount_total.is_(None)}
     if filters.kind_slug != "quote":
         exclusions["quote_not_spend"] = include & is_quote
         include = include & ~is_quote
+    exclusions["not_summable_kind"] = include & unsummable_kind
+    include = include & summable_kind
+    exclusions["duplicate_payment"] = include & ~is_canonical
+    include = include & is_canonical
     if group_by == "sender":
         exclusions["no_sender"] = include & Document.sender_id.is_(None)
         include = include & Document.sender_id.isnot(None)
@@ -361,17 +470,33 @@ async def sum_amount(
         exclusions["no_kind"] = include & Document.kind_id.is_(None)
         include = include & Document.kind_id.isnot(None)
 
-    conditions = [*filter_conditions(filters), has_amount]
+    conditions = [
+        *filter_conditions(filters),
+        spend_facts.c.is_canonical,
+        spend_facts.c.amount_kind.in_(kind_values),
+    ]
     if filters.kind_slug != "quote":
         conditions.append(~is_quote)
-    key_column = None
-    statement = select(
-        func.sum(Document.amount_total),
-        Document.currency,
-        func.count(Document.id),
-        func.array_agg(Document.id),
-    ).where(*conditions)
 
+    # DISTINCT on both: a document split across spend lines is one `spend_facts`
+    # row PER LINE, so a plain count would report an itemised document once per
+    # line and array_agg would cite it as many times. The money is right either
+    # way, which is what makes this the quiet half of the bug.
+    key_column = None
+    statement = (
+        select(
+            func.sum(_signed_amount(kinds)),
+            spend_facts.c.currency,
+            func.count(distinct(spend_facts.c.document_id)),
+            func.array_agg(distinct(spend_facts.c.document_id)),
+        )
+        .select_from(Document)
+        .join(spend_facts, spend_facts.c.document_id == Document.id)
+        .where(*conditions)
+    )
+
+    # Joined through `Document`, not through the view's own `sender_id`, so the
+    # join and `count_coverage`'s `no_sender` predicate read the same column.
     if group_by == "sender":
         key_column = Sender.name
         statement = statement.join(Sender, Document.sender_id == Sender.id)
@@ -380,10 +505,10 @@ async def sum_amount(
         statement = statement.join(Kind, Document.kind_id == Kind.id)
 
     if key_column is not None:
-        statement = statement.add_columns(key_column).group_by(key_column, Document.currency)
+        statement = statement.add_columns(key_column).group_by(key_column, spend_facts.c.currency)
     else:
-        statement = statement.group_by(Document.currency)
-    statement = statement.order_by(func.sum(Document.amount_total).desc())
+        statement = statement.group_by(spend_facts.c.currency)
+    statement = statement.order_by(func.sum(_signed_amount(kinds)).desc())
 
     groups: list[AmountGroup] = []
     for row in (await session.execute(statement)).all():

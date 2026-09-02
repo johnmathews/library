@@ -174,3 +174,88 @@ async def test_query_documents_reports_an_unknown_review_status_as_an_error(
     assert "needs_review" in result["error"]
     assert "unreviewed" in result["error"]
     assert called is False  # nothing was queried for a value that can't be honoured
+
+
+# --- facet filters (#136) ----------------------------------------------------
+
+
+def test_query_tools_declare_the_facet_filter() -> None:
+    """`DocumentFilters.facets` has existed since the vocabulary shipped; until
+    a tool schema declared it, the curated `category` vocabulary was unreachable
+    from a question — the model had no way to express the filter at all."""
+    by_name = {tool["name"]: tool for tool in TOOLS}
+    for tool_name in ("query_documents", "semantic_search"):
+        properties = by_name[tool_name]["input_schema"]["properties"]
+        assert "facets" in properties, tool_name
+        assert properties["facets"]["type"] == "object"
+
+
+@pytest.mark.asyncio
+async def test_query_documents_tool_forwards_a_facet_filter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict[str, DocumentFilters] = {}
+
+    async def fake_query_documents(session: Any, *, filters: DocumentFilters, **_: Any) -> Any:
+        captured["filters"] = filters
+        return {"result_type": "sum_amount", "rows": []}
+
+    monkeypatch.setattr(ask_engine, "query_documents", fake_query_documents)
+    await _run_query_documents(
+        cast(Any, None),
+        {"aggregate": "sum_amount", "facets": {"category": "software"}},
+        set(),
+    )
+
+    assert dict(captured["filters"].facets) == {"category": "software"}
+
+
+@pytest.mark.asyncio
+async def test_query_documents_tool_drops_unusable_facet_entries(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A blank or non-string facet entry becomes *no filter for that facet*,
+    never a filter on the empty string.
+
+    The model writes this object freehand. An entry coerced to `""` would match
+    no document and silently narrow a total to zero, which reads exactly like a
+    real answer of nothing — the failure the `coverage` block cannot describe,
+    because the documents were never matched in the first place.
+    """
+    captured: dict[str, DocumentFilters] = {}
+
+    async def fake_query_documents(session: Any, *, filters: DocumentFilters, **_: Any) -> Any:
+        captured["filters"] = filters
+        return {"result_type": "sum_amount", "rows": []}
+
+    monkeypatch.setattr(ask_engine, "query_documents", fake_query_documents)
+    await _run_query_documents(
+        cast(Any, None),
+        {
+            "aggregate": "sum_amount",
+            "facets": {"category": "  ", "scope": None, "cost_type": " usage ", "": "software"},
+        },
+        set(),
+    )
+
+    assert dict(captured["filters"].facets) == {"cost_type": "usage"}
+
+
+@pytest.mark.asyncio
+async def test_query_documents_tool_tolerates_a_non_object_facets_argument(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A hallucinated shape degrades to "no facet filter", never to a 500 inside
+    the tool loop — the same contract `_slug_args` holds for the list filters."""
+    captured: dict[str, DocumentFilters] = {}
+
+    async def fake_query_documents(session: Any, *, filters: DocumentFilters, **_: Any) -> Any:
+        captured["filters"] = filters
+        return {"result_type": "sum_amount", "rows": []}
+
+    monkeypatch.setattr(ask_engine, "query_documents", fake_query_documents)
+    await _run_query_documents(
+        cast(Any, None), {"aggregate": "sum_amount", "facets": ["category=software"]}, set()
+    )
+
+    assert dict(captured["filters"].facets) == {}
