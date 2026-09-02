@@ -47,6 +47,26 @@ const FIELD_LABELS: Record<string, string> = {
   expiry_date: 'Expiry date',
   amount_total: 'Amount',
   currency: 'Currency',
+  // Reached via `fieldLabel()` rather than a finding: no validation rule
+  // targets `amount_kind`, but re-extraction can report withholding it.
+  amount_kind: 'Amount kind',
+}
+
+/**
+ * Storage field name → friendly label, or the raw name when unmapped.
+ *
+ * Exported for surfaces that name a field OUTSIDE a validation finding — the
+ * document timeline reports which fields an extraction withheld. A second copy
+ * of this map is the thing to avoid: the labels have to agree wherever a field
+ * is named, or the same column reads as two different attributes.
+ *
+ * Unlike `resolveReviewReason`, this falls back to the raw name instead of
+ * `null`. A finding can simply omit an attribute chip; a list of withheld
+ * fields cannot omit its members, and a storage name a reader can look up
+ * beats silence about a write that did not happen.
+ */
+export function fieldLabel(field: string): string {
+  return FIELD_LABELS[field] ?? field
 }
 
 /** Short title per validation rule code. Unknown rules get a safe generic. */
