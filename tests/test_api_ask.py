@@ -1563,6 +1563,64 @@ def test_disclosure_rule_names_the_coverage_reporting_tools() -> None:
     assert "semantic_search" in disclosure
 
 
+def test_ask_system_prompt_obliges_disclosure_across_a_comparison() -> None:
+    """The disclosure rule above it is scoped to one tool result, so a
+    comparison assembled from two aggregate calls satisfies every word of it
+    while still being an artefact: each period discloses its own coverage
+    correctly, and the difference between them — the actual answer — is
+    governed by nothing.
+
+    Pinned as its own bullet rather than folded into the existing one, and
+    asserted to come AFTER it — the rule opens by referring to "the rule
+    above", so the order is part of its meaning, not formatting.
+
+    There is a latent trap next door, and the ordering assertion below is what
+    guards it. `test_disclosure_rule_names_the_coverage_reporting_tools`
+    slices from the first rule line *starting* `- ` that contains the word
+    "coverage" to the next bullet. This rule survives only because its own
+    first line happens not to use that word — moving it above the per-result
+    bullet was tried, and that sibling test stayed green while only this one
+    reded. So the sibling cannot be relied on to catch a reordering, and a
+    future reword of this bullet's opening line could capture its slice
+    silently. Hence the explicit index comparison here.
+    """
+    from library.ask.engine import ASK_SYSTEM_PROMPT_TEMPLATE
+
+    rules = ASK_SYSTEM_PROMPT_TEMPLATE.split("Rules:")[1]
+    lines = rules.splitlines()
+    starts = [i for i, line in enumerate(lines) if line.startswith("- ")]
+    # Whole bullets, not first lines: this rule's opening sentence is about
+    # comparing results and only reaches the word `excluded` on its second
+    # line, so a first-line match would miss it.
+    bullets = [
+        " ".join(lines[start:end])
+        for start, end in zip(starts, [*starts[1:], len(lines)], strict=True)
+    ]
+    coverage_bullets = [b for b in bullets if "`excluded`" in b]
+    assert len(coverage_bullets) == 2, (
+        "the cross-call rule must be its own bullet, separate from the "
+        "per-result one — folded into it, a reader (and the model) reads the "
+        "whole thing as being about a single tool result"
+    )
+
+    per_result, cross_call = coverage_bullets
+    assert bullets.index(per_result) < bullets.index(cross_call), (
+        "the cross-call rule must come AFTER the per-result one: it opens by "
+        "referring to 'the rule above', and the sibling test above slices from "
+        "the first coverage-naming bullet"
+    )
+
+    # The trigger: it has to be about more than one result.
+    assert "compare two or more results" in cross_call
+    # The obligation, at the same strength as the per-result rule. Without the
+    # modal this is advice, and advice is what the prompt already implied.
+    assert "MUST say so" in cross_call
+    # The specific thing that must not happen — naming it is what makes the
+    # rule actionable rather than a general exhortation to be careful.
+    assert "trend" in cross_call
+    assert "`excluded`" in cross_call
+
+
 def test_ask_refuses_an_allocated_documents_amount_edit_without_a_500(
     api_client: TestClient,
     api_database_url: str,
