@@ -26,11 +26,41 @@ criterion this corpus is held to — if baseline recall@10 comes out at or above
 0.90, the corpus is too easy and gets harder before any retrieval change is
 measured against it.
 
-**One chunk per document, by construction.** Every ``body`` is shorter than
-``embedding_chunk_chars`` (1800), so each document produces exactly one content
-chunk. ``tests/test_recall_scenarios.py`` asserts this. It keeps document-level
-recall unambiguous: a document is retrieved or it is not, with no question of
-which of its chunks won.
+**Chunk counts are declared, and documents may span several chunks.** This
+reverses a deliberate earlier decision — every body used to be shorter than
+``embedding_chunk_chars`` so that each document produced exactly one chunk —
+and the reversal is worth explaining, because the reason originally written
+down for the invariant was not the reason it was load-bearing.
+
+The stated reason was that one chunk per document "keeps document-level recall
+unambiguous: a document is retrieved or it is not, with no question of which of
+its chunks won." That was never true of the code. ``semantic_search`` collapses
+to one row per document (``DISTINCT ON (document_id) ORDER BY distance``) and
+the eval scores ``hit.document.id``, so document-level recall was unambiguous
+for any chunk count.
+
+The invariant *was* load-bearing, for two reasons nobody wrote down:
+
+1. **The blind floor assumed it.** Ranking is by nearest chunk, so a document
+   with ``c`` chunks gets ``c`` draws under a null retriever. The old floor
+   formula modelled documents as exchangeable, which is exactly right while
+   every document is one chunk and wrong — in the passing direction — as soon
+   as one is not. See ``recall_eval.blind_recall``.
+2. **The ANN prefetch budget assumed it.** ``semantic_search`` prefetches
+   ``top_k * 5 * VECTOR_CANDIDATE_FANOUT`` *chunks* before collapsing. A
+   201-chunk corpus sits under that window, so on a clean stack the vector leg
+   is an exact global argmax rather than the approximate retriever that ships.
+
+Issue #106 needs multi-chunk fixtures to measure whether chunk count biases
+retrieval at all, so the invariant had to go. Both real reasons are now
+enforced instead of assumed: ``RecallDoc.chunks`` is declared and checked
+against the real chunker, and the floor is weighted by it.
+
+**The rule for anyone adding fixtures, which is the opposite of the obvious
+one: crowders long, expected documents no longer than their crowders.**
+Lengthening the *expected* documents raises the blind floor — three 5-chunk
+expected documents among single-chunk crowders sit at 0.70 — so it makes a case
+easier while looking harder.
 """
 
 from __future__ import annotations
@@ -38,9 +68,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-#: Ceiling every ``RecallDoc.body`` must stay under so each document yields
-#: exactly one chunk. Mirrors ``Settings.embedding_chunk_chars``; the structural
-#: test imports the real setting and asserts this does not drift above it.
+#: This module's mirror of ``Settings.embedding_chunk_chars`` — the size of one
+#: chunk. No longer a ceiling on ``RecallDoc.body``: bodies may exceed it, and
+#: what they must do instead is declare the resulting ``chunks`` count, which
+#: the structural test checks against the real chunker. Kept because it is still
+#: the number every body length is reasoned about in, and because the structural
+#: test asserts it has not drifted above the real setting.
 MAX_BODY_CHARS: int = 1800
 
 #: Suffix on every synthetic sender. See the module docstring.
