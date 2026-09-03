@@ -1098,22 +1098,83 @@ CANCELLATION_NEEDLE: str = (
     "is served after it."
 )
 
-_AGREEMENT_FILLER: str = (
+#: Crowder prose for the passage case. Several of these paragraphs discuss
+#: notice, cancellation and termination AT LENGTH, with different periods and
+#: about different things — which is the point.
+#:
+#: The first version of these crowders never mentioned notice at all, and the
+#: case scored 1.00 in both environments: the question's own vocabulary
+#: ("notice", "cancel", "maintenance agreement") appeared in exactly two
+#: documents, so finding them was a lexical exercise and no retrieval quality
+#: was being measured. A case that cannot fail at baseline can register a
+#: regression but can never show an improvement, which is most of what this
+#: corpus exists for.
+#:
+#: This is the corpus's standing technique — "hand-authored near-miss
+#: distractors: same sender, same kind, adjacent dates, overlapping vocabulary"
+#: — applied where it was missing.
+_AGREEMENT_PARAGRAPHS: tuple[str, ...] = (
     "The agreement sets out the scope of the maintenance service, the response "
     "times that apply to each category of fault, and the circumstances in which "
-    "an attendance is chargeable rather than included in the annual charge. "
+    "an attendance is chargeable rather than included in the annual charge.",
+    "Either party may give notice to vary the schedule of covered equipment. "
+    "Thirty days notice is required, and the revised schedule takes effect from "
+    "the start of the following month rather than immediately.",
+    "Notice of a change to the call-out rate is given in writing sixty days "
+    "before it applies. A customer who does not wish to accept the revised rate "
+    "may say so in the same period, and the previous rate is held until the "
+    "anniversary.",
+    "Cancellation of an individual visit requires two working days notice. A "
+    "visit cancelled with less notice than that is chargeable at the standard "
+    "attendance rate whether or not the engineer has set out.",
+    "Termination for non-payment follows a separate route and is not subject to "
+    "the notice arrangements described elsewhere in this agreement. Fourteen "
+    "days is allowed to remedy an overdue balance before cover is suspended.",
+    "The maintenance agreement renews on its anniversary unless it has been "
+    "brought to an end beforehand. Renewal carries the schedule of charges "
+    "current at that date, which is issued in advance.",
+    "Where the property changes hands the agreement may be transferred rather "
+    "than cancelled. The incoming owner confirms acceptance in writing and no "
+    "notice period arises on a transfer.",
+    "A suspension is not a cancellation. Cover may be suspended by agreement for "
+    "up to three months, during which no charge accrues and no notice is "
+    "required to resume.",
+    "Records of every attendance are retained for six years. Copies are provided "
+    "on request, and are provided automatically when an agreement ends for any "
+    "reason.",
+    "Response times are measured from the time a fault is reported rather than "
+    "from the time it occurs. Out of hours reports are timed from the start of "
+    "the next working day unless the fault is an emergency.",
 )
 
 
-def _agreement_body(needle: str | None) -> str:
+def _agreement_prose(offset: int) -> str:
+    """Cycled crowder prose, so no two agreements read identically."""
+    parts: list[str] = []
+    length = 0
+    index = offset
+    while length < _CROWDER_TARGET_CHARS + len(_AGREEMENT_FILLER_TAIL):
+        paragraph = _AGREEMENT_PARAGRAPHS[index % len(_AGREEMENT_PARAGRAPHS)]
+        parts.append(paragraph)
+        length += len(paragraph) + 1
+        index += 1
+    return " ".join(parts)
+
+
+#: Padding used when a body needs a few more characters than the cycle produced.
+_AGREEMENT_FILLER_TAIL: str = " The remainder of this schedule is unchanged."
+
+
+def _agreement_body(needle: str | None, offset: int = 0) -> str:
     """A maintenance-agreement body, optionally with the answer buried in it."""
+    prose = _agreement_prose(offset)
     if needle is None:
-        filler = (_AGREEMENT_FILLER * 60)[:_CROWDER_TARGET_CHARS]
+        filler = prose[:_CROWDER_TARGET_CHARS]
         return filler[: filler.rfind(" ")]
-    before = (_AGREEMENT_FILLER * 60)[:_NEEDLE_OFFSET]
+    before = prose[:_NEEDLE_OFFSET]
     before = before[: before.rfind(" ") + 1]
     remaining = _AGREEMENT_TARGET_CHARS - len(before) - len(needle) - 1
-    after = (_AGREEMENT_FILLER * 60)[:remaining]
+    after = prose[:remaining]
     return before + needle + " " + after[: after.rfind(" ")]
 
 
@@ -1124,12 +1185,15 @@ _AGREEMENT_ANSWERS: tuple[RecallDoc, ...] = tuple(
         kind_slug="contract",
         document_date=date(2023, month, 14),
         title=title,
-        body=_agreement_body(CANCELLATION_NEEDLE),
+        body=_agreement_body(CANCELLATION_NEEDLE, offset),
         chunks=_AGREEMENT_CHUNKS,
     )
-    for slug, month, title in (
-        ("boiler", 3, "Maintenance agreement — boiler cover"),
-        ("electrical", 9, "Maintenance agreement — electrical cover"),
+    for offset, (slug, month, title) in enumerate(
+        (
+            ("boiler", 3, "Maintenance agreement — boiler cover"),
+            ("electrical", 9, "Maintenance agreement — electrical cover"),
+            ("plumbing", 6, "Maintenance agreement — plumbing cover"),
+        )
     )
 )
 
@@ -1143,7 +1207,7 @@ _AGREEMENT_CROWDERS: tuple[RecallDoc, ...] = tuple(
         kind_slug="contract" if index % 3 else "letter",
         document_date=date(2021 + (index % 4), 1 + (index % 12), 1 + (index % 27)),
         title=title,
-        body=_agreement_body(None),
+        body=_agreement_body(None, index),
         chunks=_CROWDER_CHUNKS,
         crowds=("passage-buried-clause",),
     )
@@ -1265,9 +1329,13 @@ CASES: tuple[RecallCase, ...] = (
     RecallCase(
         name="passage-buried-clause",
         question="What notice do I have to give to cancel the maintenance agreement?",
-        expected_markers=("agreement-boiler", "agreement-electrical"),
+        expected_markers=(
+            "agreement-boiler",
+            "agreement-electrical",
+            "agreement-plumbing",
+        ),
         why=(
-            "THE case for #106. Two agreements state the notice period in one "
+            "THE case for #106. Three agreements state the notice period in one "
             "passage each; twenty-four longer agreements from the same sender "
             "discuss every other term at length and never state it. Built with "
             "the CROWDERS long and the expected documents shorter, which is the "
