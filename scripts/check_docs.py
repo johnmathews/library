@@ -75,6 +75,20 @@ NOT_YET_GRACE_DAYS: int = 60
 #: real offset (max ±14h) while still catching a date that is simply wrong.
 FUTURE_DATE_GRACE_DAYS: int = 1
 
+#: Slack for the two comparative staleness rules, and the mirror of the constant
+#: above. A stamp is written while the work happens; the doc's commit DATE is
+#: assigned later, by the squash-merge. When the merge lands after the author's
+#: local midnight, `main` sees a doc committed one day after its own stamp — and
+#: reds, on a diff identical to the PR's, which was green. Nothing is stale; the
+#: author simply cannot know at stamping time what date their merge will carry.
+#: The same single commit dates the covered *source* too, which is why both rules
+#: need this and fixing only one leaves half the failure in place (issue #126).
+#: One day covers it: the trigger is midnight in the committer's own offset, so
+#: the exposure is at most one calendar day wide. The cost is that the blind spot
+#: `git_changed_since` documents widens from one day to two — the honest price,
+#: and the reason the `method:` string, not this rule, carries the real guarantee.
+STALE_GRACE_DAYS: int = 1
+
 #: The archived greenfield plan whose `units:` frontmatter the `Wn` citations in
 #: `docs/` refer to. Restored from history in W14 — before that the reference in
 #: `architecture.md` pointed at a path that no longer existed, so no `Wn` token
@@ -305,7 +319,7 @@ def check_document(
         )
 
     # --- Comparative staleness ----------------------------------------------
-    if last_commit is not None and last_commit > stamp.verified_date:
+    if last_commit is not None and (last_commit - stamp.verified_date).days > STALE_GRACE_DAYS:
         violations.append(
             Violation(
                 path,
@@ -679,17 +693,30 @@ def git_changed_since(since: date, patterns: tuple[str, ...]) -> tuple[str, ...]
     gives both comparative rules one shared meaning of "since": this is exactly
     the comparison ``stale-doc-edit`` already makes.
 
-    Same-date changes are not reported, for the reason ``stale-doc-edit`` does
-    not report them either: a stamp is a date, so a commit on that same date
-    cannot be ordered against it, and flagging it would fire on the ordinary
-    workflow of verifying a document in the same commit as the code it covers.
-    The residual blind spot is one day wide, and it is why the ``method:`` string
-    — not this rule — carries the real guarantee.
+    Changes within ``STALE_GRACE_DAYS`` are not reported, for two reasons that
+    compound. First, a stamp is a date, so a commit on that same date cannot be
+    ordered against it, and flagging it would fire on the ordinary workflow of
+    verifying a document in the same commit as the code it covers. Second, and
+    this is issue #126: the author does not choose the commit date at all — the
+    **squash-merge** does, later. A doc stamped on the 29th whose PR merges after
+    the author's local midnight lands on ``main`` dated the 30th, and both this
+    rule and ``stale-doc-edit`` then fire on a diff that was green on the PR.
+
+    Note where the boundary actually is. ``--date=short`` renders each commit in
+    its **own recorded offset** (that is the fix above), so the trigger is
+    midnight in the *committer's* timezone, not midnight UTC:
+    ``2026-08-30T00:08:30+02:00`` is ``2026-08-29T22:08Z``, and for a ``+0200``
+    author the exposure window opens at 22:00Z. Both effects are one calendar day
+    wide, which is what ``STALE_GRACE_DAYS`` covers.
+
+    The residual blind spot is therefore two days wide, and it is why the
+    ``method:`` string — not this rule — carries the real guarantee.
     """
     return tuple(
         pattern
         for pattern in patterns
-        if (last := git_last_commit_date(pattern)) is not None and last > since
+        if (last := git_last_commit_date(pattern)) is not None
+        and (last - since).days > STALE_GRACE_DAYS
     )
 
 
