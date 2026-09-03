@@ -7,6 +7,7 @@ from datetime import UTC, datetime
 
 import pytest
 from sqlalchemy import select
+from sqlalchemy import text as sql_text
 from sqlalchemy.ext.asyncio import AsyncEngine, AsyncSession, create_async_engine
 
 from library.models import (
@@ -16,7 +17,7 @@ from library.models import (
     DocumentSource,
     Kind,
 )
-from library.search import DocumentFilters, semantic_search
+from library.search import VECTOR_CANDIDATE_FANOUT, DocumentFilters, semantic_search
 
 pytestmark = pytest.mark.integration
 
@@ -149,6 +150,53 @@ async def test_collapse_one_row_per_document_nearest_first(session: AsyncSession
     assert len(ids) == len(set(ids))  # A's three chunks collapse to one row
     a_hit = next(hit for hit in hits if hit.document.id == a)
     assert a_hit.chunk_text == "a-near"  # carries A's nearest chunk, not a farther one
+
+
+async def test_the_ann_prefetch_raises_ef_search_to_match_its_fanout(
+    session: AsyncSession,
+) -> None:
+    """pgvector caps an HNSW scan at `hnsw.ef_search` rows, whatever the LIMIT says.
+
+    The default is 40. `_vector_candidates` prefetches
+    `pool * VECTOR_CANDIDATE_FANOUT` chunks — 250 at the shipped top_k of 10 —
+    and the entire design in its docstring rests on that prefetch running over
+    the index. Left at the default, the fanout silently collapses to 40 chunks on
+    the index path and the candidate set comes back short, with no error and
+    nothing in the result to show it happened (#161).
+
+    Latent rather than live today: at the archive's current size the planner
+    prefers a sequential scan, which is not capped. It arms as the archive grows
+    into the size the index was added for — i.e. exactly when nobody is watching.
+
+    Asserts the SETTING, not a row count, deliberately. On a small test corpus the
+    planner takes the sequential path, so a row-count assertion would pass for the
+    wrong reason and would keep passing if this SET were deleted.
+    """
+    await seed_document(session, "efs", ocr_text="a", chunks=[("a", graded_vector(0.9))])
+    await semantic_search(
+        session,
+        query="",
+        query_embedding=unit_vector(0),
+        filters=DocumentFilters(),
+        top_k=10,
+    )
+    applied = await session.scalar(sql_text("SELECT current_setting('hnsw.ef_search')"))
+    assert int(applied) == max(10 * 5, 50) * VECTOR_CANDIDATE_FANOUT == 250
+
+
+async def test_ef_search_does_not_leak_past_the_transaction(session: AsyncSession) -> None:
+    """SET LOCAL, so it cannot leak into another caller sharing the connection."""
+    await seed_document(session, "efs2", ocr_text="b", chunks=[("b", graded_vector(0.9))])
+    await semantic_search(
+        session,
+        query="",
+        query_embedding=unit_vector(0),
+        filters=DocumentFilters(),
+        top_k=10,
+    )
+    await session.rollback()
+    applied = await session.scalar(sql_text("SELECT current_setting('hnsw.ef_search')"))
+    assert int(applied) == 40, "ef_search outlived its transaction"
 
 
 async def test_unfiltered_search_excludes_soft_deleted_documents(session: AsyncSession) -> None:
