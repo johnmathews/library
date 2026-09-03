@@ -20,13 +20,30 @@ trigger.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 
-#: Simpson steps for :func:`blind_recall`. Converged: the ninth significant
-#: figure stops moving between 500 and 4000 steps on a mixed-weight pool, so
-#: this is comfortably past the knee and still fast enough for a unit test.
+#: Starting number of composite-Simpson intervals for :func:`blind_recall`.
+#: **Even, and it must stay even** — the composite rule alternates 4/2 weights
+#: and an odd count silently invalidates it. Asserted below rather than trusted.
+#:
+#: This is a starting point, not a tuned constant, because a tuned one was
+#: wrong. The integrand is a polynomial in ``1 - u`` whose degree grows with the
+#: pool's TOTAL CHUNK COUNT, so a step count checked against today's corpus
+#: (177 chunks, exact to 1e-14) degrades as the corpus grows — measured at 1.9e-3
+#: relative error by 1,600 chunks and 4.8e-2 by 3,200, in both directions, with
+#: nothing to notice. Since this corpus is deliberately growing in chunks, the
+#: step count refines until it converges instead.
 _BLIND_QUADRATURE_STEPS: int = 512
+
+#: Relative agreement required between successive refinements before the value
+#: is trusted. Well inside anything the 0.35 ceiling could care about.
+_BLIND_QUADRATURE_TOLERANCE: float = 1e-9
+
+#: How many times the step count may double before giving up. 512 -> 32,768
+#: covers a corpus far larger than this one; beyond that the caller is told
+#: rather than handed a quietly wrong floor.
+_BLIND_QUADRATURE_REFINEMENTS: int = 6
 
 
 @dataclass(frozen=True, slots=True)
@@ -163,11 +180,20 @@ def blind_recall(expected_chunks: Iterable[int], crowder_chunks: Iterable[int], 
 
 
 def _probability_in_top_k(own_chunks: int, other_chunks: list[int], k: int) -> float:
-    """Composite Simpson over the substituted integral described in ``blind_recall``."""
+    """Integrate the substituted integral from ``blind_recall`` to convergence.
+
+    Refines rather than trusting a fixed step count. The integrand's degree grows
+    with the pool's total chunk count, so any constant chosen against one corpus
+    goes quietly wrong on a larger one — and this corpus is built to grow in
+    chunks. Doubling until two successive estimates agree makes the step count a
+    property of the input instead of a constant someone has to remember to revisit.
+    """
 
     def integrand(u: float) -> float:
         remaining = 1.0 - u
         if remaining <= 0.0:
+            # The correct limit, not a fudge: k < len(weights), so at least two
+            # clocks must still be unfired and P(fewer than k fired) -> 0.
             return 0.0
         elapsed = -math.log(remaining)
         return (
@@ -176,9 +202,31 @@ def _probability_in_top_k(own_chunks: int, other_chunks: list[int], k: int) -> f
             * _fewer_than_k_fired(other_chunks, elapsed, k)
         )
 
-    step = 1.0 / _BLIND_QUADRATURE_STEPS
+    steps = _BLIND_QUADRATURE_STEPS
+    estimate = _simpson(integrand, steps)
+    for _ in range(_BLIND_QUADRATURE_REFINEMENTS):
+        steps *= 2
+        refined = _simpson(integrand, steps)
+        if abs(refined - estimate) <= _BLIND_QUADRATURE_TOLERANCE * max(abs(refined), 1e-12):
+            return refined
+        estimate = refined
+    raise ValueError(
+        f"blind_recall did not converge at {steps} quadrature steps for a pool of "
+        f"{sum(other_chunks) + own_chunks} chunks. The corpus has outgrown this "
+        "integrator — raise _BLIND_QUADRATURE_REFINEMENTS, or switch to a "
+        "Gauss-Legendre rule sized to the chunk count (the integrand is a "
+        "polynomial, so that is exact). Do not widen the tolerance: the floor "
+        "would then be wrong in an unknown direction."
+    )
+
+
+def _simpson(integrand: Callable[[float], float], steps: int) -> float:
+    """Composite Simpson on [0, 1] over an even number of intervals."""
+    if steps % 2:  # pragma: no cover - callers only ever double an even constant
+        raise ValueError(f"composite Simpson needs an even interval count, got {steps}")
+    step = 1.0 / steps
     acc = integrand(0.0) + integrand(1.0)
-    for index in range(1, _BLIND_QUADRATURE_STEPS):
+    for index in range(1, steps):
         acc += integrand(index * step) * (4.0 if index % 2 else 2.0)
     return acc * step / 3.0
 

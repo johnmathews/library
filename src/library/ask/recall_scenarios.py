@@ -1005,10 +1005,19 @@ _CROWDER_SUBJECTS: tuple[tuple[str, str], ...] = (
 def _crowder_body(offset: int) -> str:
     """Deterministic prose of exactly ``_CROWDER_TARGET_CHARS`` characters.
 
-    Paragraphs are cycled from ``offset`` so no two crowders read identically,
-    then the result is truncated on a word boundary to a fixed length — which is
-    what lets a single declared ``chunks`` constant cover every crowder, and what
-    keeps them all clear of a chunk threshold.
+    Paragraphs are cycled from ``offset`` and truncated on a word boundary to a
+    fixed length, which is what lets a single declared ``chunks`` constant cover
+    every crowder and keeps them all clear of a chunk threshold.
+
+    **They are rotations of one another, not 24 independent documents.** The
+    paragraph pool is far smaller than the target length, so each body repeats
+    its sources two or three times and any two crowders share roughly 94% of
+    their sentences. That is enough for what they are for — occupying candidate
+    slots with plausible non-answers — and it is measurably stable (three eval
+    runs across two stacks returned identical rankings). But it does mean their
+    embeddings are near-identical, so the ORDER among them is an arbitrary
+    tie-break, and adding more distinct paragraph material would be a real
+    improvement rather than a cosmetic one.
     """
     parts: list[str] = []
     length = 0
@@ -1072,7 +1081,7 @@ _FILLER: tuple[RecallDoc, ...] = tuple(
 # So the long documents are the CROWDERS and the expected documents are the
 # SHORTER ones — three chunks against five. The retrieval problem is still
 # "reach a document whose answer is one passage among several", which is what
-# #106 wants; what changes is which side carries the length. Floor: 0.26.
+# #106 wants; what changes is which side carries the length. Floor: 0.2516.
 #
 # The answer sentence sits in the middle chunk, 2,400 characters in, placed by
 # measurement rather than arithmetic: the 200-character overlap carries a
@@ -1153,7 +1162,7 @@ def _agreement_prose(offset: int) -> str:
     parts: list[str] = []
     length = 0
     index = offset
-    while length < _CROWDER_TARGET_CHARS + len(_AGREEMENT_FILLER_TAIL):
+    while length < _CROWDER_TARGET_CHARS + _AGREEMENT_PROSE_HEADROOM:
         paragraph = _AGREEMENT_PARAGRAPHS[index % len(_AGREEMENT_PARAGRAPHS)]
         parts.append(paragraph)
         length += len(paragraph) + 1
@@ -1161,8 +1170,11 @@ def _agreement_prose(offset: int) -> str:
     return " ".join(parts)
 
 
-#: Padding used when a body needs a few more characters than the cycle produced.
-_AGREEMENT_FILLER_TAIL: str = " The remainder of this schedule is unchanged."
+#: Extra prose generated beyond the longest body that consumes it, so
+#: `_agreement_body` can slice a window *after* the needle without running off
+#: the end. Needed because the answer bodies read `prose[len(before):...]` rather
+#: than restarting at zero.
+_AGREEMENT_PROSE_HEADROOM: int = 400
 
 
 def _agreement_body(needle: str | None, offset: int = 0) -> str:
@@ -1174,7 +1186,17 @@ def _agreement_body(needle: str | None, offset: int = 0) -> str:
     before = prose[:_NEEDLE_OFFSET]
     before = before[: before.rfind(" ") + 1]
     remaining = _AGREEMENT_TARGET_CHARS - len(before) - len(needle) - 1
-    after = prose[:remaining]
+    if remaining <= 0:  # pragma: no cover - guarded by the chunk-count test
+        raise ValueError(
+            f"needle of {len(needle)} chars leaves no room in a "
+            f"{_AGREEMENT_TARGET_CHARS}-char body after {len(before)} chars of lead-in"
+        )
+    # CONTINUE the prose past the needle rather than restarting it. Slicing
+    # `prose[:remaining]` here re-read from index 0, so every answer document
+    # carried its own first ~1,600 characters twice — invisible to the chunk-count
+    # guard (the length is the same either way) and quietly doubling the lexical
+    # weight of whatever happened to open the document.
+    after = prose[len(before) : len(before) + remaining]
     return before + needle + " " + after[: after.rfind(" ")]
 
 
@@ -1341,7 +1363,7 @@ CASES: tuple[RecallCase, ...] = (
             "the CROWDERS long and the expected documents shorter, which is the "
             "opposite of the issue's wording: chunks are draws under "
             "max-over-chunks ranking, so long expected documents raise the blind "
-            "floor to 0.92 and the case measures nothing. This way it is 0.26."
+            "floor to 0.92 and the case measures nothing. This way it is 0.25."
         ),
         answer_needle=CANCELLATION_NEEDLE,
     ),

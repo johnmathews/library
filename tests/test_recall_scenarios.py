@@ -16,11 +16,12 @@ from tests.conftest import fetch_all
 
 #: Below this the haystack stops discriminating: with ten retrieval slots and a
 #: corpus of thirty, "retrieved" and "exists" converge and recall@10 is near 1.0
-#: for everything. Raised from 45 to 80 after the first real baseline came out at
-#: mean 0.917 — above the 0.90 ceiling docs/ask.md holds this corpus to — because
-#: five of six cases expected a single document against only three or four
-#: distractors and so could not lose recall at k=10 at all. Chosen as a floor,
-#: not a target: growing the corpus is fine.
+#: for everything. Raised to 180 over two rebuilds: first after the 2026-08-27
+#: baseline came out at mean 0.917 — above the 0.90 ceiling docs/ask.md holds this
+#: corpus to — because five of six cases expected a single document against only
+#: three or four distractors and so could not lose recall at k=10 at all, and
+#: again when the clusters grew to roughly forty. Chosen as a floor, not a target:
+#: the corpus is now 252 documents and growing it further is fine.
 MIN_CORPUS_SIZE = 180
 
 #: The score a retriever that ranked at RANDOM would get on a case. It is the
@@ -148,9 +149,14 @@ def test_declared_crowders_are_actually_long() -> None:
     silently gets easier. Nothing else would notice: the blind floor would fall,
     which reads like the case got *harder*, and the guard below would still pass.
     """
-    for doc in CORPUS:
-        if not doc.crowds:
-            continue
+    declared = [doc for doc in CORPUS if doc.crowds]
+    # Without this the guard below iterates an empty list if every `crowds=` is
+    # deleted, and passes — while every case's blind floor RISES (crowders leave
+    # the pool), which reads as the corpus getting harder rather than blinder.
+    # Nothing else in the suite would go red. Exactly the shape of guard this
+    # corpus keeps growing by accident.
+    assert declared, "no document declares `crowds`; the crowder guard is vacuous"
+    for doc in declared:
         assert doc.chunks >= CROWDER_MIN_CHUNKS, (
             f"{doc.marker} is declared a crowder for {list(doc.crowds)} but yields "
             f"only {doc.chunks} chunk(s); a crowder needs at least "
@@ -176,7 +182,11 @@ def test_the_corpus_outgrows_the_ann_prefetch_window() -> None:
     The constants are imported rather than copied, so a change to either one
     reds this instead of silently invalidating it.
     """
-    window = max(case.k for case in CASES) * 5 * VECTOR_CANDIDATE_FANOUT
+    # Mirrors `search.py`'s `pool = max(top_k * 5, 50)`, floor included. Dropping
+    # the floor understates the window for any case with k < 10, which is the
+    # UNSAFE direction: the guard would pass while the real prefetch still failed
+    # to bind. Every case is k=10 or k=12 today, so this is latent, not live.
+    window = max(max(case.k * 5, 50) for case in CASES) * VECTOR_CANDIDATE_FANOUT
     total_chunks = sum(doc.chunks for doc in CORPUS)
     assert total_chunks > window, (
         f"the corpus is {total_chunks} chunks against a prefetch window of {window}, "
@@ -199,9 +209,9 @@ def test_a_buried_answer_lands_in_exactly_one_chunk() -> None:
     the blind floor would still pass, and the case would still look well formed.
     """
     by_marker = {doc.marker: doc for doc in CORPUS}
-    for case in CASES:
-        if not case.answer_needle:
-            continue
+    needled = [case for case in CASES if case.answer_needle]
+    assert needled, "no case declares `answer_needle`; this guard is vacuous"
+    for case in needled:
         for marker in case.expected_markers:
             body = by_marker[marker].body
             settings = get_settings()
@@ -238,9 +248,9 @@ def test_a_buried_answer_appears_in_no_other_document() -> None:
     failure — or, worse, the case passes for the wrong reason and stops measuring
     what its name claims.
     """
-    for case in CASES:
-        if not case.answer_needle:
-            continue
+    needled = [case for case in CASES if case.answer_needle]
+    assert needled, "no case declares `answer_needle`; this guard is vacuous"
+    for case in needled:
         expected = set(case.expected_markers)
         leaks = [
             doc.marker
@@ -311,7 +321,8 @@ def test_every_case_competes_against_more_documents_than_its_cut() -> None:
     would have waved through the first fixture this corpus grew.
     `library.ask.recall_eval.blind_recall` carries the model and the derivation;
     `tests/test_recall_eval.py` pins it against the uniform formula for the
-    all-single-chunk corpus, so today's five numbers are unchanged.
+    pre-rebuild all-single-chunk shapes, so the model reproduces the old numbers
+    on the corpus the old formula was correct for.
 
     "Plausible candidate" is a document sharing a sender or a title with an
     expected document — exactly how this corpus places its near-misses — plus any

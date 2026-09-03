@@ -1294,8 +1294,9 @@ async def _seed_corpus(session: AsyncSession) -> dict[str, int]:
     # nothing still "succeeds": every case's ``semantic_search`` call then
     # falls back to the FTS leg of RRF alone and prints plausible-looking
     # per-case numbers that are not measuring retrieval recall at all. The
-    # corpus guarantees exactly one chunk per document, so "every seeded
-    # document has at least one chunk" is the right — and cheap — assertion.
+    # corpus no longer guarantees one chunk per document (crowders are five),
+    # so this is the floor and the declared-count check below is the real
+    # assertion; ">= 1" still catches the dead-embedder case it was written for.
     seeded_ids = list(ids_by_marker.values())
     chunk_count_rows = (
         await session.execute(

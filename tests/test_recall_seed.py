@@ -1,7 +1,8 @@
 """The recall corpus seeds through the real embedding path.
 
-Uses a fake embedder — this test is about the seeding mechanics (one chunk per
-document, markers resolving to ids), not about vector quality, which only
+Uses a fake embedder — this test is about the seeding mechanics (each document
+producing the chunk count it declares, markers resolving to ids), not about
+vector quality, which only
 `library eval-recall` against a real bge-m3 sidecar can measure.
 """
 
