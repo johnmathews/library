@@ -62,6 +62,22 @@ class RecallDoc:
     title: str
     body: str
 
+    #: How many chunks this body is asserted to produce. **Declared, not
+    #: derived** — ``tests/test_recall_scenarios.py`` checks the declaration
+    #: against the real chunker, and a derived value would only ever agree with
+    #: itself. It cannot be computed from ``len(body)`` either: the packer works
+    #: in whole words so each boundary drifts, and ``str.split`` collapses
+    #: whitespace, so a 220-character column-padded body chunks as 158.
+    chunks: int = 1
+
+    #: Case names this document is authored to compete in, for cases where it
+    #: shares neither sender nor title with the expected documents. The blind
+    #: floor infers competition from shared metadata, which is how this corpus
+    #: places its near-misses — but a fixture that is long *purely to crowd*
+    #: matches neither, would count for nothing, and the floor would come out
+    #: too pessimistic. Competition that cannot be inferred is declared.
+    crowds: tuple[str, ...] = ()
+
 
 @dataclass(frozen=True, slots=True)
 class RecallCase:

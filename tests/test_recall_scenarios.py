@@ -7,6 +7,7 @@ edited into uselessness without any test going red.
 
 import pytest
 
+from library.ask.recall_eval import blind_recall
 from library.ask.recall_scenarios import CASES, CORPUS, FIXTURE_SUFFIX, MAX_BODY_CHARS
 from library.config import get_settings
 from tests.conftest import fetch_all
@@ -100,20 +101,46 @@ def test_every_case_competes_against_more_documents_than_its_cut() -> None:
     discriminate. The pool must be several times the cut before the difference
     between good and bad retrieval shows up in the number.
 
-    "Plausible candidate" is approximated as sharing a sender or a title with an
-    expected document, which is exactly how this corpus places its near-misses.
+    **The floor is weighted by chunk count, and that is not a refinement.** This
+    check used to compute ``min(k, len(pool)) / len(pool)`` — documents drawn
+    uniformly. `semantic_search` ranks a document by its NEAREST CHUNK, so a
+    document with `c` chunks gets `c` draws. The two models agree exactly while
+    every fixture is one chunk, and diverge in the PASSING direction the moment
+    lengths vary: three 5-chunk expected documents among 37 single-chunk crowders
+    have a true floor of 0.70 while the uniform formula reports 0.25 and passes.
+    That is precisely the case shape issue #106 asks for, so the old formula
+    would have waved through the first fixture this corpus grew.
+    `library.ask.recall_eval.blind_recall` carries the model and the derivation;
+    `tests/test_recall_eval.py` pins it against the uniform formula for the
+    all-single-chunk corpus, so today's five numbers are unchanged.
+
+    "Plausible candidate" is a document sharing a sender or a title with an
+    expected document — exactly how this corpus places its near-misses — plus any
+    document that names the case in `crowds`, for crowders that deliberately
+    share neither.
     """
     by_marker = {doc.marker: doc for doc in CORPUS}
     for case in CASES:
         if case.name == "control-unique-term":
             continue
+        expected_markers = set(case.expected_markers)
         expected = [by_marker[marker] for marker in case.expected_markers]
         senders = {doc.sender_name for doc in expected}
         titles = {doc.title for doc in expected}
-        pool = {doc.marker for doc in CORPUS if doc.sender_name in senders or doc.title in titles}
-        blind_recall = min(case.k, len(pool)) / len(pool)
-        assert blind_recall <= MAX_BLIND_RECALL, (
+        pool = [
+            doc
+            for doc in CORPUS
+            if doc.sender_name in senders or doc.title in titles or case.name in doc.crowds
+        ]
+        floor = blind_recall(
+            [doc.chunks for doc in expected],
+            [doc.chunks for doc in pool if doc.marker not in expected_markers],
+            k=case.k,
+        )
+        assert floor <= MAX_BLIND_RECALL, (
             f"{case.name}: {len(pool)} candidates for a cut of {case.k}, so a "
-            f"retriever ranking at RANDOM already scores {blind_recall:.2f}. "
-            "The case has too little room to fall to measure anything."
+            f"retriever ranking at RANDOM already scores {floor:.2f}. "
+            "The case has too little room to fall to measure anything. If the "
+            "expected documents are longer than their crowders, that is the "
+            "cause — lengthen the crowders instead."
         )
