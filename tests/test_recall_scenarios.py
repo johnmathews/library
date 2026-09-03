@@ -11,6 +11,7 @@ from library.ask.recall_eval import blind_recall
 from library.ask.recall_scenarios import CASES, CORPUS, FIXTURE_SUFFIX, MAX_BODY_CHARS
 from library.config import get_settings
 from library.embedding.chunker import chunk_text
+from library.search import VECTOR_CANDIDATE_FANOUT
 from tests.conftest import fetch_all
 
 #: Below this the haystack stops discriminating: with ten retrieval slots and a
@@ -34,6 +35,13 @@ MAX_BLIND_RECALL = 0.35
 #: matching. Eighty characters is roughly ten words — comfortably more than one
 #: edit, comfortably less than the 1600 characters a whole chunk occupies.
 _BOUNDARY_SLACK_CHARS = 80
+
+#: The fewest chunks a document declared as a crowder may have. One chunk is
+#: not crowding — it is an ordinary competitor. Three is the point at which a
+#: document occupies meaningfully more of the candidate window than the
+#: single-chunk majority of both this corpus and the real archive (whose
+#: median is 2).
+CROWDER_MIN_CHUNKS = 3
 
 
 def test_markers_are_unique() -> None:
@@ -124,6 +132,51 @@ def test_no_fixture_sits_on_a_chunk_boundary() -> None:
             f"{doc.marker} declares {doc.chunks} chunk(s) but yields {shorter} with "
             f"{_BOUNDARY_SLACK_CHARS} fewer characters — it is on a boundary"
         )
+
+
+def test_declared_crowders_are_actually_long() -> None:
+    """ "Long purely to crowd" has to be enforced, or it is just a comment.
+
+    A crowder that gets shortened — or a short document that someone declares as
+    a crowder — competes for one candidate slot instead of several and the case
+    silently gets easier. Nothing else would notice: the blind floor would fall,
+    which reads like the case got *harder*, and the guard below would still pass.
+    """
+    for doc in CORPUS:
+        if not doc.crowds:
+            continue
+        assert doc.chunks >= CROWDER_MIN_CHUNKS, (
+            f"{doc.marker} is declared a crowder for {list(doc.crowds)} but yields "
+            f"only {doc.chunks} chunk(s); a crowder needs at least "
+            f"{CROWDER_MIN_CHUNKS} to occupy more than one candidate slot"
+        )
+
+
+def test_the_corpus_outgrows_the_ann_prefetch_window() -> None:
+    """Under the window, the vector leg is exact and the eval scores the wrong thing.
+
+    `semantic_search` prefetches `pool * VECTOR_CANDIDATE_FANOUT` CHUNKS, where
+    `pool = max(top_k * 5, 50)`, and only then collapses to one row per document.
+    If the whole corpus fits inside that window the `LIMIT` never binds: every
+    chunk in existence is fetched and the vector leg becomes an exact global
+    argmax — not the approximate retriever that ships.
+
+    That was the state until this corpus grew: 201 chunks against a 300-chunk
+    window at the breadth case's k=12. The deployed archive (1300 chunks) binds
+    and the nightly's clean stack did not, which is a structural difference
+    between the two environments that nothing recorded and that shows up in the
+    numbers as a haystack effect.
+
+    The constants are imported rather than copied, so a change to either one
+    reds this instead of silently invalidating it.
+    """
+    window = max(case.k for case in CASES) * 5 * VECTOR_CANDIDATE_FANOUT
+    total_chunks = sum(doc.chunks for doc in CORPUS)
+    assert total_chunks > window, (
+        f"the corpus is {total_chunks} chunks against a prefetch window of {window}, "
+        "so the ANN prefetch never binds and the eval scores an exact retriever "
+        "rather than the shipped one — add crowders"
+    )
 
 
 def test_every_sender_is_marked_as_a_fixture() -> None:

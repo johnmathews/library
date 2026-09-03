@@ -880,6 +880,154 @@ _FILLER_SUBJECTS: tuple[tuple[str, str, str], ...] = (
     ("Aldergate Opticians", "certificate", "Prescription record following an eye examination."),
 )
 
+# --- Crowders: long documents whose job is to compete for candidate slots -------
+#
+# Issue #106 asks for "fixtures that are long purely to crowd". These are they.
+#
+# They exist for two measurable reasons, neither of which the single-chunk corpus
+# could serve:
+#
+# 1. **The corpus has to outgrow the ANN prefetch window.** `semantic_search`
+#    prefetches `top_k * 5 * VECTOR_CANDIDATE_FANOUT` CHUNKS before collapsing to
+#    one row per document — 300 at the breadth case's k=12. A 201-chunk corpus
+#    sits under that, so on a clean stack the vector leg is an exact global argmax
+#    and the eval scores a retriever that is not the one that ships. The deployed
+#    archive (1300 chunks) binds; CI did not.
+# 2. **Chunk count has to vary before it can be measured.** Whether a document's
+#    chunk count buys it rank — the open question behind #105 and #106 — cannot be
+#    asked of a corpus with no variation in it.
+#
+# They are LONG and they are CROWDERS, never expected. That ordering is the whole
+# design and it is the opposite of the obvious reading of #106: ranking is
+# max-over-chunks, so a document with c chunks gets c draws under a null
+# retriever. Lengthening the EXPECTED documents raises the blind floor (three
+# 5-chunk expected among single-chunk crowders sit at 0.70, against a 0.35
+# ceiling) and makes a case easier while looking harder. Lengthening the crowders
+# lowers it, which is what difficulty means here.
+#
+# Subject matter is installation and building work: the breadth case asks "find
+# every document about the solar panel installation", so documents about OTHER
+# installation programmes are genuine near-misses on the word that carries the
+# query. They share no sender and no title with the solar block, so the blind
+# floor cannot infer the competition — hence the explicit `crowds`.
+
+#: Length that yields exactly `_CROWDER_CHUNKS` chunks, chosen mid-band rather
+#: than at a threshold: 6795 characters is already 5 chunks and 8596 is 6, so
+#: 7400 sits far from both edges and survives the +/-80 boundary guard.
+_CROWDER_TARGET_CHARS: int = 7400
+
+#: Declared, and checked against the real chunker by the structural test. Every
+#: crowder is truncated to the same length, so one constant covers them all.
+_CROWDER_CHUNKS: int = 5
+
+_CROWDER_PARAGRAPHS: tuple[str, ...] = (
+    "The installation programme is divided into stages, and each stage is signed "
+    "off in writing before the next begins. Access equipment is erected first, "
+    "then fixings are set out against the survey drawing, and only then is any "
+    "connection made to the existing system.",
+    "Access equipment remains in place for the duration of the works. The "
+    "scaffold is inspected weekly and a record of each inspection is kept with "
+    "the site paperwork. Nothing is fixed to the structure until that record "
+    "shows a current inspection.",
+    "The electrical connection is carried out by a qualified engineer working to "
+    "the current wiring rules. Circuits are tested before energising, readings "
+    "are recorded against the schedule, and the schedule is issued with the "
+    "completion paperwork rather than separately.",
+    "Materials are held at the depot until the week of installation so that "
+    "nothing is stored on site longer than necessary. Deliveries are booked "
+    "against the programme, and any change to the delivery date is confirmed in "
+    "writing because it moves every later stage with it.",
+    "Weather delays are absorbed into the programme where possible. Work at "
+    "height stops when wind speeds exceed the threshold set out in the method "
+    "statement, and the day is recorded as lost rather than being charged.",
+    "On completion the system is demonstrated to the occupier and the paperwork "
+    "is handed over as one bundle: the commissioning record, the test schedule, "
+    "the operating instructions and the maintenance recommendations. Keeping "
+    "them together is what makes a later claim straightforward.",
+    "Maintenance is recommended annually. The recommendation is not a condition "
+    "of anything issued here, and it is set out so that the intervals are known "
+    "at handover rather than discovered later.",
+    "Any variation to the agreed scope is quoted separately before it is carried "
+    "out. Work already completed is invoiced at the agreed stage rate regardless "
+    "of whether a variation is subsequently agreed.",
+    "The survey drawing governs the layout. Where site conditions differ from "
+    "the drawing, the difference is recorded with a photograph and the layout is "
+    "reissued before the affected stage proceeds.",
+    "Waste is removed from site at the end of each stage and disposed of under "
+    "the relevant duty of care. Transfer notes are retained and are available on "
+    "request for two years from the date of the works.",
+    "Payment is due against the stage schedule. Retention, where it applies, is "
+    "released once the completion paperwork has been issued and any outstanding "
+    "items on the snagging list have been closed.",
+    "Notice of the intended start date is given at least ten working days in "
+    "advance. Where access to a neighbouring property is required, that notice "
+    "is served separately and the works cannot begin until it has been "
+    "acknowledged.",
+)
+
+_CROWDER_SUBJECTS: tuple[tuple[str, str], ...] = (
+    ("letter", "Loft conversion programme"),
+    ("quote", "Estimate for a full rewire"),
+    ("invoice", "Rewiring works, first stage"),
+    ("letter", "Heat pump installation programme"),
+    ("invoice", "Heat pump installation, balance due"),
+    ("certificate", "Electrical installation condition report"),
+    ("letter", "Roof covering replacement programme"),
+    ("invoice", "Roof covering replacement"),
+    ("quote", "Estimate for replacement windows"),
+    ("invoice", "Replacement windows fitted"),
+    ("letter", "Electric vehicle charger installation"),
+    ("invoice", "Electric vehicle charger, supply and fit"),
+    ("quote", "Estimate for a rear extension"),
+    ("letter", "Rear extension programme"),
+    ("invoice", "Rear extension, second stage"),
+    ("certificate", "Completion record for the extension"),
+    ("letter", "Damp proofing programme"),
+    ("invoice", "Damp proofing works"),
+    ("quote", "Estimate for external wall insulation"),
+    ("invoice", "External wall insulation fitted"),
+    ("letter", "Drainage renewal programme"),
+    ("invoice", "Drainage renewal works"),
+    ("quote", "Estimate for a garage conversion"),
+    ("invoice", "Garage conversion, final stage"),
+)
+
+
+def _crowder_body(offset: int) -> str:
+    """Deterministic prose of exactly ``_CROWDER_TARGET_CHARS`` characters.
+
+    Paragraphs are cycled from ``offset`` so no two crowders read identically,
+    then the result is truncated on a word boundary to a fixed length — which is
+    what lets a single declared ``chunks`` constant cover every crowder, and what
+    keeps them all clear of a chunk threshold.
+    """
+    parts: list[str] = []
+    length = 0
+    index = offset
+    while length < _CROWDER_TARGET_CHARS:
+        paragraph = _CROWDER_PARAGRAPHS[index % len(_CROWDER_PARAGRAPHS)]
+        parts.append(paragraph)
+        length += len(paragraph) + 1
+        index += 1
+    body = " ".join(parts)[:_CROWDER_TARGET_CHARS]
+    return body[: body.rfind(" ")]
+
+
+_CROWDERS: tuple[RecallDoc, ...] = tuple(
+    RecallDoc(
+        marker=f"crowder-{index:02d}",
+        sender_name=_sender("Halcyon Property Services"),
+        kind_slug=kind,
+        document_date=date(2021 + (index % 4), 1 + (index % 12), 1 + (index % 27)),
+        title=title,
+        body=_crowder_body(index),
+        chunks=_CROWDER_CHUNKS,
+        crowds=("breadth-many-mentions",),
+    )
+    for index, (kind, title) in enumerate(_CROWDER_SUBJECTS, start=1)
+)
+
+
 _FILLER: tuple[RecallDoc, ...] = tuple(
     RecallDoc(
         marker=f"filler-{index:02d}",
@@ -901,7 +1049,7 @@ _FILLER: tuple[RecallDoc, ...] = tuple(
 
 #: The whole haystack, seeded once and shared by every case.
 CORPUS: tuple[RecallDoc, ...] = (
-    _MORTGAGE + _BARE_FIGURES + _BOILER + _SOLAR + _PARKING + _CONTROL + _FILLER
+    _MORTGAGE + _BARE_FIGURES + _BOILER + _SOLAR + _PARKING + _CONTROL + _FILLER + _CROWDERS
 )
 
 

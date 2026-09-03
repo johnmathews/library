@@ -76,20 +76,38 @@ async def test_seed_corpus_raises_when_embedding_is_disabled(
         await _seed_corpus(session)
 
 
-async def test_seed_corpus_produces_exactly_one_chunk_per_document(
+async def test_seed_corpus_produces_the_declared_chunk_count_per_document(
     session: AsyncSession, fake_embedder: None
 ) -> None:
-    """The corpus promises document-level recall is unambiguous. Hold it to that.
+    """Every `RecallDoc.chunks` is a promise about the PIPELINE. Hold it to that.
 
-    If this fails, a body has grown past `embedding_chunk_chars` and a document
-    now spans several chunks — recall is still measurable, but the corpus's
-    stated invariant is broken and the scenarios module's docstring is lying.
+    This used to assert one chunk per document. That invariant was deliberately
+    removed: issue #106 cannot be measured by a corpus with no variation in chunk
+    count, so bodies now declare what they produce and this checks the
+    declaration end to end.
+
+    Not redundant with the pure guard in `test_recall_scenarios.py`, and the
+    difference is the point. That one calls `chunk_text` directly, so it proves
+    the arithmetic. This one runs `_seed_corpus` -> `run_embed` -> `chunker_for_mime`
+    against a real database, so it proves the *routing*: that the seeder still
+    writes `application/pdf` with `ocr_text` and no page rows, and therefore still
+    lands on `chunk_text` rather than `chunk_markdown`. A change to the mime type,
+    to page seeding, or to `chunker_for_mime`'s dispatch would leave the pure
+    guard green and this one red.
     """
-    await _seed_corpus(session)
-    per_document = (
-        await session.execute(
-            select(DocumentChunk.document_id, func.count()).group_by(DocumentChunk.document_id)
-        )
-    ).all()
-    assert len(per_document) == len(CORPUS)
-    assert {count for _, count in per_document} == {1}
+    ids_by_marker = await _seed_corpus(session)
+    counts = {
+        document_id: count
+        for document_id, count in (
+            await session.execute(
+                select(DocumentChunk.document_id, func.count()).group_by(DocumentChunk.document_id)
+            )
+        ).all()
+    }
+    assert len(counts) == len(CORPUS)
+    mismatched = {
+        doc.marker: (doc.chunks, counts[ids_by_marker[doc.marker]])
+        for doc in CORPUS
+        if counts[ids_by_marker[doc.marker]] != doc.chunks
+    }
+    assert not mismatched, f"declared vs seeded chunk counts differ: {mismatched}"
