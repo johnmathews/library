@@ -1,15 +1,17 @@
 {
   "cases": {
-    "breadth-many-mentions": 0.3333333333333333,
+    "breadth-many-mentions": 0.16666666666666666,
     "contract-clause": 1.0,
     "control-unique-term": 1.0,
     "date-scoped": 1.0,
     "kind-scoped": 1.0,
+    "passage-buried-clause": 0.3333333333333333,
     "sender-named-bare-chunk": 1.0
   },
-  "mean": 0.8888888888888888,
+  "mean": 0.7857142857142857,
   "measured_against": {
-    "archive_documents": 259,
-    "corpus_documents": 201
+    "archive_documents": 266,
+    "corpus_chunks": 450,
+    "corpus_documents": 252
   }
 }
