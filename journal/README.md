@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-192 entries.
+193 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## September 2026
 
+- **2026-09-03** — [The header was the cause all along](260903-the-header-was-the-cause.md)
 - **2026-09-03** — [The recall corpus could not have measured what it was about to be asked](260903-recall-corpus-multichunk.md)
 - **2026-09-02** — [The scenario that passed either way](260902-the-scenario-that-passed-either-way.md)
 - **2026-09-02** — [Telling the owner what extraction refused to write](260902-skipped-writes-made-visible.md)

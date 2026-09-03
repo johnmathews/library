@@ -24,6 +24,7 @@ from enum import StrEnum
 from typing import Any
 
 from sqlalchemy import Select, case, cast, exists, func, literal, or_, select
+from sqlalchemy import text as sql_text
 from sqlalchemy.dialects.postgresql import REGCONFIG
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
@@ -398,6 +399,29 @@ async def _vector_candidates(
         .order_by(nearest_per_document.c.distance.asc())
         .limit(pool)
     )
+    # pgvector's HNSW scan returns at most `hnsw.ef_search` rows, whatever the
+    # LIMIT asks for, unless `hnsw.iterative_scan` is on. The default is 40 — far
+    # below the `pool * VECTOR_CANDIDATE_FANOUT` this prefetch is built around
+    # (250 at the shipped top_k of 10) — so on the index path the whole fanout
+    # above silently collapses to 40 chunks and the collapse yields ~38 documents
+    # where `pool` asked for 50. No error, no warning, nothing in the result to
+    # show it happened.
+    #
+    # Latent rather than live today: measured on the deployed archive (1300
+    # chunks) the planner picks a sequential scan for every recall query, so the
+    # cap is not being hit. It arms as the archive grows into the size the index
+    # was added for, which is exactly when nobody would be looking. See #161.
+    #
+    # SET LOCAL, so it lasts only for the surrounding transaction and cannot leak
+    # into another caller's session.
+    #
+    # Interpolated, not bound: PostgreSQL's SET does not accept bind parameters
+    # ("syntax error at or near $1"). Safe here because the value is arithmetic
+    # on two module constants and an int argument, never caller text — asserted
+    # rather than left to a reader to verify.
+    ef_search = pool * VECTOR_CANDIDATE_FANOUT
+    assert isinstance(ef_search, int)
+    await session.execute(sql_text(f"SET LOCAL hnsw.ef_search = {ef_search}"))
     order: list[int] = []
     best_chunk: dict[int, tuple[int, str, int | None]] = {}
     for document_id, chunk_index, page_number, text in (await session.execute(statement)).all():
