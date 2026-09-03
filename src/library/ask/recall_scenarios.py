@@ -26,11 +26,41 @@ criterion this corpus is held to — if baseline recall@10 comes out at or above
 0.90, the corpus is too easy and gets harder before any retrieval change is
 measured against it.
 
-**One chunk per document, by construction.** Every ``body`` is shorter than
-``embedding_chunk_chars`` (1800), so each document produces exactly one content
-chunk. ``tests/test_recall_scenarios.py`` asserts this. It keeps document-level
-recall unambiguous: a document is retrieved or it is not, with no question of
-which of its chunks won.
+**Chunk counts are declared, and documents may span several chunks.** This
+reverses a deliberate earlier decision — every body used to be shorter than
+``embedding_chunk_chars`` so that each document produced exactly one chunk —
+and the reversal is worth explaining, because the reason originally written
+down for the invariant was not the reason it was load-bearing.
+
+The stated reason was that one chunk per document "keeps document-level recall
+unambiguous: a document is retrieved or it is not, with no question of which of
+its chunks won." That was never true of the code. ``semantic_search`` collapses
+to one row per document (``DISTINCT ON (document_id) ORDER BY distance``) and
+the eval scores ``hit.document.id``, so document-level recall was unambiguous
+for any chunk count.
+
+The invariant *was* load-bearing, for two reasons nobody wrote down:
+
+1. **The blind floor assumed it.** Ranking is by nearest chunk, so a document
+   with ``c`` chunks gets ``c`` draws under a null retriever. The old floor
+   formula modelled documents as exchangeable, which is exactly right while
+   every document is one chunk and wrong — in the passing direction — as soon
+   as one is not. See ``recall_eval.blind_recall``.
+2. **The ANN prefetch budget assumed it.** ``semantic_search`` prefetches
+   ``top_k * 5 * VECTOR_CANDIDATE_FANOUT`` *chunks* before collapsing. A
+   201-chunk corpus sits under that window, so on a clean stack the vector leg
+   is an exact global argmax rather than the approximate retriever that ships.
+
+Issue #106 needs multi-chunk fixtures to measure whether chunk count biases
+retrieval at all, so the invariant had to go. Both real reasons are now
+enforced instead of assumed: ``RecallDoc.chunks`` is declared and checked
+against the real chunker, and the floor is weighted by it.
+
+**The rule for anyone adding fixtures, which is the opposite of the obvious
+one: crowders long, expected documents no longer than their crowders.**
+Lengthening the *expected* documents raises the blind floor — three 5-chunk
+expected documents among single-chunk crowders sit at 0.70 — so it makes a case
+easier while looking harder.
 """
 
 from __future__ import annotations
@@ -38,9 +68,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date
 
-#: Ceiling every ``RecallDoc.body`` must stay under so each document yields
-#: exactly one chunk. Mirrors ``Settings.embedding_chunk_chars``; the structural
-#: test imports the real setting and asserts this does not drift above it.
+#: This module's mirror of ``Settings.embedding_chunk_chars`` — the size of one
+#: chunk. No longer a ceiling on ``RecallDoc.body``: bodies may exceed it, and
+#: what they must do instead is declare the resulting ``chunks`` count, which
+#: the structural test checks against the real chunker. Kept because it is still
+#: the number every body length is reasoned about in, and because the structural
+#: test asserts it has not drifted above the real setting.
 MAX_BODY_CHARS: int = 1800
 
 #: Suffix on every synthetic sender. See the module docstring.
@@ -62,6 +95,22 @@ class RecallDoc:
     title: str
     body: str
 
+    #: How many chunks this body is asserted to produce. **Declared, not
+    #: derived** — ``tests/test_recall_scenarios.py`` checks the declaration
+    #: against the real chunker, and a derived value would only ever agree with
+    #: itself. It cannot be computed from ``len(body)`` either: the packer works
+    #: in whole words so each boundary drifts, and ``str.split`` collapses
+    #: whitespace, so a 220-character column-padded body chunks as 158.
+    chunks: int = 1
+
+    #: Case names this document is authored to compete in, for cases where it
+    #: shares neither sender nor title with the expected documents. The blind
+    #: floor infers competition from shared metadata, which is how this corpus
+    #: places its near-misses — but a fixture that is long *purely to crowd*
+    #: matches neither, would count for nothing, and the floor would come out
+    #: too pessimistic. Competition that cannot be inferred is declared.
+    crowds: tuple[str, ...] = ()
+
 
 @dataclass(frozen=True, slots=True)
 class RecallCase:
@@ -80,6 +129,15 @@ class RecallCase:
     expected_markers: tuple[str, ...]
     why: str
     k: int = 10
+
+    #: For a case whose answer lives in one PASSAGE of a long document: the
+    #: sentence that states it. Declared so the structural tests can hold two
+    #: properties that are otherwise unenforceable — that the answer lands in
+    #: exactly one chunk (the 200-character overlap will duplicate a sentence
+    #: placed near a boundary, which both falsifies "one chunk" and doubles that
+    #: chunk's draws), and that it appears in no other document, so a miss
+    #: cannot score as a hit. Empty for cases with no single answer sentence.
+    answer_needle: str = ""
 
 
 def _sender(name: str) -> str:
@@ -831,6 +889,163 @@ _FILLER_SUBJECTS: tuple[tuple[str, str, str], ...] = (
     ("Aldergate Opticians", "certificate", "Prescription record following an eye examination."),
 )
 
+# --- Crowders: long documents whose job is to compete for candidate slots -------
+#
+# Issue #106 asks for "fixtures that are long purely to crowd". These are they.
+#
+# They exist for two measurable reasons, neither of which the single-chunk corpus
+# could serve:
+#
+# 1. **The corpus has to outgrow the ANN prefetch window.** `semantic_search`
+#    prefetches `top_k * 5 * VECTOR_CANDIDATE_FANOUT` CHUNKS before collapsing to
+#    one row per document — 300 at the breadth case's k=12. A 201-chunk corpus
+#    sits under that, so on a clean stack the vector leg is an exact global argmax
+#    and the eval scores a retriever that is not the one that ships. The deployed
+#    archive (1300 chunks) binds; CI did not.
+# 2. **Chunk count has to vary before it can be measured.** Whether a document's
+#    chunk count buys it rank — the open question behind #105 and #106 — cannot be
+#    asked of a corpus with no variation in it.
+#
+# They are LONG and they are CROWDERS, never expected. That ordering is the whole
+# design and it is the opposite of the obvious reading of #106: ranking is
+# max-over-chunks, so a document with c chunks gets c draws under a null
+# retriever. Lengthening the EXPECTED documents raises the blind floor (three
+# 5-chunk expected among single-chunk crowders sit at 0.70, against a 0.35
+# ceiling) and makes a case easier while looking harder. Lengthening the crowders
+# lowers it, which is what difficulty means here.
+#
+# Subject matter is installation and building work: the breadth case asks "find
+# every document about the solar panel installation", so documents about OTHER
+# installation programmes are genuine near-misses on the word that carries the
+# query. They share no sender and no title with the solar block, so the blind
+# floor cannot infer the competition — hence the explicit `crowds`.
+
+#: Length that yields exactly `_CROWDER_CHUNKS` chunks, chosen mid-band rather
+#: than at a threshold: 6795 characters is already 5 chunks and 8596 is 6, so
+#: 7400 sits far from both edges and survives the +/-80 boundary guard.
+_CROWDER_TARGET_CHARS: int = 7400
+
+#: Declared, and checked against the real chunker by the structural test. Every
+#: crowder is truncated to the same length, so one constant covers them all.
+_CROWDER_CHUNKS: int = 5
+
+_CROWDER_PARAGRAPHS: tuple[str, ...] = (
+    "The installation programme is divided into stages, and each stage is signed "
+    "off in writing before the next begins. Access equipment is erected first, "
+    "then fixings are set out against the survey drawing, and only then is any "
+    "connection made to the existing system.",
+    "Access equipment remains in place for the duration of the works. The "
+    "scaffold is inspected weekly and a record of each inspection is kept with "
+    "the site paperwork. Nothing is fixed to the structure until that record "
+    "shows a current inspection.",
+    "The electrical connection is carried out by a qualified engineer working to "
+    "the current wiring rules. Circuits are tested before energising, readings "
+    "are recorded against the schedule, and the schedule is issued with the "
+    "completion paperwork rather than separately.",
+    "Materials are held at the depot until the week of installation so that "
+    "nothing is stored on site longer than necessary. Deliveries are booked "
+    "against the programme, and any change to the delivery date is confirmed in "
+    "writing because it moves every later stage with it.",
+    "Weather delays are absorbed into the programme where possible. Work at "
+    "height stops when wind speeds exceed the threshold set out in the method "
+    "statement, and the day is recorded as lost rather than being charged.",
+    "On completion the system is demonstrated to the occupier and the paperwork "
+    "is handed over as one bundle: the commissioning record, the test schedule, "
+    "the operating instructions and the maintenance recommendations. Keeping "
+    "them together is what makes a later claim straightforward.",
+    "Maintenance is recommended annually. The recommendation is not a condition "
+    "of anything issued here, and it is set out so that the intervals are known "
+    "at handover rather than discovered later.",
+    "Any variation to the agreed scope is quoted separately before it is carried "
+    "out. Work already completed is invoiced at the agreed stage rate regardless "
+    "of whether a variation is subsequently agreed.",
+    "The survey drawing governs the layout. Where site conditions differ from "
+    "the drawing, the difference is recorded with a photograph and the layout is "
+    "reissued before the affected stage proceeds.",
+    "Waste is removed from site at the end of each stage and disposed of under "
+    "the relevant duty of care. Transfer notes are retained and are available on "
+    "request for two years from the date of the works.",
+    "Payment is due against the stage schedule. Retention, where it applies, is "
+    "released once the completion paperwork has been issued and any outstanding "
+    "items on the snagging list have been closed.",
+    "Notice of the intended start date is given at least ten working days in "
+    "advance. Where access to a neighbouring property is required, that notice "
+    "is served separately and the works cannot begin until it has been "
+    "acknowledged.",
+)
+
+_CROWDER_SUBJECTS: tuple[tuple[str, str], ...] = (
+    ("letter", "Loft conversion programme"),
+    ("quote", "Estimate for a full rewire"),
+    ("invoice", "Rewiring works, first stage"),
+    ("letter", "Heat pump installation programme"),
+    ("invoice", "Heat pump installation, balance due"),
+    ("certificate", "Electrical installation condition report"),
+    ("letter", "Roof covering replacement programme"),
+    ("invoice", "Roof covering replacement"),
+    ("quote", "Estimate for replacement windows"),
+    ("invoice", "Replacement windows fitted"),
+    ("letter", "Electric vehicle charger installation"),
+    ("invoice", "Electric vehicle charger, supply and fit"),
+    ("quote", "Estimate for a rear extension"),
+    ("letter", "Rear extension programme"),
+    ("invoice", "Rear extension, second stage"),
+    ("certificate", "Completion record for the extension"),
+    ("letter", "Damp proofing programme"),
+    ("invoice", "Damp proofing works"),
+    ("quote", "Estimate for external wall insulation"),
+    ("invoice", "External wall insulation fitted"),
+    ("letter", "Drainage renewal programme"),
+    ("invoice", "Drainage renewal works"),
+    ("quote", "Estimate for a garage conversion"),
+    ("invoice", "Garage conversion, final stage"),
+)
+
+
+def _crowder_body(offset: int) -> str:
+    """Deterministic prose of exactly ``_CROWDER_TARGET_CHARS`` characters.
+
+    Paragraphs are cycled from ``offset`` and truncated on a word boundary to a
+    fixed length, which is what lets a single declared ``chunks`` constant cover
+    every crowder and keeps them all clear of a chunk threshold.
+
+    **They are rotations of one another, not 24 independent documents.** The
+    paragraph pool is far smaller than the target length, so each body repeats
+    its sources two or three times and any two crowders share roughly 94% of
+    their sentences. That is enough for what they are for — occupying candidate
+    slots with plausible non-answers — and it is measurably stable (three eval
+    runs across two stacks returned identical rankings). But it does mean their
+    embeddings are near-identical, so the ORDER among them is an arbitrary
+    tie-break, and adding more distinct paragraph material would be a real
+    improvement rather than a cosmetic one.
+    """
+    parts: list[str] = []
+    length = 0
+    index = offset
+    while length < _CROWDER_TARGET_CHARS:
+        paragraph = _CROWDER_PARAGRAPHS[index % len(_CROWDER_PARAGRAPHS)]
+        parts.append(paragraph)
+        length += len(paragraph) + 1
+        index += 1
+    body = " ".join(parts)[:_CROWDER_TARGET_CHARS]
+    return body[: body.rfind(" ")]
+
+
+_CROWDERS: tuple[RecallDoc, ...] = tuple(
+    RecallDoc(
+        marker=f"crowder-{index:02d}",
+        sender_name=_sender("Halcyon Property Services"),
+        kind_slug=kind,
+        document_date=date(2021 + (index % 4), 1 + (index % 12), 1 + (index % 27)),
+        title=title,
+        body=_crowder_body(index),
+        chunks=_CROWDER_CHUNKS,
+        crowds=("breadth-many-mentions",),
+    )
+    for index, (kind, title) in enumerate(_CROWDER_SUBJECTS, start=1)
+)
+
+
 _FILLER: tuple[RecallDoc, ...] = tuple(
     RecallDoc(
         marker=f"filler-{index:02d}",
@@ -851,8 +1066,217 @@ _FILLER: tuple[RecallDoc, ...] = tuple(
 
 
 #: The whole haystack, seeded once and shared by every case.
+# --- Case 7: an answer buried in one passage of a long document ------------------
+#
+# The case issue #106 asks for, built the way the blind floor says it has to be
+# rather than the way the issue describes it.
+#
+# #106 says: "cases whose answer lives in a specific passage of a long document".
+# Read literally that makes the EXPECTED documents the long ones — and measured,
+# that is unbuildable. Ranking is max-over-chunks, so chunks are draws: two
+# 5-chunk expected documents among twenty single-chunk crowders have a blind
+# floor of 0.92. A retriever ranking at random would score 92% and the case would
+# look hard while measuring nothing.
+#
+# So the long documents are the CROWDERS and the expected documents are the
+# SHORTER ones — three chunks against five. The retrieval problem is still
+# "reach a document whose answer is one passage among several", which is what
+# #106 wants; what changes is which side carries the length. Floor: 0.2516.
+#
+# The answer sentence sits in the middle chunk, 2,400 characters in, placed by
+# measurement rather than arithmetic: the 200-character overlap carries a
+# sentence within ~200 characters of a boundary into TWO chunks, which would both
+# falsify "the answer is in one chunk" and give that answer two draws instead of
+# one. `answer_needle` lets the structural tests hold that.
+
+#: Length yielding exactly three chunks, mid-band. Shorter than a crowder, which
+#: is the whole point — see the note above.
+_AGREEMENT_TARGET_CHARS: int = 4200
+_AGREEMENT_CHUNKS: int = 3
+
+#: Where the answer sentence starts. Measured: at 2,400 characters it lands in
+#: chunk 1 of 3 and in no other; at 1,800 or 3,400 it drifts to a neighbour.
+_NEEDLE_OFFSET: int = 2400
+
+#: The sentence that answers the question, and nothing else in the corpus says
+#: it. Deliberately specific — ninety days, served before the anniversary — so
+#: the crowders can discuss notice at length without accidentally answering.
+CANCELLATION_NEEDLE: str = (
+    "Cancellation requires ninety days written notice served before the "
+    "anniversary date, and no refund of the annual charge arises where notice "
+    "is served after it."
+)
+
+#: Crowder prose for the passage case. Several of these paragraphs discuss
+#: notice, cancellation and termination AT LENGTH, with different periods and
+#: about different things — which is the point.
+#:
+#: The first version of these crowders never mentioned notice at all, and the
+#: case scored 1.00 in both environments: the question's own vocabulary
+#: ("notice", "cancel", "maintenance agreement") appeared in exactly two
+#: documents, so finding them was a lexical exercise and no retrieval quality
+#: was being measured. A case that cannot fail at baseline can register a
+#: regression but can never show an improvement, which is most of what this
+#: corpus exists for.
+#:
+#: This is the corpus's standing technique — "hand-authored near-miss
+#: distractors: same sender, same kind, adjacent dates, overlapping vocabulary"
+#: — applied where it was missing.
+_AGREEMENT_PARAGRAPHS: tuple[str, ...] = (
+    "The agreement sets out the scope of the maintenance service, the response "
+    "times that apply to each category of fault, and the circumstances in which "
+    "an attendance is chargeable rather than included in the annual charge.",
+    "Either party may give notice to vary the schedule of covered equipment. "
+    "Thirty days notice is required, and the revised schedule takes effect from "
+    "the start of the following month rather than immediately.",
+    "Notice of a change to the call-out rate is given in writing sixty days "
+    "before it applies. A customer who does not wish to accept the revised rate "
+    "may say so in the same period, and the previous rate is held until the "
+    "anniversary.",
+    "Cancellation of an individual visit requires two working days notice. A "
+    "visit cancelled with less notice than that is chargeable at the standard "
+    "attendance rate whether or not the engineer has set out.",
+    "Termination for non-payment follows a separate route and is not subject to "
+    "the notice arrangements described elsewhere in this agreement. Fourteen "
+    "days is allowed to remedy an overdue balance before cover is suspended.",
+    "The maintenance agreement renews on its anniversary unless it has been "
+    "brought to an end beforehand. Renewal carries the schedule of charges "
+    "current at that date, which is issued in advance.",
+    "Where the property changes hands the agreement may be transferred rather "
+    "than cancelled. The incoming owner confirms acceptance in writing and no "
+    "notice period arises on a transfer.",
+    "A suspension is not a cancellation. Cover may be suspended by agreement for "
+    "up to three months, during which no charge accrues and no notice is "
+    "required to resume.",
+    "Records of every attendance are retained for six years. Copies are provided "
+    "on request, and are provided automatically when an agreement ends for any "
+    "reason.",
+    "Response times are measured from the time a fault is reported rather than "
+    "from the time it occurs. Out of hours reports are timed from the start of "
+    "the next working day unless the fault is an emergency.",
+)
+
+
+def _agreement_prose(offset: int) -> str:
+    """Cycled crowder prose, so no two agreements read identically."""
+    parts: list[str] = []
+    length = 0
+    index = offset
+    while length < _CROWDER_TARGET_CHARS + _AGREEMENT_PROSE_HEADROOM:
+        paragraph = _AGREEMENT_PARAGRAPHS[index % len(_AGREEMENT_PARAGRAPHS)]
+        parts.append(paragraph)
+        length += len(paragraph) + 1
+        index += 1
+    return " ".join(parts)
+
+
+#: Extra prose generated beyond the longest body that consumes it, so
+#: `_agreement_body` can slice a window *after* the needle without running off
+#: the end. Needed because the answer bodies read `prose[len(before):...]` rather
+#: than restarting at zero.
+_AGREEMENT_PROSE_HEADROOM: int = 400
+
+
+def _agreement_body(needle: str | None, offset: int = 0) -> str:
+    """A maintenance-agreement body, optionally with the answer buried in it."""
+    prose = _agreement_prose(offset)
+    if needle is None:
+        filler = prose[:_CROWDER_TARGET_CHARS]
+        return filler[: filler.rfind(" ")]
+    before = prose[:_NEEDLE_OFFSET]
+    before = before[: before.rfind(" ") + 1]
+    remaining = _AGREEMENT_TARGET_CHARS - len(before) - len(needle) - 1
+    if remaining <= 0:  # pragma: no cover - guarded by the chunk-count test
+        raise ValueError(
+            f"needle of {len(needle)} chars leaves no room in a "
+            f"{_AGREEMENT_TARGET_CHARS}-char body after {len(before)} chars of lead-in"
+        )
+    # CONTINUE the prose past the needle rather than restarting it. Slicing
+    # `prose[:remaining]` here re-read from index 0, so every answer document
+    # carried its own first ~1,600 characters twice — invisible to the chunk-count
+    # guard (the length is the same either way) and quietly doubling the lexical
+    # weight of whatever happened to open the document.
+    after = prose[len(before) : len(before) + remaining]
+    return before + needle + " " + after[: after.rfind(" ")]
+
+
+_AGREEMENT_ANSWERS: tuple[RecallDoc, ...] = tuple(
+    RecallDoc(
+        marker=f"agreement-{slug}",
+        sender_name=_sender("Verity Maintenance"),
+        kind_slug="contract",
+        document_date=date(2023, month, 14),
+        title=title,
+        body=_agreement_body(CANCELLATION_NEEDLE, offset),
+        chunks=_AGREEMENT_CHUNKS,
+    )
+    for offset, (slug, month, title) in enumerate(
+        (
+            ("boiler", 3, "Maintenance agreement — boiler cover"),
+            ("electrical", 9, "Maintenance agreement — electrical cover"),
+            ("plumbing", 6, "Maintenance agreement — plumbing cover"),
+        )
+    )
+)
+
+#: Same sender, same shape, longer, and they never state the notice period. They
+#: join the case's candidate pool by sender anyway; `crowds` is declared so the
+#: "crowders are actually long" guard covers them too.
+_AGREEMENT_CROWDERS: tuple[RecallDoc, ...] = tuple(
+    RecallDoc(
+        marker=f"agreement-other-{index:02d}",
+        sender_name=_sender("Verity Maintenance"),
+        kind_slug="contract" if index % 3 else "letter",
+        document_date=date(2021 + (index % 4), 1 + (index % 12), 1 + (index % 27)),
+        title=title,
+        body=_agreement_body(None, index),
+        chunks=_CROWDER_CHUNKS,
+        crowds=("passage-buried-clause",),
+    )
+    for index, title in enumerate(
+        (
+            "Maintenance agreement — annual review",
+            "Maintenance agreement — schedule of charges",
+            "Maintenance agreement — response times",
+            "Maintenance agreement — parts and labour",
+            "Maintenance agreement — out of hours cover",
+            "Maintenance agreement — excluded works",
+            "Maintenance agreement — access arrangements",
+            "Maintenance agreement — payment terms",
+            "Maintenance agreement — assignment and transfer",
+            "Maintenance agreement — variation of scope",
+            "Maintenance agreement — subcontracted work",
+            "Maintenance agreement — complaints procedure",
+            "Maintenance agreement — data and records",
+            "Maintenance agreement — health and safety",
+            "Maintenance agreement — insurance and liability",
+            "Maintenance agreement — force majeure",
+            "Maintenance agreement — dispute resolution",
+            "Maintenance agreement — governing terms",
+            "Maintenance agreement — service levels",
+            "Maintenance agreement — reporting",
+            "Maintenance agreement — spare parts holding",
+            "Maintenance agreement — engineer competence",
+            "Maintenance agreement — site attendance",
+            "Maintenance agreement — annual statement",
+        ),
+        start=1,
+    )
+)
+
+_AGREEMENTS: tuple[RecallDoc, ...] = _AGREEMENT_ANSWERS + _AGREEMENT_CROWDERS
+
+
 CORPUS: tuple[RecallDoc, ...] = (
-    _MORTGAGE + _BARE_FIGURES + _BOILER + _SOLAR + _PARKING + _CONTROL + _FILLER
+    _MORTGAGE
+    + _BARE_FIGURES
+    + _BOILER
+    + _SOLAR
+    + _PARKING
+    + _CONTROL
+    + _FILLER
+    + _CROWDERS
+    + _AGREEMENTS
 )
 
 
@@ -923,6 +1347,25 @@ CASES: tuple[RecallCase, ...] = (
             "filter or a contextual header can. Three of the thirteen fall in "
             "the year asked about."
         ),
+    ),
+    RecallCase(
+        name="passage-buried-clause",
+        question="What notice do I have to give to cancel the maintenance agreement?",
+        expected_markers=(
+            "agreement-boiler",
+            "agreement-electrical",
+            "agreement-plumbing",
+        ),
+        why=(
+            "THE case for #106. Three agreements state the notice period in one "
+            "passage each; twenty-four longer agreements from the same sender "
+            "discuss every other term at length and never state it. Built with "
+            "the CROWDERS long and the expected documents shorter, which is the "
+            "opposite of the issue's wording: chunks are draws under "
+            "max-over-chunks ranking, so long expected documents raise the blind "
+            "floor to 0.92 and the case measures nothing. This way it is 0.25."
+        ),
+        answer_needle=CANCELLATION_NEEDLE,
     ),
     RecallCase(
         name="breadth-many-mentions",

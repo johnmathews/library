@@ -1294,8 +1294,9 @@ async def _seed_corpus(session: AsyncSession) -> dict[str, int]:
     # nothing still "succeeds": every case's ``semantic_search`` call then
     # falls back to the FTS leg of RRF alone and prints plausible-looking
     # per-case numbers that are not measuring retrieval recall at all. The
-    # corpus guarantees exactly one chunk per document, so "every seeded
-    # document has at least one chunk" is the right — and cheap — assertion.
+    # corpus no longer guarantees one chunk per document (crowders are five),
+    # so this is the floor and the declared-count check below is the real
+    # assertion; ">= 1" still catches the dead-embedder case it was written for.
     seeded_ids = list(ids_by_marker.values())
     chunk_count_rows = (
         await session.execute(
@@ -1331,6 +1332,37 @@ async def _seed_corpus(session: AsyncSession) -> dict[str, int]:
             "IngestionEvent rows before assuming the corpus or the retriever is at fault. "
             "Left unraised, eval-recall would silently score the FTS leg of RRF alone and "
             "report it as retrieval recall."
+        )
+
+    # Second post-condition: every document produced the number of chunks it
+    # DECLARES. "At least one chunk" above catches a dead embedder; it cannot
+    # catch a fixture that quietly collapsed, which is a live risk now that the
+    # corpus has crowders. A crowder that yields one chunk instead of five
+    # crowds nothing, the case it guards silently gets easier, and eval-recall
+    # keeps printing plausible per-case numbers.
+    #
+    # Checked HERE as well as in tests/ because this is the only place that sees
+    # the settings the container actually runs with: a deployed
+    # LIBRARY_EMBEDDING_CHUNK_CHARS differing from the default re-chunks the
+    # whole corpus, and no test in the repo can reach that.
+    miscounted = {
+        doc.marker: (doc.chunks, counts_by_document_id.get(ids_by_marker[doc.marker], 0))
+        for doc in CORPUS
+        if counts_by_document_id.get(ids_by_marker[doc.marker], 0) != doc.chunks
+    }
+    if miscounted:
+        sample = ", ".join(
+            f"{marker} declares {declared} got {actual}"
+            for marker, (declared, actual) in list(miscounted.items())[:5]
+        )
+        raise RuntimeError(
+            f"_seed_corpus: {len(miscounted)} of {len(ids_by_marker)} seeded documents "
+            f"produced a different chunk count than they declare ({sample}"
+            f"{', ...' if len(miscounted) > 5 else ''}). The corpus's blind floors are "
+            "computed from the declared counts, so a mismatch means every case's "
+            "difficulty is being reported wrongly. Most likely this container's "
+            "LIBRARY_EMBEDDING_CHUNK_CHARS or LIBRARY_EMBEDDING_CHUNK_OVERLAP differs "
+            "from the defaults the fixtures were authored against."
         )
 
     return ids_by_marker
@@ -1583,8 +1615,14 @@ RECALL_BASELINE_PATH: Path = Path(__file__).resolve().parents[2] / "recall-basel
 BASELINE_ARCHIVE_TOLERANCE: float = 0.10
 
 
-def _warn_if_baseline_is_not_comparable(recorded: dict[str, Any], archive_documents: int) -> None:
-    """Say so when the baseline was measured against a different-sized archive."""
+def _warn_if_baseline_is_not_comparable(
+    recorded: dict[str, Any], archive_documents: int, corpus_chunks: int
+) -> None:
+    """Say so when the baseline was measured against a different-sized haystack.
+
+    Both halves of the haystack matter and both can move independently: the
+    real archive around the fixtures, and the fixtures themselves.
+    """
     measured_against = recorded.get("measured_against")
     if not isinstance(measured_against, dict):
         typer.echo(
@@ -1594,29 +1632,52 @@ def _warn_if_baseline_is_not_comparable(recorded: dict[str, Any], archive_docume
         return
 
     previous = measured_against.get("archive_documents")
-    if not isinstance(previous, int):
-        return
+    if isinstance(previous, int):
+        drift = abs(archive_documents - previous)
+        if drift > max(5, int(BASELINE_ARCHIVE_TOLERANCE * previous)):
+            typer.echo(
+                f"WARNING: baseline was measured against {previous} archive documents, "
+                f"this run against {archive_documents}. Every case scores over the whole "
+                "documents table, so the deltas below reflect the change in haystack as "
+                "much as any change in retrieval. Re-record the baseline here before "
+                "trusting them."
+            )
 
-    drift = abs(archive_documents - previous)
-    if drift > max(5, int(BASELINE_ARCHIVE_TOLERANCE * previous)):
-        typer.echo(
-            f"WARNING: baseline was measured against {previous} archive documents, "
-            f"this run against {archive_documents}. Every case scores over the whole "
-            "documents table, so the deltas below reflect the change in haystack as "
-            "much as any change in retrieval. Re-record the baseline here before "
-            "trusting them."
-        )
+    # The other half of the haystack, and the half that used to go unrecorded.
+    # `corpus_documents` was written but never compared, and it cannot stand in
+    # for this: the corpus can triple in CHUNKS while its document count barely
+    # moves, and chunks are what the retriever ranks. A rebuilt corpus would then
+    # read as a retrieval change. Same class of defect `measured_against` was
+    # added to fix, one level down.
+    #
+    # A baseline recorded before this field existed simply has no `corpus_chunks`,
+    # and silence is right for it — the warning would be about a comparison that
+    # cannot be made, which is what the missing-provenance note above already says.
+    previous_chunks = measured_against.get("corpus_chunks")
+    if isinstance(previous_chunks, int) and previous_chunks > 0:
+        chunk_drift = abs(corpus_chunks - previous_chunks)
+        if chunk_drift > max(5, int(BASELINE_ARCHIVE_TOLERANCE * previous_chunks)):
+            typer.echo(
+                f"WARNING: baseline was measured against a corpus of {previous_chunks} "
+                f"chunks, this run against {corpus_chunks}. The retriever ranks chunks, "
+                "so the deltas below reflect the change in the corpus as much as any "
+                "change in retrieval. Re-record the baseline before trusting them."
+            )
 
 
 def _report_recall(
-    verdicts: list[RecallVerdict], *, write_baseline: bool, archive_documents: int
+    verdicts: list[RecallVerdict],
+    *,
+    write_baseline: bool,
+    archive_documents: int,
+    corpus_chunks: int,
 ) -> None:
     """Print each case, the mean, and the delta against the recorded baseline."""
     baseline: dict[str, float] = {}
     if RECALL_BASELINE_PATH.exists():
         recorded = json.loads(RECALL_BASELINE_PATH.read_text())
         baseline = recorded.get("cases", {})
-        _warn_if_baseline_is_not_comparable(recorded, archive_documents)
+        _warn_if_baseline_is_not_comparable(recorded, archive_documents, corpus_chunks)
 
     failures = 0
     for verdict in verdicts:
@@ -1644,6 +1705,10 @@ def _report_recall(
                     "measured_against": {
                         "archive_documents": archive_documents,
                         "corpus_documents": len(CORPUS),
+                        # Chunks, not just documents: the retriever ranks chunks,
+                        # and the corpus can change size in chunks without changing
+                        # size in documents.
+                        "corpus_chunks": corpus_chunks,
                     },
                 },
                 indent=2,
@@ -1716,7 +1781,7 @@ def eval_recall(
         typer.echo(f"error: no case named {only!r}")
         raise typer.Exit(code=1)
 
-    async def operation(session: AsyncSession) -> tuple[list[RecallVerdict], int]:
+    async def operation(session: AsyncSession) -> tuple[list[RecallVerdict], int, int]:
         # Counted BEFORE seeding, so it is the real archive this ran against and
         # not the archive plus the fixtures.
         archive_documents = int(
@@ -1747,10 +1812,26 @@ def eval_recall(
                 )
                 retrieved = [hit.document.id for hit in hits]
             verdicts.append(score_recall(case.name, expected, retrieved, k=case.k))
-        return verdicts, archive_documents
+        # Counted from the DB rather than from the declarations, so the number
+        # recorded in the baseline is what was actually embedded and ranked.
+        corpus_chunks = int(
+            (
+                await session.execute(
+                    select(func.count())
+                    .select_from(DocumentChunk)
+                    .where(DocumentChunk.document_id.in_(list(ids_by_marker.values())))
+                )
+            ).scalar_one()
+        )
+        return verdicts, archive_documents, corpus_chunks
 
-    verdicts, archive_documents = _run_rolled_back(operation)
-    _report_recall(verdicts, write_baseline=write_baseline, archive_documents=archive_documents)
+    verdicts, archive_documents, corpus_chunks = _run_rolled_back(operation)
+    _report_recall(
+        verdicts,
+        write_baseline=write_baseline,
+        archive_documents=archive_documents,
+        corpus_chunks=corpus_chunks,
+    )
 
 
 def main() -> None:

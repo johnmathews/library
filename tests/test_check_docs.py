@@ -136,6 +136,26 @@ class TestSeededViolations:
         assert "stale-doc-edit" in rules(violations)
         assert "2026-07-25" in next(v.message for v in violations if v.rule == "stale-doc-edit")
 
+    def test_a_squash_merge_one_day_after_the_stamp_is_tolerated(self) -> None:
+        """#126: the stamp is written during the work; the DATE is set by the merge.
+
+        An author stamps a doc while working on the 20th and the squash-merge
+        lands it on the 21st, so on `main` the doc's last commit is one day after
+        its own stamp and `stale-doc-edit` fires — on a diff identical to the
+        PR's, which was green. Nothing was actually stale.
+
+        This is the mirror of `future-date`'s existing one-day skew (see
+        `test_future_date_tolerates_one_day_of_timezone_skew`): without slack the
+        two rules contradict each other across a merge boundary.
+        """
+        violations = check(doc(verified="2026-07-20 — method: x"), last_commit="2026-07-21")
+        assert "stale-doc-edit" not in rules(violations)
+
+    def test_the_stale_grace_is_one_day_not_a_licence(self) -> None:
+        """Two days apart is a doc that really was edited without re-verifying."""
+        violations = check(doc(verified="2026-07-20 — method: x"), last_commit="2026-07-22")
+        assert "stale-doc-edit" in rules(violations)
+
     def test_untracked_file_fails(self) -> None:
         assert "untracked" in rules(check(doc(), last_commit=None))
 
@@ -227,14 +247,17 @@ class TestCoveredChangeDetectionIsClockIndependent:
     def test_it_compares_last_commit_dates(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """The unit that needs no repository and no clock."""
         last: dict[str, date | None] = {
-            "after.py": date(2026, 7, 30),
+            "well-after.py": date(2026, 7, 31),
+            # One day later is inside STALE_GRACE_DAYS: a squash-merge assigns
+            # this date, not the author, so it cannot be evidence of staleness.
+            "one-day-after.py": date(2026, 7, 30),
             "same-day.py": date(2026, 7, 29),
             "before.py": date(2026, 7, 28),
             "untracked.py": None,
         }
         monkeypatch.setattr(check_docs, "git_last_commit_date", lambda path: last[path])
         changed = check_docs.git_changed_since(date(2026, 7, 29), tuple(last))
-        assert changed == ("after.py",)
+        assert changed == ("well-after.py",)
 
     def test_a_same_day_change_is_not_reported(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Date-granularity, stated deliberately rather than left to emerge.
@@ -248,6 +271,44 @@ class TestCoveredChangeDetectionIsClockIndependent:
         """
         monkeypatch.setattr(check_docs, "git_last_commit_date", lambda path: date(2026, 7, 29))
         assert check_docs.git_changed_since(date(2026, 7, 29), ("x.py",)) == ()
+
+    def test_a_covered_path_committed_one_day_later_is_tolerated(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """#126's OTHER half, and the reason fixing `stale-doc-edit` alone is not a fix.
+
+        The squash-merge that dates the doc one day after its stamp dates the
+        *covered source* too — both land in the same single commit. So the same
+        incident arrives through this rule as `stale-covered-code`, and a patch
+        applied only to `stale-doc-edit` leaves this red.
+        """
+        monkeypatch.setattr(check_docs, "git_last_commit_date", lambda path: date(2026, 7, 30))
+        assert check_docs.git_changed_since(date(2026, 7, 29), ("x.py",)) == ()
+
+    def test_a_covered_path_committed_two_days_later_is_still_reported(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """One day of merge skew, not an open-ended amnesty."""
+        monkeypatch.setattr(check_docs, "git_last_commit_date", lambda path: date(2026, 7, 31))
+        assert check_docs.git_changed_since(date(2026, 7, 29), ("x.py",)) == ("x.py",)
+
+    def test_the_incident_timestamp_from_126_is_clean(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The real repository, at the timestamp that actually reded `main`.
+
+        `2026-08-30T00:08:30+02:00` is `2026-08-29T22:08Z` — still the 29th in
+        UTC. It reads as the 30th only because `--date=short` renders each commit
+        in its own recorded offset, which is #70's fix. So the trigger is midnight
+        in the COMMITTER's offset, not midnight UTC, and for a `+0200` author the
+        exposure window opens at 22:00Z.
+        """
+        monkeypatch.setattr(
+            check_docs,
+            "REPO_ROOT",
+            _repo_with_commit_at(tmp_path / "repo-126", "2026-08-30T00:08:30+02:00"),
+        )
+        assert check_docs.git_changed_since(date(2026, 8, 29), ("covered.py",)) == ()
 
     def test_the_hour_of_the_commit_cannot_change_the_verdict(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
@@ -311,7 +372,10 @@ class TestPathspecsResolveForEveryLanguage:
             "frontend/src/views/",
             "frontend/src/**",
         ):
-            assert check_docs.git_changed_since(date(2026, 7, 29), (pattern,)) == (pattern,), (
+            # Two days before the commit, not one: one day is inside
+            # STALE_GRACE_DAYS, and this test is about pathspec resolution —
+            # it must not accidentally depend on the grace boundary.
+            assert check_docs.git_changed_since(date(2026, 7, 28), (pattern,)) == (pattern,), (
                 f"pathspec {pattern!r} matched nothing"
             )
 

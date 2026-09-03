@@ -62,9 +62,24 @@ RRF_K: int = 60
 # several near chunks share a document (~6 chunks/doc typical).
 VECTOR_CANDIDATE_FANOUT: int = 5
 
-# ts_rank normalization bitmask (Postgres). 1 = divide rank by 1 + log(document
-# length): damps long docs accumulating raw match count so score reflects match
-# density, keeping short on-topic invoices competitive. 0 restores prior behavior.
+# ts_rank normalization bitmask (Postgres). 1 divides the rank by the logarithm
+# of the document length, damping long documents that accumulate raw match count
+# so the score reflects match density and short on-topic invoices stay
+# competitive. 0 restores the prior behaviour.
+#
+# PostgreSQL's own prose says "1 + the logarithm", and the measured divisor is
+# `log2(length + 1)` — checked against a running database at four lengths with
+# match density held constant, matching to four decimal places. Recorded because
+# the difference is not cosmetic: the divisor grows FASTER than the saturating
+# numerator, so normalization 1 does not merely damp long documents, it inverts
+# the ordering. At one match per twenty words, a 400-word document ranks BELOW a
+# 20-word one.
+#
+# Which matters for issue #106: the vector leg's max-over-chunks collapse favours
+# long documents (more chunks is more draws at the nearest-chunk minimum), and
+# this leg favours short ones. RRF fusion therefore self-corrects part of that
+# bias, and a remedy applied to the vector side alone risks over-correcting past
+# neutral. See docs/ask.md §1.2 and journal/260903-recall-corpus-multichunk.md.
 FTS_RANK_NORMALIZATION: int = 1
 
 

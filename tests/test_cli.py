@@ -1302,11 +1302,17 @@ def test_report_recall_records_the_archive_it_measured_against(
     baseline = tmp_path / "recall-baseline.json"
     monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
 
-    cli_module._report_recall([_passing_verdict()], write_baseline=True, archive_documents=259)
+    cli_module._report_recall(
+        [_passing_verdict()], write_baseline=True, archive_documents=259, corpus_chunks=447
+    )
 
     recorded = json.loads(baseline.read_text())
     assert recorded["measured_against"]["archive_documents"] == 259
     assert recorded["measured_against"]["corpus_documents"] == len(CORPUS)
+    # Chunks too: the retriever ranks chunks, and the corpus can change size in
+    # chunks (crowders growing, chunk settings moving) without changing size in
+    # documents. Without this a rebuilt corpus reads as a retrieval delta.
+    assert recorded["measured_against"]["corpus_chunks"] == 447
     # Counts only — this file is committed to a public repository.
     assert "database" not in recorded["measured_against"]
     assert "@" not in baseline.read_text()
@@ -1321,13 +1327,19 @@ def test_report_recall_warns_when_the_baseline_archive_differs(
             {
                 "mean": 1.0,
                 "cases": {"control-unique-term": 1.0},
-                "measured_against": {"archive_documents": 259, "corpus_documents": 90},
+                "measured_against": {
+                    "archive_documents": 259,
+                    "corpus_documents": 90,
+                    "corpus_chunks": 447,
+                },
             }
         )
     )
     monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
 
-    cli_module._report_recall([_passing_verdict()], write_baseline=False, archive_documents=3)
+    cli_module._report_recall(
+        [_passing_verdict()], write_baseline=False, archive_documents=3, corpus_chunks=447
+    )
 
     output = capsys.readouterr().out
     assert "WARNING: baseline was measured against 259 archive documents" in output
@@ -1344,15 +1356,115 @@ def test_report_recall_is_quiet_when_the_archive_only_drifted(
             {
                 "mean": 1.0,
                 "cases": {"control-unique-term": 1.0},
-                "measured_against": {"archive_documents": 259, "corpus_documents": 90},
+                "measured_against": {
+                    "archive_documents": 259,
+                    "corpus_documents": 90,
+                    "corpus_chunks": 447,
+                },
             }
         )
     )
     monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
 
-    cli_module._report_recall([_passing_verdict()], write_baseline=False, archive_documents=272)
+    cli_module._report_recall(
+        [_passing_verdict()], write_baseline=False, archive_documents=272, corpus_chunks=447
+    )
 
     assert "WARNING" not in capsys.readouterr().out
+
+
+def test_report_recall_warns_when_the_corpus_itself_changed_size(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The other half of the haystack, which used to be recorded and never read.
+
+    `corpus_documents` was written into `measured_against` from the start and
+    never compared against anything. It could not have served as a proxy either:
+    the corpus can more than double in CHUNKS while its document count barely
+    moves — exactly what adding crowders does — and chunks are what the retriever
+    ranks. A rebuilt corpus would then show a delta that reads as a retrieval
+    change.
+    """
+    baseline = tmp_path / "recall-baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "mean": 1.0,
+                "cases": {"control-unique-term": 1.0},
+                "measured_against": {
+                    "archive_documents": 259,
+                    "corpus_documents": 201,
+                    "corpus_chunks": 201,
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
+
+    cli_module._report_recall(
+        [_passing_verdict()], write_baseline=False, archive_documents=259, corpus_chunks=447
+    )
+
+    output = capsys.readouterr().out
+    assert "WARNING: baseline was measured against a corpus of 201 chunks" in output
+    assert "this run against 447" in output
+    # The archive did not move, so only the corpus warning should fire.
+    assert "archive documents" not in output
+
+
+def test_report_recall_is_quiet_when_the_corpus_only_drifted(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A fixture edited by a few chunks is not a rebuilt corpus."""
+    baseline = tmp_path / "recall-baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "mean": 1.0,
+                "cases": {"control-unique-term": 1.0},
+                "measured_against": {
+                    "archive_documents": 259,
+                    "corpus_documents": 251,
+                    "corpus_chunks": 447,
+                },
+            }
+        )
+    )
+    monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
+
+    cli_module._report_recall(
+        [_passing_verdict()], write_baseline=False, archive_documents=259, corpus_chunks=452
+    )
+
+    assert "WARNING" not in capsys.readouterr().out
+
+
+def test_report_recall_is_quiet_about_chunks_for_a_baseline_without_them(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """An older baseline has no `corpus_chunks`, and silence is the right answer.
+
+    Warning there would be a claim about a comparison that cannot be made. The
+    existing "predates provenance" note already covers a baseline with no
+    provenance at all; this covers one recorded between the two changes.
+    """
+    baseline = tmp_path / "recall-baseline.json"
+    baseline.write_text(
+        json.dumps(
+            {
+                "mean": 1.0,
+                "cases": {"control-unique-term": 1.0},
+                "measured_against": {"archive_documents": 259, "corpus_documents": 201},
+            }
+        )
+    )
+    monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
+
+    cli_module._report_recall(
+        [_passing_verdict()], write_baseline=False, archive_documents=259, corpus_chunks=447
+    )
+
+    assert "chunks" not in capsys.readouterr().out
 
 
 def test_report_recall_notes_a_baseline_recorded_before_provenance(
@@ -1362,7 +1474,9 @@ def test_report_recall_notes_a_baseline_recorded_before_provenance(
     baseline.write_text(json.dumps({"mean": 1.0, "cases": {"control-unique-term": 1.0}}))
     monkeypatch.setattr(cli_module, "RECALL_BASELINE_PATH", baseline)
 
-    cli_module._report_recall([_passing_verdict()], write_baseline=False, archive_documents=259)
+    cli_module._report_recall(
+        [_passing_verdict()], write_baseline=False, archive_documents=259, corpus_chunks=447
+    )
 
     assert "predates provenance" in capsys.readouterr().out
 
