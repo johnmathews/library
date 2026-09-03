@@ -43,6 +43,12 @@ _BOUNDARY_SLACK_CHARS = 80
 #: median is 2).
 CROWDER_MIN_CHUNKS = 3
 
+#: How much of each end of an answer sentence must also be unique to one
+#: chunk. Fifty characters is a clause or so — long enough to be distinctive,
+#: short enough to sit well inside the 200-character overlap window that would
+#: duplicate it.
+_NEEDLE_FRAGMENT_CHARS = 50
+
 
 def test_markers_are_unique() -> None:
     markers = [doc.marker for doc in CORPUS]
@@ -177,6 +183,74 @@ def test_the_corpus_outgrows_the_ann_prefetch_window() -> None:
         "so the ANN prefetch never binds and the eval scores an exact retriever "
         "rather than the shipped one — add crowders"
     )
+
+
+def test_a_buried_answer_lands_in_exactly_one_chunk() -> None:
+    """The premise of a passage case, which the chunker can silently break.
+
+    `chunk_text` carries a 200-character overlap tail into the next chunk, so a
+    sentence placed within ~200 characters of a boundary appears in TWO chunks.
+    That breaks the case twice over: the answer no longer "lives in a specific
+    passage", and — because ranking is max-over-chunks — the answer gets two
+    draws instead of one, inflating the score for a reason that has nothing to do
+    with retrieval quality.
+
+    Nothing else would catch it. The declared chunk count would still be right,
+    the blind floor would still pass, and the case would still look well formed.
+    """
+    by_marker = {doc.marker: doc for doc in CORPUS}
+    for case in CASES:
+        if not case.answer_needle:
+            continue
+        for marker in case.expected_markers:
+            body = by_marker[marker].body
+            settings = get_settings()
+            chunks = chunk_text(
+                body,
+                max_chars=settings.embedding_chunk_chars,
+                overlap=settings.embedding_chunk_overlap,
+            )
+            # Whole sentence, and each end of it. Checking only the whole
+            # sentence leaves a hole that mutation testing found: with the needle
+            # just past a boundary, the overlap carries its OPENING WORDS back
+            # into the previous chunk. The full sentence then appears once — so a
+            # whole-sentence check passes — while both chunks carry part of the
+            # answer, which is the duplicated signal this guard exists to stop.
+            for label, fragment in (
+                ("sentence", case.answer_needle),
+                ("opening", case.answer_needle[:_NEEDLE_FRAGMENT_CHARS]),
+                ("closing", case.answer_needle[-_NEEDLE_FRAGMENT_CHARS:]),
+            ):
+                hits = [index for index, chunk in enumerate(chunks) if fragment in chunk]
+                assert len(hits) == 1, (
+                    f"{case.name}: the answer's {label} appears in {len(hits)} chunks "
+                    f"of {marker} (chunks {hits}), not exactly one. The overlap is "
+                    f"{settings.embedding_chunk_overlap} characters — move the "
+                    "sentence away from the boundary rather than adjusting this guard."
+                )
+
+
+def test_a_buried_answer_appears_in_no_other_document() -> None:
+    """Otherwise a miss can score as a hit.
+
+    If any document outside the expected set states the answer, retrieving it
+    instead of an expected one is a correct answer that the eval records as a
+    failure — or, worse, the case passes for the wrong reason and stops measuring
+    what its name claims.
+    """
+    for case in CASES:
+        if not case.answer_needle:
+            continue
+        expected = set(case.expected_markers)
+        leaks = [
+            doc.marker
+            for doc in CORPUS
+            if doc.marker not in expected and case.answer_needle in doc.body
+        ]
+        assert not leaks, (
+            f"{case.name}: the answer sentence also appears in {leaks}, so a "
+            "document the case does not expect can answer the question"
+        )
 
 
 def test_every_sender_is_marked_as_a_fixture() -> None:

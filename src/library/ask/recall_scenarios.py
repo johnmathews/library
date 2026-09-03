@@ -130,6 +130,15 @@ class RecallCase:
     why: str
     k: int = 10
 
+    #: For a case whose answer lives in one PASSAGE of a long document: the
+    #: sentence that states it. Declared so the structural tests can hold two
+    #: properties that are otherwise unenforceable — that the answer lands in
+    #: exactly one chunk (the 200-character overlap will duplicate a sentence
+    #: placed near a boundary, which both falsifies "one chunk" and doubles that
+    #: chunk's draws), and that it appears in no other document, so a miss
+    #: cannot score as a hit. Empty for cases with no single answer sentence.
+    answer_needle: str = ""
+
 
 def _sender(name: str) -> str:
     return f"{name} {FIXTURE_SUFFIX}"
@@ -1048,8 +1057,140 @@ _FILLER: tuple[RecallDoc, ...] = tuple(
 
 
 #: The whole haystack, seeded once and shared by every case.
+# --- Case 7: an answer buried in one passage of a long document ------------------
+#
+# The case issue #106 asks for, built the way the blind floor says it has to be
+# rather than the way the issue describes it.
+#
+# #106 says: "cases whose answer lives in a specific passage of a long document".
+# Read literally that makes the EXPECTED documents the long ones — and measured,
+# that is unbuildable. Ranking is max-over-chunks, so chunks are draws: two
+# 5-chunk expected documents among twenty single-chunk crowders have a blind
+# floor of 0.92. A retriever ranking at random would score 92% and the case would
+# look hard while measuring nothing.
+#
+# So the long documents are the CROWDERS and the expected documents are the
+# SHORTER ones — three chunks against five. The retrieval problem is still
+# "reach a document whose answer is one passage among several", which is what
+# #106 wants; what changes is which side carries the length. Floor: 0.26.
+#
+# The answer sentence sits in the middle chunk, 2,400 characters in, placed by
+# measurement rather than arithmetic: the 200-character overlap carries a
+# sentence within ~200 characters of a boundary into TWO chunks, which would both
+# falsify "the answer is in one chunk" and give that answer two draws instead of
+# one. `answer_needle` lets the structural tests hold that.
+
+#: Length yielding exactly three chunks, mid-band. Shorter than a crowder, which
+#: is the whole point — see the note above.
+_AGREEMENT_TARGET_CHARS: int = 4200
+_AGREEMENT_CHUNKS: int = 3
+
+#: Where the answer sentence starts. Measured: at 2,400 characters it lands in
+#: chunk 1 of 3 and in no other; at 1,800 or 3,400 it drifts to a neighbour.
+_NEEDLE_OFFSET: int = 2400
+
+#: The sentence that answers the question, and nothing else in the corpus says
+#: it. Deliberately specific — ninety days, served before the anniversary — so
+#: the crowders can discuss notice at length without accidentally answering.
+CANCELLATION_NEEDLE: str = (
+    "Cancellation requires ninety days written notice served before the "
+    "anniversary date, and no refund of the annual charge arises where notice "
+    "is served after it."
+)
+
+_AGREEMENT_FILLER: str = (
+    "The agreement sets out the scope of the maintenance service, the response "
+    "times that apply to each category of fault, and the circumstances in which "
+    "an attendance is chargeable rather than included in the annual charge. "
+)
+
+
+def _agreement_body(needle: str | None) -> str:
+    """A maintenance-agreement body, optionally with the answer buried in it."""
+    if needle is None:
+        filler = (_AGREEMENT_FILLER * 60)[:_CROWDER_TARGET_CHARS]
+        return filler[: filler.rfind(" ")]
+    before = (_AGREEMENT_FILLER * 60)[:_NEEDLE_OFFSET]
+    before = before[: before.rfind(" ") + 1]
+    remaining = _AGREEMENT_TARGET_CHARS - len(before) - len(needle) - 1
+    after = (_AGREEMENT_FILLER * 60)[:remaining]
+    return before + needle + " " + after[: after.rfind(" ")]
+
+
+_AGREEMENT_ANSWERS: tuple[RecallDoc, ...] = tuple(
+    RecallDoc(
+        marker=f"agreement-{slug}",
+        sender_name=_sender("Verity Maintenance"),
+        kind_slug="contract",
+        document_date=date(2023, month, 14),
+        title=title,
+        body=_agreement_body(CANCELLATION_NEEDLE),
+        chunks=_AGREEMENT_CHUNKS,
+    )
+    for slug, month, title in (
+        ("boiler", 3, "Maintenance agreement — boiler cover"),
+        ("electrical", 9, "Maintenance agreement — electrical cover"),
+    )
+)
+
+#: Same sender, same shape, longer, and they never state the notice period. They
+#: join the case's candidate pool by sender anyway; `crowds` is declared so the
+#: "crowders are actually long" guard covers them too.
+_AGREEMENT_CROWDERS: tuple[RecallDoc, ...] = tuple(
+    RecallDoc(
+        marker=f"agreement-other-{index:02d}",
+        sender_name=_sender("Verity Maintenance"),
+        kind_slug="contract" if index % 3 else "letter",
+        document_date=date(2021 + (index % 4), 1 + (index % 12), 1 + (index % 27)),
+        title=title,
+        body=_agreement_body(None),
+        chunks=_CROWDER_CHUNKS,
+        crowds=("passage-buried-clause",),
+    )
+    for index, title in enumerate(
+        (
+            "Maintenance agreement — annual review",
+            "Maintenance agreement — schedule of charges",
+            "Maintenance agreement — response times",
+            "Maintenance agreement — parts and labour",
+            "Maintenance agreement — out of hours cover",
+            "Maintenance agreement — excluded works",
+            "Maintenance agreement — access arrangements",
+            "Maintenance agreement — payment terms",
+            "Maintenance agreement — assignment and transfer",
+            "Maintenance agreement — variation of scope",
+            "Maintenance agreement — subcontracted work",
+            "Maintenance agreement — complaints procedure",
+            "Maintenance agreement — data and records",
+            "Maintenance agreement — health and safety",
+            "Maintenance agreement — insurance and liability",
+            "Maintenance agreement — force majeure",
+            "Maintenance agreement — dispute resolution",
+            "Maintenance agreement — governing terms",
+            "Maintenance agreement — service levels",
+            "Maintenance agreement — reporting",
+            "Maintenance agreement — spare parts holding",
+            "Maintenance agreement — engineer competence",
+            "Maintenance agreement — site attendance",
+            "Maintenance agreement — annual statement",
+        ),
+        start=1,
+    )
+)
+
+_AGREEMENTS: tuple[RecallDoc, ...] = _AGREEMENT_ANSWERS + _AGREEMENT_CROWDERS
+
+
 CORPUS: tuple[RecallDoc, ...] = (
-    _MORTGAGE + _BARE_FIGURES + _BOILER + _SOLAR + _PARKING + _CONTROL + _FILLER + _CROWDERS
+    _MORTGAGE
+    + _BARE_FIGURES
+    + _BOILER
+    + _SOLAR
+    + _PARKING
+    + _CONTROL
+    + _FILLER
+    + _CROWDERS
+    + _AGREEMENTS
 )
 
 
@@ -1120,6 +1261,21 @@ CASES: tuple[RecallCase, ...] = (
             "filter or a contextual header can. Three of the thirteen fall in "
             "the year asked about."
         ),
+    ),
+    RecallCase(
+        name="passage-buried-clause",
+        question="What notice do I have to give to cancel the maintenance agreement?",
+        expected_markers=("agreement-boiler", "agreement-electrical"),
+        why=(
+            "THE case for #106. Two agreements state the notice period in one "
+            "passage each; twenty-four longer agreements from the same sender "
+            "discuss every other term at length and never state it. Built with "
+            "the CROWDERS long and the expected documents shorter, which is the "
+            "opposite of the issue's wording: chunks are draws under "
+            "max-over-chunks ranking, so long expected documents raise the blind "
+            "floor to 0.92 and the case measures nothing. This way it is 0.26."
+        ),
+        answer_needle=CANCELLATION_NEEDLE,
     ),
     RecallCase(
         name="breadth-many-mentions",

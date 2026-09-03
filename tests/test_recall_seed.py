@@ -96,7 +96,7 @@ async def test_seed_corpus_produces_the_declared_chunk_count_per_document(
     guard green and this one red.
     """
     ids_by_marker = await _seed_corpus(session)
-    counts = {
+    counts: dict[int, int] = {  # noqa: C416 -- dict() rejects Row's tuple typing, as in cli.py
         document_id: count
         for document_id, count in (
             await session.execute(
