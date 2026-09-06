@@ -1,8 +1,8 @@
 # Frontend
 
-**Status:** active. **Last updated:** 2026-09-03 (§1.7.0, the nightly retrieval-recall heartbeat, is collapsed to a two-line pointer at `docs/ask.md` §1.2, which owns the corpus, the baseline and the interpretation and already carried every fact this section duplicated except the schedule and the `/health` rationale — both moved there. #137 asked for one owner; this inverts which side it proposed, because the workflow's entire remaining substance is one CLI recall command and the browser journey that justified describing it beside the e2e suite went with the series stack on 2026-08-31.) the `DocumentDetailView` row's previous/next paragraph is rewritten: neighbours now follow the ACTIVE FILTER SET carried on the detail route, with a scope indicator naming the mode ("2 of 3" / "In your filtered results" / "No longer matches this filter"), and `toDocumentFilters` is shared with the list view so the two cannot follow different sets. Says explicitly that this is not a reversal of the settled decision against following the list SORT — membership changed, direction did not (#140).) Earlier: 2026-09-01 (the document-detail **Facets** card is now an ordinary reorderable section card, id `facets` — the facet-editor section's "not part of the drag-reorder system" bullet is replaced, the default left-column split gains it in last place, and the card-migration paragraph gains a note on why this one needed no migration function (issue #139). Earlier the same day: e2e is sharded across three parallel CI jobs, one stack each: §1.7's `test:e2e` bullet documents the desktop/mobile/tablet split, the `E2E_PROJECTS` selector and why `workers: 1` stays; §1.7.1's did-it-actually-run floor is now per-shard via `E2E_MIN_EXPECTED` and says so, including that the three floors sum higher than the single one they replace.) Earlier the same day: (the chart rule editor, issue #135: `ChartRuleEditor.vue`, `spending/ruleText.ts` and `composables/facetVocabulary.ts` join the `components/spending/` set, the `SpendingWorkspaceView` row gains the **Edit rule** trigger and the two things `onRuleSaved` must and must not do, and `SpendingCard`'s overflow menu is restated as a closed list of four with a note on where rule editing lives instead. `Covers:` gains `components/spending/`, `spending/` and `composables/` — the first draft named only `views/`, `router/index.ts` and `components/layout/`, which did not reach a single one of the three modules this change added to the enumerations, so the gate could not have flagged this document for the edit it was making.) Earlier: 2026-08-31 (the legacy series stack was deleted, and this document loses everything that described it: the `ChartsView` (`/charts/legacy`) and `SeriesChartView` (`/charts/:seriesId`) route rows, the `DocumentSeriesTrend`/`SeriesChartTile` block in the `DocumentDetailView` row, the `series-chart` card in the document-detail layout (with a note on how a stored layout naming it is reconciled), `llm-surface-series_insight` in the `SettingsView` row, `series insight` in `JobsView`'s system-row example, and the currency form's "series-aware"/conflict-list wording in the `AdminView` row. §1.7.0 is rewritten for the renamed `retrieval-recall` job — the workflow survives, the browser journey and its did-it-actually-run assertion do not.) Earlier: 2026-08-30 (`/charts` becomes the spending board: `SpendingBoardView.vue` and `SpendingWorkspaceView.vue` join the routes table, alongside the `components/spending/` set — `SpendingChart`, `SpendingLegend`, `SpendingFooter`, `SpendingCard`, `SpendingDrillPanel` and its three bodies, `QuestionDraft`, `SpendingEmptyState` — and the two pure modules `spending/money.ts` and `spending/palette.ts`, in a new "Spending board and workspace" subsection. `ChartsView.vue` moves to `/charts/legacy`, unlinked from the sidebar — it holds the only Smart Groups creation UI and survives until a later plan deletes it with the series backend it serves. A second container-query threshold (`@3xl`, 768px) is recorded beside the existing `@5xl` header one, with the measured border-box/content-box table and the top-layer constraint that keeps the drill panel off container queries entirely. Earlier (2026-08-28): documented the facet vocabulary UI, which had no mention here: a new "Facet filter bar" subsection for `FacetFilterBar.vue` (AND-composed selects, facets with no values omitted, URL/saved-view persistence, its own "Clear facets" button, no active-filter chip) and a new "Facet editor" subsection for `FacetEditor.vue` (every facet including empty ones rendered disabled, only changed facets sent, a cleared facet sent as explicit `null`, and its exclusion from the drag-reorder card-columns system flagged as a known limitation rather than intentional design). See `docs/facets.md` for the vocabulary itself. Earlier (2026-08-25): Settings gains an **Ask** tab — the free-text "About you" notes Ask reads with every question; §1.3 `SettingsView`, `auth.askProfile`). Earlier (2026-08-22): `/matters` and `/projects` gain a one-sentence `PageHeader` lede explaining what each feature is for. Earlier the same day: `PageHeader` gains a `#controls` slot: `/charts`, `/jobs` and `/matters` render one header toolbar instead of an actions row above a filter row, merged on a **container** query so the same viewport merges or stacks depending on the sidebar; `/jobs`' filter bar rebuilt to the §5 label recipe). Earlier the same day: §1.5 `AskView`: correct two clauses left stale by the app-bar title move. Earlier the same day: the page title moves into `AppHeader`; `PageHeader` keeps only the lede + actions and renders nothing for a bare title. Also: the Ask composer is one flat full-width bar — the nested pill is gone). Earlier (2026-08-20): Settings gains an **LLM backend** tab — the instance-wide metered-API vs Claude-subscription choice per surface, admin-editable, read-only for everyone else; §1.3 `SettingsView`; badges colour-coded via AppBadge's `colour` prop, and the override badge reworded from "Overridden (deployed default: …)" to "Changed here" with the reset button naming its target value). Earlier: 2026-08-13 (the `index.html` sidebar seed now mirrors the store's full key precedence, so §1.2's note about it reading only the legacy key no longer applies; earlier, 2026-08-12: nightly Smart Groups heartbeat §1.7.0 and the Playwright-not-jsdom layout rule §1.7.3; earlier the same day, documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical. Earlier the same day: facet vocabulary panel, Task 11: new `VocabularyView` row in §1.5's views table — the tab shell, each panel's lazy-on-first-activation load and its `{ immediate: true }` deviation from the `AdminMetadataPanel` pattern, `ValueMergeView`'s target-specific dry-run gating and stale-response guard, and the `@container`/`@md:` row in `FacetsPanel.vue` with a pointer to [frontend-view-principles.md §5.1](frontend-view-principles.md); §1.3's `AppSidebar` nav-order list gains the **Vocabulary** entry between Matters and Settings). Earlier (2026-08-28) (documented the facet vocabulary UI, which had no mention here: a new "Facet filter bar" subsection for `FacetFilterBar.vue` (AND-composed selects, facets with no values omitted, URL/saved-view persistence, its own "Clear facets" button, no active-filter chip) and a new "Facet editor" subsection for `FacetEditor.vue` (every facet including empty ones rendered disabled, only changed facets sent, a cleared facet sent as explicit `null`, and its exclusion from the drag-reorder card-columns system flagged as a known limitation rather than intentional design). See `docs/facets.md` for the vocabulary itself. Earlier (2026-08-25): Settings gains an **Ask** tab — the free-text "About you" notes Ask reads with every question; §1.3 `SettingsView`, `auth.askProfile`). Earlier (2026-08-22): `/matters` and `/projects` gain a one-sentence `PageHeader` lede explaining what each feature is for. Earlier the same day: `PageHeader` gains a `#controls` slot: `/charts`, `/jobs` and `/matters` render one header toolbar instead of an actions row above a filter row, merged on a **container** query so the same viewport merges or stacks depending on the sidebar; `/jobs`' filter bar rebuilt to the §5 label recipe). Earlier the same day: §1.5 `AskView`: correct two clauses left stale by the app-bar title move. Earlier the same day: the page title moves into `AppHeader`; `PageHeader` keeps only the lede + actions and renders nothing for a bare title. Also: the Ask composer is one flat full-width bar — the nested pill is gone). Earlier (2026-08-20): Settings gains an **LLM backend** tab — the instance-wide metered-API vs Claude-subscription choice per surface, admin-editable, read-only for everyone else; §1.3 `SettingsView`; badges colour-coded via AppBadge's `colour` prop, and the override badge reworded from "Overridden (deployed default: …)" to "Changed here" with the reset button naming its target value). Earlier: 2026-08-13 (the `index.html` sidebar seed now mirrors the store's full key precedence, so §1.2's note about it reading only the legacy key no longer applies; earlier, 2026-08-12: nightly Smart Groups heartbeat §1.7.0 and the Playwright-not-jsdom layout rule §1.7.3; earlier the same day, documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical)
-**Last verified:** 2026-09-03 — method: partial, scoped to §1.7.0. Read `.github/workflows/e2e-nightly.yml` end to end and compared it claim-by-claim against both this section and `docs/ask.md` §1.2; the two agreed on every claim, differing only in that this one carried the schedule and the `/health` reasoning. Confirmed by grep that no third description exists. Nothing else in this document was re-read on this pass.
-**Covers:** frontend/src/views/, frontend/src/router/index.ts, frontend/src/components/layout/, frontend/src/components/spending/, frontend/src/spending/, frontend/src/composables/
+**Status:** active. **Last updated:** 2026-09-06 (the document-detail view is consolidated: the four `metadata-*` tiles and the `facets` card become ONE metadata panel; `DocumentMetadataEditor` renders both that panel and the hero from one component via `variant`; a field renders in exactly one surface; "Edit details" and "Edit layout" merge into one **Edit mode**; `collapseMetadataCards` migrates saved layouts in place and `migrateMetadataCard` is deleted.) Earlier: 2026-09-03 (§1.7.0, the nightly retrieval-recall heartbeat, is collapsed to a two-line pointer at `docs/ask.md` §1.2, which owns the corpus, the baseline and the interpretation and already carried every fact this section duplicated except the schedule and the `/health` rationale — both moved there. #137 asked for one owner; this inverts which side it proposed, because the workflow's entire remaining substance is one CLI recall command and the browser journey that justified describing it beside the e2e suite went with the series stack on 2026-08-31.) the `DocumentDetailView` row's previous/next paragraph is rewritten: neighbours now follow the ACTIVE FILTER SET carried on the detail route, with a scope indicator naming the mode ("2 of 3" / "In your filtered results" / "No longer matches this filter"), and `toDocumentFilters` is shared with the list view so the two cannot follow different sets. Says explicitly that this is not a reversal of the settled decision against following the list SORT — membership changed, direction did not (#140).) Earlier: 2026-09-01 (the document-detail **Facets** card is now an ordinary reorderable section card, id `facets` — the facet-editor section's "not part of the drag-reorder system" bullet is replaced, the default left-column split gains it in last place, and the card-migration paragraph gains a note on why this one needed no migration function (issue #139). Earlier the same day: e2e is sharded across three parallel CI jobs, one stack each: §1.7's `test:e2e` bullet documents the desktop/mobile/tablet split, the `E2E_PROJECTS` selector and why `workers: 1` stays; §1.7.1's did-it-actually-run floor is now per-shard via `E2E_MIN_EXPECTED` and says so, including that the three floors sum higher than the single one they replace.) Earlier the same day: (the chart rule editor, issue #135: `ChartRuleEditor.vue`, `spending/ruleText.ts` and `composables/facetVocabulary.ts` join the `components/spending/` set, the `SpendingWorkspaceView` row gains the **Edit rule** trigger and the two things `onRuleSaved` must and must not do, and `SpendingCard`'s overflow menu is restated as a closed list of four with a note on where rule editing lives instead. `Covers:` gains `components/spending/`, `spending/` and `composables/` — the first draft named only `views/`, `router/index.ts` and `components/layout/`, which did not reach a single one of the three modules this change added to the enumerations, so the gate could not have flagged this document for the edit it was making.) Earlier: 2026-08-31 (the legacy series stack was deleted, and this document loses everything that described it: the `ChartsView` (`/charts/legacy`) and `SeriesChartView` (`/charts/:seriesId`) route rows, the `DocumentSeriesTrend`/`SeriesChartTile` block in the `DocumentDetailView` row, the `series-chart` card in the document-detail layout (with a note on how a stored layout naming it is reconciled), `llm-surface-series_insight` in the `SettingsView` row, `series insight` in `JobsView`'s system-row example, and the currency form's "series-aware"/conflict-list wording in the `AdminView` row. §1.7.0 is rewritten for the renamed `retrieval-recall` job — the workflow survives, the browser journey and its did-it-actually-run assertion do not.) Earlier: 2026-08-30 (`/charts` becomes the spending board: `SpendingBoardView.vue` and `SpendingWorkspaceView.vue` join the routes table, alongside the `components/spending/` set — `SpendingChart`, `SpendingLegend`, `SpendingFooter`, `SpendingCard`, `SpendingDrillPanel` and its three bodies, `QuestionDraft`, `SpendingEmptyState` — and the two pure modules `spending/money.ts` and `spending/palette.ts`, in a new "Spending board and workspace" subsection. `ChartsView.vue` moves to `/charts/legacy`, unlinked from the sidebar — it holds the only Smart Groups creation UI and survives until a later plan deletes it with the series backend it serves. A second container-query threshold (`@3xl`, 768px) is recorded beside the existing `@5xl` header one, with the measured border-box/content-box table and the top-layer constraint that keeps the drill panel off container queries entirely. Earlier (2026-08-28): documented the facet vocabulary UI, which had no mention here: a new "Facet filter bar" subsection for `FacetFilterBar.vue` (AND-composed selects, facets with no values omitted, URL/saved-view persistence, its own "Clear facets" button, no active-filter chip) and a new "Facet editor" subsection for `FacetEditor.vue` (every facet including empty ones rendered disabled, only changed facets sent, a cleared facet sent as explicit `null`, and its exclusion from the drag-reorder card-columns system flagged as a known limitation rather than intentional design). See `docs/facets.md` for the vocabulary itself. Earlier (2026-08-25): Settings gains an **Ask** tab — the free-text "About you" notes Ask reads with every question; §1.3 `SettingsView`, `auth.askProfile`). Earlier (2026-08-22): `/matters` and `/projects` gain a one-sentence `PageHeader` lede explaining what each feature is for. Earlier the same day: `PageHeader` gains a `#controls` slot: `/charts`, `/jobs` and `/matters` render one header toolbar instead of an actions row above a filter row, merged on a **container** query so the same viewport merges or stacks depending on the sidebar; `/jobs`' filter bar rebuilt to the §5 label recipe). Earlier the same day: §1.5 `AskView`: correct two clauses left stale by the app-bar title move. Earlier the same day: the page title moves into `AppHeader`; `PageHeader` keeps only the lede + actions and renders nothing for a bare title. Also: the Ask composer is one flat full-width bar — the nested pill is gone). Earlier (2026-08-20): Settings gains an **LLM backend** tab — the instance-wide metered-API vs Claude-subscription choice per surface, admin-editable, read-only for everyone else; §1.3 `SettingsView`; badges colour-coded via AppBadge's `colour` prop, and the override badge reworded from "Overridden (deployed default: …)" to "Changed here" with the reset button naming its target value). Earlier: 2026-08-13 (the `index.html` sidebar seed now mirrors the store's full key precedence, so §1.2's note about it reading only the legacy key no longer applies; earlier, 2026-08-12: nightly Smart Groups heartbeat §1.7.0 and the Playwright-not-jsdom layout rule §1.7.3; earlier the same day, documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical. Earlier the same day: facet vocabulary panel, Task 11: new `VocabularyView` row in §1.5's views table — the tab shell, each panel's lazy-on-first-activation load and its `{ immediate: true }` deviation from the `AdminMetadataPanel` pattern, `ValueMergeView`'s target-specific dry-run gating and stale-response guard, and the `@container`/`@md:` row in `FacetsPanel.vue` with a pointer to [frontend-view-principles.md §5.1](frontend-view-principles.md); §1.3's `AppSidebar` nav-order list gains the **Vocabulary** entry between Matters and Settings). Earlier (2026-08-28) (documented the facet vocabulary UI, which had no mention here: a new "Facet filter bar" subsection for `FacetFilterBar.vue` (AND-composed selects, facets with no values omitted, URL/saved-view persistence, its own "Clear facets" button, no active-filter chip) and a new "Facet editor" subsection for `FacetEditor.vue` (every facet including empty ones rendered disabled, only changed facets sent, a cleared facet sent as explicit `null`, and its exclusion from the drag-reorder card-columns system flagged as a known limitation rather than intentional design). See `docs/facets.md` for the vocabulary itself. Earlier (2026-08-25): Settings gains an **Ask** tab — the free-text "About you" notes Ask reads with every question; §1.3 `SettingsView`, `auth.askProfile`). Earlier (2026-08-22): `/matters` and `/projects` gain a one-sentence `PageHeader` lede explaining what each feature is for. Earlier the same day: `PageHeader` gains a `#controls` slot: `/charts`, `/jobs` and `/matters` render one header toolbar instead of an actions row above a filter row, merged on a **container** query so the same viewport merges or stacks depending on the sidebar; `/jobs`' filter bar rebuilt to the §5 label recipe). Earlier the same day: §1.5 `AskView`: correct two clauses left stale by the app-bar title move. Earlier the same day: the page title moves into `AppHeader`; `PageHeader` keeps only the lede + actions and renders nothing for a bare title. Also: the Ask composer is one flat full-width bar — the nested pill is gone). Earlier (2026-08-20): Settings gains an **LLM backend** tab — the instance-wide metered-API vs Claude-subscription choice per surface, admin-editable, read-only for everyone else; §1.3 `SettingsView`; badges colour-coded via AppBadge's `colour` prop, and the override badge reworded from "Overridden (deployed default: …)" to "Changed here" with the reset button naming its target value). Earlier: 2026-08-13 (the `index.html` sidebar seed now mirrors the store's full key precedence, so §1.2's note about it reading only the legacy key no longer applies; earlier, 2026-08-12: nightly Smart Groups heartbeat §1.7.0 and the Playwright-not-jsdom layout rule §1.7.3; earlier the same day, documentation verification sweep: documented `MattersListView`, the Matters sidebar link and filter pill, the Notifications settings tab, `DefaultLayout`'s toast container and SSE ownership, and PWA wiring (new §1.6.1); corrected the doc-grid column defaults, the Jobs view's table shape and `AppPopover`'s backers; scoped §1.8 as historical)
+**Last verified:** 2026-09-06 — method: ran the frontend unit suite (1453 passed) and `vue-tsc`/`eslint` clean against the described behaviour; the de-duplication and empty-field-reachability claims are each pinned by a named test observed RED against the pre-change components. NOT verified against a running stack: no browser was driven, so nothing here claims how the panel renders at a given width.
+**Covers:** frontend/src/views/, frontend/src/router/index.ts, frontend/src/components/, frontend/src/spending/, frontend/src/composables/
 
 The Library web UI: a Vue 3 single-page app styled with the **Mosaic** design
 language (Cruip) — Tailwind 4, the Inter typeface, a violet accent, soft
@@ -551,24 +551,85 @@ page. Covered by `stores/__tests__/reviewQueue.spec.ts`, queue-mode cases in
 ### DocumentDetailView component structure
 
 The view keeps the hero, the two-column grid, the preview column + markdown
-reader, the actions card, and the history timeline; the two editors are their
-own components: **`DocumentMetadataEditor.vue`** (the metadata editor — now
-rendered **once per section** via a `section` prop, so the former single
-"Details" card is **four independent tiles**: Content (which also holds Kind +
-Language), Sender, recipient & dates, Financial, and a read-only System tile)
-and **`NoteEditorPanel.vue`** (the in-place note editor + version history).
-Because every save **replaces** the parent-owned `doc` wholesale (and the hero /
-preview read `doc`), both editors are wired **`v-model:doc`** — the child emits
-the fresh document up so the parent's other regions re-render (a one-way prop
-would freeze them on the pre-save snapshot). `NoteEditorPanel` additionally emits
-**`reload-markdown`** because the note body lives in the parent's reader
-(`markdownData`), not on `doc`. Shared `marked`+DOMPurify/format helpers live in
-`src/utils/documentFormat.ts`. `hydrateDrafts` runs on the shared edit-mode flag
-flipping on (a `watch(editMode)`, so any of the hero toggle / Action dock reaches
-every mounted tile) plus once on mount if edit mode is *already* on (a value-less
-tile — e.g. Financial — is hidden in read mode and first mounts only after
-editing begins, so its watch never fires) — never on a `watch(doc)`, so a
-background refresh mid-edit can't clobber in-progress drafts.
+reader, the actions card, and the history timeline. Two components do the
+editing: **`DocumentMetadataEditor.vue`** and **`NoteEditorPanel.vue`** (the
+in-place note editor + version history).
+
+`DocumentMetadataEditor` renders **two surfaces from one component**, chosen by
+its `variant` prop:
+
+- **`panel`** (the default, and the default matters — the view mounts it without
+  naming a variant) is the document's single **metadata card**: every field
+  group as a titled section, then the facet editor, then a read-only **System**
+  provenance block. One card, one drag handle, one place a field lives.
+- **`hero`** is the compact stat grid at the top of the page, drawn by the *same*
+  component so the intricate per-field bodies — kind's inline add, the recipient
+  adder, the three-part date group, the amount+currency pair, the per-field
+  validation ⚠ badges — exist once rather than twice.
+
+Between 2026-07-09 and 2026-09-06 the metadata card was **four independent
+tiles** (Content / Sender, recipient & dates / Financial / System) plus a
+separate Facets card. That split was made on aesthetic grounds and its own
+journal entry left the aesthetic result unverified; the verdict, two months
+later, was that the page had become undisciplined. `Financial` held exactly one
+field (`amount`) and spent a whole card, an accent colour and a drag handle on
+it. The tiles are one card again, and the groups survive as titled sections
+inside it.
+
+**The de-duplication rule.** A field renders in exactly ONE surface. The hero
+owns `summary`, `title` (as the page's `<h1>`) and whatever the hero field
+picker currently makes **visible**; the panel is handed those keys as
+`excludeFields` and renders everything else. Before this, 8 of the 10 picker
+keys ALSO rendered in a metadata card, because the hero's field list and the
+editor's field groups were two unrelated literals with nothing relating them.
+
+Two properties of that rule are load-bearing, and both fail silently if changed:
+
+1. **The split is computed from the picker's `visible` flag, never from "does
+   this field have a value".** An is-it-populated predicate would be reactive on
+   the *document*, so a field would jump from panel to hero the instant a save
+   populated it — unmounting the input the user was typing in, taking focus with
+   it and possibly a keystroke whose `change` had not yet fired.
+2. **In edit mode the hero renders every visible field, empty ones included.**
+   The hero's read mode omits an empty field (it is a summary, not a form) and
+   the panel omits whatever the hero owns — so a visible-but-empty field that
+   the hero also hid while editing would be editable **nowhere**. `amount` on a
+   non-financial document is the everyday case. The four-tile layout had the
+   same hazard and solved it card-side, by revealing an empty Financial tile on
+   edit; this is the hero's version of that rule, and
+   `DocumentDetailView.spec.ts`'s "keeps an empty hero-owned field reachable"
+   pins it.
+
+`title` and `summary` are deliberately **not** picker keys. That avoids two
+traps at once: `reconcileHeroFields` appends a newly-added key **last** for
+every existing user (so a picker `title` would land after `expiry_date`,
+however high it sat in the defaults), and two surfaces able to render
+`#edit-title` at once would break the strict-mode Playwright locator that
+`library.spec.ts` and `projects.spec.ts` both depend on. The `<h1>` shows the
+title in both modes — a heading is context, not a duplicated form field — while
+the editable copy is the Title row that appears in edit mode.
+
+`created_at` and `updated_at` are picker keys with `readOnly` row configs: the
+hero can show, hide and reorder them, and neither mode offers a text input over
+a server-assigned timestamp. `buildPatch` carries explicit no-write cases for
+them so the switch stays exhaustive.
+
+Every field **autosaves independently** on commit — native `change` on blur for
+text inputs and on selection for selects, a fieldset-level `focusout` for the
+three-part dates. There is **no global Save/Cancel**; "Done" just leaves edit
+mode. Because every save **replaces** the parent-owned `doc` wholesale, both
+editors are wired **`v-model:doc`** so the parent's other regions re-render (a
+one-way prop would freeze them on the pre-save snapshot). `NoteEditorPanel`
+additionally emits **`reload-markdown`** because the note body lives in the
+parent's reader (`markdownData`), not on `doc`. Shared `marked`+DOMPurify/format
+helpers live in `src/utils/documentFormat.ts`. `hydrateDrafts` runs on the
+shared edit-mode flag flipping on, plus once on mount if edit mode is *already*
+on — never on a `watch(doc)`, so a background refresh mid-edit cannot clobber an
+in-progress draft.
+
+Panel and hero grids are **container** queries (`@xl:`, `@2xl:`), not viewport
+ones: both sit in a column that is viewport-minus-sidebar, so a viewport query
+breaks at the wrong width ([frontend-view-principles.md](frontend-view-principles.md) §5.1).
 
 The detail page also leads with a prominent **"Why this needs review"** panel
 (`[data-testid="validation-findings"]`, shown while `review_status` is
@@ -583,124 +644,132 @@ and the review queue's **"Verify & next"**) is shown **only while `needs_review`
 — an `unreviewed` document has nothing flagged, so there is nothing to verify and
 no button; verifying is thus strictly the resolution of a flagged document.
 
-**Edit layout mode** is a single page-wide toggle in the hero
-(`[data-testid="edit-layout-toggle"]`, label **Edit layout** / **Done**,
-`aria-pressed`) that drives the **`useDocumentLayout`** composable
-(`src/composables/useDocumentLayout.ts`) — a singleton backed by `localStorage`
-(per-machine, all documents; the mode flag itself is ephemeral and resets on
-reload). This is **distinct** from the hero's **Edit details** `edit-toggle`
-(which edits metadata *values* across the section tiles): Edit layout only
-rearranges *presentation*. Turning it
-on reveals, in the hero, one reorderable row per known field
-(`[data-testid="hero-field-{key}"]`) with a **show/hide** checkbox
-(`hero-field-toggle-{key}`) and a drag handle, plus a **Reset layout** button
-(`[data-testid="reset-layout"]`); and, on each section card, a drag handle
-(`card-drag-handle-{id}`) over its wrapper (`section-card-{id}`). Drag is
-`sortablejs` (instances built on the container refs when the mode turns on and
-destroyed when it turns off / on unmount); each `onEnd` translates the DOM move
-into a composable setter (`moveHeroField` / `moveCard`) — the reactive
-state is the source of truth and Vue re-renders from it. Hero fields render in
-the saved order (read mode: visible-and-populated only; edit mode: **all** known
-fields, empty ones with an em-dash placeholder so they stay toggleable).
+#### One Edit mode
+
+There is **one** page-wide edit control: `[data-testid="edit-toggle"]`, labelled
+**Edit mode** / **Done**, with `aria-pressed`. It flips the single
+**`useMetadataEditMode`** singleton, which the hero button and the floating
+Action dock's Edit/Done button share; the view resets it on unmount and on
+in-queue Prev/Next navigation.
+
+Until 2026-09-06 there were **two** adjacent buttons — "Edit details" (field
+values) and "Edit layout" (arrangement) — driving two independent flags, one in
+`useMetadataEditMode` and one in `useDocumentLayout`. Nothing on either label
+said which was which and pressing the wrong one was the page's most-reported
+annoyance. `useDocumentLayout` now owns **persisted layout only**; the retired
+`edit-layout-toggle` testid is gone. `edit-toggle` was the survivor because it
+has five e2e call sites across three browser projects and `edit-layout-toggle`
+had **none** — keeping the testid with real coverage was the only safe
+direction. Showing drag handles beside live text inputs needed no extra work:
+dragging was already scoped to `[data-card-drag-handle]` /
+`[data-hero-drag-handle]`, so the two never compete.
+
+Edit mode reveals, together: every field's inline editor; in the hero, a
+**chooser** listing each known field with a show/hide checkbox
+(`hero-field-toggle-{key}`) and a drag handle (`[data-testid="hero-field-{key}"]`)
+— a chooser, not a second rendering of the values, since the editable copy is
+the grid above it; on each card, a drag handle (`card-drag-handle-{id}`) over
+its wrapper (`section-card-{id}`); and a **Reset layout** button
+(`[data-testid="reset-layout"]`). Hero fields render in the saved order.
+
+#### Card layout and its migrations
 
 Section cards use a **free-form, cross-column** layout: `useDocumentLayout`
 persists `cardColumns: { left: string[], right: string[] }`
 (`library:doc-layout-card-columns-v1`) rather than one flat order, and the
-metadata (left) and preview (right) columns' two SortableJS instances share
-one `group` (`'doc-cards'`), so a card can be dragged from either column into
-the other, not just reordered within its own. Both columns render their cards
-from **one shared card template** — defined once via VueUse's
-`createReusableTemplate` (`<DefineCard v-slot="{ cardId }">` holds the drag
-handle plus every card body; each column's `v-for` reuses it with
-`<ReuseCard :card-id>`), so a card draws its body in **whichever column
-currently holds it**. (Before this, the two columns had *disjoint*
-`v-if cardId===…` chains, so dragging a card into the other column dropped it —
-the destination had no branch for its id and the wrapper collapsed via
-`empty:hidden`.) Each column renders its full, persisted id list filtered to
-cards actually present for this document via `cardPresent(id)`: `notes` only for
-note docs, and `preview` only when it would render real content — an image/PDF viewer, a
-downloadable binary original, or (once the text has loaded and is empty) the
-"no preview" fallback — so a text-only note no longer renders an empty preview
-`.card` (a stray thin line) or, in edit mode, a drag handle attached to no
-panel. The metadata section tiles add their own `cardPresent` rule: **Content
-and System always show; Sender, recipient & dates / Financial appear only
-when they hold a value OR metadata edit mode is on** — so an empty tile (e.g.
-Financial on a non-financial document) stays hidden in read mode but reappears to
-be filled in while editing. The default split is left: `notes` ·
-`metadata-content` · `metadata-parties` ·
-`metadata-financial` · `metadata-system` · `comments` · `actions` · `history` ·
-`facets`, right: `preview` · `markdown`. (`series-chart` was a third right-column card
-until 2026-08-31; `DocumentSeriesTrend` went with the series stack. A user whose
-`localStorage` still names it is not broken — `reconcileCardColumns` drops any
-stored id that is not in `DEFAULT_CARD_COLUMNS` while preserving the order of the
-survivors, pinned by `useDocumentLayout.spec.ts`'s "drops series-chart and keeps
-every card that still exists".) On drop,
-`onCardDragEnd` reverts SortableJS's own
-DOM move (so Vue's re-render from `cardColumns` is the only thing that ever
-places the node — otherwise the card would briefly exist twice when it
-crosses into the other column's DOM subtree) and translates the rendered
-drop index back into a full-list index before calling `moveCard(cardId,
-toColumn, toIndex)`. **Reset layout** restores both `heroFields` and
-`cardColumns` to their defaults. A user's pre-existing flat
-`library:doc-layout-card-order-v1` order (from before this two-column model)
-is migrated once, on first load, by splitting it into `left`/`right` along
-the same preview/metadata boundary, so nothing visibly jumps for an existing
-user; the legacy key is then left untouched (no longer read or written).
-Separately, a saved layout that still holds the pre-split single `metadata`
-card is migrated once on load (`migrateMetadataCard`) by expanding it **in
-place** into the five `metadata-*` tiles, so a user who moved the Details card
-keeps its position rather than having the new tiles appended at the column's end.
+metadata (left) and preview (right) columns' two SortableJS instances share one
+`group` (`'doc-cards'`), so a card can be dragged from either column into the
+other. Both columns render from **one shared card template** — defined once via
+VueUse's `createReusableTemplate` — so a card draws its body in **whichever
+column currently holds it**. (Before this, the two columns had *disjoint*
+`v-if cardId===…` chains, so dragging a card into the other column dropped it.)
+Each column filters its persisted id list through `cardPresent(id)`: `notes`
+only for note docs, `preview` only when it would render real content. The
+metadata panel needs no rule — it carries System, which every document has, so
+it can never be empty.
 
-`facets` needed **no** such migration, and the reason is worth stating because
-it is the exception rather than the rule. Every stored layout predates that id,
-so `reconcileCardColumns` appends it to the end of its default column — and for
-this card alone, the end **is** its intended position, because before it became
-a card it rendered after every card in that column anyway. Listing it last in
-`DEFAULT_CARD_COLUMNS.left` therefore makes "where reconciliation puts it" and
-"where it should go" the same place, so no layout moves and nobody's page
-rearranges itself as a side effect of the card becoming movable. Contrast
-`migrateMetadataCard`, where the two did *not* coincide and an in-place
-migration was the only way to respect a position the user had chosen.
-Covered by `DocumentDetailView.spec.ts` and `useDocumentLayout.spec.ts`.
+The default split is left: `notes` · `metadata` · `comments` · `actions` ·
+`history`, right: `preview` · `markdown`. On drop, `onCardDragEnd` reverts
+SortableJS's own DOM move (so Vue's re-render from `cardColumns` is the only
+thing that ever places the node) and translates the rendered drop index back
+into a full-list index before calling `moveCard`.
+
+Three migrations run on **every** load, in this order, and all are idempotent:
+
+1. `migrateCardOrderToColumns` splits a pre-column flat order
+   (`library:doc-layout-card-order-v1`) into two columns along the
+   preview/metadata boundary. The legacy key is then left untouched.
+2. **`collapseMetadataCards`** rewrites the four `metadata-*` tiles and the
+   `facets` card into the single `metadata` id, **in place**: the first retired
+   id encountered (columns walked left then right) claims the slot and every
+   later one is dropped. Without it `reconcileCardColumns` drops all five as
+   unknown ids and appends the panel at the **end** of its default column —
+   below History for anyone who had ever rearranged their layout, with a
+   customised `facets` placement silently lost.
+3. `reconcileCardColumns` drops any stored id absent from `DEFAULT_CARD_COLUMNS`
+   (preserving the order of the survivors) and appends known-but-unplaced cards
+   to the end of their default column.
+
+**`metadata` is deliberately the same string the original pre-split Details card
+used.** That is what lets an ancient layout from before 2026-07-09 pass through
+untouched, and it is why the old expansion migration (`migrateMetadataCard`)
+could be **deleted** rather than maintained alongside its own inverse — two
+migrations that must never disagree are worse than one.
+
+Note the contrast with `facets` becoming a card in #139, which needed **no**
+migration: there, reconciliation's landing spot (the end of the left column) and
+the intended position happened to coincide, so listing it last in the defaults
+was the whole fix. For the collapse they do **not** coincide, which is exactly
+when a real in-place migration is required. Covered by
+`DocumentDetailView.spec.ts` and `useDocumentLayout.spec.ts`.
+
 
 ### Facet editor (`src/components/facets/FacetEditor.vue`)
 
 The controlled-vocabulary label editor for one document (`docs/facets.md`;
-`[data-testid="facet-editor"]`, `#document-facets-card`), rendered as card id
-`facets` — by default last in the metadata column, and reorderable like any
-other section card.
-`DocumentDetailView` loads the vocabulary (`GET /api/facets`, best-effort —
-the editor just renders no facets if it fails) and the document's own labels
-(`GET /api/documents/{id}/labels`) once and hands both down as props.
+`[data-testid="facet-editor"]`, `#document-facets-card`). Since 2026-09-06 it is
+a **section of the document's metadata panel**, not a card of its own.
+`DocumentDetailView` loads the vocabulary (`GET /api/facets`, best-effort — the
+editor renders no facets if it fails) and the document's own labels
+(`GET /api/documents/{id}/labels`) and passes both to `DocumentMetadataEditor`,
+which mounts this component with `flat` set.
 
+- **`flat` drops the card chrome and heading** so the editor reads as one more
+  group in the panel rather than a box inside a box. It defaults to **false**,
+  which is what keeps the second consumer working: the spending drill-through
+  (`components/spending/DrillCellBody.vue`) mounts this component directly, with
+  no panel around it, and still needs its own card.
 - **Renders EVERY facet, including ones with no values yet**, as a disabled
   select (`[data-testid="facet-edit-<key>"]`, `disabled` when
   `facet.values.length === 0`) with a "No values yet" hint underneath. This is
   deliberately the **opposite** of the filter bar above, which omits an empty
-  facet entirely: there an empty select would just be noise, but here the
-  owner needs to **see** that a facet such as `vehicle` exists before they can
-  ask for a value to be added to it.
-- **Only changed facets are sent.** A `dirty` computed diffs the in-progress
-  draft against the last-saved label map and sends just the facets that
-  differ; a facet the user clears is sent as an explicit `null` (never
-  omitted) so `PUT /api/documents/{id}/labels` removes that label rather than
-  leaving the previous value in place (`docs/api.md` §1.23). The **Save
-  labels** button (`[data-testid="facet-save"]`) is disabled while saving or
-  while nothing is dirty; a failed save leaves the draft in place (never
-  silently discarded) and shows an inline error
-  (`[data-testid="facet-error"]`).
-- **An ordinary section card.** It is registered as card id `facets` in
-  `useDocumentLayout`'s `DEFAULT_CARD_COLUMNS`, rendered from the shared
-  `<DefineCard>` template with a `[data-card-drag-handle]` like every other
-  card, so **Edit layout** can move it within the metadata column or across
-  into the preview column. It was a fixed, non-draggable sibling until
-  2026-09-01; that was recorded here as a known limitation rather than a design
-  choice, and it is now lifted. Its default position is unchanged (see the
-  migration note above), so making it movable did not move it.
-- **A second, non-draggable copy exists by design.** The spending
-  drill-through panel (`DrillCellBody.vue`) mounts `FacetEditor.vue` directly,
-  not through the card system, so that usage is unaffected by any of the
-  above — it is a plain embedded component with no layout state.
+  facet entirely: there an empty select would just be noise, but here the owner
+  needs to **see** that a facet such as `vehicle` exists before they can ask for
+  a value to be added to it.
+- **Each facet autosaves on selection. There is no Save button.** Every other
+  field in the metadata panel commits on change, and a section that needed a
+  button press was the inconsistency the 2026-09-06 consolidation removed. The
+  in-flight facet key is held in `saving`, so one slow write disables only its
+  own select.
+- **A cleared facet is sent as an explicit `null`, never omitted.**
+  `PUT /api/documents/{id}/labels` applies exactly the keys it is given
+  (`docs/api.md` §1.23), so an omitted key leaves the previous label in place
+  and clearing would silently do nothing. Only the touched facet is sent.
+- **A failed save keeps the draft and shows the server's own message**
+  (`[data-testid="facet-error"]`, `role="alert"`). It previously replaced the
+  response with a fixed "Could not save these labels", discarding the only part
+  of a 422 that says what to change; it now matches the metadata fields beside
+  it, which surface `detail`.
+- **The `touched` guard survives autosave.** It exists because `labels` can
+  arrive AFTER a selection: the view feeds this component from two independent
+  fetches and nothing orders them, so on a cold backend the label map can land
+  while the write is still in flight and reset the draft to the server's
+  (usually empty) map. Autosave shortens the draft's life but does not close
+  that window. The regression tests target it specifically — a deferred promise,
+  and no flush before the late map arrives; written the easy way (settle the
+  save first) they pass without exercising the race at all, which is how the bug
+  shipped originally (#144).
+
 
 ### Dashboard card-fields picker (`DashboardFieldsMenu.vue` / `DashboardFieldsEditor.vue`)
 
