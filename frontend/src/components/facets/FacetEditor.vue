@@ -26,13 +26,27 @@
  */
 import { computed, ref, watch } from 'vue'
 import { updateDocumentLabels, type FacetRef } from '@/api/facets'
-import { AppButton } from '@/components/app'
+import { ApiError } from '@/api/client'
 
-const props = defineProps<{
-  documentId: number
-  facets: FacetRef[]
-  labels: Record<string, string>
-}>()
+const props = withDefaults(
+  defineProps<{
+    documentId: number
+    facets: FacetRef[]
+    labels: Record<string, string>
+    /**
+     * Render without the surrounding `.card` chrome and heading, as a plain
+     * group inside a parent panel. The document detail view sets this — the
+     * facet editor is one section of its single Metadata panel there, and a
+     * `.card` inside a `.card` reads as a box in a box.
+     *
+     * Defaults to false so the standalone mount in the spending drill-through
+     * (`components/spending/DrillCellBody.vue`) is untouched: that surface has
+     * no panel around it and still needs its own card.
+     */
+    flat?: boolean
+  }>(),
+  { flat: false },
+)
 
 const emit = defineEmits<{ saved: [Record<string, string>] }>()
 
@@ -46,7 +60,9 @@ const ordered = computed<FacetRef[]>(() =>
 )
 
 const draft = ref<Record<string, string>>({ ...props.labels })
-const saving = ref(false)
+/** The facet key currently being written, or null. Per-facet rather than a
+ * boolean so one slow save disables only its own select. */
+const saving = ref<string | null>(null)
 const error = ref<string | null>(null)
 
 /**
@@ -93,50 +109,64 @@ watch(
   },
 )
 
-/** Facet keys whose draft value differs from the last-saved label, mapped to
- * what the PUT should send: the new value key, or `null` to clear it. Only
- * these are sent — sending the whole draft would be wasteful, and omitting a
- * cleared key would silently leave the old label in place. */
-const dirty = computed<Record<string, string | null>>(() => {
-  const changes: Record<string, string | null> = {}
-  for (const facet of props.facets) {
-    const before = props.labels[facet.key] ?? ''
-    const after = draft.value[facet.key] ?? ''
-    if (before !== after) changes[facet.key] = after === '' ? null : after
-  }
-  return changes
-})
-
-const hasChanges = computed(() => Object.keys(dirty.value).length > 0)
-
-function onSelect(facetKey: string, event: Event): void {
-  const value = (event.target as HTMLSelectElement).value
-  draft.value = { ...draft.value, [facetKey]: value }
-  touched.value = true
-}
-
-async function save(): Promise<void> {
-  if (saving.value || !hasChanges.value) return
-  saving.value = true
+/**
+ * Save ONE facet as soon as it is chosen. There is no Save button: this editor
+ * is a section of the document's metadata panel, and every other field there
+ * autosaves on commit — a panel where some fields save themselves and others
+ * need a button press is the inconsistency the 2026-09-06 consolidation set out
+ * to remove.
+ *
+ * A cleared facet is sent as an explicit `null`, never omitted: the PUT applies
+ * exactly the keys it is given, so omitting one leaves the previous label in
+ * place and clearing would silently do nothing (docs/facets.md §2.2).
+ */
+async function saveFacet(facetKey: string, next: string): Promise<void> {
+  const before = props.labels[facetKey] ?? ''
+  if (before === next) return // no-op: re-picking the value already stored
+  saving.value = facetKey
   error.value = null
   try {
-    const saved = await updateDocumentLabels(props.documentId, dirty.value)
+    const saved = await updateDocumentLabels(props.documentId, {
+      [facetKey]: next === '' ? null : next,
+    })
     // Before the emit, not after: the parent assigns `labels` synchronously in
     // its handler, so leaving `touched` set here would make the watch above skip
     // the very re-hydration this save exists to produce.
     touched.value = false
     emit('saved', saved)
-  } catch {
-    error.value = 'Could not save these labels. Try again.'
+  } catch (e) {
+    // Surface what the server actually said. The metadata fields beside this one
+    // do (DocumentMetadataEditor.saveField), and a fixed string threw away the
+    // only part of a 422 that tells the owner what to change.
+    error.value =
+      e instanceof ApiError && e.status !== 0
+        ? e.detail
+        : 'Could not save this label — check your connection and try again'
   } finally {
-    saving.value = false
+    saving.value = null
   }
+}
+
+function onSelect(facetKey: string, event: Event): void {
+  const value = (event.target as HTMLSelectElement).value
+  draft.value = { ...draft.value, [facetKey]: value }
+  touched.value = true
+  void saveFacet(facetKey, value)
 }
 </script>
 
 <template>
-  <div id="document-facets-card" class="card p-5" data-testid="facet-editor">
-    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">Facets</h2>
+  <div
+    id="document-facets-card"
+    :class="props.flat ? '' : 'card p-5'"
+    data-testid="facet-editor"
+  >
+    <h2
+      v-if="!props.flat"
+      class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3"
+    >
+      Facets
+    </h2>
     <div class="@container">
       <div class="flex flex-wrap items-end gap-3">
         <div v-for="facet in ordered" :key="facet.key">
@@ -145,7 +175,7 @@ async function save(): Promise<void> {
             :id="`facet-edit-${facet.key}`"
             class="form-select disabled:opacity-60"
             :data-testid="`facet-edit-${facet.key}`"
-            :disabled="facet.values.length === 0"
+            :disabled="facet.values.length === 0 || saving === facet.key"
             :value="draft[facet.key] ?? ''"
             @change="onSelect(facet.key, $event)"
           >
@@ -158,16 +188,6 @@ async function save(): Promise<void> {
             No values yet
           </p>
         </div>
-
-        <AppButton
-          type="button"
-          size="sm"
-          :disabled="saving || !hasChanges"
-          data-testid="facet-save"
-          @click="save"
-        >
-          {{ saving ? 'Saving…' : 'Save labels' }}
-        </AppButton>
       </div>
     </div>
 

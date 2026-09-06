@@ -90,11 +90,13 @@ function makeDetail(overrides: Partial<DocumentDetail> = {}): DocumentDetail {
   }
 }
 
-type Section = 'content' | 'parties' | 'financial' | 'system'
-
-function mountEditor(section: Section = 'content', doc: DocumentDetail = makeDetail()) {
+/** The panel renders every group at once, so there is no longer a section to
+ * select — it took a `section` prop from 2026-07-09 until 2026-09-06, when the
+ * four tiles were consolidated back into one card. Facets are passed through to
+ * the embedded editor; most tests here do not exercise them and pass empties. */
+function mountEditor(doc: DocumentDetail = makeDetail()) {
   const wrapper = mount(DocumentMetadataEditor, {
-    props: { doc, section },
+    props: { doc, facets: [], facetLabels: {} },
     global: { stubs: { RouterLink: true } },
   })
   return { wrapper, doc }
@@ -182,7 +184,7 @@ describe('DocumentMetadataEditor', () => {
     // DocumentDetailView's floating Action dock as well as this card's own
     // `edit-toggle` button. Flip it directly here (bypassing the card's own
     // button entirely) to simulate the Action dock's path.
-    const { wrapper, doc } = mountEditor('content')
+    const { wrapper, doc } = mountEditor()
     await flushPromises()
 
     // Flip the shared flag directly (bypassing any button) to simulate the dock.
@@ -193,7 +195,7 @@ describe('DocumentMetadataEditor', () => {
 
     // A sibling section tile (Sender & dates) hydrates from the same flag — and,
     // if it only mounts once editing is already on, still hydrates on mount.
-    const parties = mountEditor('parties', doc)
+    const parties = mountEditor(doc)
     await flushPromises()
     expect((parties.wrapper.find('#edit-sender').element as HTMLInputElement).value).toBe(
       doc.sender?.name ?? '',
@@ -205,7 +207,7 @@ describe('DocumentMetadataEditor', () => {
   it('assigns a matter and PATCHes matters as a full-replacement name list', async () => {
     const fresh = makeDetail({ matters: [{ slug: 'acme-merger', name: 'Acme merger' }] })
     vi.mocked(updateDocument).mockResolvedValue(fresh)
-    const { wrapper, doc } = mountEditor('content')
+    const { wrapper, doc } = mountEditor()
     await flushPromises()
 
     await enterEditMode()
@@ -220,7 +222,7 @@ describe('DocumentMetadataEditor', () => {
   it('replaces an existing matter set when removing all pins (clears with [])', async () => {
     const doc = makeDetail({ matters: [{ slug: 'acme-merger', name: 'Acme merger' }] })
     vi.mocked(updateDocument).mockResolvedValue(makeDetail({ matters: [] }))
-    const { wrapper } = mountEditor('content', doc)
+    const { wrapper } = mountEditor(doc)
     await flushPromises()
 
     await enterEditMode()
@@ -233,7 +235,7 @@ describe('DocumentMetadataEditor', () => {
   it('renders matter badges linking to the matter-filtered dashboard in read mode', async () => {
     const doc = makeDetail({ matters: [{ slug: 'acme-merger', name: 'Acme merger' }] })
     const wrapper = mount(DocumentMetadataEditor, {
-      props: { doc, section: 'content' as const },
+      props: { doc, facets: [], facetLabels: {} },
       global: { stubs: { RouterLink: RouterLinkStub } },
     })
     await flushPromises()
@@ -251,7 +253,7 @@ describe('DocumentMetadataEditor', () => {
   })
 
   it('renders the document tags as chips in edit mode', async () => {
-    const { wrapper } = mountEditor('content')
+    const { wrapper } = mountEditor()
     await flushPromises()
 
     await enterEditMode()
@@ -268,7 +270,7 @@ describe('DocumentMetadataEditor', () => {
       ],
     })
     vi.mocked(updateDocument).mockResolvedValue(fresh)
-    const { wrapper, doc } = mountEditor('content')
+    const { wrapper, doc } = mountEditor()
     await flushPromises()
 
     await enterEditMode()
@@ -288,7 +290,7 @@ describe('DocumentMetadataEditor', () => {
       ],
     })
     vi.mocked(updateDocument).mockResolvedValue(fresh)
-    const { wrapper, doc } = mountEditor('content')
+    const { wrapper, doc } = mountEditor()
     await flushPromises()
 
     await enterEditMode()
@@ -302,7 +304,7 @@ describe('DocumentMetadataEditor', () => {
 
   it('removes a tag and PATCHes the reduced slug list (clears with [])', async () => {
     vi.mocked(updateDocument).mockResolvedValue(makeDetail({ tags: [] }))
-    const { wrapper, doc } = mountEditor('content')
+    const { wrapper, doc } = mountEditor()
     await flushPromises()
 
     await enterEditMode()
@@ -315,7 +317,7 @@ describe('DocumentMetadataEditor', () => {
   it('renders tag badges linking to the tag-filtered dashboard in read mode', async () => {
     const doc = makeDetail({ tags: [{ slug: 'energie', name: 'Energie' }] })
     const wrapper = mount(DocumentMetadataEditor, {
-      props: { doc, section: 'content' as const },
+      props: { doc, facets: [], facetLabels: {} },
       global: { stubs: { RouterLink: RouterLinkStub } },
     })
     await flushPromises()
@@ -330,7 +332,7 @@ describe('DocumentMetadataEditor', () => {
   })
 
   it('renders the sender datalist adjacent to the sender input', async () => {
-    const { wrapper } = mountEditor('parties')
+    const { wrapper } = mountEditor()
     await flushPromises()
 
     await enterEditMode()

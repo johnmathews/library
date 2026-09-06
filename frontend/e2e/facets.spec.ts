@@ -90,18 +90,16 @@ test('a facet can be created, applied to a document, and filtered on', async ({
   await expect(page.getByTestId('facet-editor')).toBeAttached()
   await page.getByTestId(`facet-edit-${key}`).selectOption('alpha')
 
-  const saveButton = page.getByTestId('facet-save')
-  await saveButton.click()
-  // The button's label flips back from "Saving…" to "Save labels" only once
-  // the PUT round-trip resolves (success or failure) — the signal that it is
-  // now safe to reload without racing the in-flight request. A save that
-  // *succeeded* additionally leaves the button disabled (no more unsaved
-  // changes); that combination is the assertion that it actually worked.
-  await expect(saveButton).toHaveText('Save labels')
-  await expect(saveButton).toBeDisabled()
+  // There is no Save button since 2026-09-06 — selecting the value IS the
+  // save, like every other field in the metadata panel. The old assertion
+  // (button text flips back to "Save labels" AND goes disabled) was the
+  // round-trip signal; without a button, persistence across a reload is the
+  // only honest evidence the PUT actually landed, so assert that directly.
   await expect(page.getByTestId('facet-error')).toHaveCount(0)
 
-  // Persisted: reload and confirm the select still shows the saved value.
+  // Persisted: reload and confirm the select still shows the saved value. This
+  // also serialises against the in-flight PUT — a reload that raced it would
+  // come back empty and fail here rather than passing by luck.
   await page.reload()
   await expect(page.getByTestId(`facet-edit-${key}`)).toHaveValue('alpha')
 

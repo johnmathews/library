@@ -8,7 +8,11 @@ import type { DocumentDetail, DocumentMarkdownResponse } from '@/api/documents'
 import { listNoteVersions, restoreNoteVersion, updateNote } from '@/api/notes'
 import { useJobsStore } from '@/stores/jobs'
 import { useReviewQueueStore } from '@/stores/reviewQueue'
-import { useDocumentLayout, DEFAULT_CARD_COLUMNS } from '@/composables/useDocumentLayout'
+import {
+  useDocumentLayout,
+  DEFAULT_CARD_COLUMNS,
+  METADATA_CARD_ID,
+} from '@/composables/useDocumentLayout'
 import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 
 // pdfjs-dist can't run its worker/canvas in jsdom — mock the whole module
@@ -234,11 +238,9 @@ describe('DocumentDetailView', () => {
   beforeEach(async () => {
     // useDocumentLayout is a module singleton — reset its persisted state and
     // leave edit mode so hero/card customisation tests don't leak into others.
-    const layout = useDocumentLayout()
-    layout.resetLayout()
-    layout.setEditMode(false)
-    // useMetadataEditMode is a module singleton too — reset it so a metadata
-    // edit-mode toggle in one test never leaks into the next.
+    useDocumentLayout().resetLayout()
+    // One edit-mode singleton since 2026-09-06 — reset it so a toggle in one
+    // test never leaks into the next.
     useMetadataEditMode().setEditMode(false)
     detail = makeDetail()
     patchResponse = () => jsonResponse(detail)
@@ -389,11 +391,15 @@ describe('DocumentDetailView', () => {
     expect(rowValue(w, 'language')).toBe('Dutch')
     expect(rowValue(w, 'tags')).toBe('Energie')
     expect(rowValue(w, 'amount')).toBe('123.45 EUR')
-    // Value-less fields still render, showing an em-dash, so a field keeps its
-    // position when the Edit toggle flips.
-    expect(rowValue(w, 'title')).toBe('—')
+    // Value-less fields inside the PANEL still render with an em-dash, so a
+    // field keeps its position when the Edit toggle flips.
     expect(rowValue(w, 'due_date')).toBe('—')
-    expect(rowValue(w, 'summary')).toBe('—')
+    // `title` and `summary` are hero-owned. In read mode the hero omits an
+    // empty field (it is a summary, not a form) and the title is the <h1>, so
+    // neither has a row here — they are reachable in edit mode, which is what
+    // stops them becoming unfillable.
+    expect(w.find('[data-testid="row-title"]').exists()).toBe(false)
+    expect(w.find('[data-testid="row-summary"]').exists()).toBe(false)
     // Read-only system rows still render: status, source, and OCR confidence —
     // which for a born-digital doc (null confidence) reads "Not applicable".
     const text = w.text()
@@ -454,13 +460,18 @@ describe('DocumentDetailView', () => {
     expect(w.find('#edit-sender').exists()).toBe(true)
     expect(w.find('#edit-tags').exists()).toBe(true)
     expect(w.find('#edit-amount').exists()).toBe(true)
-    // Read-only values are gone while editing.
-    expect(w.find('[data-testid="row-title"] [data-testid="row-value"]').exists()).toBe(false)
+    // Read-only values are gone while editing. `title` is hero-owned, so its
+    // read value is the <h1> rather than a row — the row exists only in edit
+    // mode, carrying the input.
+    expect(w.find('[data-testid="row-kind"] [data-testid="row-value"]').exists()).toBe(false)
 
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
     expect(w.find('#edit-title').exists()).toBe(false)
-    expect(w.find('[data-testid="row-title"] [data-testid="row-value"]').exists()).toBe(true)
+    expect(w.find('[data-testid="row-kind"] [data-testid="row-value"]').exists()).toBe(true)
+    // The heading is what shows the title in read mode, and it is never a
+    // second editable copy: exactly one `#edit-title` exists in edit mode.
+    expect(w.find('h1#document-title').text()).toBe('Energierekening mei 2026')
   })
 
   it('aligns the Amount and Currency inputs (both labels hidden, no inline hint)', async () => {
@@ -491,11 +502,14 @@ describe('DocumentDetailView', () => {
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
     // kind + language are narrow fields: in edit mode they must keep the
-    // two-column grid, not collapse to a single full-width column.
-    expect(w.find('[data-testid="row-kind"]').classes()).not.toContain('sm:col-span-2')
-    expect(w.find('[data-testid="row-language"]').classes()).not.toContain('sm:col-span-2')
+    // two-column grid, not collapse to a single full-width column. The
+    // breakpoint is a CONTAINER query (`@xl:`) — the panel sits in a column
+    // that is viewport-minus-sidebar, so a viewport query would break at the
+    // wrong width (docs/frontend-view-principles.md §5.1).
+    expect(w.find('[data-testid="row-kind"]').classes()).not.toContain('@xl:col-span-2')
+    expect(w.find('[data-testid="row-language"]').classes()).not.toContain('@xl:col-span-2')
     // Wide fields still span both columns.
-    expect(w.find('[data-testid="row-title"]').classes()).toContain('sm:col-span-2')
+    expect(w.find('[data-testid="row-title"]').classes()).toContain('@xl:col-span-2')
   })
 
   it('does not duplicate the field label in edit mode (inline editor label is sr-only)', async () => {
@@ -754,10 +768,16 @@ describe('DocumentDetailView', () => {
     expect(w.find('#edit-topics').exists()).toBe(false)
   })
 
-  it('read mode renders each topic as a badge', async () => {
+  it('read mode renders each topic as a badge, in the panel and only there', async () => {
     detail = makeDetail({ topics: ['thermostat installation', 'boiler maintenance'] })
     const w = await mountView()
     expect(rowValue(w, 'topics')).toContain('thermostat installation')
+    // Exactly once: the hero reuses this component, and the Topics block is
+    // gated on the panel variant so it cannot render in both.
+    expect(w.findAll('[data-testid="row-topics"]')).toHaveLength(1)
+    expect(
+      w.find('[data-testid="metadata-panel"]').find('[data-testid="row-topics"]').exists(),
+    ).toBe(true)
     const badges = w.findAll('[data-testid="topic-badge"]')
     expect(badges).toHaveLength(2)
     expect(badges[0]!.text()).toBe('thermostat installation')
@@ -878,7 +898,7 @@ describe('DocumentDetailView', () => {
     detail = makeDetail({ title: null, amount_total: null })
     const w = await mountView()
     expect(w.find('h1').text()).toBe('Untitled document')
-    const stats = w.find('[data-testid="hero-stats"]').text()
+    const stats = w.find('[data-testid="hero-fields"]').text()
     expect(stats).toContain('Invoice') // kind
     expect(stats).toContain('Eneco') // sender
     expect(stats).toContain('15 May 2026') // document date
@@ -887,13 +907,21 @@ describe('DocumentDetailView', () => {
     expect(stats).toContain('10 June 2026') // created_at, formatted
     expect(stats).toContain('Last edited')
     expect(stats).toContain('11 June 2026') // updated_at, formatted
-    // A null amount is dropped from the hero entirely — no em-dash placeholder.
+    // A null amount is dropped from the read-mode hero entirely — no em-dash
+    // placeholder. (It comes back, editable, in edit mode: see the
+    // reachability test below.)
     expect(stats).not.toContain('Amount')
     expect(stats).not.toContain('—')
   })
 
-  it('hides value-less hero stats and value-less metadata tiles in read mode, revealing them on edit', async () => {
-    // A general document: a kind and a date, but no sender and no amount.
+  it('keeps an empty hero-owned field reachable: hidden in read mode, editable on edit', async () => {
+    // THE reachability contract, and the one thing a naive de-duplication gets
+    // wrong. The hero omits an empty field (it is a summary, not a form) and
+    // the panel omits whatever the hero owns — so if the hero also hid the
+    // field while EDITING, a document with no amount would offer nowhere at
+    // all to enter one. The four-tile layout had the same hazard and solved it
+    // card-side, by revealing an empty Financial tile on edit; this is the
+    // hero's version of that rule.
     detail = makeDetail({
       title: 'Brief van de gemeente',
       kind: { slug: 'letter', name: 'Letter' },
@@ -904,61 +932,113 @@ describe('DocumentDetailView', () => {
     })
     const w = await mountView()
 
-    // Hero shows only the stats that have a value.
-    const stats = w.find('[data-testid="hero-stats"]').text()
+    // Read mode: the hero shows only what has a value.
+    const stats = w.find('[data-testid="hero-fields"]').text()
     expect(stats).toContain('Letter') // kind
     expect(stats).toContain('15 May 2026') // document date
     expect(stats).not.toContain('Sender')
     expect(stats).not.toContain('Amount')
 
-    // Now that each metadata group is its own tile, a value-less group hides its
-    // WHOLE tile in read mode — no lone "Amount —" card on a non-financial doc.
-    expect(w.find('[data-testid="section-card-metadata-financial"]').exists()).toBe(false)
-    expect(w.find('[data-testid="row-amount"]').exists()).toBe(false)
+    // Both are hero-owned, so neither appears in the panel either — they are
+    // genuinely absent from the page in read mode, not merely moved.
+    const panel = w.find('[data-testid="metadata-panel"]')
+    expect(panel.find('[data-testid="row-sender"]').exists()).toBe(false)
+    expect(panel.find('[data-testid="row-amount"]').exists()).toBe(false)
 
-    // The Sender-&-dates tile IS present (it has a document date), so a value-less
-    // field inside a present tile (sender) still renders with an em-dash —
-    // group-level hiding, field-level em-dash.
-    expect(w.find('[data-testid="section-card-metadata-parties"]').exists()).toBe(true)
-    expect(w.find('[data-testid="row-sender"]').exists()).toBe(true)
-    expect(rowValue(w, 'sender')).toBe('—')
-    expect(w.find('[data-testid="row-document_date"]').exists()).toBe(true)
-
-    // Entering edit mode reveals the empty Financial tile so the amount can be added.
+    // Edit mode: every visible field renders, empty ones included, WITH an
+    // editor. This is what stops "absent in read mode" becoming "unfillable".
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
-    expect(w.find('[data-testid="section-card-metadata-financial"]').exists()).toBe(true)
-    expect(w.find('[data-testid="row-amount"]').exists()).toBe(true)
-    expect(w.find('[data-testid="row-sender"]').exists()).toBe(true)
+
+    const hero = w.find('[data-testid="hero-fields"]')
+    expect(hero.find('[data-testid="row-sender"]').exists()).toBe(true)
+    expect(hero.find('[data-testid="row-amount"]').exists()).toBe(true)
+    expect(w.find('#edit-sender').exists()).toBe(true)
+    expect(w.find('#edit-amount').exists()).toBe(true)
   })
 
-  it('renders the split Details card as four metadata tiles, folding Topics + classification into Content', async () => {
+  it('renders no field in both the hero and the panel, for any picker state', async () => {
+    // The invariant the whole change exists to establish. Before this, 8 of the
+    // 10 picker keys also rendered in a metadata card, because two unrelated
+    // field lists had nothing relating them.
+    const fieldsIn = (w: VueWrapper, testid: string) =>
+      new Set(
+        w
+          .find(`[data-testid="${testid}"]`)
+          .findAll('[data-testid^="row-"]')
+          .map((el) => el.attributes('data-testid') ?? '')
+          .filter((id) => id !== 'row-value'),
+      )
+
+    // State 1: the shipped defaults.
+    let w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    let overlap = [...fieldsIn(w, 'hero-fields')].filter((f) =>
+      fieldsIn(w, 'metadata-panel').has(f),
+    )
+    expect(overlap).toEqual([])
+    // …and the hero is actually showing something, so this is not vacuous.
+    expect(fieldsIn(w, 'hero-fields').size).toBeGreaterThan(3)
+
+    // State 2: a field toggled OFF must move to the panel, not disappear.
+    // Unmount first: a second live view would leave an extra SortableJS
+    // instance registered on the shared mock, and the drag tests read the most
+    // recent one — a stale instance there fails them for a reason that has
+    // nothing to do with dragging.
+    w.unmount()
+    useDocumentLayout().setHeroFieldVisible('kind', false)
+    w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    expect(fieldsIn(w, 'hero-fields').has('row-kind')).toBe(false)
+    expect(fieldsIn(w, 'metadata-panel').has('row-kind')).toBe(true)
+    overlap = [...fieldsIn(w, 'hero-fields')].filter((f) => fieldsIn(w, 'metadata-panel').has(f))
+    expect(overlap).toEqual([])
+  })
+
+  it('renders ONE metadata panel holding every group, including facets and system', async () => {
     detail = makeDetail({ topics: ['energy', 'utilities'] })
     const w = await mountView()
 
-    // Each metadata section is now its own reorderable tile (wrapper testid).
-    for (const id of [
+    // One card, one drag handle, one place a field lives. The four tiles this
+    // replaced (2026-07-09 to 2026-09-06) put the same fields on screen twice.
+    expect(w.findAll('[data-testid="metadata-panel"]')).toHaveLength(1)
+    expect(w.findAll('[data-testid="section-card-metadata"]')).toHaveLength(1)
+    for (const retired of [
       'section-card-metadata-content',
       'section-card-metadata-parties',
       'section-card-metadata-financial',
       'section-card-metadata-system',
+      'section-card-facets',
     ]) {
-      expect(w.find(`[data-testid="${id}"]`).exists()).toBe(true)
+      expect(w.find(`[data-testid="${retired}"]`).exists()).toBe(false)
     }
-    // The old monolithic Details card is gone, and so is the former standalone
-    // Classification tile — kind + language now live in Content.
-    expect(w.find('#document-details-card').exists()).toBe(false)
-    expect(w.find('[data-testid="section-card-metadata-classification"]').exists()).toBe(false)
 
-    // Topics AND classification (kind + language) fold into the Content tile.
+    // Every group is a titled section INSIDE that one card.
+    const panel = w.find('[data-testid="metadata-panel"]')
+    for (const group of ['content', 'facets', 'system']) {
+      expect(panel.find(`[data-testid="metadata-section-${group}"]`).exists()).toBe(true)
+    }
+    // `financial` held one field, `amount`, which the hero now owns — so the
+    // group is empty and dropped rather than left as a heading over nothing.
+    expect(panel.find('[data-testid="metadata-section-financial"]').exists()).toBe(false)
+
+    // Topics live in Content. `kind` does NOT: it is visible in the hero by
+    // default, and the panel omits whatever the hero owns — that subtraction is
+    // the de-duplication rule, asserted directly in its own test below.
     const content = w.find('[data-testid="metadata-section-content"]')
     expect(content.find('[data-testid="row-topics"]').exists()).toBe(true)
     expect(content.text()).toContain('energy')
-    expect(content.find('[data-testid="row-kind"]').exists()).toBe(true)
-    expect(content.find('[data-testid="row-language"]').exists()).toBe(true)
+    expect(content.find('[data-testid="row-kind"]').exists()).toBe(false)
+    expect(content.find('[data-testid="row-tags"]').exists()).toBe(true)
+
+    // The facet editor is embedded flat — one instance, no card-in-card.
+    expect(w.findAll('[data-testid="facet-editor"]')).toHaveLength(1)
+    expect(w.find('[data-testid="facet-editor"]').classes()).not.toContain('card')
   })
 
-  it('hero header renders each tag as a coloured badge', async () => {
+  it('renders tags in the metadata panel, not the hero', async () => {
     detail = makeDetail({
       tags: [
         { slug: 'energie', name: 'Energie' },
@@ -966,8 +1046,13 @@ describe('DocumentDetailView', () => {
       ],
     })
     const w = await mountView()
-    expect(w.findAll('[data-testid="hero-tags"] .rounded-full')).toHaveLength(2)
-    expect(w.find('[data-testid="hero-tags"]').text()).toContain('Energie')
+    // Tags are metadata, so they live in the panel with the rest of it. The
+    // hero used to carry a duplicate pill row below its stats.
+    expect(w.find('[data-testid="hero-tags"]').exists()).toBe(false)
+    const tagRow = w.find('[data-testid="metadata-panel"]').find('[data-testid="row-tags"]')
+    expect(tagRow.exists()).toBe(true)
+    expect(tagRow.text()).toContain('Energie')
+    expect(tagRow.text()).toContain('Wonen')
   })
 
   it('passes the thumbnail as poster to DocumentPdfPreview when has_thumbnail is true', async () => {
@@ -1736,18 +1821,22 @@ describe('DocumentDetailView', () => {
 
   describe('layout customisation (Edit layout)', () => {
     /** Ordered hero-field testids currently in the hero (read or edit mode). */
+    // The hero's fields are drawn by the shared metadata editor, so its rows
+    // carry `row-<field>` like the panel's. `hero-field-<key>` now belongs to
+    // the edit-mode CHOOSER (checkbox + drag handle), which is a different
+    // list — scope to `hero-fields` to read what the hero actually displays.
     function heroFieldOrder(w: VueWrapper): string[] {
       return w
-        .find('#document-hero')
-        .findAll('[data-testid^="hero-field-"]')
+        .find('[data-testid="hero-fields"]')
+        .findAll('[data-testid^="row-"]')
         .map((el) => el.attributes('data-testid') ?? '')
-        .filter((id) => !id.startsWith('hero-field-toggle-'))
+        .filter((id) => id !== 'row-value')
     }
 
     it('renders the recipient field in the hero when present (added in W5)', async () => {
       detail = makeDetail({ recipient: { id: 5, name: 'John' } })
       const w = await mountView()
-      const field = w.find('#document-hero [data-testid="hero-field-recipient"]')
+      const field = w.find('[data-testid="hero-fields"] [data-testid="row-recipient"]')
       expect(field.exists()).toBe(true)
       expect(field.text()).toContain('John')
     })
@@ -1755,9 +1844,16 @@ describe('DocumentDetailView', () => {
     it('omits a hero field hidden in the saved layout (read mode)', async () => {
       useDocumentLayout().setHeroFieldVisible('sender', false)
       const w = await mountView()
-      expect(w.find('#document-hero [data-testid="hero-field-sender"]').exists()).toBe(false)
+      expect(w.find('[data-testid="hero-fields"] [data-testid="row-sender"]').exists()).toBe(false)
       // Other visible fields still render.
-      expect(w.find('#document-hero [data-testid="hero-field-kind"]').exists()).toBe(true)
+      expect(w.find('[data-testid="hero-fields"] [data-testid="row-kind"]').exists()).toBe(true)
+      // …and the hidden one moved to the panel rather than vanishing from the
+      // page. This is the de-duplication rule seen from the other side: a
+      // field the hero gives up must be picked up below, or hiding it in the
+      // hero would silently make it uneditable.
+      expect(
+        w.find('[data-testid="metadata-panel"]').find('[data-testid="row-sender"]').exists(),
+      ).toBe(true)
     })
 
     it('drops a visible-but-empty field from the read-mode hero', async () => {
@@ -1765,14 +1861,16 @@ describe('DocumentDetailView', () => {
       useDocumentLayout().setHeroFieldVisible('due_date', true)
       detail = makeDetail({ due_date: null })
       const w = await mountView()
-      expect(w.find('#document-hero [data-testid="hero-field-due_date"]').exists()).toBe(false)
+      expect(w.find('[data-testid="hero-fields"] [data-testid="row-due_date"]').exists()).toBe(
+        false,
+      )
     })
 
     it('renders hero fields in the saved order', async () => {
       useDocumentLayout().setHeroFieldOrder(['sender', 'kind'])
       const w = await mountView()
       const order = heroFieldOrder(w)
-      expect(order.indexOf('hero-field-sender')).toBeLessThan(order.indexOf('hero-field-kind'))
+      expect(order.indexOf('row-sender')).toBeLessThan(order.indexOf('row-kind'))
     })
 
     it('shows no edit-only controls when edit mode is off', async () => {
@@ -1781,12 +1879,12 @@ describe('DocumentDetailView', () => {
       expect(w.findAll('[data-testid^="hero-field-toggle-"]')).toHaveLength(0)
       expect(w.findAll('[data-testid^="card-drag-handle-"]')).toHaveLength(0)
       expect(w.find('[data-testid="reset-layout"]').exists()).toBe(false)
-      expect(w.find('[data-testid="edit-layout-toggle"]').text()).toBe('Edit layout')
+      expect(w.find('[data-testid="edit-toggle"]').text()).toBe('Edit mode')
     })
 
     it('reveals hero field toggles and card drag handles when edit mode is on', async () => {
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       // Every known field is listed for toggling — including ones hidden by
@@ -1796,19 +1894,19 @@ describe('DocumentDetailView', () => {
       expect(w.find('[data-testid="hero-field-toggle-language"]').exists()).toBe(true)
       // Section cards expose a drag handle in both columns.
       expect(w.find('[data-testid="card-drag-handle-preview"]').exists()).toBe(true)
-      expect(w.find('[data-testid="card-drag-handle-metadata-content"]').exists()).toBe(true)
+      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(true)
       // Reset appears only in edit mode, and the toggle now reads "Done".
       expect(w.find('[data-testid="reset-layout"]').exists()).toBe(true)
-      expect(w.find('[data-testid="edit-layout-toggle"]').text()).toBe('Done')
+      expect(w.find('[data-testid="edit-toggle"]').text()).toBe('Done')
     })
 
     it('hiding a field via its toggle persists and removes it from the read-mode hero', async () => {
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       await w.find('[data-testid="hero-field-toggle-kind"]').setValue(false)
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click') // back to read
+      await w.find('[data-testid="edit-toggle"]').trigger('click') // back to read
       await flushPromises()
 
       expect(w.find('#document-hero [data-testid="hero-field-kind"]').exists()).toBe(false)
@@ -1858,21 +1956,20 @@ describe('DocumentDetailView', () => {
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       // Both column Sortables share one onEnd (group: 'doc-cards'); grab it
       // from whichever card-column Sortable.create call was captured.
       const onEnd = cardColumnOnEnd()
       // Simulate SortableJS dropping "comments" into the right column at index 0.
-      // For this (note) document every metadata tile is present, so the rendered
-      // left column is: notes, metadata-content, metadata-parties,
-      // metadata-financial, metadata-system, comments (index 5), actions, history.
+      // For this (note) document every card is present, so the rendered left
+      // column is: notes, metadata, comments (index 2), actions, history.
       const evt = {
         from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
         to: { dataset: { col: 'right' } },
         item: {},
-        oldIndex: 5,
+        oldIndex: 2,
         newIndex: 0,
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
@@ -1913,7 +2010,7 @@ describe('DocumentDetailView', () => {
       expect(w.find('#document-preview-card').exists()).toBe(false)
 
       // …and no stray drag handle for it in edit mode.
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
       expect(w.find('[data-testid="card-drag-handle-preview"]').exists()).toBe(false)
     })
@@ -1929,7 +2026,7 @@ describe('DocumentDetailView', () => {
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView() // detail defaults to source: 'upload' (not a note)
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       const onEnd = cardColumnOnEnd()
@@ -1938,14 +2035,14 @@ describe('DocumentDetailView', () => {
         to: { dataset: { col: 'left' } },
         item: {},
         oldIndex: 0, // 'preview' — first rendered card in the right column
-        newIndex: 0, // top of the *rendered* left column (before 'metadata-content', since 'notes' is hidden)
+        newIndex: 0, // top of the *rendered* left column (before 'metadata', since 'notes' is hidden)
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
       await flushPromises()
 
       expect(layout.cardColumns.value.left[0]).toBe('notes')
       expect(layout.cardColumns.value.left[1]).toBe('preview')
-      expect(layout.cardColumns.value.left[2]).toBe('metadata-content')
+      expect(layout.cardColumns.value.left[2]).toBe(METADATA_CARD_ID)
       expect(layout.cardColumns.value.right).not.toContain('preview')
     })
 
@@ -1955,7 +2052,7 @@ describe('DocumentDetailView', () => {
       layout.setColumn('left', [...DEFAULT_CARD_COLUMNS.left].reverse())
       layout.setColumn('right', [...DEFAULT_CARD_COLUMNS.right].reverse())
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
       await w.find('[data-testid="reset-layout"]').trigger('click')
       await flushPromises()
@@ -1965,16 +2062,16 @@ describe('DocumentDetailView', () => {
     })
 
     it('resets edit mode when the view unmounts so it never persists across navigation', async () => {
-      const layout = useDocumentLayout()
+      const mode = useMetadataEditMode()
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
-      expect(layout.editMode.value).toBe(true)
+      expect(mode.editMode.value).toBe(true)
 
       // Leaving the view (SPA navigation) must clear the singleton flag, otherwise
       // returning would show edit affordances with no Sortable instances attached.
       w.unmount()
-      expect(layout.editMode.value).toBe(false)
+      expect(mode.editMode.value).toBe(false)
     })
 
     it('resets metadata edit mode when in-view queue navigation changes route.params.id without unmounting', async () => {
@@ -2015,7 +2112,8 @@ describe('DocumentDetailView', () => {
 
       expect(useMetadataEditMode().editMode.value).toBe(false)
       expect(w.find('#edit-title').exists()).toBe(false)
-      expect(rowValue(w, 'title')).toBe('Doc B')
+      // `title` is hero-owned, so out of edit mode it reads from the heading.
+      expect(w.find('h1#document-title').text()).toBe('Doc B')
     })
 
     it('a drop landing past the real cards degrades safely, even though the non-draggable PaymentGroup sibling inflates the DOM index Sortable would report', async () => {
@@ -2026,21 +2124,20 @@ describe('DocumentDetailView', () => {
       // *dragged* item — but Sortable still counts it as an ordinary sibling
       // when computing evt.newIndex for an actual card drag.
       //
-      // FacetEditor used to be a second such sibling; since #139 it is an
-      // ordinary card inside the v-for, so every index WITHIN the rendered
-      // card list is now exact rather than merely harmless. PaymentGroup is
-      // the last remaining inflator, and because it sits after every card, the
-      // only index it can inflate is one that was already past the end.
+      // FacetEditor used to be a second such sibling, then an ordinary card
+      // (#139), and is now a section inside the metadata panel — so PaymentGroup
+      // is the last remaining inflator, and because it sits after every card the
+      // only index it can inflate is one already past the end.
       //
       // For this (non-note) document the rendered/present left column is:
-      // metadata-content, metadata-parties, metadata-financial,
-      // metadata-system, comments, actions, history, facets (8 cards) — plus
-      // the PaymentGroup sibling. A drop positioned after everything therefore
-      // reports an index past what the card list alone would suggest.
+      // metadata, comments, actions, history (4 cards) — plus the PaymentGroup
+      // sibling. `newIndex` below must stay past the END of that list, or this
+      // stops exercising the out-of-range branch it is named for and silently
+      // becomes an ordinary in-range move.
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView() // default (non-note) doc
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       const onEnd = cardColumnOnEnd()
@@ -2048,14 +2145,14 @@ describe('DocumentDetailView', () => {
         from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
         to: { dataset: { col: 'left' } },
         item: {},
-        oldIndex: 4, // 'comments' — 5th present card (0-based index 4)
-        newIndex: 9, // past all 8 cards, inflated by the uncounted PaymentGroup sibling
+        oldIndex: 1, // 'comments' — 2nd present card (0-based index 1)
+        newIndex: 5, // past all 4 cards, inflated by the uncounted PaymentGroup sibling
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
       await flushPromises()
 
       // Safe degradation: presentIndexToFullIndex's out-of-range branch
-      // (presentIndex >= present.length) treats any overshoot — 8 or 9 or
+      // (presentIndex >= present.length) treats any overshoot — 4 or 5 or
       // 99 — identically, as "append at the very end". No crash, no
       // duplicate, no dropped card; 'comments' simply lands at the end.
       expect(layout.cardColumns.value.left.filter((id) => id === 'comments')).toHaveLength(1)
@@ -2064,83 +2161,115 @@ describe('DocumentDetailView', () => {
       expect(layout.cardColumns.value.right).toEqual(DEFAULT_CARD_COLUMNS.right)
     })
 
-    // --- The Facets card is an ordinary card (#139) --------------------------
+    // --- Facets is a section of the metadata panel, not a card ------------
+    //
+    // It was a fixed sibling until #139, an ordinary card until 2026-09-06, and
+    // is now one group inside the single metadata panel. What survives from the
+    // card era is the "exactly once" guard: the failure mode of moving a mount
+    // site is leaving the old one in place, giving two writable editors that
+    // silently disagree.
 
-    it('gives the Facets card a drag handle in edit mode, like every other card', async () => {
-      const layout = useDocumentLayout()
-      layout.resetLayout()
-      const w = await mountView()
-      // Read mode: no handles at all, on facets or anything else.
-      expect(w.find('[data-testid="card-drag-handle-facets"]').exists()).toBe(false)
-
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
-      await flushPromises()
-      expect(w.find('[data-testid="card-drag-handle-facets"]').exists()).toBe(true)
-    })
-
-    it('defaults the Facets card to the bottom of the metadata column, where it already rendered', async () => {
-      // Making the card movable must not MOVE it: everyone's first view after
-      // this change should look exactly like their last view before it.
-      const layout = useDocumentLayout()
-      layout.resetLayout()
-      const w = await mountView()
-      const rendered = w
-        .find('#document-metadata-column')
-        .findAll('[data-testid^="section-card-"]')
-        .map((el) => el.attributes('data-testid'))
-      expect(rendered.at(-1)).toBe('section-card-facets')
-      expect(w.find('[data-testid="section-card-facets"]').find('[data-testid="facet-editor"]').exists()).toBe(true)
-    })
-
-    it('renders the Facets card exactly once, not both as a card and as a fixed sibling', async () => {
-      // The failure mode of promoting a card while leaving its old mount site
-      // in place: two editors, both writable, silently disagreeing.
+    it('renders the facet editor exactly once, inside the metadata panel', async () => {
       const w = await mountView()
       expect(w.findAll('[data-testid="facet-editor"]')).toHaveLength(1)
+      expect(
+        w.find('[data-testid="metadata-panel"]').find('[data-testid="facet-editor"]').exists(),
+      ).toBe(true)
+      // No card of its own any more — neither a wrapper nor a drag handle.
+      expect(w.find('[data-testid="section-card-facets"]').exists()).toBe(false)
+      expect(w.find('[data-testid="card-drag-handle-facets"]').exists()).toBe(false)
     })
 
-    it('drags the Facets card to the top of the metadata column, and renders it there', async () => {
-      // The actual ask in #139. 'notes' is hidden on this (non-note) document,
-      // so rendered index 0 is 'metadata-content' and the card must land
-      // immediately after the hidden 'notes' in the FULL column array.
+    it('one Edit mode click reveals field editors AND layout affordances together', async () => {
+      // The whole point of the merge. Until 2026-09-06 "Edit details" and
+      // "Edit layout" were separate adjacent buttons driving separate flags:
+      // pressing the wrong one showed half of what you wanted and nothing
+      // said which was which. Assert the observable outcome — all three
+      // affordances present after ONE click on ONE button.
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+
+      // Read mode: none of the three.
+      expect(w.find('#edit-title').exists()).toBe(false)
+      expect(w.find('[data-testid="hero-field-toggle-kind"]').exists()).toBe(false)
+      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(false)
+
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
+      await flushPromises()
+
+      // A metadata field editor (values), a hero visibility toggle and a card
+      // drag handle (arrangement) — one mode, all of it.
+      expect(w.find('#edit-title').exists()).toBe(true)
+      expect(w.find('[data-testid="hero-field-toggle-kind"]').exists()).toBe(true)
+      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(true)
+      expect(w.find('[data-testid="edit-toggle"]').text()).toBe('Done')
+      expect(w.find('[data-testid="edit-toggle"]').attributes('aria-pressed')).toBe('true')
+
+      // And exactly one edit button: the second one is what caused the
+      // confusion, so its absence is part of the contract.
+      expect(w.find('[data-testid="edit-layout-toggle"]').exists()).toBe(false)
+    })
+
+    it('gives the metadata panel a drag handle in edit mode, like every other card', async () => {
+      const layout = useDocumentLayout()
+      layout.resetLayout()
+      const w = await mountView()
+      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(false)
+
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
+      await flushPromises()
+      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(true)
+    })
+
+    it('drags the metadata panel to the top of the column, carrying facets with it', async () => {
+      // 'notes' is hidden on this (non-note) document, so the panel is already
+      // rendered index 0; move it from the right column instead to prove the
+      // facets section travels inside the card rather than being left behind.
+      const layout = useDocumentLayout()
+      layout.resetLayout()
+      layout.setColumn('left', ['notes', 'comments', 'actions', 'history'])
+      layout.setColumn('right', ['preview', METADATA_CARD_ID, 'markdown'])
+      const w = await mountView()
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       const onEnd = cardColumnOnEnd()
       const evt = {
-        from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
+        from: { dataset: { col: 'right' }, insertBefore: vi.fn(), children: [] },
         to: { dataset: { col: 'left' } },
         item: {},
-        oldIndex: 7, // 'facets' — last present card in the left column
+        oldIndex: 1, // the panel, in the right column
         newIndex: 0, // top of the rendered left column
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
       await flushPromises()
 
-      expect(layout.cardColumns.value.left[0]).toBe('notes')
-      expect(layout.cardColumns.value.left[1]).toBe('facets')
-      expect(layout.cardColumns.value.left.filter((id) => id === 'facets')).toHaveLength(1)
+      expect(layout.cardColumns.value.left[0]).toBe('notes') // hidden, still first
+      expect(layout.cardColumns.value.left[1]).toBe(METADATA_CARD_ID)
+      expect(layout.cardColumns.value.right).not.toContain(METADATA_CARD_ID)
 
-      // Observable outcome, not just persisted state: the editor must actually
-      // render at the top of the column now.
+      // Observable outcome: the panel renders at the top of the metadata
+      // column, and its facet editor came along inside it — exactly once.
       const rendered = w
         .find('#document-metadata-column')
         .findAll('[data-testid^="section-card-"]')
         .map((el) => el.attributes('data-testid'))
-      expect(rendered[0]).toBe('section-card-facets')
+      expect(rendered[0]).toBe('section-card-metadata')
+      expect(
+        w.find('#document-metadata-column').find('[data-testid="facet-editor"]').exists(),
+      ).toBe(true)
+      expect(w.findAll('[data-testid="facet-editor"]')).toHaveLength(1)
     })
 
-    it('carries the Facets card into the preview column when dragged across', async () => {
+    it('carries the metadata panel into the preview column when dragged across', async () => {
       // It shares the 'doc-cards' group like every other card, so it must
       // render its body in whichever column holds it — the cross-column drop
       // that silently lost a card before the shared card template existed.
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       const onEnd = cardColumnOnEnd()
@@ -2148,14 +2277,14 @@ describe('DocumentDetailView', () => {
         from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
         to: { dataset: { col: 'right' } },
         item: {},
-        oldIndex: 7, // 'facets'
+        oldIndex: 0, // the panel — first present card ('notes' is hidden)
         newIndex: 0,
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
       await flushPromises()
 
-      expect(layout.cardColumns.value.right).toContain('facets')
-      expect(layout.cardColumns.value.left).not.toContain('facets')
+      expect(layout.cardColumns.value.right).toContain(METADATA_CARD_ID)
+      expect(layout.cardColumns.value.left).not.toContain(METADATA_CARD_ID)
       expect(w.find('#document-preview-column').find('[data-testid="facet-editor"]').exists()).toBe(
         true,
       )
@@ -2362,14 +2491,15 @@ describe('DocumentDetailView', () => {
   })
 
   describe('facet editor (docs/facets.md)', () => {
-    it('mounts in the metadata column, fetches the vocabulary + this document\'s labels, and saves an edit end-to-end', async () => {
+    it('mounts inside the metadata panel, fetches the vocabulary + this document\'s labels, and autosaves an edit end-to-end', async () => {
       documentLabels = { category: 'utility' }
       const w = await mountView()
 
-      // Mounted for real inside the metadata column, not just in isolation.
-      const metadataColumn = w.find('#document-metadata-column')
-      expect(metadataColumn.exists()).toBe(true)
-      const editor = metadataColumn.find('[data-testid="facet-editor"]')
+      // Mounted for real inside the metadata PANEL (not merely somewhere in
+      // the column), and not just in isolation.
+      const panel = w.find('[data-testid="metadata-panel"]')
+      expect(panel.exists()).toBe(true)
+      const editor = panel.find('[data-testid="facet-editor"]')
       expect(editor.exists()).toBe(true)
 
       // The GET /api/documents/12/labels response hydrated the select with
@@ -2383,10 +2513,11 @@ describe('DocumentDetailView', () => {
       expect(vehicleSelect.attributes('disabled')).toBeDefined()
       expect(editor.text()).toContain('No values yet')
 
-      // Clearing the label and saving PUTs an explicit null and re-renders
-      // from the server's response (the select drops back to "—").
+      // Clearing the label autosaves: the PUT carries an explicit null and the
+      // select re-renders from the server's response (dropping back to "—").
+      // No Save button since 2026-09-06 — this section of the metadata panel
+      // commits on change like every other field in it.
       await categorySelect.setValue('')
-      await editor.get('[data-testid="facet-save"]').trigger('click')
       await flushPromises()
 
       const putCall = fetchMock.mock.calls.find(

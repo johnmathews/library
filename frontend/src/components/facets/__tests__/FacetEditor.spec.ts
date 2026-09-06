@@ -2,6 +2,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import FacetEditor from '../FacetEditor.vue'
 import type { FacetRef } from '@/api/facets'
+import { ApiError } from '@/api/client'
 
 const updateDocumentLabels = vi.fn()
 vi.mock('@/api/facets', async (importOriginal) => ({
@@ -77,8 +78,9 @@ describe('FacetEditor', () => {
       props: { documentId: 7, facets: FACETS, labels: {} },
     })
     await wrapper.get('[data-testid="facet-edit-category"]').setValue('software')
-    await wrapper.get('[data-testid="facet-save"]').trigger('click')
     await flushPromises()
+    // No Save button: choosing the value IS the save, exactly like every other
+    // field in the metadata panel this editor is a section of.
     expect(updateDocumentLabels).toHaveBeenCalledWith(7, { category: 'software' })
     expect(wrapper.emitted('saved')?.at(-1)).toEqual([{ category: 'software' }])
   })
@@ -88,8 +90,10 @@ describe('FacetEditor', () => {
       props: { documentId: 7, facets: FACETS, labels: { category: 'software' } },
     })
     await wrapper.get('[data-testid="facet-edit-category"]').setValue('')
-    await wrapper.get('[data-testid="facet-save"]').trigger('click')
     await flushPromises()
+    // Explicit null, never omission: the PUT applies exactly the keys it is
+    // given, so omitting a cleared facet would leave the old label in place and
+    // clearing would silently do nothing.
     expect(updateDocumentLabels).toHaveBeenCalledWith(7, { category: null })
   })
 
@@ -99,17 +103,37 @@ describe('FacetEditor', () => {
       props: { documentId: 7, facets: FACETS, labels: {} },
     })
     await wrapper.get('[data-testid="facet-edit-category"]').setValue('software')
-    await wrapper.get('[data-testid="facet-save"]').trigger('click')
     await flushPromises()
     expect(wrapper.get('[data-testid="facet-error"]').text()).toContain('Could not save')
+    // The draft survives the failure — the selection is never thrown away
+    // without saying so.
+    const select = wrapper.get('[data-testid="facet-edit-category"]')
+      .element as HTMLSelectElement
+    expect(select.value).toBe('software')
+  })
+
+  it("reports the server's own message on a 422, not a fixed string", async () => {
+    // The metadata fields beside this one surface `detail`; this editor used to
+    // replace it with 'Could not save these labels', throwing away the only
+    // part of the response that tells the owner what to change.
+    updateDocumentLabels.mockRejectedValue(
+      new ApiError(422, 'value "software" is not in the Category vocabulary', null),
+    )
+    const wrapper = mount(FacetEditor, {
+      props: { documentId: 7, facets: FACETS, labels: {} },
+    })
+    await wrapper.get('[data-testid="facet-edit-category"]').setValue('software')
+    await flushPromises()
+    expect(wrapper.get('[data-testid="facet-error"]').text()).toBe(
+      'value "software" is not in the Category vocabulary',
+    )
   })
 
   it('omits an unrelated, already-set facet from the PUT when only a different facet changes', async () => {
-    // This is the whole reason `dirty` exists: with two facets both already
-    // labelled, changing just one must send ONLY that one — not the whole
+    // Per-facet autosave must send ONLY the facet that changed — not the whole
     // draft (which would needlessly re-send 'category', and would send an
-    // explicit null for it if `save` ever sent draft-minus-blanks instead of
-    // an actual before/after diff).
+    // explicit null for it if it ever sent draft-minus-blanks instead of the
+    // one key the user just touched).
     updateDocumentLabels.mockResolvedValue({ category: 'software', priority: 'low' })
     const wrapper = mount(FacetEditor, {
       props: {
@@ -119,7 +143,6 @@ describe('FacetEditor', () => {
       },
     })
     await wrapper.get('[data-testid="facet-edit-priority"]').setValue('low')
-    await wrapper.get('[data-testid="facet-save"]').trigger('click')
     await flushPromises()
 
     expect(updateDocumentLabels).toHaveBeenCalledWith(7, { priority: 'low' })
@@ -141,7 +164,18 @@ describe('FacetEditor', () => {
   // disabled with no error, permanently. In CI the same race burned the full
   // 180s e2e timeout roughly once per run.
 
-  it('keeps the user selection when the label map arrives after it', async () => {
+  it('keeps the user selection when the label map arrives mid-save', async () => {
+    // The race is specifically the window BEFORE the write settles: the user
+    // has picked a value, the PUT is in flight, and the unrelated label fetch
+    // resolves with the server's (still empty) map. Note there is no
+    // `flushPromises` before `setProps` — adding one would settle the save
+    // first and test a different, easier thing.
+    let resolveSave: (v: Record<string, string>) => void = () => {}
+    updateDocumentLabels.mockReturnValue(
+      new Promise<Record<string, string>>((r) => {
+        resolveSave = r
+      }),
+    )
     const wrapper = mount(FacetEditor, {
       props: { documentId: 7, facets: FACETS, labels: {} },
     })
@@ -153,19 +187,30 @@ describe('FacetEditor', () => {
     const select = wrapper.get('[data-testid="facet-edit-category"]')
       .element as HTMLSelectElement
     expect(select.value).toBe('software')
-    expect(wrapper.get('[data-testid="facet-save"]').attributes('disabled')).toBeUndefined()
+
+    resolveSave({ category: 'software' })
+    await flushPromises()
+    expect(select.value).toBe('software')
   })
 
-  it('still saves the selection that a late label map tried to clobber', async () => {
-    // The observable outcome that matters: not merely that the select still
-    // shows the value, but that clicking Save actually PUTs it.
+  it('writes the selection exactly once, even when a late label map lands mid-flight', async () => {
+    // The observable outcome that matters: the value reaches the server, and a
+    // late map arriving mid-save does not trigger a second, contradictory write.
+    let resolveSave: (v: Record<string, string>) => void = () => {}
+    updateDocumentLabels.mockReturnValue(
+      new Promise<Record<string, string>>((r) => {
+        resolveSave = r
+      }),
+    )
     const wrapper = mount(FacetEditor, {
       props: { documentId: 7, facets: FACETS, labels: {} },
     })
     await wrapper.get('[data-testid="facet-edit-category"]').setValue('software')
     await wrapper.setProps({ labels: {} })
-    await wrapper.get('[data-testid="facet-save"]').trigger('click')
+    resolveSave({ category: 'software' })
     await flushPromises()
+
+    expect(updateDocumentLabels).toHaveBeenCalledTimes(1)
     expect(updateDocumentLabels).toHaveBeenCalledWith(7, { category: 'software' })
   })
 
@@ -178,7 +223,6 @@ describe('FacetEditor', () => {
       props: { documentId: 7, facets: FACETS, labels: {} },
     })
     await wrapper.get('[data-testid="facet-edit-category"]').setValue('software')
-    await wrapper.get('[data-testid="facet-save"]').trigger('click')
     await flushPromises()
 
     // The parent assigns what `saved` carried; a later refresh then clears it
@@ -202,6 +246,19 @@ describe('FacetEditor', () => {
     const select = wrapper.get('[data-testid="facet-edit-category"]')
       .element as HTMLSelectElement
     expect(select.value).toBe('')
-    expect(wrapper.get('[data-testid="facet-save"]').attributes('disabled')).toBeDefined()
+    // Under autosave the selection was written to document 7 as it was made —
+    // that is correct. What must never happen is a write landing on document 8
+    // as a side effect of the switch, labelling the wrong document.
+    for (const [id] of updateDocumentLabels.mock.calls) expect(id).toBe(7)
+  })
+
+  it('has no Save button — every facet autosaves on selection', async () => {
+    // The panel this editor sits in autosaves every other field on commit; a
+    // section that needed a button press was the inconsistency the 2026-09-06
+    // consolidation removed.
+    const wrapper = mount(FacetEditor, {
+      props: { documentId: 7, facets: FACETS, labels: {} },
+    })
+    expect(wrapper.find('[data-testid="facet-save"]').exists()).toBe(false)
   })
 })

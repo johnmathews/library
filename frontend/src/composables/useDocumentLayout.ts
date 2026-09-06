@@ -1,4 +1,4 @@
-import { ref, type Ref } from 'vue'
+import { type Ref } from 'vue'
 import { useStorage } from '@vueuse/core'
 
 /**
@@ -6,15 +6,17 @@ import { useStorage } from '@vueuse/core'
  *
  * The detail page lets each user tailor how a document is presented: which
  * metadata fields show in the hero (and in what order), and the vertical order
- * of the page's cards. Those two preferences persist per-machine so the page
- * comes back the way the user left it. A third piece — `editMode` — is the
- * ephemeral "am I currently rearranging the layout" flag; it is intentionally
- * NOT persisted so a reload always returns to the normal (non-editing) view.
+ * of the page's cards. Both persist per-machine so the page comes back the way
+ * the user left it.
  *
- * This is singleton state (module-level refs). Later units render the hero-field
- * customiser and the card reorderer from *separate* components, but they must
- * share one `editMode` (entering edit mode reveals both affordances at once), so
- * every `useDocumentLayout()` caller gets the same underlying refs.
+ * This module owns PERSISTED layout only. The ephemeral "am I editing" flag
+ * lives in `useMetadataEditMode` and is deliberately not duplicated here: there
+ * used to be two flags — "Edit details" (field values) and "Edit layout"
+ * (arrangement) — behind two adjacent buttons, and pressing the wrong one was
+ * the single most-reported annoyance on this page. One mode, one owner.
+ *
+ * This is singleton state (module-level refs), so every `useDocumentLayout()`
+ * caller gets the same underlying refs.
  *
  * Merge-safe loading: stored preferences are reconciled against the current
  * DEFAULT_* constants on read (see `reconcileHeroFields` / `reconcileCardColumns`)
@@ -84,41 +86,43 @@ export interface CardColumns {
   right: string[]
 }
 
-/** The pre-split single Details card. Retained only so `migrateMetadataCard`
- * can rewrite an existing saved layout that still holds it. */
-export const LEGACY_METADATA_CARD_ID = 'metadata'
+/**
+ * The one metadata panel: kind/language/tags/projects/matters, sender,
+ * recipient and dates, facet labels, and read-only provenance, in a single
+ * card.
+ *
+ * The id is deliberately the string the ORIGINAL pre-split Details card used.
+ * Between 2026-07-09 and 2026-09-06 it was split into four `metadata-*` tiles
+ * plus a separate `facets` card; reusing `'metadata'` means an ancient layout
+ * from before that split needs no migration of its own, which is why the
+ * expansion migration could be deleted rather than kept alongside its inverse.
+ */
+export const METADATA_CARD_ID = 'metadata'
 
-/** The Details card was split into one tile per metadata section; these are the
- * resulting card ids, in their default top-to-bottom order. Content leads (it
- * also carries Topics, and kind + language — the former "Classification" tile,
- * since removed), System (read-only provenance) trails. A saved layout still
- * holding the retired `metadata-classification` id has it dropped on read by
- * `reconcileCardColumns` (it is no longer a known card). */
-export const METADATA_CARD_IDS = [
+/** Card ids the metadata panel absorbed, collapsed into `METADATA_CARD_ID` by
+ * `collapseMetadataCards` on load. `metadata-classification` is absent on
+ * purpose: it was retired earlier and no longer appears in any live layout, so
+ * `reconcileCardColumns` dropping it as unknown is the correct handling. */
+export const RETIRED_METADATA_CARD_IDS = [
   'metadata-content',
   'metadata-parties',
   'metadata-financial',
   'metadata-system',
+  'facets',
 ] as const
 
 /**
  * Stable card ids, split into their default column and default in-column order.
  *
- * `facets` is deliberately LAST in `left`. It became a card in #139, having
- * previously been a fixed element rendered after every card in that column —
- * so last IS where it already appeared, and defaulting it anywhere else would
- * move the card for every existing user as a side effect of making it movable.
- *
- * That choice is also what makes a migration unnecessary. Every stored layout
- * predates the `facets` id, and `reconcileCardColumns` appends a
- * known-but-unplaced card to the end of its default column — which, for this
- * card alone, coincides with its intended position. Contrast
- * `migrateMetadataCard` below, where the two did NOT coincide (the split tiles
- * had to land wherever the user had put the old Details card) and a real
- * in-place migration was required. Tested in useDocumentLayout.spec.ts.
+ * `metadata` sits second in `left`, directly under `notes` — the position the
+ * Content tile held, since that is where a returning user's collapsed panel
+ * anchors (see `collapseMetadataCards`). The `series-chart` card was a third
+ * right-column entry until 2026-08-31; a layout still naming it is not broken,
+ * because `reconcileCardColumns` drops any stored id absent from this constant
+ * while preserving the order of the survivors.
  */
 export const DEFAULT_CARD_COLUMNS: CardColumns = {
-  left: ['notes', ...METADATA_CARD_IDS, 'comments', 'actions', 'history', 'facets'],
+  left: ['notes', METADATA_CARD_ID, 'comments', 'actions', 'history'],
   right: ['preview', 'markdown'],
 }
 
@@ -140,7 +144,11 @@ function moveItem<T>(list: readonly T[], from: number, to: number): T[] {
  * Reconcile a stored hero-field list against the current defaults:
  *  - keep still-valid stored entries in their saved order + visibility;
  *  - drop stored keys no longer present in the defaults;
- *  - append known keys missing from storage at their default position/visibility.
+ *  - append known keys missing from storage at the END of the list, with
+ *    their default visibility. NOT at their index in `defaults` — a key added
+ *    to `DEFAULT_HERO_FIELDS` therefore lands last for every existing user,
+ *    however high it is listed there. A key that must appear in a particular
+ *    place needs a migration, the hero's analogue of `collapseMetadataCards`.
  * Pure — used both at init and directly in tests.
  */
 export function reconcileHeroFields(
@@ -226,20 +234,41 @@ export function migrateCardOrderToColumns(flatOrder: readonly string[]): CardCol
 }
 
 /**
- * Migrate a stored two-column layout from the single pre-split `metadata`
- * (Details) card to the five per-section metadata tiles. Wherever the old
- * `metadata` id sits — either column, any position — it is replaced in place by
- * `METADATA_CARD_IDS`, so a user who moved or repositioned the Details card
- * keeps that spot instead of having the new tiles appended at the end by
- * `reconcileCardColumns`. Pure; a layout without the legacy id is returned
- * structurally unchanged.
+ * Collapse a stored two-column layout's per-section metadata tiles and its
+ * `facets` card into the single `METADATA_CARD_ID` panel, in place.
+ *
+ * The FIRST retired id encountered — columns walked left then right — becomes
+ * the panel and keeps that slot; every later one is dropped. Without this,
+ * `reconcileCardColumns` would drop all five as unknown and append the panel at
+ * the END of its default column, putting it below History for anyone who had
+ * ever touched their layout.
+ *
+ * Two properties this must hold, both pinned in `useDocumentLayout.spec.ts`:
+ * it runs on every page load, so it is **idempotent**; and because
+ * `METADATA_CARD_ID` is itself the pre-2026-07-09 id, a layout predating the
+ * split passes through unchanged rather than needing a second migration.
+ *
+ * Pure; a layout holding no retired id is returned structurally unchanged.
  */
-export function migrateMetadataCard(cols: Partial<CardColumns> | null | undefined): CardColumns {
-  const expand = (ids: readonly string[] | undefined): string[] =>
-    (ids ?? []).flatMap((id) =>
-      id === LEGACY_METADATA_CARD_ID ? [...METADATA_CARD_IDS] : [id],
-    )
-  return { left: expand(cols?.left), right: expand(cols?.right) }
+export function collapseMetadataCards(cols: Partial<CardColumns> | null | undefined): CardColumns {
+  const retired = new Set<string>(RETIRED_METADATA_CARD_IDS)
+  let placed = false
+  const collapse = (ids: readonly string[] | undefined): string[] => {
+    const out: string[] = []
+    for (const id of ids ?? []) {
+      if (!retired.has(id) && id !== METADATA_CARD_ID) {
+        out.push(id)
+        continue
+      }
+      // The panel (or the first tile standing in for it) claims this slot.
+      if (!placed) {
+        out.push(METADATA_CARD_ID)
+        placed = true
+      }
+    }
+    return out
+  }
+  return { left: collapse(cols?.left), right: collapse(cols?.right) }
 }
 
 // --- Singleton state (module-level, shared across every caller) --------------
@@ -271,22 +300,12 @@ if (!hadColumns && legacyOrder) {
     /* ignore malformed legacy value */
   }
 }
-// Expand the pre-split single Details card into its five per-section tiles,
-// in place, before reconciliation (which would otherwise drop the unknown
-// `metadata` id and append the new tiles at the column's end).
-cardColumns.value = migrateMetadataCard(cardColumns.value)
+// Collapse the retired per-section metadata tiles and the old `facets` card
+// into the single `metadata` panel, in place, BEFORE reconciliation — which
+// would otherwise drop all five as unknown ids and append the panel at the
+// column's end, below History.
+cardColumns.value = collapseMetadataCards(cardColumns.value)
 cardColumns.value = reconcileCardColumns(cardColumns.value, DEFAULT_CARD_COLUMNS)
-
-// Ephemeral — deliberately a plain ref, never persisted.
-const editMode = ref(false)
-
-function toggleEditMode(): void {
-  editMode.value = !editMode.value
-}
-
-function setEditMode(value: boolean): void {
-  editMode.value = value
-}
 
 /** Show or hide a hero field by key (no-op for an unknown key). */
 function setHeroFieldVisible(key: string, visible: boolean): void {
@@ -361,10 +380,6 @@ export interface DocumentLayout {
   heroFields: Ref<HeroField[]>
   /** Persisted two-column card layout (left/right, each an ordered id list). */
   cardColumns: Ref<CardColumns>
-  /** Ephemeral "editing the layout" flag (not persisted; resets on reload). */
-  editMode: Ref<boolean>
-  toggleEditMode: () => void
-  setEditMode: (value: boolean) => void
   setHeroFieldVisible: (key: string, visible: boolean) => void
   moveHeroField: (fromIndex: number, toIndex: number) => void
   setHeroFieldOrder: (keys: readonly string[]) => void
@@ -377,9 +392,6 @@ export function useDocumentLayout(): DocumentLayout {
   return {
     heroFields,
     cardColumns,
-    editMode,
-    toggleEditMode,
-    setEditMode,
     setHeroFieldVisible,
     moveHeroField,
     setHeroFieldOrder,
