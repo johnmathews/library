@@ -8,7 +8,11 @@ import type { DocumentDetail, DocumentMarkdownResponse } from '@/api/documents'
 import { listNoteVersions, restoreNoteVersion, updateNote } from '@/api/notes'
 import { useJobsStore } from '@/stores/jobs'
 import { useReviewQueueStore } from '@/stores/reviewQueue'
-import { useDocumentLayout, DEFAULT_CARD_COLUMNS } from '@/composables/useDocumentLayout'
+import {
+  useDocumentLayout,
+  DEFAULT_CARD_COLUMNS,
+  METADATA_CARD_ID,
+} from '@/composables/useDocumentLayout'
 import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 
 // pdfjs-dist can't run its worker/canvas in jsdom — mock the whole module
@@ -491,11 +495,14 @@ describe('DocumentDetailView', () => {
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
     // kind + language are narrow fields: in edit mode they must keep the
-    // two-column grid, not collapse to a single full-width column.
-    expect(w.find('[data-testid="row-kind"]').classes()).not.toContain('sm:col-span-2')
-    expect(w.find('[data-testid="row-language"]').classes()).not.toContain('sm:col-span-2')
+    // two-column grid, not collapse to a single full-width column. The
+    // breakpoint is a CONTAINER query (`@xl:`) — the panel sits in a column
+    // that is viewport-minus-sidebar, so a viewport query would break at the
+    // wrong width (docs/frontend-view-principles.md §5.1).
+    expect(w.find('[data-testid="row-kind"]').classes()).not.toContain('@xl:col-span-2')
+    expect(w.find('[data-testid="row-language"]').classes()).not.toContain('@xl:col-span-2')
     // Wide fields still span both columns.
-    expect(w.find('[data-testid="row-title"]').classes()).toContain('sm:col-span-2')
+    expect(w.find('[data-testid="row-title"]').classes()).toContain('@xl:col-span-2')
   })
 
   it('does not duplicate the field label in edit mode (inline editor label is sr-only)', async () => {
@@ -911,51 +918,60 @@ describe('DocumentDetailView', () => {
     expect(stats).not.toContain('Sender')
     expect(stats).not.toContain('Amount')
 
-    // Now that each metadata group is its own tile, a value-less group hides its
-    // WHOLE tile in read mode — no lone "Amount —" card on a non-financial doc.
-    expect(w.find('[data-testid="section-card-metadata-financial"]').exists()).toBe(false)
-    expect(w.find('[data-testid="row-amount"]').exists()).toBe(false)
-
-    // The Sender-&-dates tile IS present (it has a document date), so a value-less
-    // field inside a present tile (sender) still renders with an em-dash —
-    // group-level hiding, field-level em-dash.
-    expect(w.find('[data-testid="section-card-metadata-parties"]').exists()).toBe(true)
+    // There is ONE metadata panel now, always present — it carries System,
+    // which every document has. A value-less field inside it renders with an
+    // em-dash rather than vanishing, so nothing becomes unreachable.
+    expect(w.find('[data-testid="metadata-panel"]').exists()).toBe(true)
     expect(w.find('[data-testid="row-sender"]').exists()).toBe(true)
     expect(rowValue(w, 'sender')).toBe('—')
     expect(w.find('[data-testid="row-document_date"]').exists()).toBe(true)
 
-    // Entering edit mode reveals the empty Financial tile so the amount can be added.
+    // The amount is reachable even with no value — this is the property that
+    // used to be supplied by `cardPresent` revealing a hidden Financial tile on
+    // edit. Losing it would make an empty field impossible to fill in.
+    expect(w.find('[data-testid="row-amount"]').exists()).toBe(true)
+    expect(rowValue(w, 'amount')).toBe('—')
+
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
-    expect(w.find('[data-testid="section-card-metadata-financial"]').exists()).toBe(true)
     expect(w.find('[data-testid="row-amount"]').exists()).toBe(true)
     expect(w.find('[data-testid="row-sender"]').exists()).toBe(true)
   })
 
-  it('renders the split Details card as four metadata tiles, folding Topics + classification into Content', async () => {
+  it('renders ONE metadata panel holding every group, including facets and system', async () => {
     detail = makeDetail({ topics: ['energy', 'utilities'] })
     const w = await mountView()
 
-    // Each metadata section is now its own reorderable tile (wrapper testid).
-    for (const id of [
+    // One card, one drag handle, one place a field lives. The four tiles this
+    // replaced (2026-07-09 to 2026-09-06) put the same fields on screen twice.
+    expect(w.findAll('[data-testid="metadata-panel"]')).toHaveLength(1)
+    expect(w.findAll('[data-testid="section-card-metadata"]')).toHaveLength(1)
+    for (const retired of [
       'section-card-metadata-content',
       'section-card-metadata-parties',
       'section-card-metadata-financial',
       'section-card-metadata-system',
+      'section-card-facets',
     ]) {
-      expect(w.find(`[data-testid="${id}"]`).exists()).toBe(true)
+      expect(w.find(`[data-testid="${retired}"]`).exists()).toBe(false)
     }
-    // The old monolithic Details card is gone, and so is the former standalone
-    // Classification tile — kind + language now live in Content.
-    expect(w.find('#document-details-card').exists()).toBe(false)
-    expect(w.find('[data-testid="section-card-metadata-classification"]').exists()).toBe(false)
 
-    // Topics AND classification (kind + language) fold into the Content tile.
+    // Every group is a titled section INSIDE that one card.
+    const panel = w.find('[data-testid="metadata-panel"]')
+    for (const group of ['content', 'parties', 'financial', 'facets', 'system']) {
+      expect(panel.find(`[data-testid="metadata-section-${group}"]`).exists()).toBe(true)
+    }
+
+    // Topics AND classification (kind + language) live in Content.
     const content = w.find('[data-testid="metadata-section-content"]')
     expect(content.find('[data-testid="row-topics"]').exists()).toBe(true)
     expect(content.text()).toContain('energy')
     expect(content.find('[data-testid="row-kind"]').exists()).toBe(true)
     expect(content.find('[data-testid="row-language"]').exists()).toBe(true)
+
+    // The facet editor is embedded flat — one instance, no card-in-card.
+    expect(w.findAll('[data-testid="facet-editor"]')).toHaveLength(1)
+    expect(w.find('[data-testid="facet-editor"]').classes()).not.toContain('card')
   })
 
   it('hero header renders each tag as a coloured badge', async () => {
@@ -1796,7 +1812,7 @@ describe('DocumentDetailView', () => {
       expect(w.find('[data-testid="hero-field-toggle-language"]').exists()).toBe(true)
       // Section cards expose a drag handle in both columns.
       expect(w.find('[data-testid="card-drag-handle-preview"]').exists()).toBe(true)
-      expect(w.find('[data-testid="card-drag-handle-metadata-content"]').exists()).toBe(true)
+      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(true)
       // Reset appears only in edit mode, and the toggle now reads "Done".
       expect(w.find('[data-testid="reset-layout"]').exists()).toBe(true)
       expect(w.find('[data-testid="edit-layout-toggle"]').text()).toBe('Done')
@@ -1865,14 +1881,13 @@ describe('DocumentDetailView', () => {
       // from whichever card-column Sortable.create call was captured.
       const onEnd = cardColumnOnEnd()
       // Simulate SortableJS dropping "comments" into the right column at index 0.
-      // For this (note) document every metadata tile is present, so the rendered
-      // left column is: notes, metadata-content, metadata-parties,
-      // metadata-financial, metadata-system, comments (index 5), actions, history.
+      // For this (note) document every card is present, so the rendered left
+      // column is: notes, metadata, comments (index 2), actions, history.
       const evt = {
         from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
         to: { dataset: { col: 'right' } },
         item: {},
-        oldIndex: 5,
+        oldIndex: 2,
         newIndex: 0,
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
@@ -1938,14 +1953,14 @@ describe('DocumentDetailView', () => {
         to: { dataset: { col: 'left' } },
         item: {},
         oldIndex: 0, // 'preview' — first rendered card in the right column
-        newIndex: 0, // top of the *rendered* left column (before 'metadata-content', since 'notes' is hidden)
+        newIndex: 0, // top of the *rendered* left column (before 'metadata', since 'notes' is hidden)
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
       await flushPromises()
 
       expect(layout.cardColumns.value.left[0]).toBe('notes')
       expect(layout.cardColumns.value.left[1]).toBe('preview')
-      expect(layout.cardColumns.value.left[2]).toBe('metadata-content')
+      expect(layout.cardColumns.value.left[2]).toBe(METADATA_CARD_ID)
       expect(layout.cardColumns.value.right).not.toContain('preview')
     })
 
@@ -2026,17 +2041,16 @@ describe('DocumentDetailView', () => {
       // *dragged* item — but Sortable still counts it as an ordinary sibling
       // when computing evt.newIndex for an actual card drag.
       //
-      // FacetEditor used to be a second such sibling; since #139 it is an
-      // ordinary card inside the v-for, so every index WITHIN the rendered
-      // card list is now exact rather than merely harmless. PaymentGroup is
-      // the last remaining inflator, and because it sits after every card, the
-      // only index it can inflate is one that was already past the end.
+      // FacetEditor used to be a second such sibling, then an ordinary card
+      // (#139), and is now a section inside the metadata panel — so PaymentGroup
+      // is the last remaining inflator, and because it sits after every card the
+      // only index it can inflate is one already past the end.
       //
       // For this (non-note) document the rendered/present left column is:
-      // metadata-content, metadata-parties, metadata-financial,
-      // metadata-system, comments, actions, history, facets (8 cards) — plus
-      // the PaymentGroup sibling. A drop positioned after everything therefore
-      // reports an index past what the card list alone would suggest.
+      // metadata, comments, actions, history (4 cards) — plus the PaymentGroup
+      // sibling. `newIndex` below must stay past the END of that list, or this
+      // stops exercising the out-of-range branch it is named for and silently
+      // becomes an ordinary in-range move.
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView() // default (non-note) doc
@@ -2048,14 +2062,14 @@ describe('DocumentDetailView', () => {
         from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
         to: { dataset: { col: 'left' } },
         item: {},
-        oldIndex: 4, // 'comments' — 5th present card (0-based index 4)
-        newIndex: 9, // past all 8 cards, inflated by the uncounted PaymentGroup sibling
+        oldIndex: 1, // 'comments' — 2nd present card (0-based index 1)
+        newIndex: 5, // past all 4 cards, inflated by the uncounted PaymentGroup sibling
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
       await flushPromises()
 
       // Safe degradation: presentIndexToFullIndex's out-of-range branch
-      // (presentIndex >= present.length) treats any overshoot — 8 or 9 or
+      // (presentIndex >= present.length) treats any overshoot — 4 or 5 or
       // 99 — identically, as "append at the very end". No crash, no
       // duplicate, no dropped card; 'comments' simply lands at the end.
       expect(layout.cardColumns.value.left.filter((id) => id === 'comments')).toHaveLength(1)
@@ -2064,76 +2078,77 @@ describe('DocumentDetailView', () => {
       expect(layout.cardColumns.value.right).toEqual(DEFAULT_CARD_COLUMNS.right)
     })
 
-    // --- The Facets card is an ordinary card (#139) --------------------------
+    // --- Facets is a section of the metadata panel, not a card ------------
+    //
+    // It was a fixed sibling until #139, an ordinary card until 2026-09-06, and
+    // is now one group inside the single metadata panel. What survives from the
+    // card era is the "exactly once" guard: the failure mode of moving a mount
+    // site is leaving the old one in place, giving two writable editors that
+    // silently disagree.
 
-    it('gives the Facets card a drag handle in edit mode, like every other card', async () => {
+    it('renders the facet editor exactly once, inside the metadata panel', async () => {
+      const w = await mountView()
+      expect(w.findAll('[data-testid="facet-editor"]')).toHaveLength(1)
+      expect(
+        w.find('[data-testid="metadata-panel"]').find('[data-testid="facet-editor"]').exists(),
+      ).toBe(true)
+      // No card of its own any more — neither a wrapper nor a drag handle.
+      expect(w.find('[data-testid="section-card-facets"]').exists()).toBe(false)
+      expect(w.find('[data-testid="card-drag-handle-facets"]').exists()).toBe(false)
+    })
+
+    it('gives the metadata panel a drag handle in edit mode, like every other card', async () => {
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView()
-      // Read mode: no handles at all, on facets or anything else.
-      expect(w.find('[data-testid="card-drag-handle-facets"]').exists()).toBe(false)
+      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(false)
 
       await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
       await flushPromises()
-      expect(w.find('[data-testid="card-drag-handle-facets"]').exists()).toBe(true)
+      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(true)
     })
 
-    it('defaults the Facets card to the bottom of the metadata column, where it already rendered', async () => {
-      // Making the card movable must not MOVE it: everyone's first view after
-      // this change should look exactly like their last view before it.
+    it('drags the metadata panel to the top of the column, carrying facets with it', async () => {
+      // 'notes' is hidden on this (non-note) document, so the panel is already
+      // rendered index 0; move it from the right column instead to prove the
+      // facets section travels inside the card rather than being left behind.
       const layout = useDocumentLayout()
       layout.resetLayout()
-      const w = await mountView()
-      const rendered = w
-        .find('#document-metadata-column')
-        .findAll('[data-testid^="section-card-"]')
-        .map((el) => el.attributes('data-testid'))
-      expect(rendered.at(-1)).toBe('section-card-facets')
-      expect(w.find('[data-testid="section-card-facets"]').find('[data-testid="facet-editor"]').exists()).toBe(true)
-    })
-
-    it('renders the Facets card exactly once, not both as a card and as a fixed sibling', async () => {
-      // The failure mode of promoting a card while leaving its old mount site
-      // in place: two editors, both writable, silently disagreeing.
-      const w = await mountView()
-      expect(w.findAll('[data-testid="facet-editor"]')).toHaveLength(1)
-    })
-
-    it('drags the Facets card to the top of the metadata column, and renders it there', async () => {
-      // The actual ask in #139. 'notes' is hidden on this (non-note) document,
-      // so rendered index 0 is 'metadata-content' and the card must land
-      // immediately after the hidden 'notes' in the FULL column array.
-      const layout = useDocumentLayout()
-      layout.resetLayout()
+      layout.setColumn('left', ['notes', 'comments', 'actions', 'history'])
+      layout.setColumn('right', ['preview', METADATA_CARD_ID, 'markdown'])
       const w = await mountView()
       await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
       await flushPromises()
 
       const onEnd = cardColumnOnEnd()
       const evt = {
-        from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
+        from: { dataset: { col: 'right' }, insertBefore: vi.fn(), children: [] },
         to: { dataset: { col: 'left' } },
         item: {},
-        oldIndex: 7, // 'facets' — last present card in the left column
+        oldIndex: 1, // the panel, in the right column
         newIndex: 0, // top of the rendered left column
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
       await flushPromises()
 
-      expect(layout.cardColumns.value.left[0]).toBe('notes')
-      expect(layout.cardColumns.value.left[1]).toBe('facets')
-      expect(layout.cardColumns.value.left.filter((id) => id === 'facets')).toHaveLength(1)
+      expect(layout.cardColumns.value.left[0]).toBe('notes') // hidden, still first
+      expect(layout.cardColumns.value.left[1]).toBe(METADATA_CARD_ID)
+      expect(layout.cardColumns.value.right).not.toContain(METADATA_CARD_ID)
 
-      // Observable outcome, not just persisted state: the editor must actually
-      // render at the top of the column now.
+      // Observable outcome: the panel renders at the top of the metadata
+      // column, and its facet editor came along inside it — exactly once.
       const rendered = w
         .find('#document-metadata-column')
         .findAll('[data-testid^="section-card-"]')
         .map((el) => el.attributes('data-testid'))
-      expect(rendered[0]).toBe('section-card-facets')
+      expect(rendered[0]).toBe('section-card-metadata')
+      expect(
+        w.find('#document-metadata-column').find('[data-testid="facet-editor"]').exists(),
+      ).toBe(true)
+      expect(w.findAll('[data-testid="facet-editor"]')).toHaveLength(1)
     })
 
-    it('carries the Facets card into the preview column when dragged across', async () => {
+    it('carries the metadata panel into the preview column when dragged across', async () => {
       // It shares the 'doc-cards' group like every other card, so it must
       // render its body in whichever column holds it — the cross-column drop
       // that silently lost a card before the shared card template existed.
@@ -2148,14 +2163,14 @@ describe('DocumentDetailView', () => {
         from: { dataset: { col: 'left' }, insertBefore: vi.fn(), children: [] },
         to: { dataset: { col: 'right' } },
         item: {},
-        oldIndex: 7, // 'facets'
+        oldIndex: 0, // the panel — first present card ('notes' is hidden)
         newIndex: 0,
       } as unknown as Sortable.SortableEvent
       onEnd(evt)
       await flushPromises()
 
-      expect(layout.cardColumns.value.right).toContain('facets')
-      expect(layout.cardColumns.value.left).not.toContain('facets')
+      expect(layout.cardColumns.value.right).toContain(METADATA_CARD_ID)
+      expect(layout.cardColumns.value.left).not.toContain(METADATA_CARD_ID)
       expect(w.find('#document-preview-column').find('[data-testid="facet-editor"]').exists()).toBe(
         true,
       )

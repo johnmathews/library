@@ -45,23 +45,35 @@ import {
 import { refreshTaxonomyOptions, useTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 import { ApiError } from '@/api/client'
+import type { FacetRef } from '@/api/facets'
+import FacetEditor from '@/components/facets/FacetEditor.vue'
 import { formatDate, tagColour, formatDateTime } from '@/utils/documentFormat'
 
-/** Which metadata section this tile renders. What used to be a single "Details"
- * card is now one instance per section (the detail view mounts five of them);
- * `system` is the read-only provenance tile and has no editable field group. */
-type MetadataSection = 'content' | 'parties' | 'financial' | 'system'
+/** A field group's key. What used to be a single "Details" card, then four
+ * independent tiles (2026-07-09 to 2026-09-06), is one panel again: this
+ * component renders every group in sequence, plus the facet editor and the
+ * read-only System provenance block, inside one card.
+ *
+ * Typed rather than left as `string` so a group's `data-testid` and a template
+ * reference to it cannot drift apart silently. */
+type MetadataGroupKey = 'content' | 'parties' | 'financial'
 
 const props = defineProps<{
   /** The document being edited (always non-null; the parent gates on `doc`). */
   doc: DocumentDetail
-  /** The section this instance renders as its own standalone tile. */
-  section: MetadataSection
+  /** Facet vocabulary, passed straight through to the embedded facet editor. */
+  facets: FacetRef[]
+  /** This document's current facet labels, likewise passed through. */
+  facetLabels: Record<string, string>
 }>()
 
 const emit = defineEmits<{
   /** The server's fresh DocumentDetail after a per-field PATCH (parent binds `v-model:doc`). */
   (e: 'update:doc', doc: DocumentDetail): void
+  /** The resulting label map after the embedded facet editor saves. Forwarded
+   * rather than handled here: the parent owns the label state, because it also
+   * feeds it from its own route-level fetch. */
+  (e: 'facets-saved', labels: Record<string, string>): void
 }>()
 
 // --- Taxonomy options (kind select, sender autocomplete) ----------------------
@@ -81,7 +93,7 @@ const {
 // Only the Content tile renders the tags/projects/matters multiselects; the
 // composable caches its fetch, so this is at most one request across the whole
 // page regardless.
-if (props.section === 'content') void ensureProjectsLoaded()
+void ensureProjectsLoaded()
 // Tags are identified by slug (unlike projects/matters, keyed by name): the
 // multiselect binds slugs, so its suggestion list is the existing tag slugs.
 const tagOptionSlugs = computed(() => tagOptions.value.map((tag) => tag.slug))
@@ -95,11 +107,11 @@ onMounted(async () => {
   // the Sender-&-dates tile keeps this to one request each. Best-effort —
   // without options the kind/recipient selects still offer the current value and
   // "Not set", and the sender input just loses its suggestions.
-  if (props.section === 'content') {
+  {
     const [kindResult] = await Promise.allSettled([listKinds()])
     if (kindResult.status === 'fulfilled') kinds.value = kindResult.value
   }
-  if (props.section === 'parties') {
+  {
     const [senderResult, recipientResult] = await Promise.allSettled([
       listSenders(),
       listRecipients(),
@@ -247,7 +259,7 @@ const rowByField = Object.fromEntries(rowConfigs.map((row) => [row.field, row]))
 type Accent = 'violet' | 'sky' | 'green' | 'yellow' | 'gray'
 
 interface FieldGroup {
-  key: string
+  key: MetadataGroupKey
   label: string
   accent: Accent
   fields: EditableField[]
@@ -272,13 +284,11 @@ const fieldGroups: FieldGroup[] = [
   { key: 'financial', label: 'Financial', accent: 'green', fields: ['amount'] },
 ]
 
-/** The field group this tile renders, wrapped as a 0-or-1 array so the template
- * can drive its per-field body with `v-for="group in activeGroups"` — the same
- * body the old single "Details" card used, now emitted for exactly one group.
- * Empty for the `system` tile (read-only provenance, rendered separately). */
-const activeGroups = computed<FieldGroup[]>(() =>
-  props.section === 'system' ? [] : fieldGroups.filter((group) => group.key === props.section),
-)
+/** Every field group, in order, rendered as consecutive sections of the one
+ * panel. Kept as a computed (rather than using `fieldGroups` directly) so a
+ * group can be dropped for a document that cannot have it without the template
+ * growing a second condition. */
+const activeGroups = computed<FieldGroup[]>(() => fieldGroups)
 
 /** Fields that read better spanning the full width of the two-column grid. */
 const WIDE_FIELDS = new Set<EditableField>([
@@ -753,22 +763,27 @@ const latestExtractionEvent = computed(() => {
 </script>
 
 <template>
-  <!-- Each metadata section is its own reorderable tile (card). The detail view
-       renders one instance per section via the `section` prop, so what used to
-       be a single "Details" card is now a Content (which also holds kind +
-       language) / Sender-&-dates / Financial / System tile that can be dragged
-       and reordered independently. There is no per-tile Edit toggle: the single
-       page-wide toggle lives in the hero and flips the shared `useMetadataEditMode` flag
-       every instance reads. `activeGroups` holds this tile's one field group
-       (empty for the read-only System tile, rendered separately below). -->
-  <div
-    v-for="group in activeGroups"
-    :key="group.key"
-    :id="`document-details-${group.key}`"
-    class="card p-5"
-    :data-testid="`metadata-section-${group.key}`"
-  >
-    <div class="min-w-0">
+  <!-- ONE metadata panel. Between 2026-07-09 and 2026-09-06 this was four
+       independent tiles plus a separate Facets card, which put the same fields
+       on screen twice (once here, once in the hero) and gave a single-field
+       Financial group a card of its own. Now every group is a titled SECTION of
+       one card: the accent bar and heading still separate them visually, but
+       there is one card, one drag handle, one place a field lives.
+
+       There is no per-section Edit toggle — the page-wide toggle in the hero
+       flips the shared `useMetadataEditMode` flag this component reads.
+
+       Sizing is a CONTAINER query, not a viewport one: this panel sits in a grid
+       column that is viewport-minus-sidebar, so `sm:`/`lg:` would break at the
+       wrong moment (see docs/frontend-view-principles.md §5.1). -->
+  <div id="document-details" class="card p-5 @container" data-testid="metadata-panel">
+    <div
+      v-for="group in activeGroups"
+      :key="group.key"
+      :id="`document-details-${group.key}`"
+      class="min-w-0"
+      :data-testid="`metadata-section-${group.key}`"
+    >
       <section>
         <div class="mb-4 flex items-center gap-2">
           <span class="h-4 w-1.5 rounded-full" :class="ACCENT[group.accent].bar"></span>
@@ -779,11 +794,11 @@ const latestExtractionEvent = computed(() => {
             {{ group.label }}
           </h2>
         </div>
-        <dl class="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+        <dl class="grid grid-cols-1 gap-x-6 gap-y-4 @xl:grid-cols-2">
           <template v-for="field in group.fields" :key="field">
           <div
             :data-testid="`row-${field}`"
-            :class="WIDE_FIELDS.has(field) ? 'sm:col-span-2' : ''"
+            :class="WIDE_FIELDS.has(field) ? '@xl:col-span-2' : ''"
           >
             <dt class="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
               {{ rowByField[field].label }}
@@ -1134,18 +1149,36 @@ const latestExtractionEvent = computed(() => {
         </dl>
       </section>
     </div>
-  </div>
 
-  <!-- System tile: read-only provenance (status, OCR, source, extraction), a
-       neutral accent, its own card. Always present, so it never collapses to an
-       empty tile. -->
-  <div
-    v-if="section === 'system'"
-    id="document-details-system"
-    class="card p-5"
-    data-testid="metadata-section-system"
-  >
-    <div class="min-w-0">
+    <!-- Facet labels (controlled vocabulary, docs/facets.md) as a section of
+         this panel rather than a card of its own. `flat` drops FacetEditor's
+         own card chrome and heading so it reads as one more group here; the
+         spending drill-through still mounts it un-flat, with its card. -->
+    <div id="document-details-facets" class="min-w-0" data-testid="metadata-section-facets">
+      <section>
+        <div class="mb-4 flex items-center gap-2">
+          <span class="h-4 w-1.5 rounded-full" :class="ACCENT.yellow.bar"></span>
+          <h2
+            class="text-sm font-semibold uppercase tracking-wider"
+            :class="ACCENT.yellow.text"
+          >
+            Facets
+          </h2>
+        </div>
+        <FacetEditor
+          flat
+          :document-id="doc.id"
+          :facets="props.facets"
+          :labels="props.facetLabels"
+          @saved="emit('facets-saved', $event)"
+        />
+      </section>
+    </div>
+
+    <!-- System: read-only provenance (status, OCR, source, extraction) with a
+         neutral accent. Always present — it is the one group that can never be
+         empty, so it anchors the bottom of the panel. -->
+    <div id="document-details-system" class="min-w-0" data-testid="metadata-section-system">
       <section>
         <div class="mb-4 flex items-center gap-2">
           <span class="h-4 w-1.5 rounded-full" :class="ACCENT.gray.bar"></span>
@@ -1156,7 +1189,7 @@ const latestExtractionEvent = computed(() => {
             System
           </h2>
         </div>
-        <dl class="grid grid-cols-1 gap-x-6 gap-y-4 sm:grid-cols-2">
+        <dl class="grid grid-cols-1 gap-x-6 gap-y-4 @xl:grid-cols-2">
           <div>
             <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
               Status

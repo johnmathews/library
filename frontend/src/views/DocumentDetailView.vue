@@ -51,11 +51,14 @@ import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
 import NoteEditorPanel from '@/components/NoteEditorPanel.vue'
 import DocumentMetadataEditor from '@/components/DocumentMetadataEditor.vue'
-import FacetEditor from '@/components/facets/FacetEditor.vue'
 import PaymentGroup from '@/components/payments/PaymentGroup.vue'
 import DocumentComments from '@/components/DocumentComments.vue'
 import ActionDock from '@/components/ActionDock.vue'
-import { useDocumentLayout, HERO_FIELD_LABELS } from '@/composables/useDocumentLayout'
+import {
+  useDocumentLayout,
+  HERO_FIELD_LABELS,
+  METADATA_CARD_ID,
+} from '@/composables/useDocumentLayout'
 import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 import { useDocumentNeighbors } from '@/composables/useDocumentNeighbors'
 import { parseDocumentQuery, hasActiveFilters } from '@/utils/documentQuery'
@@ -683,23 +686,12 @@ function cardPresent(id: string): boolean {
       (markdownData.value !== null && !hasReadableText.value)
     )
   }
-  // Metadata section tiles (the split-out Details card). Content and System
-  // always show; the value-bearing groups appear only when they hold a value OR
-  // metadata edit mode is on — so an empty group (e.g. Financial on a letter)
-  // stays hidden in read mode but reappears to be filled in while editing.
-  const d = doc.value
-  if (id === 'metadata-content' || id === 'metadata-system') return true
-  if (id === 'metadata-parties') {
-    return (
-      metadataEditMode.value ||
-      !!d?.sender ||
-      !!d?.recipient ||
-      !!d?.document_date ||
-      !!d?.due_date ||
-      !!d?.expiry_date
-    )
-  }
-  if (id === 'metadata-financial') return metadataEditMode.value || d?.amount_total != null
+  // The metadata panel is always present: it carries System (read-only
+  // provenance), which every document has, so it can never be empty. The
+  // per-section presence rules this replaced existed so a value-less tile
+  // (Financial on a letter) vanished in read mode and came back on edit —
+  // that requirement now lives per-GROUP inside the panel, not per-card. So it
+  // needs no rule of its own and falls through to the default below.
   return true
 }
 
@@ -1424,27 +1416,16 @@ watch(
           @reload-markdown="loadMarkdown(doc.id)"
         />
 
-        <!-- The former single "Details" card, now one tile per metadata section
-             (all reading/flipping the shared metadata edit mode). -->
+        <!-- The one metadata panel: every field group, the facet editor and
+             the read-only System provenance block in a single card. It was four
+             separate tiles plus a Facets card from 2026-07-09 until 2026-09-06;
+             see `collapseMetadataCards` for how a saved layout is migrated. -->
         <DocumentMetadataEditor
-          v-else-if="cardId === 'metadata-content'"
-          section="content"
+          v-else-if="cardId === METADATA_CARD_ID"
           v-model:doc="doc"
-        />
-        <DocumentMetadataEditor
-          v-else-if="cardId === 'metadata-parties'"
-          section="parties"
-          v-model:doc="doc"
-        />
-        <DocumentMetadataEditor
-          v-else-if="cardId === 'metadata-financial'"
-          section="financial"
-          v-model:doc="doc"
-        />
-        <DocumentMetadataEditor
-          v-else-if="cardId === 'metadata-system'"
-          section="system"
-          v-model:doc="doc"
+          :facets="facets"
+          :facet-labels="facetLabels"
+          @facets-saved="facetLabels = $event"
         />
 
         <DocumentComments
@@ -1522,19 +1503,6 @@ watch(
           :events="doc.events"
         />
 
-        <!-- Facet labels (controlled vocabulary, docs/facets.md). An ordinary
-             card since #139: it is edited on the same page, in the same column,
-             for the same reasons as the metadata tiles, and it is the primary
-             editing surface for the charts feature, so wanting it above the
-             fold is a normal thing to want. FacetEditor supplies its own
-             `.card` root, like every other branch here. -->
-        <FacetEditor
-          v-else-if="cardId === 'facets'"
-          :document-id="doc.id"
-          :facets="facets"
-          :labels="facetLabels"
-          @saved="facetLabels = $event"
-        />
     </DefineCard>
 
     <div id="document-detail-grid" class="grid grid-cols-1 lg:grid-cols-2 gap-6">

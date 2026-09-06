@@ -5,10 +5,11 @@ import {
   reconcileHeroFields,
   reconcileCardColumns,
   migrateCardOrderToColumns,
-  migrateMetadataCard,
+  collapseMetadataCards,
   DEFAULT_HERO_FIELDS,
   DEFAULT_CARD_COLUMNS,
-  METADATA_CARD_IDS,
+  METADATA_CARD_ID,
+  RETIRED_METADATA_CARD_IDS,
   HERO_FIELD_LABELS,
   HERO_FIELDS_STORAGE_KEY,
   CARD_ORDER_STORAGE_KEY,
@@ -71,90 +72,131 @@ describe('reconcileHeroFields', () => {
 describe('reconcileCardColumns', () => {
   // --- The facets card (#139) ------------------------------------------------
   //
-  // Before #139 the Facets editor was a fixed, non-draggable element rendered
-  // AFTER every card in the left column. Making it a card means every existing
-  // user has a persisted layout with no `facets` entry, so where it lands on
-  // their next visit is a migration question.
-  //
-  // It is answered by the choice of default rather than by a migration
-  // function: `facets` is LAST in DEFAULT_CARD_COLUMNS.left, which is exactly
-  // where it already rendered, and `reconcileCardColumns` appends a
-  // known-but-unplaced card to the end of its default column. The two coincide,
-  // so no stored layout moves — see `migrateMetadataCard` for the case where
-  // they do NOT coincide and a real migration was needed.
+  // Facets was a fixed element until #139, then its own card, and from
+  // 2026-09-06 a group inside the one `metadata` panel. A stored layout naming
+  // it is handled by `collapseMetadataCards` (above), not by reconciliation —
+  // reconciliation alone would drop it as unknown and lose its position.
 
-  it('appends facets to the end of the left column for a layout saved before it existed', () => {
+  it('drops a retired metadata tile id that reached it unmigrated', () => {
+    // Reconciliation is the LAST line of defence, not the migration: it cannot
+    // preserve a position for an id it does not know. This pins the behaviour
+    // that makes `collapseMetadataCards` necessary rather than optional.
     const stored = {
-      left: ['notes', 'metadata-content', 'metadata-parties', 'metadata-financial', 'metadata-system', 'comments', 'actions', 'history'],
+      left: ['notes', 'metadata-content', 'metadata-parties', 'comments', 'actions', 'history'],
       right: ['preview', 'markdown'],
     }
     const merged = reconcileCardColumns(stored, DEFAULT_CARD_COLUMNS)
-    expect(merged.left.at(-1)).toBe('facets')
-    // Nothing else moved: the stored order is preserved ahead of it.
-    expect(merged.left.slice(0, -1)).toEqual(stored.left)
-    expect(merged.right).toEqual(stored.right)
+    expect(merged.left).not.toContain('metadata-content')
+    expect(merged.left).not.toContain('metadata-parties')
+    // …and the panel it should have become is appended at the END, below
+    // history — the user-visible symptom the migration exists to prevent.
+    expect(merged.left).toEqual(['notes', 'comments', 'actions', 'history', METADATA_CARD_ID])
   })
 
-  it('still puts facets last for a user who had rearranged their cards', () => {
-    // The position it lands in must not depend on the user's saved order —
-    // pre-#139 it rendered after every card no matter how they were arranged.
+  it('preserves a migrated layout unchanged', () => {
     const stored = {
-      left: ['history', 'comments', 'metadata-system', 'notes'],
-      right: ['markdown', 'preview'],
+      left: ['notes', METADATA_CARD_ID, 'comments', 'actions', 'history'],
+      right: ['preview', 'markdown'],
     }
-    const merged = reconcileCardColumns(stored, DEFAULT_CARD_COLUMNS)
-    expect(merged.left.at(-1)).toBe('facets')
-    expect(merged.left.slice(0, 4)).toEqual(stored.left)
-    expect(merged.right).toEqual(stored.right)
-  })
-
-  it('keeps a facets position the user has already chosen', () => {
-    // Once they move it, reconciliation must respect that rather than
-    // re-appending it to the bottom on every read.
-    const stored = { left: ['facets', 'notes'], right: ['preview'] }
-    const merged = reconcileCardColumns(stored, DEFAULT_CARD_COLUMNS)
-    expect(merged.left[0]).toBe('facets')
-    expect(merged.left.filter((id) => id === 'facets')).toHaveLength(1)
-  })
-
-  it('returns the defaults when nothing is stored', () => {
-    expect(reconcileCardColumns(null, DEFAULT_CARD_COLUMNS)).toEqual(DEFAULT_CARD_COLUMNS)
-    expect(reconcileCardColumns({}, DEFAULT_CARD_COLUMNS)).toEqual(DEFAULT_CARD_COLUMNS)
+    expect(reconcileCardColumns(stored, DEFAULT_CARD_COLUMNS)).toEqual(stored)
   })
 
   it('appends missing known cards, drops unknown, de-dupes', () => {
-    const stored = { left: ['metadata-content', 'metadata-content', 'ghost'], right: ['preview'] } // dup + unknown, missing several
+    const stored = { left: [METADATA_CARD_ID, METADATA_CARD_ID, 'ghost'], right: ['preview'] } // dup + unknown, missing several
     const merged = reconcileCardColumns(stored, DEFAULT_CARD_COLUMNS)
     const all = [...merged.left, ...merged.right]
     expect(all).not.toContain('ghost') // unknown dropped
-    expect(all.filter((c) => c === 'metadata-content')).toHaveLength(1) // de-duped
+    expect(all.filter((c) => c === METADATA_CARD_ID)).toHaveLength(1) // de-duped
     expect(new Set(all)).toEqual(
       new Set([...DEFAULT_CARD_COLUMNS.left, ...DEFAULT_CARD_COLUMNS.right]),
     ) // every known card present once
-    expect(merged.left[0]).toBe('metadata-content') // preserved stored order for survivors
+    expect(merged.left[0]).toBe(METADATA_CARD_ID) // preserved stored order for survivors
   })
 })
 
-describe('migrateMetadataCard', () => {
-  it('expands the legacy single `metadata` card into the five section tiles in place', () => {
-    // A returning user who moved Details to the top of the right column.
-    const stored: CardColumns = { left: ['notes', 'comments'], right: ['metadata', 'preview'] }
-    const migrated = migrateMetadataCard(stored)
-    expect(migrated.left).toEqual(['notes', 'comments']) // untouched
-    expect(migrated.right).toEqual([...METADATA_CARD_IDS, 'preview']) // expanded at metadata's spot
+describe('collapseMetadataCards', () => {
+  // The reverse of the 2026-07-09 split: four per-section tiles plus the Facets
+  // card become ONE `metadata` panel. Unlike `facets` becoming a card (#139),
+  // reconciliation's landing spot and the intended position do NOT coincide —
+  // an unmigrated layout has every old id dropped as unknown and the new panel
+  // appended at the column's END. So this is the `migrateMetadataCard` case.
+  it('collapses the four tiles and facets into one `metadata` id, in place', () => {
+    // The reporting user's actual layout: facets dragged into the RIGHT column.
+    const stored: CardColumns = {
+      left: [
+        'notes',
+        'metadata-content',
+        'metadata-parties',
+        'metadata-financial',
+        'metadata-system',
+        'comments',
+        'actions',
+        'history',
+      ],
+      right: ['preview', 'facets', 'markdown'],
+    }
+    const collapsed = collapseMetadataCards(stored)
+    // The panel takes the FIRST old id's position (index 1), not the column end.
+    expect(collapsed.left).toEqual([
+      'notes',
+      METADATA_CARD_ID,
+      'comments',
+      'actions',
+      'history',
+    ])
+    // The later `facets` occurrence is dropped, not turned into a second panel.
+    expect(collapsed.right).toEqual(['preview', 'markdown'])
   })
 
-  it('leaves a layout without the legacy id structurally unchanged', () => {
-    const stored: CardColumns = { left: ['notes', ...METADATA_CARD_IDS], right: ['preview'] }
-    expect(migrateMetadataCard(stored)).toEqual(stored)
+  it('is idempotent — it runs on every page load', () => {
+    const stored: CardColumns = {
+      left: ['notes', 'metadata-content', 'metadata-system', 'comments'],
+      right: ['preview', 'facets'],
+    }
+    const once = collapseMetadataCards(stored)
+    expect(collapseMetadataCards(once)).toEqual(once)
+  })
+
+  it('keeps the position when the panel is in the right column and facets in the left', () => {
+    // First-encountered wins, and columns are walked left-then-right, so a
+    // user who put facets high in the LEFT column anchors the panel there.
+    const stored: CardColumns = {
+      left: ['facets', 'notes'],
+      right: ['preview', 'metadata-content', 'markdown'],
+    }
+    const collapsed = collapseMetadataCards(stored)
+    expect(collapsed.left).toEqual([METADATA_CARD_ID, 'notes'])
+    expect(collapsed.right).toEqual(['preview', 'markdown'])
+  })
+
+  it('still collapses a pre-split layout that holds the legacy `metadata` id', () => {
+    // `metadata` IS the collapsed id, so an ancient layout needs no separate
+    // migration — this is why `migrateMetadataCard` could be deleted outright.
+    const stored: CardColumns = { left: ['notes', 'metadata'], right: ['preview'] }
+    expect(collapseMetadataCards(stored)).toEqual(stored)
+  })
+
+  it('leaves a layout with no metadata card structurally unchanged', () => {
+    const stored: CardColumns = { left: ['notes', 'comments'], right: ['preview'] }
+    expect(collapseMetadataCards(stored)).toEqual(stored)
   })
 
   it('tolerates partial/absent columns', () => {
-    expect(migrateMetadataCard(null)).toEqual({ left: [], right: [] })
-    expect(migrateMetadataCard({ left: ['metadata'] })).toEqual({
-      left: [...METADATA_CARD_IDS],
+    expect(collapseMetadataCards(null)).toEqual({ left: [], right: [] })
+    expect(collapseMetadataCards({ left: ['metadata-financial'] })).toEqual({
+      left: [METADATA_CARD_ID],
       right: [],
     })
+  })
+
+  it('names every retired id, so a stale one cannot survive as an unknown card', () => {
+    expect([...RETIRED_METADATA_CARD_IDS].sort()).toEqual([
+      'facets',
+      'metadata-content',
+      'metadata-financial',
+      'metadata-parties',
+      'metadata-system',
+    ])
   })
 })
 
@@ -197,17 +239,13 @@ describe('legacy card-order migration (module init)', () => {
     // Right column preserved the customized order (markdown before preview).
     expect(layout.cardColumns.value.right).toEqual(['markdown', 'preview'])
     // Left column preserved the flat order for its members; the legacy single
-    // `metadata` card expands in place into the five per-section tiles.
+    // `metadata` card IS the panel id, so it passes through in place.
     expect(layout.cardColumns.value.left).toEqual([
       'history',
-      ...mod.METADATA_CARD_IDS,
+      mod.METADATA_CARD_ID,
       'notes',
       'actions',
       'comments',
-      // The legacy order predates the facets card entirely; it appends to the
-      // end of its default column, which is exactly where it used to render
-      // as a fixed element (#139).
-      'facets',
     ])
   })
 
@@ -221,42 +259,47 @@ describe('legacy card-order migration (module init)', () => {
     const layout = mod.useDocumentLayout()
     expect(layout.cardColumns.value.right).toEqual(['markdown', 'preview'])
     // 'comments' wasn't in the legacy order; reconcileCardColumns appends it
-    // to its default (left) column rather than dropping it. The legacy single
-    // `metadata` card expands in place into the five per-section tiles.
+    // to its default (left) column rather than dropping it.
     expect(layout.cardColumns.value.left).toEqual([
       'history',
-      ...mod.METADATA_CARD_IDS,
+      mod.METADATA_CARD_ID,
       'notes',
       'actions',
       'comments',
-      // The legacy order predates the facets card entirely; it appends to the
-      // end of its default column, which is exactly where it used to render
-      // as a fixed element (#139).
-      'facets',
     ])
   })
 
-  it('expands a returning user’s persisted single `metadata` card into the five tiles in place', async () => {
-    // Returning user already on the columns key, with the pre-split Details
-    // card moved to a custom spot. Migration must keep that spot.
+  it('collapses a returning user’s split tiles back into one panel, in place', async () => {
+    // The reporting user's real layout: four tiles high in the left column,
+    // facets dragged across into the right. The panel must land where the
+    // tiles were (index 1), NOT appended below history.
     localStorage.setItem(
       CARD_COLUMNS_STORAGE_KEY,
       JSON.stringify({
-        left: ['metadata', 'notes', 'comments', 'actions', 'history'],
-        right: ['preview', 'markdown'],
+        left: [
+          'notes',
+          'metadata-content',
+          'metadata-parties',
+          'metadata-financial',
+          'metadata-system',
+          'comments',
+          'actions',
+          'history',
+        ],
+        right: ['preview', 'facets', 'markdown'],
       }),
     )
     const mod = await import('../useDocumentLayout')
     const layout = mod.useDocumentLayout()
     expect(layout.cardColumns.value.left).toEqual([
-      ...mod.METADATA_CARD_IDS,
       'notes',
+      mod.METADATA_CARD_ID,
       'comments',
       'actions',
       'history',
-      'facets',
     ])
-    expect(layout.cardColumns.value.left).not.toContain('metadata')
+    // facets was absorbed, not left behind as a second card.
+    expect(layout.cardColumns.value.right).toEqual(['preview', 'markdown'])
   })
 
   it('a fresh user with no legacy key gets the default columns', async () => {
@@ -376,7 +419,14 @@ describe('useDocumentLayout', () => {
     setColumn('left', reversedLeft)
     expect(cardColumns.value.left).toEqual(reversedLeft)
     await nextTick()
-    expect(localStorage.getItem(CARD_COLUMNS_STORAGE_KEY)).toContain('metadata')
+    // Value-exact, not `toContain('metadata')`: a substring check is satisfied
+    // by every id this card has ever had ('metadata', 'metadata-content', a
+    // hypothetical 'metadata-panel'), so it passed no matter what was written
+    // and proved nothing about persistence.
+    expect(JSON.parse(localStorage.getItem(CARD_COLUMNS_STORAGE_KEY) ?? 'null')).toEqual({
+      left: reversedLeft,
+      right: cardColumns.value.right,
+    })
   })
 
   it('round-trips persisted hero/card state and reconciles a fresh read', async () => {

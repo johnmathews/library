@@ -28,11 +28,25 @@ import { computed, ref, watch } from 'vue'
 import { updateDocumentLabels, type FacetRef } from '@/api/facets'
 import { AppButton } from '@/components/app'
 
-const props = defineProps<{
-  documentId: number
-  facets: FacetRef[]
-  labels: Record<string, string>
-}>()
+const props = withDefaults(
+  defineProps<{
+    documentId: number
+    facets: FacetRef[]
+    labels: Record<string, string>
+    /**
+     * Render without the surrounding `.card` chrome and heading, as a plain
+     * group inside a parent panel. The document detail view sets this — the
+     * facet editor is one section of its single Metadata panel there, and a
+     * `.card` inside a `.card` reads as a box in a box.
+     *
+     * Defaults to false so the standalone mount in the spending drill-through
+     * (`components/spending/DrillCellBody.vue`) is untouched: that surface has
+     * no panel around it and still needs its own card.
+     */
+    flat?: boolean
+  }>(),
+  { flat: false },
+)
 
 const emit = defineEmits<{ saved: [Record<string, string>] }>()
 
@@ -135,8 +149,17 @@ async function save(): Promise<void> {
 </script>
 
 <template>
-  <div id="document-facets-card" class="card p-5" data-testid="facet-editor">
-    <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">Facets</h2>
+  <div
+    id="document-facets-card"
+    :class="props.flat ? '' : 'card p-5'"
+    data-testid="facet-editor"
+  >
+    <h2
+      v-if="!props.flat"
+      class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3"
+    >
+      Facets
+    </h2>
     <div class="@container">
       <div class="flex flex-wrap items-end gap-3">
         <div v-for="facet in ordered" :key="facet.key">
