@@ -384,38 +384,31 @@ const WIDE_FIELDS = new Set<EditableField>([
   'amount',
 ])
 
-/** Static Tailwind class strings per accent (kept literal so the build's content
- * scan keeps them). `border` is left-only so it never fights a shorthand. */
-const ACCENT: Record<Accent, { bar: string; text: string; border: string; bg: string }> = {
+/** Static Tailwind class strings per accent, kept literal so Tailwind's content
+ * scan keeps them. Just the two an accent actually renders: the heading's pill
+ * (`bar`) and its text. A `border` and a `bg` were declared here for every
+ * accent and NEVER read — the doc comment described "a faint tint" the page has
+ * never drawn. */
+const ACCENT: Record<Accent, { bar: string; text: string }> = {
   violet: {
     bar: 'bg-violet-400 dark:bg-violet-500',
     text: 'text-violet-700 dark:text-violet-300',
-    border: 'border-l-violet-400 dark:border-l-violet-500',
-    bg: 'bg-violet-50/50 dark:bg-violet-500/[0.06]',
   },
   sky: {
     bar: 'bg-sky-400 dark:bg-sky-500',
     text: 'text-sky-700 dark:text-sky-300',
-    border: 'border-l-sky-400 dark:border-l-sky-500',
-    bg: 'bg-sky-50/50 dark:bg-sky-500/[0.06]',
   },
   green: {
     bar: 'bg-green-500 dark:bg-green-500',
     text: 'text-green-700 dark:text-green-300',
-    border: 'border-l-green-500',
-    bg: 'bg-green-50/50 dark:bg-green-500/[0.06]',
   },
   yellow: {
     bar: 'bg-yellow-400 dark:bg-yellow-500',
     text: 'text-yellow-700 dark:text-yellow-400',
-    border: 'border-l-yellow-400 dark:border-l-yellow-500',
-    bg: 'bg-yellow-50/60 dark:bg-yellow-500/[0.06]',
   },
   gray: {
     bar: 'bg-gray-300 dark:bg-gray-600',
     text: 'text-gray-500 dark:text-gray-400',
-    border: 'border-l-gray-300 dark:border-l-gray-600',
-    bg: 'bg-gray-50/70 dark:bg-gray-900/20',
   },
 }
 
