@@ -2406,14 +2406,15 @@ describe('DocumentDetailView', () => {
   })
 
   describe('facet editor (docs/facets.md)', () => {
-    it('mounts in the metadata column, fetches the vocabulary + this document\'s labels, and saves an edit end-to-end', async () => {
+    it('mounts inside the metadata panel, fetches the vocabulary + this document\'s labels, and autosaves an edit end-to-end', async () => {
       documentLabels = { category: 'utility' }
       const w = await mountView()
 
-      // Mounted for real inside the metadata column, not just in isolation.
-      const metadataColumn = w.find('#document-metadata-column')
-      expect(metadataColumn.exists()).toBe(true)
-      const editor = metadataColumn.find('[data-testid="facet-editor"]')
+      // Mounted for real inside the metadata PANEL (not merely somewhere in
+      // the column), and not just in isolation.
+      const panel = w.find('[data-testid="metadata-panel"]')
+      expect(panel.exists()).toBe(true)
+      const editor = panel.find('[data-testid="facet-editor"]')
       expect(editor.exists()).toBe(true)
 
       // The GET /api/documents/12/labels response hydrated the select with
@@ -2427,10 +2428,11 @@ describe('DocumentDetailView', () => {
       expect(vehicleSelect.attributes('disabled')).toBeDefined()
       expect(editor.text()).toContain('No values yet')
 
-      // Clearing the label and saving PUTs an explicit null and re-renders
-      // from the server's response (the select drops back to "—").
+      // Clearing the label autosaves: the PUT carries an explicit null and the
+      // select re-renders from the server's response (dropping back to "—").
+      // No Save button since 2026-09-06 — this section of the metadata panel
+      // commits on change like every other field in it.
       await categorySelect.setValue('')
-      await editor.get('[data-testid="facet-save"]').trigger('click')
       await flushPromises()
 
       const putCall = fetchMock.mock.calls.find(
