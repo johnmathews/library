@@ -7,6 +7,9 @@ import {
   reconcileCardColumns,
   migrateCardOrderToColumns,
   collapseMetadataCards,
+  reconcileCollapsedSections,
+  METADATA_SECTION_KEYS,
+  COLLAPSED_SECTIONS_STORAGE_KEY,
   DEFAULT_HERO_FIELDS,
   DEFAULT_CARD_COLUMNS,
   METADATA_CARD_ID,
@@ -321,6 +324,33 @@ describe('legacy card-order migration (module init)', () => {
   })
 })
 
+describe('reconcileCollapsedSections', () => {
+  it('drops keys that are no longer collapsible sections, and de-dupes', () => {
+    // `content` was renamed to `classification` on 2026-09-06; a layout saved
+    // before that must not keep folding a section that no longer exists.
+    expect(
+      reconcileCollapsedSections(['facets', 'content', 'facets', 'nonsense', 'dates']),
+    ).toEqual(['facets', 'dates'])
+  })
+
+  it('treats absent or malformed storage as "nothing collapsed"', () => {
+    // Expanded is the default for a new user AND a returning one, which is why
+    // this is a key LIST and not a per-key boolean map — a map would need a
+    // migration every time a section is added.
+    expect(reconcileCollapsedSections(null)).toEqual([])
+    expect(reconcileCollapsedSections(undefined)).toEqual([])
+    expect(reconcileCollapsedSections([])).toEqual([])
+  })
+
+  it('accepts every key the panel actually renders', () => {
+    // Guards the two lists drifting apart: a section added to the panel but
+    // missing here would silently refuse to stay collapsed across a reload.
+    expect(reconcileCollapsedSections([...METADATA_SECTION_KEYS])).toEqual([
+      ...METADATA_SECTION_KEYS,
+    ])
+  })
+})
+
 describe('useDocumentLayout', () => {
   beforeEach(() => {
     localStorage.clear()
@@ -367,6 +397,33 @@ describe('useDocumentLayout', () => {
   // `editMode` used to live here as a second flag beside `useMetadataEditMode`'s.
   // The two merged on 2026-09-06 (one "Edit mode" button); the surviving flag is
   // covered by `useMetadataEditMode.spec.ts`, so its tests are not duplicated here.
+
+  it('toggles a section collapsed and persists it, independently of other sections', async () => {
+    const { toggleSection, isSectionCollapsed } = useDocumentLayout()
+    expect(isSectionCollapsed('facets')).toBe(false)
+
+    toggleSection('facets')
+    expect(isSectionCollapsed('facets')).toBe(true)
+    expect(isSectionCollapsed('dates')).toBe(false)
+    await nextTick()
+    expect(JSON.parse(localStorage.getItem(COLLAPSED_SECTIONS_STORAGE_KEY) ?? 'null')).toEqual([
+      'facets',
+    ])
+
+    toggleSection('facets')
+    expect(isSectionCollapsed('facets')).toBe(false)
+    await nextTick()
+    expect(JSON.parse(localStorage.getItem(COLLAPSED_SECTIONS_STORAGE_KEY) ?? 'null')).toEqual([])
+  })
+
+  it('resetLayout expands every collapsed section', () => {
+    const { toggleSection, collapsedSections, resetLayout } = useDocumentLayout()
+    toggleSection('facets')
+    toggleSection('system')
+    expect(collapsedSections.value).toEqual(['facets', 'system'])
+    resetLayout()
+    expect(collapsedSections.value).toEqual([])
+  })
 
   it('sets hero-field visibility and persists it to localStorage', async () => {
     const { setHeroFieldVisible, heroFields } = useDocumentLayout()

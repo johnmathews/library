@@ -44,6 +44,7 @@ import {
 } from '@/api/taxonomy'
 import { refreshTaxonomyOptions, useTaxonomyOptions } from '@/composables/taxonomyOptions'
 import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
+import { useDocumentLayout } from '@/composables/useDocumentLayout'
 import { ApiError } from '@/api/client'
 import type { FacetRef } from '@/api/facets'
 import FacetEditor from '@/components/facets/FacetEditor.vue'
@@ -56,7 +57,7 @@ import { formatDate, tagColour, formatDateTime } from '@/utils/documentFormat'
  *
  * Typed rather than left as `string` so a group's `data-testid` and a template
  * reference to it cannot drift apart silently. */
-type MetadataGroupKey = 'content' | 'parties' | 'financial' | 'hero'
+type MetadataGroupKey = 'classification' | 'parties' | 'dates' | 'hero'
 
 const props = withDefaults(
   defineProps<{
@@ -317,22 +318,34 @@ interface FieldGroup {
 }
 
 const fieldGroups: FieldGroup[] = [
-  // Kind + language (the former standalone "Classification" tile) live here now:
-  // a two-field panel read as over-fragmented, and both are metadata about the
-  // content. Kind sits high (right after the summary) as the primary attribute.
+  // What the document IS and what it is filed under. `title`/`summary`/`kind`
+  // are normally hero-owned and subtracted out by `excludeFields`; they stay
+  // listed so hiding one in the hero drops it here rather than off the page.
+  //
+  // Named "Classification", not "Content": the panel as a whole is Metadata,
+  // and a subsection called Content read as the whole panel's title when it sat
+  // at the top with nothing above it.
   {
-    key: 'content',
-    label: 'Content',
+    key: 'classification',
+    label: 'Classification',
     accent: 'violet',
     fields: ['title', 'summary', 'kind', 'language', 'tags', 'projects', 'matters'],
   },
+  // Who the document is between, and when it applies. One group until
+  // 2026-09-06 ("Sender, recipient & dates"), which put two unrelated kinds of
+  // fact under one heading and made the dates hard to find.
   {
     key: 'parties',
-    label: 'Sender, recipient & dates',
+    label: 'Sender & recipient',
     accent: 'sky',
-    fields: ['sender', 'recipient', 'document_date', 'due_date', 'expiry_date'],
+    fields: ['sender', 'recipient'],
   },
-  { key: 'financial', label: 'Financial', accent: 'green', fields: ['amount'] },
+  {
+    key: 'dates',
+    label: 'Dates',
+    accent: 'sky',
+    fields: ['document_date', 'due_date', 'expiry_date'],
+  },
 ]
 
 /** Every field group, in order, rendered as consecutive sections of the one
@@ -442,6 +455,37 @@ function sourceLabel(source: string): string {
 // hydrate fresh drafts before its editors render — otherwise a tile would open
 // with stale/empty drafts and risk autosaving them.
 const { editMode } = useMetadataEditMode()
+
+const { isSectionCollapsed, toggleSection } = useDocumentLayout()
+
+/**
+ * One spacing rule for every subsection, so the panel has a single vertical
+ * rhythm instead of each group setting its own margins. A separator plus equal
+ * padding above and below; `first:` drops both on the leading section so it
+ * sits flush under the panel title.
+ *
+ * This is what the panel lacked: sections were bare `min-w-0` divs, so a
+ * heading butted straight onto the previous group's last field and the
+ * structure was invisible.
+ */
+const SECTION_WRAPPER =
+  'min-w-0 border-t border-gray-100 pt-5 mt-5 first:border-t-0 first:pt-0 first:mt-0 dark:border-gray-700/60'
+
+/** Collapsed state for one subsection (panel only — the hero never folds). */
+function collapsed(key: string): boolean {
+  return props.variant === 'panel' && isSectionCollapsed(key)
+}
+
+/** Accessibility + test hooks for a section's fold button, kept in one place
+ * so the five call sites cannot drift apart. */
+function sectionToggleAttrs(key: string): Record<string, string> {
+  return {
+    type: 'button',
+    'aria-expanded': String(!collapsed(key)),
+    'aria-controls': `document-details-${key}`,
+    'data-testid': `section-toggle-${key}`,
+  }
+}
 
 /** The fields whose draft is a plain string (text inputs + selects). */
 type StringDraftField =
@@ -865,23 +909,56 @@ const latestExtractionEvent = computed(() => {
     :class="variant === 'hero' ? '@container' : 'card p-5 @container'"
     :data-testid="variant === 'hero' ? 'hero-fields' : 'metadata-panel'"
   >
+    <!-- The panel's own title. Without it the first subsection's heading read as
+         the whole panel's name, which is why "Content" looked like it labelled
+         everything below it. -->
+    <h2
+      v-if="variant === 'panel'"
+      class="mb-5 text-lg font-semibold text-gray-800 dark:text-gray-100"
+    >
+      Metadata
+    </h2>
+
     <div
       v-for="group in activeGroups"
       :key="group.key"
       :id="`document-details-${group.key}`"
-      class="min-w-0"
+      :class="variant === 'panel' ? SECTION_WRAPPER : 'min-w-0'"
       :data-testid="`metadata-section-${group.key}`"
     >
       <section>
-        <div v-if="group.label" class="mb-4 flex items-center gap-2">
+        <component
+          :is="variant === 'panel' ? 'button' : 'div'"
+          v-if="group.label"
+          v-bind="variant === 'panel' ? sectionToggleAttrs(group.key) : {}"
+          :class="[
+            'flex w-full items-center gap-2 text-left',
+            collapsed(group.key) ? '' : 'mb-4',
+          ]"
+          @click="variant === 'panel' ? toggleSection(group.key) : undefined"
+        >
           <span class="h-4 w-1.5 rounded-full" :class="ACCENT[group.accent].bar"></span>
-          <h2
+          <h3
             class="text-sm font-semibold uppercase tracking-wider"
             :class="ACCENT[group.accent].text"
           >
             {{ group.label }}
-          </h2>
-        </div>
+          </h3>
+          <svg
+            v-if="variant === 'panel'"
+            class="ml-auto h-4 w-4 shrink-0 text-gray-400 transition-transform"
+            :class="collapsed(group.key) ? '-rotate-90' : ''"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="2"
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+          </svg>
+        </component>
+        <div v-if="!collapsed(group.key)">
         <!-- The hero packs more columns in: its rows are short stats, where the
              panel's are labelled form fields. Both are CONTAINER queries. -->
         <dl
@@ -965,8 +1042,7 @@ const latestExtractionEvent = computed(() => {
             </dd>
             <dd
               v-else-if="!editMode || rowByField[field].readOnly"
-              class="mt-2 min-w-0 break-words leading-snug text-gray-800 dark:text-gray-100"
-              :class="field === 'amount' ? 'text-2xl font-semibold tracking-tight' : 'text-base'"
+              class="mt-2 min-w-0 break-words leading-snug text-base text-gray-800 dark:text-gray-100"
               data-testid="row-value"
               >{{ rowByField[field].display(doc) ?? EMPTY }}</dd
             >
@@ -1227,7 +1303,7 @@ const latestExtractionEvent = computed(() => {
              describe what the document is about, so they live in the Content
              tile; hidden entirely when the document has none. -->
         <dl
-          v-if="variant === 'panel' && group.key === 'content' && doc.topics.length"
+          v-if="variant === 'panel' && group.key === 'classification' && doc.topics.length"
           class="mt-5 grid grid-cols-1 border-t border-gray-100 pt-4 dark:border-gray-700/60"
         >
           <div data-testid="row-topics">
@@ -1245,6 +1321,7 @@ const latestExtractionEvent = computed(() => {
             </dd>
           </div>
         </dl>
+        </div>
       </section>
     </div>
 
@@ -1255,19 +1332,36 @@ const latestExtractionEvent = computed(() => {
     <div
       v-if="variant === 'panel'"
       id="document-details-facets"
-      class="min-w-0"
+      :class="SECTION_WRAPPER"
       data-testid="metadata-section-facets"
     >
       <section>
-        <div class="mb-4 flex items-center gap-2">
+        <button
+          v-bind="sectionToggleAttrs('facets')"
+          :class="['flex w-full items-center gap-2 text-left', collapsed('facets') ? '' : 'mb-4']"
+          @click="toggleSection('facets')"
+        >
           <span class="h-4 w-1.5 rounded-full" :class="ACCENT.yellow.bar"></span>
-          <h2
+          <h3
             class="text-sm font-semibold uppercase tracking-wider"
             :class="ACCENT.yellow.text"
           >
             Facets
-          </h2>
-        </div>
+          </h3>
+          <svg
+            class="ml-auto h-4 w-4 shrink-0 text-gray-400 transition-transform"
+            :class="collapsed('facets') ? '-rotate-90' : ''"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="2"
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+          </svg>
+        </button>
+        <div v-if="!collapsed('facets')">
         <FacetEditor
           flat
           :document-id="doc.id"
@@ -1275,6 +1369,7 @@ const latestExtractionEvent = computed(() => {
           :labels="props.facetLabels ?? {}"
           @saved="emit('facets-saved', $event)"
         />
+        </div>
       </section>
     </div>
 
@@ -1284,19 +1379,36 @@ const latestExtractionEvent = computed(() => {
     <div
       v-if="variant === 'panel'"
       id="document-details-system"
-      class="min-w-0"
+      :class="SECTION_WRAPPER"
       data-testid="metadata-section-system"
     >
       <section>
-        <div class="mb-4 flex items-center gap-2">
+        <button
+          v-bind="sectionToggleAttrs('system')"
+          :class="['flex w-full items-center gap-2 text-left', collapsed('system') ? '' : 'mb-4']"
+          @click="toggleSection('system')"
+        >
           <span class="h-4 w-1.5 rounded-full" :class="ACCENT.gray.bar"></span>
-          <h2
+          <h3
             class="text-sm font-semibold uppercase tracking-wider"
             :class="ACCENT.gray.text"
           >
             System
-          </h2>
-        </div>
+          </h3>
+          <svg
+            class="ml-auto h-4 w-4 shrink-0 text-gray-400 transition-transform"
+            :class="collapsed('system') ? '-rotate-90' : ''"
+            xmlns="http://www.w3.org/2000/svg"
+            fill="none"
+            viewBox="0 0 24 24"
+            stroke-width="2"
+            stroke="currentColor"
+            aria-hidden="true"
+          >
+            <path stroke-linecap="round" stroke-linejoin="round" d="m19.5 8.25-7.5 7.5-7.5-7.5" />
+          </svg>
+        </button>
+        <div v-if="!collapsed('system')">
         <dl class="grid grid-cols-1 gap-x-6 gap-y-4 @xl:grid-cols-2">
           <div>
             <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
@@ -1381,6 +1493,7 @@ const latestExtractionEvent = computed(() => {
             </div>
           </dl>
         </AppDetails>
+        </div>
       </section>
     </div>
   </div>

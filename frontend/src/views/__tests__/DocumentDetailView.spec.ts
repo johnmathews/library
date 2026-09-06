@@ -12,6 +12,7 @@ import {
   useDocumentLayout,
   DEFAULT_CARD_COLUMNS,
   METADATA_CARD_ID,
+  COLLAPSED_SECTIONS_STORAGE_KEY,
 } from '@/composables/useDocumentLayout'
 import { useMetadataEditMode } from '@/composables/useMetadataEditMode'
 
@@ -957,6 +958,130 @@ describe('DocumentDetailView', () => {
     expect(w.find('#edit-amount').exists()).toBe(true)
   })
 
+  it('gives the panel a title and one collapsible section per group', async () => {
+    const w = await mountView()
+    const panel = w.find('[data-testid="metadata-panel"]')
+    // The panel names itself, so the first subsection heading no longer reads
+    // as the whole panel's title — which is what "Content" looked like.
+    expect(panel.text()).toContain('Metadata')
+
+    // Sender/recipient and dates are separate sections now: one heading used
+    // to cover two unrelated kinds of fact and buried the dates.
+    //
+    // `parties` is absent HERE and that is correct, not a gap: it holds only
+    // sender + recipient, both of which the hero owns by default, so the group
+    // is empty and gets dropped rather than left as a heading over nothing.
+    // The next assertion brings it back by hiding sender from the hero.
+    for (const key of ['classification', 'dates', 'facets', 'system']) {
+      expect(panel.find(`[data-testid="metadata-section-${key}"]`).exists()).toBe(true)
+      expect(panel.find(`[data-testid="section-toggle-${key}"]`).exists()).toBe(true)
+    }
+    expect(panel.find('[data-testid="metadata-section-content"]').exists()).toBe(false)
+
+    // Every section carries the SAME spacing rule, so the panel has one
+    // vertical rhythm. Before this each section was a bare `min-w-0` div with
+    // no gap and no rule, so a heading butted straight onto the previous
+    // group's last field and the structure was invisible.
+    //
+    // This asserts the shared class is applied, not how it LOOKS — jsdom
+    // computes no layout. The visual result is only established in a browser.
+    const sections = panel.findAll('[data-testid^="metadata-section-"]')
+    expect(sections.length).toBeGreaterThan(2)
+    for (const s of sections) {
+      expect(s.classes()).toContain('border-t')
+      expect(s.classes()).toContain('pt-5')
+      expect(s.classes()).toContain('mt-5')
+      // …and the leading section drops both, so it sits flush under the title.
+      expect(s.classes()).toContain('first:border-t-0')
+    }
+  })
+
+  it('shows the Sender & recipient section once the hero gives those fields up', async () => {
+    useDocumentLayout().setHeroFieldVisible('sender', false)
+    useDocumentLayout().setHeroFieldVisible('recipient', false)
+    const w = await mountView()
+    const panel = w.find('[data-testid="metadata-panel"]')
+    expect(panel.find('[data-testid="metadata-section-parties"]').exists()).toBe(true)
+    expect(panel.find('[data-testid="section-toggle-parties"]').exists()).toBe(true)
+    expect(panel.find('[data-testid="row-sender"]').exists()).toBe(true)
+    expect(panel.find('[data-testid="row-recipient"]').exists()).toBe(true)
+    // Dates stayed its own section rather than being absorbed back.
+    expect(panel.find('[data-testid="metadata-section-dates"]').exists()).toBe(true)
+  })
+
+  it('collapses a subsection on click, hides its fields, and persists the choice', async () => {
+    const w = await mountView()
+    const toggle = () => w.find('[data-testid="section-toggle-dates"]')
+    const body = () =>
+      w.find('[data-testid="metadata-section-dates"] [data-testid="row-due_date"]')
+
+    // Expanded by default, and the button says so.
+    expect(toggle().attributes('aria-expanded')).toBe('true')
+    expect(body().exists()).toBe(true)
+
+    await toggle().trigger('click')
+    await flushPromises()
+
+    // The observable outcome is the fields going away, not just a flag moving.
+    // Asserted with `exists()` rather than `isVisible()`: the body is removed
+    // with `v-if`, and `isVisible()` against a `v-show` ancestor is unreliable
+    // in jsdom — it reported the row visible here while `aria-expanded` had
+    // already flipped to false.
+    expect(toggle().attributes('aria-expanded')).toBe('false')
+    expect(body().exists()).toBe(false)
+    // The heading itself stays, or you could not unfold it again.
+    expect(toggle().exists()).toBe(true)
+
+    // Persisted per-machine, like every other layout preference here.
+    expect(useDocumentLayout().collapsedSections.value).toContain('dates')
+    expect(localStorage.getItem(COLLAPSED_SECTIONS_STORAGE_KEY)).toContain('dates')
+
+    await toggle().trigger('click')
+    await flushPromises()
+    expect(body().exists()).toBe(true)
+    expect(useDocumentLayout().collapsedSections.value).not.toContain('dates')
+  })
+
+  it('collapsing one section leaves the others alone', async () => {
+    const w = await mountView()
+    await w.find('[data-testid="section-toggle-facets"]').trigger('click')
+    await flushPromises()
+    expect(w.find('[data-testid="section-toggle-facets"]').attributes('aria-expanded')).toBe(
+      'false',
+    )
+    expect(w.find('[data-testid="section-toggle-system"]').attributes('aria-expanded')).toBe('true')
+    expect(
+      w.find('[data-testid="metadata-section-system"]').text(),
+    ).toContain('Status')
+  })
+
+  it('reset layout expands every collapsed section again', async () => {
+    const w = await mountView()
+    await w.find('[data-testid="section-toggle-facets"]').trigger('click')
+    await flushPromises()
+    expect(useDocumentLayout().collapsedSections.value).toEqual(['facets'])
+
+    useDocumentLayout().resetLayout()
+    await flushPromises()
+    expect(useDocumentLayout().collapsedSections.value).toEqual([])
+  })
+
+  it('renders the amount at the same size as every other field', async () => {
+    // It was `text-2xl font-semibold` — right when Financial was its own card
+    // showing one big number, jarring in the hero's stat grid beside Kind and
+    // Sender. The Financial group is gone, so that branch only ever fired here.
+    const w = await mountView()
+    const amount = w.find('[data-testid="row-amount"] [data-testid="row-value"]')
+    expect(amount.exists()).toBe(true)
+    expect(amount.classes()).toContain('text-base')
+    expect(amount.classes()).not.toContain('text-2xl')
+
+    const kind = w.find('[data-testid="row-kind"] [data-testid="row-value"]')
+    expect(amount.classes().filter((c) => c.startsWith('text-'))).toEqual(
+      kind.classes().filter((c) => c.startsWith('text-')),
+    )
+  })
+
   it('renders no field in both the hero and the panel, for any picker state', async () => {
     // The invariant the whole change exists to establish. Before this, 8 of the
     // 10 picker keys also rendered in a metadata card, because two unrelated
@@ -1017,17 +1142,20 @@ describe('DocumentDetailView', () => {
 
     // Every group is a titled section INSIDE that one card.
     const panel = w.find('[data-testid="metadata-panel"]')
-    for (const group of ['content', 'facets', 'system']) {
+    for (const group of ['classification', 'dates', 'facets', 'system']) {
       expect(panel.find(`[data-testid="metadata-section-${group}"]`).exists()).toBe(true)
     }
     // `financial` held one field, `amount`, which the hero now owns — so the
     // group is empty and dropped rather than left as a heading over nothing.
+    // `parties` is dropped for the same reason (sender + recipient are both
+    // hero-owned by default).
     expect(panel.find('[data-testid="metadata-section-financial"]').exists()).toBe(false)
+    expect(panel.find('[data-testid="metadata-section-parties"]').exists()).toBe(false)
 
     // Topics live in Content. `kind` does NOT: it is visible in the hero by
     // default, and the panel omits whatever the hero owns — that subtraction is
     // the de-duplication rule, asserted directly in its own test below.
-    const content = w.find('[data-testid="metadata-section-content"]')
+    const content = w.find('[data-testid="metadata-section-classification"]')
     expect(content.find('[data-testid="row-topics"]').exists()).toBe(true)
     expect(content.text()).toContain('energy')
     expect(content.find('[data-testid="row-kind"]').exists()).toBe(false)
