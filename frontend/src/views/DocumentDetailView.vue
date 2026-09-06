@@ -19,7 +19,6 @@ import Sortable from 'sortablejs'
 import { useRoute, useRouter } from 'vue-router'
 import {
   AppBackLink,
-  AppBadge,
   AppBanner,
   AppButton,
   AppErrorSummary,
@@ -46,7 +45,7 @@ import { useAuthStore } from '@/stores/auth'
 import { useFlashStore } from '@/stores/flash'
 import { useReviewQueueStore } from '@/stores/reviewQueue'
 import { resolveReviewReasons, type ReviewReason } from '@/utils/validationReason'
-import { formatDate, formatDateTime, markdownPageHtml, tagColour } from '@/utils/documentFormat'
+import { formatDate, markdownPageHtml } from '@/utils/documentFormat'
 import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
 import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
 import NoteEditorPanel from '@/components/NoteEditorPanel.vue'
@@ -243,42 +242,84 @@ const {
   setEditMode,
 } = useMetadataEditMode()
 
-/** Display string for every known hero field, resolved from the current doc.
- * An empty string means "no value" — such a field is dropped from the read-mode
- * hero (preserving today's "only show when present" behaviour) but is still
- * listed (with an em-dash placeholder) inside edit mode so it can be toggled. */
-const heroFieldValues = computed<Record<string, string>>(() => {
-  const d = doc.value
-  const values: Record<string, string> = {}
-  if (!d) return values
-  values.kind = d.kind?.name ?? ''
-  values.sender = d.sender?.name ?? ''
-  values.recipient = d.recipient?.name ?? ''
-  values.document_date = formatDate(d.document_date) ?? ''
-  values.created_at = formatDateTime(d.created_at)
-  values.updated_at = formatDateTime(d.updated_at)
-  values.amount =
-    d.amount_total !== null ? [d.amount_total, d.currency].filter(Boolean).join(' ') : ''
-  values.language = d.language ?? ''
-  values.due_date = formatDate(d.due_date) ?? ''
-  values.expiry_date = formatDate(d.expiry_date) ?? ''
-  return values
-})
-
-/** Resolved display value for a hero field key ('' when absent). */
-function heroValue(key: string): string {
-  return heroFieldValues.value[key] ?? ''
-}
+// The hero's display values used to be resolved here, duplicating the row
+// definitions in DocumentMetadataEditor. The hero now embeds that component
+// (variant="hero"), so it resolves and formats its own values — one definition
+// of what "Amount" or "Date on document" reads as, not two that could drift.
 
 /** Human label for a hero field key. */
 function heroLabel(key: string): string {
   return HERO_FIELD_LABELS[key] ?? key
 }
 
-/** Read-mode hero fields: visible AND with a value, in the saved order. */
-const readHeroFields = computed(() =>
-  heroFields.value.filter((f) => f.visible && heroValue(f.key) !== ''),
+// --- The de-duplication rule -------------------------------------------------
+//
+// A field renders in exactly ONE surface. The hero owns `summary` (and `title`,
+// as the page's <h1>) plus whatever the field picker currently makes visible;
+// the metadata panel below renders everything else.
+//
+// The split is computed from the picker's `visible` flag and NOT from
+// `readHeroFields`. That is deliberate and it is the subtle part: an
+// is-it-populated predicate would be reactive on the DOCUMENT, so a field would
+// jump from the panel into the hero the instant a save gave it a value —
+// unmounting the very input the user was typing in, losing focus and possibly a
+// keystroke that had not yet fired its `change`. Visibility only changes when
+// the user toggles a checkbox, so the surfaces stay put while editing.
+
+/** Every picker key the hero's embedded editor can draw — which is all of
+ * them. The panel omits exactly these, so the two surfaces partition the
+ * field set rather than overlapping. */
+const HERO_EDITABLE_KEYS = [
+  'kind',
+  'sender',
+  'recipient',
+  'document_date',
+  'amount',
+  'language',
+  'due_date',
+  'expiry_date',
+  // Rendered by the same component but marked read-only there: they are
+  // server-assigned timestamps a user can show, hide and reorder but not edit.
+  'created_at',
+  'updated_at',
+] as const
+
+type HeroEditableKey = (typeof HERO_EDITABLE_KEYS)[number]
+
+function isHeroEditableKey(key: string): key is HeroEditableKey {
+  return (HERO_EDITABLE_KEYS as readonly string[]).includes(key)
+}
+
+/** The editable fields the hero is showing, in the user's saved order. */
+const heroOwnedFields = computed<HeroEditableKey[]>(() =>
+  heroFields.value.filter((f) => f.visible).map((f) => f.key).filter(isHeroEditableKey),
 )
+
+/**
+ * What the hero's embedded editor draws, in order: summary first (it is the
+ * document in one sentence), then the visible stat fields.
+ *
+ * `title` joins the list only in edit mode. In read mode it is the page's
+ * <h1>, so listing it would print the title twice — the exact duplication this
+ * change removes. Keeping it out of the picker entirely also avoids two traps:
+ * `reconcileHeroFields` appends a newly-added key LAST for every existing user
+ * (so a picker `title` would land after `expiry_date`), and two surfaces able
+ * to render `#edit-title` at once would break Playwright's strict-mode locator
+ * that two e2e specs depend on.
+ */
+const heroPanelFields = computed(() => [
+  ...(editMode.value ? (['title'] as const) : []),
+  'summary' as const,
+  ...heroOwnedFields.value,
+])
+
+/** Everything the hero is showing, so the panel can omit it. `title` and
+ * `summary` are always hero-owned regardless of mode. */
+const panelExcludedFields = computed(() => [
+  'title' as const,
+  'summary' as const,
+  ...heroOwnedFields.value,
+])
 
 /** Pre-filled text for the "Ask about this document" button. It just names the
  * current document so the existing Ask RAG retrieval surfaces it — there is no
@@ -1036,6 +1077,12 @@ watch(
            the layout controls sit top-right, stacking under the title on narrow
            screens (flex keeps them reachable when the grid stacks below lg). -->
       <div class="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <!-- The page's heading, always. In edit mode a Title row appears in
+             the field grid below to change it, and this reflects the result —
+             a heading is context, not a duplicated form field, and dropping it
+             while editing left the page with nothing naming the document.
+             There is still exactly one `#edit-title` in the DOM (the row), so
+             the strict-mode e2e locator is safe. -->
         <h1
           id="document-title"
           class="text-2xl md:text-3xl text-gray-800 dark:text-gray-100 font-bold break-words app-detail-title"
@@ -1086,35 +1133,37 @@ watch(
         </div>
       </div>
 
-      <!-- Read mode: labelled stat row — only visible fields that have a value,
-           in the saved order (unchanged from before apart from customisation). -->
-      <dl
-        v-if="!editMode && readHeroFields.length"
-        class="mt-12 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3"
-        data-testid="hero-stats"
-      >
-        <div v-for="field in readHeroFields" :key="field.key" :data-testid="`hero-field-${field.key}`">
-          <dt class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
-            {{ heroLabel(field.key) }}
-          </dt>
-          <dd class="mt-0.5 text-sm font-medium text-gray-800 dark:text-gray-100 break-words">
-            {{ heroValue(field.key) }}
-          </dd>
-        </div>
-      </dl>
+      <!-- The hero's own fields, drawn by the SAME editor component the panel
+           below uses (variant="hero"). Reusing it is what lets the hero be
+           editable at all: a hand-rolled hero would have to re-implement the
+           inline kind/recipient adders, the three-part date group, the
+           amount+currency pair and the per-field validation badges, and would
+           drift from the panel's copy the first time one of them changed.
 
-      <!-- Edit mode: every known field as a reorderable row with a show/hide
-           toggle + drag handle. Empty fields show a muted em-dash so they can
-           still be toggled/reordered. -->
-      <div v-else-if="editMode" class="mt-6" data-testid="hero-fields-editor">
+           Read mode omits an empty field; edit mode shows every visible field
+           so an empty one can still be filled in. That second half matters:
+           the panel omits whatever the hero owns, so a hero field the hero also
+           hid would be editable nowhere. -->
+      <DocumentMetadataEditor
+        v-if="heroPanelFields.length"
+        class="mt-8"
+        variant="hero"
+        :fields="[...heroPanelFields]"
+        v-model:doc="doc"
+      />
+
+      <!-- Which fields the hero shows, and in what order. A CHOOSER, not a
+           second rendering of the values: the editable copy is the grid above,
+           so these rows carry only a checkbox, a drag handle and a label. -->
+      <div v-if="editMode" class="mt-6 border-t border-gray-100 dark:border-gray-700/60 pt-4" data-testid="hero-fields-editor">
         <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
-          Show, hide and drag to reorder the fields shown here. Cards below can be dragged to reorder them or move them between columns.
+          Choose which fields appear here, and drag to reorder them. Cards below can be dragged to reorder them or move them between columns.
         </p>
-        <ul ref="heroEditListEl" role="list" class="flex flex-col gap-1">
+        <ul ref="heroEditListEl" role="list" class="flex flex-wrap gap-x-4 gap-y-1">
           <li
             v-for="field in heroFields"
             :key="field.key"
-            class="flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-gray-50 dark:hover:bg-gray-700/40"
+            class="flex items-center gap-2 rounded-md px-2 py-1 hover:bg-gray-50 dark:hover:bg-gray-700/40"
             :data-testid="`hero-field-${field.key}`"
           >
             <button
@@ -1134,15 +1183,13 @@ watch(
               :data-testid="`hero-field-toggle-${field.key}`"
               @change="setHeroFieldVisible(field.key, ($event.target as HTMLInputElement).checked)"
             />
-            <span class="w-32 shrink-0 text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+            <span class="text-xs font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
               {{ heroLabel(field.key) }}
-            </span>
-            <span class="min-w-0 truncate text-sm text-gray-800 dark:text-gray-100">
-              {{ heroValue(field.key) || '—' }}
             </span>
           </li>
         </ul>
       </div>
+
       <!-- Bottom row: tag pills on the left, the primary "Ask" action pinned
            bottom-right and baseline-aligned with the pills (sm:items-end). On a
            narrow screen the row stacks (flex-col) so the button drops neatly
@@ -1152,16 +1199,6 @@ watch(
         id="document-hero-bottom-row"
         class="mt-5 flex flex-col gap-3 sm:flex-row sm:items-end"
       >
-        <div
-          v-if="doc.tags.length"
-          class="flex flex-wrap gap-2"
-          data-testid="hero-tags"
-        >
-          <AppBadge v-for="tag in doc.tags" :key="tag.slug" :colour="tagColour(tag.name)">
-            {{ tag.name }}
-          </AppBadge>
-        </div>
-
         <AppButton
           :href="askHref"
           target="_blank"
@@ -1413,6 +1450,7 @@ watch(
           v-model:doc="doc"
           :facets="facets"
           :facet-labels="facetLabels"
+          :exclude-fields="[...panelExcludedFields]"
           @facets-saved="facetLabels = $event"
         />
 

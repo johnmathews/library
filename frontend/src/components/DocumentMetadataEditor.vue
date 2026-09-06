@@ -56,16 +56,45 @@ import { formatDate, tagColour, formatDateTime } from '@/utils/documentFormat'
  *
  * Typed rather than left as `string` so a group's `data-testid` and a template
  * reference to it cannot drift apart silently. */
-type MetadataGroupKey = 'content' | 'parties' | 'financial'
+type MetadataGroupKey = 'content' | 'parties' | 'financial' | 'hero'
 
-const props = defineProps<{
+const props = withDefaults(
+  defineProps<{
   /** The document being edited (always non-null; the parent gates on `doc`). */
   doc: DocumentDetail
   /** Facet vocabulary, passed straight through to the embedded facet editor. */
-  facets: FacetRef[]
+  facets?: FacetRef[]
   /** This document's current facet labels, likewise passed through. */
-  facetLabels: Record<string, string>
-}>()
+  facetLabels?: Record<string, string>
+  /**
+   * Which surface this instance draws.
+   *
+   * `panel` (default) is the document's one metadata card: every group as a
+   * titled section, plus the facet editor and the read-only System block.
+   *
+   * `hero` is the compact stat grid at the top of the page. Same component on
+   * purpose — the per-field read/edit bodies (kind's inline add, the
+   * three-part date group, amount+currency, the validation badges) are
+   * intricate, and a hero that reimplemented them would be a second copy
+   * drifting from this one. Two instances editing DISJOINT field sets over a
+   * shared `v-model:doc` is the arrangement the four split tiles already
+   * proved.
+   */
+  variant?: 'panel' | 'hero'
+  /** `hero` only: exactly which fields to draw, in order. */
+  fields?: EditableField[]
+  /** `panel` only: fields the hero is already showing, so the panel omits
+   * them. This is the de-duplication rule — a field renders in exactly one
+   * surface — and it is why the panel must be told, rather than deciding. */
+  excludeFields?: EditableField[]
+  }>(),
+  // `panel` must be the DEFAULT, not merely the documented intent: the detail
+  // view mounts the panel without naming a variant, so a bare optional prop
+  // would leave it `undefined` and every `variant === 'panel'` gate — the
+  // facet editor, the System block, the card chrome — would silently render
+  // nothing.
+  { variant: 'panel', facets: () => [], facetLabels: () => ({}), fields: () => [], excludeFields: () => [] },
+)
 
 const emit = defineEmits<{
   /** The server's fresh DocumentDetail after a per-field PATCH (parent binds `v-model:doc`). */
@@ -201,11 +230,21 @@ type EditableField =
   | 'due_date'
   | 'expiry_date'
   | 'summary'
+  // Read-only provenance. Listed here because the hero can DISPLAY them (they
+  // are hero-picker keys, so a user can show or hide them like any other), but
+  // `readOnly` on their RowConfig keeps them out of edit mode entirely — there
+  // is nothing about "when was this added" for a user to change.
+  | 'created_at'
+  | 'updated_at'
 
 interface RowConfig {
   field: EditableField
   label: string
   display: (d: DocumentDetail) => string | null
+  /** Never offer an editor for this row — it shows its value in both modes.
+   * Without this the generic `v-else` edit branch would put a text input over
+   * a server-assigned timestamp. */
+  readOnly?: boolean
 }
 
 const EMPTY = '—'
@@ -240,6 +279,18 @@ const rowConfigs: RowConfig[] = [
       d.amount_total === null ? null : [d.amount_total, d.currency].filter(Boolean).join(' '),
   },
   { field: 'due_date', label: 'Due date', display: (d) => formatDate(d.due_date) },
+  {
+    field: 'created_at',
+    label: 'Date added to library',
+    display: (d) => formatDateTime(d.created_at),
+    readOnly: true,
+  },
+  {
+    field: 'updated_at',
+    label: 'Last edited',
+    display: (d) => formatDateTime(d.updated_at),
+    readOnly: true,
+  },
   { field: 'expiry_date', label: 'Expiry date', display: (d) => formatDate(d.expiry_date) },
   { field: 'summary', label: 'Summary', display: (d) => d.summary },
 ]
@@ -288,7 +339,40 @@ const fieldGroups: FieldGroup[] = [
  * panel. Kept as a computed (rather than using `fieldGroups` directly) so a
  * group can be dropped for a document that cannot have it without the template
  * growing a second condition. */
-const activeGroups = computed<FieldGroup[]>(() => fieldGroups)
+const activeGroups = computed<FieldGroup[]>(() => {
+  // The hero draws one unlabelled group: exactly the fields it was given.
+  if (props.variant === 'hero') {
+    // Its own key, NOT 'content': the Topics block below is gated on the
+    // content group, and reusing that key would render topics in the hero as
+    // well as the panel — the duplication this whole change removes.
+    return [{ key: 'hero', label: '', accent: 'violet', fields: props.fields ?? [] }]
+  }
+  // The panel draws everything the hero is NOT showing. A group emptied by
+  // that subtraction is dropped rather than left as a heading over nothing.
+  const excluded = new Set(props.excludeFields ?? [])
+  return fieldGroups
+    .map((group) => ({ ...group, fields: group.fields.filter((f) => !excluded.has(f)) }))
+    .filter((group) => group.fields.length > 0)
+})
+
+/** Whether a field has something to show for this document. Used only by the
+ * hero's read mode, which omits an empty field rather than printing an
+ * em-dash — the stat row is a summary, not a form.
+ *
+ * In EDIT mode the hero shows every field it was given, empty ones included.
+ * That is load-bearing: the panel omits whatever the hero is showing, so a
+ * visible-but-empty hero field that the hero also hid would be editable
+ * NOWHERE. The four-tile layout had the same hazard and solved it card-side
+ * (an empty Financial tile reappeared on edit); this is the hero's version of
+ * that rule. */
+function hasValue(field: EditableField): boolean {
+  const shown = rowByField[field]?.display(props.doc)
+  return shown !== null && shown !== undefined && shown !== ''
+}
+
+function showRow(field: EditableField): boolean {
+  return props.variant !== 'hero' || editMode.value || hasValue(field)
+}
 
 /** Fields that read better spanning the full width of the two-column grid. */
 const WIDE_FIELDS = new Set<EditableField>([
@@ -535,6 +619,13 @@ function fieldDirty(field: EditableField): boolean {
  * (and sets fieldError) when the field fails client-side validation. */
 function buildPatch(field: EditableField): DocumentUpdate | null {
   switch (field) {
+    // Server-assigned timestamps: displayed, never written. `saveField` also
+    // never reaches here for them, because the read-only rows render no editor
+    // to fire a `change` — this case exists so the switch stays exhaustive and
+    // a future writable field cannot be added without a deliberate branch.
+    case 'created_at':
+    case 'updated_at':
+      return null
     case 'title':
       return { title: drafts.title.trim() || null }
     case 'summary':
@@ -776,7 +867,11 @@ const latestExtractionEvent = computed(() => {
        Sizing is a CONTAINER query, not a viewport one: this panel sits in a grid
        column that is viewport-minus-sidebar, so `sm:`/`lg:` would break at the
        wrong moment (see docs/frontend-view-principles.md §5.1). -->
-  <div id="document-details" class="card p-5 @container" data-testid="metadata-panel">
+  <div
+    :id="variant === 'hero' ? 'document-hero-fields' : 'document-details'"
+    :class="variant === 'hero' ? '@container' : 'card p-5 @container'"
+    :data-testid="variant === 'hero' ? 'hero-fields' : 'metadata-panel'"
+  >
     <div
       v-for="group in activeGroups"
       :key="group.key"
@@ -785,7 +880,7 @@ const latestExtractionEvent = computed(() => {
       :data-testid="`metadata-section-${group.key}`"
     >
       <section>
-        <div class="mb-4 flex items-center gap-2">
+        <div v-if="group.label" class="mb-4 flex items-center gap-2">
           <span class="h-4 w-1.5 rounded-full" :class="ACCENT[group.accent].bar"></span>
           <h2
             class="text-sm font-semibold uppercase tracking-wider"
@@ -794,9 +889,19 @@ const latestExtractionEvent = computed(() => {
             {{ group.label }}
           </h2>
         </div>
-        <dl class="grid grid-cols-1 gap-x-6 gap-y-4 @xl:grid-cols-2">
+        <!-- The hero packs more columns in: its rows are short stats, where the
+             panel's are labelled form fields. Both are CONTAINER queries. -->
+        <dl
+          class="grid gap-x-6 gap-y-4"
+          :class="
+            variant === 'hero'
+              ? 'grid-cols-2 @2xl:grid-cols-4'
+              : 'grid-cols-1 @xl:grid-cols-2'
+          "
+        >
           <template v-for="field in group.fields" :key="field">
           <div
+            v-if="showRow(field)"
             :data-testid="`row-${field}`"
             :class="WIDE_FIELDS.has(field) ? '@xl:col-span-2' : ''"
           >
@@ -866,7 +971,7 @@ const latestExtractionEvent = computed(() => {
               </RouterLink>
             </dd>
             <dd
-              v-else-if="!editMode"
+              v-else-if="!editMode || rowByField[field].readOnly"
               class="mt-2 min-w-0 break-words leading-snug text-gray-800 dark:text-gray-100"
               :class="field === 'amount' ? 'text-2xl font-semibold tracking-tight' : 'text-base'"
               data-testid="row-value"
@@ -1129,7 +1234,7 @@ const latestExtractionEvent = computed(() => {
              describe what the document is about, so they live in the Content
              tile; hidden entirely when the document has none. -->
         <dl
-          v-if="group.key === 'content' && doc.topics.length"
+          v-if="variant === 'panel' && group.key === 'content' && doc.topics.length"
           class="mt-5 grid grid-cols-1 border-t border-gray-100 pt-4 dark:border-gray-700/60"
         >
           <div data-testid="row-topics">
@@ -1154,7 +1259,12 @@ const latestExtractionEvent = computed(() => {
          this panel rather than a card of its own. `flat` drops FacetEditor's
          own card chrome and heading so it reads as one more group here; the
          spending drill-through still mounts it un-flat, with its card. -->
-    <div id="document-details-facets" class="min-w-0" data-testid="metadata-section-facets">
+    <div
+      v-if="variant === 'panel'"
+      id="document-details-facets"
+      class="min-w-0"
+      data-testid="metadata-section-facets"
+    >
       <section>
         <div class="mb-4 flex items-center gap-2">
           <span class="h-4 w-1.5 rounded-full" :class="ACCENT.yellow.bar"></span>
@@ -1168,8 +1278,8 @@ const latestExtractionEvent = computed(() => {
         <FacetEditor
           flat
           :document-id="doc.id"
-          :facets="props.facets"
-          :labels="props.facetLabels"
+          :facets="props.facets ?? []"
+          :labels="props.facetLabels ?? {}"
           @saved="emit('facets-saved', $event)"
         />
       </section>
@@ -1178,7 +1288,12 @@ const latestExtractionEvent = computed(() => {
     <!-- System: read-only provenance (status, OCR, source, extraction) with a
          neutral accent. Always present — it is the one group that can never be
          empty, so it anchors the bottom of the panel. -->
-    <div id="document-details-system" class="min-w-0" data-testid="metadata-section-system">
+    <div
+      v-if="variant === 'panel'"
+      id="document-details-system"
+      class="min-w-0"
+      data-testid="metadata-section-system"
+    >
       <section>
         <div class="mb-4 flex items-center gap-2">
           <span class="h-4 w-1.5 rounded-full" :class="ACCENT.gray.bar"></span>

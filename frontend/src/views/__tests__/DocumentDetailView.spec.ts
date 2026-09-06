@@ -391,11 +391,15 @@ describe('DocumentDetailView', () => {
     expect(rowValue(w, 'language')).toBe('Dutch')
     expect(rowValue(w, 'tags')).toBe('Energie')
     expect(rowValue(w, 'amount')).toBe('123.45 EUR')
-    // Value-less fields still render, showing an em-dash, so a field keeps its
-    // position when the Edit toggle flips.
-    expect(rowValue(w, 'title')).toBe('—')
+    // Value-less fields inside the PANEL still render with an em-dash, so a
+    // field keeps its position when the Edit toggle flips.
     expect(rowValue(w, 'due_date')).toBe('—')
-    expect(rowValue(w, 'summary')).toBe('—')
+    // `title` and `summary` are hero-owned. In read mode the hero omits an
+    // empty field (it is a summary, not a form) and the title is the <h1>, so
+    // neither has a row here — they are reachable in edit mode, which is what
+    // stops them becoming unfillable.
+    expect(w.find('[data-testid="row-title"]').exists()).toBe(false)
+    expect(w.find('[data-testid="row-summary"]').exists()).toBe(false)
     // Read-only system rows still render: status, source, and OCR confidence —
     // which for a born-digital doc (null confidence) reads "Not applicable".
     const text = w.text()
@@ -456,13 +460,18 @@ describe('DocumentDetailView', () => {
     expect(w.find('#edit-sender').exists()).toBe(true)
     expect(w.find('#edit-tags').exists()).toBe(true)
     expect(w.find('#edit-amount').exists()).toBe(true)
-    // Read-only values are gone while editing.
-    expect(w.find('[data-testid="row-title"] [data-testid="row-value"]').exists()).toBe(false)
+    // Read-only values are gone while editing. `title` is hero-owned, so its
+    // read value is the <h1> rather than a row — the row exists only in edit
+    // mode, carrying the input.
+    expect(w.find('[data-testid="row-kind"] [data-testid="row-value"]').exists()).toBe(false)
 
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
     expect(w.find('#edit-title').exists()).toBe(false)
-    expect(w.find('[data-testid="row-title"] [data-testid="row-value"]').exists()).toBe(true)
+    expect(w.find('[data-testid="row-kind"] [data-testid="row-value"]').exists()).toBe(true)
+    // The heading is what shows the title in read mode, and it is never a
+    // second editable copy: exactly one `#edit-title` exists in edit mode.
+    expect(w.find('h1#document-title').text()).toBe('Energierekening mei 2026')
   })
 
   it('aligns the Amount and Currency inputs (both labels hidden, no inline hint)', async () => {
@@ -759,10 +768,16 @@ describe('DocumentDetailView', () => {
     expect(w.find('#edit-topics').exists()).toBe(false)
   })
 
-  it('read mode renders each topic as a badge', async () => {
+  it('read mode renders each topic as a badge, in the panel and only there', async () => {
     detail = makeDetail({ topics: ['thermostat installation', 'boiler maintenance'] })
     const w = await mountView()
     expect(rowValue(w, 'topics')).toContain('thermostat installation')
+    // Exactly once: the hero reuses this component, and the Topics block is
+    // gated on the panel variant so it cannot render in both.
+    expect(w.findAll('[data-testid="row-topics"]')).toHaveLength(1)
+    expect(
+      w.find('[data-testid="metadata-panel"]').find('[data-testid="row-topics"]').exists(),
+    ).toBe(true)
     const badges = w.findAll('[data-testid="topic-badge"]')
     expect(badges).toHaveLength(2)
     expect(badges[0]!.text()).toBe('thermostat installation')
@@ -883,7 +898,7 @@ describe('DocumentDetailView', () => {
     detail = makeDetail({ title: null, amount_total: null })
     const w = await mountView()
     expect(w.find('h1').text()).toBe('Untitled document')
-    const stats = w.find('[data-testid="hero-stats"]').text()
+    const stats = w.find('[data-testid="hero-fields"]').text()
     expect(stats).toContain('Invoice') // kind
     expect(stats).toContain('Eneco') // sender
     expect(stats).toContain('15 May 2026') // document date
@@ -892,13 +907,21 @@ describe('DocumentDetailView', () => {
     expect(stats).toContain('10 June 2026') // created_at, formatted
     expect(stats).toContain('Last edited')
     expect(stats).toContain('11 June 2026') // updated_at, formatted
-    // A null amount is dropped from the hero entirely — no em-dash placeholder.
+    // A null amount is dropped from the read-mode hero entirely — no em-dash
+    // placeholder. (It comes back, editable, in edit mode: see the
+    // reachability test below.)
     expect(stats).not.toContain('Amount')
     expect(stats).not.toContain('—')
   })
 
-  it('hides value-less hero stats and value-less metadata tiles in read mode, revealing them on edit', async () => {
-    // A general document: a kind and a date, but no sender and no amount.
+  it('keeps an empty hero-owned field reachable: hidden in read mode, editable on edit', async () => {
+    // THE reachability contract, and the one thing a naive de-duplication gets
+    // wrong. The hero omits an empty field (it is a summary, not a form) and
+    // the panel omits whatever the hero owns — so if the hero also hid the
+    // field while EDITING, a document with no amount would offer nowhere at
+    // all to enter one. The four-tile layout had the same hazard and solved it
+    // card-side, by revealing an empty Financial tile on edit; this is the
+    // hero's version of that rule.
     detail = makeDetail({
       title: 'Brief van de gemeente',
       kind: { slug: 'letter', name: 'Letter' },
@@ -909,31 +932,69 @@ describe('DocumentDetailView', () => {
     })
     const w = await mountView()
 
-    // Hero shows only the stats that have a value.
-    const stats = w.find('[data-testid="hero-stats"]').text()
+    // Read mode: the hero shows only what has a value.
+    const stats = w.find('[data-testid="hero-fields"]').text()
     expect(stats).toContain('Letter') // kind
     expect(stats).toContain('15 May 2026') // document date
     expect(stats).not.toContain('Sender')
     expect(stats).not.toContain('Amount')
 
-    // There is ONE metadata panel now, always present — it carries System,
-    // which every document has. A value-less field inside it renders with an
-    // em-dash rather than vanishing, so nothing becomes unreachable.
-    expect(w.find('[data-testid="metadata-panel"]').exists()).toBe(true)
-    expect(w.find('[data-testid="row-sender"]').exists()).toBe(true)
-    expect(rowValue(w, 'sender')).toBe('—')
-    expect(w.find('[data-testid="row-document_date"]').exists()).toBe(true)
+    // Both are hero-owned, so neither appears in the panel either — they are
+    // genuinely absent from the page in read mode, not merely moved.
+    const panel = w.find('[data-testid="metadata-panel"]')
+    expect(panel.find('[data-testid="row-sender"]').exists()).toBe(false)
+    expect(panel.find('[data-testid="row-amount"]').exists()).toBe(false)
 
-    // The amount is reachable even with no value — this is the property that
-    // used to be supplied by `cardPresent` revealing a hidden Financial tile on
-    // edit. Losing it would make an empty field impossible to fill in.
-    expect(w.find('[data-testid="row-amount"]').exists()).toBe(true)
-    expect(rowValue(w, 'amount')).toBe('—')
-
+    // Edit mode: every visible field renders, empty ones included, WITH an
+    // editor. This is what stops "absent in read mode" becoming "unfillable".
     await w.find('[data-testid="edit-toggle"]').trigger('click')
     await flushPromises()
-    expect(w.find('[data-testid="row-amount"]').exists()).toBe(true)
-    expect(w.find('[data-testid="row-sender"]').exists()).toBe(true)
+
+    const hero = w.find('[data-testid="hero-fields"]')
+    expect(hero.find('[data-testid="row-sender"]').exists()).toBe(true)
+    expect(hero.find('[data-testid="row-amount"]').exists()).toBe(true)
+    expect(w.find('#edit-sender').exists()).toBe(true)
+    expect(w.find('#edit-amount').exists()).toBe(true)
+  })
+
+  it('renders no field in both the hero and the panel, for any picker state', async () => {
+    // The invariant the whole change exists to establish. Before this, 8 of the
+    // 10 picker keys also rendered in a metadata card, because two unrelated
+    // field lists had nothing relating them.
+    const fieldsIn = (w: VueWrapper, testid: string) =>
+      new Set(
+        w
+          .find(`[data-testid="${testid}"]`)
+          .findAll('[data-testid^="row-"]')
+          .map((el) => el.attributes('data-testid') ?? '')
+          .filter((id) => id !== 'row-value'),
+      )
+
+    // State 1: the shipped defaults.
+    let w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    let overlap = [...fieldsIn(w, 'hero-fields')].filter((f) =>
+      fieldsIn(w, 'metadata-panel').has(f),
+    )
+    expect(overlap).toEqual([])
+    // …and the hero is actually showing something, so this is not vacuous.
+    expect(fieldsIn(w, 'hero-fields').size).toBeGreaterThan(3)
+
+    // State 2: a field toggled OFF must move to the panel, not disappear.
+    // Unmount first: a second live view would leave an extra SortableJS
+    // instance registered on the shared mock, and the drag tests read the most
+    // recent one — a stale instance there fails them for a reason that has
+    // nothing to do with dragging.
+    w.unmount()
+    useDocumentLayout().setHeroFieldVisible('kind', false)
+    w = await mountView()
+    await w.find('[data-testid="edit-toggle"]').trigger('click')
+    await flushPromises()
+    expect(fieldsIn(w, 'hero-fields').has('row-kind')).toBe(false)
+    expect(fieldsIn(w, 'metadata-panel').has('row-kind')).toBe(true)
+    overlap = [...fieldsIn(w, 'hero-fields')].filter((f) => fieldsIn(w, 'metadata-panel').has(f))
+    expect(overlap).toEqual([])
   })
 
   it('renders ONE metadata panel holding every group, including facets and system', async () => {
@@ -956,23 +1017,28 @@ describe('DocumentDetailView', () => {
 
     // Every group is a titled section INSIDE that one card.
     const panel = w.find('[data-testid="metadata-panel"]')
-    for (const group of ['content', 'parties', 'financial', 'facets', 'system']) {
+    for (const group of ['content', 'facets', 'system']) {
       expect(panel.find(`[data-testid="metadata-section-${group}"]`).exists()).toBe(true)
     }
+    // `financial` held one field, `amount`, which the hero now owns — so the
+    // group is empty and dropped rather than left as a heading over nothing.
+    expect(panel.find('[data-testid="metadata-section-financial"]').exists()).toBe(false)
 
-    // Topics AND classification (kind + language) live in Content.
+    // Topics live in Content. `kind` does NOT: it is visible in the hero by
+    // default, and the panel omits whatever the hero owns — that subtraction is
+    // the de-duplication rule, asserted directly in its own test below.
     const content = w.find('[data-testid="metadata-section-content"]')
     expect(content.find('[data-testid="row-topics"]').exists()).toBe(true)
     expect(content.text()).toContain('energy')
-    expect(content.find('[data-testid="row-kind"]').exists()).toBe(true)
-    expect(content.find('[data-testid="row-language"]').exists()).toBe(true)
+    expect(content.find('[data-testid="row-kind"]').exists()).toBe(false)
+    expect(content.find('[data-testid="row-tags"]').exists()).toBe(true)
 
     // The facet editor is embedded flat — one instance, no card-in-card.
     expect(w.findAll('[data-testid="facet-editor"]')).toHaveLength(1)
     expect(w.find('[data-testid="facet-editor"]').classes()).not.toContain('card')
   })
 
-  it('hero header renders each tag as a coloured badge', async () => {
+  it('renders tags in the metadata panel, not the hero', async () => {
     detail = makeDetail({
       tags: [
         { slug: 'energie', name: 'Energie' },
@@ -980,8 +1046,13 @@ describe('DocumentDetailView', () => {
       ],
     })
     const w = await mountView()
-    expect(w.findAll('[data-testid="hero-tags"] .rounded-full')).toHaveLength(2)
-    expect(w.find('[data-testid="hero-tags"]').text()).toContain('Energie')
+    // Tags are metadata, so they live in the panel with the rest of it. The
+    // hero used to carry a duplicate pill row below its stats.
+    expect(w.find('[data-testid="hero-tags"]').exists()).toBe(false)
+    const tagRow = w.find('[data-testid="metadata-panel"]').find('[data-testid="row-tags"]')
+    expect(tagRow.exists()).toBe(true)
+    expect(tagRow.text()).toContain('Energie')
+    expect(tagRow.text()).toContain('Wonen')
   })
 
   it('passes the thumbnail as poster to DocumentPdfPreview when has_thumbnail is true', async () => {
@@ -1750,18 +1821,22 @@ describe('DocumentDetailView', () => {
 
   describe('layout customisation (Edit layout)', () => {
     /** Ordered hero-field testids currently in the hero (read or edit mode). */
+    // The hero's fields are drawn by the shared metadata editor, so its rows
+    // carry `row-<field>` like the panel's. `hero-field-<key>` now belongs to
+    // the edit-mode CHOOSER (checkbox + drag handle), which is a different
+    // list — scope to `hero-fields` to read what the hero actually displays.
     function heroFieldOrder(w: VueWrapper): string[] {
       return w
-        .find('#document-hero')
-        .findAll('[data-testid^="hero-field-"]')
+        .find('[data-testid="hero-fields"]')
+        .findAll('[data-testid^="row-"]')
         .map((el) => el.attributes('data-testid') ?? '')
-        .filter((id) => !id.startsWith('hero-field-toggle-'))
+        .filter((id) => id !== 'row-value')
     }
 
     it('renders the recipient field in the hero when present (added in W5)', async () => {
       detail = makeDetail({ recipient: { id: 5, name: 'John' } })
       const w = await mountView()
-      const field = w.find('#document-hero [data-testid="hero-field-recipient"]')
+      const field = w.find('[data-testid="hero-fields"] [data-testid="row-recipient"]')
       expect(field.exists()).toBe(true)
       expect(field.text()).toContain('John')
     })
@@ -1769,9 +1844,16 @@ describe('DocumentDetailView', () => {
     it('omits a hero field hidden in the saved layout (read mode)', async () => {
       useDocumentLayout().setHeroFieldVisible('sender', false)
       const w = await mountView()
-      expect(w.find('#document-hero [data-testid="hero-field-sender"]').exists()).toBe(false)
+      expect(w.find('[data-testid="hero-fields"] [data-testid="row-sender"]').exists()).toBe(false)
       // Other visible fields still render.
-      expect(w.find('#document-hero [data-testid="hero-field-kind"]').exists()).toBe(true)
+      expect(w.find('[data-testid="hero-fields"] [data-testid="row-kind"]').exists()).toBe(true)
+      // …and the hidden one moved to the panel rather than vanishing from the
+      // page. This is the de-duplication rule seen from the other side: a
+      // field the hero gives up must be picked up below, or hiding it in the
+      // hero would silently make it uneditable.
+      expect(
+        w.find('[data-testid="metadata-panel"]').find('[data-testid="row-sender"]').exists(),
+      ).toBe(true)
     })
 
     it('drops a visible-but-empty field from the read-mode hero', async () => {
@@ -1779,14 +1861,16 @@ describe('DocumentDetailView', () => {
       useDocumentLayout().setHeroFieldVisible('due_date', true)
       detail = makeDetail({ due_date: null })
       const w = await mountView()
-      expect(w.find('#document-hero [data-testid="hero-field-due_date"]').exists()).toBe(false)
+      expect(w.find('[data-testid="hero-fields"] [data-testid="row-due_date"]').exists()).toBe(
+        false,
+      )
     })
 
     it('renders hero fields in the saved order', async () => {
       useDocumentLayout().setHeroFieldOrder(['sender', 'kind'])
       const w = await mountView()
       const order = heroFieldOrder(w)
-      expect(order.indexOf('hero-field-sender')).toBeLessThan(order.indexOf('hero-field-kind'))
+      expect(order.indexOf('row-sender')).toBeLessThan(order.indexOf('row-kind'))
     })
 
     it('shows no edit-only controls when edit mode is off', async () => {
@@ -2028,7 +2112,8 @@ describe('DocumentDetailView', () => {
 
       expect(useMetadataEditMode().editMode.value).toBe(false)
       expect(w.find('#edit-title').exists()).toBe(false)
-      expect(rowValue(w, 'title')).toBe('Doc B')
+      // `title` is hero-owned, so out of edit mode it reads from the heading.
+      expect(w.find('h1#document-title').text()).toBe('Doc B')
     })
 
     it('a drop landing past the real cards degrades safely, even though the non-draggable PaymentGroup sibling inflates the DOM index Sortable would report', async () => {
