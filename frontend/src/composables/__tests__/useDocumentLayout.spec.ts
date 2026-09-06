@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { nextTick } from 'vue'
+import { useMetadataEditMode } from '../useMetadataEditMode'
 import {
   useDocumentLayout,
   reconcileHeroFields,
@@ -324,7 +325,7 @@ describe('useDocumentLayout', () => {
   beforeEach(() => {
     localStorage.clear()
     useDocumentLayout().resetLayout()
-    useDocumentLayout().setEditMode(false)
+    useMetadataEditMode().setEditMode(false)
   })
 
   it('exposes hero-field defaults with recipient visible by default', () => {
@@ -363,27 +364,9 @@ describe('useDocumentLayout', () => {
     expect(HERO_FIELD_LABELS.updated_at).toBe('Last edited')
   })
 
-  it('is a singleton: hero and card consumers share one editMode', () => {
-    const a = useDocumentLayout()
-    const b = useDocumentLayout()
-    a.setEditMode(true)
-    expect(b.editMode.value).toBe(true)
-  })
-
-  it('toggles editMode and does not persist it (ephemeral)', async () => {
-    const { editMode, toggleEditMode, setEditMode } = useDocumentLayout()
-    expect(editMode.value).toBe(false)
-    toggleEditMode()
-    expect(editMode.value).toBe(true)
-    setEditMode(false)
-    expect(editMode.value).toBe(false)
-    toggleEditMode()
-    await nextTick()
-    // Nothing written to localStorage for editMode.
-    for (let i = 0; i < localStorage.length; i++) {
-      expect(localStorage.key(i)).not.toContain('edit-mode')
-    }
-  })
+  // `editMode` used to live here as a second flag beside `useMetadataEditMode`'s.
+  // The two merged on 2026-09-06 (one "Edit mode" button); the surviving flag is
+  // covered by `useMetadataEditMode.spec.ts`, so its tests are not duplicated here.
 
   it('sets hero-field visibility and persists it to localStorage', async () => {
     const { setHeroFieldVisible, heroFields } = useDocumentLayout()

@@ -238,11 +238,9 @@ describe('DocumentDetailView', () => {
   beforeEach(async () => {
     // useDocumentLayout is a module singleton — reset its persisted state and
     // leave edit mode so hero/card customisation tests don't leak into others.
-    const layout = useDocumentLayout()
-    layout.resetLayout()
-    layout.setEditMode(false)
-    // useMetadataEditMode is a module singleton too — reset it so a metadata
-    // edit-mode toggle in one test never leaks into the next.
+    useDocumentLayout().resetLayout()
+    // One edit-mode singleton since 2026-09-06 — reset it so a toggle in one
+    // test never leaks into the next.
     useMetadataEditMode().setEditMode(false)
     detail = makeDetail()
     patchResponse = () => jsonResponse(detail)
@@ -1797,12 +1795,12 @@ describe('DocumentDetailView', () => {
       expect(w.findAll('[data-testid^="hero-field-toggle-"]')).toHaveLength(0)
       expect(w.findAll('[data-testid^="card-drag-handle-"]')).toHaveLength(0)
       expect(w.find('[data-testid="reset-layout"]').exists()).toBe(false)
-      expect(w.find('[data-testid="edit-layout-toggle"]').text()).toBe('Edit layout')
+      expect(w.find('[data-testid="edit-toggle"]').text()).toBe('Edit mode')
     })
 
     it('reveals hero field toggles and card drag handles when edit mode is on', async () => {
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       // Every known field is listed for toggling — including ones hidden by
@@ -1815,16 +1813,16 @@ describe('DocumentDetailView', () => {
       expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(true)
       // Reset appears only in edit mode, and the toggle now reads "Done".
       expect(w.find('[data-testid="reset-layout"]').exists()).toBe(true)
-      expect(w.find('[data-testid="edit-layout-toggle"]').text()).toBe('Done')
+      expect(w.find('[data-testid="edit-toggle"]').text()).toBe('Done')
     })
 
     it('hiding a field via its toggle persists and removes it from the read-mode hero', async () => {
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       await w.find('[data-testid="hero-field-toggle-kind"]').setValue(false)
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click') // back to read
+      await w.find('[data-testid="edit-toggle"]').trigger('click') // back to read
       await flushPromises()
 
       expect(w.find('#document-hero [data-testid="hero-field-kind"]').exists()).toBe(false)
@@ -1874,7 +1872,7 @@ describe('DocumentDetailView', () => {
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       // Both column Sortables share one onEnd (group: 'doc-cards'); grab it
@@ -1928,7 +1926,7 @@ describe('DocumentDetailView', () => {
       expect(w.find('#document-preview-card').exists()).toBe(false)
 
       // …and no stray drag handle for it in edit mode.
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
       expect(w.find('[data-testid="card-drag-handle-preview"]').exists()).toBe(false)
     })
@@ -1944,7 +1942,7 @@ describe('DocumentDetailView', () => {
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView() // detail defaults to source: 'upload' (not a note)
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       const onEnd = cardColumnOnEnd()
@@ -1970,7 +1968,7 @@ describe('DocumentDetailView', () => {
       layout.setColumn('left', [...DEFAULT_CARD_COLUMNS.left].reverse())
       layout.setColumn('right', [...DEFAULT_CARD_COLUMNS.right].reverse())
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
       await w.find('[data-testid="reset-layout"]').trigger('click')
       await flushPromises()
@@ -1980,16 +1978,16 @@ describe('DocumentDetailView', () => {
     })
 
     it('resets edit mode when the view unmounts so it never persists across navigation', async () => {
-      const layout = useDocumentLayout()
+      const mode = useMetadataEditMode()
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
-      expect(layout.editMode.value).toBe(true)
+      expect(mode.editMode.value).toBe(true)
 
       // Leaving the view (SPA navigation) must clear the singleton flag, otherwise
       // returning would show edit affordances with no Sortable instances attached.
       w.unmount()
-      expect(layout.editMode.value).toBe(false)
+      expect(mode.editMode.value).toBe(false)
     })
 
     it('resets metadata edit mode when in-view queue navigation changes route.params.id without unmounting', async () => {
@@ -2054,7 +2052,7 @@ describe('DocumentDetailView', () => {
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView() // default (non-note) doc
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       const onEnd = cardColumnOnEnd()
@@ -2097,13 +2095,44 @@ describe('DocumentDetailView', () => {
       expect(w.find('[data-testid="card-drag-handle-facets"]').exists()).toBe(false)
     })
 
+    it('one Edit mode click reveals field editors AND layout affordances together', async () => {
+      // The whole point of the merge. Until 2026-09-06 "Edit details" and
+      // "Edit layout" were separate adjacent buttons driving separate flags:
+      // pressing the wrong one showed half of what you wanted and nothing
+      // said which was which. Assert the observable outcome — all three
+      // affordances present after ONE click on ONE button.
+      const layout = useDocumentLayout()
+      layout.resetLayout()
+      const w = await mountView()
+
+      // Read mode: none of the three.
+      expect(w.find('#edit-title').exists()).toBe(false)
+      expect(w.find('[data-testid="hero-field-toggle-kind"]').exists()).toBe(false)
+      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(false)
+
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
+      await flushPromises()
+
+      // A metadata field editor (values), a hero visibility toggle and a card
+      // drag handle (arrangement) — one mode, all of it.
+      expect(w.find('#edit-title').exists()).toBe(true)
+      expect(w.find('[data-testid="hero-field-toggle-kind"]').exists()).toBe(true)
+      expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(true)
+      expect(w.find('[data-testid="edit-toggle"]').text()).toBe('Done')
+      expect(w.find('[data-testid="edit-toggle"]').attributes('aria-pressed')).toBe('true')
+
+      // And exactly one edit button: the second one is what caused the
+      // confusion, so its absence is part of the contract.
+      expect(w.find('[data-testid="edit-layout-toggle"]').exists()).toBe(false)
+    })
+
     it('gives the metadata panel a drag handle in edit mode, like every other card', async () => {
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView()
       expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(false)
 
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
       expect(w.find('[data-testid="card-drag-handle-metadata"]').exists()).toBe(true)
     })
@@ -2117,7 +2146,7 @@ describe('DocumentDetailView', () => {
       layout.setColumn('left', ['notes', 'comments', 'actions', 'history'])
       layout.setColumn('right', ['preview', METADATA_CARD_ID, 'markdown'])
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       const onEnd = cardColumnOnEnd()
@@ -2155,7 +2184,7 @@ describe('DocumentDetailView', () => {
       const layout = useDocumentLayout()
       layout.resetLayout()
       const w = await mountView()
-      await w.find('[data-testid="edit-layout-toggle"]').trigger('click')
+      await w.find('[data-testid="edit-toggle"]').trigger('click')
       await flushPromises()
 
       const onEnd = cardColumnOnEnd()

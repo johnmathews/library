@@ -1,4 +1,4 @@
-import { ref, type Ref } from 'vue'
+import { type Ref } from 'vue'
 import { useStorage } from '@vueuse/core'
 
 /**
@@ -6,15 +6,17 @@ import { useStorage } from '@vueuse/core'
  *
  * The detail page lets each user tailor how a document is presented: which
  * metadata fields show in the hero (and in what order), and the vertical order
- * of the page's cards. Those two preferences persist per-machine so the page
- * comes back the way the user left it. A third piece — `editMode` — is the
- * ephemeral "am I currently rearranging the layout" flag; it is intentionally
- * NOT persisted so a reload always returns to the normal (non-editing) view.
+ * of the page's cards. Both persist per-machine so the page comes back the way
+ * the user left it.
  *
- * This is singleton state (module-level refs). Later units render the hero-field
- * customiser and the card reorderer from *separate* components, but they must
- * share one `editMode` (entering edit mode reveals both affordances at once), so
- * every `useDocumentLayout()` caller gets the same underlying refs.
+ * This module owns PERSISTED layout only. The ephemeral "am I editing" flag
+ * lives in `useMetadataEditMode` and is deliberately not duplicated here: there
+ * used to be two flags — "Edit details" (field values) and "Edit layout"
+ * (arrangement) — behind two adjacent buttons, and pressing the wrong one was
+ * the single most-reported annoyance on this page. One mode, one owner.
+ *
+ * This is singleton state (module-level refs), so every `useDocumentLayout()`
+ * caller gets the same underlying refs.
  *
  * Merge-safe loading: stored preferences are reconciled against the current
  * DEFAULT_* constants on read (see `reconcileHeroFields` / `reconcileCardColumns`)
@@ -305,17 +307,6 @@ if (!hadColumns && legacyOrder) {
 cardColumns.value = collapseMetadataCards(cardColumns.value)
 cardColumns.value = reconcileCardColumns(cardColumns.value, DEFAULT_CARD_COLUMNS)
 
-// Ephemeral — deliberately a plain ref, never persisted.
-const editMode = ref(false)
-
-function toggleEditMode(): void {
-  editMode.value = !editMode.value
-}
-
-function setEditMode(value: boolean): void {
-  editMode.value = value
-}
-
 /** Show or hide a hero field by key (no-op for an unknown key). */
 function setHeroFieldVisible(key: string, visible: boolean): void {
   heroFields.value = heroFields.value.map((f) => (f.key === key ? { ...f, visible } : f))
@@ -389,10 +380,6 @@ export interface DocumentLayout {
   heroFields: Ref<HeroField[]>
   /** Persisted two-column card layout (left/right, each an ordered id list). */
   cardColumns: Ref<CardColumns>
-  /** Ephemeral "editing the layout" flag (not persisted; resets on reload). */
-  editMode: Ref<boolean>
-  toggleEditMode: () => void
-  setEditMode: (value: boolean) => void
   setHeroFieldVisible: (key: string, visible: boolean) => void
   moveHeroField: (fromIndex: number, toIndex: number) => void
   setHeroFieldOrder: (keys: readonly string[]) => void
@@ -405,9 +392,6 @@ export function useDocumentLayout(): DocumentLayout {
   return {
     heroFields,
     cardColumns,
-    editMode,
-    toggleEditMode,
-    setEditMode,
     setHeroFieldVisible,
     moveHeroField,
     setHeroFieldOrder,

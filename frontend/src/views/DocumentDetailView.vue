@@ -214,34 +214,33 @@ async function confirmPurge(): Promise<void> {
 
 // --- Hero header (title + key stats + tags) -----------------------------------
 //
-// The hero is customisable (W5): a single page-wide "Edit layout" mode (shared
-// with the section-card reorder, W6) lets the user show/hide and drag-reorder
+// The hero is customisable: edit mode lets the user show/hide and drag-reorder
 // the labelled stat fields. Order + visibility persist per-machine via
-// `useDocumentLayout`; the mode itself is ephemeral (resets on reload). Values
-// remain read-only here — editing metadata stays in the Details card below.
+// `useDocumentLayout`; the mode itself is ephemeral (resets on reload).
 
 const {
   heroFields,
   cardColumns,
-  editMode: layoutEditMode,
-  toggleEditMode: toggleLayoutEditMode,
-  setEditMode: setLayoutEditMode,
   setHeroFieldVisible,
   moveHeroField,
   moveCard,
   resetLayout,
 } = useDocumentLayout()
 
-// The hero's "Edit details" toggle and the ActionDock's Edit/Done button drive
-// the SAME metadata edit mode (not this view's "Edit layout" mode above) — both
-// read/flip the one `useMetadataEditMode` singleton, so every split-out metadata
-// tile opens its editors together. `metadataEditMode` also gates `cardPresent`
-// so an empty section tile (e.g. Financial) reappears when editing. The view
-// resets the flag on unmount/navigation.
+// ONE edit mode for the whole page. Until 2026-09-06 there were two adjacent
+// buttons — "Edit details" (field values) and "Edit layout" (arrangement) —
+// driving two independent flags, and pressing the wrong one was the page's
+// most-reported annoyance. Now a single "Edit mode" reveals the field editors,
+// the hero field-visibility toggles and the card drag handles together.
+//
+// Dragging is scoped to `[data-card-drag-handle]` / `[data-hero-drag-handle]`,
+// so showing handles alongside live text inputs does not make the two compete.
+// The hero button and the ActionDock's Edit/Done button flip the same
+// singleton; the view resets it on unmount and on in-queue navigation.
 const {
-  editMode: metadataEditMode,
-  toggle: toggleMetadataEditMode,
-  setEditMode: setMetadataEditMode,
+  editMode,
+  toggle: toggleEditMode,
+  setEditMode,
 } = useMetadataEditMode()
 
 /** Display string for every known hero field, resolved from the current doc.
@@ -815,7 +814,7 @@ function buildSortables(): void {
   }
 }
 
-watch(layoutEditMode, async (on) => {
+watch(editMode, async (on) => {
   if (on) {
     await nextTick()
     buildSortables()
@@ -831,10 +830,7 @@ watch(layoutEditMode, async (on) => {
 // dragging would be silently dead until the user toggled Done→Edit again.
 onBeforeUnmount(() => {
   destroySortables()
-  setLayoutEditMode(false)
-  // Same rationale for the metadata edit-mode singleton: never leave the
-  // Details card (or the ActionDock) rendering its editors after navigating away.
-  setMetadataEditMode(false)
+  setEditMode(false)
   heroObserver?.disconnect()
   heroObserver = null
 })
@@ -855,14 +851,13 @@ watch(
     markdownLoading.value = false
     markdownError.value = false
     facetLabels.value = {}
-    // The edit-mode flags are module singletons (shared with ActionDock),
-    // and this view is reused across in-queue Prev/Next navigation
-    // (the RouterView in App.vue is unkeyed, so no unmount happens). Reset
-    // both here too, or a still-true editMode survives into the new document
-    // while the editor's non-immediate hydration watcher never re-fires,
-    // leaving blank edit inputs that can PATCH an empty value on Enter.
-    setLayoutEditMode(false)
-    setMetadataEditMode(false)
+    // The edit-mode flag is a module singleton (shared with ActionDock), and
+    // this view is reused across in-queue Prev/Next navigation (the RouterView
+    // in App.vue is unkeyed, so no unmount happens). Reset it here too, or a
+    // still-true editMode survives into the new document while the editor's
+    // non-immediate hydration watcher never re-fires, leaving blank edit inputs
+    // that can PATCH an empty value on Enter.
+    setEditMode(false)
     const numericId = Number(id)
     if (!Number.isInteger(numericId) || numericId < 1) {
       notFound.value = true
@@ -1048,17 +1043,19 @@ watch(
           {{ doc.title ?? 'Untitled document' }}
         </h1>
         <div class="flex shrink-0 items-center gap-2">
-          <!-- Page-wide metadata edit toggle. The Details card was split into
-               per-section tiles, so this single control (not a per-tile button)
-               flips the shared `useMetadataEditMode` flag every tile reads. Kept
-               distinct from "Edit layout" (which rearranges tiles/fields). -->
+          <!-- The page's ONE edit control. It replaced an adjacent pair
+               ("Edit details" / "Edit layout") that drove two independent
+               flags: the labels did not make the split obvious and pressing
+               the wrong one was the page's most-reported annoyance. Keeps the
+               `edit-toggle` testid because that is the one with e2e coverage —
+               `edit-layout-toggle` had none. -->
           <button
             type="button"
             class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
-            :class="metadataEditMode ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-500/15 dark:text-violet-300' : ''"
+            :class="editMode ? 'bg-violet-50 text-violet-700 border-violet-200 dark:bg-violet-500/15 dark:text-violet-300' : ''"
             data-testid="edit-toggle"
-            :aria-pressed="metadataEditMode"
-            @click="toggleMetadataEditMode"
+            :aria-pressed="editMode"
+            @click="toggleEditMode"
           >
             <svg
               xmlns="http://www.w3.org/2000/svg"
@@ -1075,10 +1072,10 @@ watch(
                 d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125"
               />
             </svg>
-            {{ metadataEditMode ? 'Done' : 'Edit details' }}
+            {{ editMode ? 'Done' : 'Edit mode' }}
           </button>
           <button
-            v-if="layoutEditMode"
+            v-if="editMode"
             type="button"
             class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
             data-testid="reset-layout"
@@ -1086,22 +1083,13 @@ watch(
           >
             Reset layout
           </button>
-          <button
-            type="button"
-            class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300"
-            data-testid="edit-layout-toggle"
-            :aria-pressed="layoutEditMode"
-            @click="toggleLayoutEditMode"
-          >
-            {{ layoutEditMode ? 'Done' : 'Edit layout' }}
-          </button>
         </div>
       </div>
 
       <!-- Read mode: labelled stat row — only visible fields that have a value,
            in the saved order (unchanged from before apart from customisation). -->
       <dl
-        v-if="!layoutEditMode && readHeroFields.length"
+        v-if="!editMode && readHeroFields.length"
         class="mt-12 grid grid-cols-2 sm:grid-cols-4 gap-x-4 gap-y-3"
         data-testid="hero-stats"
       >
@@ -1118,7 +1106,7 @@ watch(
       <!-- Edit mode: every known field as a reorderable row with a show/hide
            toggle + drag handle. Empty fields show a muted em-dash so they can
            still be toggled/reordered. -->
-      <div v-else-if="layoutEditMode" class="mt-6" data-testid="hero-fields-editor">
+      <div v-else-if="editMode" class="mt-6" data-testid="hero-fields-editor">
         <p class="mb-2 text-xs text-gray-500 dark:text-gray-400">
           Show, hide and drag to reorder the fields shown here. Cards below can be dragged to reorder them or move them between columns.
         </p>
@@ -1207,7 +1195,7 @@ watch(
          card between columns keeps it visible instead of dropping it. -->
     <DefineCard v-slot="{ cardId }">
         <button
-          v-if="layoutEditMode"
+          v-if="editMode"
           type="button"
           data-card-drag-handle
           :data-testid="`card-drag-handle-${cardId}`"
