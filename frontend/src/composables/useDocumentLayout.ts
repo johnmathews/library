@@ -38,6 +38,8 @@ export const HERO_FIELDS_STORAGE_KEY = 'library:doc-layout-hero-fields-v1'
 export const CARD_ORDER_STORAGE_KEY = 'library:doc-layout-card-order-v1'
 /** localStorage key for the persisted two-column card layout. */
 export const CARD_COLUMNS_STORAGE_KEY = 'library:doc-layout-card-columns-v1'
+/** localStorage key for the collapsed metadata-panel subsections (a key list). */
+export const COLLAPSED_SECTIONS_STORAGE_KEY = 'library:doc-layout-collapsed-sections-v1'
 
 /**
  * Human labels for every hero-eligible field key. Kept separate from the
@@ -125,6 +127,21 @@ export const DEFAULT_CARD_COLUMNS: CardColumns = {
   left: ['notes', METADATA_CARD_ID, 'comments', 'actions', 'history'],
   right: ['preview', 'markdown'],
 }
+
+/**
+ * Every collapsible subsection of the metadata panel, in render order. Stored
+ * collapse state is reconciled against this on read, so a key retired later
+ * stops being honoured rather than lingering invisibly in localStorage.
+ */
+export const METADATA_SECTION_KEYS = [
+  'classification',
+  'parties',
+  'dates',
+  'facets',
+  'system',
+] as const
+
+export type MetadataSectionKey = (typeof METADATA_SECTION_KEYS)[number]
 
 /** Fresh, mutable copy of a hero-field list (never share the constant's refs). */
 function cloneHeroFields(fields: readonly HeroField[]): HeroField[] {
@@ -307,6 +324,13 @@ if (!hadColumns && legacyOrder) {
 cardColumns.value = collapseMetadataCards(cardColumns.value)
 cardColumns.value = reconcileCardColumns(cardColumns.value, DEFAULT_CARD_COLUMNS)
 
+// Collapsed subsections. Stored as a list of keys rather than a per-key
+// boolean map so the DEFAULT is "everything expanded" for both a new user and
+// a returning one — a map would need a migration every time a section is added,
+// and an absent key would have to mean "expanded" anyway.
+const collapsedSections = useStorage<string[]>(COLLAPSED_SECTIONS_STORAGE_KEY, [])
+collapsedSections.value = reconcileCollapsedSections(collapsedSections.value)
+
 /** Show or hide a hero field by key (no-op for an unknown key). */
 function setHeroFieldVisible(key: string, visible: boolean): void {
   heroFields.value = heroFields.value.map((f) => (f.key === key ? { ...f, visible } : f))
@@ -366,9 +390,38 @@ function moveCard(cardId: string, toColumn: 'left' | 'right', toIndex: number): 
   cardColumns.value = next
 }
 
+/** Drop stored keys that are no longer collapsible sections, and de-dupe.
+ * Pure, so the spec can exercise it without touching localStorage. */
+export function reconcileCollapsedSections(stored: readonly string[] | null | undefined): string[] {
+  const known = new Set<string>(METADATA_SECTION_KEYS)
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const key of Array.isArray(stored) ? stored : []) {
+    if (known.has(key) && !seen.has(key)) {
+      out.push(key)
+      seen.add(key)
+    }
+  }
+  return out
+}
+
+/** Is this metadata subsection currently collapsed? */
+function isSectionCollapsed(key: string): boolean {
+  return collapsedSections.value.includes(key)
+}
+
+/** Fold or unfold one subsection, persisting the change. */
+function toggleSection(key: string): void {
+  collapsedSections.value = isSectionCollapsed(key)
+    ? collapsedSections.value.filter((k) => k !== key)
+    : [...collapsedSections.value, key]
+}
+
 /** Restore both persisted preferences to their DEFAULT_* values. */
 function resetLayout(): void {
   heroFields.value = cloneHeroFields(DEFAULT_HERO_FIELDS)
+  // Reset means "as shipped", and as shipped every subsection is expanded.
+  collapsedSections.value = []
   cardColumns.value = {
     left: [...DEFAULT_CARD_COLUMNS.left],
     right: [...DEFAULT_CARD_COLUMNS.right],
@@ -380,6 +433,12 @@ export interface DocumentLayout {
   heroFields: Ref<HeroField[]>
   /** Persisted two-column card layout (left/right, each an ordered id list). */
   cardColumns: Ref<CardColumns>
+  /** Persisted keys of the collapsed metadata-panel subsections. */
+  collapsedSections: Ref<string[]>
+  /** Whether one metadata subsection is currently folded. */
+  isSectionCollapsed: (key: string) => boolean
+  /** Fold or unfold one metadata subsection. */
+  toggleSection: (key: string) => void
   setHeroFieldVisible: (key: string, visible: boolean) => void
   moveHeroField: (fromIndex: number, toIndex: number) => void
   setHeroFieldOrder: (keys: readonly string[]) => void
@@ -392,6 +451,9 @@ export function useDocumentLayout(): DocumentLayout {
   return {
     heroFields,
     cardColumns,
+    collapsedSections,
+    isSectionCollapsed,
+    toggleSection,
     setHeroFieldVisible,
     moveHeroField,
     setHeroFieldOrder,
