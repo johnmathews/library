@@ -307,8 +307,11 @@ function renderAnswer(answer: string): string {
 
 function friendlyError(error: unknown): string {
   if (error instanceof ApiError) {
-    if (error.status === 503) {
-      return 'Answering is unavailable — no AI API key is configured. Add one in settings to use Ask.'
+    // Several faults answer 503 — no API key, an expired subscription login —
+    // and the server's `detail` names which one, so show it. A 503 with no JSON
+    // body came from a proxy or a restart, not the app.
+    if (error.status === 503 && error.body === null) {
+      return 'Answering is unavailable right now — try again shortly.'
     }
     if (error.status === 0) return 'Network problem — check your connection and try again.'
     return error.detail
