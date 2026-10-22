@@ -155,3 +155,41 @@ def test_healthz_stays_quiet_with_no_credentials_and_no_subscription(
 
     assert body["status"] == "ok"
     assert "claude_credentials" not in body
+
+
+def test_metrics_gauge_reads_the_same_check_as_healthz(
+    app: Any, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The wiring, end to end: the lifespan registers the gauge and a scrape
+    reflects the credentials on disk. The alert reads this series, so a gauge
+    that drifted from /healthz would page on a different truth."""
+    import re
+
+    from fastapi.testclient import TestClient
+
+    from library import telemetry
+    from library.config import get_settings
+
+    monkeypatch.setattr(telemetry, "_configured", False)
+    monkeypatch.setattr(telemetry, "_provider", None)
+    monkeypatch.setattr(telemetry, "_instruments", {})
+    settings = get_settings()
+    monkeypatch.setattr(settings, "otel_metrics_enabled", True)
+    monkeypatch.setattr(settings, "claude_config_dir", tmp_path)
+    _write_creds(tmp_path)
+
+    def gauge(client: TestClient) -> list[str]:
+        body = client.get("/metrics").text
+        return re.findall(r"^library_claude_credentials_healthy(?:\{[^}]*\})? (\S+)$", body, re.M)
+
+    try:
+        with TestClient(app) as client:
+            assert client.get("/healthz").json()["claude_credentials"] == "healthy"
+            assert gauge(client) == ["1.0"]
+
+            _write_creds(tmp_path, hours=-1, refresh=None)
+            assert client.get("/healthz").json()["claude_credentials"] == "unhealthy"
+            assert gauge(client) == ["0.0"]
+    finally:
+        if telemetry._provider is not None:
+            telemetry._provider.shutdown()
