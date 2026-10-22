@@ -255,15 +255,34 @@ describe('AskView', () => {
     expect(maxRequested).toBeGreaterThan(0)
   })
 
-  it('shows a friendly error summary when the API returns 503', async () => {
-    askQuestionMock.mockRejectedValue(new ApiError(503, 'no API key configured'))
+  it("shows the server's reason when the API returns 503", async () => {
+    // Two different faults return 503 — a missing API key and an expired
+    // subscription login — and they need different fixes. The UI once mapped
+    // every 503 to "no API key", which sent the user to the wrong one.
+    const detail =
+      'Ask is unavailable: the Claude subscription backend could not authenticate: ' +
+      'OAuth session expired'
+    askQuestionMock.mockRejectedValue(new ApiError(503, detail, { detail }))
     const w = mountView()
     await typeAndSubmit(w, 'which invoices are due?')
 
     const summary = w.find('[data-testid="error-summary"]')
     expect(summary.exists()).toBe(true)
-    expect(summary.text()).toContain('no AI API key is configured')
+    expect(summary.text()).toContain('could not authenticate')
+    expect(summary.text()).not.toContain('API key')
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
+  })
+
+  it('shows a generic unavailable message for a 503 with no JSON body', async () => {
+    // A proxy or a restarting container answers 503 with no `detail`; the
+    // status text alone ("Service Unavailable") tells the user nothing.
+    askQuestionMock.mockRejectedValue(new ApiError(503, 'Service Unavailable'))
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+
+    const summary = w.find('[data-testid="error-summary"]')
+    expect(summary.text()).toContain('Answering is unavailable right now')
+    expect(summary.text()).not.toContain('API key')
   })
 
   it('syncs the URL to /ask/:threadId and shows no error on a successful ask', async () => {

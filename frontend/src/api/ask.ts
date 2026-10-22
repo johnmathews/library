@@ -55,8 +55,8 @@ export interface ThreadDetail {
  * POST /api/ask — ask a natural-language question about the archive and get
  * a cited answer. `question` must be 1..1000 chars (validated server-side;
  * 422 on violation). Pass `threadId` to continue an existing conversation
- * thread. Rejects with `ApiError` carrying `.detail` for the
- * 503 "no API key configured" case and any other non-2xx response.
+ * thread. Rejects with `ApiError` carrying `.detail` for any non-2xx response,
+ * including the 503s for a missing API key or an unusable subscription login.
  */
 /** A base64 image attached to a question (no `data:` prefix). */
 export interface AskImage {
