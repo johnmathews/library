@@ -1,10 +1,10 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-08-13 (§1.2: the `main` ruleset does require `ci-gate` — the claim that branch protection was not yet pointed at it was written before the ruleset existed; documented the `check_mypy.py` ratchet as the second `typecheck` step, now guarding an empty quarantine). Earlier: 2026-08-12, 2026-07-27. **Supersedes:** none.
-**Last verified:** 2026-08-28 — method: partial, scoped to §1.3 step 4. Added the /healthz body check to match the new block in `scripts/deploy.sh` (verified with `bash -n`, and the two grep patterns proven against a real compact `/healthz` payload). §1.2 and the deploy-script flags carry forward the 2026-08-13 verification below, whose method was: method: partial, scoped to §1.2. Re-read the "what green means" paragraph against `ci.yml` and `scripts/ci_gate.sh`, and checked the branch-protection claim against the live `main` ruleset via `gh api repos/johnmathews/library/rulesets` (active since 2026-07-28; requires `ci-gate`, blocks deletion and non-fast-forward, `bypass_actors: []`). The deploy-script flags and the end-to-end run remain as verified on 2026-08-12 and were not re-executed.
+**Status:** active. **Last updated:** 2026-10-22 (the live LXC is `documents` now, not `paperless` (renamed 2026-10-11 by home-server PR #197), so every `ssh paperless` and the deploy script's default host were stale; `scripts/deploy.sh` now defaults to `documents`, and its health-probe comment no longer claims paperless-ngx still serves :8000). Earlier: 2026-08-13 (§1.2: the `main` ruleset does require `ci-gate` — the claim that branch protection was not yet pointed at it was written before the ruleset existed; documented the `check_mypy.py` ratchet as the second `typecheck` step, now guarding an empty quarantine). Earlier: 2026-08-12, 2026-07-27. **Supersedes:** none.
+**Last verified:** 2026-10-22 — method: partial, scoped to the host name. The LXC was renamed `paperless` → `documents` on 2026-10-11 (home-server PR #197); `LIBRARY_DEPLOY_HOST=documents scripts/deploy.sh` deployed `00a33c0` on 2026-10-22 and `/healthz` returned that sha, which is the run behind the new default. Earlier: `bash -n scripts/deploy.sh` is clean. Earlier: 2026-08-28 — method: partial, scoped to §1.3 step 4. Added the /healthz body check to match the new block in `scripts/deploy.sh` (verified with `bash -n`, and the two grep patterns proven against a real compact `/healthz` payload). §1.2 and the deploy-script flags carry forward the 2026-08-13 verification below, whose method was: method: partial, scoped to §1.2. Re-read the "what green means" paragraph against `ci.yml` and `scripts/ci_gate.sh`, and checked the branch-protection claim against the live `main` ruleset via `gh api repos/johnmathews/library/rulesets` (active since 2026-07-28; requires `ci-gate`, blocks deletion and non-fast-forward, `bypass_actors: []`). The deploy-script flags and the end-to-end run remain as verified on 2026-08-12 and were not re-executed.
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh
 
-How to ship a merged change to the live `paperless` LXC. This is the focused
+How to ship a merged change to the live `documents` LXC. This is the focused
 "do it now" version; the full topology and rationale live in
 [../deployment.md](../deployment.md) (§1.7.2 for the live instance).
 
@@ -55,7 +55,7 @@ pulls the new image, migrates, recreates web + worker, and verifies. Done.
    not locked in by lowering the number, and on an override that has stopped
    suppressing anything. Re-quarantining a module is allowed; doing it without a
    measured count beside it is not.
-2. **Key-based SSH to the host works** (`ssh paperless true` returns instantly,
+2. **Key-based SSH to the host works** (`ssh documents true` returns instantly,
    no password). The script aborts early if it can't connect non-interactively.
 3. **No schema-incompatible change shipped without a backup plan.** The new
    migrations run automatically (step 1.3). They are normally additive and have
@@ -109,7 +109,7 @@ scripts/deploy.sh --help     # usage
 when you've verified `:latest` is current yourself (e.g. `docker`/git isn't
 available locally to run the check). You then own not redeploying the old image.
 
-Overrides (env): `LIBRARY_DEPLOY_HOST` (default `paperless`),
+Overrides (env): `LIBRARY_DEPLOY_HOST` (default `documents`),
 `LIBRARY_DEPLOY_DIR` (default `/srv/apps`), `SKIP_PROMOTE_CHECK` (`1` = bypass
 the promote gate, like `--force`).
 
@@ -119,7 +119,7 @@ The script already checks migrate + `/healthz`, but for a human sanity pass:
 
 ```bash
 scripts/deploy.sh --status        # web/worker/db/embedder up, head = expected revision
-ssh paperless 'cd /srv/apps && docker compose logs --tail 30 library-worker'
+ssh documents 'cd /srv/apps && docker compose logs --tail 30 library-worker'
 ```
 
 Then click through the changed surface in the browser.
@@ -131,7 +131,7 @@ previous SHA:
 
 1. Find the previous good image:
    ```bash
-   ssh paperless 'docker images ghcr.io/johnmathews/library --format "{{.Tag}}\t{{.CreatedAt}}"'
+   ssh documents 'docker images ghcr.io/johnmathews/library --format "{{.Tag}}\t{{.CreatedAt}}"'
    ```
 2. Pin the stack to the previous `:sha` tag (edit `/srv/apps/.env` or the compose
    image ref — back it up first) and `docker compose up -d`. See
@@ -143,7 +143,7 @@ previous SHA:
 
 ## 1.7 Troubleshooting
 
-1. **`Cannot SSH to 'paperless'`** — `ssh paperless true` fails. Fix your SSH
+1. **`Cannot SSH to 'documents'`** — `ssh documents true` fails. Fix your SSH
    config/keys, or set `LIBRARY_DEPLOY_HOST`.
 2. **`library-migrate exited <n>`** — a migration failed; the script aborts
    before declaring success. Read `docker compose logs library-migrate`, fix
