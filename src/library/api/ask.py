@@ -11,8 +11,8 @@ from typing import Annotated, Any, Literal
 
 from anthropic import AsyncAnthropic
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+from sqlalchemy import delete, func, literal, select, tuple_
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library import telemetry
@@ -51,6 +51,11 @@ class AskImage(BaseModel):
 class AskRequest(BaseModel):
     """Body of POST /api/ask."""
 
+    # Unknown fields are refused, not ignored. Ignoring them meant a client that
+    # misspelt `replace_from_turn_id` got a normal answer appended to the thread
+    # — a plausible 200 for a request that asked for something else.
+    model_config = ConfigDict(extra="forbid")
+
     question: str = Field(min_length=1, max_length=1000, description="The question to answer.")
     thread_id: int | None = Field(default=None, description="Continue an existing conversation.")
     images: list[AskImage] = Field(
@@ -58,6 +63,20 @@ class AskRequest(BaseModel):
         max_length=MAX_ASK_IMAGES,
         description="Optional image attachments for the multimodal model.",
     )
+    replace_from_turn_id: int | None = Field(
+        default=None,
+        description=(
+            "Retry or edit: answer `question` in place of this turn, dropping it and every "
+            "later turn of the thread. The dropped turns are deleted only once the new answer "
+            "succeeds. Requires `thread_id`."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _replacement_needs_a_thread(self) -> "AskRequest":
+        if self.replace_from_turn_id is not None and self.thread_id is None:
+            raise ValueError("replace_from_turn_id requires thread_id")
+        return self
 
 
 class Citation(BaseModel):
@@ -76,6 +95,7 @@ class AskResponse(BaseModel):
     used_tools: list[str]
     cost_usd: float
     thread_id: int
+    turn_id: int
 
 
 class ThreadSummary(BaseModel):
@@ -113,19 +133,35 @@ def _thread_title(question: str) -> str:
     return question.strip()[:120]
 
 
+# A turn's position in its thread: turns are ordered by (created_at, id), and
+# "this turn and every later one" is everything at or after that pair.
+_TurnKey = tuple[datetime, int]
+
+
+def _turn_order() -> Any:
+    return tuple_(AskTurn.created_at, AskTurn.id)
+
+
+def _position(key: _TurnKey) -> Any:
+    return tuple_(literal(key[0]), literal(key[1]))
+
+
 async def _history_messages(
-    session: AsyncSession, thread_id: int, turns: int
+    session: AsyncSession, thread_id: int, turns: int, before: _TurnKey | None = None
 ) -> list[dict[str, Any]]:
-    """The last ``turns`` turns' message blocks, chronological, flattened."""
+    """The last ``turns`` turns' message blocks, chronological, flattened.
+
+    ``before`` limits history to turns earlier than that position, so a turn
+    being replaced never appears in the context of its own replacement."""
     if turns <= 0:
         return []
+    query = select(AskTurn.messages).where(AskTurn.thread_id == thread_id)
+    if before is not None:
+        query = query.where(_turn_order() < _position(before))
     rows = (
         (
             await session.execute(
-                select(AskTurn.messages)
-                .where(AskTurn.thread_id == thread_id)
-                .order_by(AskTurn.created_at.desc(), AskTurn.id.desc())
-                .limit(turns)
+                query.order_by(AskTurn.created_at.desc(), AskTurn.id.desc()).limit(turns)
             )
         )
         .scalars()
@@ -185,7 +221,17 @@ async def ask(
     # `_previewed_ids_from_history`), and previewed ids come solely from replayed
     # thread history — a brand-new thread has none, so no rollback can happen on
     # the turn that creates it.
-    history = await _history_messages(session, thread_id, settings.ask_history_turns)
+    replace_from: _TurnKey | None = None
+    if request.replace_from_turn_id is not None:
+        target = await session.get(AskTurn, request.replace_from_turn_id)
+        if target is None or target.thread_id != thread_id:
+            raise HTTPException(status_code=404, detail="Turn not found in this conversation.")
+        # Plain values, for the same reason as `thread_id` above: a rollback
+        # inside the answer would expire `target`.
+        replace_from = (target.created_at, target.id)
+    history = await _history_messages(
+        session, thread_id, settings.ask_history_turns, before=replace_from
+    )
     # Who is asking and what the archive calls things — see library.ask.context.
     archive_context = render_archive_context(await load_archive_context(session, user))
 
@@ -280,24 +326,36 @@ async def ask(
     # computed at different points is how they drift.
     telemetry.record_cost(backend=ask_backend, model=result.model, usd=turn_cost)
 
-    session.add(
-        AskTurn(
-            thread_id=thread_id,
-            query=request.question,
-            answer=result.answer,
-            model=result.model,
-            input_tokens=result.input_tokens,
-            output_tokens=result.output_tokens,
-            cost_usd=turn_cost,
-            used_tools={"tools": result.used_tools},
-            citations=[
-                {"document_id": c.document_id, "title": c.title, "page_number": c.page_number}
-                for c in result.citations
-            ],
-            messages=result.turn_messages,
+    # Retry/edit: drop the replaced turn and everything after it now, and only
+    # now — after the answer exists — so a failed retry costs nothing. The
+    # delete and the new turn commit together.
+    if replace_from is not None:
+        await session.execute(
+            delete(AskTurn).where(
+                AskTurn.thread_id == thread_id, _turn_order() >= _position(replace_from)
+            )
         )
+    new_turn = AskTurn(
+        thread_id=thread_id,
+        query=request.question,
+        answer=result.answer,
+        model=result.model,
+        input_tokens=result.input_tokens,
+        output_tokens=result.output_tokens,
+        cost_usd=turn_cost,
+        used_tools={"tools": result.used_tools},
+        citations=[
+            {"document_id": c.document_id, "title": c.title, "page_number": c.page_number}
+            for c in result.citations
+        ],
+        messages=result.turn_messages,
     )
+    session.add(new_turn)
     thread.updated_at = func.now()
+    # Flushed and read before the commit: the commit expires attributes, and a
+    # post-commit read of `id` would be a lazy load outside the greenlet.
+    await session.flush()
+    turn_id = new_turn.id
     await session.commit()
 
     return AskResponse(
@@ -309,6 +367,7 @@ async def ask(
         used_tools=result.used_tools,
         cost_usd=turn_cost,
         thread_id=thread_id,
+        turn_id=turn_id,
     )
 
 

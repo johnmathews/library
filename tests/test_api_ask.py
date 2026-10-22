@@ -1753,3 +1753,155 @@ def test_ask_refuses_an_allocated_documents_amount_edit_without_a_500(
             assert turns == 2
     finally:
         engine.dispose()
+
+
+# --- Retry / edit: replace a turn and everything after it -------------------
+
+
+def _scripted_run_ask(monkeypatch: pytest.MonkeyPatch, *, fail_on: str | None = None) -> list[Any]:
+    """Stub `run_ask` so each answer echoes its question; record the history
+    each call received. A question equal to ``fail_on`` raises the subscription
+    auth error instead, the 503 path."""
+    histories: list[Any] = []
+
+    async def fake_run_ask(
+        session: Any,
+        *,
+        question: str,
+        settings: Any,
+        client: Any,
+        history_messages: list[dict[str, Any]] | None = None,
+        images: list[dict[str, str]] | None = None,
+        backend: str = "api",
+        archive_context: str | None = None,
+    ):
+        histories.append(history_messages)
+        if question == fail_on:
+            from library.llm.subscription import SubscriptionBackendError
+
+            raise SubscriptionBackendError("the Claude subscription backend could not authenticate")
+        from library.ask.engine import AskResult
+
+        return AskResult(
+            answer=f"answer to {question}",
+            citations=[],
+            used_tools=[],
+            model=settings.ask_model,
+            turn_messages=[
+                {"role": "user", "content": [{"type": "text", "text": question}]},
+                {
+                    "role": "assistant",
+                    "content": [{"type": "text", "text": f"answer to {question}"}],
+                },
+            ],
+        )
+
+    monkeypatch.setattr(ask_module, "run_ask", fake_run_ask)
+    return histories
+
+
+def _ask_three(api_client: TestClient) -> tuple[int, list[int]]:
+    """A thread of three turns: q1, q2, q3. Returns (thread_id, turn ids)."""
+    first = api_client.post("/api/ask", json={"question": "q1"}).json()
+    thread_id = first["thread_id"]
+    ids = [first["turn_id"]]
+    for q in ("q2", "q3"):
+        ids.append(
+            api_client.post("/api/ask", json={"question": q, "thread_id": thread_id}).json()[
+                "turn_id"
+            ]
+        )
+    return thread_id, ids
+
+
+def test_ask_returns_the_new_turn_id(
+    api_client: TestClient, with_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Retry and edit address a turn by id, so the client must learn it from the
+    answer without refetching the thread."""
+    _scripted_run_ask(monkeypatch)
+    body = api_client.post("/api/ask", json={"question": "q1"}).json()
+
+    turns = api_client.get(f"/api/ask/threads/{body['thread_id']}").json()["turns"]
+    assert [t["id"] for t in turns] == [body["turn_id"]]
+
+
+def test_replacing_a_turn_drops_it_and_every_later_turn(
+    api_client: TestClient, with_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Editing the second question re-asks from there: q1 stays, q2 and q3 go,
+    and the new answer follows q1. The model sees only q1 as history — a
+    replaced turn must not leak into the context of its own replacement."""
+    histories = _scripted_run_ask(monkeypatch)
+    thread_id, ids = _ask_three(api_client)
+
+    response = api_client.post(
+        "/api/ask",
+        json={"question": "q2 edited", "thread_id": thread_id, "replace_from_turn_id": ids[1]},
+    )
+
+    assert response.status_code == 200, response.text
+    turns = api_client.get(f"/api/ask/threads/{thread_id}").json()["turns"]
+    assert [t["query"] for t in turns] == ["q1", "q2 edited"]
+    assert turns[-1]["id"] == response.json()["turn_id"]
+    replayed = [m["content"][0]["text"] for m in histories[-1] if m["role"] == "user"]
+    assert replayed == ["q1"]
+
+
+def test_retrying_the_last_turn_replaces_only_it(
+    api_client: TestClient, with_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _scripted_run_ask(monkeypatch)
+    thread_id, ids = _ask_three(api_client)
+
+    api_client.post(
+        "/api/ask",
+        json={"question": "q3", "thread_id": thread_id, "replace_from_turn_id": ids[2]},
+    )
+
+    turns = api_client.get(f"/api/ask/threads/{thread_id}").json()["turns"]
+    assert [t["query"] for t in turns] == ["q1", "q2", "q3"]
+    assert turns[-1]["id"] != ids[2]
+
+
+def test_a_failed_replacement_keeps_the_original_turns(
+    api_client: TestClient, with_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The replaced turns are deleted only once the new answer exists. A retry
+    that fails (here: the login expired) must not cost the user the answer they
+    already had."""
+    _scripted_run_ask(monkeypatch, fail_on="q2 edited")
+    thread_id, ids = _ask_three(api_client)
+
+    response = api_client.post(
+        "/api/ask",
+        json={"question": "q2 edited", "thread_id": thread_id, "replace_from_turn_id": ids[1]},
+    )
+
+    assert response.status_code == 503
+    turns = api_client.get(f"/api/ask/threads/{thread_id}").json()["turns"]
+    assert [t["id"] for t in turns] == ids
+
+
+def test_replace_from_turn_needs_a_thread(api_client: TestClient, with_api_key: None) -> None:
+    response = api_client.post("/api/ask", json={"question": "q", "replace_from_turn_id": 1})
+    assert response.status_code == 422
+
+
+def test_replace_from_a_turn_of_another_thread_is_404(
+    api_client: TestClient, with_api_key: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn id is only meaningful inside its own thread; accepting a foreign
+    one would delete turns from a conversation the request never named."""
+    _scripted_run_ask(monkeypatch)
+    thread_a, ids_a = _ask_three(api_client)
+    thread_b = api_client.post("/api/ask", json={"question": "other"}).json()["thread_id"]
+
+    response = api_client.post(
+        "/api/ask",
+        json={"question": "x", "thread_id": thread_b, "replace_from_turn_id": ids_a[0]},
+    )
+
+    assert response.status_code == 404
+    turns = api_client.get(f"/api/ask/threads/{thread_a}").json()["turns"]
+    assert [t["id"] for t in turns] == ids_a

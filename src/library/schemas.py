@@ -902,6 +902,10 @@ class LLMSurfaceOut(BaseModel):
     # value is deployed config or something a person changed.
     default: Literal["api", "subscription"]
     overridden: bool
+    # The model this surface answers with (e.g. `claude-opus-4-8`). Instance
+    # config, not a secret, and readable by every signed-in user so the Ask
+    # composer can say what will answer.
+    model: str
 
 
 class LLMBackendsOut(BaseModel):
