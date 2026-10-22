@@ -21,6 +21,8 @@ export interface AskResponse {
   used_tools: string[]
   cost_usd: number
   thread_id: number
+  /** The turn this answer was stored as — what retry and edit address. */
+  turn_id: number
 }
 
 /** Summary row returned by GET /api/ask/threads. */
@@ -69,10 +71,19 @@ export function askQuestion(
   threadId?: number,
   signal?: AbortSignal,
   images?: AskImage[],
+  replaceFromTurnId?: number,
 ): Promise<AskResponse> {
-  const body: { question: string; thread_id?: number; images?: AskImage[] } = { question }
+  const body: {
+    question: string
+    thread_id?: number
+    images?: AskImage[]
+    replace_from_turn_id?: number
+  } = { question }
   if (threadId !== undefined) body.thread_id = threadId
   if (images && images.length) body.images = images
+  // Retry / edit: answer in place of this turn, dropping it and every later
+  // turn. The server deletes them only once the new answer succeeds.
+  if (replaceFromTurnId !== undefined) body.replace_from_turn_id = replaceFromTurnId
   return apiFetch<AskResponse>('/api/ask', { method: 'POST', body, signal })
 }
 

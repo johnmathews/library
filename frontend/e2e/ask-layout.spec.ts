@@ -67,6 +67,7 @@ async function stubAsk(page: Page, answer: string): Promise<void> {
         used_tools: ['search_documents'],
         cost_usd: 0.0,
         thread_id: 1,
+        turn_id: 1,
       }),
     })
   })

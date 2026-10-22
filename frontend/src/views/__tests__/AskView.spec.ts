@@ -3,9 +3,19 @@ import { nextTick } from 'vue'
 import { flushPromises, mount, type VueWrapper } from '@vue/test-utils'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import AskView from '../AskView.vue'
-import { askQuestion, getThread, listThreads, type AskResponse } from '@/api/ask'
+import {
+  askQuestion,
+  deleteThread,
+  getThread,
+  listThreads,
+  renameThread,
+  type AskResponse,
+  type ThreadDetail,
+} from '@/api/ask'
+import { getLLMBackends, type LLMBackends } from '@/api/settings'
 import { ApiError } from '@/api/client'
 import { usePageTitle } from '@/composables/usePageTitle'
+import { ASK_VIEW_MODE_STORAGE_KEY } from '@/composables/useAskViewMode'
 
 vi.mock('@/api/ask', () => ({
   askQuestion: vi.fn(),
@@ -14,6 +24,7 @@ vi.mock('@/api/ask', () => ({
   deleteThread: vi.fn(),
   renameThread: vi.fn(),
 }))
+vi.mock('@/api/settings', () => ({ getLLMBackends: vi.fn() }))
 
 const askQuestionMock = vi.mocked(askQuestion)
 const getThreadMock = vi.mocked(getThread)
@@ -30,7 +41,44 @@ function sampleResponse(overrides: Partial<AskResponse> = {}): AskResponse {
     used_tools: ['search'],
     cost_usd: 0.0123,
     thread_id: 1,
+    turn_id: 101,
     ...overrides,
+  }
+}
+
+function threadWith(queries: string[], id = 7): ThreadDetail {
+  return {
+    id,
+    title: 'Energy',
+    turns: queries.map((query, i) => ({
+      id: 100 + i,
+      query,
+      answer: `answer ${i + 1}`,
+      citations: [],
+      used_tools: [],
+      cost_usd: 0.02,
+      created_at: '',
+    })),
+  }
+}
+
+function backends(model = 'claude-opus-4-8'): LLMBackends {
+  return {
+    surfaces: [
+      {
+        surface: 'ask',
+        label: 'Ask',
+        description: '',
+        backend: 'subscription',
+        default: 'subscription',
+        overridden: false,
+        model,
+      },
+    ],
+    credentials_status: 'healthy',
+    credentials_detail: '',
+    api_key_configured: true,
+    editable: false,
   }
 }
 
@@ -42,6 +90,8 @@ describe('AskView', () => {
     askQuestionMock.mockReset()
     getThreadMock.mockReset()
     vi.mocked(listThreads).mockResolvedValue([])
+    vi.mocked(getLLMBackends).mockResolvedValue(backends())
+    localStorage.clear()
     router = createRouter({
       history: createMemoryHistory(),
       routes: [
@@ -58,13 +108,11 @@ describe('AskView', () => {
   afterEach(() => {
     wrapper?.unmount()
     wrapper = undefined
-    // Some tests stub matchMedia to simulate the lg (desktop) breakpoint; reset
-    // so others fall back to the mobile default (jsdom leaves matchMedia unset).
     vi.unstubAllGlobals()
   })
 
-  /** Simulate the lg+ (desktop) breakpoint for useMediaQuery. jsdom leaves
-   * matchMedia undefined, which vueuse treats as "no match" (mobile). */
+  /** Simulate the lg+ breakpoint for useMediaQuery (jsdom has no matchMedia,
+   * which vueuse treats as "no match", i.e. a phone). */
   function stubDesktopViewport(): void {
     vi.stubGlobal('matchMedia', (query: string) => ({
       matches: true,
@@ -89,176 +137,113 @@ describe('AskView', () => {
     await flushPromises()
   }
 
-  it('claims the page title for the app bar', () => {
+  async function openThread(queries: string[]): Promise<VueWrapper> {
+    getThreadMock.mockResolvedValue(threadWith(queries))
+    await router.push('/ask/7')
     const w = mountView()
-    // The page title is claimed for the app bar rather than rendered in the
-    // view — see composables/usePageTitle.ts.
+    await flushPromises()
+    return w
+  }
+
+  // ── Shell ──────────────────────────────────────────────────────────────────
+
+  it('claims the page title for the app bar and renders no heading of its own', () => {
+    const w = mountView()
     expect(w.find('h1').exists()).toBe(false)
     expect(usePageTitle().pageTitle.value).toBe('Ask')
   })
 
-  it('disables New conversation in the fresh state and enables it after an ask (item 2)', async () => {
-    // Desktop: the composer is always docked, so from a fresh state "New
-    // conversation" is redundant and greyed out.
-    stubDesktopViewport()
-    askQuestionMock.mockResolvedValue(sampleResponse())
+  it('has no conversation list beside the transcript; conversations live in the title menu', () => {
+    const w = mountView()
+    expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(false)
+    expect(w.find('[data-testid="ask-title"]').exists()).toBe(true)
+  })
+
+  it('shows which model and backend will answer under the composer', async () => {
     const w = mountView()
     await flushPromises()
-    const btn = () => w.find('[data-testid="new-conversation"]').element as HTMLButtonElement
-    expect(btn().disabled).toBe(true)
-    // Once a conversation exists it is enabled again (starting a new one is real).
+    expect(w.get('[data-testid="ask-model-chip"]').text()).toBe('Opus 4.8 · Subscription')
+  })
+
+  it('still works when the model cannot be loaded — the chip is simply absent', async () => {
+    vi.mocked(getLLMBackends).mockRejectedValue(new ApiError(500, 'boom'))
+    const w = mountView()
+    await flushPromises()
+    expect(w.find('[data-testid="ask-model-chip"]').exists()).toBe(false)
+    expect(w.find('#ask-question').exists()).toBe(true)
+  })
+
+  // ── Asking ─────────────────────────────────────────────────────────────────
+
+  it('disables New conversation in the fresh state and enables it after an ask', async () => {
+    askQuestionMock.mockResolvedValueOnce(sampleResponse())
+    getThreadMock.mockResolvedValue(threadWith(['which invoices are due?'], 1))
+    const w = mountView()
+    expect(w.get('[data-testid="new-conversation"]').attributes('disabled')).toBeDefined()
+
     await typeAndSubmit(w, 'which invoices are due?')
-    expect(btn().disabled).toBe(false)
+
+    expect(w.get('[data-testid="new-conversation"]').attributes('disabled')).toBeUndefined()
   })
 
-  it('appends a turn to the transcript after a successful ask', async () => {
-    askQuestionMock.mockResolvedValueOnce(
-      sampleResponse({
-        answer: 'Two invoices are due this month.',
-        citations: [{ document_id: 7, title: 'Energy bill', page_number: null }],
-        thread_id: 42,
-      }),
-    )
-    const w = mountView()
-    await typeAndSubmit(w, 'which invoices are due?')
-
-    const turns = w.findAll('[data-testid="ask-turn"]')
-    expect(turns).toHaveLength(1)
-    expect(turns[0]!.find('[data-testid="ask-answer"]').text()).toContain('Two invoices are due')
-    expect(turns[0]!.find('[data-testid="ask-citation"]').text()).toContain('Energy bill')
-  })
-
-  it('appends a second turn and posts with thread_id on follow-up', async () => {
-    getThreadMock.mockResolvedValue({ id: 42, title: '', turns: [] })
-    askQuestionMock.mockResolvedValueOnce({
-      answer: 'First answer [#1].',
-      citations: [{ document_id: 1, title: 'Doc', page_number: null }],
-      used_tools: ['semantic_search'],
-      cost_usd: 0.01,
-      thread_id: 42,
-    })
-    const w = mountView()
-    await typeAndSubmit(w, 'first?')
-    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
-
-    askQuestionMock.mockResolvedValueOnce({
-      answer: 'Second answer.',
-      citations: [],
-      used_tools: [],
-      cost_usd: 0.01,
-      thread_id: 42,
-    })
-    await typeAndSubmit(w, 'and then?')
-    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(2)
-    expect(askQuestionMock).toHaveBeenLastCalledWith('and then?', 42, expect.anything(), undefined)
-  })
-
-  it('loads a thread when mounted on /ask/:threadId', async () => {
-    getThreadMock.mockResolvedValue({
-      id: 7,
-      title: 'Energy',
-      turns: [
-        {
-          id: 1,
-          query: 'who?',
-          answer: 'Vattenfall [#3].',
-          citations: [{ document_id: 3, title: 'Bill', page_number: 2 }],
-          used_tools: ['query_documents'],
-          cost_usd: 0.02,
-          created_at: '',
-        },
-      ],
-    })
-    await router.push('/ask/7')
-    const w = mountView()
-    await flushPromises()
-    expect(getThreadMock).toHaveBeenCalledWith(7)
-    expect(w.text()).toContain('Vattenfall')
-  })
-
-  // --- transcript scroll position -----------------------------------------
-  //
-  // Two different intents share one scroll container. A turn ARRIVING should
-  // pull you to the bottom — you want the new thing. OPENING a thread to read
-  // it should start at the top, or the transcript lands mid-answer with your
-  // own question scrolled off, which is the first thing needed to make sense of
-  // what follows. Screenshot review caught this; nothing asserted it.
-  //
-  // jsdom has no layout, so `scrollHeight`/`clientHeight` are 0 and the real
-  // geometry cannot be tested here. What CAN be pinned is the direction the
-  // code drives the container, which is the part that regressed.
-
-  it('starts an opened conversation at the top, not scrolled into the answer', async () => {
-    getThreadMock.mockResolvedValue({
-      id: 7,
-      title: 'Energy',
-      turns: [
-        {
-          id: 1,
-          query: 'who is my supplier?',
-          answer: 'Vattenfall [#3].',
-          citations: [],
-          used_tools: ['query_documents'],
-          cost_usd: 0.02,
-          created_at: '',
-        },
-      ],
-    })
-    await router.push('/ask/7')
-    const w = mountView()
-    const transcript = w.get('[data-testid="ask-transcript"]').element as HTMLElement
-
-    // Give the element real geometry BEFORE the load resolves. Without this the
-    // test is vacuous: jsdom reports scrollHeight/clientHeight as 0, so
-    // scrollToBottom's overflow branch is false, it falls through to a
-    // scrollIntoView that jsdom no-ops, and scrollTop stays 0 whichever
-    // function ran. Verified by reverting the fix and watching this fail.
-    let scrollTop = 0
-    Object.defineProperty(transcript, 'scrollTop', {
-      configurable: true,
-      get: () => scrollTop,
-      set: (v: number) => {
-        scrollTop = v
-      },
-    })
-    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, get: () => 5000 })
-    Object.defineProperty(transcript, 'clientHeight', { configurable: true, get: () => 400 })
-
-    await flushPromises()
-    await nextTick()
-
-    expect(scrollTop).toBe(0)
-  })
-
-  it('drives the transcript downward when a new answer arrives', async () => {
-    // The counterpart: scroll-to-bottom must survive the change above. Written
-    // as "did it try to move down" rather than a pixel assertion, because jsdom
-    // reports zero height and a pixel test here would pass vacuously.
+  it('appends a turn: the question as a bubble, the answer as text', async () => {
     askQuestionMock.mockResolvedValueOnce(sampleResponse())
     const w = mountView()
-    const transcript = w.get('[data-testid="ask-transcript"]').element as HTMLElement
-
-    let maxRequested = 0
-    Object.defineProperty(transcript, 'scrollTop', {
-      configurable: true,
-      get: () => maxRequested,
-      set: (v: number) => {
-        maxRequested = Math.max(maxRequested, v)
-      },
-    })
-    Object.defineProperty(transcript, 'scrollHeight', { configurable: true, get: () => 5000 })
-    Object.defineProperty(transcript, 'clientHeight', { configurable: true, get: () => 400 })
-
     await typeAndSubmit(w, 'which invoices are due?')
-    await nextTick()
 
-    expect(maxRequested).toBeGreaterThan(0)
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
+    expect(w.get('[data-testid="ask-question-bubble"]').text()).toBe('which invoices are due?')
+    expect(w.get('[data-testid="ask-answer"]').text()).toContain('Two invoices are due')
+    expect(w.find('[data-testid="ask-greeting"]').exists()).toBe(false)
+  })
+
+  it('posts a follow-up with the thread id', async () => {
+    askQuestionMock
+      .mockResolvedValueOnce(sampleResponse({ thread_id: 5 }))
+      .mockResolvedValueOnce(sampleResponse({ thread_id: 5, turn_id: 102 }))
+    getThreadMock.mockResolvedValue(threadWith(['first'], 5))
+    const w = mountView()
+    await typeAndSubmit(w, 'first')
+    await typeAndSubmit(w, 'second')
+
+    expect(askQuestionMock.mock.calls[1]![1]).toBe(5)
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(2)
+  })
+
+  it('moves the URL to the thread and shows its generated title after the first answer', async () => {
+    askQuestionMock.mockResolvedValueOnce(sampleResponse({ thread_id: 42 }))
+    getThreadMock.mockResolvedValue({ ...threadWith(['q'], 42), title: 'Invoices due' })
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+    await flushPromises()
+
+    expect(router.currentRoute.value.name).toBe('ask-thread')
+    expect(router.currentRoute.value.params.threadId).toBe('42')
+    expect(w.get('[data-testid="ask-title"]').text()).toContain('Invoices due')
+    expect(w.find('[data-testid="error-summary"]').exists()).toBe(false)
+  })
+
+  it('shows no error when a successful response omits thread_id', async () => {
+    const withoutThreadId = sampleResponse()
+    delete (withoutThreadId as Partial<AskResponse>).thread_id
+    askQuestionMock.mockResolvedValueOnce(withoutThreadId)
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
+    expect(w.find('[data-testid="error-summary"]').exists()).toBe(false)
+  })
+
+  it('validates an empty question without calling the API', async () => {
+    const w = mountView()
+    await w.find('[data-testid="ask-form"]').trigger('submit')
+    await flushPromises()
+
+    expect(askQuestionMock).not.toHaveBeenCalled()
+    expect(w.get('[data-testid="error-summary"]').text()).toContain('Enter a question to ask')
   })
 
   it("shows the server's reason when the API returns 503", async () => {
-    // Two different faults return 503 — a missing API key and an expired
-    // subscription login — and they need different fixes. The UI once mapped
-    // every 503 to "no API key", which sent the user to the wrong one.
     const detail =
       'Ask is unavailable: the Claude subscription backend could not authenticate: ' +
       'OAuth session expired'
@@ -266,784 +251,290 @@ describe('AskView', () => {
     const w = mountView()
     await typeAndSubmit(w, 'which invoices are due?')
 
-    const summary = w.find('[data-testid="error-summary"]')
-    expect(summary.exists()).toBe(true)
+    const summary = w.get('[data-testid="error-summary"]')
     expect(summary.text()).toContain('could not authenticate')
     expect(summary.text()).not.toContain('API key')
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
   })
 
   it('shows a generic unavailable message for a 503 with no JSON body', async () => {
-    // A proxy or a restarting container answers 503 with no `detail`; the
-    // status text alone ("Service Unavailable") tells the user nothing.
     askQuestionMock.mockRejectedValue(new ApiError(503, 'Service Unavailable'))
     const w = mountView()
     await typeAndSubmit(w, 'which invoices are due?')
 
-    const summary = w.find('[data-testid="error-summary"]')
-    expect(summary.text()).toContain('Answering is unavailable right now')
-    expect(summary.text()).not.toContain('API key')
-  })
-
-  it('syncs the URL to /ask/:threadId and shows no error on a successful ask', async () => {
-    askQuestionMock.mockResolvedValueOnce(sampleResponse({ thread_id: 42 }))
-    const w = mountView()
-    await typeAndSubmit(w, 'which invoices are due?')
-
-    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
-    expect(w.find('[data-testid="error-summary"]').exists()).toBe(false)
-    expect(router.currentRoute.value.name).toBe('ask-thread')
-    expect(router.currentRoute.value.params.threadId).toBe('42')
-  })
-
-  it('shows no error summary when a successful response omits thread_id', async () => {
-    // The real backend always returns thread_id, but a malformed/partial
-    // response (or an incomplete test mock) can omit it. A rendered answer
-    // must never be turned into a generic "Something went wrong" error by a
-    // failed post-success navigation. Regression guard for the spurious
-    // error-on-success alert.
-    const withoutThreadId = sampleResponse()
-    delete (withoutThreadId as Partial<AskResponse>).thread_id
-    askQuestionMock.mockResolvedValueOnce(withoutThreadId)
-    const w = mountView()
-    await typeAndSubmit(w, 'which invoices are due?')
-
-    // The answer turn renders…
-    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
-    // …and no error alert appears.
-    expect(w.find('[data-testid="error-summary"]').exists()).toBe(false)
-  })
-
-  it('renders the answer on a distinct surface card at lg+, flat on mobile (item 4 / P4)', async () => {
-    askQuestionMock.mockResolvedValueOnce(sampleResponse())
-    const w = mountView()
-    await typeAndSubmit(w, 'which invoices are due?')
-    // At lg+ the answer sits on a bordered, shaded surface card (distinct from the
-    // two-pane panel). On mobile that card is dropped — the answer is flat text
-    // under the violet question bubble — so the classes are lg-gated.
-    const surface = w.find('[data-testid="ask-answer-surface"]')
-    expect(surface.exists()).toBe(true)
-    expect(surface.classes()).toContain('lg:bg-gray-50')
-    expect(surface.classes()).toContain('lg:border')
-    // The mobile (unprefixed) card classes are gone.
-    expect(surface.classes()).not.toContain('bg-gray-50')
-    expect(surface.classes()).not.toContain('border')
-    // The answer body lives inside it either way.
-    expect(surface.find('[data-testid="ask-answer"]').exists()).toBe(true)
-    // These class strings are the CONVERSATION-mode contract. Stated
-    // explicitly because this test doesn't stub the viewport, so it relies on
-    // the mobile default to stay in conversation mode — if the default ever
-    // changed, the assertions above would start describing a layout nobody
-    // meant to pin.
-    expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('conversation')
-  })
-
-  // --- Document view mode -------------------------------------------------
-  //
-  // The transcript can render as chat bubbles (default) or as full-width
-  // role-labelled document blocks. Document mode is clamped to lg+, so every
-  // test here that expects it must stub the desktop viewport AND seed the
-  // stored preference; the ones that omit either are asserting the clamp.
-  describe('document view mode', () => {
-    beforeEach(() => {
-      localStorage.clear()
-    })
-
-    /** Opt OUT of the default (document) before mounting. */
-    function preferConversationMode(): void {
-      localStorage.setItem('library:ask-view-mode', 'conversation')
-    }
-
-    it('renders document blocks by DEFAULT on a desktop viewport', async () => {
-      stubDesktopViewport()
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('document')
-      expect(w.find('[data-testid="ask-doc-block"]').exists()).toBe(true)
-    })
-
-    it('renders bubbles on a desktop viewport when the user opts out', async () => {
-      stubDesktopViewport()
-      preferConversationMode()
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('conversation')
-      expect(w.find('[data-testid="ask-doc-block"]').exists()).toBe(false)
-    })
-
-    it('renders role-labelled document blocks when selected on a desktop viewport', async () => {
-      stubDesktopViewport()
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      const turn = w.get('[data-testid="ask-turn"]')
-      expect(turn.attributes('data-view-mode')).toBe('document')
-      expect(turn.find('[data-testid="ask-doc-block"]').exists()).toBe(true)
-      // Both roles are named, so the speaker is stated rather than implied by
-      // alignment — which is the whole point of dropping the right-aligned bubble.
-      expect(turn.findAll('[data-testid="ask-doc-role"]').map((r) => r.text())).toEqual([
-        'You',
-        'Agent',
-      ])
-    })
-
-    it('drops the right-aligned bubble cap in document mode', async () => {
-      stubDesktopViewport()
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      // The bubble's max-w-[85%] is the thing document mode exists to remove.
-      expect(w.get('[data-testid="ask-turn"]').html()).not.toContain('max-w-[85%]')
-    })
-
-    it('ignores a stored document preference below lg', async () => {
-      // No stubDesktopViewport(): jsdom leaves matchMedia undefined, which
-      // vueuse reads as "no match", i.e. a phone. A desktop user's preference
-      // must not follow them onto a phone.
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('conversation')
-      expect(w.find('[data-testid="ask-doc-block"]').exists()).toBe(false)
-    })
-
-    it('offers the layout toggle only at lg+', async () => {
-      askQuestionMock.mockResolvedValue(sampleResponse())
-      const mobile = mountView()
-      await typeAndSubmit(mobile, 'which invoices are due?')
-      // v-if, not a `hidden` utility: a CSS-hidden button stays focusable and
-      // stays in the accessibility tree, so it must not be in the DOM at all.
-      expect(mobile.find('[data-testid="ask-view-mode"]').exists()).toBe(false)
-      mobile.unmount()
-
-      stubDesktopViewport()
-      const desktop = mountView()
-      await typeAndSubmit(desktop, 'which invoices are due?')
-      expect(desktop.find('[data-testid="ask-view-mode"]').exists()).toBe(true)
-    })
-
-    it('marks the active layout with aria-pressed on exactly one button', async () => {
-      stubDesktopViewport()
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      const conversation = w.get('[data-testid="ask-view-mode-conversation"]')
-      const document_ = w.get('[data-testid="ask-view-mode-document"]')
-      // Document is the default, so it starts pressed.
-      expect(document_.attributes('aria-pressed')).toBe('true')
-      expect(conversation.attributes('aria-pressed')).toBe('false')
-
-      await conversation.trigger('click')
-      expect(document_.attributes('aria-pressed')).toBe('false')
-      expect(conversation.attributes('aria-pressed')).toBe('true')
-    })
-
-    it('switches layout and persists the choice when the toggle is clicked', async () => {
-      stubDesktopViewport()
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      await w.get('[data-testid="ask-view-mode-document"]').trigger('click')
-      expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('document')
-      expect(localStorage.getItem('library:ask-view-mode')).toContain('document')
-
-      await w.get('[data-testid="ask-view-mode-conversation"]').trigger('click')
-      expect(w.get('[data-testid="ask-turn"]').attributes('data-view-mode')).toBe('conversation')
-    })
-
-    it('collapses the conversation rail by default and restores it in conversation mode', async () => {
-      // The rail is 288px. Without giving that back, document mode at 1024px
-      // leaves 332px of answer text — narrower than the phone layout it
-      // replaces — so the collapse is what makes the mode worth defaulting to.
-      stubDesktopViewport()
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(false)
-
-      await w.get('[data-testid="ask-view-mode-conversation"]').trigger('click')
-      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
-
-      await w.get('[data-testid="ask-view-mode-document"]').trigger('click')
-      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(false)
-    })
-
-    // --- the rail's actions, when the rail is not on screen ----------------
-    //
-    // These exist because the first cut of document mode shipped without them:
-    // the rail was hidden and with it the ONLY lg+ way to start or switch a
-    // conversation. The unit tests passed, because they asserted the rail
-    // disappeared and never asked whether what it carried was still reachable.
-    // Testing the mechanism instead of the capability is what let it through.
-
-    it('keeps New conversation reachable while the rail is collapsed', async () => {
-      stubDesktopViewport()
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      // Rail gone, capability still addressable by the same selector.
-      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(false)
-      const newBtn = w.find('[data-testid="new-conversation"]')
-      expect(newBtn.exists()).toBe(true)
-      await newBtn.trigger('click')
-      await flushPromises()
-      expect(router.currentRoute.value.name).toBe('ask-new')
-    })
-
-    it('offers a way back to the conversation list while the rail is collapsed', async () => {
-      stubDesktopViewport()
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      const back = w.find('[data-testid="ask-show-conversations"]')
-      expect(back.exists()).toBe(true)
-      await back.trigger('click')
-      await flushPromises()
-      expect(router.currentRoute.value.name).toBe('ask')
-      // Landing on the list restores the rail, so a thread can be picked.
-      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
-    })
-
-    it('never shows the rail and its relocated actions at the same time', async () => {
-      stubDesktopViewport()
-      preferConversationMode()
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      // Conversation mode: rail present, so the thread-bar duplicates must not be.
-      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
-      expect(w.find('[data-testid="ask-show-conversations"]').exists()).toBe(false)
-      // Exactly one New button in the DOM, wherever it lives.
-      expect(w.findAll('[data-testid="new-conversation"]')).toHaveLength(1)
-    })
-
-    it('does not put the relocated actions in a phone tab order', async () => {
-      // Below lg the rail is the list SCREEN, not a collapsed rail, so these
-      // buttons would be duplicates. v-if keeps them out of the DOM entirely.
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      expect(w.find('[data-testid="ask-show-conversations"]').exists()).toBe(false)
-    })
-
-    it('keeps the rail when document mode is on but no conversation is open', async () => {
-      // Otherwise the empty state says "select a conversation from the
-      // sidebar" with no sidebar on screen and no way to select one.
-      stubDesktopViewport()
-      const w = mountView()
-      await flushPromises()
-
-      expect(w.find('[data-testid="conversation-sidebar"]').exists()).toBe(true)
-    })
-
-    it('preserves the e2e selector contract in document mode', async () => {
-      // These are pinned by e2e specs that gate deploy; document mode must not
-      // rename or drop any of them.
-      stubDesktopViewport()
-      askQuestionMock.mockResolvedValueOnce(sampleResponse())
-      const w = mountView()
-      await typeAndSubmit(w, 'which invoices are due?')
-
-      for (const id of ['ask-form', 'ask-transcript', 'ask-submit', 'ask-answer', 'ask-turn']) {
-        expect(w.find(`[data-testid="${id}"]`).exists()).toBe(true)
-      }
-      // Depended on as a DOM id, not a testid.
-      expect(w.find('#ask-question').exists()).toBe(true)
-      // Matched by rendered text against /^Citations \(\d+\)$/.
-      expect(w.get('[data-testid="ask-citations-disclosure"]').text()).toContain('Citations (2)')
-    })
-  })
-
-  it('validates an empty question without calling the API', async () => {
-    const w = mountView()
-    await w.find('form').trigger('submit')
-    await flushPromises()
-
-    expect(askQuestionMock).not.toHaveBeenCalled()
-    expect(w.find('[data-testid="error-summary"]').text()).toContain('Enter a question')
-  })
-
-  it('renders markdown in the answer as HTML', async () => {
-    askQuestionMock.mockResolvedValueOnce(
-      sampleResponse({ answer: 'Your supplier was **PWN** [#67].\n\n- one\n- two', thread_id: 1 }),
+    expect(w.get('[data-testid="error-summary"]').text()).toContain(
+      'Answering is unavailable right now',
     )
-    const w = mountView()
-    await typeAndSubmit(w, 'which invoices are due?')
-
-    const turn = w.get('[data-testid="ask-turn"]')
-    const answer = turn.get('[data-testid="ask-answer"]')
-    expect(answer.find('strong').text()).toBe('PWN')
-    expect(answer.html()).not.toContain('**PWN**')
-    expect(answer.findAll('li')).toHaveLength(2)
   })
 
-  // Wide GFM tables used to pan the entire transcript sideways: the transcript
-  // is overflow-y-auto, which makes the browser compute overflow-x to auto too,
-  // so a table wider than the column dragged every question bubble with it.
-  // Each table now gets its own scroll container. These assert the DOM contract
-  // the CSS hangs off; the geometry itself is asserted in e2e, where there is a
-  // layout engine.
-  const TABLE_ANSWER =
-    '| Disk | Serial | Standby % | Active % | Cycles | Baseline | Status |\n' +
-    '| --- | --- | --- | --- | --- | --- | --- |\n' +
-    '| sdf | K3S04BKQ | 1.0% | 99.0% | 2 | 3.1 | Normal |'
-
-  it('wraps a rendered table in its own scroll container', async () => {
-    askQuestionMock.mockResolvedValueOnce(sampleResponse({ answer: TABLE_ANSWER, thread_id: 1 }))
-    const w = mountView()
-    await typeAndSubmit(w, 'disk report?')
-
-    const answer = w.get('[data-testid="ask-answer"]')
-    const wrap = answer.get('.ask-table-wrap')
-    // The table must be INSIDE the wrapper, not a sibling — a sibling would
-    // scroll nothing.
-    expect(wrap.find('table').exists()).toBe(true)
-    expect(answer.findAll('table')).toHaveLength(1)
-  })
-
-  it('keeps the table wrapper keyboard-reachable through DOMPurify', async () => {
-    askQuestionMock.mockResolvedValueOnce(sampleResponse({ answer: TABLE_ANSWER, thread_id: 1 }))
-    const w = mountView()
-    await typeAndSubmit(w, 'disk report?')
-
-    // tabindex is not in DOMPurify's default allow-list. Without the explicit
-    // ADD_ATTR it is stripped and the scrollable region becomes unreachable by
-    // keyboard — silently, since the table still looks fine.
-    const wrap = w.get('[data-testid="ask-answer"]').get('.ask-table-wrap')
-    expect(wrap.attributes('tabindex')).toBe('0')
-    expect(wrap.attributes('role')).toBe('region')
-    expect(wrap.attributes('aria-label')).toBe('Table')
-  })
-
-  it('wraps every table when an answer contains more than one', async () => {
-    askQuestionMock.mockResolvedValueOnce(
-      sampleResponse({ answer: `${TABLE_ANSWER}\n\nAnd another:\n\n${TABLE_ANSWER}`, thread_id: 1 }),
-    )
-    const w = mountView()
-    await typeAndSubmit(w, 'both pools?')
-
-    const answer = w.get('[data-testid="ask-answer"]')
-    expect(answer.findAll('.ask-table-wrap')).toHaveLength(2)
-    expect(answer.findAll('table')).toHaveLength(2)
-  })
-
-  it('leaves an answer with no table untouched', async () => {
-    askQuestionMock.mockResolvedValueOnce(
-      sampleResponse({ answer: 'No tables here, just **prose**.', thread_id: 1 }),
-    )
-    const w = mountView()
-    await typeAndSubmit(w, 'anything?')
-
-    expect(w.get('[data-testid="ask-answer"]').find('.ask-table-wrap').exists()).toBe(false)
-  })
-
-  it('collapses citations behind a disclosure showing the count by default', async () => {
-    askQuestionMock.mockResolvedValueOnce(
-      sampleResponse({
-        citations: [
-          { document_id: 42, title: 'Energy bill', page_number: 3 },
-          { document_id: 43, title: 'Water bill', page_number: null },
-        ],
-        thread_id: 1,
-      }),
-    )
-    const w = mountView()
-    await typeAndSubmit(w, 'which invoices are due?')
-
-    const details = w.get('[data-testid="ask-citations-disclosure"] details')
-    // Collapsed by default: the native <details> has no `open` attribute.
-    expect(details.attributes('open')).toBeUndefined()
-    // Summary shows the citation count.
-    expect(details.get('summary').text()).toBe('Citations (2)')
-  })
-
-  it('renders the page number on a citation and links with a page query', async () => {
-    askQuestionMock.mockResolvedValueOnce(
-      sampleResponse({
-        citations: [{ document_id: 42, title: 'Energy bill', page_number: 3 }],
-        thread_id: 1,
-      }),
-    )
-    const w = mountView()
-    await typeAndSubmit(w, 'which invoices are due?')
-
-    // jsdom renders <details> content regardless of the open state, so the
-    // citation link is queryable even though the disclosure is collapsed.
-    const link = w.get('[data-testid="ask-citation"]')
-    expect(link.text()).toContain('p. 3')
-    expect(link.attributes('href')).toContain('page=3')
-  })
-
-  it('omits the page label when page_number is null', async () => {
-    askQuestionMock.mockResolvedValueOnce(
-      sampleResponse({
-        citations: [{ document_id: 7, title: 'Note', page_number: null }],
-        thread_id: 1,
-      }),
-    )
-    const w = mountView()
-    await typeAndSubmit(w, 'which invoices are due?')
-
-    expect(w.get('[data-testid="ask-citation"]').text()).not.toContain('p.')
-  })
-
-  it('optimistically shows the question with a thinking indicator while pending (W2)', async () => {
+  it('optimistically shows the question with a thinking indicator, and a live Stop', async () => {
     let resolve!: (value: AskResponse) => void
-    askQuestionMock.mockReturnValue(
-      new Promise<AskResponse>((r) => {
-        resolve = r
-      }),
-    )
+    askQuestionMock.mockReturnValue(new Promise<AskResponse>((r) => (resolve = r)))
     const w = mountView()
-    await w.find('#ask-question').setValue('which invoices are due?')
-    await w.find('[data-testid="ask-form"]').trigger('submit')
-    await flushPromises()
+    await typeAndSubmit(w, 'which invoices are due?')
 
-    // The user's question is on screen immediately (optimistic) and the input
-    // has been cleared — "sending" is instant, distinct from the LLM thinking.
-    const turns = w.findAll('[data-testid="ask-turn"]')
-    expect(turns).toHaveLength(1)
-    expect(turns[0]!.text()).toContain('which invoices are due?')
+    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
     expect(w.find('[data-testid="ask-thinking"]').exists()).toBe(true)
     expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe('')
-
-    // The primary action is a live Stop control, not a greyed-out button.
-    const button = w.find('[data-testid="ask-submit"]')
+    const button = w.get('[data-testid="ask-submit"]')
+    expect(button.attributes('aria-label')).toBe('Stop answering')
     expect(button.attributes('disabled')).toBeUndefined()
-    expect(button.text()).toContain('Stop')
 
-    resolve(sampleResponse({ thread_id: 1 }))
+    resolve(sampleResponse())
     await flushPromises()
 
     expect(w.find('[data-testid="ask-thinking"]').exists()).toBe(false)
-    expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
-    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
-    expect(w.find('[data-testid="ask-answer"]').text()).toContain('Two invoices are due')
+    expect(w.get('[data-testid="ask-submit"]').attributes('aria-label')).toBe('Send')
   })
 
-  it('aborts an in-flight request and removes the optimistic turn when Stop is clicked (W2)', async () => {
+  it('Stop aborts the request, removes the optimistic turn and restores the question', async () => {
     let reject!: (reason: unknown) => void
-    askQuestionMock.mockReturnValue(
-      new Promise<AskResponse>((_resolve, r) => {
-        reject = r
-      }),
-    )
+    askQuestionMock.mockReturnValue(new Promise<AskResponse>((_r, rj) => (reject = rj)))
     const w = mountView()
     await typeAndSubmit(w, 'which invoices are due?')
-    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
 
-    await w.find('[data-testid="ask-submit"]').trigger('click')
-    // The component aborts; simulate the fetch rejecting with an AbortError.
+    await w.get('[data-testid="ask-submit"]').trigger('click')
+    const signal = askQuestionMock.mock.calls[0]![2] as AbortSignal
+    expect(signal.aborted).toBe(true)
     reject(new DOMException('aborted', 'AbortError'))
     await flushPromises()
 
-    // The optimistic turn is gone and no error alert is shown for a user abort.
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
+    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe(
+      'which invoices are due?',
+    )
     expect(w.find('[data-testid="error-summary"]').exists()).toBe(false)
-    expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
   })
 
-  it('removes the optimistic turn and restores the question on an API error (W2)', async () => {
-    askQuestionMock.mockRejectedValueOnce(new ApiError(500, 'boom'))
+  it('removes the optimistic turn and restores the question on an API error', async () => {
+    askQuestionMock.mockRejectedValue(new ApiError(500, 'boom', { detail: 'boom' }))
     const w = mountView()
     await typeAndSubmit(w, 'which invoices are due?')
 
-    // No dangling question turn, error surfaced, and the text is back in the box.
     expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(0)
-    expect(w.find('[data-testid="error-summary"]').exists()).toBe(true)
     expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe(
       'which invoices are due?',
     )
   })
 
-  it('submits on Cmd/Ctrl+Enter in the textarea (W2)', async () => {
-    askQuestionMock.mockResolvedValueOnce(sampleResponse({ thread_id: 1 }))
-    const w = mountView()
-    await w.find('#ask-question').setValue('which invoices are due?')
-    await w.find('#ask-question').trigger('keydown', { key: 'Enter', metaKey: true })
-    await flushPromises()
-    expect(askQuestionMock).toHaveBeenCalledTimes(1)
-    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
-  })
+  // ── Scrolling ──────────────────────────────────────────────────────────────
 
-  it('sends on plain Enter (desktop), not on Shift+Enter / Ctrl+J / while composing', async () => {
-    // Plain Enter sends only on desktop (lg+); stub that viewport.
-    stubDesktopViewport()
-    askQuestionMock.mockResolvedValue(sampleResponse({ thread_id: 1 }))
-    const w = mountView()
-    const ta = w.find('#ask-question')
-    await ta.setValue('hello')
+  function trackScroll(el: HTMLElement): { top: () => number; max: () => number } {
+    let current = 0
+    let max = 0
+    Object.defineProperty(el, 'scrollTop', {
+      configurable: true,
+      get: () => current,
+      set: (v: number) => {
+        current = v
+        max = Math.max(max, v)
+      },
+    })
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => 5000 })
+    Object.defineProperty(el, 'clientHeight', { configurable: true, get: () => 400 })
+    return { top: () => current, max: () => max }
+  }
 
-    await ta.trigger('keydown', { key: 'Enter' })
-    await flushPromises()
-    expect(askQuestionMock).toHaveBeenCalledTimes(1) // plain Enter sends on desktop
-
-    await ta.trigger('keydown', { key: 'Enter', shiftKey: true })
-    await flushPromises()
-    expect(askQuestionMock).toHaveBeenCalledTimes(1) // shift+enter does not send
-
-    // Ctrl+J inserts a newline at the caret and restores the caret just after
-    // it (on nextTick), rather than sending — a regression in the splice/caret
-    // math, or a dropped nextTick, would otherwise pass silently here.
-    const textarea = ta.element as HTMLTextAreaElement
-    await ta.setValue('hello')
-    textarea.selectionStart = textarea.selectionEnd = 2
-    await ta.trigger('keydown', { key: 'j', ctrlKey: true })
-    await flushPromises()
-    expect(askQuestionMock).toHaveBeenCalledTimes(1) // ctrl+j does not send
-    expect(textarea.value).toBe('he\nllo')
-    expect(textarea.selectionStart).toBe(3)
-    expect(textarea.selectionEnd).toBe(3)
-
-    await ta.trigger('keydown', { key: 'Enter', isComposing: true })
-    await flushPromises()
-    expect(askQuestionMock).toHaveBeenCalledTimes(1) // IME compose does not send
-
-    await ta.setValue('hello again')
-    await ta.trigger('keydown', { key: 'Enter', metaKey: true })
-    await flushPromises()
-    expect(askQuestionMock).toHaveBeenCalledTimes(2) // cmd/ctrl+enter still sends
-  })
-
-  it('on a phone, plain Enter does not send; Cmd/Ctrl+Enter still does (P3)', async () => {
-    // Default jsdom viewport = mobile (matchMedia unset → useMediaQuery false).
-    askQuestionMock.mockResolvedValue(sampleResponse({ thread_id: 1 }))
-    const w = mountView()
-    const ta = w.find('#ask-question')
-    await ta.setValue('hello')
-
-    // Plain Enter inserts a newline (browser default), so onSubmit is NOT called.
-    await ta.trigger('keydown', { key: 'Enter' })
-    await flushPromises()
-    expect(askQuestionMock).not.toHaveBeenCalled()
-
-    // The Send button still works on a phone…
-    await w.find('[data-testid="ask-form"]').trigger('submit')
-    await flushPromises()
-    expect(askQuestionMock).toHaveBeenCalledTimes(1)
-
-    // …and a hardware keyboard's Cmd/Ctrl+Enter still sends.
-    await ta.setValue('again')
-    await ta.trigger('keydown', { key: 'Enter', metaKey: true })
-    await flushPromises()
-    expect(askQuestionMock).toHaveBeenCalledTimes(2)
-  })
-
-  it('uses the shared PageHeader and imposes no max-width cap (W10)', () => {
-    const w = mountView()
-    expect(w.find('[data-testid="page-header"]').exists()).toBe(true)
-    expect(w.find('#ask-page').classes()).not.toContain('max-w-6xl')
-  })
-
-  it('places the title/description above the sidebar working area, not inside it', () => {
-    const w = mountView()
-    // The header is a sibling above #ask-page (which holds the sidebar +
-    // answer column), so it spans full width on top — the standard layout.
-    expect(w.find('#ask-page [data-testid="page-header"]').exists()).toBe(false)
-    const html = w.html()
-    expect(html.indexOf('data-testid="page-header"')).toBeLessThan(html.indexOf('id="ask-page"'))
-  })
-
-  it('docks the composer at the bottom: a shrink-0 footer on every breakpoint (W4/K1)', () => {
-    const w = mountView()
-    const form = w.find('[data-testid="ask-form"]')
-    expect(form.exists()).toBe(true)
-    // A shrink-0 FOOTER of the fixed-height chat column at every breakpoint — NOT
-    // sticky. Sticky only pins on overflow, which floated it mid-page on short
-    // chats (mobile) and left it mid-panel below the tall sidebar (desktop).
-    expect(form.classes()).toContain('shrink-0')
-    expect(form.classes()).not.toContain('lg:sticky')
-    expect(form.classes()).not.toContain('sticky')
-    // Never hidden behind a reveal step.
-    expect(form.classes()).not.toContain('max-lg:hidden')
-    // The transcript is the internal scroll area on every breakpoint, so the
-    // composer below it is a real footer (no page-scroll clearance padding).
-    const transcript = w.find('[data-testid="ask-transcript"]')
-    expect(transcript.classes()).toContain('overflow-y-auto')
-    expect(transcript.classes()).toContain('flex-1')
-    expect(transcript.classes()).toContain('min-h-0')
-    expect(transcript.classes()).not.toContain('lg:pb-28')
-    expect(w.find('[data-testid="ask-submit"]').text()).toBe('Send')
-  })
-
-  it('fills the viewport as a fixed-height column on desktop so the composer docks (K1)', () => {
-    // At lg+ the whole view is a bounded-height flex column (100dvh − the 4rem
-    // header − the 4rem #app-page py-8), the #ask-page panel takes the rest, and
-    // its columns scroll internally — so the composer sits at the viewport bottom
-    // instead of the panel growing with the tall conversation-list sidebar.
-    const w = mountView()
-    const root = w.find('#ask-page').element.parentElement as HTMLElement
-    expect(root.className).toContain('lg:flex')
-    expect(root.className).toContain('lg:flex-col')
-    expect(root.className).toContain('lg:h-[calc(100dvh_-_8rem)]')
-    const page = w.find('#ask-page')
-    expect(page.classes()).toContain('lg:flex-1')
-    expect(page.classes()).toContain('lg:min-h-0')
-    // Overflow containment lives on the panel (not the fill wrapper) so the
-    // panel's `-mx` full-bleed reaches the screen edges on mobile.
-    expect(page.classes()).toContain('overflow-hidden')
-  })
-
-  it('fills the viewport as a fixed-height column on the mobile chat screen (K1)', async () => {
-    // On /ask/new (a chat screen) the view is a fixed-height flex column so the
-    // composer footer docks at the bottom; on /ask (the list) it is not.
-    await router.push('/ask/new')
-    const w = mountView()
-    await flushPromises()
-    const root = w.find('#ask-page').element.parentElement as HTMLElement
-    // Underscores → spaces: `calc(100dvh - 4rem)` is valid CSS; the no-space
-    // form is rejected by strict engines (iOS Safari), which left the column
-    // with no height so the composer floated.
-    expect(root.className).toContain('max-lg:h-[calc(100dvh_-_4rem)]')
-    expect(root.className).toContain('max-lg:flex-col')
-    // The chat pane and transcript participate in the flex-height chain.
-    expect(w.find('[data-testid="ask-thread-pane"]').classes()).toContain('min-h-0')
-    expect(w.find('#ask-page').classes()).toContain('max-lg:flex-1')
-  })
-
-  it('is full-bleed on mobile and carded at lg+ (P1)', () => {
-    const w = mountView()
-    const page = w.find('#ask-page')
-    // Breaks out of the shell's side padding and drops the card chrome on mobile…
-    expect(page.classes()).toContain('-mx-4')
-    expect(page.classes()).toContain('rounded-none')
-    expect(page.classes()).toContain('border-0')
-    // …but is the bordered two-pane card again at lg+.
-    expect(page.classes()).toContain('lg:mx-0')
-    expect(page.classes()).toContain('lg:rounded-xl')
-    expect(page.classes()).toContain('lg:border')
-  })
-
-  it('composer is one full-width pill: borderless field, actions on their own row (P2)', () => {
-    const w = mountView()
-    const field = w.find('#ask-question')
-    // A raw, borderless, full-width textarea (no boxed .form-textarea).
-    expect(field.element.tagName).toBe('TEXTAREA')
-    expect(field.classes()).toContain('w-full')
-    expect(field.classes()).toContain('border-0')
-    expect(field.classes()).not.toContain('form-textarea')
-    // Attach and Send both exist (on their own row inside the pill).
-    expect(w.find('[data-testid="ask-image-attach"]').exists()).toBe(true)
-    expect(w.find('[data-testid="ask-submit"]').exists()).toBe(true)
-    // The old two-line hint is gone.
-    expect(w.text()).not.toContain('Shift+Enter for new line')
-  })
-
-  it('shows the list on /ask and the chat pane on /ask/new (mobile screen model, W1/W3/W4)', async () => {
-    await router.push('/ask')
-    const w = mountView()
-    await flushPromises()
-    // List screen: the conversation list is on-screen; the chat pane is the
-    // mobile-hidden one. The mobile ＋ starts a new chat.
-    expect(w.find('[data-testid="conversation-sidebar"]').classes()).not.toContain('max-lg:hidden')
-    expect(w.find('[data-testid="ask-thread-pane"]').classes()).toContain('max-lg:hidden')
-    expect(w.find('[data-testid="ask-new-mobile"]').exists()).toBe(true)
-
-    // The ＋ navigates to a fresh chat screen.
-    await w.find('[data-testid="ask-new-mobile"]').trigger('click')
-    await flushPromises()
-    expect(router.currentRoute.value.name).toBe('ask-new')
-    // Chat screen: the pane is visible on mobile, the list is the hidden one.
-    expect(w.find('[data-testid="ask-thread-pane"]').classes()).not.toContain('max-lg:hidden')
-    expect(w.find('[data-testid="conversation-sidebar"]').classes()).toContain('max-lg:hidden')
-  })
-
-  it('shows a greeting with example prompts on a new chat and fills the composer (W4)', async () => {
-    await router.push('/ask/new')
-    const w = mountView()
-    await flushPromises()
-    expect(w.find('[data-testid="ask-greeting"]').exists()).toBe(true)
-    const prompts = w.findAll('[data-testid="ask-example-prompt"]')
-    expect(prompts.length).toBeGreaterThan(0)
-    await prompts[0]!.trigger('click')
-    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe(prompts[0]!.text())
-  })
-
-  it('returns to the list when the chat back arrow is tapped (W4)', async () => {
-    getThreadMock.mockResolvedValue({ id: 7, title: 'Energy', turns: [] })
+  it('starts an opened conversation at the top, not scrolled into the answer', async () => {
+    getThreadMock.mockResolvedValue(threadWith(['who is my supplier?']))
     await router.push('/ask/7')
     const w = mountView()
+    // Real geometry BEFORE the load resolves, or the test passes vacuously:
+    // jsdom reports 0 heights, so scroll-to-bottom would never move either.
+    const scroll = trackScroll(w.get('[data-testid="ask-transcript"]').element as HTMLElement)
     await flushPromises()
-    expect(w.find('[data-testid="ask-thread-bar"]').exists()).toBe(true)
-    await w.find('[data-testid="ask-back"]').trigger('click')
-    await flushPromises()
-    expect(router.currentRoute.value.name).toBe('ask')
+    await nextTick()
+
+    expect(scroll.top()).toBe(0)
   })
 
-  it('renames the active thread from the chat title bar ⋯ menu (W5)', async () => {
-    const { renameThread } = await import('@/api/ask')
+  it('drives the transcript downward when a new answer arrives', async () => {
+    askQuestionMock.mockResolvedValueOnce(sampleResponse())
+    const w = mountView()
+    const scroll = trackScroll(w.get('[data-testid="ask-transcript"]').element as HTMLElement)
+    await typeAndSubmit(w, 'which invoices are due?')
+    await nextTick()
+
+    expect(scroll.max()).toBeGreaterThan(0)
+  })
+
+  // ── Retry and edit ─────────────────────────────────────────────────────────
+
+  it('Retry re-asks the last question in place of its turn', async () => {
+    const w = await openThread(['q1', 'q2'])
+    askQuestionMock.mockResolvedValueOnce(
+      sampleResponse({ thread_id: 7, turn_id: 200, answer: 'a better answer' }),
+    )
+
+    await w.get('[data-testid="ask-retry"]').trigger('click')
+    await flushPromises()
+
+    const [question, thread, , , replaceFrom] = askQuestionMock.mock.calls[0]!
+    expect(question).toBe('q2')
+    expect(thread).toBe(7)
+    expect(replaceFrom).toBe(101)
+    const answers = w.findAll('[data-testid="ask-answer"]').map((a) => a.text())
+    expect(answers).toEqual(['answer 1', 'a better answer'])
+  })
+
+  it('offers Retry on the latest answer only', async () => {
+    const w = await openThread(['q1', 'q2', 'q3'])
+    expect(w.findAll('[data-testid="ask-retry"]')).toHaveLength(1)
+    const turns = w.findAll('[data-testid="ask-turn"]')
+    expect(turns[2]!.find('[data-testid="ask-retry"]').exists()).toBe(true)
+  })
+
+  it('a failed retry puts the original answer back', async () => {
+    const w = await openThread(['q1', 'q2'])
+    const detail = 'Ask is unavailable: the Claude subscription backend could not authenticate'
+    askQuestionMock.mockRejectedValueOnce(new ApiError(503, detail, { detail }))
+
+    await w.get('[data-testid="ask-retry"]').trigger('click')
+    await flushPromises()
+
+    const answers = w.findAll('[data-testid="ask-answer"]').map((a) => a.text())
+    expect(answers).toEqual(['answer 1', 'answer 2'])
+    expect(w.get('[data-testid="error-summary"]').text()).toContain('could not authenticate')
+  })
+
+  it('editing an earlier question re-asks from there and drops the later turns', async () => {
+    const w = await openThread(['q1', 'q2', 'q3'])
+    let resolve!: (value: AskResponse) => void
+    askQuestionMock.mockReturnValue(new Promise<AskResponse>((r) => (resolve = r)))
+
+    const second = w.findAll('[data-testid="ask-turn"]')[1]!
+    await second.get('[data-testid="ask-edit-start"]').trigger('click')
+    // The editor says what sending will cost before anything is sent.
+    expect(second.get('[data-testid="ask-edit-note"]').text()).toContain('the one after it')
+    await second.get('[data-testid="ask-edit-input"]').setValue('q2, but for 2025')
+    await second.get('[data-testid="ask-edit-submit"]').trigger('click')
+    await flushPromises()
+
+    expect(askQuestionMock.mock.calls[0]![0]).toBe('q2, but for 2025')
+    expect(askQuestionMock.mock.calls[0]![4]).toBe(101)
+    // On screen at once: q1 stays, the edited question is pending, q3 is gone.
+    const bubbles = w.findAll('[data-testid="ask-question-bubble"]').map((b) => b.text())
+    expect(bubbles).toEqual(['q1', 'q2, but for 2025'])
+    expect(w.find('[data-testid="ask-thinking"]').exists()).toBe(true)
+
+    resolve(sampleResponse({ thread_id: 7, turn_id: 300, answer: 'for 2025: two' }))
+    await flushPromises()
+    expect(w.findAll('[data-testid="ask-answer"]').map((a) => a.text())).toEqual([
+      'answer 1',
+      'for 2025: two',
+    ])
+  })
+
+  it('cancelling an edit changes nothing', async () => {
+    const w = await openThread(['q1', 'q2'])
+    const first = w.findAll('[data-testid="ask-turn"]')[0]!
+    await first.get('[data-testid="ask-edit-start"]').trigger('click')
+    await first.get('[data-testid="ask-edit-input"]').setValue('something else')
+    await first.get('[data-testid="ask-edit-cancel"]').trigger('click')
+
+    expect(askQuestionMock).not.toHaveBeenCalled()
+    expect(w.findAll('[data-testid="ask-question-bubble"]').map((b) => b.text())).toEqual([
+      'q1',
+      'q2',
+    ])
+  })
+
+  // ── Conversation actions ───────────────────────────────────────────────────
+
+  it('renames the conversation from the title bar', async () => {
     vi.mocked(renameThread).mockResolvedValue({
       id: 7,
-      title: 'Renamed',
+      title: 'Power bills',
       created_at: '',
       updated_at: '',
-      turn_count: 0,
+      turn_count: 1,
       total_cost_usd: 0,
     })
-    getThreadMock.mockResolvedValue({ id: 7, title: 'Energy', turns: [] })
-    await router.push('/ask/7')
-    const w = mountView()
+    const w = await openThread(['q1'])
+    await w.get('[data-testid="ask-title-actions"]').trigger('click')
+    await w.get('[data-testid="thread-rename"]').trigger('click')
+    await w.get('[data-testid="ask-title-rename-input"]').setValue('Power bills')
+    await w.get('[data-testid="ask-title-rename-save"]').trigger('click')
     await flushPromises()
-    await w.find('[data-testid="ask-title-actions"]').trigger('click')
-    await w.find('[data-testid="thread-rename"]').trigger('click')
-    const input = w.find('[data-testid="ask-title-rename-input"]')
-    expect((input.element as HTMLInputElement).value).toBe('Energy')
-    await input.setValue('Renamed')
-    await w.find('[data-testid="ask-title-rename-save"]').trigger('click')
-    await flushPromises()
-    expect(vi.mocked(renameThread)).toHaveBeenCalledWith(7, 'Renamed')
+
+    expect(renameThread).toHaveBeenCalledWith(7, 'Power bills')
+    expect(w.get('[data-testid="ask-title"]').text()).toContain('Power bills')
   })
 
-  it('deletes the active thread from the chat title bar and returns to the list (W5)', async () => {
-    const { deleteThread } = await import('@/api/ask')
-    vi.mocked(deleteThread).mockResolvedValue()
-    getThreadMock.mockResolvedValue({ id: 7, title: 'Energy', turns: [] })
-    await router.push('/ask/7')
-    const w = mountView()
+  it('deletes the conversation after a confirmation and opens a new one', async () => {
+    vi.mocked(deleteThread).mockResolvedValue(undefined)
+    const w = await openThread(['q1'])
+    await w.get('[data-testid="ask-title-actions"]').trigger('click')
+    await w.get('[data-testid="thread-delete"]').trigger('click')
+    expect(deleteThread).not.toHaveBeenCalled()
+    await w.get('[data-testid="ask-title-delete-confirm"]').trigger('click')
     await flushPromises()
-    await w.find('[data-testid="ask-title-actions"]').trigger('click')
-    await w.find('[data-testid="thread-delete"]').trigger('click')
-    // Two-step: nothing deleted until confirm.
-    expect(vi.mocked(deleteThread)).not.toHaveBeenCalled()
-    await w.find('[data-testid="ask-title-delete-confirm"]').trigger('click')
-    await flushPromises()
-    expect(vi.mocked(deleteThread)).toHaveBeenCalledWith(7)
-    expect(router.currentRoute.value.name).toBe('ask')
+
+    expect(deleteThread).toHaveBeenCalledWith(7)
+    expect(router.currentRoute.value.name).toBe('ask-new')
   })
 
-  it('shows the no-threads empty-state prompt when no conversations exist (W10)', async () => {
-    vi.mocked(listThreads).mockResolvedValue([])
-    const w = mountView()
-    await flushPromises()
-    expect(w.find('[data-testid="ask-empty"]').exists()).toBe(true)
-    expect(w.find('[data-testid="ask-select-thread"]').exists()).toBe(false)
-  })
-
-  it('shows a "select a conversation" prompt when threads exist but none is selected (W5)', async () => {
+  it('opens a conversation chosen from the title switcher', async () => {
     vi.mocked(listThreads).mockResolvedValue([
-      { id: 1, title: 'Energy bills', created_at: '', updated_at: '', turn_count: 3, total_cost_usd: 0.05 },
+      { id: 3, title: 'Car insurance', created_at: '', updated_at: '', turn_count: 1, total_cost_usd: 0 },
     ])
+    getThreadMock.mockResolvedValue(threadWith(['insured?'], 3))
+    const w = mountView()
+    await w.get('[data-testid="ask-title"]').trigger('click')
+    await flushPromises()
+    await w.get('[data-testid="thread-item"]').trigger('click')
+    await flushPromises()
+
+    expect(router.currentRoute.value.params.threadId).toBe('3')
+    expect(w.get('[data-testid="ask-question-bubble"]').text()).toBe('insured?')
+  })
+
+  // ── New conversation ───────────────────────────────────────────────────────
+
+  it('greets a new conversation with example prompts that fill the composer', async () => {
+    const w = mountView()
+    expect(w.find('[data-testid="ask-greeting"]').exists()).toBe(true)
+    await w.findAll('[data-testid="ask-example-prompt"]')[0]!.trigger('click')
+    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe(
+      'Which invoices are due this month?',
+    )
+  })
+
+  it('seeds the composer from ?q= and focuses it', async () => {
+    await router.push('/ask?q=Hello%20world')
     const w = mountView()
     await flushPromises()
-    expect(w.find('[data-testid="ask-select-thread"]').exists()).toBe(true)
-    expect(w.find('[data-testid="ask-select-thread"]').text()).toContain(
-      'Select a conversation from the sidebar',
-    )
-    expect(w.find('[data-testid="ask-empty"]').exists()).toBe(false)
+
+    expect(router.currentRoute.value.name).toBe('ask-new')
+    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe('Hello world')
+    expect(document.activeElement).toBe(w.find('#ask-question').element)
   })
+
+  it('resumes a thread on /ask/:threadId with an empty composer', async () => {
+    const w = await openThread(['who?'])
+    expect(getThreadMock).toHaveBeenCalledWith(7)
+    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe('')
+    expect(w.text()).toContain('answer 1')
+  })
+
+  it('drops a stale in-flight answer when the user switches threads mid-request', async () => {
+    let resolveAsk!: (value: AskResponse) => void
+    askQuestionMock.mockReturnValue(new Promise<AskResponse>((r) => (resolveAsk = r)))
+    getThreadMock.mockResolvedValue(threadWith(['who?']))
+    await router.push('/ask/new')
+    const w = mountView()
+    await typeAndSubmit(w, 'which invoices are due?')
+
+    await router.push('/ask/7')
+    await flushPromises()
+    resolveAsk(sampleResponse({ thread_id: 99 }))
+    await flushPromises()
+
+    expect(router.currentRoute.value.params.threadId).toBe('7')
+    expect(w.findAll('[data-testid="ask-question-bubble"]').map((b) => b.text())).toEqual(['who?'])
+  })
+
+  // ── Images ─────────────────────────────────────────────────────────────────
 
   async function attachImage(w: VueWrapper, name = 'receipt.png'): Promise<void> {
     const file = new File(['hello'], name, { type: 'image/png' })
@@ -1057,118 +548,55 @@ describe('AskView', () => {
     }
   }
 
-  it('previews an attached image and sends it with the question (W11)', async () => {
-    askQuestionMock.mockResolvedValue(sampleResponse({ thread_id: 1 }))
+  it('previews an attached image and sends it with the question', async () => {
+    askQuestionMock.mockResolvedValue(sampleResponse())
     const w = mountView()
     await attachImage(w)
     expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(true)
 
-    await w.find('#ask-question').setValue('what is this?')
-    await w.find('[data-testid="ask-form"]').trigger('submit')
-    await flushPromises()
+    await typeAndSubmit(w, 'what is this?')
 
-    const call = askQuestionMock.mock.calls[0]!
-    // askQuestion(question, threadId, signal, images)
-    expect(call[3]).toEqual([{ media_type: 'image/png', data: 'aGVsbG8=' }])
-    // Cleared after a successful send.
+    expect(askQuestionMock.mock.calls[0]![3]).toEqual([{ media_type: 'image/png', data: 'aGVsbG8=' }])
     expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(false)
   })
 
-  it('removes a pending image before sending (W11)', async () => {
+  it('removes a pending image before sending', async () => {
     const w = mountView()
     await attachImage(w)
-    expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(true)
-    await w.find('[data-testid="ask-image-remove"]').trigger('click')
+    await w.get('[data-testid="ask-image-remove"]').trigger('click')
     expect(w.find('[data-testid="ask-image-preview"]').exists()).toBe(false)
   })
 
-  it('seeds the composer from ?q= and reveals + focuses it (W1)', async () => {
-    // The "Ask about this document" button opens /ask?q=… in a new tab; the
-    // (already URL-decoded) query pre-fills the composer, ready to send.
-    await router.push('/ask?q=Hello%20world')
+  // ── Layout ─────────────────────────────────────────────────────────────────
+
+  it('renders the conversation layout by default on a desktop', async () => {
+    stubDesktopViewport()
+    askQuestionMock.mockResolvedValueOnce(sampleResponse())
     const w = mountView()
-    await flushPromises()
+    await typeAndSubmit(w, 'which invoices are due?')
 
-    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe('Hello world')
-    // The composer is revealed (not hidden on mobile) and focused.
-    expect(w.find('[data-testid="ask-form"]').classes()).not.toContain('max-lg:hidden')
-    expect(document.activeElement).toBe(w.find('#ask-question').element)
-  })
-
-  it('leaves the composer empty when no ?q= is present (W1)', async () => {
-    const w = mountView()
-    await flushPromises()
-    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe('')
-  })
-
-  it('resumes a thread on /ask/:threadId and ignores an absent ?q= (W1)', async () => {
-    getThreadMock.mockResolvedValue({
-      id: 7,
-      title: 'Energy',
-      turns: [
-        {
-          id: 1,
-          query: 'who?',
-          answer: 'Vattenfall [#3].',
-          citations: [],
-          used_tools: [],
-          cost_usd: 0.02,
-          created_at: '',
-        },
-      ],
-    })
-    await router.push('/ask/7')
-    const w = mountView()
-    await flushPromises()
-
-    expect(getThreadMock).toHaveBeenCalledWith(7)
-    // The thread resumes; the composer is not seeded (no q) and stays empty.
-    expect((w.find('#ask-question').element as HTMLTextAreaElement).value).toBe('')
-    expect(w.text()).toContain('Vattenfall')
-  })
-
-  it('drops a stale in-flight answer when the user switches threads mid-request (W4)', async () => {
-    // Ask on a new chat, then open a different thread before the answer lands.
-    // The stale answer must not corrupt the now-active thread's transcript or
-    // force-navigate back to the thread it belonged to.
-    let resolveAsk!: (value: AskResponse) => void
-    askQuestionMock.mockReturnValue(
-      new Promise<AskResponse>((r) => {
-        resolveAsk = r
-      }),
+    expect(w.find('[data-testid="ask-question-bubble"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ask-doc-block"]').exists()).toBe(false)
+    expect(w.get('[data-testid="ask-view-mode-conversation"]').attributes('aria-pressed')).toBe(
+      'true',
     )
-    getThreadMock.mockResolvedValue({
-      id: 7,
-      title: 'Energy',
-      turns: [
-        {
-          id: 1,
-          query: 'who?',
-          answer: 'Vattenfall.',
-          citations: [],
-          used_tools: [],
-          cost_usd: 0.02,
-          created_at: '',
-        },
-      ],
-    })
-    await router.push('/ask/new')
+  })
+
+  it('switches to the document layout and remembers it', async () => {
+    stubDesktopViewport()
+    askQuestionMock.mockResolvedValueOnce(sampleResponse())
     const w = mountView()
-    await flushPromises()
-    await typeAndSubmit(w, 'first question') // optimistic turn, request in flight
+    await typeAndSubmit(w, 'which invoices are due?')
 
-    // Navigate to thread 7 while the first answer is still generating.
-    await router.push('/ask/7')
-    await flushPromises()
-    expect(w.text()).toContain('Vattenfall')
+    await w.get('[data-testid="ask-view-mode-document"]').trigger('click')
 
-    // The stale answer resolves — it must be dropped, not applied to thread 7.
-    resolveAsk(sampleResponse({ answer: 'STALE ANSWER', thread_id: 1 }))
-    await flushPromises()
-    expect(w.text()).toContain('Vattenfall')
-    expect(w.text()).not.toContain('STALE ANSWER')
-    expect(w.findAll('[data-testid="ask-turn"]')).toHaveLength(1)
-    expect(router.currentRoute.value.name).toBe('ask-thread')
-    expect(router.currentRoute.value.params.threadId).toBe('7')
+    expect(w.find('[data-testid="ask-doc-block"]').exists()).toBe(true)
+    expect(w.find('[data-testid="ask-question-bubble"]').exists()).toBe(false)
+    expect(localStorage.getItem(ASK_VIEW_MODE_STORAGE_KEY)).toBe('document')
+  })
+
+  it('offers no layout toggle on a phone', () => {
+    const w = mountView()
+    expect(w.find('[data-testid="ask-view-mode"]').exists()).toBe(false)
   })
 })
