@@ -307,7 +307,9 @@ defineExpose({ refresh: loadThreads })
           :disabled="!canStartNew"
           @click="emit('new')"
         >
-          <svg class="h-4 w-4 fill-none stroke-current" stroke-width="2" stroke-linecap="round" viewBox="0 0 24 24" aria-hidden="true">
+          <!-- Heavier than its neighbours on purpose: a 2px plus has so little
+               ink it read as disabled beside the search glyph. -->
+          <svg class="h-[1.125rem] w-[1.125rem] fill-none stroke-current" stroke-width="2.5" stroke-linecap="round" viewBox="0 0 24 24" aria-hidden="true">
             <path d="M12 5v14M5 12h14" />
           </svg>
         </button>
