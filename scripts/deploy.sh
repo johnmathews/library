@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Deploy Library to the production host (the `paperless` LXC).
+# Deploy Library to the production host (the `documents` LXC, CT 117).
 #
 # Pulls the freshly-promoted `ghcr.io/johnmathews/library:latest` image, runs DB
 # migrations via the one-shot `library-migrate` job, recreates the webserver and
@@ -27,13 +27,13 @@
 #   scripts/deploy.sh --force    Deploy without the promote gate (emergencies).
 #
 # Environment overrides:
-#   LIBRARY_DEPLOY_HOST   SSH host/alias            (default: paperless)
+#   LIBRARY_DEPLOY_HOST   SSH host/alias            (default: documents)
 #   LIBRARY_DEPLOY_DIR    Compose dir on the host   (default: /srv/apps)
 #   SKIP_PROMOTE_CHECK    Set to 1 to bypass the promote gate (like --force).
 #
 set -euo pipefail
 
-HOST="${LIBRARY_DEPLOY_HOST:-paperless}"
+HOST="${LIBRARY_DEPLOY_HOST:-documents}"
 DIR="${LIBRARY_DEPLOY_DIR:-/srv/apps}"
 IMAGE="ghcr.io/johnmathews/library"
 SKIP_PROMOTE_CHECK="${SKIP_PROMOTE_CHECK:-0}"
@@ -166,11 +166,12 @@ deploy() {
   fi
 
   bold "Health check:"
-  # Probe /healthz INSIDE the webserver container. The host's :8000 is
-  # paperless-ngx (the library app publishes on :8010), and a bare
-  # `curl localhost:8000` there gets paperless' 302 to /accounts/login/ —
-  # which `curl -fsS` treats as success, so it never actually checked the
-  # library app. Exec-in-container hits the app directly on its own port, and
+  # Probe /healthz INSIDE the webserver container, not via a host port. The
+  # host publishes the app on :8010, not :8000, and when paperless-ngx still
+  # ran there (until 2026-07) a bare `curl localhost:8000` got its 302 to
+  # /accounts/login/ — which `curl -fsS` treats as success, so it never
+  # checked the library app at all. Exec-in-container hits the app directly
+  # on its own port whatever the host maps, and
   # uses python (guaranteed present — it's what the image's HEALTHCHECK uses;
   # curl may not be installed) so a non-2xx raises and fails the gate.
   #

@@ -1,7 +1,7 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-08-31 (dropped "plus Smart Group auto-membership" from the without-the-embedder loss list — Smart Groups was deleted with the legacy series stack, so the only things a missing embedder costs are semantic search and the semantic half of Ask retrieval. **Fix round 1:** this stamp's evidence sentence claimed a whole-file grep for the phrase returned nothing, which its own `Last updated` line falsifies; scoped to the body.) Earlier: 2026-08-12 (documentation verification sweep: removed a stale `LIBRARY_PDF_UNLOCK_PASSWORDS` default that republished a withdrawn password; `node:26-slim`, not `node:22-slim`; corrected the `compose-smoke` scope and reconciled the RAM guidance). Earlier: 2026-06-11.
-**Last verified:** 2026-08-31 — method: partial, scoped to the one edited sentence. Confirmed the phrase is gone from this document's body — `sed -n '6,$p' docs/deployment.md | grep -icE 'smart.?group'` returns `0`, the range starting below the stamp because the `Last updated` line above necessarily names what it removed — and that no series job remains in `src/library/jobs.py` to depend on the embedder; the compose file, image tags, memory limits and `/healthz` payloads were not re-checked this pass. Earlier (2026-08-28) — method: partial, scoped to §1.4. Added §1.4.2 (`status: "degraded"`) and refreshed the two `/healthz` payload examples, each checked against the endpoint in `src/library/app.py` and the vendored-weights check in `src/library/ocr/weights.py`; the deploy-script behaviour described there was read against the new block in `scripts/deploy.sh`. Nothing else was re-checked this pass; the rest carries forward the 2026-08-12 verification below unchanged, whose method was: method: checked every service name, image tag, memory limit, volume, healthcheck, build arg, env var, CLI command and API path against `docker-compose.yml`, `Dockerfile`, `Makefile`, `.env.example`, `config.py`, `app.py`, `cli.py` and `api/`; §1.7.2's deploy path was additionally exercised for real (`make deploy` to the live `paperless` LXC). The §1.2 Proxmox walkthrough, §1.5 reverse proxy and §1.6 backup commands were read, not executed.
+**Status:** active. **Last updated:** 2026-10-22 (the live LXC is `documents` now, not `paperless` (renamed 2026-10-11 by home-server PR #197), so every `ssh paperless` and the deploy script's default host were stale; §1.7.2 renamed). Earlier: 2026-08-31 (dropped "plus Smart Group auto-membership" from the without-the-embedder loss list — Smart Groups was deleted with the legacy series stack, so the only things a missing embedder costs are semantic search and the semantic half of Ask retrieval. **Fix round 1:** this stamp's evidence sentence claimed a whole-file grep for the phrase returned nothing, which its own `Last updated` line falsifies; scoped to the body.) Earlier: 2026-08-12 (documentation verification sweep: removed a stale `LIBRARY_PDF_UNLOCK_PASSWORDS` default that republished a withdrawn password; `node:26-slim`, not `node:22-slim`; corrected the `compose-smoke` scope and reconciled the RAM guidance). Earlier: 2026-06-11.
+**Last verified:** 2026-10-22 — method: partial, scoped to the host name. The LXC was renamed `paperless` → `documents` on 2026-10-11 (home-server PR #197); `LIBRARY_DEPLOY_HOST=documents scripts/deploy.sh` deployed `00a33c0` on 2026-10-22 and `/healthz` returned that sha, which is the run behind the new default. Earlier: 2026-08-31 — method: partial, scoped to the one edited sentence. Confirmed the phrase is gone from this document's body — `sed -n '6,$p' docs/deployment.md | grep -icE 'smart.?group'` returns `0`, the range starting below the stamp because the `Last updated` line above necessarily names what it removed — and that no series job remains in `src/library/jobs.py` to depend on the embedder; the compose file, image tags, memory limits and `/healthz` payloads were not re-checked this pass. Earlier (2026-08-28) — method: partial, scoped to §1.4. Added §1.4.2 (`status: "degraded"`) and refreshed the two `/healthz` payload examples, each checked against the endpoint in `src/library/app.py` and the vendored-weights check in `src/library/ocr/weights.py`; the deploy-script behaviour described there was read against the new block in `scripts/deploy.sh`. Nothing else was re-checked this pass; the rest carries forward the 2026-08-12 verification below unchanged, whose method was: method: checked every service name, image tag, memory limit, volume, healthcheck, build arg, env var, CLI command and API path against `docker-compose.yml`, `Dockerfile`, `Makefile`, `.env.example`, `config.py`, `app.py`, `cli.py` and `api/`; §1.7.2's deploy path was additionally exercised for real (`make deploy` to the live `paperless` LXC). The §1.2 Proxmox walkthrough, §1.5 reverse proxy and §1.6 backup commands were read, not executed.
 
 How to run Library in production: a single `docker compose up` on any
 Docker host. The walkthrough targets the intended home — a Debian LXC on
@@ -289,7 +289,7 @@ proxy — the cookie flag is about what the *browser* sees.
 ## 1.6 Backups
 
 This section is the general guidance for a repo-based deploy. The **live
-`paperless` instance uses a different, already-automated topology** (file store
+`documents` instance uses a different, already-automated topology** (file store
 on TrueNAS NFS with ZFS snapshots + replication; local `pgdata` captured by the
 daily PBS LXC backup) — see §1.7.2 point 3.
 
@@ -357,7 +357,7 @@ restore the pre-upgrade `pg_dump` if a downgrade must cross a migration.
 ### 1.7.1 Upgrading to semantic Ask (pgvector + embedder)
 
 The Ask release swaps the `db` image to `pgvector/pgvector:pg17` and adds the
-`embedder` service. Steps (with the gotchas seen on the live `paperless` LXC —
+`embedder` service. Steps (with the gotchas seen on the live `documents` LXC —
 see 1.7.2 for that instance's exact shape):
 
 1. **Back up the DB first** — always, before any DB image change:
@@ -413,16 +413,17 @@ see 1.7.2 for that instance's exact shape):
    without `LIBRARY_ANTHROPIC_API_KEY` (only the answer step calls Claude;
    embedding/indexing is local). Retrieval works without it.
 
-### 1.7.2 The live `paperless` LXC instance
+### 1.7.2 The live `documents` LXC instance
 
 The production instance does **not** use this repo's `docker-compose.yml`
 (that file is a dev / CI-smoke reference). The live compose at
-`/srv/apps/docker-compose.yml` on the `paperless` LXC is **templated from the
+`/srv/apps/docker-compose.yml` on the `documents` LXC is **templated from the
 `home-server/proxmox-setup` Ansible repo — that repo is the deploy source of
 truth for the container wiring, mounts, and memory limits.** This repo owns the
 image; proxmox-setup owns how it is run. Concrete details:
 
-1. **Access:** `ssh paperless` (root). Compose at `/srv/apps/docker-compose.yml`
+1. **Access:** `ssh documents` (root; `documentst` over Tailscale). The LXC
+   was named `paperless` until 2026-10-11, when the home-server repo renamed it. Compose at `/srv/apps/docker-compose.yml`
    (back it up before editing — `cp` to a `.bak-<ts>`); env in `/srv/apps/.env`.
    Edit the compose in the proxmox-setup repo and re-apply, rather than editing
    the host copy by hand, so the source of truth stays authoritative.
