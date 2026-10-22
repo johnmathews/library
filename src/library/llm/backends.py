@@ -39,6 +39,13 @@ BACKEND_SURFACES: dict[str, str] = {
     "ask": "ask_llm_backend",
 }
 
+# The Settings field naming the model each surface answers with, for display
+# ("Opus 4.8 · Subscription" under the Ask composer). Same keys as
+# BACKEND_SURFACES; tests/test_llm_backends.py keeps them in step.
+SURFACE_MODELS: dict[str, str] = {
+    "ask": "ask_model",
+}
+
 _VALID_BACKENDS: tuple[str, ...] = get_args(LLMBackend)
 
 

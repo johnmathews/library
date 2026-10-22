@@ -389,6 +389,8 @@ export interface LLMSurface {
   default: LLMBackend
   /** True when an admin has overridden the deployed default. */
   overridden: boolean
+  /** The model this surface answers with, e.g. `claude-opus-4-8`. */
+  model: string
 }
 
 /**

@@ -211,6 +211,28 @@ def test_get_reports_every_surface(api_client: TestClient, with_api_key: None) -
     assert body["credentials_status"] in {"healthy", "degraded", "unhealthy"}
 
 
+def test_get_names_the_model_each_surface_answers_with(
+    api_client: TestClient, with_api_key: None
+) -> None:
+    """The Ask composer shows "<model> · <backend>" from this payload, so a
+    signed-in non-admin must be able to read which model will answer."""
+    from library.config import get_settings
+
+    body = api_client.get("/api/settings/llm-backends").json()
+    surfaces = {s["surface"]: s for s in body["surfaces"]}
+    assert surfaces["ask"]["model"] == get_settings().ask_model
+
+
+def test_every_switchable_surface_names_its_model_setting() -> None:
+    """A surface added to BACKEND_SURFACES without a model setting would make
+    the payload raise for every user, Settings included."""
+    from library.config import Settings
+    from library.llm.backends import BACKEND_SURFACES, SURFACE_MODELS
+
+    assert set(SURFACE_MODELS) == set(BACKEND_SURFACES)
+    assert all(field in Settings.model_fields for field in SURFACE_MODELS.values())
+
+
 def test_get_never_leaks_the_api_key(api_client: TestClient, with_api_key: None) -> None:
     """The payload reports *whether* a key exists, never the key."""
     body = api_client.get("/api/settings/llm-backends").json()

@@ -344,6 +344,7 @@ async def _llm_backends_payload(db: AsyncSession, user: User) -> LLMBackendsOut:
                 backend=backend,
                 default=llm_backends.config_default(surface, settings),
                 overridden=f"llm_backend.{surface}" in overrides,
+                model=getattr(settings, llm_backends.SURFACE_MODELS[surface]),
             )
         )
 

@@ -2,12 +2,17 @@ import { computed, type ComputedRef, type Ref } from 'vue'
 import { useStorage } from '@vueuse/core'
 
 /**
- * Ask transcript view mode — `document` (full-width role-labelled blocks, the
- * default on a wide screen) or `conversation` (chat bubbles).
+ * Ask transcript view mode — `conversation` (the default: your question in a
+ * bubble, the answer as plain text in one centred column, the Claude layout)
+ * or `document` (role-labelled blocks, offered at lg+ from the title menu).
  *
- * Document mode is for prose- and table-heavy answers, where a right-aligned
- * `max-w-[85%]` bubble wastes the width those answers need — which describes
- * most of what Ask produces, so it is the **default** on a wide screen. It is a
+ * Document mode was the wide-screen default while answers sat inside a
+ * bordered card beside a conversation rail, where a right-aligned bubble
+ * wasted width the answer needed. The 2026-10 layout removed the card and the
+ * rail, and answers already run the full reading column, so the default moved
+ * to conversation. The storage key moved with it (`-v2`): `useStorage` had
+ * written the old default into every browser, so changing the default alone
+ * would have changed nothing for anyone who had ever opened Ask. It is a
  * display-size preference about *this screen*, so it lives in localStorage
  * under the app's `library:` key convention rather than the server-side user
  * profile (docs/frontend-view-principles.md §4).
@@ -32,7 +37,7 @@ import { useStorage } from '@vueuse/core'
 export type AskViewMode = 'conversation' | 'document'
 
 /** Storage key for the per-machine transcript view preference. */
-export const ASK_VIEW_MODE_STORAGE_KEY = 'library:ask-view-mode'
+export const ASK_VIEW_MODE_STORAGE_KEY = 'library:ask-view-mode-v2'
 
 export interface AskViewModeApi {
   /** The persisted, two-way bindable preference. Not clamped. */
@@ -50,7 +55,7 @@ export function useAskViewMode(isLargeScreen: Ref<boolean>): AskViewModeApi {
   // table-heavy, so the layout that suits them is the one most people should
   // get without going looking for a setting. `effectiveViewMode` still clamps
   // it away below `lg`, so a phone is unaffected by this default.
-  const viewMode = useStorage<AskViewMode>(ASK_VIEW_MODE_STORAGE_KEY, 'document')
+  const viewMode = useStorage<AskViewMode>(ASK_VIEW_MODE_STORAGE_KEY, 'conversation')
 
   const effectiveViewMode = computed<AskViewMode>(() =>
     isLargeScreen.value && viewMode.value === 'document' ? 'document' : 'conversation',
