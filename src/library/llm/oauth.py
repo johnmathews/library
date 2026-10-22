@@ -103,6 +103,32 @@ async def ensure_valid_token(config_dir: Path) -> None:
         logger.warning("OAuth token refresh failed", exc_info=True)
 
 
+async def keep_fresh(config_dir: Path, interval_s: float) -> None:
+    """Run :func:`ensure_valid_token` every ``interval_s`` seconds, forever.
+
+    Refresh used to run only before an SDK query, so a refresh token that died
+    while Ask sat unused stayed invisible: ``token_health`` reads "expired
+    access token + refresh token present" as healthy, and is right to, until
+    something actually spends the token. On 2026-10-22 that something was the
+    user's own question, after 11 idle days. On a timer, the token is spent at
+    least once per access-token lifetime (~8h), so a rejection flips health
+    to unhealthy — and the credentials gauge, and the alert — without a
+    question being asked. It also keeps the refresh token in use, in case
+    idleness is what kills it.
+
+    Started from the webserver lifespan. It must share that process because
+    the rejection flag is process memory. Each iteration is guarded: a loop
+    that died on one bad read would silence the alarm for good.
+    """
+    while True:
+        try:
+            if credentials_path(config_dir).exists():
+                await ensure_valid_token(config_dir)
+        except Exception:
+            logger.warning("Scheduled OAuth credential check failed", exc_info=True)
+        await asyncio.sleep(interval_s)
+
+
 async def _refresh_if_needed(config_dir: Path) -> None:
     oauth = await asyncio.to_thread(_read_oauth, config_dir)
     if oauth is None:

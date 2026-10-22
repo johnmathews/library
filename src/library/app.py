@@ -1,5 +1,6 @@
 """FastAPI application factory for the Library backend."""
 
+import asyncio
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
@@ -10,6 +11,7 @@ from fastapi.responses import FileResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 import library
+from library import telemetry
 from library.api import (
     admin,
     ask,
@@ -33,6 +35,7 @@ from library.auth.deps import csrf_protect, current_user, require_admin
 from library.config import Settings, get_settings
 from library.events_broker import EventsBroker
 from library.jobs import job_app, procrastinate_conninfo
+from library.llm import oauth
 from library.mcp_server import create_mcp_http_app
 
 logger = logging.getLogger(__name__)
@@ -208,6 +211,41 @@ def _configure_telemetry_from_settings(settings: Settings) -> None:
     )
 
 
+def claude_credential_status(settings: Settings) -> tuple[str, str] | None:
+    """``(status, detail)`` for the subscription credentials, or ``None`` where
+    OAuth is not in play. The one check behind both /healthz and the
+    ``library_claude_credentials_healthy`` gauge, so the alert and the health
+    endpoint cannot disagree.
+
+    Only meaningful where subscription credentials are actually in play. A dead
+    refresh token cannot self-heal — it needs a human — and without this the
+    symptom is every question failing while /healthz says "ok".
+
+    Keyed on the credentials *existing*, not on the configured backend. The
+    live backend is an instance setting resolved from the database
+    (library.llm.backends), and both callers are deliberately DB-free — so
+    reading `settings.ask_llm_backend` reported on the environment default
+    while the toggle said otherwise, and the alarm stayed silent for exactly
+    the deployments that enabled the backend through the UI. Presence is the
+    right trigger anyway: credentials on disk are there to be used, and the
+    write-time guard means a surface cannot be switched to `subscription`
+    without them.
+    """
+    from library.llm.oauth import credentials_path, token_health
+
+    if (
+        credentials_path(settings.claude_config_dir).exists()
+        or settings.ask_llm_backend == "subscription"
+    ):
+        return token_health(settings.claude_config_dir)
+    return None
+
+
+def _read_credential_status() -> str | None:
+    credentials = claude_credential_status(get_settings())
+    return None if credentials is None else credentials[0]
+
+
 def create_app() -> FastAPI:
     """Build and return the Library FastAPI application."""
     # Built per app instance: the MCP ASGI app's session manager is created
@@ -220,15 +258,30 @@ def create_app() -> FastAPI:
         """Open the Procrastinate connection (so defer() works), start the
         process-wide SSE events broker (one shared Postgres LISTEN connection
         fanned out to all clients), and run the mounted MCP app's lifespan."""
-        warn_if_no_public_base_url(get_settings().public_base_url)
-        _configure_telemetry_from_settings(get_settings())
-        broker = EventsBroker(procrastinate_conninfo(get_settings().database_url))
+        settings = get_settings()
+        warn_if_no_public_base_url(settings.public_base_url)
+        _configure_telemetry_from_settings(settings)
+        telemetry.observe_claude_credentials(_read_credential_status)
+        # In this process, not the worker: the refresh-token rejection flag that
+        # turns health unhealthy is process memory (library.llm.oauth).
+        credentials_check = (
+            asyncio.create_task(
+                oauth.keep_fresh(
+                    settings.claude_config_dir, settings.claude_credentials_check_interval_s
+                )
+            )
+            if settings.claude_credentials_check_interval_s > 0
+            else None
+        )
+        broker = EventsBroker(procrastinate_conninfo(settings.database_url))
         await broker.start()
         app.state.events_broker = broker
         try:
             async with job_app.open_async(), mcp_http.lifespan(mcp_http):
                 yield
         finally:
+            if credentials_check is not None:
+                credentials_check.cancel()
             await broker.stop()
 
     app = FastAPI(
@@ -310,26 +363,9 @@ def create_app() -> FastAPI:
             "version": library.__version__,
             "git_sha": settings.git_sha,
         }
-        # Only meaningful where subscription credentials are actually in play. A
-        # dead refresh token cannot self-heal — it needs a human — and without
-        # this the symptom is every question failing while /healthz says "ok".
-        #
-        # Keyed on the credentials *existing*, not on the configured backend.
-        # The live backend is an instance setting resolved from the database
-        # (library.llm.backends), and this endpoint is deliberately DB-free — so
-        # reading `settings.ask_llm_backend` here reported on the environment
-        # default while the toggle said otherwise, and the alarm stayed silent
-        # for exactly the deployments that enabled the backend through the UI.
-        # Presence is the right trigger anyway: credentials on disk are there to
-        # be used, and the write-time guard means a surface cannot be switched
-        # to `subscription` without them.
-        from library.llm.oauth import credentials_path, token_health
-
-        if (
-            credentials_path(settings.claude_config_dir).exists()
-            or settings.ask_llm_backend == "subscription"
-        ):
-            status, detail = token_health(settings.claude_config_dir)
+        credentials = claude_credential_status(settings)
+        if credentials is not None:
+            status, detail = credentials
             payload["claude_credentials"] = status
             payload["claude_credentials_detail"] = detail
             if status != "healthy":

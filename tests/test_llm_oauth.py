@@ -364,3 +364,96 @@ async def test_a_failed_write_leaves_no_credentials_behind(
     await oauth.ensure_valid_token(tmp_path)
 
     assert not (tmp_path / ".credentials.tmp").exists()
+
+
+# --------------------------------------------------------------------------
+# Scheduled check — a dead refresh token is found before anyone asks
+# --------------------------------------------------------------------------
+
+
+async def _run_keep_fresh_until(
+    tmp_path: Path, done: Any, *, interval_s: float = 0.01, timeout_s: float = 2.0
+) -> None:
+    """Run the loop until ``done()`` holds, then cancel it."""
+    import asyncio
+
+    task = asyncio.create_task(oauth.keep_fresh(tmp_path, interval_s))
+    try:
+        async with asyncio.timeout(timeout_s):
+            while not done():
+                await asyncio.sleep(0.005)
+    finally:
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+
+
+async def test_keep_fresh_finds_a_dead_refresh_token_without_a_question(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 2026-10-22 outage: Ask went unused for 11 days, the refresh token
+    died in that time, and refresh only ran when someone asked. Health still
+    read "healthy" (expired access token + refresh token present), so the first
+    sign was the user's own failed question. The loop must reach the token
+    endpoint on its own and turn health unhealthy, with no Ask call at all."""
+    _write_creds(tmp_path, expires_in_hours=-200)
+    calls: list[dict[str, Any]] = []
+    _stub_post(monkeypatch, _err(400, {"error": "invalid_grant"}), calls)
+    assert oauth.token_health(tmp_path)[0] == "healthy"
+
+    await _run_keep_fresh_until(tmp_path, lambda: bool(calls))
+
+    assert oauth.token_health(tmp_path)[0] == "unhealthy"
+
+
+async def test_keep_fresh_refreshes_an_expired_token(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = _write_creds(tmp_path, expires_in_hours=-1)
+    _stub_post(monkeypatch, _ok({"access_token": "access-new", "expires_in": 28800}), [])
+
+    def refreshed() -> bool:
+        return json.loads(path.read_text())["claudeAiOauth"]["accessToken"] == "access-new"
+
+    await _run_keep_fresh_until(tmp_path, refreshed)
+
+
+async def test_keep_fresh_does_nothing_without_credentials(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A deployment that never logged in must not reach the token endpoint."""
+    import asyncio
+
+    calls: list[dict[str, Any]] = []
+    _stub_post(monkeypatch, _ok({}), calls)
+    checks: list[None] = []
+    real = oauth.credentials_path
+
+    def counting(config_dir: Path) -> Path:
+        checks.append(None)
+        return real(config_dir)
+
+    monkeypatch.setattr(oauth, "credentials_path", counting)
+
+    await _run_keep_fresh_until(tmp_path, lambda: len(checks) >= 3)
+    await asyncio.sleep(0)
+
+    assert calls == []
+
+
+async def test_keep_fresh_survives_a_failing_check(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One bad iteration (a stale NFS handle, say) must not end the loop: a
+    dead loop would silence the alert for good while the gauge still read 1."""
+    _write_creds(tmp_path, expires_in_hours=1)
+    attempts: list[int] = []
+
+    async def flaky(config_dir: Path) -> None:
+        attempts.append(1)
+        if len(attempts) == 1:
+            raise OSError("Stale file handle")
+
+    monkeypatch.setattr(oauth, "ensure_valid_token", flaky)
+
+    await _run_keep_fresh_until(tmp_path, lambda: len(attempts) >= 2)

@@ -1,7 +1,7 @@
 # Observability
 
-**Status:** active. **Last updated:** 2026-08-21 (new: OpenTelemetry metrics for the Ask surface, a Prometheus scrape endpoint, an optional OTLP exporter, and Claude Code's own CLI telemetry for the subscription backend).
-**Last verified:** 2026-08-21 — method: every metric name, attribute and setting below resolved against `src/library/telemetry.py`, `src/library/api/ask.py` and `src/library/config.py`; the exposition format checked by scraping `GET /metrics` in a test that records first and asserts the series appear; the content-logging guard checked by 8 tests including one per forbidden variable. **Not verified:** no dashboard has been built and no scrape has run against the deployed host — the Prometheus config below is written from the endpoint's actual output, not from an observed scrape.
+**Status:** active. **Last updated:** 2026-10-22 (new `library.claude_credentials.healthy` gauge, and §7 now records the two login alerts and drops "no verified scrape": Prometheus scrapes the deployed host as `job="library"`). Earlier: 2026-08-21 (new: OpenTelemetry metrics for the Ask surface, a Prometheus scrape endpoint, an optional OTLP exporter, and Claude Code's own CLI telemetry for the subscription backend).
+**Last verified:** 2026-10-22 — method: partial, scoped to the gauge row and §7. The gauge's exposition (`1`, `0`, absent) is asserted by scraping in `tests/test_telemetry.py` and through the app in `tests/test_llm_backend_config.py`; the scrape claim by querying `library_ask_errors_total` from the production Prometheus, which returned the series with `job="library"`. Earlier: 2026-08-21 — method: every metric name, attribute and setting below resolved against `src/library/telemetry.py`, `src/library/api/ask.py` and `src/library/config.py`; the exposition format checked by scraping `GET /metrics` in a test that records first and asserts the series appear; the content-logging guard checked by 8 tests including one per forbidden variable. **Not verified:** no dashboard has been built and no scrape has run against the deployed host — the Prometheus config below is written from the endpoint's actual output, not from an observed scrape.
 
 > Purpose
 >
@@ -58,6 +58,7 @@ to counters.
 | `library.ask.tool_calls` | histogram | `backend`, `model`, `outcome` | Whether raising the loop ceiling from 4 to 8 is being used |
 | `library.ask.citations` | histogram | `backend`, `model`, `outcome` | Whether answers are grounded — a quality proxy |
 | `library.ask.errors` | counter | `backend`, `kind` | Failures by category, previously only greppable in logs |
+| `library.claude_credentials.healthy` | gauge | none | Whether Ask's subscription login works: `1` usable, `0` a human must log in again, absent where OAuth is not in use. Read on each scrape; see [llm-backends.md §5.3](llm-backends.md) |
 
 `backend` is `api` or `subscription`, and it changes what `cost` *means*: the
 subscription path is not metered, so its cost is a notional ceiling priced at
@@ -172,6 +173,7 @@ but it is worth knowing before pointing this at a shared collector.
 1. **Ask only.** Ingestion, OCR, extraction and the job queue are uninstrumented.
 2. **No traces.** Per-request timing breakdowns are not available.
 3. **No dashboard.** The metrics exist; nothing renders them yet.
-4. **No alerting.** No rule fires on a cost spike or an error-rate jump.
-5. **No verified scrape.** The Prometheus config above is written from the
-   endpoint's real output, but no scrape has been run against the deployed host.
+4. **Alerting covers the login only.** Two Grafana rules page on the
+   credentials gauge and on `subscription_auth` errors
+   ([llm-backends.md §5.3](llm-backends.md)). Nothing fires on a cost spike or
+   a general error-rate jump.

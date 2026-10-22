@@ -1,7 +1,7 @@
 # LLM backends
 
-**Status:** active. **Last updated:** 2026-08-31 (the `series_insight` surface was deleted with the legacy series stack, so §2's table is one row: `ask`. The switchable-backend *mechanism* is unchanged — `BACKEND_SURFACES` is still a map and a second row is still all it takes — and §3.2 keeps the reason a per-document job should not be switchable. Also corrected the structured-output call-site count, six → nine.) Earlier: 2026-08-20 (credential failures now answer 503 with the command that fixes them instead of a bare 500 — §5.2). Earlier the same day: corrected the provisioning command — `claude auth login --claudeai`, not `setup-token`, which writes nothing; and `/healthz` now reports credential health whenever credentials exist rather than keying on the environment default, which left the alarm silent for deployments enabled via the toggle). Earlier the same day: credential-file permissions: refreshes now preserve `0600` instead of widening it, plus directory-ownership guidance in §4). Earlier the same day: the backend became an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
-**Last verified:** 2026-08-31 — method: partial, scoped to §2, §3.2 and §5.2's closing paragraph. Read `BACKEND_SURFACES` in `src/library/llm/backends.py` (one key, `ask`), confirmed no `series_insight` field survives in `src/library/config.py`, and re-derived the structured-output call sites with `grep -rn 'output_format=' src/library/` — nine files: `charts/draft.py`, `email_label.py`, `extraction/extractor.py`, `extraction/judge.py`, `extraction/repair.py`, `facets/labeller.py`, `markdown/generator.py`, `matter_classifier.py`, `money/backfill.py`. No live LLM calls were made this pass; every measured figure carries forward from the 2026-08-20 verification, whose method was: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The §5.2 behaviour was established by running the adapter against an unprovisioned config directory on the production container, which raised the SDK's own `ResultError` ("Not logged in · Please run /login") before any result message — the case the translation now covers; the 503 and the healthy-credentials wording are covered by tests confirmed to fail against the previous behaviour. The §4 provisioning commands were run on the deploy host: `setup-token` left `claude auth status` reporting `loggedIn: false` with no credentials file anywhere, while `claude auth login --claudeai` over SSH produced a `claudeAiOauth` file and `loggedIn: true`. A live Opus call and a full Ask turn then ran on the subscription from the production container (131,966 input tokens for a one-tool turn), and the container's write path was checked to confirm §5's refresh can persist. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure, and the §4/§5 file-permission claims by tests asserting the on-disk mode after a refresh (including under umask 0), confirmed to fail against the previous implementation. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Still unverified: the ~1-year `CLAUDE_CODE_OAUTH_TOKEN` form is documented from the CLI's own output, not exercised.
+**Status:** active. **Last updated:** 2026-10-22 (§5 gains the scheduled refresh, which finds a dead refresh token without a question being asked; §5.1 is renamed "Runbook: log in again" and gives the host-side commands, so the alerts can link to it; new §5.3 documents the `library_claude_credentials_healthy` gauge and the two Grafana alerts). Earlier: 2026-08-31 (the `series_insight` surface was deleted with the legacy series stack, so §2's table is one row: `ask`. The switchable-backend *mechanism* is unchanged — `BACKEND_SURFACES` is still a map and a second row is still all it takes — and §3.2 keeps the reason a per-document job should not be switchable. Also corrected the structured-output call-site count, six → nine.) Earlier: 2026-08-20 (credential failures now answer 503 with the command that fixes them instead of a bare 500 — §5.2). Earlier the same day: corrected the provisioning command — `claude auth login --claudeai`, not `setup-token`, which writes nothing; and `/healthz` now reports credential health whenever credentials exist rather than keying on the environment default, which left the alarm silent for deployments enabled via the toggle). Earlier the same day: credential-file permissions: refreshes now preserve `0600` instead of widening it, plus directory-ownership guidance in §4). Earlier the same day: the backend became an admin-editable instance setting resolved per request — Settings → LLM backend, §4.1 — and `ask` ships defaulting to `subscription`; the startup validator is replaced by write-time and health checks, §6). Earlier the same day: initial version, adding the subscription backend for `ask` and, off by default, `series_insight`.
+**Last verified:** 2026-10-22 — method: partial, scoped to §5, §5.1 and §5.3. The timer and the gauge are pinned by tests in `tests/test_llm_oauth.py`, `tests/test_telemetry.py` and `tests/test_llm_backend_config.py`; the loop's error guard was mutation-checked (removing it turns its test red). The §5.1 commands were run on the deploy host on 2026-10-22 and `/healthz` then read `healthy`. The §5.3 rules are verified in the home-server repo, not here. Earlier: 2026-08-31 — method: partial, scoped to §2, §3.2 and §5.2's closing paragraph. Read `BACKEND_SURFACES` in `src/library/llm/backends.py` (one key, `ask`), confirmed no `series_insight` field survives in `src/library/config.py`, and re-derived the structured-output call sites with `grep -rn 'output_format=' src/library/` — nine files: `charts/draft.py`, `email_label.py`, `extraction/extractor.py`, `extraction/judge.py`, `extraction/repair.py`, `facets/labeller.py`, `markdown/generator.py`, `matter_classifier.py`, `money/backfill.py`. No live LLM calls were made this pass; every measured figure carries forward from the 2026-08-20 verification, whose method was: the §3.1 harness figures and the model-access claim are from live calls against a Claude subscription (both spikes reproduced the numbers); the §3.1.1 figures and the §7 claims about tool bridging, block reconstruction and history stuffing are from running `library.llm.subscription.tool_loop`/`text_call` themselves against the live API — the transcript came back with unprefixed tool names, both tools dispatched, the history preamble honoured and an image attachment read. The §5.2 behaviour was established by running the adapter against an unprovisioned config directory on the production container, which raised the SDK's own `ResultError` ("Not logged in · Please run /login") before any result message — the case the translation now covers; the 503 and the healthy-credentials wording are covered by tests confirmed to fail against the previous behaviour. The §4 provisioning commands were run on the deploy host: `setup-token` left `claude auth status` reporting `loggedIn: false` with no credentials file anywhere, while `claude auth login --claudeai` over SSH produced a `claudeAiOauth` file and `loggedIn: true`. A live Opus call and a full Ask turn then ran on the subscription from the production container (131,966 input tokens for a one-tool turn), and the container's write path was checked to confirm §5's refresh can persist. The `CLAUDE_CONFIG_DIR` rule in §4 was established by bisecting a real auth failure, and the §4/§5 file-permission claims by tests asserting the on-disk mode after a refresh (including under umask 0), confirmed to fail against the previous implementation. The §2/§4.1/§6 claims about runtime resolution, override precedence, write-time refusal and the 409 are covered by executed tests (`tests/test_llm_backends.py`, `frontend/src/views/__tests__/SettingsLlmBackend.spec.ts`) in a run of the full suite: 1623 backend tests and 1058 frontend tests passing, ruff and mypy clean. Still unverified: the ~1-year `CLAUDE_CODE_OAUTH_TOKEN` form is documented from the CLI's own output, not exercised.
 
 > **Purpose** — Library can reach Claude two ways: the metered Anthropic
 > Messages API, or a Claude subscription via the bundled Claude Code CLI. This
@@ -236,6 +236,15 @@ them itself in a headless container. `library.llm.oauth` refreshes before each
 call: it reads `expiresAt`, and within a five-minute buffer exchanges the
 refresh token at `POST /v1/oauth/token`.
 
+The webserver also runs that same check on a timer
+(`LIBRARY_CLAUDE_CREDENTIALS_CHECK_INTERVAL_S`, default 900 s; `0` turns it off),
+whether or not anyone asks a question. Before the timer existed, a refresh
+token that died while Ask sat unused stayed invisible: health reads "expired
+access token + refresh token present" as healthy until something spends the
+token, and on 2026-10-22 that something was the user's own question, after 11
+idle days. On the timer, a rejection surfaces within one access-token lifetime,
+and the token stays in use.
+
 Three properties matter operationally:
 
 - **Refresh tokens are single-use.** The replacement must be persisted or the
@@ -251,18 +260,28 @@ Three properties matter operationally:
 - **A rejected refresh token is not self-healing.** `400 invalid_grant` means it
   has been revoked and no amount of retrying will help.
 
-### 5.1 Runbook: "every question fails, `/healthz` says degraded"
+### 5.1 Runbook: log in again
 
-Symptom — `claude_credentials: "unhealthy"` with detail
-`refresh token rejected by Anthropic (invalid_grant)`, and logs showing
-`Command failed with exit code 1` from the SDK.
+Symptoms: the Pushover alert "Library Ask: Claude login needs renewing" or
+"Library Ask: questions failing on Claude login" (§5.3); `/healthz` reports
+`claude_credentials: "unhealthy"`, for example with the detail
+`refresh token rejected by Anthropic (invalid_grant)`; Ask answers 503.
 
-Recovery:
+Recovery, on the deploy host, not your laptop. The CLI login is interactive, so
+SSH needs a TTY:
 
 ```bash
+ssh -t root@<deploy host>
 CLAUDE_CONFIG_DIR=<mounted dir> claude auth login --claudeai
 chown 999:999 <mounted dir>/.credentials.json
 ```
+
+`<mounted dir>` is the host side of the `/app/.claude` bind mount
+(`/srv/apps/library/claude` on the current deploy). The login prints a URL:
+open it anywhere, sign in, and paste the code back. Confirm with
+`curl -s http://localhost:8010/healthz | jq .claude_credentials` on the host,
+which should read `"healthy"`; the gauge follows within one scrape and the
+alert resolves.
 
 No restart needed — the next call re-reads the file.
 
@@ -299,6 +318,25 @@ A background job has no user-facing surface to answer with; the same message
 reaches the worker log instead. No background job is switchable today — `ask` is
 the only surface in `BACKEND_SURFACES` — so in practice this path is reached
 only by a job sharing the credentials for another reason.
+
+### 5.3 Monitoring: the gauge and the alerts
+
+The webserver's `/metrics` exposes `library_claude_credentials_healthy`: `1`
+while credentials are `healthy`, `0` when a human must act (`unhealthy` or
+`degraded`), and no series where OAuth is not in use. It reads the same check
+as `/healthz` (`app.claude_credential_status`), evaluated on each scrape, so
+the two cannot disagree.
+
+Two Grafana rules page through Pushover. Both messages carry the §5.1 commands
+and a link to it.
+
+| Rule | Condition | Catches |
+| --- | --- | --- |
+| Library Ask: Claude login needs renewing | gauge `< 1` for 5 min; a missing series also fires | a dead or missing login, found by the timer before anyone asks; the webserver not being scraped |
+| Library Ask: questions failing on Claude login | any `library_ask_errors_total{kind="subscription_auth"}` increase in 15 min | a question that already failed on auth, even if the gauge still reads `1` |
+
+The rules live in Grafana's database, not this repo. Their definitions are
+recorded in the home-server repo's `documentation/grafana-alerting.md`.
 
 ## 6. Where the guard lives
 

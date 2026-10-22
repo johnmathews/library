@@ -84,6 +84,10 @@ class Settings(BaseSettings):
     # back, and a read-only mount silently degrades to re-refreshing every call
     # until the refresh token rotates out from under us.
     claude_config_dir: Path = Path("/app/.claude")
+    # How often the webserver spends the OAuth refresh token when it is due,
+    # whether or not anyone is asking questions (llm.oauth.keep_fresh). 0 turns
+    # the timer off and leaves refresh to Ask calls alone.
+    claude_credentials_check_interval_s: int = 900
     extraction_enabled: bool = True
     extraction_model: str = "claude-haiku-4-5"
     extraction_escalation_model: str = "claude-sonnet-4-6"

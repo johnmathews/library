@@ -6,6 +6,9 @@ dashboard; those protect the promise that document text does not leave the host.
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterator
+
 import pytest
 
 from library import telemetry
@@ -183,3 +186,72 @@ def test_metrics_endpoint_exposes_recorded_series(monkeypatch, api_client) -> No
     assert "library_ask_cost" in body
 
     get_settings.cache_clear()
+
+
+# --- the Claude credentials gauge -------------------------------------------
+#
+# The alert "Library Ask: Claude login needs renewing" reads this series.
+# Absent and 0 both page (the rule's NoData state is Alerting), so the cases
+# below pin all three: 1, 0, and no series at all.
+
+
+@pytest.fixture
+def fresh_prometheus(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    """A provider with a Prometheus reader, unregistered afterwards so one
+    test's gauge cannot leak into the next test's scrape."""
+    monkeypatch.setattr(telemetry, "_configured", False)
+    monkeypatch.setattr(telemetry, "_provider", None)
+    monkeypatch.setattr(telemetry, "_instruments", {})
+    telemetry.configure_telemetry(
+        service_name="library-test",
+        service_version="0",
+        prometheus_enabled=True,
+        otlp_endpoint=None,
+    )
+    provider = telemetry._provider
+    assert provider is not None
+    yield
+    provider.shutdown()
+
+
+def _gauge_samples() -> list[str]:
+    from prometheus_client import generate_latest
+
+    body = generate_latest().decode()
+    return re.findall(r"^library_claude_credentials_healthy(?:\{[^}]*\})? (\S+)$", body, re.M)
+
+
+def test_credentials_gauge_is_1_while_healthy(fresh_prometheus: None) -> None:
+    telemetry.observe_claude_credentials(lambda: "healthy")
+    assert _gauge_samples() == ["1.0"]
+
+
+@pytest.mark.parametrize("status", ["unhealthy", "degraded"])
+def test_credentials_gauge_is_0_whenever_a_human_must_act(
+    fresh_prometheus: None, status: str
+) -> None:
+    """``degraded`` pages too: it means no refresh token, so the login lapses
+    when the current access token does, and nothing can stop that but a login."""
+    telemetry.observe_claude_credentials(lambda: status)
+    assert _gauge_samples() == ["0.0"]
+
+
+def test_credentials_gauge_is_absent_when_oauth_is_not_in_use(fresh_prometheus: None) -> None:
+    telemetry.observe_claude_credentials(lambda: None)
+    assert _gauge_samples() == []
+
+
+def test_credentials_gauge_survives_a_failing_read(fresh_prometheus: None) -> None:
+    """A read that raises must drop the series (which pages as NoData), never
+    break the scrape for every other metric."""
+
+    def boom() -> str | None:
+        raise OSError("Stale file handle")
+
+    telemetry.observe_claude_credentials(boom)
+    telemetry.record_error(backend="subscription", kind="subscription_auth")
+
+    assert _gauge_samples() == []
+    from prometheus_client import generate_latest
+
+    assert "library_ask_errors" in generate_latest().decode()

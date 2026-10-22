@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-196 entries.
+197 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -14,6 +14,7 @@ CI checks it is current.
 ## October 2026
 
 - **2026-10-22** — [Ask said "no API key" when the key was there](261022-ask-503-said-no-api-key.md)
+- **2026-10-22** — [Alerting before Ask's login breaks](261022-alert-before-ask-breaks.md)
 
 ## September 2026
 

@@ -48,11 +48,12 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterable, Iterator
 from contextlib import contextmanager
 from typing import Any
 
 from opentelemetry import metrics
+from opentelemetry.metrics import CallbackOptions, Observation
 from opentelemetry.sdk.metrics import MeterProvider
 from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 from opentelemetry.sdk.resources import Resource
@@ -256,6 +257,40 @@ def record_error(*, backend: str, kind: str) -> None:
     """
     _counter("library.ask.errors", "{error}", "Failed Ask turns by category").add(
         1, {"backend": backend, "kind": kind}
+    )
+
+
+def observe_claude_credentials(read_status: Callable[[], str | None]) -> None:
+    """Gauge ``library_claude_credentials_healthy``: 1 while the subscription
+    credentials are ``healthy``, 0 when a human must log in again, and no
+    series at all when OAuth is not in use.
+
+    ``read_status`` runs on every scrape, so the value is never older than the
+    scrape itself — it reads a small file, no network. A read that raises
+    yields no series rather than breaking the scrape: the alert treats a
+    missing series as firing, so the failure still pages.
+
+    Grafana's "Library Ask: Claude login needs renewing" rule reads this
+    series (docs/llm-backends.md §5.3).
+    """
+    name = "library.claude_credentials.healthy"
+    if name in _instruments:
+        return
+
+    def callback(_options: CallbackOptions) -> Iterable[Observation]:
+        try:
+            status = read_status()
+        except Exception:
+            logger.warning("credential health read failed during scrape", exc_info=True)
+            return []
+        if status is None:
+            return []
+        return [Observation(1 if status == "healthy" else 0)]
+
+    _instruments[name] = _meter().create_observable_gauge(
+        name,
+        callbacks=[callback],
+        description="1 while Claude subscription credentials are usable, 0 when a login is needed",
     )
 
 
