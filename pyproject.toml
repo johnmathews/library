@@ -62,7 +62,7 @@ dependencies = [
     # ASGI/reverse-proxy deployments — which is exactly how the MCP app is
     # mounted here (app.py mounts create_mcp_http_app() into the FastAPI
     # lifespan, behind a proxy). 3.4.4 restores that compatibility.
-    "fastmcp>=3.4.4",
+    "fastmcp>=3.4.10",
     "watchfiles>=1.2.0",
     "imap-tools>=1.13.0",
     "sse-starlette>=2.1",
