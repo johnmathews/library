@@ -41,3 +41,10 @@ deploys itself. A commit SHA cannot be moved.
 `marocchino/sticky-pull-request-comment@v3` is not a tag upstream: `v3` is a **branch**, which is
 even more mutable than a tag. On 2026-10-25 its head was the `v3.0.5` release commit, so the pin
 is that commit with `# v3.0.5`.
+
+## 4. A re-stamped doc
+
+`docs/ask.md` lists `.github/workflows/e2e-nightly.yml` under `Covers:`, so the pin made
+`check_docs.py` report it stale. Its stamp now carries a partial verification scoped to the one
+paragraph that describes that workflow, re-read against the pinned file; nothing else in the
+document was re-checked.
