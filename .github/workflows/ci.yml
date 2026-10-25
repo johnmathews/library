@@ -40,8 +40,8 @@ jobs:
       frontend: ${{ steps.filter.outputs.frontend }}
       ci: ${{ steps.filter.outputs.ci }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: dorny/paths-filter@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dorny/paths-filter@ceb8a2b8f2d89434be7ff52d3de7ec3738c5cc9d # v4.0.3
         id: filter
         with:
           filters: |
@@ -99,9 +99,9 @@ jobs:
       # is how it presents: every check missing rather than one check red.
       GOLDEN_CORPUS_TOKEN: ${{ secrets.GOLDEN_CORPUS_TOKEN }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       # Full version: astral-sh/setup-uv publishes no floating `v8` major tag.
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
       - name: Install OCR system packages
@@ -127,7 +127,7 @@ jobs:
         # a step-level env (a step's own env is not in scope for its own `if`).
         if: env.GOLDEN_CORPUS_TOKEN != ''
         continue-on-error: true
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: johnmathews/library-golden-corpus
           token: ${{ secrets.GOLDEN_CORPUS_TOKEN }}
@@ -198,7 +198,7 @@ jobs:
             --engine corpus --engine cassettes
       - name: Upload coverage HTML
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-coverage-html
           path: htmlcov/
@@ -207,14 +207,14 @@ jobs:
           if-no-files-found: ignore
       - name: Upload backend coverage JSON
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: backend-coverage-json
           path: coverage.json
           if-no-files-found: ignore
       - name: Coverage PR comment
         if: success() && github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: backend-coverage
           path: coverage.md
@@ -245,10 +245,10 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
       - name: Check documentation stamps
@@ -292,8 +292,8 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10.0.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
           enable-cache: true
       - name: Install dependencies
@@ -326,8 +326,8 @@ jobs:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -347,13 +347,13 @@ jobs:
           node scripts/coverage-summary.mjs | tee coverage/summary.md >> "$GITHUB_STEP_SUMMARY"
       - name: Coverage PR comment
         if: success() && github.event_name == 'pull_request'
-        uses: marocchino/sticky-pull-request-comment@v3
+        uses: marocchino/sticky-pull-request-comment@5770ad5eb8f42dd2c4f34da00c94c5381e49af88 # v3.0.5
         with:
           header: frontend-coverage
           path: frontend/coverage/summary.md
       - name: Upload coverage HTML
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: frontend-coverage-html
           path: frontend/coverage/
@@ -443,8 +443,8 @@ jobs:
       E2E_PROJECTS: ${{ matrix.projects }}
       E2E_MIN_EXPECTED: ${{ matrix.min-executed }}
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # Build the backend image via bake so it restores from the shared gha
       # layer cache when warm (the `build` job also writes it). Now that e2e is
       # un-gated it usually starts before `build`, so the cache is often cold and
@@ -452,7 +452,7 @@ jobs:
       # skips its own build; on a cache/name miss it simply rebuilds — slower,
       # never broken.
       - name: Build the stack image (gha layer cache)
-        uses: docker/bake-action@v7
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
         with:
           files: |
             docker-compose.yml
@@ -472,7 +472,7 @@ jobs:
         run: |
           echo 'e2e-admin-password-123' | docker compose exec -T api \
             library user add e2e-admin --display-name "E2E Admin" --admin --password-stdin
-      - uses: actions/setup-node@v7
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
           cache: npm
@@ -484,7 +484,7 @@ jobs:
       # sets, and a shared key would hand a WebKit-only cache to the shard that
       # needs all three.
       - name: Cache Playwright browsers
-        uses: actions/cache@v6
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ matrix.shard }}-${{ hashFiles('frontend/package-lock.json') }}
@@ -516,7 +516,7 @@ jobs:
         run: npm run test:e2e:ci
       - name: Upload the e2e JSON report
         if: always()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-json-report-${{ matrix.shard }}
           path: frontend/e2e-report.json
@@ -524,7 +524,7 @@ jobs:
           retention-days: 7
       - name: Upload Playwright report
         if: failure()
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: playwright-report-${{ matrix.shard }}
           path: frontend/playwright-report/
@@ -552,10 +552,10 @@ jobs:
       # dropped by curl's cookie jar. Production keeps the default (true).
       LIBRARY_COOKIE_SECURE: "false"
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Build the stack image (gha layer cache)
-        uses: docker/bake-action@v7
+        uses: docker/bake-action@59cb1203cd42bcefd40a1b6d73b589e48c86040e # v7.5.0
         with:
           files: docker-compose.yml
           load: true
@@ -638,19 +638,19 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: actions/checkout@v7
-      - uses: docker/setup-buildx-action@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       # Pull the coverage reports the test jobs uploaded; missing artifacts are
       # tolerated so the build never fails for want of coverage (the script then
       # records a null pct for that side).
       - name: Download backend coverage JSON
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         continue-on-error: true
         with:
           name: backend-coverage-json
           path: coverage-artifacts/backend
       - name: Download frontend coverage report
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         continue-on-error: true
         with:
           name: frontend-coverage-html
@@ -669,13 +669,13 @@ jobs:
           GIT_SHA: ${{ github.sha }}
       - name: Log in to GHCR
         if: github.ref == 'refs/heads/main'
-        uses: docker/login-action@v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build (push :sha on main; warm the cache on branches)
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
         with:
           context: .
           push: ${{ github.ref == 'refs/heads/main' }}
@@ -698,9 +698,9 @@ jobs:
       contents: read
       packages: write
     steps:
-      - uses: docker/setup-buildx-action@v4
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - name: Log in to GHCR
-        uses: docker/login-action@v4
+        uses: docker/login-action@81c6f93d4bc991e510b342a00b419b3bb4efc5c6 # v4.7.0
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
@@ -741,7 +741,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Require that no upstream job failed
         # A job must appear in BOTH `needs:` above and the argument list below.
         # Listing it only in `needs:` makes the gate wait for it and then ignore
