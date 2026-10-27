@@ -185,8 +185,8 @@ async def _do_refresh(config_dir: Path, oauth: dict[str, Any], refresh_token: st
         if response.status_code == 400 and _is_invalid_grant(response):
             _rejected_refresh_token_hash = _hash_token(refresh_token)
             logger.error(
-                "OAuth refresh token rejected (invalid_grant) — re-authenticate on the "
-                "host with `claude auth login --claudeai`"
+                "OAuth refresh token rejected (invalid_grant) — log in again on the host; "
+                "/healthz claude_credentials_detail has the command (docs/llm-backends.md §5.1)"
             )
         else:
             logger.warning(
@@ -248,7 +248,30 @@ def _write_credentials(config_dir: Path, oauth: dict[str, Any]) -> None:
         raise
 
 
-def token_health(config_dir: Path) -> tuple[str, str]:
+def login_instructions(config_dir: Path, host_config_dir: str | None) -> str:
+    """Return the commands that log library's subscription in, as run on the host.
+
+    ``config_dir`` is where the *container* sees the credentials. An operator
+    logs in on the host, into the directory bind-mounted there, and the container
+    cannot discover that path. With ``host_config_dir`` the commands are literal;
+    without it they name the mount instead and never present the container path
+    as a host path. Run on the host, ``CLAUDE_CONFIG_DIR=/app/.claude`` creates a
+    new directory library never reads, and a bare ``claude auth login`` logs in
+    the operator's own ``~/.claude`` (#195).
+    """
+    if host_config_dir:
+        target = host_config_dir
+        where = "on the host"
+    else:
+        target = "<host dir>"
+        where = f"on the host, where <host dir> is the directory mounted at {config_dir}"
+    return (
+        f"log in {where}: `CLAUDE_CONFIG_DIR={target} claude auth login --claudeai`, "
+        f"then `chown 999:999 {target}/{_CREDENTIALS_FILENAME}`"
+    )
+
+
+def token_health(config_dir: Path, host_config_dir: str | None = None) -> tuple[str, str]:
     """Report subscription credential status as ``(status, detail)``.
 
     ``status`` is one of ``healthy`` / ``degraded`` / ``unhealthy``, and the
@@ -257,21 +280,25 @@ def token_health(config_dir: Path) -> tuple[str, str]:
     refresh token is present is ``healthy`` — it refreshes on the next call, and
     reporting that as degraded made an entirely self-healing state look like an
     outage for an hour out of every eight in sre-agent.
+
+    Every non-healthy detail ends with :func:`login_instructions`, so /healthz,
+    the settings view and Ask's 503 all hand over a command that works.
     """
+    fix = login_instructions(config_dir, host_config_dir)
     path = credentials_path(config_dir)
     if not path.exists():
-        return (
-            "unhealthy",
-            f"no credentials at {path} — run `claude auth login --claudeai` on the host",
-        )
+        return ("unhealthy", f"no credentials at {path} (container path) — {fix}")
 
     oauth = _read_oauth(config_dir)
     if oauth is None:
-        return ("unhealthy", f"credentials at {path} are unreadable or carry no OAuth block")
+        return (
+            "unhealthy",
+            f"credentials at {path} are unreadable or carry no OAuth block — {fix}",
+        )
 
     expires_at = oauth.get("expiresAt")
     if not isinstance(expires_at, int | float):
-        return ("unhealthy", "credentials carry no expiresAt")
+        return ("unhealthy", f"credentials carry no expiresAt — {fix}")
 
     remaining_hours = (int(expires_at) - int(time.time() * 1000)) / (1000 * 3600)
     refresh_token = oauth.get("refreshToken")
@@ -281,11 +308,7 @@ def token_health(config_dir: Path) -> tuple[str, str]:
             _rejected_refresh_token_hash is not None
             and _hash_token(refresh_token) == _rejected_refresh_token_hash
         ):
-            return (
-                "unhealthy",
-                "refresh token rejected by Anthropic (invalid_grant) — re-authenticate "
-                "on the host with `claude auth login --claudeai`",
-            )
+            return ("unhealthy", f"refresh token rejected by Anthropic (invalid_grant) — {fix}")
         if remaining_hours < 0:
             return (
                 "healthy",
@@ -294,5 +317,11 @@ def token_health(config_dir: Path) -> tuple[str, str]:
         return ("healthy", f"access token valid ({remaining_hours:.1f}h), refresh token present")
 
     if remaining_hours < 0:
-        return ("unhealthy", f"access token expired {-remaining_hours:.1f}h ago, no refresh token")
-    return ("degraded", f"access token valid ({remaining_hours:.1f}h) but no refresh token")
+        return (
+            "unhealthy",
+            f"access token expired {-remaining_hours:.1f}h ago, no refresh token — {fix}",
+        )
+    return (
+        "degraded",
+        f"access token valid ({remaining_hours:.1f}h) but no refresh token — {fix}",
+    )

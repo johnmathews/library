@@ -299,17 +299,17 @@ def _explain(failure: str, config_dir: Path) -> str:
     CLI, which is not how this deployment authenticates. Appending the
     credential status and the actual command turns a dead end into a fix.
     """
-    status, detail = oauth.token_health(config_dir)
+    status, detail = oauth.token_health(config_dir, get_settings().claude_host_config_dir)
     if status == "healthy":
         # Credentials are fine, so this is something else — a CLI crash, a
         # network failure, a rate limit. Don't send anyone to re-authenticate
         # for a problem that is not about authentication.
         return f"the Claude subscription backend failed: {failure}"
+    # The detail already ends with the login commands, written for the host
+    # (oauth.login_instructions); `config_dir` is the container's view (#195).
     return (
-        f"the Claude subscription backend could not authenticate: {detail}. "
-        f"Run `CLAUDE_CONFIG_DIR={config_dir} claude auth login --claudeai` on "
-        f"the host, then `chown 999:999 {oauth.credentials_path(config_dir)}` "
-        f"(see docs/llm-backends.md §4). Original error: {failure}"
+        f"the Claude subscription backend could not authenticate: {detail} "
+        f"(see docs/llm-backends.md §5.1). Original error: {failure}"
     )
 
 

@@ -457,3 +457,65 @@ async def test_keep_fresh_survives_a_failing_check(
     monkeypatch.setattr(oauth, "ensure_valid_token", flaky)
 
     await _run_keep_fresh_until(tmp_path, lambda: len(attempts) >= 2)
+
+
+# --- login instructions (#195) ----------------------------------------------
+#
+# The container sees its credentials at /app/.claude, but an operator logs in on
+# the host, into the directory that is bind-mounted there. Every message that
+# tells someone to log in must name the host directory, never the container path:
+# on 2026-10-27 `CLAUDE_CONFIG_DIR=/app/.claude claude auth login`, copied from
+# the 503, created a fresh /app/.claude on the host that library never read, and
+# a bare `claude auth login` logged root's own ~/.claude in instead.
+
+_HOST_DIR = "/srv/apps/library/claude"
+
+
+def test_login_instructions_name_the_host_directory() -> None:
+    text = oauth.login_instructions(Path("/app/.claude"), _HOST_DIR)
+    assert f"CLAUDE_CONFIG_DIR={_HOST_DIR} claude auth login --claudeai" in text
+    assert f"chown 999:999 {_HOST_DIR}/.credentials.json" in text
+    assert "CLAUDE_CONFIG_DIR=/app/.claude" not in text
+
+
+def test_login_instructions_without_a_host_directory_never_offer_the_container_path() -> None:
+    text = oauth.login_instructions(Path("/app/.claude"), None)
+    assert "CLAUDE_CONFIG_DIR=/app/.claude" not in text
+    assert "/app/.claude/.credentials.json" not in text
+    # It still says which mount to look for, and keeps the full command shape.
+    assert "mounted at /app/.claude" in text
+    assert "claude auth login --claudeai" in text
+    assert "chown 999:999" in text
+
+
+def test_login_instructions_treat_an_empty_host_directory_as_unset() -> None:
+    # compose passes `${CLAUDE_CONFIG_DIR:-}`, which is "" when unset.
+    assert oauth.login_instructions(Path("/app/.claude"), "") == oauth.login_instructions(
+        Path("/app/.claude"), None
+    )
+
+
+def test_health_missing_file_names_the_host_directory(tmp_path: Path) -> None:
+    status, detail = oauth.token_health(tmp_path, _HOST_DIR)
+    assert status == "unhealthy"
+    assert f"CLAUDE_CONFIG_DIR={_HOST_DIR} claude auth login --claudeai" in detail
+
+
+async def test_invalid_grant_detail_names_the_host_directory(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _write_creds(tmp_path, expires_in_hours=-1)
+    _stub_post(monkeypatch, _err(400, {"error": "invalid_grant"}), [])
+    await oauth.ensure_valid_token(tmp_path)
+
+    status, detail = oauth.token_health(tmp_path, _HOST_DIR)
+    assert status == "unhealthy"
+    assert f"CLAUDE_CONFIG_DIR={_HOST_DIR} claude auth login --claudeai" in detail
+
+
+def test_every_unhealthy_detail_says_which_directory_to_log_in_to(tmp_path: Path) -> None:
+    """A bare `claude auth login` logs the operator's own ~/.claude in, not library's."""
+    _write_creds(tmp_path, expires_in_hours=-1, refresh_token=None)  # expired, no refresh
+    status, detail = oauth.token_health(tmp_path, _HOST_DIR)
+    assert status == "unhealthy"
+    assert f"CLAUDE_CONFIG_DIR={_HOST_DIR}" in detail

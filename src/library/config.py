@@ -84,6 +84,11 @@ class Settings(BaseSettings):
     # back, and a read-only mount silently degrades to re-refreshing every call
     # until the refresh token rotates out from under us.
     claude_config_dir: Path = Path("/app/.claude")
+    # The same directory as the HOST sees it (the source of the bind mount above).
+    # Used only to write login instructions an operator can paste on the host;
+    # the container cannot discover it. Unset or empty, messages name the mount
+    # instead of guessing (#195).
+    claude_host_config_dir: str | None = None
     # How often the webserver spends the OAuth refresh token when it is due,
     # whether or not anyone is asking questions (llm.oauth.keep_fresh). 0 turns
     # the timer off and leaves refresh to Ask calls alone.
