@@ -109,7 +109,9 @@ def check_backend_available(backend: LLMBackend, settings: Settings) -> None:
     as a failed query.
     """
     if backend == "subscription":
-        status, detail = oauth.token_health(settings.claude_config_dir)
+        status, detail = oauth.token_health(
+            settings.claude_config_dir, settings.claude_host_config_dir
+        )
         if status == "unhealthy":
             raise BackendUnavailableError(f"the Claude subscription is not usable: {detail}")
     elif backend == "api" and settings.anthropic_api_key is None:
@@ -168,7 +170,7 @@ async def clear_backend(session: AsyncSession, surface: str) -> None:
 
 async def credential_health(settings: Settings) -> tuple[str, str]:
     """Subscription credential status, for the settings view and /healthz."""
-    return oauth.token_health(settings.claude_config_dir)
+    return oauth.token_health(settings.claude_config_dir, settings.claude_host_config_dir)
 
 
 async def list_overrides(session: AsyncSession) -> list[InstanceSetting]:

@@ -237,7 +237,7 @@ def claude_credential_status(settings: Settings) -> tuple[str, str] | None:
         credentials_path(settings.claude_config_dir).exists()
         or settings.ask_llm_backend == "subscription"
     ):
-        return token_health(settings.claude_config_dir)
+        return token_health(settings.claude_config_dir, settings.claude_host_config_dir)
     return None
 
 

@@ -577,6 +577,40 @@ async def test_an_sdk_error_becomes_an_actionable_backend_error(
     assert "Not logged in" in message  # the original cause is preserved
 
 
+async def test_an_auth_failure_names_the_host_directory_not_the_container_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The 503 an operator copies from must work when pasted on the host (#195).
+
+    It used to say `CLAUDE_CONFIG_DIR=<container path>`; run on the host, that
+    created a new directory library never reads.
+    """
+    from claude_agent_sdk import ClaudeSDKError
+
+    from library.config import get_settings
+
+    monkeypatch.setenv("LIBRARY_CLAUDE_HOST_CONFIG_DIR", "/srv/apps/library/claude")
+    get_settings.cache_clear()
+
+    def fake_query(*, prompt: Any, options: Any, **_: Any) -> AsyncIterator[Message]:
+        async def gen() -> AsyncIterator[Message]:
+            raise ClaudeSDKError("Not logged in · Please run /login")
+            yield  # pragma: no cover - unreachable, makes this an async generator
+
+        return gen()
+
+    monkeypatch.setattr(subscription, "query", fake_query)
+
+    with pytest.raises(SubscriptionBackendError) as excinfo:
+        await subscription.text_call(config_dir=tmp_path, model="m", system_prompt="s", prompt="p")
+
+    message = str(excinfo.value)
+    assert "CLAUDE_CONFIG_DIR=/srv/apps/library/claude claude auth login --claudeai" in message
+    assert "chown 999:999 /srv/apps/library/claude/.credentials.json" in message
+    assert f"CLAUDE_CONFIG_DIR={tmp_path}" not in message
+    get_settings.cache_clear()
+
+
 async def test_a_failure_with_healthy_credentials_does_not_blame_auth(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
