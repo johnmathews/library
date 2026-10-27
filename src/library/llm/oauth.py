@@ -28,6 +28,7 @@ import hashlib
 import json
 import logging
 import os
+import shlex
 import time
 from pathlib import Path
 from typing import Any
@@ -259,8 +260,10 @@ def login_instructions(config_dir: Path, host_config_dir: str | None) -> str:
     new directory library never reads, and a bare ``claude auth login`` logs in
     the operator's own ``~/.claude`` (#195).
     """
-    if host_config_dir:
-        target = host_config_dir
+    # The value comes from deploy config, but it ends up pasted into a root
+    # shell: quote it, and only trust an absolute path.
+    if host_config_dir and host_config_dir.startswith("/"):
+        target = shlex.quote(host_config_dir)
         where = "on the host"
     else:
         target = "<host dir>"

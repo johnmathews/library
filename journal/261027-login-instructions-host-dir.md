@@ -45,7 +45,22 @@ The cause was `subscription._explain` formatting the command from
 - **The host directory is a plain `str`, not a `Path`.** It is never opened in the
   container, and a `Path` would suggest it could be.
 
-## 4. What is deliberately not done
+## 4. Security review
+
+An automated review of the first push raised four points.
+
+- **Accepted, fixed:** the host path is pasted into a root shell, so it is `shlex.quote`d, and
+  only an absolute path is trusted. Anything else falls back to `<host dir>`.
+- **Already fixed:** worktree symlinks (`.venv`, `node_modules`) had been committed. They were
+  removed with an amend before review.
+- **Kept as is:** the host path now appears on unauthenticated `/healthz` and to non-admins in
+  settings. It is a directory name, not a secret. `/healthz` already showed the container path
+  and a login command, and the home-server alert relies on that detail.
+- **Declined:** a separate variable instead of reusing `CLAUDE_CONFIG_DIR`. The compose mount
+  reads `CLAUDE_CONFIG_DIR`, so reusing it guarantees the message names the mounted
+  directory. A second variable would bring back the drift this change removes.
+
+## 5. What is deliberately not done
 
 - **Production does not use this repo's compose file.** The home-server role
   `document_library_lxc` renders its own, so the live 503 shows `<host dir>` until that

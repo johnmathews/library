@@ -519,3 +519,16 @@ def test_every_unhealthy_detail_says_which_directory_to_log_in_to(tmp_path: Path
     status, detail = oauth.token_health(tmp_path, _HOST_DIR)
     assert status == "unhealthy"
     assert f"CLAUDE_CONFIG_DIR={_HOST_DIR}" in detail
+
+
+def test_login_instructions_shell_quote_the_host_directory() -> None:
+    """The operator pastes these into a root shell; a path must stay one word."""
+    text = oauth.login_instructions(Path("/app/.claude"), "/srv/my apps/claude")
+    assert "CLAUDE_CONFIG_DIR='/srv/my apps/claude' claude auth login --claudeai" in text
+    assert "chown 999:999 '/srv/my apps/claude'/.credentials.json" in text
+
+
+def test_login_instructions_ignore_a_relative_host_directory() -> None:
+    """Only an absolute path can be pasted anywhere on the host and mean the same thing."""
+    text = oauth.login_instructions(Path("/app/.claude"), "claude")
+    assert text == oauth.login_instructions(Path("/app/.claude"), None)
