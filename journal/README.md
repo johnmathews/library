@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-200 entries.
+201 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -13,6 +13,7 @@ CI checks it is current.
 
 ## October 2026
 
+- **2026-10-31** — [Downloads from the iOS home-screen app](261031-ios-home-screen-download.md)
 - **2026-10-27** — [Login instructions name the host directory](261027-login-instructions-host-dir.md)
 - **2026-10-25** — [GitHub Actions pinned to commit SHAs](261025-pin-actions-to-sha.md)
 - **2026-10-22** — [Ask, laid out like a chat app](261022-ask-chat-app-layout.md)
