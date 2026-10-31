@@ -136,3 +136,56 @@ test('pdf preview renders canvas pages and scrolls through them', async ({ page 
     headers: { 'X-CSRF-Token': csrf!.value },
   })
 })
+
+/**
+ * An iOS home-screen web app cannot download a file: following the attachment
+ * link opens a viewer with no save or share control (WebKit bug 290847), so
+ * DownloadLink hands the file to the share sheet instead. Playwright cannot
+ * launch a real home-screen app, so fake the two things the component reads —
+ * `navigator.standalone` and the Web Share API — and record what would have
+ * been shared. Against the real stack this proves the authenticated fetch
+ * works and the backend's Content-Disposition name survives into the File.
+ */
+test('in an iOS home-screen app, Download opens the share sheet with the named file', async ({
+  page,
+}, testInfo) => {
+  await page.addInitScript(() => {
+    const shared: Array<{ name: string; type: string; size: number }> = []
+    Object.assign(window, { __shared: shared })
+    Object.defineProperty(navigator, 'standalone', { value: true, configurable: true })
+    Object.defineProperty(navigator, 'canShare', { value: () => true, configurable: true })
+    Object.defineProperty(navigator, 'share', {
+      value: async ({ files }: { files: File[] }) => {
+        for (const f of files) shared.push({ name: f.name, type: f.type, size: f.size })
+      },
+      configurable: true,
+    })
+  })
+  await signIn(page)
+
+  const marker = `pdf-share-${testInfo.project.name}-${Date.now()}`
+  const id = await uploadAndOpenDetailPage(page, marker)
+  const detailUrl = page.url()
+
+  await page.getByTestId('preview-download').click()
+  await expect
+    .poll(() => page.evaluate(() => (window as unknown as { __shared: unknown[] }).__shared))
+    .toEqual([
+      {
+        name: expect.stringMatching(new RegExp(`^pdf-preview-${marker}.*\\.pdf$`)),
+        type: 'application/pdf',
+        size: expect.any(Number),
+      },
+    ])
+  const [file] = await page.evaluate(
+    () => (window as unknown as { __shared: Array<{ size: number }> }).__shared,
+  )
+  expect(file!.size).toBeGreaterThan(0)
+  // The app never navigated away to the file.
+  expect(page.url()).toBe(detailUrl)
+
+  const csrf = (await page.context().cookies()).find((c) => c.name === 'library_csrftoken')
+  await page.request.delete(`/api/documents/${id}`, {
+    headers: { 'X-CSRF-Token': csrf!.value },
+  })
+})

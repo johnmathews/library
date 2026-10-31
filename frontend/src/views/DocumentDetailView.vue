@@ -47,6 +47,7 @@ import { useReviewQueueStore } from '@/stores/reviewQueue'
 import { resolveReviewReasons, type ReviewReason } from '@/utils/validationReason'
 import { formatDate, markdownPageHtml } from '@/utils/documentFormat'
 import DocumentPdfPreview from '@/components/DocumentPdfPreview.vue'
+import DownloadLink from '@/components/DownloadLink.vue'
 import DocumentHistoryTimeline from '@/components/DocumentHistoryTimeline.vue'
 import NoteEditorPanel from '@/components/NoteEditorPanel.vue'
 import DocumentMetadataEditor from '@/components/DocumentMetadataEditor.vue'
@@ -1279,7 +1280,7 @@ watch(
                 </svg>
                 Open
               </a>
-              <a
+              <DownloadLink
                 :href="previewDownloadUrl"
                 class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
                 data-testid="preview-download"
@@ -1300,7 +1301,7 @@ watch(
                   />
                 </svg>
                 Download
-              </a>
+              </DownloadLink>
             </div>
           </div>
           <!-- Inline disposition: Firefox refuses to render <img> responses
@@ -1327,10 +1328,10 @@ watch(
             data-testid="preview-fallback"
           >
             No preview is available for this file type.
-            <a
+            <DownloadLink
               class="text-violet-600 hover:underline"
               :href="originalUrl(doc.id, { includeDeleted: isDeleted })"
-              >Download the original file</a
+              >Download the original file</DownloadLink
             >
             to view it.
           </div>
@@ -1343,7 +1344,7 @@ watch(
             data-testid="preview-download-original"
           >
             <span class="text-sm text-gray-500 dark:text-gray-400">Original file preserved</span>
-            <a
+            <DownloadLink
               :href="originalDownloadUrl"
               class="btn-sm border-gray-200 dark:border-gray-700/60 hover:border-gray-300 text-gray-700 dark:text-gray-300 gap-1.5"
               data-testid="download-original"
@@ -1364,7 +1365,7 @@ watch(
                 />
               </svg>
               Download original
-            </a>
+            </DownloadLink>
           </div>
         </div>
 
@@ -1468,22 +1469,22 @@ watch(
         >
           <h2 class="text-lg font-semibold text-gray-800 dark:text-gray-100 mb-3">Actions</h2>
           <p class="text-sm mb-2">
-            <a
+            <DownloadLink
               class="text-violet-600 hover:underline"
               :href="originalUrl(doc.id, { includeDeleted: isDeleted })"
               data-testid="download-original"
             >
               Download the original file
-            </a>
+            </DownloadLink>
           </p>
           <p v-if="doc.has_searchable_pdf" class="text-sm mb-2">
-            <a
+            <DownloadLink
               class="text-violet-600 hover:underline"
               :href="searchablePdfUrl(doc.id, { includeDeleted: isDeleted })"
               data-testid="download-searchable"
             >
               Download the searchable PDF
-            </a>
+            </DownloadLink>
           </p>
           <p class="text-sm mb-4">
             <RouterLink

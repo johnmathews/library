@@ -4,6 +4,7 @@ defineOptions({ name: 'DocumentPdfPreview' })
 import { ref, shallowRef, onMounted, onBeforeUnmount, watch, nextTick } from 'vue'
 import * as pdfjsLib from 'pdfjs-dist'
 import type { PDFDocumentLoadingTask, PDFDocumentProxy } from 'pdfjs-dist'
+import DownloadLink from './DownloadLink.vue'
 
 // Module worker, bundled by Vite and loaded on demand (off the initial bundle).
 pdfjsLib.GlobalWorkerOptions.workerSrc = new URL(
@@ -163,7 +164,7 @@ defineExpose({ status, pageCount })
       <span>This preview couldn't be displayed.</span>
       <span class="flex gap-3">
         <a :href="openHref" target="_blank" rel="noopener" data-testid="pdf-preview-open" class="text-violet-600 hover:underline">Open</a>
-        <a :href="downloadHref" data-testid="pdf-preview-download" class="text-violet-600 hover:underline">Download</a>
+        <DownloadLink :href="downloadHref" data-testid="pdf-preview-download" class="text-violet-600 hover:underline">Download</DownloadLink>
       </span>
     </div>
   </div>
