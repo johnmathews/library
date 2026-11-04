@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.5: the `user_edited` event records the editing `user_id`; the PATCH error statuses are listed; the route calls `documents_service.edit_document`). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.5's audit, errors and shared-service paragraphs. Read `update_document` and `documents_service.py` against the prose; `test_patch_records_editor_user_id` and `test_patch_edit_errors_keep_status_and_detail` green after each was seen red. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-04 (§1.19: creating a comment is `comments_service.add_comment`, shared with the MCP `add_comment` tool). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.19's POST row and its shared-service sentence. Read `create_comment` and `comments_service.add_comment` against the prose; `tests/test_api_comments.py` green unchanged after the route moved onto the service. The rest carries its earlier verifications forward.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -1525,7 +1525,7 @@ apply exactly as elsewhere (§1.9).
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/documents/{id}/comments` | The document's comments, **newest first**: `[{id, document_id, author_id, body, created_at}, …]`. `404` for unknown/deleted documents. |
-| POST | `/api/documents/{id}/comments` | Body `{"body": "…"}`. `201` with the created comment. Blank/whitespace-only `body` is rejected `422`. Writes a `comment_added` ingestion event and defers a re-embed of the document. |
+| POST | `/api/documents/{id}/comments` | Body `{"body": "…"}`. `201` with the created comment, authored by the requesting user. Blank/whitespace-only `body` is rejected `422`; unknown/deleted document `404`. Writes a `comment_added` ingestion event and, after the commit, defers a re-embed of the document. The work is `comments_service.add_comment` (`src/library/comments_service.py`), which the MCP `add_comment` tool calls too ([mcp.md §1.3](mcp.md)). |
 | PATCH | `/api/documents/{id}/comments/{cid}` | Body `{"body": "…"}`, full replacement (there is no partial-field edit — a comment has one field). `200` with the updated comment. Blank body `422`; unknown or foreign (belonging to a different document) comment `404`. Writes a `comment_edited` event and defers a re-embed. |
 | DELETE | `/api/documents/{id}/comments/{cid}` | `204` on success; unknown or foreign comment `404`. Writes a `comment_deleted` event and defers a re-embed (the comment's chunk is dropped from search on the next embed run). |
 

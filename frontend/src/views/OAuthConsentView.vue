@@ -246,9 +246,10 @@ const headingClass = 'text-2xl font-bold text-gray-800 dark:text-gray-100'
                 <li>Search and read every document in the Library, including ones others added</li>
                 <li>Download document files</li>
                 <li>Add new documents</li>
+                <li>Change document details and add comments</li>
               </ul>
               <p :class="bodyClass" class="mt-3">
-                Everything it adds is recorded as {{ userName }}. Disconnect it at any
+                Everything it adds or changes is recorded as {{ userName }}. Disconnect it at any
                 time in Settings, under Connected apps.
               </p>
             </dd>

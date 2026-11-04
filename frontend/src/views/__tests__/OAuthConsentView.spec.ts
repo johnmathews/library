@@ -110,8 +110,8 @@ describe('OAuthConsentView', () => {
     const access = w.find('[data-testid="consent-access"]').text()
     expect(access).toMatch(/search and read/i)
     expect(access).toMatch(/add new documents/i)
-    // Edit tools arrive with W7 of the MCP plan; until then the page must not promise them.
-    expect(access).not.toMatch(/change document details/i)
+    expect(access).toMatch(/change document details and add comments/i)
+    expect(access).toMatch(/everything it adds or changes is recorded as anna de vries/i)
     expect(approveBtn(w).attributes('disabled')).toBeUndefined()
     expect(denyBtn(w).attributes('disabled')).toBeUndefined()
   })
