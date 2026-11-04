@@ -124,6 +124,16 @@ export const routes: RouteRecordRaw[] = [
     meta: { adminOnly: true },
   },
   {
+    // OAuth consent for MCP clients (claude.ai, ChatGPT, Claude Code), reached
+    // from /mcp/authorize with ?request=<id>. NOT public: the guard sends a
+    // signed-out visitor to /login and back with the query intact. `bare`
+    // renders it without the app shell, like /login (App.vue).
+    path: '/oauth/consent',
+    name: 'oauth-consent',
+    component: () => import('../views/OAuthConsentView.vue'),
+    meta: { bare: true },
+  },
+  {
     path: '/login',
     name: 'login',
     component: () => import('../views/LoginView.vue'),

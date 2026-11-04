@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createMemoryHistory, createRouter, type Router } from 'vue-router'
 import { createPinia, setActivePinia } from 'pinia'
-import { authGuard } from '../index'
+import { authGuard, routes } from '../index'
 
 function jsonResponse(body: unknown, status = 200): Response {
   return new Response(JSON.stringify(body), {
@@ -92,5 +92,42 @@ describe('authGuard', () => {
     await router.push('/admin')
 
     expect(router.currentRoute.value.name).toBe('admin')
+  })
+
+  describe('the OAuth consent route', () => {
+    function makeAppRouter(): Router {
+      // The app's real route table, so this pins the consent route's own meta.
+      const router = createRouter({ history: createMemoryHistory(), routes })
+      router.beforeEach(authGuard)
+      return router
+    }
+
+    it('requires login and keeps the request id through the login redirect', async () => {
+      fetchMock.mockResolvedValue(jsonResponse({ detail: 'not authenticated' }, 401))
+      const router = makeAppRouter()
+
+      await router.push('/oauth/consent?request=req_Ab-9')
+
+      expect(router.currentRoute.value.name).toBe('login')
+      const redirect = router.currentRoute.value.query.redirect
+      expect(redirect).toBe('/oauth/consent?request=req_Ab-9')
+      // LoginView pushes the redirect string after signing in; it must land
+      // back on the consent page with the same request id.
+      const back = router.resolve(redirect as string)
+      expect(back.name).toBe('oauth-consent')
+      expect(back.query.request).toBe('req_Ab-9')
+    })
+
+    it('lets a signed-in user through with the query intact', async () => {
+      fetchMock.mockResolvedValue(
+        jsonResponse({ id: 1, username: 'anna', display_name: 'Anna', is_admin: false, preferences: { dashboard_fields: [] } }),
+      )
+      const router = makeAppRouter()
+
+      await router.push('/oauth/consent?request=req_Ab-9')
+
+      expect(router.currentRoute.value.name).toBe('oauth-consent')
+      expect(router.currentRoute.value.query.request).toBe('req_Ab-9')
+    })
   })
 })

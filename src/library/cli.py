@@ -194,7 +194,7 @@ def user_passwd(
 
 @user_app.command("disable")
 def user_disable(username: str) -> None:
-    """Deactivate a user and revoke all their sessions and API tokens."""
+    """Deactivate a user and revoke all their sessions, API tokens and connected apps."""
 
     async def operation(session: AsyncSession) -> None:
         user = await _get_user(session, username)
@@ -203,7 +203,7 @@ def user_disable(username: str) -> None:
         await revoke_all_credentials(session, user.id)
 
     _run(operation)
-    typer.echo(f"disabled user {username} (sessions and tokens revoked)")
+    typer.echo(f"disabled user {username} (sessions, tokens and connected apps revoked)")
 
 
 @user_app.command("list")

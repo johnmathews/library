@@ -66,6 +66,11 @@ class Settings(BaseSettings):
     # Auth (see docs/api.md §1.9).
     session_ttl_days: int = 30
     cookie_secure: bool = True
+    # Request header naming the real client IP, set by the reverse proxy
+    # (e.g. "CF-Connecting-IP" behind cloudflared). Rate limiting keys on it
+    # when present, else on the socket peer. Trust it only if the app is
+    # reachable solely through that proxy (docs/deployment.md).
+    trusted_client_ip_header: str | None = None
     # Admin views (see docs/admin.md). Build metadata is injected at image
     # build time; coverage_summary_path points at a JSON file the CI build
     # bakes into the image (absent in dev → the admin coverage view reports

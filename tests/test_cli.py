@@ -218,6 +218,30 @@ def test_user_disable_revokes_everything(cli_database_url: str) -> None:
         h=f"hash-{user.id}-token",
         uid=user.id,
     )
+    # A connected OAuth app: client, grant, live access + refresh tokens.
+    client_id = f"cli-client-{user.id}"
+    execute_sql(
+        cli_database_url,
+        "INSERT INTO oauth_clients (client_id, client_name, client_info)"
+        " VALUES (:cid, 'Test app', '{}'::jsonb)",
+        cid=client_id,
+    )
+    execute_sql(
+        cli_database_url,
+        "INSERT INTO oauth_grants (user_id, client_id) VALUES (:uid, :cid)",
+        uid=user.id,
+        cid=client_id,
+    )
+    for kind in ("access", "refresh"):
+        execute_sql(
+            cli_database_url,
+            "INSERT INTO oauth_tokens (grant_id, kind, token_hash, family_id, scopes, expires_at)"
+            " SELECT id, :kind, :h, 'fam', '[]'::jsonb, now() + interval '1 hour'"
+            " FROM oauth_grants WHERE user_id = :uid",
+            kind=kind,
+            h=f"hash-{user.id}-oauth-{kind}",
+            uid=user.id,
+        )
 
     result = runner.invoke(app, ["user", "disable", user.username])
     assert result.exit_code == 0, result.output
@@ -234,6 +258,18 @@ def test_user_disable_revokes_everything(cli_database_url: str) -> None:
         cli_database_url, "SELECT revoked_at FROM api_tokens WHERE user_id = :uid", uid=user.id
     )
     assert revoked_at is not None
+    [(grant_revoked_at,)] = fetch_all(
+        cli_database_url, "SELECT revoked_at FROM oauth_grants WHERE user_id = :uid", uid=user.id
+    )
+    assert grant_revoked_at is not None
+    token_stamps = fetch_all(
+        cli_database_url,
+        "SELECT t.revoked_at FROM oauth_tokens t JOIN oauth_grants g ON g.id = t.grant_id"
+        " WHERE g.user_id = :uid",
+        uid=user.id,
+    )
+    assert len(token_stamps) == 2
+    assert all(stamp is not None for (stamp,) in token_stamps)
 
 
 def test_user_list_shows_users(cli_database_url: str) -> None:

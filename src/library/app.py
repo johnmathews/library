@@ -7,8 +7,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import library
@@ -34,6 +35,7 @@ from library.api import (
     taxonomy,
 )
 from library.auth.deps import csrf_protect, current_user, require_admin
+from library.auth.ratelimit import OAUTH_LIMITS, client_key, limiter
 from library.config import Settings, get_settings
 from library.events_broker import EventsBroker
 from library.jobs import job_app, procrastinate_conninfo
@@ -180,6 +182,40 @@ class SlashlessMcpPath:
         await self.app(scope, receive, send)
 
 
+class OAuthRateLimit:
+    """ASGI middleware: throttle ``POST /mcp/token`` and ``POST /mcp/register``.
+
+    Both are reachable from the internet without a proxy login (the Access
+    bypass in docs/mcp.md §1.6), so every request counts per client key
+    (``library.auth.ratelimit.client_key``). Over the limit: ``429`` with
+    ``Retry-After`` and a JSON body, before the request reaches the OAuth
+    provider. Installed inside ``SlashlessMcpPath`` and outside the mount, so
+    it matches the full ``/mcp/...`` path; the limits apply even when OAuth is
+    off (the routes then 404, and the count is harmless).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        limit = OAUTH_LIMITS.get(scope["path"]) if scope["type"] == "http" else None
+        if limit is not None and scope["method"] == "POST":
+            key = client_key(HTTPConnection(scope), get_settings().trusted_client_ip_header)
+            wait = limiter.hit(f"oauth:{scope['path']}", key, *limit)
+            if wait:
+                response = JSONResponse(
+                    {
+                        "error": "slow_down",
+                        "error_description": "too many requests; retry later",
+                    },
+                    status_code=429,
+                    headers={"Retry-After": str(wait), "Cache-Control": "no-store"},
+                )
+                await response(scope, receive, send)
+                return
+        await self.app(scope, receive, send)
+
+
 def warn_if_no_public_base_url(public_base_url: str | None) -> None:
     """Log a startup warning when document deep-links are disabled.
 
@@ -193,6 +229,22 @@ def warn_if_no_public_base_url(public_base_url: str | None) -> None:
             "LIBRARY_PUBLIC_BASE_URL is unset — Pushover notifications will not "
             "include a link to the document. Set it to the web app's public URL "
             "(e.g. https://library.example.com) to enable deep-links."
+        )
+
+
+def warn_if_oauth_without_client_ip_header(*, oauth_on: bool, trusted_header: str | None) -> None:
+    """Log a startup warning when MCP OAuth runs without a client-IP header.
+
+    The login and OAuth-endpoint rate limits key on the client. Behind
+    cloudflared and Traefik the socket peer is the proxy for every caller, so
+    without LIBRARY_TRUSTED_CLIENT_IP_HEADER all callers share one bucket and
+    one stranger exhausting it blocks every connector's token refresh.
+    """
+    if oauth_on and not trusted_header:
+        logger.warning(
+            "MCP OAuth is on but LIBRARY_TRUSTED_CLIENT_IP_HEADER is unset: behind a "
+            "reverse proxy every client shares one rate-limit bucket. Set it to the "
+            "proxy's client-IP header (e.g. CF-Connecting-IP behind cloudflared)."
         )
 
 
@@ -308,6 +360,10 @@ def create_app() -> FastAPI:
         fanned out to all clients), and run the mounted MCP app's lifespan."""
         settings = get_settings()
         warn_if_no_public_base_url(settings.public_base_url)
+        warn_if_oauth_without_client_ip_header(
+            oauth_on=oauth_provider_of(mcp_auth) is not None,
+            trusted_header=settings.trusted_client_ip_header,
+        )
         _configure_telemetry_from_settings(settings)
         telemetry.observe_claude_credentials(_read_credential_status)
         # In this process, not the worker: the refresh-token rejection flag that
@@ -454,6 +510,9 @@ def create_app() -> FastAPI:
     # mount too. /mcp without the slash is rewritten onto the mount before
     # routing.
     app.mount(MCP_MOUNT_PATH, mcp_http)
+    # Added first = innermost: the slash rewrite (added next, outer) runs
+    # before it, and it sees the path the mount will route on.
+    app.add_middleware(OAuthRateLimit)
     app.add_middleware(SlashlessMcpPath)
     # OAuth discovery (RFC 9728 / RFC 8414) at the site root, where clients
     # look for it; none when OAuth is off, so /.well-known/* stays a JSON 404.

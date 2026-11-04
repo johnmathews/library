@@ -634,6 +634,149 @@ describe('SettingsView', () => {
     })
   })
 
+  describe('Connected apps tab', () => {
+    const GRANTS = [
+      {
+        id: 11,
+        client_id: 'client-claude',
+        client_name: 'Claude',
+        created_at: '2026-11-01T09:30:00Z',
+        last_used_at: '2026-11-03T18:05:00Z',
+      },
+      {
+        id: 12,
+        client_id: 'client-unnamed',
+        client_name: null,
+        created_at: '2026-11-02T10:00:00Z',
+        last_used_at: null,
+      },
+    ]
+
+    type Handler = () => Promise<Response> | Response
+
+    /** Route by method + path; kinds and anything else answer as on mount. */
+    function stubGrants(handlers: Record<string, Handler>): void {
+      fetchMock.mockImplementation((input: unknown, init?: RequestInit) => {
+        const url = String(input)
+        if (url === '/api/kinds') return Promise.resolve(jsonResponse(KINDS))
+        const handler = handlers[`${init?.method ?? 'GET'} ${url}`]
+        if (handler) return Promise.resolve(handler())
+        return Promise.resolve(jsonResponse({ dashboard_fields: ['kind'] }))
+      })
+    }
+
+    function callsTo(key: string): number {
+      return fetchMock.mock.calls.filter(
+        ([url, init]) => `${(init as RequestInit | undefined)?.method ?? 'GET'} ${String(url)}` === key,
+      ).length
+    }
+
+    async function mountAndOpen(handlers: Record<string, Handler>) {
+      const auth = useAuthStore()
+      auth.user = { id: 1, username: 'a', display_name: 'A', is_admin: false, preferences: { dashboard_fields: ['kind'] } }
+      stubGrants(handlers)
+      const wrapper = mount(SettingsView, { global: { stubs: { RouterLink: true } } })
+      // Nothing is fetched until the tab is opened.
+      expect(callsTo('GET /api/oauth/grants')).toBe(0)
+      await wrapper.find('[data-testid="tab-connected-apps-btn"]').trigger('click')
+      await flushPromises()
+      return wrapper
+    }
+
+    it('lists connected apps with when they connected and were last used', async () => {
+      const wrapper = await mountAndOpen({ 'GET /api/oauth/grants': () => jsonResponse(GRANTS) })
+
+      expect(callsTo('GET /api/oauth/grants')).toBe(1)
+      const first = wrapper.find('[data-testid="connected-app-11"]')
+      expect(first.text()).toContain('Claude')
+      expect(first.text()).toContain('1 November 2026')
+      expect(first.text()).toContain('3 November 2026')
+      const second = wrapper.find('[data-testid="connected-app-12"]')
+      expect(second.text()).toContain('Unnamed app')
+      expect(second.text()).toContain('Not used yet')
+    })
+
+    it('shows an empty state when no app is connected', async () => {
+      const wrapper = await mountAndOpen({ 'GET /api/oauth/grants': () => jsonResponse([]) })
+      expect(wrapper.find('[data-testid="connected-apps-empty"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="connected-apps-list"]').exists()).toBe(false)
+    })
+
+    it('revokes an app after an inline confirmation, without a browser dialog', async () => {
+      const confirmSpy = vi.spyOn(window, 'confirm')
+      const wrapper = await mountAndOpen({
+        'GET /api/oauth/grants': () => jsonResponse(GRANTS),
+        'DELETE /api/oauth/grants/11': () => new Response(null, { status: 204 }),
+      })
+
+      await wrapper.find('[data-testid="connected-app-revoke-11"]').trigger('click')
+      // First click only asks; nothing is deleted yet.
+      expect(callsTo('DELETE /api/oauth/grants/11')).toBe(0)
+      const confirmRow = wrapper.find('[data-testid="connected-app-confirm-11"]')
+      expect(confirmRow.text()).toContain('Claude')
+
+      await wrapper.find('[data-testid="connected-app-confirm-revoke-11"]').trigger('click')
+      await flushPromises()
+
+      expect(confirmSpy).not.toHaveBeenCalled()
+      expect(callsTo('DELETE /api/oauth/grants/11')).toBe(1)
+      const [, init] = fetchMock.mock.calls.find(([url, i]) =>
+        String(url) === '/api/oauth/grants/11' && (i as RequestInit).method === 'DELETE',
+      )!
+      expect((init as RequestInit).method).toBe('DELETE')
+      expect(wrapper.find('[data-testid="connected-app-11"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="connected-app-12"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="connected-apps-revoked"]').text()).toContain('Claude')
+    })
+
+    it('cancelling the confirmation keeps the app and sends nothing', async () => {
+      const wrapper = await mountAndOpen({ 'GET /api/oauth/grants': () => jsonResponse(GRANTS) })
+
+      await wrapper.find('[data-testid="connected-app-revoke-11"]').trigger('click')
+      await wrapper.find('[data-testid="connected-app-cancel-11"]').trigger('click')
+
+      expect(wrapper.find('[data-testid="connected-app-confirm-11"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="connected-app-11"]').exists()).toBe(true)
+      expect(callsTo('DELETE /api/oauth/grants/11')).toBe(0)
+    })
+
+    it('a failed revoke keeps the app listed and says so', async () => {
+      const wrapper = await mountAndOpen({
+        'GET /api/oauth/grants': () => jsonResponse(GRANTS),
+        'DELETE /api/oauth/grants/11': () => jsonResponse({ detail: 'boom' }, 500),
+      })
+
+      await wrapper.find('[data-testid="connected-app-revoke-11"]').trigger('click')
+      await wrapper.find('[data-testid="connected-app-confirm-revoke-11"]').trigger('click')
+      await flushPromises()
+
+      expect(wrapper.find('[data-testid="connected-app-11"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="connected-apps-error"]').exists()).toBe(true)
+    })
+
+    it('explains, instead of listing, when OAuth is off on the server (404)', async () => {
+      const wrapper = await mountAndOpen({
+        'GET /api/oauth/grants': () => jsonResponse({ detail: 'OAuth is not enabled' }, 404),
+      })
+      expect(wrapper.find('[data-testid="connected-apps-off"]').exists()).toBe(true)
+      expect(wrapper.find('[data-testid="connected-apps-error"]').exists()).toBe(false)
+      expect(wrapper.find('[data-testid="connected-apps-empty"]').exists()).toBe(false)
+    })
+
+    it('shows a load error with a retry for any other failure', async () => {
+      let fail = true
+      const wrapper = await mountAndOpen({
+        'GET /api/oauth/grants': () => (fail ? jsonResponse({ detail: 'boom' }, 500) : jsonResponse(GRANTS)),
+      })
+      expect(wrapper.find('[data-testid="connected-apps-error"]').exists()).toBe(true)
+
+      fail = false
+      await wrapper.find('[data-testid="connected-apps-retry"]').trigger('click')
+      await flushPromises()
+      expect(wrapper.find('[data-testid="connected-app-11"]').exists()).toBe(true)
+    })
+  })
+
   describe('Email triage tab', () => {
     const baseTriage = {
       email_in_configured: true,

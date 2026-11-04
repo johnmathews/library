@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.9.4: the consent request routes need the binding cookie `/mcp/authorize` set, and answer `404` without it; approving or denying clears it and consumes the request atomically; the consent page is not shipped yet). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.9.4. Read `src/library/api/oauth.py` and `src/library/auth/oauth_service.py`; the binding-cookie rules, the `404` detail and the cookie clearing are asserted by `tests/test_mcp_oauth.py` (each new test seen red first), green. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-04 (§1.9.1: `POST /api/auth/login` is rate-limited and can answer `429`). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.9.1's rate-limit paragraph. Read `login` in `src/library/api/auth.py` and `src/library/auth/ratelimit.py` against the prose (limits, 429 body and `Retry-After`, failures-only counting); `tests/test_ratelimit.py` login tests green after being seen red with the check disabled. The rest carries its earlier verifications forward.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -631,7 +631,7 @@ the host with the bundled CLI — there is no signup endpoint:
 ```console
 library user add anna --display-name "Anna"   # prompts for password
 library user passwd anna
-library user disable anna                      # also revokes all sessions/tokens
+library user disable anna                      # also revokes sessions, tokens, connected apps
 library user list
 ```
 
@@ -649,6 +649,19 @@ Wrong username, wrong password, and disabled accounts all return the same
 generic `401` (`{"detail": "invalid credentials"}`) — no account
 enumeration. The `Secure` flag follows the `LIBRARY_COOKIE_SECURE` setting
 (default `true`; set `false` only for plain-HTTP dev).
+
+**Rate limit.** Only *failed* attempts count: 5 per username (case-folded)
+and 20 per client in any 15 minutes. Past either limit the endpoint answers
+`429` with `{"detail": "too many login attempts"}` and a `Retry-After`
+header (seconds) *before* checking credentials, so even the right password
+is refused until the window slides, and the response is identical whether or
+not the username exists. Each attempt is counted as it starts (before the
+password is verified) and uncounted if it succeeds, so a burst of
+simultaneous requests gets no more checks than the limit, and a finished
+successful login leaves no trace; it does not reset anything either. The
+client is the socket peer, or the header named by
+`LIBRARY_TRUSTED_CLIENT_IP_HEADER` when set (see `docs/deployment.md` §1.5.1).
+The counters live in the single API process's memory and reset on restart.
 
 Sessions live in Postgres and expire after `LIBRARY_SESSION_TTL_DAYS`
 (default 30) of inactivity, with **sliding expiry**: any authenticated use
@@ -713,9 +726,8 @@ When `LIBRARY_PUBLIC_BASE_URL` is set, the MCP server is also an OAuth
 authorization server for clients such as claude.ai, ChatGPT and Claude
 Code ([mcp.md §1.2, §1.5](mcp.md)). A client's `/mcp/authorize` sends the
 browser to `/oauth/consent?request=<request_id>`; these endpoints are what
-that page and the connected-apps settings use. **The consent page itself
-is not shipped yet** ([mcp.md §1.2](mcp.md)): the endpoints below are in
-place, but nothing in the web app calls them. When OAuth is off, **every
+that page and Settings → **Connected apps** use (what the user sees:
+[mcp.md §1.2](mcp.md)). When OAuth is off, **every
 route here answers `404`** (`{"detail": "OAuth is not enabled"}`) to an
 authenticated caller. Like the rest of `/api`, anonymous requests get `401`
 first.

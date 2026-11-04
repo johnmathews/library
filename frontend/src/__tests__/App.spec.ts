@@ -73,6 +73,7 @@ describe('App Mosaic shell', () => {
         { path: '/upload', name: 'upload', component: Stub },
         { path: '/settings', name: 'settings', component: Stub },
         { path: '/login', name: 'login', component: Stub, meta: { public: true } },
+        { path: '/oauth/consent', name: 'oauth-consent', component: Stub, meta: { bare: true } },
       ],
     })
   })
@@ -105,5 +106,21 @@ describe('App Mosaic shell', () => {
     wrapper = mount(App, { global: { plugins: [router, pinia] } })
     await flushPromises()
     expect(wrapper.find('#sidebar').exists()).toBe(true)
+  })
+
+  it('renders no shell on a bare route even when authenticated (OAuth consent)', async () => {
+    await router.push('/oauth/consent?request=r')
+    await router.isReady()
+    const auth = useAuthStore()
+    auth.user = {
+      id: 1,
+      username: 'e2e',
+      display_name: 'E2E',
+      is_admin: false,
+      preferences: { dashboard_fields: [] },
+    }
+    wrapper = mount(App, { global: { plugins: [router, pinia] } })
+    await flushPromises()
+    expect(wrapper.find('#sidebar').exists()).toBe(false)
   })
 })

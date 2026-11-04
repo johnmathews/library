@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.auth.deps import CSRF_COOKIE, SESSION_COOKIE, current_user
+from library.auth.ratelimit import begin_login_attempt, client_key, forget_login_attempt
 from library.auth.service import (
     authenticate_user,
     create_api_token,
@@ -63,9 +64,13 @@ def _set_cookie(response: Response, name: str, value: str, *, httponly: bool) ->
     "/auth/login",
     response_model=UserOut,
     summary="Log in",
-    responses={401: {"description": "Invalid credentials (generic; no enumeration)"}},
+    responses={
+        401: {"description": "Invalid credentials (generic; no enumeration)"},
+        429: {"description": "Too many failed attempts; see Retry-After"},
+    },
 )
 async def login(
+    request: Request,
     payload: LoginRequest,
     response: Response,
     db: Annotated[AsyncSession, Depends(get_session)],
@@ -73,11 +78,25 @@ async def login(
     """Verify credentials; set the session and CSRF cookies.
 
     Unknown username, wrong password, and disabled account all return the
-    same generic 401.
+    same generic 401. Failed attempts are throttled per username and per
+    client (``library.auth.ratelimit``); over the limit every request gets
+    the same 429 whatever the username, before any credential is checked.
+    Successful logins are neither counted nor do they reset a counter.
     """
+    client = client_key(request, get_settings().trusted_client_ip_header)
+    # Counted before the password check awaits, so simultaneous attempts
+    # cannot all read the old count; a success is uncounted afterwards.
+    wait, stamp = begin_login_attempt(payload.username, client)
+    if wait:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="too many login attempts",
+            headers={"Retry-After": str(wait)},
+        )
     user = await authenticate_user(db, payload.username, payload.password)
     if user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
+    forget_login_attempt(payload.username, client, stamp)
     raw = await create_session(db, user)
     _set_cookie(response, SESSION_COOKIE, raw, httponly=True)
     _set_cookie(response, CSRF_COOKIE, secrets.token_urlsafe(32), httponly=False)
