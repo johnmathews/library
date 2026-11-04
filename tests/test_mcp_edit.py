@@ -6,9 +6,10 @@ their own fixtures (two users with their own tokens, direct service edits
 between two tool calls, spend-line allocations).
 
 The edit tool is preview-then-apply: a preview writes nothing and returns a
-``preview_token`` hashed over the document id, the proposed values and the
-current values of those fields; an apply must carry a token that still
-matches. The adversarial cases are the household ones: someone else edits
+``preview_token`` hashed over the document id and, for each field, its
+current value and the value applying would store (read back from a
+rolled-back dry run, so rounded and resolved, not the input); an apply must
+carry a token that still matches. The adversarial cases are the household ones: someone else edits
 the same document between the preview and the apply, someone allocates its
 amount across spend lines in between, the applying user is not the uploader.
 
@@ -238,6 +239,112 @@ async def test_edit_preview_writes_nothing(
     assert (
         await _fetch_all(api_database_url, "SELECT id FROM tags WHERE slug = :s", s=new_tag) == []
     )
+
+
+async def _preview_then_apply(
+    connect: Connector, token: str, arguments: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Preview ``arguments``, then apply them with the preview's own token."""
+    async with connect(token) as session:
+        preview = payload(await _call(session, arguments))
+        applied = payload(
+            await _call(
+                session, {**arguments, "apply": True, "preview_token": preview["preview_token"]}
+            )
+        )
+    return preview, applied
+
+
+async def test_preview_shows_the_stored_amount(
+    connect: Connector, owner_token: str, api_database_url: str
+) -> None:
+    """``amount_total`` is ``Numeric(14, 2)``: 12.345 is stored as 12.35, so
+    that is the value the user is shown to approve, not the input."""
+    document_id = await _seed_document(
+        api_database_url, f"mcp-edit-round-{secrets.token_hex(4)}", title="T"
+    )
+    preview, applied = await _preview_then_apply(
+        connect, owner_token, {"document_id": document_id, "amount_total": "12.345"}
+    )
+
+    assert preview["changes"] == {"amount_total": {"current": None, "proposed": "12.35"}}
+    assert applied["applied"] is True
+    assert await _row(api_database_url, document_id, "amount_total") == (Decimal("12.35"),)
+
+
+async def test_preview_shows_the_normalised_sender(
+    connect: Connector, owner_token: str, api_database_url: str
+) -> None:
+    """The sender upsert collapses whitespace; the preview shows the
+    collapsed name, which is the sender the document ends up with."""
+    marker = f"mcp-edit-ws-{secrets.token_hex(4)}"
+    document_id = await _seed_document(api_database_url, marker, title="T")
+    preview, _ = await _preview_then_apply(
+        connect, owner_token, {"document_id": document_id, "sender": f"  {marker}   Sender  "}
+    )
+
+    assert preview["changes"] == {"sender": {"current": None, "proposed": f"{marker} Sender"}}
+    stored = await _fetch_all(
+        api_database_url,
+        "SELECT s.name FROM documents d JOIN senders s ON s.id = d.sender_id WHERE d.id = :id",
+        id=document_id,
+    )
+    assert stored == [(f"{marker} Sender",)]
+
+
+async def test_preview_shows_the_resolved_recipient(
+    connect: Connector, owner_token: str, spouse: tuple[int, str], api_database_url: str
+) -> None:
+    """A household member's username resolves to the recipient linked to
+    her, named by her display name; the preview shows that name, not the
+    username typed."""
+    spouse_id, _ = spouse
+    display_name = f"Spouse {secrets.token_hex(4)}"
+    engine = create_async_engine(api_database_url, poolclass=NullPool)
+    try:
+        async with engine.begin() as connection:
+            username = (
+                await connection.execute(
+                    text("UPDATE users SET display_name = :d WHERE id = :id RETURNING username"),
+                    {"d": display_name, "id": spouse_id},
+                )
+            ).scalar_one()
+    finally:
+        await engine.dispose()
+    document_id = await _seed_document(
+        api_database_url, f"mcp-edit-recipient-{secrets.token_hex(4)}", title="T"
+    )
+    preview, applied = await _preview_then_apply(
+        connect, owner_token, {"document_id": document_id, "recipient": username}
+    )
+
+    assert preview["changes"] == {"recipient": {"current": None, "proposed": display_name}}
+    assert applied["current"] == {"recipient": display_name}
+
+
+async def test_apply_with_the_preview_token_succeeds_after_normalisation(
+    connect: Connector, owner_token: str, api_database_url: str
+) -> None:
+    """Apply recomputes the token from the same stored values the preview
+    showed, so a change that normalises still applies with the preview's own
+    token, and what is stored is exactly what was approved."""
+    marker = f"mcp-edit-normtoken-{secrets.token_hex(4)}"
+    document_id = await _seed_document(api_database_url, marker, title="T")
+    preview, applied = await _preview_then_apply(
+        connect,
+        owner_token,
+        {
+            "document_id": document_id,
+            "amount_total": "7.005",
+            "currency": "eur",
+            "sender": f" {marker}  Shop ",
+        },
+    )
+
+    assert applied["applied"] is True
+    approved = {name: change["proposed"] for name, change in preview["changes"].items()}
+    assert approved == {"amount_total": "7.01", "currency": "EUR", "sender": f"{marker} Shop"}
+    assert applied["current"] == approved
 
 
 async def test_edit_database_refusal_at_preview_is_masked(
@@ -479,10 +586,11 @@ async def test_edit_apply_allocated_amount_refused(
     """An amount allocated across spend lines cannot be changed.
 
     Previewed while the amount was free, then allocated (60 + 40) before the
-    apply: the token still matches — the amount itself did not change — so it
-    is the commit's allocation guard that refuses, after a rollback the tool
-    must not read the document through. A fresh preview now refuses up front
-    with the same words. Amounts are invented (this repository is public).
+    apply: the token would still match — the amount itself did not change —
+    but apply reruns the preview's dry run under the row lock, and that
+    refuses with the commit guard's words before anything is written. A fresh
+    preview refuses the same way. Amounts are invented (this repository is
+    public).
     """
     document_id = await _seed_document(
         api_database_url,

@@ -7,6 +7,7 @@ dispatch driven by a stubbed Anthropic client).
 """
 
 import json
+import secrets
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import date
@@ -140,9 +141,8 @@ async def test_update_tool_preview_does_not_write(api_database_url: str) -> None
 async def test_update_tool_preview_shows_the_value_that_would_be_stored(
     api_database_url: str,
 ) -> None:
-    """The preview is built by ``documents_service.preview_update`` from the
-    validated ``DocumentUpdate``: an unstorable value is refused before the user
-    is asked to approve it, and a storable one is shown normalised (currency
+    """An unparseable value is refused by ``DocumentUpdate`` before the user is
+    asked to approve it, and a storable one is shown normalised (currency
     upper-cased) — what applying would actually write, not the raw input."""
     document_id = await _seed_document(api_database_url, "askw-preview-norm", currency="EUR")
 
@@ -164,6 +164,56 @@ async def test_update_tool_preview_shows_the_value_that_would_be_stored(
 
     assert bad["error"] == "invalid field value"
     assert good["changes"] == {"currency": {"current": "EUR", "proposed": "USD"}}
+
+
+@pytest.mark.asyncio
+async def test_update_tool_preview_shows_what_the_database_stores(
+    api_database_url: str,
+) -> None:
+    """The preview comes from ``documents_service.preview_update``'s rolled-back
+    dry run, so it shows what only the database and the upserts decide:
+    ``Numeric(14, 2)`` rounds 12.345 to 12.35 and the sender upsert collapses
+    whitespace. A kind only the database can reject is refused at preview. The
+    dry run is a savepoint: the commit the Ask route makes after every turn
+    keeps nothing of it."""
+    marker = f"askw-preview-stored-{secrets.token_hex(4)}"
+    document_id = await _seed_document(api_database_url, marker, title="Kept")
+
+    async with _open_session(api_database_url) as session:
+        stored = await _run_update_document(
+            session,
+            get_settings(),
+            {
+                "document_id": document_id,
+                "amount_total": "12.345",
+                "sender": f"  {marker}   Sender ",
+                "confirmed": False,
+            },
+            {document_id},
+            set(),
+        )
+        bad_kind = await _run_update_document(
+            session,
+            get_settings(),
+            {"document_id": document_id, "kind_slug": "askw-not-a-kind", "confirmed": False},
+            {document_id},
+            set(),
+        )
+        await session.commit()  # what the Ask route does after every turn
+
+    assert stored["changes"] == {
+        "sender": {"current": None, "proposed": f"{marker} Sender"},
+        "amount_total": {"current": None, "proposed": "12.35"},
+    }
+    assert bad_kind == {"error": "unknown kind slug: 'askw-not-a-kind'"}
+    async with _open_session(api_database_url) as session:
+        document = await _load(session, document_id)
+        assert (document.sender_id, document.amount_total) == (None, None)
+        assert (await _events(session, document_id)) == []
+        senders = await session.execute(
+            text("SELECT id FROM senders WHERE name = :n"), {"n": f"{marker} Sender"}
+        )
+        assert senders.all() == []
 
 
 @pytest.mark.asyncio

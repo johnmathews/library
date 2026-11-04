@@ -1,7 +1,7 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.3: `update_document_metadata` (preview, then apply with a preview token) and `add_comment`; §1.4: editing is exposed, deletion is not; §1.2: the consent page lists changing details and adding comments). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to the two new §1.3 rows, the editing paragraph, §1.4's first bullet and §1.2's consent sentence. Read `update_document_metadata`, `_preview_token`, `_dry_run_edit`, `add_comment` and `comments_service.py` against the prose; the 15 tests in `tests/test_mcp_edit.py` green, 14 seen red with the tools absent, and mutants of the dry run, rollback, token check, user id, re-embed and DB-error re-raise each turned one or more red. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-04 (§1.3 *Editing*: a preview's `proposed` is the value applying would store, read back from a rolled-back dry run, and the preview token hashes that). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.3's *Editing* paragraph. Read `update_document_metadata`, `_preview_token` and `documents_service.preview_update` against the prose; the 19 tests in `tests/test_mcp_edit.py` green, the four new stored-value tests seen red first (the preview showed `12.345` and the uncollapsed sender). The rest carries its earlier verifications forward.
 **Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
@@ -196,8 +196,9 @@ and recipient by name substring; no facet, status or review filters, no
 `offset`) and returns at most 50 results per call.
 
 **Editing: preview, then apply.** `update_document_metadata` never
-writes on the first call. Without `apply` it returns the current and
-proposed value of every field it would change, plus a `preview_token`;
+writes on the first call. Without `apply` it returns the current value
+of every field it would change and the value applying would store, plus
+a `preview_token`;
 the tool description tells the model to show the user that preview and
 call again with `apply: true`, the same arguments and the token only
 after they agree. The fields and validators are the PATCH route's
@@ -207,20 +208,26 @@ it in `clear_fields` (lists are emptied with `[]`; `language` cannot be
 emptied). Naming a field that is not editable (for example `topics`) is
 an argument error.
 
-- *What a preview checks.* The preview runs the edit inside a
-  transaction it rolls back, with the spend-line sum triggers forced to
-  fire immediately, so anything the apply would refuse is refused at
-  preview with the same message: an unknown kind slug, an
-  `amount_total` that is split across spend lines (*clear or replace its
-  spend lines before changing it*), so the user is not asked to approve
-  a change the apply would refuse as things stand. Nothing persists: no
-  new sender, tag or audit event.
+- *What a preview shows and checks.* The preview
+  (`documents_service.preview_update`, shared with Ask) runs the edit
+  inside a savepoint it rolls back, reads each edited field back from
+  the database first, and shows that as `proposed`: the stored value,
+  not the input. An amount is rounded to cents (`12.345` shows as
+  `12.35`), a sender's whitespace is collapsed, a recipient given as a
+  household member's username shows as her linked recipient, a project
+  or matter name shows as the slug it resolves to. The spend-line sum
+  triggers are forced to fire immediately, so anything the apply would
+  refuse is refused at preview with the same message: an unknown kind
+  slug, an `amount_total` that is split across spend lines (*clear or
+  replace its spend lines before changing it*). Nothing persists: no new
+  sender, tag or audit event.
 - *The token.* A SHA-256 over the document id and, for each field being
-  set, its current and proposed value. It is stateless (the server keeps
+  set, its current value and the stored value the preview showed, so it
+  approves exactly what the user saw. It is stateless (the server keeps
   no record of previews) and is not a secret: it enforces "preview
   first" and detects change, not authority, which the bearer token
-  already carries. Apply recomputes it from the database under a row
-  lock and refuses a missing token (*preview first*) or a mismatch (*the
+  already carries. Apply takes a row lock, reruns the preview's dry run
+  to recompute it, and refuses a missing token (*preview first*) or a mismatch (*the
   document changed since the preview, or the fields differ*): another
   value, another field, another document, or someone else having
   changed one of those fields in between. A change to a field the edit

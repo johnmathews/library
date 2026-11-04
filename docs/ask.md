@@ -1,7 +1,7 @@
 # Ask — semantic question answering
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.8: a confirmed Ask edit records the asking user's `user_id`; the write tool calls `documents_service.edit_document`, shared with PATCH; the preview validates first and comes from `preview_update`). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.8. Read `_run_update_document`, `run_ask`, `api/ask.py` and `documents_service.py` against the prose; `test_ask_edit_records_user_id`, `test_ask_edit_unknown_kind_returns_error` and the preview/partial-edit tests in `tests/test_ask_document_write.py` green after each was seen red. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-04 (§1.8: the write tool's preview shows the value applying would store, from `documents_service.preview_update`'s rolled-back dry run shared with MCP, and refuses what applying would refuse). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.8. Read `_run_update_document` and `documents_service.preview_update` against the prose; `test_update_tool_preview_shows_what_the_database_stores` seen red first (the preview showed `12.345` and the uncollapsed sender), then green with the rest of `tests/test_ask_document_write.py`. The rest carries its earlier verifications forward.
 **Covers:** src/library/ask/, src/library/embedding/, src/library/search.py, src/library/cli.py, .github/workflows/e2e-nightly.yml
 
 Ask lets you put a natural-language question to the archive and get a prose
@@ -1141,9 +1141,15 @@ below are enforced regardless of what the model does.
      current vs proposed value per field — and **writes nothing**. The
      arguments are validated as a `DocumentUpdate` first, so a value that
      could not be stored (say an `amount_total` of `"twelve"`) is an
-     `invalid field value` error rather than a proposal, and `proposed` shows
-     the value as it would be stored (`currency` upper-cased, an amount as a
-     decimal string).
+     `invalid field value` error rather than a proposal. `proposed` is the
+     value as it would be stored, read back from the database: the edit is
+     applied inside a savepoint and rolled back (`documents_service.preview_update`,
+     the same dry run as the MCP edit tool's preview), so an amount shows
+     rounded to cents, a sender's whitespace collapsed, a recipient resolved to
+     the linked one, `currency` upper-cased. Anything applying would refuse (an
+     unknown kind slug, an amount split across spend lines) is a tool-result
+     `error` here instead of a proposal. The savepoint is what keeps the
+     turn's own commit from storing any of it.
   2. A confirmed call (`confirmed=true`) is **refused unless that document was
      previewed earlier in the same thread** (the `previewed_ids` gate,
      reconstructed from history on follow-ups). So a write can never happen
@@ -1210,7 +1216,8 @@ and `AllocationError` become a `422`/`400` on the route and a tool-result
 which matters for Ask in particular: `POST /api/ask` commits the same session
 after the turn to store it, so a refusal raised half-way through applying
 would have had its earlier fields committed without an audit event. The
-preview comes from the same module (`preview_update`).
+preview comes from the same module (`preview_update`, a dry run of
+`apply_document_update` in a rolled-back savepoint).
 
 ## 1.9 Document comments
 

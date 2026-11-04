@@ -74,8 +74,7 @@ from mcp.shared.auth import ProtectedResourceMetadata
 from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, Field
 from pydantic_core import to_jsonable_python
-from sqlalchemy import func, select, text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
@@ -90,7 +89,6 @@ from library.config import Settings, get_settings
 from library.db import get_sessionmaker
 from library.documents_service import (
     DocumentEditError,
-    apply_document_update,
     edit_document,
     preview_current,
     preview_update,
@@ -106,11 +104,7 @@ from library.models import (
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
 from library.schemas import CommentOut, CurrencyCode, DocumentUpdate
 from library.search import DocumentFilters, build_document_query
-from library.spend_lines import (
-    ALLOCATION_TRIGGER_SQLSTATE,
-    AMOUNT_ALLOCATED_REFUSAL,
-    AllocationError,
-)
+from library.spend_lines import AllocationError
 from library.storage import derived_path, path_for
 
 logger = logging.getLogger(__name__)
@@ -783,15 +777,17 @@ ClearableField = Literal[
 
 #: Versions the preview-token hash, so a change to what it covers can never
 #: accept a token minted under the old scheme.
-_PREVIEW_TOKEN_DOMAIN: str = "library-mcp-edit-preview-v1"
+_PREVIEW_TOKEN_DOMAIN: str = "library-mcp-edit-preview-v2"
 
 _UNCHANGED: str = "Omit to leave unchanged."
 
 
 def _preview_token(document_id: int, changes: dict[str, Any]) -> str:
     """The preview token: SHA-256 over the document id and, for each field
-    the edit sets, its current and proposed value (``preview_update``'s
-    output in JSON form, keys sorted).
+    the edit sets, its current value and the value applying would store
+    (``preview_update``'s output, read back from its rolled-back dry run;
+    keys sorted). Hashing the stored value, not the input, means the token
+    approves exactly what the user was shown.
 
     Stateless, because MCP gives a server no conversation to remember a
     preview in: apply recomputes the hash from the database and the
@@ -828,33 +824,6 @@ def _build_update(provided: dict[str, Any], clear_fields: Sequence[str] | None) 
             "no changes given: pass at least one field to set, or name fields in clear_fields"
         )
     return DocumentUpdate(**fields)
-
-
-async def _dry_run_edit(session: AsyncSession, document: Document, update: DocumentUpdate) -> None:
-    """Run the edit as apply would, keep nothing, and raise apply's refusals.
-
-    So a preview never shows the user a change that apply would refuse, and
-    the checks exist once (in ``documents_service``), not again here:
-    ``apply_document_update`` raises ``DocumentEditError`` (an unknown kind
-    slug), and ``SET CONSTRAINTS ALL IMMEDIATE`` fires the deferred
-    spend-line sum triggers now instead of at a commit that never comes
-    (an amount allocated across spend lines). The SQLSTATE test is the one
-    ``spend_lines.commit_allocation`` makes at commit; anything else is
-    re-raised. Always rolled back, which expires ``document``: callers read
-    what they need from it first.
-    """
-    try:
-        await apply_document_update(session, document, update, edited_by="mcp")
-        await session.flush()
-        await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
-    except DocumentEditError as exc:
-        raise ToolError(str(exc)) from exc
-    except DBAPIError as exc:
-        if getattr(exc.orig, "sqlstate", None) != ALLOCATION_TRIGGER_SQLSTATE:
-            raise
-        raise ToolError(AMOUNT_ALLOCATED_REFUSAL) from exc
-    finally:
-        await session.rollback()
 
 
 @mcp.tool(
@@ -1008,13 +977,19 @@ async def update_document_metadata(
     )
 
     async with _session() as session:
-        # Locked on apply, so nobody can change the row between the token
-        # check and the commit.
+        # Locked on apply, before the dry run, so nobody can change the row
+        # between computing the token and the commit.
         document = await _get_document(session, document_id, for_update=apply)
-        changes = to_jsonable_python(preview_update(document, update))
+        # The same dry run on preview and on apply, so `expected` is the
+        # preview's token when nothing changed in between. It also refuses
+        # (with apply's own words) a change apply would refuse, so a preview
+        # never shows the user one.
+        try:
+            changes = await preview_update(session, document, update)
+        except (DocumentEditError, AllocationError) as exc:
+            raise ToolError(str(exc)) from exc
         expected = _preview_token(document_id, changes)
         if not apply:
-            await _dry_run_edit(session, document, update)
             return {
                 "document_id": document_id,
                 "applied": False,
@@ -1040,8 +1015,10 @@ async def update_document_metadata(
                 edited_by="mcp",
                 user_id=_current_user_id(),
             )
-        except (DocumentEditError, AllocationError) as exc:
-            # An AllocationError follows a rollback that expired `document`:
+        except (DocumentEditError, AllocationError) as exc:  # pragma: no cover - race
+            # The dry run above already refused both under this row lock, so
+            # only a kind deleted between it and this edit reaches here. An
+            # AllocationError would follow a rollback that expired `document`:
             # only the message is used.
             raise ToolError(str(exc)) from exc
 

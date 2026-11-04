@@ -11,7 +11,8 @@ through the allocation guard, and re-embed when a chunk-header field changed.
 It exists once so a further caller (the MCP edit tool) cannot drift from the
 other two. ``apply_document_update`` is its uncommitted core.
 ``preview_update`` renders the current-vs-proposed view a caller shows before
-asking to apply.
+asking to apply, with ``proposed`` read back from a rolled-back dry run, so
+it is what applying would store.
 
 This module does not speak HTTP. A refused edit raises ``DocumentEditError``
 (the PATCH route answers 422, Ask returns a tool-result error); an allocated
@@ -24,7 +25,9 @@ from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from pydantic_core import to_jsonable_python
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
@@ -39,7 +42,12 @@ from library.matters import get_or_create_matter
 from library.models import Document, IngestionEvent, Kind, ReviewStatus
 from library.projects import get_or_create_project
 from library.schemas import DocumentUpdate
-from library.spend_lines import AMOUNT_ALLOCATED_REFUSAL, commit_allocation
+from library.spend_lines import (
+    ALLOCATION_TRIGGER_SQLSTATE,
+    AMOUNT_ALLOCATED_REFUSAL,
+    AllocationError,
+    commit_allocation,
+)
 
 
 class DocumentEditError(ValueError):
@@ -377,18 +385,58 @@ def preview_current(document: Document, field: str) -> Any:
     return getattr(document, field, None)
 
 
-def preview_update(document: Document, update: DocumentUpdate) -> dict[str, dict[str, Any]]:
-    """Current vs proposed value for each field ``update`` sets; writes nothing.
+async def preview_update(
+    session: AsyncSession, document: Document, update: DocumentUpdate
+) -> dict[str, dict[str, Any]]:
+    """Current vs stored value for each field ``update`` sets; keeps nothing.
 
     Keyed by ``DocumentUpdate`` field name (``kind_slug``, ``sender``, ...) in
-    model field order. ``proposed`` is the validated value in JSON form (an
-    amount is a decimal string, a date ISO text, ``currency`` upper-cased), so
-    the preview shows what would be stored rather than echoing the input. It
-    does not check what only applying can (an unknown kind slug, an allocated
-    amount): those surface from ``edit_document``.
+    model field order, both sides as ``preview_current`` renders them, in JSON
+    form (names and slugs, an amount a decimal string, a date ISO text).
+
+    ``proposed`` is read back from the database, not taken from the input:
+    the edit is applied and flushed inside a SAVEPOINT, ``document`` is
+    re-selected, and the savepoint is rolled back. So the preview shows every
+    normalisation applying makes: ``Numeric(14, 2)`` rounding (12.345 is
+    "12.35"), a sender name's collapsed whitespace, a recipient given as a
+    user's username or display name shown as the recipient linked to that
+    user, a project or matter name shown as the slug it resolves to (new or not),
+    an upper-cased currency.
+
+    It refuses what applying would, with the same exceptions:
+    ``DocumentEditError`` (an unknown kind slug, a null list), and
+    ``AllocationError`` for an allocated document's amount, because
+    ``SET CONSTRAINTS ALL IMMEDIATE`` fires the deferred spend-line sum
+    triggers now instead of at a commit that never comes (the SQLSTATE test is
+    the one ``commit_allocation`` makes; any other database error is
+    re-raised).
+
+    Only the savepoint is rolled back, so the caller's transaction and any row
+    lock it holds survive, and so does its constraint mode (Postgres undoes a
+    ``SET CONSTRAINTS`` with the savepoint). ``document`` is re-selected
+    afterwards, so a caller may go on to edit it; after a refusal it is
+    expired and must not be read.
     """
-    proposed = update.model_dump(mode="json", exclude_unset=True)
-    return {
-        name: {"current": preview_current(document, name), "proposed": value}
-        for name, value in proposed.items()
-    }
+    fields = list(update.model_dump(exclude_unset=True))
+    current = {name: preview_current(document, name) for name in fields}
+    savepoint = await session.begin_nested()
+    try:
+        await apply_document_update(session, document, update, edited_by="preview")
+        await session.flush()
+        await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        # Re-select: after the flush the columns still hold the values
+        # assigned (12.345, not the stored 12.35), and sender/recipient/kind
+        # still hold the pre-edit objects, since only their ids were set.
+        await session.refresh(document)
+        stored = {name: preview_current(document, name) for name in fields}
+    except DBAPIError as exc:
+        if getattr(exc.orig, "sqlstate", None) != ALLOCATION_TRIGGER_SQLSTATE:
+            raise
+        raise AllocationError(AMOUNT_ALLOCATED_REFUSAL) from exc
+    finally:
+        await savepoint.rollback()
+    await session.refresh(document)
+    changes: dict[str, dict[str, Any]] = to_jsonable_python(
+        {name: {"current": current[name], "proposed": stored[name]} for name in fields}
+    )
+    return changes

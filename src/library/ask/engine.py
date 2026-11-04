@@ -749,7 +749,10 @@ async def _run_update_document(
     history, never from previews made in the current turn) — so the user has
     actually seen the proposal and replied before anything is written, enforced
     in code rather than only by the system prompt. ``confirmed=false`` returns a
-    current-vs-proposed preview and writes nothing; ``confirmed=true`` applies the
+    current-vs-proposed preview and writes nothing; ``proposed`` is the value
+    applying would store (``documents_service.preview_update``'s rolled-back dry
+    run), and a change applying would refuse (an unknown kind, an allocated
+    amount) comes back as a tool-result error instead. ``confirmed=true`` applies the
     edit (edited_by="ask") and commits — or, if the edit would leave an
     allocated document's spend lines summing to the old ``amount_total``,
     returns the mirror trigger's refusal as a tool-result error (§10.1 of
@@ -779,7 +782,15 @@ async def _run_update_document(
         return {"error": "invalid field value", "detail": exc.errors(include_url=False)}
 
     if not bool(args.get("confirmed", False)):
-        preview = preview_update(document, update)
+        # The same rolled-back dry run as the MCP preview: `proposed` is what
+        # applying would store (rounded amount, resolved sender/recipient), and
+        # a change applying would refuse is refused here, before the user is
+        # asked to approve it. Only a savepoint is rolled back, so the turn's
+        # session (committed after the turn) keeps nothing of it.
+        try:
+            preview = await preview_update(session, document, update)
+        except (DocumentEditError, AllocationError) as exc:
+            return {"error": str(exc)}
         # Deliberately does NOT record the id as previewed: a confirmed write is
         # only allowed once the preview has been shown to the user AND they have
         # replied — which only happens on a later question (the preview lands in
