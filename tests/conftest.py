@@ -285,22 +285,16 @@ def _truncate_api_database(
         cursor.execute(f"TRUNCATE TABLE {', '.join(targets)} CASCADE")
 
 
-@pytest.fixture(scope="session")
-def _api_app_instance(api_database_url: str) -> FastAPI:
-    """The single FastAPI instance shared by the whole API suite.
-
-    ``create_app()`` costs ~110 ms — almost all of it FastAPI rebuilding the
-    dependant graph and Pydantic TypeAdapters for ~250 routes — and it reads no
-    settings at construction time (every ``get_settings()`` call in the app
-    happens inside a request or the lifespan). So the object is identical for
-    every test, and building it 559 times was ~27% of the suite's wall clock.
-    Per-test state that used to ride on a fresh app (env vars, the settings
-    cache) is reset by the function-scoped ``api_app`` wrapper below.
+def build_test_app(database_url: str) -> FastAPI:
+    """``create_app()`` with the session dependency on a per-request NullPool
+    engine against ``database_url`` (created lazily inside the app's event
+    loop: TestClient runs the app in its own loop, and asyncpg connections
+    are loop-bound). Reads settings at call time — see ``_api_app_instance``.
     """
     application = create_app()
 
     async def override_session() -> AsyncIterator[AsyncSession]:
-        engine = create_async_engine(api_database_url, poolclass=NullPool)
+        engine = create_async_engine(database_url, poolclass=NullPool)
         try:
             async with AsyncSession(engine, expire_on_commit=False) as session:
                 yield session
@@ -308,6 +302,31 @@ def _api_app_instance(api_database_url: str) -> FastAPI:
             await engine.dispose()
 
     application.dependency_overrides[get_session] = override_session
+    return application
+
+
+@pytest.fixture(scope="session")
+def _api_app_instance(api_database_url: str) -> FastAPI:
+    """The single FastAPI instance shared by the whole API suite.
+
+    ``create_app()`` costs ~110 ms — almost all of it FastAPI rebuilding the
+    dependant graph and Pydantic TypeAdapters for ~250 routes — so the shared
+    object saves ~27% of the suite's wall clock over building it per test.
+    Sharing is sound because construction reads only two settings:
+    ``frontend_dist`` (whether a built SPA is mounted; tests/test_spa.py builds
+    its own apps for that) and ``public_base_url``, which turns MCP OAuth on.
+    The latter is cleared here so the shared app is always the OAuth-off app,
+    whatever the developer's shell exports; tests that need OAuth on build
+    their own app with
+    ``build_test_app`` (tests/test_mcp_oauth.py). Every other ``get_settings()``
+    call happens inside a request or the lifespan, and per-test state there
+    (env vars, the settings cache) is reset by the ``api_app`` wrapper below.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.delenv("LIBRARY_PUBLIC_BASE_URL", raising=False)
+        get_settings.cache_clear()
+        application = build_test_app(api_database_url)
+    get_settings.cache_clear()
     return application
 
 

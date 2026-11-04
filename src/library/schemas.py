@@ -1110,6 +1110,40 @@ class TokenInfo(BaseModel):
     revoked_at: datetime | None
 
 
+class OAuthRequestOut(BaseModel):
+    """GET /api/oauth/requests/{id}: what the consent page shows.
+
+    These routes take no request body (the request id is in the path), so
+    there is no body model to forbid extra fields on.
+    """
+
+    client_id: str
+    client_name: str | None = Field(description="As the client registered it; may be absent.")
+    redirect_uri: str = Field(description="Where the answer is sent (the client's callback).")
+    redirect_host: str = Field(description="The host of redirect_uri, for display.")
+    scopes: list[str]
+    expires_at: datetime
+    expired: bool = Field(description="True once past expires_at; approving then answers 410.")
+
+
+class OAuthRedirectOut(BaseModel):
+    """POST /api/oauth/requests/{id}/approve|deny: send the browser here next."""
+
+    redirect_to: str = Field(
+        description="The client's redirect URI with code (or error=access_denied), state and iss."
+    )
+
+
+class OAuthGrantOut(BaseModel):
+    """One row of GET /api/oauth/grants: an app connected over OAuth."""
+
+    id: int
+    client_id: str
+    client_name: str | None
+    created_at: datetime
+    last_used_at: datetime | None
+
+
 class JobInfo(BaseModel):
     """One row from GET /api/jobs: a Procrastinate job enriched with the
     pipeline state of the document it processes (when it has one).

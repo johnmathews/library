@@ -6,12 +6,26 @@ lifespan alongside the job-queue lifespan. See docs/mcp.md.
 
 Auth
 ----
-``LibraryTokenVerifier`` subclasses FastMCP's ``TokenVerifier`` and calls
-the same ``validate_api_token`` service the REST API uses — one code path
-for credential checks, including revocation and disabled accounts.
-FastMCP wires the verifier into bearer middleware that 401s (with
-``WWW-Authenticate: Bearer``) before any tool code runs; the token's user
-id rides along in the access token claims for attribution.
+``build_mcp_auth`` picks the auth for one app build from the settings:
+
+- ``LibraryTokenVerifier`` always: it subclasses FastMCP's ``TokenVerifier``
+  and calls the same ``validate_api_token`` service the REST API uses — one
+  code path for static ``library_…`` tokens, including revocation and
+  disabled accounts.
+- When ``public_base_url`` is set (and is HTTPS, or loopback HTTP), Library is
+  also an OAuth 2.1 authorization server (``LibraryOAuthProvider``), and the
+  two are combined in ``LibraryMultiAuth``: claude.ai, ChatGPT and Claude
+  Code discover it from the 401's ``resource_metadata``, register, send the
+  user to the consent page and come back with ``libmcp_at_…`` tokens. The
+  OAuth endpoints live inside the mount (``/mcp/authorize`` …); the RFC 9728
+  and RFC 8414 discovery documents are mounted at the site root by app.py.
+
+FastMCP wires the result into bearer middleware that 401s before any tool
+code runs. Either kind of token carries the user's id in its claims
+(``auth`` says which kind), which is what ``_current_user_id`` reads for
+attribution. The auth object is passed to ``create_mcp_http_app`` rather
+than set on the module-level ``mcp`` server, so app builds with different
+settings (tests) never share it.
 
 Database sessions
 -----------------
@@ -35,25 +49,37 @@ LLM connector cannot call it.
 
 import base64
 import binascii
+import logging
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Annotated, Any, Literal
+from urllib.parse import urlsplit
 
+import fastmcp
 from fastmcp import FastMCP
 from fastmcp.exceptions import ToolError
-from fastmcp.server.auth import AccessToken, TokenVerifier
+from fastmcp.server.auth import AccessToken, AuthProvider, MultiAuth, TokenVerifier
 from fastmcp.server.dependencies import get_access_token
-from fastmcp.server.http import StarletteWithLifespan
+from fastmcp.server.http import StarletteWithLifespan, create_streamable_http_app
+from mcp.server.auth.handlers.metadata import ProtectedResourceMetadataHandler
+from mcp.server.auth.routes import build_metadata, build_resource_metadata_url, cors_middleware
+from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+from mcp.shared.auth import ProtectedResourceMetadata
 from mcp.types import ToolAnnotations
-from pydantic import Field
+from pydantic import AnyHttpUrl, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
+from starlette.responses import JSONResponse, Response
+from starlette.routing import Route
+from starlette.types import ASGIApp
 
 import library
 from library import matters, projects, taxonomy
+from library.auth.oauth_provider import LibraryOAuthProvider
 from library.auth.service import validate_api_token
-from library.config import get_settings
+from library.config import Settings, get_settings
 from library.db import get_sessionmaker
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
 from library.models import (
@@ -67,12 +93,17 @@ from library.ocr.tesseract import SEARCHABLE_PDF_NAME
 from library.search import DocumentFilters, build_document_query
 from library.storage import derived_path, path_for
 
+logger = logging.getLogger(__name__)
+
 OCR_TEXT_LIMIT: int = 20_000
 MAX_FILE_BYTES: int = 10 * 1024 * 1024
 SEARCH_LIMIT_MAX: int = 50
 #: The largest value a Postgres BIGINT (``documents.id``) holds. Bounding the
 #: argument makes an out-of-range id a validation error, not a SQL error.
 MAX_DOCUMENT_ID: int = 2**63 - 1
+
+#: The single OAuth scope: full access to the archive as the calling user.
+OAUTH_SCOPE: str = "library"
 
 #: Hints for every tool that only reads the archive. ``openWorldHint=False``:
 #: no tool reaches anything outside Library. ChatGPT asks the user to confirm
@@ -115,28 +146,239 @@ class LibraryTokenVerifier(TokenVerifier):
         return AccessToken(
             token=token,
             client_id=f"library-user-{user.id}",
-            scopes=[],
-            claims={"user_id": user.id, "username": user.username},
+            # A static token is full account access, so it holds the one scope
+            # there is. Nothing requires a scope (``required_scopes`` stays
+            # empty), so this describes the token and never gates it.
+            scopes=[OAUTH_SCOPE],
+            claims={"user_id": user.id, "username": user.username, "auth": "api_token"},
         )
 
 
+# --------------------------------------------------------------------- OAuth
+
+#: Where the SPA's consent page lives, relative to ``public_base_url``.
+CONSENT_PATH: str = "/oauth/consent"
+
+#: Client authentication the token and revocation endpoints accept. ``none``
+#: is a public client (PKCE only); registration accepts it and the SDK's
+#: client authenticator handles it, but the SDK's metadata omits it.
+TOKEN_ENDPOINT_AUTH_METHODS: tuple[str, ...] = (
+    "client_secret_post",
+    "client_secret_basic",
+    "none",
+)
+
+#: Discovery documents change only with a deploy; clients may cache them.
+_METADATA_CACHE_CONTROL: str = "public, max-age=3600"
+_METADATA_METHODS: list[str] = ["GET", "OPTIONS"]
+
+
+def oauth_base_url(settings: Settings) -> str | None:
+    """``public_base_url`` without a trailing slash, when OAuth can run on it.
+
+    ``None`` when it is unset, or when it is plain HTTP on a non-loopback
+    host: RFC 8414 requires an HTTPS issuer and the MCP SDK refuses to build
+    the OAuth routes otherwise. That case is logged, not raised — the setting
+    predates OAuth (notification deep-links use it), so an HTTP value must
+    leave the server up on static tokens rather than stop it booting.
+    """
+    if not settings.public_base_url:
+        return None
+    base = settings.public_base_url.rstrip("/")
+    parts = urlsplit(base)
+    host = parts.hostname or ""
+    if parts.scheme == "https" or (
+        parts.scheme == "http" and (host == "localhost" or host.startswith("127.0.0.1"))
+    ):
+        return base
+    logger.warning(
+        "LIBRARY_PUBLIC_BASE_URL is not HTTPS (%s); MCP OAuth stays off and /mcp "
+        "accepts static library_ tokens only",
+        base,
+    )
+    return None
+
+
+class LibraryMultiAuth(MultiAuth):
+    """Library's OAuth server plus static API tokens, on one MCP endpoint.
+
+    ``MultiAuth`` tries the OAuth provider first, then each verifier. On top
+    of that this class owns the URLs a client discovers, because FastMCP's
+    defaults are wrong for an app mounted at ``/mcp``:
+
+    - the protected resource is exactly ``{public_base_url}/mcp`` (no trailing
+      slash) in the 401's ``resource_metadata``, in the metadata's
+      ``resource`` and in the path-aware metadata URL, matching the URL users
+      paste and the audience tokens are bound to;
+    - the authorization-server metadata also advertises RFC 9207 ``iss`` on
+      the authorization response (the consent API adds it) and ``none`` as a
+      token-endpoint auth method (public clients);
+    - the discovery documents are served at the site root
+      (``get_well_known_routes``), where clients look; FastMCP would put
+      them only under ``/mcp/.well-known/…``.
+    """
+
+    def __init__(self, *, server: LibraryOAuthProvider, verifiers: list[TokenVerifier]) -> None:
+        super().__init__(server=server, verifiers=verifiers)
+        self.oauth: LibraryOAuthProvider = server
+
+    def _get_resource_url(self, path: str | None = None) -> AnyHttpUrl | None:
+        """Always the provider's ``resource_url`` (FastMCP would append the
+        in-mount path, giving ``…/mcp/``)."""
+        return AnyHttpUrl(self.oauth.resource_url)
+
+    # ---------------------------------------------------------- documents
+
+    def authorization_server_metadata(self) -> dict[str, Any]:
+        """RFC 8414 metadata: the SDK's document plus ``iss`` support and ``none``."""
+        metadata = build_metadata(
+            AnyHttpUrl(self.oauth.issuer),
+            None,
+            self.oauth.client_registration_options or ClientRegistrationOptions(),
+            self.oauth.revocation_options or RevocationOptions(),
+        )
+        metadata.token_endpoint_auth_methods_supported = list(TOKEN_ENDPOINT_AUTH_METHODS)
+        if metadata.revocation_endpoint is not None:
+            metadata.revocation_endpoint_auth_methods_supported = list(TOKEN_ENDPOINT_AUTH_METHODS)
+        metadata.code_challenge_methods_supported = ["S256"]
+        document = metadata.model_dump(mode="json", exclude_none=True)
+        document["authorization_response_iss_parameter_supported"] = True
+        return document
+
+    def protected_resource_metadata(self) -> ProtectedResourceMetadata:
+        """RFC 9728 metadata for ``/mcp``: the resource, its issuer, its scope."""
+        return ProtectedResourceMetadata(
+            resource=AnyHttpUrl(self.oauth.resource_url),
+            authorization_servers=[AnyHttpUrl(self.oauth.issuer)],
+            scopes_supported=[OAUTH_SCOPE],
+            resource_name="Library",
+        )
+
+    def _as_metadata_endpoint(self) -> ASGIApp:
+        document = self.authorization_server_metadata()
+
+        async def handle(request: Request) -> Response:
+            return JSONResponse(document, headers={"Cache-Control": _METADATA_CACHE_CONTROL})
+
+        return cors_middleware(handle, _METADATA_METHODS)
+
+    def _protected_resource_endpoint(self) -> ASGIApp:
+        handler = ProtectedResourceMetadataHandler(self.protected_resource_metadata())
+        return cors_middleware(handler.handle, _METADATA_METHODS)
+
+    # ------------------------------------------------------------- routes
+
+    def get_routes(self, mcp_path: str | None = None) -> list[Route]:
+        """Routes inside the ``/mcp`` mount: the SDK's OAuth endpoints
+        (``/authorize``, ``/token``, ``/register``, ``/revoke``) and the AS
+        metadata at the in-mount paths a client derives from the issuer
+        (``{issuer}/.well-known/oauth-authorization-server`` and the OIDC
+        ``{issuer}/.well-known/openid-configuration``)."""
+        operational = [
+            route
+            for route in self.oauth.get_routes(mcp_path)
+            if not route.path.startswith("/.well-known/")
+        ]
+        as_metadata = self._as_metadata_endpoint()
+        return [
+            *operational,
+            Route(
+                "/.well-known/oauth-authorization-server",
+                endpoint=as_metadata,
+                methods=_METADATA_METHODS,
+            ),
+            Route(
+                "/.well-known/openid-configuration", endpoint=as_metadata, methods=_METADATA_METHODS
+            ),
+        ]
+
+    def get_well_known_routes(self, mcp_path: str | None = None) -> list[Route]:
+        """Discovery routes for the site root (app.py adds them before the SPA).
+
+        Protected-resource metadata at its RFC 9728 path-aware URL
+        (``/.well-known/oauth-protected-resource/mcp``, where the 401 points)
+        and the bare root; AS metadata at RFC 8414's path-aware URL for the
+        ``/mcp`` issuer, the bare root, and the matching
+        ``openid-configuration`` spellings. The OIDC spellings serve the same
+        OAuth document: Library is not an OpenID provider, but MCP clients
+        may probe those URLs, and a 404 there ends discovery for no gain.
+        """
+        resource_url = AnyHttpUrl(self.oauth.resource_url)
+        prm_path = urlsplit(str(build_resource_metadata_url(resource_url))).path
+        issuer_path = urlsplit(self.oauth.issuer).path.rstrip("/")
+        prm = self._protected_resource_endpoint()
+        as_metadata = self._as_metadata_endpoint()
+        endpoints: dict[str, ASGIApp] = {
+            prm_path: prm,
+            "/.well-known/oauth-protected-resource": prm,
+            f"/.well-known/oauth-authorization-server{issuer_path}": as_metadata,
+            "/.well-known/oauth-authorization-server": as_metadata,
+            f"/.well-known/openid-configuration{issuer_path}": as_metadata,
+            "/.well-known/openid-configuration": as_metadata,
+        }
+        return [
+            Route(path, endpoint=endpoint, methods=_METADATA_METHODS)
+            for path, endpoint in endpoints.items()
+        ]
+
+
+def build_mcp_auth(settings: Settings) -> AuthProvider:
+    """The MCP endpoint's auth for these settings (see the module docstring)."""
+    verifier = LibraryTokenVerifier()
+    base = oauth_base_url(settings)
+    if base is None:
+        return verifier
+    provider = LibraryOAuthProvider(
+        base_url=f"{base}/mcp",
+        resource_url=f"{base}/mcp",
+        consent_url=f"{base}{CONSENT_PATH}",
+        redirect_allowlist=settings.oauth_redirect_allowlist,
+        # A client that registers without a scope gets the one scope, so an
+        # /authorize that then asks for it is not refused as unregistered.
+        client_registration_options=ClientRegistrationOptions(
+            enabled=True, valid_scopes=[OAUTH_SCOPE], default_scopes=[OAUTH_SCOPE]
+        ),
+        revocation_options=RevocationOptions(enabled=True),
+    )
+    return LibraryMultiAuth(server=provider, verifiers=[verifier])
+
+
+def oauth_provider_of(auth: AuthProvider) -> LibraryOAuthProvider | None:
+    """The OAuth provider inside ``auth``, or ``None`` when OAuth is off."""
+    return auth.oauth if isinstance(auth, LibraryMultiAuth) else None
+
+
+#: The tool server. Deliberately built without ``auth=``: auth belongs to
+#: each HTTP app build (``create_mcp_http_app``), not to this module global.
 mcp: FastMCP = FastMCP(
     name="Library",
     version=library.__version__,
     instructions=SERVER_INSTRUCTIONS,
-    auth=LibraryTokenVerifier(),
     mask_error_details=True,
 )
 
 
-def create_mcp_http_app() -> StarletteWithLifespan:
-    """The Streamable-HTTP ASGI app, ready to mount at ``/mcp``.
+def create_mcp_http_app(auth: AuthProvider) -> StarletteWithLifespan:
+    """The Streamable-HTTP ASGI app behind ``auth``, ready to mount at ``/mcp``.
 
     Stateless + JSON responses: no session affinity, no SSE streams —
     maximally compatible with reverse proxies and in-process test
     transports, and sufficient for request/response tools like ours.
+    FastMCP's own factory (what ``mcp.http_app`` calls, with the same
+    global-settings defaults) takes the auth as an argument, so two app
+    builds with different settings never share one.
     """
-    return mcp.http_app(path="/", stateless_http=True, json_response=True)
+    return create_streamable_http_app(
+        server=mcp,
+        streamable_http_path="/",
+        auth=auth,
+        json_response=True,
+        stateless_http=True,
+        debug=fastmcp.settings.debug,
+        host_origin_protection=fastmcp.settings.http_host_origin_protection,
+        allowed_hosts=fastmcp.settings.http_allowed_hosts,
+        allowed_origins=fastmcp.settings.http_allowed_origins,
+    )
 
 
 # ------------------------------------------------------------------ helpers
