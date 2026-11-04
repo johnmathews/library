@@ -1,7 +1,7 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.5: with MCP OAuth on, the proxy must also pass the `/.well-known/oauth-*` discovery paths; `LIBRARY_PUBLIC_BASE_URL` and `LIBRARY_OAUTH_REDIRECT_ALLOWLIST` named).
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.5, read against `get_well_known_routes` and `oauth_base_url` in `src/library/mcp_server.py` and `_BACKEND_PREFIXES` in `src/library/app.py`; `tests/test_mcp_oauth.py` (discovery paths) green. The rest carries forward the 2026-10-22 deploy check.
+**Status:** active. **Last updated:** 2026-11-04 (new §1.5.1: `LIBRARY_TRUSTED_CLIENT_IP_HEADER` for rate limiting behind a proxy; §1.5: with MCP OAuth on, the proxy must also pass the `/.well-known/oauth-*` discovery paths).
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.5.1, read against `client_key` in `src/library/auth/ratelimit.py` and the `trusted_client_ip_header` setting; `test_trusted_header_used_only_when_configured` green after being seen red. §1.5 carries forward its earlier check against `src/library/mcp_server.py`; the rest carries forward the 2026-10-22 deploy check.
 
 How to run Library in production: a single `docker compose up` on any
 Docker host. The walkthrough targets the intended home — a Debian LXC on
@@ -294,6 +294,28 @@ In Nginx Proxy Manager: a single proxy host to `lxc-library:8000`, no
 websocket support needed; raise the upload size as above in the custom
 config. Keep `LIBRARY_COOKIE_SECURE=true` once HTTPS terminates at the
 proxy — the cookie flag is about what the *browser* sees.
+
+### 1.5.1 Client IP for rate limiting
+
+Login failures, `POST /mcp/token` and `POST /mcp/register` are rate-limited
+per client (limits: `docs/api.md` §1.9.1, `docs/mcp.md` §1.4). Uvicorn runs
+without `--proxy-headers`, so behind any reverse proxy the socket peer is
+the proxy and every user would share one bucket. Set
+
+```
+LIBRARY_TRUSTED_CLIENT_IP_HEADER=CF-Connecting-IP
+```
+
+behind cloudflared (Cloudflare sets that header to the real client address;
+Traefik forwards it untouched). Leave it unset when the app is reached
+directly or the proxy sets no such header.
+
+**Only set it when the app is reachable solely through that proxy.** The
+value is taken at face value: if clients can reach port 8000 directly (or
+through a second route that does not overwrite the header), they can send
+any value and never be limited. Unset, or header absent, falls back to the
+socket peer. The setting is host configuration (the ansible-templated
+`.env` for the live instance).
 
 ## 1.6 Backups
 

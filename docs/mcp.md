@@ -1,8 +1,8 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.2: the consent page and Settings → Connected apps ship, so OAuth connects end to end; §1.4: `library user disable` also revokes OAuth grants and tokens). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.2 and §1.4's revocation bullet. Read `OAuthConsentView.vue`, `SettingsView.vue` and `revoke_all_credentials` against the prose; drove a real authorize → sign-in → approve round trip in a browser against a local server (redirect carried `code`, `state`, `iss`) and revoked the grant in Settings; the revocation is asserted by `test_cli.py::test_user_disable_revokes_everything`, seen red first.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue
+**Status:** active. **Last updated:** 2026-11-04 (§1.4: rate limits on the OAuth endpoints. §1.2: the consent page and Settings → Connected apps ship, so OAuth connects end to end; §1.4: `library user disable` also revokes OAuth grants and tokens). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.4's rate-limit bullet. Read `OAuthRateLimit` in `src/library/app.py` and `src/library/auth/ratelimit.py` against the prose (paths, limits, 429 body); `test_token_endpoint_throttled` and `test_register_endpoint_throttled` green after being seen red with the guard disabled. The rest carries its earlier verifications forward.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, claude.ai and Claude Desktop, ChatGPT,
@@ -244,6 +244,19 @@ and recipient by name substring; no facet, status or review filters, no
   `/mcp/authorize` (for example `invalid_scope`, or a `resource` other
   than `https://<host>/mcp`) carry no `iss`, although the metadata
   advertises `iss` support; the approve and deny redirects do carry it.
+- **Rate limits on the OAuth endpoints.** `/mcp/token` and `/mcp/register`
+  are open to the internet (§1.6), so every `POST` to them counts per
+  client: 60 per 15 minutes for the token endpoint (a refresh per
+  connector is about hourly, so this leaves room for several connectors
+  behind one shared egress address), 10 per hour for registration (once per
+  connector setup). Over the limit: `429`, `Retry-After` in seconds and
+  `{"error": "slow_down", …}` (RFC 6749 has no 429 code; clients treat it
+  as a failed request). A refused request is not counted, so waiting out
+  `Retry-After` always works. Counters are in-process and reset on restart.
+  The client is the socket peer unless `LIBRARY_TRUSTED_CLIENT_IP_HEADER`
+  names a header the proxy sets (`docs/deployment.md` §1.5.1); without it,
+  everyone behind the proxy shares one bucket. `/api/auth/login` is
+  throttled too (`docs/api.md` §1.9.1).
 - **Size caps:** ingest respects `LIBRARY_MAX_UPLOAD_BYTES` (default
   100 MB, before base64 expansion); file retrieval is capped at 10 MB to
   keep tool results inside LLM context budgets.

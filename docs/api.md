@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.9.4: the consent page (`/oauth/consent`) and Settings → Connected apps now call these routes; the not-shipped caveat is gone. §1.9: `library user disable` also revokes OAuth grants and tokens). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.9.4's opening paragraph and the `user disable` comment in §1.9. Read `frontend/src/api/oauth.ts` (paths, methods, CSRF header, pinned by `api/__tests__/oauth.spec.ts`) and `revoke_all_credentials`; `tests/test_cli.py::test_user_disable_revokes_everything` green after being seen red. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-04 (§1.9.1: `POST /api/auth/login` is rate-limited and can answer `429`). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.9.1's rate-limit paragraph. Read `login` in `src/library/api/auth.py` and `src/library/auth/ratelimit.py` against the prose (limits, 429 body and `Retry-After`, failures-only counting); `tests/test_ratelimit.py` login tests green after being seen red with the check disabled. The rest carries its earlier verifications forward.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -649,6 +649,16 @@ Wrong username, wrong password, and disabled accounts all return the same
 generic `401` (`{"detail": "invalid credentials"}`) — no account
 enumeration. The `Secure` flag follows the `LIBRARY_COOKIE_SECURE` setting
 (default `true`; set `false` only for plain-HTTP dev).
+
+**Rate limit.** Only *failed* attempts count: 5 per username (case-folded)
+and 20 per client in any 15 minutes. Past either limit the endpoint answers
+`429` with `{"detail": "too many login attempts"}` and a `Retry-After`
+header (seconds) *before* checking credentials, so even the right password
+is refused until the window slides, and the response is identical whether or
+not the username exists. Successful logins are not counted and do not reset
+anything. The client is the socket peer, or the header named by
+`LIBRARY_TRUSTED_CLIENT_IP_HEADER` when set (see `docs/deployment.md` §1.5.1).
+The counters live in the single API process's memory and reset on restart.
 
 Sessions live in Postgres and expire after `LIBRARY_SESSION_TTL_DAYS`
 (default 30) of inactivity, with **sliding expiry**: any authenticated use

@@ -90,6 +90,20 @@ def _llm_backend_is_the_api(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 
 
 @pytest.fixture(autouse=True)
+def _rate_limiter_reset() -> Iterator[None]:
+    """Fresh login / OAuth rate-limit counters (and clock) for every test.
+
+    The limiter is process-wide state, and every test logs in from the same
+    TestClient address, so without this the suite would throttle itself.
+    """
+    from library.auth.ratelimit import limiter
+
+    limiter.reset()
+    yield
+    limiter.reset()
+
+
+@pytest.fixture(autouse=True)
 def _embedding_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
     """Keep the suite hermetic: embeddings off unless a test opts in.
 

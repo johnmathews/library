@@ -7,8 +7,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, FastAPI, HTTPException
-from fastapi.responses import FileResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
+from starlette.requests import HTTPConnection
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 import library
@@ -34,6 +35,7 @@ from library.api import (
     taxonomy,
 )
 from library.auth.deps import csrf_protect, current_user, require_admin
+from library.auth.ratelimit import OAUTH_LIMITS, client_key, limiter
 from library.config import Settings, get_settings
 from library.events_broker import EventsBroker
 from library.jobs import job_app, procrastinate_conninfo
@@ -177,6 +179,40 @@ class SlashlessMcpPath:
                 "path": f"{MCP_MOUNT_PATH}/",
                 "raw_path": f"{MCP_MOUNT_PATH}/".encode(),
             }
+        await self.app(scope, receive, send)
+
+
+class OAuthRateLimit:
+    """ASGI middleware: throttle ``POST /mcp/token`` and ``POST /mcp/register``.
+
+    Both are reachable from the internet without a proxy login (the Access
+    bypass in docs/mcp.md §1.6), so every request counts per client key
+    (``library.auth.ratelimit.client_key``). Over the limit: ``429`` with
+    ``Retry-After`` and a JSON body, before the request reaches the OAuth
+    provider. Installed inside ``SlashlessMcpPath`` and outside the mount, so
+    it matches the full ``/mcp/...`` path; the limits apply even when OAuth is
+    off (the routes then 404, and the count is harmless).
+    """
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        limit = OAUTH_LIMITS.get(scope["path"]) if scope["type"] == "http" else None
+        if limit is not None and scope["method"] == "POST":
+            key = client_key(HTTPConnection(scope), get_settings().trusted_client_ip_header)
+            wait = limiter.hit(f"oauth:{scope['path']}", key, *limit)
+            if wait:
+                response = JSONResponse(
+                    {
+                        "error": "slow_down",
+                        "error_description": "too many requests; retry later",
+                    },
+                    status_code=429,
+                    headers={"Retry-After": str(wait), "Cache-Control": "no-store"},
+                )
+                await response(scope, receive, send)
+                return
         await self.app(scope, receive, send)
 
 
@@ -454,6 +490,9 @@ def create_app() -> FastAPI:
     # mount too. /mcp without the slash is rewritten onto the mount before
     # routing.
     app.mount(MCP_MOUNT_PATH, mcp_http)
+    # Added first = innermost: the slash rewrite (added next, outer) runs
+    # before it, and it sees the path the mount will route on.
+    app.add_middleware(OAuthRateLimit)
     app.add_middleware(SlashlessMcpPath)
     # OAuth discovery (RFC 9728 / RFC 8414) at the site root, where clients
     # look for it; none when OAuth is off, so /.well-known/* stays a JSON 404.
