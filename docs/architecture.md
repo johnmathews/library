@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.6 `app.py` row: the lifespan also disposes the shared DB engine, and a middleware serves `/mcp` without its trailing slash). Earlier: 2026-10-22 (`app.py` added to the module map).
-**Last verified:** 2026-11-04 — method: partial, scoped to the `app.py` row, read against `create_app` and its lifespan in `src/library/app.py`; `tests/test_mcp.py::test_lifespan_disposes_shared_engine` and `tests/test_spa.py` assert the two new items. Other rows carry forward their earlier verifications.
+**Status:** active. **Last updated:** 2026-11-04 (§1.4 MCP row and §1.5 Authentication: MCP accepts static tokens and, with an https `LIBRARY_PUBLIC_BASE_URL`, OAuth access tokens from Library's own authorization server; consent needs a signed-in browser).
+**Last verified:** 2026-11-04 — method: partial, scoped to the §1.4 MCP row and §1.5, read against `build_mcp_auth`/`oauth_base_url` in `src/library/mcp_server.py` and `src/library/api/oauth.py`; `tests/test_mcp_oauth.py` green. Other sections carry forward their earlier verifications.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -264,7 +264,21 @@ and the `NULLS NOT DISTINCT` uniques). It restores the schema so an older image
 can boot, never the rows: those are gone, and only a database backup returns
 them.
 
-**Auth:** `users`, `sessions`, `api_tokens`.
+**Auth:** `users`, `sessions`, `api_tokens`, plus five tables for the OAuth
+authorization server that lets MCP connectors sign in as a Library user
+(migration 0040, `library.auth.oauth_provider`). Request ids, codes and tokens
+are stored as SHA-256 digests only:
+
+- `oauth_clients` — dynamically registered clients (RFC 7591); redirect URIs are
+  allow-listed at registration (`LIBRARY_OAUTH_REDIRECT_ALLOWLIST`).
+- `oauth_grants` — one row per user and client consent; revoking it kills every
+  code and token under it.
+- `oauth_authorization_requests` — a pending `/authorize` waiting on the consent
+  page (10 minutes).
+- `oauth_authorization_codes` — single-use codes bound to the grant, PKCE
+  challenge, redirect URI and resource (5 minutes).
+- `oauth_tokens` — access (1 hour) and refresh (30 days, rotated) tokens;
+  `family_id` links a rotation chain so a replayed refresh token revokes it.
 
 **Instance configuration:**
 
@@ -287,8 +301,10 @@ them.
   ingestion, in-app **note authoring** (`/api/notes` — create / edit-in-place /
   version history / restore, see [api.md §1.17](api.md)), job status, and
   natural-language **Ask** (`POST /api/ask`, see [ask.md](ask.md)).
-- **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens.
-  Tools for searching, reading, and ingesting documents from LLM clients.
+- **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens:
+  static `library_…` tokens, and OAuth access tokens from Library's own
+  authorization server when OAuth is on (see §1.5). Tools for searching,
+  reading, and ingesting documents from LLM clients. See [mcp.md](mcp.md).
 - **Web app** — Vue 3 SPA using the **Mosaic** (Cruip) theme: violet accent,
   soft rounded-xl cards, dark mode, Inter loaded from Google Fonts. Content-first,
   responsive 320px-up, accessible. (Reskinned from GOV.UK — see
@@ -319,7 +335,13 @@ WebSocket. See [api.md](api.md) §1.8.5 and
 Named family accounts over one shared library. Browser: Argon2 password
 hashing (pwdlib), Postgres-backed sessions in an httpOnly cookie.
 Automation (REST/MCP): per-integration opaque bearer tokens, stored
-hashed, individually revocable.
+hashed, individually revocable. MCP additionally accepts OAuth access
+tokens when `LIBRARY_PUBLIC_BASE_URL` is `https` (or `http` on
+`localhost`/`127.0.0.1`): Library is then its own OAuth 2.1 authorization
+server for claude.ai, ChatGPT and Claude Code, and a client is connected
+by a user approving it from a signed-in browser session — the session
+that started the flow. See [mcp.md](mcp.md) and
+[api.md §1.9.4](api.md).
 
 A single boolean **admin** role (`users.is_admin`) layers on top: admins
 gate global project mutations and an admin-only views surface
@@ -370,7 +392,7 @@ top-level modules.
 | --- | --- |
 | `src/library/api/` | HTTP API routers, mounted under `/api` by the application factory. The admin surface is the nested `api/admin/` package. |
 | `src/library/ask/` | Natural-language question answering over the archive: retrieval, the agentic tool loop, citations. |
-| `src/library/auth/` | Argon2 passwords, cookie sessions, bearer API tokens. |
+| `src/library/auth/` | Argon2 passwords, cookie sessions, bearer API tokens, and the OAuth authorization server for MCP connectors (`oauth_provider.py`, `oauth_service.py`). |
 | `src/library/charts/` | The chart engine: rules, aggregate queries, footer accounting and question drafting. |
 | `src/library/embedding/` | Local embedding (bge-m3 via a text-embeddings-inference sidecar). |
 | `src/library/extraction/` | Claude metadata extraction: schema, extractor, pricing, and pipeline glue. |

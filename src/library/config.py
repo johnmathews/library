@@ -3,6 +3,7 @@
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Literal
+from urllib.parse import urlsplit
 
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
@@ -43,6 +44,19 @@ class Settings(BaseSettings):
     # Public base URL of the web app (e.g. https://library.example.com), used
     # to deep-link push notifications back to a document. Unset = no link.
     public_base_url: str | None = None
+    # Redirect URIs an MCP OAuth client may register (library.auth.
+    # oauth_provider): exact URLs, prefixes ending "/*", and loopback URLs
+    # without a port, which match any port (RFC 8252 §7.3, for Claude Code).
+    # Comma-separated in the env (LIBRARY_OAUTH_REDIRECT_ALLOWLIST); setting it
+    # replaces the whole default list.
+    oauth_redirect_allowlist: Annotated[list[str], NoDecode] = [
+        "https://claude.ai/api/mcp/auth_callback",
+        "https://claude.com/api/mcp/auth_callback",
+        "https://chatgpt.com/connector_platform_oauth_redirect",
+        "https://chatgpt.com/connector/oauth/*",
+        "http://localhost/callback",
+        "http://127.0.0.1/callback",
+    ]
     # Built Vue SPA (docs/deployment.md §1.3). Relative to the working
     # directory: resolves to the baked-in build in the Docker image (/app/
     # frontend/dist) and to the local build in a checkout. If the directory
@@ -343,6 +357,35 @@ class Settings(BaseSettings):
             value = value.split(",")
         if isinstance(value, list):
             return [str(item).strip().lower() for item in value if str(item).strip()]
+        return value
+
+    @field_validator("oauth_redirect_allowlist", mode="before")
+    @classmethod
+    def _split_redirect_allowlist(cls, value: object) -> object:
+        """Parse the comma-separated env value."""
+        if isinstance(value, str):
+            value = value.split(",")
+        if isinstance(value, list):
+            return [str(item).strip() for item in value if str(item).strip()]
+        return value
+
+    @field_validator("oauth_redirect_allowlist")
+    @classmethod
+    def _check_redirect_allowlist(cls, value: list[str]) -> list[str]:
+        """Reject entries that would widen the allow-list by accident.
+
+        A wildcard must follow a path slash: ``https://host*`` would also match
+        ``https://host.attacker.example``. Every entry must be an absolute
+        http(s) URL with a host.
+        """
+        for entry in value:
+            if "*" in entry and (not entry.endswith("/*") or entry.count("*") > 1):
+                raise ValueError(f"oauth_redirect_allowlist: '*' only as a final '/*': {entry!r}")
+            parts = urlsplit(entry[:-1] if entry.endswith("/*") else entry)
+            if parts.scheme not in {"http", "https"} or not parts.hostname or not parts.path:
+                raise ValueError(
+                    f"oauth_redirect_allowlist: not an absolute URL with a path: {entry!r}"
+                )
         return value
 
     @field_validator("pdf_unlock_passwords", mode="before")

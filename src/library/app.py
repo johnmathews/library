@@ -25,6 +25,7 @@ from library.api import (
     jobs,
     matters,
     notes,
+    oauth,
     payments,
     projects,
     saved_views,
@@ -36,8 +37,8 @@ from library.auth.deps import csrf_protect, current_user, require_admin
 from library.config import Settings, get_settings
 from library.events_broker import EventsBroker
 from library.jobs import job_app, procrastinate_conninfo
-from library.llm import oauth
-from library.mcp_server import create_mcp_http_app
+from library.llm import oauth as llm_oauth
+from library.mcp_server import build_mcp_auth, create_mcp_http_app, oauth_provider_of
 
 logger = logging.getLogger(__name__)
 
@@ -121,6 +122,14 @@ OPENAPI_TAGS: list[dict[str, str]] = [
         ),
     },
     {"name": "settings", "description": "Per-user display preferences."},
+    {
+        "name": "oauth",
+        "description": (
+            "The consent page and connected apps for MCP clients that sign in "
+            "with OAuth (claude.ai, ChatGPT, Claude Code). Only when "
+            "`LIBRARY_PUBLIC_BASE_URL` is set; otherwise these routes 404."
+        ),
+    },
     {
         "name": "ask",
         "description": (
@@ -278,11 +287,19 @@ def _read_credential_status() -> str | None:
 
 
 def create_app() -> FastAPI:
-    """Build and return the Library FastAPI application."""
+    """Build and return the Library FastAPI application.
+
+    Reads two settings at construction: ``frontend_dist`` (whether to serve
+    the SPA) and ``public_base_url`` (whether /mcp is also an OAuth server).
+    Everything else is read per request or in the lifespan.
+    """
     # Built per app instance: the MCP ASGI app's session manager is created
     # and torn down by its lifespan, which we run inside our own so the
-    # mounted /mcp transport shares the application's lifetime.
-    mcp_http = create_mcp_http_app()
+    # mounted /mcp transport shares the application's lifetime. The auth is
+    # per instance too: OAuth is on only when public_base_url says where
+    # this server is reachable (see library.mcp_server.build_mcp_auth).
+    mcp_auth = build_mcp_auth(get_settings())
+    mcp_http = create_mcp_http_app(mcp_auth)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -297,7 +314,7 @@ def create_app() -> FastAPI:
         # turns health unhealthy is process memory (library.llm.oauth).
         credentials_check = (
             asyncio.create_task(
-                oauth.keep_fresh(
+                llm_oauth.keep_fresh(
                     settings.claude_config_dir, settings.claude_credentials_check_interval_s
                 )
             )
@@ -324,6 +341,9 @@ def create_app() -> FastAPI:
         openapi_tags=OPENAPI_TAGS,
         lifespan=lifespan,
     )
+    # The consent API (api/oauth.py) answers for this provider, so the
+    # issuer it puts on the redirect is the one the metadata advertises.
+    setattr(app.state, oauth.APP_STATE_KEY, oauth_provider_of(mcp_auth))
 
     # Auth gate + CSRF for the whole /api surface, attached at include level
     # so future routers are protected by default. current_user runs first:
@@ -355,6 +375,7 @@ def create_app() -> FastAPI:
     api_router.include_router(settings.router)
     api_router.include_router(ask.router)
     api_router.include_router(auth.router)
+    api_router.include_router(oauth.router)
     # Admin surface: additionally gated by require_admin (which layers on the
     # already-attached current_user, so anon → 401, non-admin → 403).
     api_router.include_router(admin.router, dependencies=[Depends(require_admin)])
@@ -426,12 +447,18 @@ def create_app() -> FastAPI:
             payload["status"] = "degraded"
         return payload
 
-    # MCP server (W13): bearer-token-authenticated tools at /mcp/ — see
-    # docs/mcp.md. Auth is enforced inside the mounted app (FastMCP bearer
-    # middleware running our token verifier), not by the /api dependencies.
-    # /mcp without the slash is rewritten onto the mount before routing.
+    # MCP server: bearer-authenticated tools at /mcp/ — see docs/mcp.md.
+    # Auth is enforced inside the mounted app (FastMCP bearer middleware
+    # running our verifiers), not by the /api dependencies; with OAuth on,
+    # /mcp/authorize, /mcp/token, /mcp/register and /mcp/revoke live in the
+    # mount too. /mcp without the slash is rewritten onto the mount before
+    # routing.
     app.mount(MCP_MOUNT_PATH, mcp_http)
     app.add_middleware(SlashlessMcpPath)
+    # OAuth discovery (RFC 9728 / RFC 8414) at the site root, where clients
+    # look for it; none when OAuth is off, so /.well-known/* stays a JSON 404.
+    # Before the SPA's catch-all below, which would otherwise shadow them.
+    app.router.routes.extend(mcp_auth.get_well_known_routes())
 
     # Production frontend (W17): when a built SPA is present (the Docker
     # image bakes it into /app/frontend/dist), serve it from this process.

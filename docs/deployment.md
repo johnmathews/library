@@ -1,7 +1,7 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.3: the never-shadowed path list gains `/.well-known` and `/metrics`). Earlier: 2026-10-22 (the live LXC is `documents`, not `paperless`).
-**Last verified:** 2026-11-04 — method: partial, scoped to the §1.3 path list, read against `_BACKEND_PREFIXES` in `src/library/app.py` and exercised by `tests/test_spa.py` (green). The rest carries forward the 2026-10-22 check (a real `make deploy` to `documents`, `/healthz` returning the deployed sha) and the 2026-08-12 full sweep.
+**Status:** active. **Last updated:** 2026-11-04 (§1.5: with MCP OAuth on, the proxy must also pass the `/.well-known/oauth-*` discovery paths; `LIBRARY_PUBLIC_BASE_URL` and `LIBRARY_OAUTH_REDIRECT_ALLOWLIST` named).
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.5, read against `get_well_known_routes` and `oauth_base_url` in `src/library/mcp_server.py` and `_BACKEND_PREFIXES` in `src/library/app.py`; `tests/test_mcp_oauth.py` (discovery paths) green. The rest carries forward the 2026-10-22 deploy check.
 
 How to run Library in production: a single `docker compose up` on any
 Docker host. The walkthrough targets the intended home — a Debian LXC on
@@ -251,9 +251,17 @@ containers.
 ## 1.5 Reverse proxy (HTTPS)
 
 Session cookies default to `Secure`, so put TLS in front for real use.
-Library is one plain HTTP upstream — no websockets, no special paths;
-`/mcp` (streamable HTTP) just needs to be passed through like
-everything else.
+Library is one plain HTTP upstream — no websockets; `/mcp` (streamable
+HTTP) just needs to be passed through like everything else. With MCP
+OAuth on, the proxy must also pass the discovery paths
+`/.well-known/oauth-protected-resource*` and
+`/.well-known/oauth-authorization-server*` (and optionally
+`/.well-known/openid-configuration*`) to Library; an auth proxy in front
+must bypass exactly the paths in [mcp.md §1.6](mcp.md).
+
+`LIBRARY_PUBLIC_BASE_URL` set to the public `https://` origin turns MCP
+OAuth on; `LIBRARY_OAUTH_REDIRECT_ALLOWLIST` controls which client
+redirect URIs are allowed (see `.env.example`).
 
 Caddy (automatic certificates):
 
