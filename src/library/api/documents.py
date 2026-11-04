@@ -19,13 +19,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from library.auth.deps import current_user
 from library.config import get_settings
 from library.db import get_session
-from library.documents_service import (
-    apply_document_update,
-    header_fields_changed,
-    revalidate_after_edit,
-)
+from library.documents_service import DocumentEditError, edit_document
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
-from library.jobs import embed_document, extract_document
+from library.jobs import extract_document
 from library.models import (
     Document,
     DocumentComment,
@@ -67,11 +63,7 @@ from library.search import (
     SortDirection,
     build_document_query,
 )
-from library.spend_lines import (
-    AMOUNT_ALLOCATED_REFUSAL,
-    AllocationError,
-    commit_allocation,
-)
+from library.spend_lines import AllocationError
 from library.storage import derived_path, path_for
 from library.storage import remove as remove_stored_files
 from library.thumbnails import THUMBNAIL_NAME
@@ -414,39 +406,36 @@ async def update_document(
     document_id: int,
     payload: DocumentUpdate,
     session: Annotated[AsyncSession, Depends(get_session)],
+    user: Annotated[User, Depends(current_user)],
 ) -> DocumentDetail:
     """Apply a partial metadata edit; only fields present in the body change.
 
     Edited fields are appended to ``extra["user_edited_fields"]`` so
     re-extraction never overwrites them, and a ``user_edited`` ingestion
-    event records the change.
+    event records the change and the editing user's id. The sequence (apply,
+    revalidate, commit, re-embed) is ``documents_service.edit_document``,
+    shared with Ask; this route only translates its two refusals.
     """
     document = await _get_document_or_404(session, document_id)
-    edited = await apply_document_update(session, document, payload, edited_by="user")
-    if not edited:
-        return await _detail(session, document)
-    # A corrected field can resolve (or introduce) a validation finding, so
-    # re-run the deterministic rules and update review_status before committing —
-    # this is what clears a fixed "implausible date" warning on save.
-    await revalidate_after_edit(session, document, get_settings())
-    # Committed through the allocation helper, not `session.commit()`. Editing
-    # ``amount_total`` on a document whose spend lines are allocated against the
-    # old amount is refused by migration 0035's mirror trigger, at COMMIT and as
-    # a bare ``DBAPIError`` — a 500 telling the owner nothing about what stopped
-    # the edit or how to proceed. The refusal itself is deliberate (an amount
-    # that no longer matches its lines makes every chart total for the document
-    # quietly wrong); being unable to explain it was not.
     try:
-        await commit_allocation(session, refusal=AMOUNT_ALLOCATED_REFUSAL)
+        edited = await edit_document(
+            session,
+            document,
+            payload,
+            settings=get_settings(),
+            edited_by="user",
+            user_id=user.id,
+        )
+    except DocumentEditError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
+        ) from exc
     except AllocationError as exc:
+        # The allocated-amount refusal (docs/charts.md §10.1). Raised after a
+        # rollback that expired `document`, so it is not touched on this path.
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    # A chunk's context_header embeds the sender/date/kind/title, so editing one
-    # makes every stored header for this document stale. Deferred only when a
-    # header field actually changed — a summary or tags edit must not wake the
-    # embedder. Mirrors how api/comments.py re-embeds on a comment write.
-    if header_fields_changed(edited):
-        await embed_document.defer_async(document_id=document.id)
-    await _refresh_for_detail(session, document)
+    if edited:
+        await _refresh_for_detail(session, document)
     return await _detail(session, document)
 
 

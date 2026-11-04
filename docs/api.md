@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.9.1: `POST /api/auth/login` is rate-limited and can answer `429`). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.9.1's rate-limit paragraph. Read `login` in `src/library/api/auth.py` and `src/library/auth/ratelimit.py` against the prose (limits, 429 body and `Retry-After`, failures-only counting); `tests/test_ratelimit.py` login tests green after being seen red with the check disabled. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-04 (§1.5: the `user_edited` event records the editing `user_id`; the PATCH error statuses are listed; the route calls `documents_service.edit_document`). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.5's audit, errors and shared-service paragraphs. Read `update_document` and `documents_service.py` against the prose; `test_patch_records_editor_user_id` and `test_patch_edit_errors_keep_status_and_detail` green after each was seen red. The rest carries its earlier verifications forward.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -342,14 +342,28 @@ Every edited field is appended to `extra["user_edited_fields"]` (mapped to
 storage names: `kind_slug`→`kind_id`, `sender`→`sender_id`,
 `recipient`→`recipient_id`). Re-extraction
 (W6) honours this list and never overwrites user-edited fields. An
-ingestion event `user_edited` is recorded with the changed field names.
-Returns the updated document detail.
+ingestion event `user_edited` is recorded with detail
+`{"fields": [...], "edited_by": "user", "user_id": <id>}` — the changed field
+names, the surface, and the id of the signed-in user who made the edit (it
+appears in the detail's `events`). Events recorded before attribution existed
+carry no `user_id` key. Returns the updated document detail.
 
-This route now delegates the mutation to the shared **`apply_document_update`**
-service (`src/library/documents_service.py`) with `edited_by="user"`; the same
-service backs the Ask agent's `update_document_metadata` write tool
-(`edited_by="ask"` — see [ask.md §1.8](ask.md)), so both surfaces apply edits,
-record provenance, and lock fields against re-extraction identically.
+**Errors.** `404` unknown or deleted document; `422` with a plain-string
+`detail` for an unknown `kind_slug` (`unknown kind slug: '<slug>'`) or `null`
+on `tags`/`projects`/`matters` (`<field> cannot be null; send [] to clear
+them`) or `language` (`language cannot be null`); `400` when the new
+`amount_total` would orphan the document's allocated spend lines
+([charts.md](charts.md) §10.1). A refused edit writes nothing.
+
+This route delegates the whole edit — apply, revalidate (below), commit
+through the allocation guard, and re-embed when the sender, kind, title or
+date changed — to **`edit_document`** (`src/library/documents_service.py`)
+with `edited_by="user"`. The Ask agent's `update_document_metadata` write tool
+calls the same function with `edited_by="ask"` and the asking user's id (see
+[ask.md §1.8](ask.md)), so both surfaces apply edits, record provenance, and
+lock fields against re-extraction identically. The service raises
+`DocumentEditError` / `AllocationError`; this route turns them into the `422` /
+`400` above.
 
 **Revalidation on save.** After applying an edit, both this route **and** the
 Ask agent's write tool re-run the deterministic validation rules

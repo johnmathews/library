@@ -24,6 +24,8 @@ import uuid
 from collections.abc import Awaitable, Callable, Iterator, Mapping
 from datetime import date
 from decimal import Decimal
+from types import SimpleNamespace
+from typing import cast
 
 import httpx
 import pytest
@@ -47,6 +49,7 @@ from library.models import (
     FxRate,
     Sender,
     SpendLine,
+    User,
 )
 from library.schemas import DocumentUpdate
 from tests.conftest import DocumentFactory, StubAnthropic
@@ -1965,6 +1968,10 @@ async def test_a_database_error_on_the_document_edit_path_is_not_a_400(
     route is a 5xx, which is where a deadlock or a dropped connection belongs.
     Reporting it as "your spend lines" would be a wrong diagnosis under a status
     code that says the owner caused it.
+
+    The route is called directly (not over HTTP) so the error is observed as
+    raised; it needs a user only for the audit event's ``user_id``, which this
+    failed commit never stores, so a stand-in carrying ``id`` is enough.
     """
     row = await document(amount_total="100.00", amount_kind=AmountKind.PAYMENT_MADE)
     await session.execute(
@@ -1975,8 +1982,11 @@ async def test_a_database_error_on_the_document_edit_path_is_not_a_400(
         )
     )
     await session.execute(text("INSERT INTO document_edit_probe VALUES (1), (1)"))
+    editor = cast(User, SimpleNamespace(id=None))
     with pytest.raises(DBAPIError) as caught:
-        await update_document(row.id, DocumentUpdate(amount_total=Decimal("200.00")), session)
+        await update_document(
+            row.id, DocumentUpdate(amount_total=Decimal("200.00")), session, editor
+        )
     assert getattr(caught.value.orig, "sqlstate", None) == "23505"
     await session.rollback()
 

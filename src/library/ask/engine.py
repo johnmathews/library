@@ -21,29 +21,19 @@ from typing import Any, cast
 
 from anthropic import AsyncAnthropic
 from anthropic.types import MessageParam, TextBlockParam, ToolParam
-from fastapi import HTTPException
 from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import LLMBackend, Settings
-from library.documents_service import (
-    apply_document_update,
-    header_fields_changed,
-    revalidate_after_edit,
-)
+from library.documents_service import DocumentEditError, edit_document, preview_update
 from library.embedding import EmbeddingError, embed_query
 from library.extraction.extractor import estimate_cost_usd
-from library.jobs import embed_document
 from library.llm import subscription
 from library.models import Document, DocumentComment, DocumentPage, ReviewStatus
 from library.schemas import DocumentUpdate
 from library.search import DocumentFilters, search_reach, semantic_search
-from library.spend_lines import (
-    AMOUNT_ALLOCATED_REFUSAL,
-    AllocationError,
-    commit_allocation,
-)
+from library.spend_lines import AllocationError
 from library.structured_query import CONCEPT_TO_KIND, query_documents
 
 logger = logging.getLogger(__name__)
@@ -742,33 +732,14 @@ async def _run_query_documents(
     return dict(result)
 
 
-def _preview_current(document: Document, field: str) -> Any:
-    """Human-readable current value of an editable field (names/slugs, not ids)."""
-    if field == "sender":
-        return document.sender.name if document.sender else None
-    if field == "recipient":
-        return document.recipient.name if document.recipient else None
-    if field == "kind_slug":
-        return document.kind.slug if document.kind else None
-    if field == "tags":
-        return sorted(tag.slug for tag in document.tags)
-    if field == "projects":
-        return sorted(project.slug for project in document.projects)
-    if field == "matters":
-        return sorted(matter.slug for matter in document.matters)
-    # Scalars fall through. Any *relationship* field must get a branch above:
-    # tool output is serialised with json.dumps(..., default=str), so a bare ORM
-    # object does not fail loudly — it renders as "<Matter object at 0x...>" in
-    # the preview the user is asked to approve.
-    return getattr(document, field, None)
-
-
 async def _run_update_document(
     session: AsyncSession,
     settings: Settings,
     args: dict[str, Any],
     editable_ids: set[int],
     previewed_ids: set[int],
+    *,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     """Propose-then-confirm write of a surfaced document's metadata.
 
@@ -800,11 +771,15 @@ async def _run_update_document(
     if not fields:
         return {"error": "no editable fields provided"}
 
+    # Validated before the preview as well as before the write: a value that
+    # cannot be stored must not be shown to the user as a change to approve.
+    try:
+        update = DocumentUpdate(**fields)
+    except ValidationError as exc:
+        return {"error": "invalid field value", "detail": exc.errors(include_url=False)}
+
     if not bool(args.get("confirmed", False)):
-        preview = {
-            name: {"current": _preview_current(document, name), "proposed": value}
-            for name, value in fields.items()
-        }
+        preview = preview_update(document, update)
         # Deliberately does NOT record the id as previewed: a confirmed write is
         # only allowed once the preview has been shown to the user AND they have
         # replied — which only happens on a later question (the preview lands in
@@ -830,31 +805,17 @@ async def _run_update_document(
             )
         }
 
+    # The same apply → revalidate → commit → re-embed sequence as the PATCH
+    # route (`documents_service.edit_document`). Both refusals come back as
+    # tool-result errors the model can explain, not exceptions out of the turn:
+    # an AllocationError in particular arrives at COMMIT, after a rollback that
+    # expired `document` — so only the plain `document_id` is used below.
     try:
-        update = DocumentUpdate(**fields)
-    except ValidationError as exc:
-        return {"error": "invalid field value", "detail": exc.errors(include_url=False)}
-
-    try:
-        edited = await apply_document_update(session, document, update, edited_by="ask")
-    except HTTPException as exc:
-        return {"error": str(exc.detail)}
-    # Recompute validation so an agent-applied fix clears its warning (and a bad
-    # edit gets flagged) — same behaviour as the PATCH route (documents.py).
-    await revalidate_after_edit(session, document, settings)
-    # Committed through the allocation helper, not `session.commit()`. This is
-    # the fifth writer of `amount_total` (docs/charts.md §10.1) and was the only
-    # one that did not translate migration 0035's deferred mirror trigger: the
-    # refusal arrives at COMMIT as a bare DBAPIError, which uncaught is a 500
-    # with a poisoned session rather than something the owner can act on.
-    try:
-        await commit_allocation(session, refusal=AMOUNT_ALLOCATED_REFUSAL)
-    except AllocationError as exc:
+        edited = await edit_document(
+            session, document, update, settings=settings, edited_by="ask", user_id=user_id
+        )
+    except (DocumentEditError, AllocationError) as exc:
         return {"error": str(exc)}
-    # Same reasoning as the PATCH route (api/documents.py): a header-field edit
-    # invalidates this document's stored chunk headers.
-    if header_fields_changed(edited):
-        await embed_document.defer_async(document_id=document_id)
     return {"status": "updated", "document_id": document_id, "updated_fields": edited}
 
 
@@ -936,6 +897,8 @@ async def _dispatch_tool(
     pages: dict[int, int],
     editable_ids: set[int],
     previewed_ids: set[int],
+    *,
+    user_id: int | None = None,
 ) -> dict[str, Any]:
     if name == "semantic_search":
         result = await _run_semantic_search(session, settings, args, cited, pages)
@@ -946,7 +909,9 @@ async def _dispatch_tool(
         editable_ids.update(cited)
         return query_result
     if name == "update_document_metadata":
-        return await _run_update_document(session, settings, args, editable_ids, previewed_ids)
+        return await _run_update_document(
+            session, settings, args, editable_ids, previewed_ids, user_id=user_id
+        )
     if name == "get_document":
         result = await _run_get_document(session, settings, args)
         if "document_id" in result:
@@ -1357,6 +1322,7 @@ async def run_ask(
     images: list[dict[str, str]] | None = None,
     backend: LLMBackend = "api",
     archive_context: str | None = None,
+    user_id: int | None = None,
 ) -> AskResult:
     """Answer ``question`` from the archive via a bounded Claude tool-use loop.
 
@@ -1379,6 +1345,10 @@ async def run_ask(
     ``archive_context`` is the rendered ``library.ask.context`` block — who the
     user is and the archive's slug vocabulary — appended to the system prompt on
     both backends. ``None`` (the default, used by tests) answers without it.
+
+    ``user_id`` is the asking user; a confirmed metadata edit records it in its
+    ``user_edited`` audit event beside ``edited_by="ask"``. ``None`` (tests that
+    drive the engine directly) records no user.
     """
     model = settings.ask_model
     result = AskResult(answer="", citations=[], used_tools=[], model=model)
@@ -1415,7 +1385,15 @@ async def run_ask(
         backends drive identical tool semantics.
         """
         return await _dispatch_tool(
-            session, settings, name, args, cited, pages, editable_ids, previewed_ids
+            session,
+            settings,
+            name,
+            args,
+            cited,
+            pages,
+            editable_ids,
+            previewed_ids,
+            user_id=user_id,
         )
 
     if backend == "subscription":

@@ -639,7 +639,7 @@ now answer.
 | `PATCH /api/documents/{id}` | 400, naming the allocation and saying to clear or replace the lines first |
 | re-extraction (`extraction/apply.py`) | the write is **skipped**, and reported in `extra["extraction"]["skipped_fields"]` |
 | the importer (`importer/runner.py`) | nothing to do — it writes only when `amount_total IS NULL`, and an allocated document has one |
-| Ask's document-edit tool (`ask/engine.py`) | a tool-result `error` naming the allocation and saying to clear or replace the lines first — literally the same wording the `PATCH` route gives (both pass `spend_lines.AMOUNT_ALLOCATED_REFUSAL`), delivered where Ask can act on it |
+| Ask's document-edit tool (`ask/engine.py`) | a tool-result `error` naming the allocation and saying to clear or replace the lines first — literally the same wording the `PATCH` route gives (both go through `documents_service.edit_document`, which passes `spend_lines.AMOUNT_ALLOCATED_REFUSAL`), delivered where Ask can act on it |
 
 The fifth row was **unguarded until 2026-08-31**. `_WRITABLE_FIELDS` is
 `tuple(DocumentUpdate.model_fields)`, which includes `amount_total`, and the tool

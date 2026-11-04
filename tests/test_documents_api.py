@@ -38,7 +38,7 @@ from library.models import (
 )
 from library.storage import derived_dir, path_for, store
 from library.thumbnails import THUMBNAIL_NAME
-from tests.conftest import fetch_all
+from tests.conftest import AuthUser, fetch_all
 from tests.test_extraction_apply import make_metadata, make_outcome, patch_extract
 
 pytestmark = pytest.mark.integration
@@ -767,6 +767,45 @@ def test_patch_empty_body_changes_nothing(api_client: TestClient, api_database_u
         id=document_id,
     )
     assert ("user_edited",) not in events
+
+
+def test_patch_records_editor_user_id(
+    api_client: TestClient, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """The ``user_edited`` audit event names WHICH user edited, not only that
+    a person did (``edited_by: "user"``): with two household members editing
+    through their own sessions and assistants, the label alone cannot say who
+    changed a document."""
+    document_id = seed_document(api_database_url, "w6-editor-id", title="Voor")
+    response = api_client.patch(f"/api/documents/{document_id}", json={"title": "Na"})
+    assert response.status_code == 200, response.text
+    edited_events = [e for e in response.json()["events"] if e["event"] == "user_edited"]
+    assert len(edited_events) == 1
+    assert edited_events[0]["detail"]["edited_by"] == "user"
+    assert edited_events[0]["detail"]["user_id"] == auth_user.id
+
+
+@pytest.mark.parametrize(
+    ("body", "detail"),
+    [
+        ({"kind_slug": "w6-not-a-kind"}, "unknown kind slug: 'w6-not-a-kind'"),
+        ({"tags": None}, "tags cannot be null; send [] to clear them"),
+        ({"projects": None}, "projects cannot be null; send [] to clear them"),
+        ({"matters": None}, "matters cannot be null; send [] to clear them"),
+        ({"language": None}, "language cannot be null"),
+    ],
+)
+def test_patch_edit_errors_keep_status_and_detail(
+    api_client: TestClient, api_database_url: str, body: dict[str, Any], detail: str
+) -> None:
+    """Pins every refusal the edit service can raise to the PATCH response a
+    client already handles: status 422 and the exact ``detail`` string. The
+    service no longer speaks HTTP (it raises ``DocumentEditError``), so the
+    route is now the only place that picks the status."""
+    document_id = seed_document(api_database_url, "w6-edit-errors")
+    response = api_client.patch(f"/api/documents/{document_id}", json=body)
+    assert response.status_code == 422, response.text
+    assert response.json() == {"detail": detail}
 
 
 def test_patch_protects_edits_from_reextraction(
