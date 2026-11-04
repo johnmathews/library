@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.5: a client is approved on the web app's consent page, `/oauth/consent`, and disconnected under Settings → Connected apps; disabling a user revokes their OAuth grants and tokens). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.5's OAuth sentence, read against `frontend/src/router/index.ts` (the `oauth-consent` route), `OAuthConsentView.vue`, `SettingsView.vue` and `revoke_all_credentials` in `src/library/auth/service.py`. Other sections carry forward their earlier verifications.
+**Status:** active. **Last updated:** 2026-11-04 (§1.5: OAuth consent page, Connected apps, revoke on user disable, and the login/OAuth rate limits; §1.6 `auth/` row names `ratelimit.py`). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.5's OAuth and rate-limit sentences and the §1.6 `auth/` row, read against `frontend/src/router/index.ts`, `OAuthConsentView.vue`, `SettingsView.vue`, `revoke_all_credentials`, `src/library/auth/ratelimit.py` and `OAuthRateLimit` in `src/library/app.py`. Other sections carry forward their earlier verifications.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -343,7 +343,10 @@ by a user approving it on the web app's consent page (`/oauth/consent`)
 from a signed-in browser session — the session that started the flow.
 Each user sees and disconnects their own apps under Settings → Connected
 apps; disabling a user revokes all of them. See [mcp.md](mcp.md) and
-[api.md §1.9.4](api.md).
+[api.md §1.9.4](api.md). Failed logins and `POST /mcp/token` / `/mcp/register` are
+rate-limited in-process, per client (the socket peer, or the header named by
+`LIBRARY_TRUSTED_CLIENT_IP_HEADER`); see [api.md §1.9.1](api.md),
+[mcp.md §1.4](mcp.md) and [deployment.md §1.5.1](deployment.md).
 
 A single boolean **admin** role (`users.is_admin`) layers on top: admins
 gate global project mutations and an admin-only views surface
@@ -394,7 +397,7 @@ top-level modules.
 | --- | --- |
 | `src/library/api/` | HTTP API routers, mounted under `/api` by the application factory. The admin surface is the nested `api/admin/` package. |
 | `src/library/ask/` | Natural-language question answering over the archive: retrieval, the agentic tool loop, citations. |
-| `src/library/auth/` | Argon2 passwords, cookie sessions, bearer API tokens, and the OAuth authorization server for MCP connectors (`oauth_provider.py`, `oauth_service.py`). |
+| `src/library/auth/` | Argon2 passwords, cookie sessions, bearer API tokens, the OAuth authorization server for MCP connectors (`oauth_provider.py`, `oauth_service.py`), and the in-process sliding-window rate limiter for login and the OAuth endpoints (`ratelimit.py`). |
 | `src/library/charts/` | The chart engine: rules, aggregate queries, footer accounting and question drafting. |
 | `src/library/embedding/` | Local embedding (bge-m3 via a text-embeddings-inference sidecar). |
 | `src/library/extraction/` | Claude metadata extraction: schema, extractor, pricing, and pipeline glue. |

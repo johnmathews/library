@@ -232,6 +232,22 @@ def warn_if_no_public_base_url(public_base_url: str | None) -> None:
         )
 
 
+def warn_if_oauth_without_client_ip_header(*, oauth_on: bool, trusted_header: str | None) -> None:
+    """Log a startup warning when MCP OAuth runs without a client-IP header.
+
+    The login and OAuth-endpoint rate limits key on the client. Behind
+    cloudflared and Traefik the socket peer is the proxy for every caller, so
+    without LIBRARY_TRUSTED_CLIENT_IP_HEADER all callers share one bucket and
+    one stranger exhausting it blocks every connector's token refresh.
+    """
+    if oauth_on and not trusted_header:
+        logger.warning(
+            "MCP OAuth is on but LIBRARY_TRUSTED_CLIENT_IP_HEADER is unset: behind a "
+            "reverse proxy every client shares one rate-limit bucket. Set it to the "
+            "proxy's client-IP header (e.g. CF-Connecting-IP behind cloudflared)."
+        )
+
+
 class HashedStaticFiles(StaticFiles):
     """Vite's content-hashed bundles under /assets never change: cache forever."""
 
@@ -344,6 +360,10 @@ def create_app() -> FastAPI:
         fanned out to all clients), and run the mounted MCP app's lifespan."""
         settings = get_settings()
         warn_if_no_public_base_url(settings.public_base_url)
+        warn_if_oauth_without_client_ip_header(
+            oauth_on=oauth_provider_of(mcp_auth) is not None,
+            trusted_header=settings.trusted_client_ip_header,
+        )
         _configure_telemetry_from_settings(settings)
         telemetry.observe_claude_credentials(_read_credential_status)
         # In this process, not the worker: the refresh-token rejection flag that

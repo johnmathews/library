@@ -1,5 +1,7 @@
 """Rate limiting: login failures, /mcp/token, /mcp/register (library.auth.ratelimit)."""
 
+import asyncio
+from collections import Counter
 from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -153,6 +155,48 @@ async def _machine(app: FastAPI, database_url: str) -> AsyncIterator[httpx.Async
                 transport=httpx.ASGITransport(app=app), base_url=BASE, timeout=30
             ) as client:
                 yield client
+
+
+async def test_concurrent_login_burst_cannot_exceed_the_limit(
+    oauth_app: FastAPI, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """A burst sent all at once gets no more password checks than the limit.
+
+    Checking the counter and recording the attempt are one step, before the
+    password hash is verified; if the failure were only recorded afterwards,
+    every request already in flight would see the old count and get through.
+    """
+    async with _machine(oauth_app, api_database_url) as machine:
+
+        async def attempt(index: int) -> int:
+            response = await machine.post(
+                "/api/auth/login",
+                json={"username": auth_user.username, "password": f"wrong-{index}"},
+            )
+            return response.status_code
+
+        codes = await asyncio.gather(*(attempt(index) for index in range(30)))
+    assert Counter(codes) == {401: 5, 429: 25}
+
+
+async def test_concurrent_successes_do_not_consume_failures(
+    oauth_app: FastAPI, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """Successful logins leave no trace once they finish.
+
+    While in flight an attempt holds a slot (it is counted before the
+    password check), so up to the limit may run at once; afterwards every
+    success has been uncounted and all five failures are still available.
+    """
+    async with _machine(oauth_app, api_database_url) as machine:
+        right = {"username": auth_user.username, "password": auth_user.password}
+        responses = await asyncio.gather(
+            *(machine.post("/api/auth/login", json=right) for _ in range(5))
+        )
+        assert {response.status_code for response in responses} == {200}
+        wrong = {"username": auth_user.username, "password": "nope"}
+        codes = [(await machine.post("/api/auth/login", json=wrong)).status_code for _ in range(6)]
+    assert codes == [401] * 5 + [429]
 
 
 async def test_token_endpoint_throttled(oauth_app: FastAPI, api_database_url: str) -> None:

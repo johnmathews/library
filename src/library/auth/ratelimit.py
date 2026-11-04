@@ -84,17 +84,28 @@ class SlidingWindowLimiter:
         frees_at = hits[len(hits) - limit] + window
         return max(1, math.ceil(frees_at - self._clock()))
 
-    def record(self, bucket: str, key: str, window: float) -> None:
-        """Add a hit for ``key`` now."""
+    def now(self) -> float:
+        """The limiter's clock reading."""
+        return self._clock()
+
+    def record(self, bucket: str, key: str, window: float, at: float | None = None) -> None:
+        """Add a hit for ``key`` now (or at ``at``, a reading of ``now()``)."""
         keys = self._hits.setdefault(bucket, OrderedDict())
         key = key[:_MAX_KEY_CHARS]
         hits = self._live(bucket, key, window)
         if hits is None:
             hits = keys.setdefault(key, deque())
-        hits.append(self._clock())
+        hits.append(self._clock() if at is None else at)
         keys.move_to_end(key)
         while len(keys) > self._max_keys:
             keys.popitem(last=False)
+
+    def forget(self, bucket: str, key: str, stamp: float) -> None:
+        """Remove one hit recorded at ``stamp`` (an attempt that turned out fine)."""
+        keys = self._hits.get(bucket)
+        hits = keys.get(key[:_MAX_KEY_CHARS]) if keys is not None else None
+        if hits is not None and stamp in hits:
+            hits.remove(stamp)
 
     def hit(self, bucket: str, key: str, limit: int, window: float) -> int:
         """Count a request and return its ``retry_after`` (0 = allowed).
@@ -129,20 +140,32 @@ def client_key(conn: HTTPConnection, trusted_header: str | None) -> str:
     return conn.client.host if conn.client else "unknown"
 
 
-def login_retry_after(username: str, client: str) -> int:
-    """Seconds to wait before a login attempt is even considered; 0 = go on."""
-    return max(
-        limiter.retry_after(
-            "login-user", username.strip().casefold(), LOGIN_USER_FAILURES, LOGIN_WINDOW_SECONDS
-        ),
+def begin_login_attempt(username: str, client: str) -> tuple[int, float]:
+    """Check the login limits and, when under them, count this attempt now.
+
+    Returns ``(retry_after, stamp)``: a non-zero ``retry_after`` refuses the
+    attempt (nothing recorded); otherwise the attempt is already counted
+    against the username and the client, and ``stamp`` identifies it for
+    ``forget_login_attempt`` if it succeeds. Counting before the password is
+    verified (an await) is what stops a burst of simultaneous requests from
+    all reading the old count and getting more checks than the limit allows.
+    """
+    user_key = username.strip().casefold()
+    wait = max(
+        limiter.retry_after("login-user", user_key, LOGIN_USER_FAILURES, LOGIN_WINDOW_SECONDS),
         limiter.retry_after("login-client", client, LOGIN_CLIENT_FAILURES, LOGIN_WINDOW_SECONDS),
     )
+    stamp = limiter.now()
+    if wait == 0:
+        limiter.record("login-user", user_key, LOGIN_WINDOW_SECONDS, at=stamp)
+        limiter.record("login-client", client, LOGIN_WINDOW_SECONDS, at=stamp)
+    return wait, stamp
 
 
-def record_login_failure(username: str, client: str) -> None:
-    """Count one failed login against the username and the client."""
-    limiter.record("login-user", username.strip().casefold(), LOGIN_WINDOW_SECONDS)
-    limiter.record("login-client", client, LOGIN_WINDOW_SECONDS)
+def forget_login_attempt(username: str, client: str, stamp: float) -> None:
+    """Uncount an attempt from ``begin_login_attempt`` that succeeded."""
+    limiter.forget("login-user", username.strip().casefold(), stamp)
+    limiter.forget("login-client", client, stamp)
 
 
 #: path -> (requests, window seconds) for the guarded OAuth endpoints.

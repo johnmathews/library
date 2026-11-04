@@ -2,7 +2,7 @@
 
 **Status:** active. **Last updated:** 2026-11-04 (§1.4: rate limits on the OAuth endpoints. §1.2: the consent page and Settings → Connected apps ship, so OAuth connects end to end; §1.4: `library user disable` also revokes OAuth grants and tokens). Earlier entries are in this file's history.
 **Last verified:** 2026-11-04 — method: partial, scoped to §1.4's rate-limit bullet. Read `OAuthRateLimit` in `src/library/app.py` and `src/library/auth/ratelimit.py` against the prose (paths, limits, 429 body); `test_token_endpoint_throttled` and `test_register_endpoint_throttled` green after being seen red with the guard disabled. The rest carries its earlier verifications forward.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, claude.ai and Claude Desktop, ChatGPT,

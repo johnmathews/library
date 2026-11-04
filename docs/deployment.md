@@ -315,7 +315,10 @@ value is taken at face value: if clients can reach port 8000 directly (or
 through a second route that does not overwrite the header), they can send
 any value and never be limited. Unset, or header absent, falls back to the
 socket peer. The setting is host configuration (the ansible-templated
-`.env` for the live instance).
+`.env` for the live instance). When MCP OAuth is on and the setting is
+unset, the API logs a warning at startup: set it before exposing `/mcp*`
+to the internet, or one caller can use up the shared token budget and
+stall every connector's token refresh.
 
 ## 1.6 Backups
 

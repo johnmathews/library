@@ -13,7 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.auth.deps import CSRF_COOKIE, SESSION_COOKIE, current_user
-from library.auth.ratelimit import client_key, login_retry_after, record_login_failure
+from library.auth.ratelimit import begin_login_attempt, client_key, forget_login_attempt
 from library.auth.service import (
     authenticate_user,
     create_api_token,
@@ -84,7 +84,9 @@ async def login(
     Successful logins are neither counted nor do they reset a counter.
     """
     client = client_key(request, get_settings().trusted_client_ip_header)
-    wait = login_retry_after(payload.username, client)
+    # Counted before the password check awaits, so simultaneous attempts
+    # cannot all read the old count; a success is uncounted afterwards.
+    wait, stamp = begin_login_attempt(payload.username, client)
     if wait:
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
@@ -93,8 +95,8 @@ async def login(
         )
     user = await authenticate_user(db, payload.username, payload.password)
     if user is None:
-        record_login_failure(payload.username, client)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
+    forget_login_attempt(payload.username, client, stamp)
     raw = await create_session(db, user)
     _set_cookie(response, SESSION_COOKIE, raw, httponly=True)
     _set_cookie(response, CSRF_COOKIE, secrets.token_urlsafe(32), httponly=False)

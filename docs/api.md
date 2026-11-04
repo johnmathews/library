@@ -655,8 +655,11 @@ and 20 per client in any 15 minutes. Past either limit the endpoint answers
 `429` with `{"detail": "too many login attempts"}` and a `Retry-After`
 header (seconds) *before* checking credentials, so even the right password
 is refused until the window slides, and the response is identical whether or
-not the username exists. Successful logins are not counted and do not reset
-anything. The client is the socket peer, or the header named by
+not the username exists. Each attempt is counted as it starts (before the
+password is verified) and uncounted if it succeeds, so a burst of
+simultaneous requests gets no more checks than the limit, and a finished
+successful login leaves no trace; it does not reset anything either. The
+client is the socket peer, or the header named by
 `LIBRARY_TRUSTED_CLIENT_IP_HEADER` when set (see `docs/deployment.md` §1.5.1).
 The counters live in the single API process's memory and reset on restart.
 

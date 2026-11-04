@@ -7,7 +7,11 @@ import pytest
 from fastapi.testclient import TestClient
 from procrastinate.testing import InMemoryConnector
 
-from library.app import create_app, warn_if_no_public_base_url
+from library.app import (
+    create_app,
+    warn_if_no_public_base_url,
+    warn_if_oauth_without_client_ip_header,
+)
 from library.config import get_settings
 from library.jobs import job_app
 
@@ -156,6 +160,27 @@ def test_warns_when_public_base_url_unset(
         "LIBRARY_PUBLIC_BASE_URL is unset" in record.message and record.levelname == "WARNING"
         for record in caplog.records
     )
+
+
+def test_warns_when_oauth_on_without_trusted_client_ip_header(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Behind a proxy every client then shares one rate-limit bucket: say so."""
+    with caplog.at_level("WARNING", logger="library.app"):
+        warn_if_oauth_without_client_ip_header(oauth_on=True, trusted_header=None)
+    assert any(
+        "LIBRARY_TRUSTED_CLIENT_IP_HEADER" in record.message and record.levelname == "WARNING"
+        for record in caplog.records
+    )
+
+
+@pytest.mark.parametrize(("oauth_on", "header"), [(False, None), (True, "CF-Connecting-IP")])
+def test_no_client_ip_header_warning_when_not_needed(
+    oauth_on: bool, header: str | None, caplog: pytest.LogCaptureFixture
+) -> None:
+    with caplog.at_level("WARNING", logger="library.app"):
+        warn_if_oauth_without_client_ip_header(oauth_on=oauth_on, trusted_header=header)
+    assert not [r for r in caplog.records if "LIBRARY_TRUSTED_CLIENT_IP_HEADER" in r.message]
 
 
 def test_no_warning_when_public_base_url_set(caplog: pytest.LogCaptureFixture) -> None:
