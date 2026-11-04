@@ -288,6 +288,120 @@ class ApiToken(Base):
     user: Mapped[User] = relationship(back_populates="api_tokens")
 
 
+# ---------------------------------------------------------------------- OAuth
+#
+# Library is its own OAuth 2.1 authorization server for MCP clients that cannot
+# take a static bearer token (claude.ai, ChatGPT; Claude Code prefers it too).
+# ``library.auth.oauth_provider`` is the only writer. Every secret a client
+# holds (authorization request id, code, access/refresh token) is stored as its
+# SHA-256 hex digest, exactly like ``api_tokens.token_hash``. The one exception
+# is ``oauth_clients.client_secret``: the MCP SDK's client authenticator compares
+# it in plaintext, so it has to be retrievable. It authenticates the client
+# application only — never a user — and is useless without a user's consent.
+
+
+class OAuthClient(Base):
+    """A dynamically registered OAuth client (RFC 7591), e.g. one connector."""
+
+    __tablename__ = "oauth_clients"
+
+    client_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    client_secret: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    client_name: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # The full RFC 7591 registration (``OAuthClientInformationFull`` minus the
+    # secret), so the SDK model round-trips without a column per field.
+    client_info: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class OAuthGrant(Base):
+    """A user's consent for one client: the thing "Connected apps" lists.
+
+    Codes and tokens hang off the grant, so revoking it (``revoked_at``) kills
+    every credential the client holds for that user in one place.
+    """
+
+    __tablename__ = "oauth_grants"
+    __table_args__ = (UniqueConstraint("user_id", "client_id", name="uq_oauth_grants_user_client"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id", ondelete="CASCADE"))
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    user: Mapped[User] = relationship()
+    client: Mapped[OAuthClient] = relationship()
+
+
+class OAuthAuthorizationRequest(Base):
+    """A pending ``/authorize`` call waiting for the user on the consent page.
+
+    ``params`` holds the SDK's ``AuthorizationParams`` (state, scopes, PKCE
+    challenge, redirect_uri, resource) as JSON. Lives 10 minutes.
+    """
+
+    __tablename__ = "oauth_authorization_requests"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    id_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    client_id: Mapped[str] = mapped_column(
+        ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), index=True
+    )
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class OAuthAuthorizationCode(Base):
+    """A single-use authorization code minted on approval. Lives 5 minutes."""
+
+    __tablename__ = "oauth_authorization_codes"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    code_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    grant_id: Mapped[int] = mapped_column(
+        ForeignKey("oauth_grants.id", ondelete="CASCADE"), index=True
+    )
+    code_challenge: Mapped[str] = mapped_column(Text)
+    redirect_uri: Mapped[str] = mapped_column(Text)
+    redirect_uri_provided_explicitly: Mapped[bool] = mapped_column(Boolean)
+    resource: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scopes: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+
+class OAuthToken(Base):
+    """An issued access or refresh token (hash only).
+
+    ``family_id`` ties every token descended from one authorization code: a
+    refresh rotates within the family, and presenting an already-rotated refresh
+    token revokes the whole family (OAuth 2.1 §4.3.1 replay detection).
+    """
+
+    __tablename__ = "oauth_tokens"
+    __table_args__ = (CheckConstraint("kind IN ('access','refresh')", name="kind"),)
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    grant_id: Mapped[int] = mapped_column(
+        ForeignKey("oauth_grants.id", ondelete="CASCADE"), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    family_id: Mapped[str] = mapped_column(String(64), index=True)
+    resource: Mapped[str | None] = mapped_column(Text, nullable=True)
+    scopes: Mapped[list[str]] = mapped_column(JSONB, default=list)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    grant: Mapped[OAuthGrant] = relationship()
+
+
 class SavedView(Base):
     """A named, per-user snapshot of the document-list filter/search state.
 

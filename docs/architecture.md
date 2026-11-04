@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.6 `app.py` row: the lifespan also disposes the shared DB engine, and a middleware serves `/mcp` without its trailing slash). Earlier: 2026-10-22 (`app.py` added to the module map).
-**Last verified:** 2026-11-04 — method: partial, scoped to the `app.py` row, read against `create_app` and its lifespan in `src/library/app.py`; `tests/test_mcp.py::test_lifespan_disposes_shared_engine` and `tests/test_spa.py` assert the two new items. Other rows carry forward their earlier verifications.
+**Status:** active. **Last updated:** 2026-11-04 (§1.3 Auth: the five OAuth tables behind MCP connectors; §1.6 `auth/` row names the OAuth provider and consent service). Earlier: 2026-11-04 (`app.py` row: engine disposal, slashless `/mcp`).
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.3 Auth and the §1.6 `auth/` row, read against `migrations/versions/0040_oauth.py`, the `OAuth*` models in `src/library/models.py` and `src/library/auth/`; `tests/test_oauth_provider.py` and the migration cycle test green. Other rows carry forward their earlier verifications.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -264,7 +264,21 @@ and the `NULLS NOT DISTINCT` uniques). It restores the schema so an older image
 can boot, never the rows: those are gone, and only a database backup returns
 them.
 
-**Auth:** `users`, `sessions`, `api_tokens`.
+**Auth:** `users`, `sessions`, `api_tokens`, plus five tables for the OAuth
+authorization server that lets MCP connectors sign in as a Library user
+(migration 0040, `library.auth.oauth_provider`). Request ids, codes and tokens
+are stored as SHA-256 digests only:
+
+- `oauth_clients` — dynamically registered clients (RFC 7591); redirect URIs are
+  allow-listed at registration (`LIBRARY_OAUTH_REDIRECT_ALLOWLIST`).
+- `oauth_grants` — one row per user and client consent; revoking it kills every
+  code and token under it.
+- `oauth_authorization_requests` — a pending `/authorize` waiting on the consent
+  page (10 minutes).
+- `oauth_authorization_codes` — single-use codes bound to the grant, PKCE
+  challenge, redirect URI and resource (5 minutes).
+- `oauth_tokens` — access (1 hour) and refresh (30 days, rotated) tokens;
+  `family_id` links a rotation chain so a replayed refresh token revokes it.
 
 **Instance configuration:**
 
@@ -370,7 +384,7 @@ top-level modules.
 | --- | --- |
 | `src/library/api/` | HTTP API routers, mounted under `/api` by the application factory. The admin surface is the nested `api/admin/` package. |
 | `src/library/ask/` | Natural-language question answering over the archive: retrieval, the agentic tool loop, citations. |
-| `src/library/auth/` | Argon2 passwords, cookie sessions, bearer API tokens. |
+| `src/library/auth/` | Argon2 passwords, cookie sessions, bearer API tokens, and the OAuth authorization server for MCP connectors (`oauth_provider.py`, `oauth_service.py`). |
 | `src/library/charts/` | The chart engine: rules, aggregate queries, footer accounting and question drafting. |
 | `src/library/embedding/` | Local embedding (bge-m3 via a text-embeddings-inference sidecar). |
 | `src/library/extraction/` | Claude metadata extraction: schema, extractor, pricing, and pipeline glue. |
