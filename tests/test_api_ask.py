@@ -971,6 +971,7 @@ def test_ask_follow_up_replays_prior_turn(
         images: list[dict[str, str]] | None = None,
         backend: str = "api",
         archive_context: str | None = None,
+        user_id: int | None = None,
     ):
         captured["history"] = history_messages
         captured["backend"] = backend
@@ -1774,6 +1775,7 @@ def _scripted_run_ask(monkeypatch: pytest.MonkeyPatch, *, fail_on: str | None = 
         images: list[dict[str, str]] | None = None,
         backend: str = "api",
         archive_context: str | None = None,
+        user_id: int | None = None,
     ):
         histories.append(history_messages)
         if question == fail_on:

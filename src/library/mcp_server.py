@@ -49,9 +49,14 @@ LLM connector cannot call it.
 
 import base64
 import binascii
+import hashlib
+import hmac
+import json
 import logging
+from collections.abc import Sequence
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
+from decimal import Decimal
 from pathlib import Path
 from typing import Annotated, Any, Literal
 from urllib.parse import urlsplit
@@ -68,6 +73,7 @@ from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOption
 from mcp.shared.auth import ProtectedResourceMetadata
 from mcp.types import ToolAnnotations
 from pydantic import AnyHttpUrl, Field
+from pydantic_core import to_jsonable_python
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.requests import Request
@@ -76,11 +82,17 @@ from starlette.routing import Route
 from starlette.types import ASGIApp
 
 import library
-from library import matters, projects, taxonomy
+from library import comments_service, matters, projects, taxonomy
 from library.auth.oauth_provider import LibraryOAuthProvider
 from library.auth.service import validate_api_token
 from library.config import Settings, get_settings
 from library.db import get_sessionmaker
+from library.documents_service import (
+    DocumentEditError,
+    edit_document,
+    preview_current,
+    preview_update,
+)
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
 from library.models import (
     Document,
@@ -90,7 +102,9 @@ from library.models import (
     Kind,
 )
 from library.ocr.tesseract import SEARCHABLE_PDF_NAME
+from library.schemas import CommentOut, CurrencyCode, DocumentUpdate
 from library.search import DocumentFilters, build_document_query
+from library.spend_lines import AllocationError
 from library.storage import derived_path, path_for
 
 logger = logging.getLogger(__name__)
@@ -127,6 +141,15 @@ for the full text of one document. Use `list_kinds`, `list_senders`,
 discover valid filter values,
 `library_stats` for an overview, `get_document_file` to retrieve the
 actual file, and `ingest_document` to add a new document to the archive.
+
+To correct a document's details (title, kind, sender, dates, amount,
+tags, ...) use `update_document_metadata` in two steps: call it without
+`apply` to get a preview of the changes, show the user that preview,
+and only after they agree call it again with `apply=true` and the
+`preview_token` the preview returned. `add_comment` attaches a dated
+note to a document (for example "this is our current house"); it is
+recorded as the connected user and becomes searchable. Everything these
+tools change is recorded as the connected user.
 """
 
 
@@ -397,8 +420,12 @@ def _current_user_id() -> int | None:
     return user_id if isinstance(user_id, int) else None
 
 
-async def _get_document(session: AsyncSession, document_id: int) -> Document:
-    document = await session.get(Document, document_id)
+async def _get_document(
+    session: AsyncSession, document_id: int, *, for_update: bool = False
+) -> Document:
+    """The live document, or a ``ToolError``; ``for_update`` row-locks it
+    until the session's transaction ends."""
+    document = await session.get(Document, document_id, with_for_update=for_update)
     if document is None or document.deleted_at is not None:
         raise ToolError(f"document {document_id} not found")
     return document
@@ -727,6 +754,326 @@ async def ingest_document(
             "status": result.document.status.value,
             "duplicate": result.duplicate,
         }
+
+
+# ---------------------------------------------------------- edit + comment
+
+#: The ``DocumentUpdate`` fields ``clear_fields`` can name: every nullable
+#: scalar. ``tags``/``projects``/``matters`` clear with ``[]`` and
+#: ``language`` cannot be cleared (the edit service refuses ``null`` for
+#: both), so they are not offered.
+ClearableField = Literal[
+    "title",
+    "summary",
+    "document_date",
+    "kind_slug",
+    "sender",
+    "recipient",
+    "amount_total",
+    "currency",
+    "due_date",
+    "expiry_date",
+]
+
+#: Versions the preview-token hash, so a change to what it covers can never
+#: accept a token minted under the old scheme.
+_PREVIEW_TOKEN_DOMAIN: str = "library-mcp-edit-preview-v2"
+
+_UNCHANGED: str = "Omit to leave unchanged."
+
+
+def _preview_token(document_id: int, changes: dict[str, Any]) -> str:
+    """The preview token: SHA-256 over the document id and, for each field
+    the edit sets, its current value and the value applying would store
+    (``preview_update``'s output, read back from its rolled-back dry run;
+    keys sorted). Hashing the stored value, not the input, means the token
+    approves exactly what the user was shown.
+
+    Stateless, because MCP gives a server no conversation to remember a
+    preview in: apply recomputes the hash from the database and the
+    arguments it is given and compares. A mismatch means the arguments are
+    not the ones previewed (another value, another field, another
+    document) or one of those fields changed since (someone else edited
+    it). A change to a field the edit does not touch does not invalidate
+    the token; nothing is being overwritten there.
+
+    Deliberately not an HMAC: Library has no server secret, and none is
+    needed, because this is not a security control. The caller already has
+    edit rights and could mint a matching token itself by previewing; the
+    token only makes "preview, show the user, then apply" the path of least
+    resistance and catches a concurrent edit.
+    """
+    canonical = json.dumps(
+        {"domain": _PREVIEW_TOKEN_DOMAIN, "document_id": document_id, "changes": changes},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
+
+
+def _build_update(provided: dict[str, Any], clear_fields: Sequence[str] | None) -> DocumentUpdate:
+    """``DocumentUpdate`` from the parameters that were given plus the
+    cleared ones, so ``exclude_unset`` is exactly what the caller asked for."""
+    fields = {name: value for name, value in provided.items() if value is not None}
+    for name in clear_fields or ():
+        if name in fields:
+            raise ToolError(f"{name} is both set and listed in clear_fields; pick one")
+        fields[name] = None
+    if not fields:
+        raise ToolError(
+            "no changes given: pass at least one field to set, or name fields in clear_fields"
+        )
+    return DocumentUpdate(**fields)
+
+
+@mcp.tool(
+    title="Update document metadata",
+    # Overwrites stored values (destructive); applying the same change again
+    # leaves the same state (idempotent).
+    annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=True, idempotentHint=True, openWorldHint=False
+    ),
+)
+async def update_document_metadata(
+    document_id: DocumentId,
+    title: Annotated[str | None, Field(description=f"New title. {_UNCHANGED}")] = None,
+    summary: Annotated[str | None, Field(description=f"New summary. {_UNCHANGED}")] = None,
+    document_date: Annotated[
+        date | None, Field(description=f"The date on the document, ISO. {_UNCHANGED}")
+    ] = None,
+    kind_slug: Annotated[
+        str | None,
+        Field(description=f"An existing kind slug (see list_kinds). {_UNCHANGED}"),
+    ] = None,
+    sender: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Sender name; matched case-insensitively to an existing sender "
+                f"(see list_senders), created if new. {_UNCHANGED}"
+            )
+        ),
+    ] = None,
+    recipient: Annotated[
+        str | None,
+        Field(
+            description=(
+                "Recipient name; matched case-insensitively to an existing "
+                f"recipient (see list_recipients), created if new. {_UNCHANGED}"
+            )
+        ),
+    ] = None,
+    tags: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "The complete new list of tag slugs (replaces the current tags; "
+                f"unknown slugs are created). [] removes every tag. {_UNCHANGED}"
+            )
+        ),
+    ] = None,
+    projects: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "The complete new list of project slugs or names (replaces the "
+                f"current ones; unknown ones are created). [] removes all. {_UNCHANGED}"
+            )
+        ),
+    ] = None,
+    matters: Annotated[
+        list[str] | None,
+        Field(
+            description=(
+                "The complete new list of matter slugs or names (replaces the "
+                f"current ones; unknown ones are created). [] removes all. {_UNCHANGED}"
+            )
+        ),
+    ] = None,
+    language: Annotated[
+        DocumentLanguage | None,
+        Field(description=f"Document language; cannot be cleared. {_UNCHANGED}"),
+    ] = None,
+    amount_total: Annotated[
+        Decimal | None,
+        Field(
+            description=(
+                "Total amount as a decimal, e.g. '123.45'. Refused when the amount "
+                f"is split across spend lines in the web app. {_UNCHANGED}"
+            )
+        ),
+    ] = None,
+    currency: Annotated[
+        CurrencyCode | None,
+        Field(description=f"Three-letter ISO 4217 code, e.g. 'EUR'. {_UNCHANGED}"),
+    ] = None,
+    due_date: Annotated[
+        date | None, Field(description=f"Payment due date, ISO. {_UNCHANGED}")
+    ] = None,
+    expiry_date: Annotated[
+        date | None, Field(description=f"Expiry date (e.g. of a policy), ISO. {_UNCHANGED}")
+    ] = None,
+    clear_fields: Annotated[
+        list[ClearableField] | None,
+        Field(
+            description=(
+                "Fields to empty (set to no value), e.g. ['due_date', 'sender']. A "
+                "field cannot be both set and cleared. Clear tags, projects or "
+                "matters by passing []."
+            )
+        ),
+    ] = None,
+    apply: Annotated[
+        bool,
+        Field(
+            description=(
+                "false (default): preview only, nothing is written. true: write the "
+                "change; needs the preview_token from a preview of exactly these "
+                "arguments."
+            )
+        ),
+    ] = False,
+    preview_token: Annotated[
+        str | None,
+        Field(description="The preview_token a preview returned; required when apply is true."),
+    ] = None,
+) -> dict[str, Any]:
+    """Change a document's details: preview first, then apply after the user agrees.
+
+    Step 1, preview: call without `apply`. Nothing is written. Returns
+    {document_id, applied: false, changes: {field: {current, proposed}},
+    preview_token}. Show the user the changes and ask whether to apply.
+
+    Step 2, apply: only once the user has agreed, call again with the SAME
+    arguments plus `apply=true` and the `preview_token`. Returns
+    {document_id, applied: true, updated_fields, current, review_status}.
+    The edit is recorded as the connected user, and re-extraction never
+    overwrites an edited field.
+
+    Only the fields you pass change. Errors if the document is unknown or
+    deleted, a value is invalid (an unknown kind, an amount split across
+    spend lines), or, at apply, the token is missing or no longer matches
+    (the document changed since the preview, or the arguments differ):
+    then preview again and show the user the new changes.
+    """
+    update = _build_update(
+        {
+            "title": title,
+            "summary": summary,
+            "document_date": document_date,
+            "kind_slug": kind_slug,
+            "sender": sender,
+            "recipient": recipient,
+            "tags": tags,
+            "projects": projects,
+            "matters": matters,
+            "language": language,
+            "amount_total": amount_total,
+            "currency": currency,
+            "due_date": due_date,
+            "expiry_date": expiry_date,
+        },
+        clear_fields,
+    )
+
+    async with _session() as session:
+        # Locked on apply, before the dry run, so nobody can change the row
+        # between computing the token and the commit.
+        document = await _get_document(session, document_id, for_update=apply)
+        # The same dry run on preview and on apply, so `expected` is the
+        # preview's token when nothing changed in between. It also refuses
+        # (with apply's own words) a change apply would refuse, so a preview
+        # never shows the user one.
+        try:
+            changes = await preview_update(session, document, update)
+        except (DocumentEditError, AllocationError) as exc:
+            raise ToolError(str(exc)) from exc
+        expected = _preview_token(document_id, changes)
+        if not apply:
+            return {
+                "document_id": document_id,
+                "applied": False,
+                "changes": changes,
+                "preview_token": expected,
+            }
+        if preview_token is None:
+            raise ToolError(
+                "preview first: call update_document_metadata without apply, show "
+                "the user the changes, and apply only after they agree"
+            )
+        if not hmac.compare_digest(preview_token.encode(), expected.encode()):
+            raise ToolError(
+                "the document changed since the preview, or the fields differ from "
+                "the ones previewed: preview again and show the user the new changes"
+            )
+        try:
+            edited = await edit_document(
+                session,
+                document,
+                update,
+                settings=get_settings(),
+                edited_by="mcp",
+                user_id=_current_user_id(),
+            )
+        except (DocumentEditError, AllocationError) as exc:  # pragma: no cover - race
+            # The dry run above already refused both under this row lock, so
+            # only a kind deleted between it and this edit reaches here. An
+            # AllocationError would follow a rollback that expired `document`:
+            # only the message is used.
+            raise ToolError(str(exc)) from exc
+
+    # Re-read in a fresh session: `document`'s relationships (sender, kind,
+    # ...) still hold their pre-edit objects, since only the ids were set.
+    async with _session() as session:
+        document = await _get_document(session, document_id)
+        current = {name: preview_current(document, name) for name in changes}
+        review_status = document.review_status.value
+    return {
+        "document_id": document_id,
+        "applied": True,
+        "updated_fields": edited,
+        "current": to_jsonable_python(current),
+        "review_status": review_status,
+    }
+
+
+@mcp.tool(
+    title="Add comment",
+    # Only adds; each call adds another comment.
+    annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=False, idempotentHint=False, openWorldHint=False
+    ),
+)
+async def add_comment(
+    document_id: DocumentId,
+    body: Annotated[
+        str,
+        Field(
+            min_length=1,
+            description=(
+                "The comment text, e.g. 'This is our current house.' Leading and "
+                "trailing whitespace is removed."
+            ),
+        ),
+    ],
+) -> dict[str, Any]:
+    """Attach a dated comment to a document, as the connected user.
+
+    Comments record personal context the document itself does not say
+    ("paid in cash", "this policy replaced the 2023 one"). The comment is
+    queued for indexing so searches find the document through it. Each
+    call adds a new comment. Returns {id, document_id, author_id, body,
+    created_at}. Errors if the document is unknown or deleted, or the body
+    is blank.
+    """
+    async with _session() as session:
+        try:
+            comment = await comments_service.add_comment(
+                session, document_id=document_id, author_id=_current_user_id(), body=body
+            )
+        except comments_service.CommentError as exc:
+            raise ToolError(str(exc)) from exc
+        return CommentOut.model_validate(comment).model_dump(mode="json")
 
 
 @mcp.tool(title="List document kinds", annotations=READ_ONLY)

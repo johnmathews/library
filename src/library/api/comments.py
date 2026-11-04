@@ -1,7 +1,9 @@
 """Comment CRUD API (U3): free-text, dated notes attached to an existing document.
 
 A comment annotates another document (unlike a note, which is its own
-``source=note`` Document — see ``notes.py``). Every create/edit/delete writes
+``source=note`` Document — see ``notes.py``). Creating one is
+``comments_service.add_comment``, shared with the MCP ``add_comment`` tool.
+Every create/edit/delete writes
 an ``IngestionEvent`` on the parent document and defers a re-embed so the
 comment's text becomes searchable from /ask (see ``jobs.embed_document`` and
 ``docs/api.md``).
@@ -13,6 +15,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from library import comments_service
 from library.auth.deps import current_user
 from library.db import get_session
 from library.jobs import embed_document
@@ -73,19 +76,19 @@ async def create_comment(
     session: Annotated[AsyncSession, Depends(get_session)],
     user: Annotated[User, Depends(current_user)],
 ) -> CommentOut:
-    """Add a comment and queue a re-embed so it becomes searchable from /ask."""
-    await _get_document_or_404(session, document_id)
-    comment = DocumentComment(document_id=document_id, author_id=user.id, body=payload.body)
-    session.add(comment)
-    await session.flush()
-    session.add(
-        IngestionEvent(
-            document_id=document_id, event="comment_added", detail={"comment_id": comment.id}
+    """Add a comment and queue a re-embed so it becomes searchable from /ask.
+
+    The work is ``comments_service.add_comment``, shared with the MCP
+    ``add_comment`` tool; this route only translates a missing document.
+    """
+    try:
+        comment = await comments_service.add_comment(
+            session, document_id=document_id, author_id=user.id, body=payload.body
         )
-    )
-    await session.commit()
-    await session.refresh(comment)
-    await embed_document.defer_async(document_id=document_id)
+    except comments_service.CommentDocumentNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="document not found"
+        ) from exc
     return CommentOut.model_validate(comment)
 
 

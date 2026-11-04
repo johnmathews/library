@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.9.1: `POST /api/auth/login` is rate-limited and can answer `429`). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.9.1's rate-limit paragraph. Read `login` in `src/library/api/auth.py` and `src/library/auth/ratelimit.py` against the prose (limits, 429 body and `Retry-After`, failures-only counting); `tests/test_ratelimit.py` login tests green after being seen red with the check disabled. The rest carries its earlier verifications forward.
+**Status:** active. **Last updated:** 2026-11-04 (§1.19: creating a comment is `comments_service.add_comment`, shared with the MCP `add_comment` tool). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.19's POST row and its shared-service sentence. Read `create_comment` and `comments_service.add_comment` against the prose; `tests/test_api_comments.py` green unchanged after the route moved onto the service. The rest carries its earlier verifications forward.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -342,14 +342,28 @@ Every edited field is appended to `extra["user_edited_fields"]` (mapped to
 storage names: `kind_slug`→`kind_id`, `sender`→`sender_id`,
 `recipient`→`recipient_id`). Re-extraction
 (W6) honours this list and never overwrites user-edited fields. An
-ingestion event `user_edited` is recorded with the changed field names.
-Returns the updated document detail.
+ingestion event `user_edited` is recorded with detail
+`{"fields": [...], "edited_by": "user", "user_id": <id>}` — the changed field
+names, the surface, and the id of the signed-in user who made the edit (it
+appears in the detail's `events`). Events recorded before attribution existed
+carry no `user_id` key. Returns the updated document detail.
 
-This route now delegates the mutation to the shared **`apply_document_update`**
-service (`src/library/documents_service.py`) with `edited_by="user"`; the same
-service backs the Ask agent's `update_document_metadata` write tool
-(`edited_by="ask"` — see [ask.md §1.8](ask.md)), so both surfaces apply edits,
-record provenance, and lock fields against re-extraction identically.
+**Errors.** `404` unknown or deleted document; `422` with a plain-string
+`detail` for an unknown `kind_slug` (`unknown kind slug: '<slug>'`) or `null`
+on `tags`/`projects`/`matters` (`<field> cannot be null; send [] to clear
+them`) or `language` (`language cannot be null`); `400` when the new
+`amount_total` would orphan the document's allocated spend lines
+([charts.md](charts.md) §10.1). A refused edit writes nothing.
+
+This route delegates the whole edit — apply, revalidate (below), commit
+through the allocation guard, and re-embed when the sender, kind, title or
+date changed — to **`edit_document`** (`src/library/documents_service.py`)
+with `edited_by="user"`. The Ask agent's `update_document_metadata` write tool
+calls the same function with `edited_by="ask"` and the asking user's id (see
+[ask.md §1.8](ask.md)), so both surfaces apply edits, record provenance, and
+lock fields against re-extraction identically. The service raises
+`DocumentEditError` / `AllocationError`; this route turns them into the `422` /
+`400` above.
 
 **Revalidation on save.** After applying an edit, both this route **and** the
 Ask agent's write tool re-run the deterministic validation rules
@@ -1511,7 +1525,7 @@ apply exactly as elsewhere (§1.9).
 | Method | Path | Notes |
 |--------|------|-------|
 | GET | `/api/documents/{id}/comments` | The document's comments, **newest first**: `[{id, document_id, author_id, body, created_at}, …]`. `404` for unknown/deleted documents. |
-| POST | `/api/documents/{id}/comments` | Body `{"body": "…"}`. `201` with the created comment. Blank/whitespace-only `body` is rejected `422`. Writes a `comment_added` ingestion event and defers a re-embed of the document. |
+| POST | `/api/documents/{id}/comments` | Body `{"body": "…"}`. `201` with the created comment, authored by the requesting user. Blank/whitespace-only `body` is rejected `422`; unknown/deleted document `404`. Writes a `comment_added` ingestion event and, after the commit, defers a re-embed of the document. The work is `comments_service.add_comment` (`src/library/comments_service.py`), which the MCP `add_comment` tool calls too ([mcp.md §1.3](mcp.md)). |
 | PATCH | `/api/documents/{id}/comments/{cid}` | Body `{"body": "…"}`, full replacement (there is no partial-field edit — a comment has one field). `200` with the updated comment. Blank body `422`; unknown or foreign (belonging to a different document) comment `404`. Writes a `comment_edited` event and defers a re-embed. |
 | DELETE | `/api/documents/{id}/comments/{cid}` | `204` on success; unknown or foreign comment `404`. Writes a `comment_deleted` event and defers a re-embed (the comment's chunk is dropped from search on the next embed run). |
 

@@ -72,6 +72,8 @@ EXPECTED_TOOLS = {
     "list_projects",
     "list_matters",
     "library_stats",
+    "update_document_metadata",
+    "add_comment",
 }
 
 # A minimal valid MCP initialize request, for raw-HTTP auth tests.
@@ -210,8 +212,10 @@ async def test_list_tools(mcp_connect: McpConnector) -> None:
         assert tool.description and len(tool.description.strip()) > 20, tool.name
 
 
-#: The only tool that changes the archive. Everything else only reads.
-WRITE_TOOLS: frozenset[str] = frozenset({"ingest_document"})
+#: The tools that change the archive. Everything else only reads.
+WRITE_TOOLS: frozenset[str] = frozenset(
+    {"ingest_document", "update_document_metadata", "add_comment"}
+)
 
 
 async def test_tools_declare_annotations_and_titles(mcp_connect: McpConnector) -> None:
@@ -240,6 +244,19 @@ async def test_tools_declare_annotations_and_titles(mcp_connect: McpConnector) -
     # return the existing document instead of a second copy.
     assert ingest.annotations.destructiveHint is False
     assert ingest.annotations.idempotentHint is True
+
+    # Overwrites metadata (destructive), but applying the same change twice
+    # leaves the same state (idempotent).
+    edit = next(tool for tool in tools if tool.name == "update_document_metadata")
+    assert edit.annotations is not None
+    assert edit.annotations.destructiveHint is True
+    assert edit.annotations.idempotentHint is True
+
+    # Only adds; each call adds another comment.
+    comment = next(tool for tool in tools if tool.name == "add_comment")
+    assert comment.annotations is not None
+    assert comment.annotations.destructiveHint is False
+    assert comment.annotations.idempotentHint is False
 
 
 async def test_tool_text_never_points_at_the_rest_api(mcp_connect: McpConnector) -> None:

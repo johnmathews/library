@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.5: OAuth consent page, Connected apps, revoke on user disable, and the login/OAuth rate limits; §1.6 `auth/` row names `ratelimit.py`). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.5's OAuth and rate-limit sentences and the §1.6 `auth/` row, read against `frontend/src/router/index.ts`, `OAuthConsentView.vue`, `SettingsView.vue`, `revoke_all_credentials`, `src/library/auth/ratelimit.py` and `OAuthRateLimit` in `src/library/app.py`. Other sections carry forward their earlier verifications.
+**Status:** active. **Last updated:** 2026-11-04 (§1.6: `documents_service.py` row, the shared edit path and its dry-run preview). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to the §1.6 `documents_service.py` row, read against `edit_document` and `preview_update` in `src/library/documents_service.py` and their callers in `api/documents.py`, `ask/engine.py` and `mcp_server.py`. Other sections carry forward their earlier verifications.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -421,6 +421,7 @@ top-level modules.
 | `src/library/search.py` | Shared document query building for the REST API and the MCP server. |
 | `src/library/consume.py` | Consume-folder watcher: ingest files dropped into a watched directory. |
 | `src/library/ingest.py` | Ingestion service: bytes in, `Document` row + queued job out. |
+| `src/library/documents_service.py` | The one document-metadata edit path shared by the PATCH route, Ask and MCP (`edit_document`), and the edit preview (`preview_update`), which reads the stored values back from a rolled-back dry run. |
 | `src/library/config.py` | Settings, loaded from the environment with the `LIBRARY_` prefix. |
 | `src/library/app.py` | The FastAPI app factory: routers, the SPA fallback, `/metrics`, `/healthz`, and the `/mcp` slashless rewrite, and the lifespan (telemetry, the events broker, the scheduled Claude credential check, and disposing the shared DB engine on exit). |
 | `src/library/spend_lines.py` | Manual allocation of a document's amount across spend lines: the replace-whole write path behind the `spend_lines`/`line_labels` tables, whose sum against `documents.amount_total` is enforced by the deferred constraint triggers of migration 0035. |

@@ -7,28 +7,38 @@ dispatch driven by a stubbed Anthropic client).
 """
 
 import json
-from collections.abc import AsyncIterator
+import secrets
+from collections.abc import AsyncIterator, Iterator
 from contextlib import asynccontextmanager
 from datetime import date
 from decimal import Decimal
 from typing import Any, cast
 
 import pytest
+from fastapi.testclient import TestClient
 from procrastinate.testing import InMemoryConnector
 from sqlalchemy import select, text
 from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from library.api import ask as ask_module
 from library.ask import engine as ask_engine
 from library.ask.engine import _run_update_document, run_ask
 from library.config import get_settings
-from library.documents_service import apply_document_update
+from library.documents_service import apply_document_update, preview_current
 from library.models import Document, IngestionEvent, ReviewStatus
 from library.schemas import DocumentUpdate
 from library.spend_lines import LineInput, replace_lines
-from tests.conftest import DocumentFactory
-from tests.test_api_ask import _FakeAnthropic, _Response, _TextBlock, _ToolUseBlock, _Usage
-from tests.test_documents_api import _seed_document
+from tests.conftest import AuthUser, DocumentFactory, fetch_all
+from tests.test_api_ask import (
+    _FakeAnthropic,
+    _install_anthropic,
+    _Response,
+    _TextBlock,
+    _ToolUseBlock,
+    _Usage,
+)
+from tests.test_documents_api import _seed_document, seed_document
 
 pytestmark = pytest.mark.integration
 
@@ -128,6 +138,85 @@ async def test_update_tool_preview_does_not_write(api_database_url: str) -> None
 
 
 @pytest.mark.asyncio
+async def test_update_tool_preview_shows_the_value_that_would_be_stored(
+    api_database_url: str,
+) -> None:
+    """An unparseable value is refused by ``DocumentUpdate`` before the user is
+    asked to approve it, and a storable one is shown normalised (currency
+    upper-cased) — what applying would actually write, not the raw input."""
+    document_id = await _seed_document(api_database_url, "askw-preview-norm", currency="EUR")
+
+    async with _open_session(api_database_url) as session:
+        bad = await _run_update_document(
+            session,
+            get_settings(),
+            {"document_id": document_id, "amount_total": "twelve", "confirmed": False},
+            {document_id},
+            set(),
+        )
+        good = await _run_update_document(
+            session,
+            get_settings(),
+            {"document_id": document_id, "currency": "usd", "confirmed": False},
+            {document_id},
+            set(),
+        )
+
+    assert bad["error"] == "invalid field value"
+    assert good["changes"] == {"currency": {"current": "EUR", "proposed": "USD"}}
+
+
+@pytest.mark.asyncio
+async def test_update_tool_preview_shows_what_the_database_stores(
+    api_database_url: str,
+) -> None:
+    """The preview comes from ``documents_service.preview_update``'s rolled-back
+    dry run, so it shows what only the database and the upserts decide:
+    ``Numeric(14, 2)`` rounds 12.345 to 12.35 and the sender upsert collapses
+    whitespace. A kind only the database can reject is refused at preview. The
+    dry run is a savepoint: the commit the Ask route makes after every turn
+    keeps nothing of it."""
+    marker = f"askw-preview-stored-{secrets.token_hex(4)}"
+    document_id = await _seed_document(api_database_url, marker, title="Kept")
+
+    async with _open_session(api_database_url) as session:
+        stored = await _run_update_document(
+            session,
+            get_settings(),
+            {
+                "document_id": document_id,
+                "amount_total": "12.345",
+                "sender": f"  {marker}   Sender ",
+                "confirmed": False,
+            },
+            {document_id},
+            set(),
+        )
+        bad_kind = await _run_update_document(
+            session,
+            get_settings(),
+            {"document_id": document_id, "kind_slug": "askw-not-a-kind", "confirmed": False},
+            {document_id},
+            set(),
+        )
+        await session.commit()  # what the Ask route does after every turn
+
+    assert stored["changes"] == {
+        "sender": {"current": None, "proposed": f"{marker} Sender"},
+        "amount_total": {"current": None, "proposed": "12.35"},
+    }
+    assert bad_kind == {"error": "unknown kind slug: 'askw-not-a-kind'"}
+    async with _open_session(api_database_url) as session:
+        document = await _load(session, document_id)
+        assert (document.sender_id, document.amount_total) == (None, None)
+        assert (await _events(session, document_id)) == []
+        senders = await session.execute(
+            text("SELECT id FROM senders WHERE name = :n"), {"n": f"{marker} Sender"}
+        )
+        assert senders.all() == []
+
+
+@pytest.mark.asyncio
 async def test_update_tool_commit_writes_with_ask_provenance(
     api_database_url: str, job_connector: InMemoryConnector
 ) -> None:
@@ -173,7 +262,7 @@ async def test_update_tool_writes_matters(api_database_url: str) -> None:
 
     async with _open_session(api_database_url) as session:
         document = await _load(session, document_id)
-        assert ask_engine._preview_current(document, "matters") == ["askw-matter-before"]
+        assert preview_current(document, "matters") == ["askw-matter-before"]
         result = await _run_update_document(
             session,
             get_settings(),
@@ -296,6 +385,153 @@ async def test_update_tool_confirm_without_preview_is_refused(api_database_url: 
         document = await _load(session, document_id)
         assert document.title == "Untouched"
         assert (await _events(session, document_id)) == []
+
+
+@pytest.mark.asyncio
+async def test_ask_edit_unknown_kind_returns_error(api_database_url: str) -> None:
+    """The edit service's refusal reaches the model as a tool-result error, not
+    an exception out of the turn. The service raises ``DocumentEditError`` (it
+    no longer speaks HTTP), so this is what proves Ask catches the new type."""
+    document_id = await _seed_document(api_database_url, "askw-badkind", title="Kept")
+
+    async with _open_session(api_database_url) as session:
+        result = await _run_update_document(
+            session,
+            get_settings(),
+            {"document_id": document_id, "kind_slug": "askw-not-a-kind", "confirmed": True},
+            {document_id},
+            {document_id},
+        )
+
+    assert result == {"error": "unknown kind slug: 'askw-not-a-kind'"}
+    async with _open_session(api_database_url) as session:
+        assert (await _events(session, document_id)) == []
+
+
+@pytest.mark.asyncio
+async def test_ask_refused_edit_leaves_nothing_for_the_turn_commit(
+    api_database_url: str,
+) -> None:
+    """A refused edit must not leave half of itself in the session.
+
+    ``POST /api/ask`` commits the SAME session after the turn to persist it
+    (``api/ask.py``), so anything a refused edit had already mutated would be
+    written then — with no ``user_edited`` event and no lock against
+    re-extraction. Here ``sender`` would be applied before ``tags: null`` is
+    refused, if validation ran in field order.
+    """
+    document_id = await _seed_document(
+        api_database_url, "askw-partial", sender_name="Askw Original Sender"
+    )
+
+    async with _open_session(api_database_url) as session:
+        result = await _run_update_document(
+            session,
+            get_settings(),
+            {
+                "document_id": document_id,
+                "sender": "Askw Replacement Sender",
+                "tags": None,
+                "confirmed": True,
+            },
+            {document_id},
+            {document_id},
+        )
+        assert result == {"error": "tags cannot be null; send [] to clear them"}
+        await session.commit()  # what the Ask route does after every turn
+
+    async with _open_session(api_database_url) as session:
+        document = await _load(session, document_id)
+        assert document.sender is not None
+        assert document.sender.name == "Askw Original Sender"
+
+
+@pytest.fixture
+def with_api_key(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
+    monkeypatch.setenv("LIBRARY_ANTHROPIC_API_KEY", "test-key")
+    get_settings.cache_clear()
+    yield
+    get_settings.cache_clear()
+
+
+def test_ask_edit_records_user_id(
+    with_api_key: None,
+    api_client: TestClient,
+    api_database_url: str,
+    auth_user: AuthUser,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """End to end through ``POST /api/ask``: the asking user's id reaches the
+    ``user_edited`` event of a confirmed Ask edit. Turn 1 reads and previews,
+    turn 2 (same thread) confirms — the real propose-then-confirm path."""
+    document_id = seed_document(api_database_url, "askw-user-id", title="Voor")
+
+    async def _no_title(*_args: Any, **_kwargs: Any) -> ask_engine.TitleResult:
+        return ask_engine.TitleResult(title="")
+
+    monkeypatch.setattr(ask_module, "generate_thread_title", _no_title)
+    edit = {"document_id": document_id, "title": "Na"}
+    _install_anthropic(
+        monkeypatch,
+        [
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(name="get_document", input={"document_id": document_id}, id="r1")
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="update_document_metadata",
+                        input={**edit, "confirmed": False},
+                        id="p1",
+                    )
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text="Shall I retitle it to Na?")],
+                usage=_Usage(6, 3),
+            ),
+            _Response(
+                stop_reason="tool_use",
+                content=[
+                    _ToolUseBlock(
+                        name="update_document_metadata",
+                        input={**edit, "confirmed": True},
+                        id="w1",
+                    )
+                ],
+                usage=_Usage(10, 5),
+            ),
+            _Response(
+                stop_reason="end_turn",
+                content=[_TextBlock(text=f"Updated [#{document_id}].")],
+                usage=_Usage(6, 3),
+            ),
+        ],
+    )
+
+    first = api_client.post("/api/ask", json={"question": "retitle it to Na"})
+    assert first.status_code == 200, first.text
+    second = api_client.post(
+        "/api/ask", json={"question": "yes", "thread_id": first.json()["thread_id"]}
+    )
+    assert second.status_code == 200, second.text
+
+    rows = fetch_all(
+        api_database_url,
+        "SELECT detail FROM ingestion_events WHERE document_id = :id AND event = 'user_edited'",
+        id=document_id,
+    )
+    assert len(rows) == 1
+    detail = cast(dict[str, Any], rows[0][0])
+    assert detail["edited_by"] == "ask"
+    assert detail["user_id"] == auth_user.id
 
 
 @pytest.mark.asyncio
@@ -708,10 +944,10 @@ async def test_preview_current_is_json_primitive_for_every_writable_field(
     async with _open_session(api_database_url) as session:
         document = await _load(session, document_id)
         for field in ask_engine._WRITABLE_FIELDS:
-            value = ask_engine._preview_current(document, field)
+            value = preview_current(document, field)
             assert _is_json_primitive(value), (
                 f"{field} previews as {type(value).__name__} ({value!r}); "
-                "a relationship needs a branch in _preview_current"
+                "a relationship needs a branch in preview_current"
             )
 
 

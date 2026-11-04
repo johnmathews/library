@@ -99,6 +99,8 @@ async def test_subscription_dispatcher_reaches_librarys_tool_dispatch(
         pages: dict[int, int],
         editable_ids: set[int],
         previewed_ids: set[int],
+        *,
+        user_id: int | None = None,
     ) -> dict[str, Any]:
         calls.append((name, args))
         cited.add(7)  # what a read tool does: mark a document citable

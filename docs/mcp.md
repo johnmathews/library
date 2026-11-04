@@ -1,13 +1,14 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.4: rate limits on the OAuth endpoints. §1.2: the consent page and Settings → Connected apps ship, so OAuth connects end to end; §1.4: `library user disable` also revokes OAuth grants and tokens). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.4's rate-limit bullet. Read `OAuthRateLimit` in `src/library/app.py` and `src/library/auth/ratelimit.py` against the prose (paths, limits, 429 body); `test_token_endpoint_throttled` and `test_register_endpoint_throttled` green after being seen red with the guard disabled. The rest carries its earlier verifications forward.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts
+**Status:** active. **Last updated:** 2026-11-04 (§1.3 *Editing*: a preview's `proposed` is the value applying would store, read back from a rolled-back dry run, and the preview token hashes that). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.3's *Editing* paragraph. Read `update_document_metadata`, `_preview_token` and `documents_service.preview_update` against the prose; the 19 tests in `tests/test_mcp_edit.py` green, the four new stored-value tests seen red first (the preview showed `12.345` and the uncollapsed sender). The rest carries its earlier verifications forward.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/ratelimit.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py, frontend/src/views/OAuthConsentView.vue, frontend/src/views/SettingsView.vue, frontend/src/api/oauth.ts, src/library/documents_service.py, src/library/comments_service.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, claude.ai and Claude Desktop, ChatGPT,
 the Anthropic API MCP connector, or any MCP-capable agent) can search the
-archive, read documents, fetch files, and ingest new documents.
+archive, read documents, fetch files, ingest new documents, correct
+document details and add comments.
 
 - **Endpoint:** `https://<your-host>/mcp` (Streamable HTTP transport,
   stateless, JSON responses). `/mcp/` with a trailing slash is the same
@@ -80,8 +81,9 @@ prominently the host the answer goes back to (`claude.ai`, `chatgpt.com`,
 `localhost` for Claude Code — the thing to check against the app you
 started from), the account it connects as, with a *Not you?* link that
 signs out and back in as someone else, and what the app can do: search
-and read every document, download files and add documents, all recorded
-as that user. **Approve**
+and read every document, download files, add documents, and change
+document details and add comments — everything it adds or changes
+recorded as that user. **Approve**
 returns to the app with the authorization code; **Deny** returns with
 `access_denied`. A request is valid for 10 minutes and works only in the
 browser that started it: an expired one offers only *Return to the app*
@@ -159,12 +161,16 @@ and schema details never reach a client; the full error goes to the
 server log.
 
 **Titles and annotations.** Every tool declares a human-readable `title`
-and behaviour hints in `tools/list`. All tools except `ingest_document`
-are `readOnlyHint: true`, `openWorldHint: false` (clients such as
-ChatGPT ask the user to confirm any tool without `readOnlyHint`).
-`ingest_document` is `readOnlyHint: false`, `destructiveHint: false`
-(it only adds), `idempotentHint: true` (the same bytes again return the
-existing document) and `openWorldHint: false`.
+and behaviour hints in `tools/list`, all with `openWorldHint: false`.
+The read tools are `readOnlyHint: true` (clients such as ChatGPT ask the
+user to confirm any tool without it). The three write tools are
+`readOnlyHint: false`:
+
+| Tool | `destructiveHint` | `idempotentHint` | Why |
+|------|-------------------|------------------|-----|
+| `ingest_document` | `false` | `true` | Only adds; the same bytes again return the existing document. |
+| `update_document_metadata` | `true` | `true` | Overwrites stored values; the same change applied twice leaves the same state. |
+| `add_comment` | `false` | `false` | Only adds; every call adds another comment. |
 
 | Tool | Parameters | Returns |
 |------|------------|---------|
@@ -178,6 +184,8 @@ existing document) and `openWorldHint: false`.
 | `list_tags` | — | `{tags: [{slug, name, document_count}]}` |
 | `list_projects` | — | `{projects: [{id, slug, name, description, document_count}]}` — archived projects are omitted. Use the slugs as the `project` filter of `search_documents`. |
 | `list_matters` | — | `{matters: [{id, slug, name, hint, document_count}]}` — archived matters are omitted. Use the slugs as the `matter` filter of `search_documents`. |
+| `update_document_metadata` | `document_id`; any of `title?`, `summary?`, `document_date?`, `kind_slug?` (an existing kind), `sender?`, `recipient?` (names, matched case-insensitively, created if new), `tags?`, `projects?`, `matters?` (complete replacement lists; `[]` empties), `language?`, `amount_total?`, `currency?` (ISO 4217), `due_date?`, `expiry_date?`; `clear_fields?` (list of the nullable scalar fields above to empty); `apply` (default `false`); `preview_token?` | Preview (`apply` false): `{document_id, applied: false, changes: {field: {current, proposed}}, preview_token}`, nothing written. Apply: `{document_id, applied: true, updated_fields, current: {field: value}, review_status}`. See *Editing* below. |
+| `add_comment` | `document_id`, `body` (stripped; blank refused) | `{id, document_id, author_id, body, created_at}` — the comment, authored by the token's user. Writes a `comment_added` audit event and queues a re-embed so the comment becomes searchable (the same service as the web app's *Add comment*). Unknown or deleted document: error. |
 | `library_stats` | — | `{total_documents, by_status, by_kind, ingested_last_7_days, oldest_document_date, newest_document_date}`. `by_status` counts the lifecycle states that have documents (`received`, `ocr`, `extract`, `markdown`, `embed`, `indexed`, `failed`); soft-deleted documents are excluded from every figure. |
 
 `search_documents` shares its query builder (`src/library/search.py`)
@@ -187,13 +195,63 @@ subset of the REST filters (one tag, project or matter per call; sender
 and recipient by name substring; no facet, status or review filters, no
 `offset`) and returns at most 50 results per call.
 
+**Editing: preview, then apply.** `update_document_metadata` never
+writes on the first call. Without `apply` it returns the current value
+of every field it would change and the value applying would store, plus
+a `preview_token`;
+the tool description tells the model to show the user that preview and
+call again with `apply: true`, the same arguments and the token only
+after they agree. The fields and validators are the PATCH route's
+(`DocumentUpdate`); an omitted parameter leaves its field unchanged, and
+since `null` also means "unchanged" here, a field is emptied by naming
+it in `clear_fields` (lists are emptied with `[]`; `language` cannot be
+emptied). Naming a field that is not editable (for example `topics`) is
+an argument error.
+
+- *What a preview shows and checks.* The preview
+  (`documents_service.preview_update`, shared with Ask) runs the edit
+  inside a savepoint it rolls back, reads each edited field back from
+  the database first, and shows that as `proposed`: the stored value,
+  not the input. An amount is rounded to cents (`12.345` shows as
+  `12.35`), a sender's whitespace is collapsed, a recipient given as a
+  household member's username shows as her linked recipient, a project
+  or matter name shows as the slug it resolves to. The spend-line sum
+  triggers are forced to fire immediately, so anything the apply would
+  refuse is refused at preview with the same message: an unknown kind
+  slug, an `amount_total` that is split across spend lines (*clear or
+  replace its spend lines before changing it*). Nothing persists: no new
+  sender, tag or audit event.
+- *The token.* A SHA-256 over the document id and, for each field being
+  set, its current value and the stored value the preview showed, so it
+  approves exactly what the user saw. It is stateless (the server keeps
+  no record of previews) and is not a secret: it enforces "preview
+  first" and detects change, not authority, which the bearer token
+  already carries. Apply takes a row lock, reruns the preview's dry run
+  to recompute it, and refuses a missing token (*preview first*) or a mismatch (*the
+  document changed since the preview, or the fields differ*): another
+  value, another field, another document, or someone else having
+  changed one of those fields in between. A change to a field the edit
+  does not touch does not invalidate it.
+- *Apply* runs the same edit service as the web app and Ask
+  (`documents_service.edit_document`): the fields become user-edited (so
+  re-extraction leaves them alone), validation is re-run, a header
+  field (sender, date, kind, title) queues a re-embed, and the
+  `user_edited` audit event records `edited_by: "mcp"` and the token's
+  `user_id`. An amount allocated across spend lines after the preview
+  is still refused at apply, with nothing written.
+
 ## 1.4 Security notes
 
 - **Token = full account access.** MCP tools run as the token's user
-  (for OAuth, the user who approved the client);
-  anything the user can do via REST (read, search, ingest) the connected
-  LLM can do too. Document deletion and metadata editing are deliberately
-  *not* exposed as MCP tools.
+  (for OAuth, the user who approved the client): the connected LLM can
+  read and search everything, ingest documents, change any document's
+  details and add comments. Edits are preview-first (§1.3): the first
+  call writes nothing, and the apply needs a token from that preview of
+  the same change, which also refuses an edit if the document changed in
+  between (for example, another household member edited it). Every
+  write is attributed to the user — the uploader on an ingest, the
+  author on a comment, `edited_by: "mcp"` plus `user_id` on an edit.
+  Document deletion is not exposed, nor are trash, restore and purge.
 - **Transport:** run behind TLS (reverse proxy). Tokens travel in the
   `Authorization` header on every request.
 - **Revocation:** both kinds of token validate against the database on

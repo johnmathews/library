@@ -1,24 +1,33 @@
-"""Reusable document-metadata mutation service.
+"""The one document-metadata edit path, shared by every surface that edits.
 
-The PATCH /api/documents/{id} route and the Ask agent's write tool both apply
+The PATCH /api/documents/{id} route and the Ask agent's write tool apply
 partial metadata edits with the same semantics: sender/recipient upsert by
-name, full-replacement of tags/projects, ``extra["user_edited_fields"]``
+name, full-replacement of tags/projects/matters, ``extra["user_edited_fields"]``
 bookkeeping (so re-extraction never overwrites a human/agent edit), a
 mining-ready correction record, and a ``user_edited`` audit event.
 
-``apply_document_update`` is that shared core. It mutates ``document`` in
-place and adds the audit event(s) to ``session`` but does NOT commit — the
-caller owns the transaction (the route commits then refreshes; the Ask write
-handler commits explicitly). ``edited_by`` ("user" vs "ask") is recorded in
-the event detail so the source of every edit is auditable.
+``edit_document`` is the entry point callers use: apply, revalidate, commit
+through the allocation guard, and re-embed when a chunk-header field changed.
+It exists once so a further caller (the MCP edit tool) cannot drift from the
+other two. ``apply_document_update`` is its uncommitted core.
+``preview_update`` renders the current-vs-proposed view a caller shows before
+asking to apply, with ``proposed`` read back from a rolled-back dry run, so
+it is what applying would store.
+
+This module does not speak HTTP. A refused edit raises ``DocumentEditError``
+(the PATCH route answers 422, Ask returns a tool-result error); an allocated
+document's amount edit raises ``spend_lines.AllocationError`` (PATCH answers
+400). The audit event records ``edited_by`` (``"user"``, ``"ask"``, ...) and
+``user_id`` — which surface made the edit, and which person.
 """
 
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import HTTPException, status
-from sqlalchemy import select
+from pydantic_core import to_jsonable_python
+from sqlalchemy import select, text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.config import Settings
@@ -28,10 +37,30 @@ from library.extraction.apply import (
     upsert_recipient,
     upsert_sender,
 )
+from library.jobs import embed_document
 from library.matters import get_or_create_matter
 from library.models import Document, IngestionEvent, Kind, ReviewStatus
 from library.projects import get_or_create_project
 from library.schemas import DocumentUpdate
+from library.spend_lines import (
+    ALLOCATION_TRIGGER_SQLSTATE,
+    AMOUNT_ALLOCATED_REFUSAL,
+    AllocationError,
+    commit_allocation,
+)
+
+
+class DocumentEditError(ValueError):
+    """An edit that cannot be applied as asked; ``str(exc)`` is the reason.
+
+    Raised for an unknown kind slug and for ``null`` on a field that cannot be
+    cleared that way (tags/projects/matters/language). Always raised BEFORE
+    anything is mutated, so a caller that keeps using the session (Ask commits
+    it to persist the turn) cannot write half an edit. Each caller translates
+    it: the PATCH route to a 422 with the message as ``detail``, Ask to a
+    tool-result ``error``.
+    """
+
 
 # PATCH body field -> name recorded in extra["user_edited_fields"] (the
 # storage-level names the W6 extraction contract checks).
@@ -105,6 +134,7 @@ async def apply_document_update(
     update: DocumentUpdate,
     *,
     edited_by: str,
+    user_id: int | None = None,
 ) -> list[str]:
     """Apply a partial metadata edit to ``document`` in place; return the list
     of changed storage-level field names.
@@ -112,14 +142,34 @@ async def apply_document_update(
     Performs sender/recipient upserts, full-replacement of tags/projects, the
     ``extra["user_edited_fields"]`` + ``corrections`` bookkeeping, and adds a
     ``user_edited`` audit event (plus a ``project_changed`` event when project
-    membership changed) tagged with ``edited_by``. Does NOT commit.
+    membership changed) recording ``edited_by`` and ``user_id`` (the editing
+    person; ``None`` when none is known). Does NOT commit — callers other than
+    tests go through ``edit_document``.
 
-    Raises ``HTTPException`` (422) on an unknown kind slug or a null value for a
-    non-nullable field (tags/projects/language) — mirroring the PATCH route.
+    Raises ``DocumentEditError`` on an unknown kind slug or a null value for a
+    non-clearable field (tags/projects/matters/language). Every check runs
+    before the first mutation, so a refused edit leaves ``document`` and the
+    session untouched.
     """
     provided = update.model_dump(exclude_unset=True)
     if not provided:
         return []
+
+    # Validate everything first, in the order the fields are applied below, so
+    # a refusal never follows a partial mutation (sender applied, then tags
+    # refused) that a caller's later commit would persist unaudited — Ask
+    # commits its session after every turn to store the conversation.
+    kind: Kind | None = None
+    if provided.get("kind_slug") is not None:
+        slug = provided["kind_slug"]
+        kind = (await session.execute(select(Kind).where(Kind.slug == slug))).scalar_one_or_none()
+        if kind is None:
+            raise DocumentEditError(f"unknown kind slug: {slug!r}")
+    for list_field in ("tags", "projects", "matters"):
+        if list_field in provided and provided[list_field] is None:
+            raise DocumentEditError(f"{list_field} cannot be null; send [] to clear them")
+    if provided.get("language", "") is None:
+        raise DocumentEditError("language cannot be null")
 
     # Snapshot pre-edit values before any mutation so corrections are accurate.
     originals: dict[str, Any] = {}
@@ -151,19 +201,8 @@ async def apply_document_update(
 
     edited: list[str] = []
     if "kind_slug" in provided:
-        slug = provided.pop("kind_slug")
-        if slug is None:
-            document.kind_id = None
-        else:
-            kind = (
-                await session.execute(select(Kind).where(Kind.slug == slug))
-            ).scalar_one_or_none()
-            if kind is None:
-                raise HTTPException(
-                    status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                    detail=f"unknown kind slug: {slug!r}",
-                )
-            document.kind_id = kind.id
+        provided.pop("kind_slug")
+        document.kind_id = None if kind is None else kind.id
         edited.append(_EDITED_FIELD_NAMES["kind_slug"])
     if "sender" in provided:
         name = provided.pop("sender")
@@ -175,20 +214,10 @@ async def apply_document_update(
         edited.append(_EDITED_FIELD_NAMES["recipient"])
     if "tags" in provided:
         slugs = provided.pop("tags")
-        if slugs is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="tags cannot be null; send [] to clear them",
-            )
         document.tags = [await get_or_create_tag(session, slug) for slug in dict.fromkeys(slugs)]
         edited.append("tags")
     if "projects" in provided:
         identifiers = provided.pop("projects")
-        if identifiers is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="projects cannot be null; send [] to clear them",
-            )
         document.projects = [
             await get_or_create_project(session, identifier)
             for identifier in dict.fromkeys(identifiers)
@@ -196,11 +225,6 @@ async def apply_document_update(
         edited.append("projects")
     if "matters" in provided:
         identifiers = provided.pop("matters")
-        if identifiers is None:
-            raise HTTPException(
-                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-                detail="matters cannot be null; send [] to clear them",
-            )
         # Resolve then dedup by the *matter*, not the raw string: distinct
         # inputs ("Car insurance" and "car-insurance") can resolve to the same
         # row, and appending it twice would violate the document_matters PK.
@@ -210,11 +234,6 @@ async def apply_document_update(
         ]
         document.matters = list({matter.id: matter for matter in resolved}.values())
         edited.append("matters")
-    if provided.get("language", "") is None:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
-            detail="language cannot be null",
-        )
     for field, value in provided.items():
         setattr(document, field, value)
         edited.append(field)
@@ -232,7 +251,7 @@ async def apply_document_update(
         IngestionEvent(
             document_id=document.id,
             event="user_edited",
-            detail={"fields": edited, "edited_by": edited_by},
+            detail={"fields": edited, "edited_by": edited_by, "user_id": user_id},
         )
     )
     if "projects" in edited:
@@ -293,3 +312,131 @@ async def revalidate_after_edit(
         document.review_status = ReviewStatus.NEEDS_REVIEW
     elif document.review_status != ReviewStatus.VERIFIED:
         document.review_status = ReviewStatus.UNREVIEWED
+
+
+async def edit_document(
+    session: AsyncSession,
+    document: Document,
+    update: DocumentUpdate,
+    *,
+    settings: Settings,
+    edited_by: str,
+    user_id: int | None,
+) -> list[str]:
+    """Apply, revalidate, commit and (when needed) re-embed one metadata edit.
+
+    The whole sequence every editing surface runs; returns the changed
+    storage-level field names (``[]`` for an empty update, which writes and
+    commits nothing).
+
+    1. ``apply_document_update`` — the mutation, plus the ``user_edited``
+       audit event recording ``edited_by`` and ``user_id``.
+    2. ``revalidate_after_edit`` — a corrected field can clear (or raise) a
+       validation finding, so ``review_status`` is recomputed in the same
+       transaction; this is what clears a fixed "implausible date" on save.
+    3. ``commit_allocation``, not ``session.commit()`` — editing
+       ``amount_total`` on a document whose spend lines are allocated against
+       the old amount is refused by migration 0035's deferred mirror trigger at
+       COMMIT, as a bare ``DBAPIError``; the helper turns that one refusal into
+       ``AllocationError`` (docs/charts.md §10.1) and re-raises anything else.
+    4. A chunk's ``context_header`` embeds sender/date/kind/title, so an edit
+       touching one makes every stored header stale: defer ``embed_document``,
+       and only then, so a summary or tags edit does not wake the embedder.
+
+    Raises ``DocumentEditError`` (before anything is mutated) or
+    ``AllocationError``. The latter follows a rollback, which expires every ORM
+    object in the session: neither this function nor the caller may read
+    ``document`` after it (a lazy load there is MissingGreenlet), which is why
+    the id is held as a plain int here.
+    """
+    document_id = document.id
+    edited = await apply_document_update(
+        session, document, update, edited_by=edited_by, user_id=user_id
+    )
+    if not edited:
+        return []
+    await revalidate_after_edit(session, document, settings)
+    await commit_allocation(session, refusal=AMOUNT_ALLOCATED_REFUSAL)
+    if header_fields_changed(edited):
+        await embed_document.defer_async(document_id=document_id)
+    return edited
+
+
+def preview_current(document: Document, field: str) -> Any:
+    """Human-readable current value of a ``DocumentUpdate`` field.
+
+    Names and slugs, not ids, because this is what a person is asked to
+    approve. Any *relationship* field must get a branch here: previews are
+    serialised with ``json.dumps(..., default=str)``, so a bare ORM object does
+    not fail loudly — it renders as "<Matter object at 0x...>".
+    """
+    if field == "sender":
+        return document.sender.name if document.sender else None
+    if field == "recipient":
+        return document.recipient.name if document.recipient else None
+    if field == "kind_slug":
+        return document.kind.slug if document.kind else None
+    if field == "tags":
+        return sorted(tag.slug for tag in document.tags)
+    if field == "projects":
+        return sorted(project.slug for project in document.projects)
+    if field == "matters":
+        return sorted(matter.slug for matter in document.matters)
+    return getattr(document, field, None)
+
+
+async def preview_update(
+    session: AsyncSession, document: Document, update: DocumentUpdate
+) -> dict[str, dict[str, Any]]:
+    """Current vs stored value for each field ``update`` sets; keeps nothing.
+
+    Keyed by ``DocumentUpdate`` field name (``kind_slug``, ``sender``, ...) in
+    model field order, both sides as ``preview_current`` renders them, in JSON
+    form (names and slugs, an amount a decimal string, a date ISO text).
+
+    ``proposed`` is read back from the database, not taken from the input:
+    the edit is applied and flushed inside a SAVEPOINT, ``document`` is
+    re-selected, and the savepoint is rolled back. So the preview shows every
+    normalisation applying makes: ``Numeric(14, 2)`` rounding (12.345 is
+    "12.35"), a sender name's collapsed whitespace, a recipient given as a
+    user's username or display name shown as the recipient linked to that
+    user, a project or matter name shown as the slug it resolves to (new or not),
+    an upper-cased currency.
+
+    It refuses what applying would, with the same exceptions:
+    ``DocumentEditError`` (an unknown kind slug, a null list), and
+    ``AllocationError`` for an allocated document's amount, because
+    ``SET CONSTRAINTS ALL IMMEDIATE`` fires the deferred spend-line sum
+    triggers now instead of at a commit that never comes (the SQLSTATE test is
+    the one ``commit_allocation`` makes; any other database error is
+    re-raised).
+
+    Only the savepoint is rolled back, so the caller's transaction and any row
+    lock it holds survive, and so does its constraint mode (Postgres undoes a
+    ``SET CONSTRAINTS`` with the savepoint). ``document`` is re-selected
+    afterwards, so a caller may go on to edit it; after a refusal it is
+    expired and must not be read.
+    """
+    fields = list(update.model_dump(exclude_unset=True))
+    current = {name: preview_current(document, name) for name in fields}
+    savepoint = await session.begin_nested()
+    try:
+        await apply_document_update(session, document, update, edited_by="preview")
+        await session.flush()
+        await session.execute(text("SET CONSTRAINTS ALL IMMEDIATE"))
+        # Re-select: after the flush the columns still hold the values
+        # assigned (12.345, not the stored 12.35), and sender/recipient/kind
+        # still hold the pre-edit objects, since only their ids were set.
+        await session.refresh(document)
+        stored = {name: preview_current(document, name) for name in fields}
+    except DBAPIError as exc:
+        if getattr(exc.orig, "sqlstate", None) != ALLOCATION_TRIGGER_SQLSTATE:
+            raise
+        raise AllocationError(AMOUNT_ALLOCATED_REFUSAL) from exc
+    finally:
+        await savepoint.rollback()
+    await session.refresh(document)
+    changes: dict[str, dict[str, Any]] = to_jsonable_python(
+        {name: {"current": current[name], "proposed": stored[name]} for name in fields}
+    )
+    return changes

@@ -262,6 +262,7 @@ async def ask(
                     images=images,
                     backend=ask_backend,
                     archive_context=archive_context,
+                    user_id=user.id,
                 )
             except SubscriptionBackendError as exc:
                 # 503, not 500: this is a configuration/credential problem an
