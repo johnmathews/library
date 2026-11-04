@@ -1,7 +1,7 @@
 # Deploy runbook
 
-**Status:** active. **Last updated:** 2026-10-22 (the live LXC is `documents` now, not `paperless` (renamed 2026-10-11 by home-server PR #197), so every `ssh paperless` and the deploy script's default host were stale; `scripts/deploy.sh` now defaults to `documents`, and its health-probe comment no longer claims paperless-ngx still serves :8000). Earlier: 2026-08-13 (§1.2: the `main` ruleset does require `ci-gate` — the claim that branch protection was not yet pointed at it was written before the ruleset existed; documented the `check_mypy.py` ratchet as the second `typecheck` step, now guarding an empty quarantine). Earlier: 2026-08-12, 2026-07-27. **Supersedes:** none.
-**Last verified:** 2026-10-22 — method: partial, scoped to the host name. The LXC was renamed `paperless` → `documents` on 2026-10-11 (home-server PR #197); `LIBRARY_DEPLOY_HOST=documents scripts/deploy.sh` deployed `00a33c0` on 2026-10-22 and `/healthz` returned that sha, which is the run behind the new default. Earlier: `bash -n scripts/deploy.sh` is clean. Earlier: 2026-08-28 — method: partial, scoped to §1.3 step 4. Added the /healthz body check to match the new block in `scripts/deploy.sh` (verified with `bash -n`, and the two grep patterns proven against a real compact `/healthz` payload). §1.2 and the deploy-script flags carry forward the 2026-08-13 verification below, whose method was: method: partial, scoped to §1.2. Re-read the "what green means" paragraph against `ci.yml` and `scripts/ci_gate.sh`, and checked the branch-protection claim against the live `main` ruleset via `gh api repos/johnmathews/library/rulesets` (active since 2026-07-28; requires `ci-gate`, blocks deletion and non-fast-forward, `bypass_actors: []`). The deploy-script flags and the end-to-end run remain as verified on 2026-08-12 and were not re-executed.
+**Status:** active. **Last updated:** 2026-11-04 (§1.3 and §1.7: the script removes compose's `<12 hex>_library-…` leftover containers before and after `up`, retries a failed `up` once, and aborts if a library container is left `Created`). Earlier: 2026-10-22 (host renamed to `documents`). **Supersedes:** none.
+**Last verified:** 2026-11-04 — method: partial, scoped to the leftover handling. `tests/test_deploy_script.py` runs the sourced functions against a fake ssh/docker (seen red before the change); the listing command was run read-only on `documents` and returned the expected `<name> <state>` rows for project `apps`; `bash -n` and shellcheck clean. A real deploy with the new script is the next check.
 **Covers:** scripts/deploy.sh, scripts/ci_gate.sh
 
 How to ship a merged change to the live `documents` LXC. This is the focused
@@ -72,13 +72,28 @@ commit yet — or `docker`/git isn't available to check — it aborts *before
 pulling or deploying anything*, so it can't silently redeploy the previous
 image.
 
-Then, on the host, in `/srv/apps`, it runs:
+Then, on the host, in `/srv/apps`, it removes any **compose leftovers** (below)
+and runs:
 
 ```bash
 docker compose up -d --pull always library-migrate library-webserver library-worker
 ```
 
-then verifies:
+If that fails, it removes the leftovers again and retries once. Afterwards it
+removes any leftover still present and **aborts if a `library-` container is
+`Created`** (created, never started: the stack may be down), naming the
+containers.
+
+**Compose leftovers.** To recreate a container, `docker compose up` first
+renames the old one to `<12 hex>_<name>`. When that is interrupted the
+temporary container stays, and the next `up` fails with "container name ... is
+already in use" and leaves every library container `Created`, i.e. production
+down. It happened on 2026-10-31 and twice on 2026-11-04 (once a running
+duplicate embedder after an otherwise good deploy, once a ~2.5 minute outage).
+The script removes only containers of the compose project whose names match
+`^[0-9a-f]{12}_library-`; they are compose's temporaries by construction.
+
+Then it verifies:
 
 1. **`--pull always`** fetches the freshly-promoted `:latest`.
 2. **`library-migrate`** (one-shot) applies any new Alembic migrations
@@ -150,6 +165,12 @@ previous SHA:
    forward or roll back. The DB is left at whatever revision the failed
    transaction reached (migrations are transactional, so a failed step rolls
    itself back).
-3. **`/healthz` not OK** — `docker compose logs library-webserver`. Common
+3. **`These containers were created but never started`** — the retry did not
+   clear compose's name conflict, and the stack may be down. Run
+   `ssh documents 'docker ps -a --filter name=library'`; confirm any
+   `<12 hex>_library-…` container is compose's (`docker inspect` labels
+   `com.docker.compose.project=apps`, `State.StartedAt` 0001-01-01),
+   `docker rm` it, and re-run `scripts/deploy.sh`.
+4. **`/healthz` not OK** — `docker compose logs library-webserver`. Common
    causes: bad env in `/srv/apps/.env`, db not healthy yet (re-run after a few
    seconds), or a startup exception in new code.

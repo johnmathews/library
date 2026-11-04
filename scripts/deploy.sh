@@ -142,6 +142,55 @@ show_logs() {
   remote "docker compose logs --tail 40 $WORKER_SVC"
 }
 
+# Compose's leftover containers. To recreate a container, `docker compose up`
+# first renames the old one to `<12 hex>_<name>`; when that is interrupted the
+# temporary container stays behind, and the next `up` fails with "container
+# name ... is already in use" and leaves every library container `Created`:
+# production down (2026-10-31, and 2026-11-04 twice — once as a running
+# duplicate embedder after a deploy that otherwise succeeded).
+COMPOSE_PROJECT="${LIBRARY_DEPLOY_PROJECT:-$(basename "$DIR")}"
+LEFTOVER_RE='^[0-9a-f]{12}_library-'
+
+# "<name> <state>" for every container of the compose project on the host.
+list_project_containers() {
+  remote "docker ps -a --filter label=com.docker.compose.project=$COMPOSE_PROJECT \
+    --format '{{.Names}} {{.State}}'"
+}
+
+# Remove compose's temporary `<12 hex>_library-…` containers, and only those.
+remove_compose_leftovers() {
+  local leftovers
+  leftovers="$(list_project_containers | awk '{print $1}' | grep -E "$LEFTOVER_RE" || true)"
+  if [[ -n "$leftovers" ]]; then
+    echo "  removing compose leftovers: $(tr '\n' ' ' <<<"$leftovers")"
+    remote "docker rm -f $(tr '\n' ' ' <<<"$leftovers")" >/dev/null
+  fi
+}
+
+# `up` once; on failure clear the leftovers it may have left and retry once.
+compose_up() {
+  if remote "docker compose up -d --pull always $DEPLOY_SVCS"; then
+    return 0
+  fi
+  err "docker compose up failed; removing compose leftovers and retrying once."
+  remove_compose_leftovers
+  remote "docker compose up -d --pull always $DEPLOY_SVCS"
+}
+
+# After `up`: no leftovers, and nothing stuck in `Created` (= never started).
+check_stack_clean() {
+  remove_compose_leftovers
+  local stuck
+  # The host's compose project also runs non-library services (alloy, wud, …).
+  stuck="$(list_project_containers | awk '$2 == "created" && $1 ~ /library-/ {print $1}')"
+  if [[ -n "$stuck" ]]; then
+    err "These containers were created but never started (the stack may be DOWN):"
+    err "  $(tr '\n' ' ' <<<"$stuck")"
+    err "Inspect: ssh $HOST 'docker ps -a --filter name=library'; recovery in docs/runbooks/deploy.md."
+    exit 1
+  fi
+}
+
 deploy() {
   require_ssh
   check_promote_gate
@@ -152,7 +201,9 @@ deploy() {
   bold "Pulling :latest and recreating ($DEPLOY_SVCS) on $HOST ..."
   # --pull always fetches the freshly-promoted image; the one-shot migrate job
   # applies any new migrations transactionally before web/worker come up.
-  remote "docker compose up -d --pull always $DEPLOY_SVCS"
+  remove_compose_leftovers
+  compose_up
+  check_stack_clean
 
   bold "Migration job result:"
   local code
@@ -237,6 +288,9 @@ deploy() {
   echo
   bold "Deploy complete."
 }
+
+# Sourced (tests/test_deploy_script.py) → define the functions only.
+[[ "${BASH_SOURCE[0]}" != "$0" ]] && return 0
 
 case "${1:-deploy}" in
   --status|status) require_ssh; show_status ;;

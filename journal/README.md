@@ -5,7 +5,7 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-204 entries.
+205 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
@@ -16,6 +16,7 @@ CI checks it is current.
 - **2026-11-04** — [MCP OAuth consent page and rate limits](261104-mcp-oauth-consent-and-rate-limits.md)
 - **2026-11-04** — [MCP OAuth authorization server](261104-mcp-oauth-authorization-server.md)
 - **2026-11-04** — [MCP hardening foundation](261104-mcp-hardening-foundation.md)
+- **2026-11-04** — [Deploy script removes compose leftover containers](261104-deploy-script-compose-leftovers.md)
 
 ## October 2026
 
