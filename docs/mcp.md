@@ -1,8 +1,8 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-11-04 (OAuth sign-in for MCP clients when `LIBRARY_PUBLIC_BASE_URL` is set: discovery documents, `/mcp/authorize|token|register|revoke`, per-client instructions, reverse-proxy bypass paths; static tokens unchanged).
-**Last verified:** 2026-11-04 — method: read `mcp_server.py`, `app.py`, `api/oauth.py` and `auth/oauth_provider.py` against §1, §1.2 and §1.4; ran `tests/test_mcp_oauth.py` (discovery URLs, SDK client flow, static tokens with OAuth on and off) and `tests/test_mcp.py`, both green.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/oauth_provider.py, src/library/api/oauth.py, src/library/db.py, src/library/app.py
+**Status:** active. **Last updated:** 2026-11-04 (OAuth hardening: a pending authorization request is bound to the browser that followed `/mcp/authorize` by a per-request cookie; the redirect allow-list is re-checked at `/authorize`; refresh scope narrowing; accepted limits in §1.4; `/mcp/.well-known/oauth-authorization-server` in §1.5).
+**Last verified:** 2026-11-04 — method: read `mcp_server.py`, `auth/oauth_provider.py`, `auth/oauth_service.py`, `api/oauth.py` and `config.py` against §1, §1.4 and §1.5; ran `tests/test_mcp_oauth.py` (binding cookie attributes, forwarded consent link refused, SDK client flow) and `tests/test_oauth_provider.py`, green, each new test seen red first.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/auth/oauth_provider.py, src/library/auth/oauth_service.py, src/library/api/oauth.py, src/library/config.py, src/library/db.py, src/library/app.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, claude.ai and Claude Desktop, ChatGPT,
@@ -18,7 +18,8 @@ archive, read documents, fetch files, and ingest new documents.
   kinds of token, and each acts as one Library user:
   - **OAuth** (claude.ai, ChatGPT, Claude Code): on when
     `LIBRARY_PUBLIC_BASE_URL` is set to the server's public `https://`
-    origin. The client discovers Library's authorization server, the user
+    origin, or to a plain `http://` origin on `localhost`/`127.0.0.1`
+    (local testing only). The client discovers Library's authorization server, the user
     signs in to Library and approves the client, and the client receives
     `libmcp_at_…` access tokens (1 hour) and rotating `libmcp_rt_…`
     refresh tokens (30 days). See §1.2 (clients), §1.5 (endpoints) and
@@ -201,6 +202,33 @@ and recipient by name substring; no facet, status or review filters, no
   client (`POST /api/oauth/requests/{id}/approve|deny` refuses bearer
   tokens with `403` and needs the CSRF header), so a static token cannot
   mint OAuth access for itself.
+- **Consent is bound to the browser that started it.** `/mcp/authorize`
+  sets a cookie named `library_oauth_request_<16 hex>` (a prefix of the
+  request id's SHA-256) holding a fresh random secret, whose hash is
+  stored on the pending request: `HttpOnly`, `SameSite=Lax`, `Path=/`,
+  `Secure` when the issuer is `https`, `Max-Age` 600 (the request's
+  lifetime). Reading, approving and denying the request need that cookie;
+  without it they answer `404`, like an unknown request, and say to start
+  again from the app. So a consent link someone forwards — say, a
+  household member who started connecting *their own* claude.ai — cannot
+  be approved by whoever opens it, even signed in, and the attempt does
+  not use the request up. One cookie per request, so two apps connecting
+  in the same browser at once do not interfere; answering clears it.
+- **Allow-list changes apply to existing clients.** A narrowed
+  `LIBRARY_OAUTH_REDIRECT_ALLOWLIST` is enforced at `/mcp/authorize`, not
+  only at registration, so clients registered under the old list lose
+  the removed redirects at once.
+- **Refresh tokens keep their scope.** A refresh that asks for fewer
+  scopes narrows the new access token only (RFC 6749 §6).
+- **Accepted limits.** Replaying an already-used authorization code is
+  refused, but does not revoke the tokens that code produced (an RFC 6749
+  SHOULD): codes are deleted on use, so there is nothing to trace them by.
+  Refresh-token reuse detection is strict: two refreshes racing from one
+  client count as reuse and revoke the whole family, so that client has
+  to be approved again. The SDK's own error redirects from
+  `/mcp/authorize` (for example `invalid_scope`, or a `resource` other
+  than `https://<host>/mcp`) carry no `iss`, although the metadata
+  advertises `iss` support; the approve and deny redirects do carry it.
 - **Size caps:** ingest respects `LIBRARY_MAX_UPLOAD_BYTES` (default
   100 MB, before base64 expansion); file retrieval is capped at 10 MB to
   keep tool results inside LLM context budgets.
@@ -218,9 +246,9 @@ slash.
 | Path | What it is |
 |------|------------|
 | `/.well-known/oauth-protected-resource/mcp` | RFC 9728 protected-resource metadata (the 401 points here); also at `/.well-known/oauth-protected-resource` |
-| `/.well-known/oauth-authorization-server/mcp` | RFC 8414 authorization-server metadata; the same document at `/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration[/mcp]` and `/mcp/.well-known/openid-configuration`, because clients differ in which they try. Library is not an OpenID provider; the OIDC spellings serve the OAuth document. |
+| `/.well-known/oauth-authorization-server/mcp` | RFC 8414 authorization-server metadata; the same document at `/.well-known/oauth-authorization-server`, `/mcp/.well-known/oauth-authorization-server`, `/.well-known/openid-configuration[/mcp]` and `/mcp/.well-known/openid-configuration`, because clients differ in which they try. Library is not an OpenID provider; the OIDC spellings serve the OAuth document. |
 | `/mcp/register` | Dynamic client registration (RFC 7591). Redirect URIs must match `LIBRARY_OAUTH_REDIRECT_ALLOWLIST` (default: the claude.ai, claude.com and ChatGPT callbacks, and `http://localhost/callback` / `http://127.0.0.1/callback` on any port). Public clients (`token_endpoint_auth_method: none`) are accepted. |
-| `/mcp/authorize` | Starts the authorization-code flow (PKCE `S256` required) and sends the browser to the consent page, `/oauth/consent?request=…` |
+| `/mcp/authorize` | Starts the authorization-code flow (PKCE `S256` required) and sends the browser to the consent page, `/oauth/consent?request=…`, setting that request's binding cookie (§1.4). The redirect URI must be registered *and* still on the current allow-list; one that is not gets a `400` directly, never a redirect. |
 | `/mcp/token` | Code and refresh-token exchange |
 | `/mcp/revoke` | Token revocation (RFC 7009) |
 

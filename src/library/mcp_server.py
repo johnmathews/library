@@ -187,6 +187,12 @@ def oauth_base_url(settings: Settings) -> str | None:
     base = settings.public_base_url.rstrip("/")
     parts = urlsplit(base)
     host = parts.hostname or ""
+    # ``startswith("127.0.0.1")`` deliberately mirrors the MCP SDK's
+    # ``validate_issuer_url`` (mcp/server/auth/routes.py), which is what would
+    # otherwise refuse to build the routes; matching it exactly keeps "OAuth
+    # on" and "SDK accepts the issuer" the same set. The value is operator
+    # config, not client input, so the loose prefix match is not an attack
+    # surface.
     if parts.scheme == "https" or (
         parts.scheme == "http" and (host == "localhost" or host.startswith("127.0.0.1"))
     ):

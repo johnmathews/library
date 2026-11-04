@@ -13,12 +13,13 @@ and Claude Code can connect to ``/mcp`` as a specific Library user
 - ``oauth_grants`` — one row per user-and-client consent; revoking it kills every
   code and token under it.
 - ``oauth_authorization_requests`` — a pending ``/authorize`` waiting on the
-  consent page (10 min).
+  consent page (10 min). ``binding_hash`` is the SHA-256 of a cookie set on
+  the browser that followed ``/authorize``; only that browser can answer it.
 - ``oauth_authorization_codes`` — single-use codes (5 min).
 - ``oauth_tokens`` — access and refresh tokens; ``family_id`` groups a refresh
   rotation chain so reuse of a rotated token revokes the whole family.
 
-Request ids, codes and tokens are stored as SHA-256 hex digests only, like
+Request ids, binding cookies, codes and tokens are stored as SHA-256 hex digests only, like
 ``api_tokens.token_hash``. Nothing existing changes; ``downgrade`` drops the
 five tables.
 
@@ -92,6 +93,7 @@ def upgrade() -> None:
             sa.ForeignKey("oauth_clients.client_id", ondelete="CASCADE"),
             nullable=False,
         ),
+        sa.Column("binding_hash", sa.String(64), nullable=False),
         sa.Column("params", postgresql.JSONB(astext_type=sa.Text()), nullable=False),
         _created_at(),
         sa.Column("expires_at", sa.DateTime(timezone=True), nullable=False),

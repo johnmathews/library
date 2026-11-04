@@ -13,7 +13,11 @@ policy:
   to a known vendor callback or to the user's own machine.
 - **Authorization** never issues a code itself: it parks the request and sends
   the browser to the consent page (``consent_url``), where a signed-in user
-  approves or denies (``library.auth.oauth_service``).
+  approves or denies (``library.auth.oauth_service``). The parked request is
+  bound to the browser that followed ``/authorize``: this class replaces the
+  SDK's ``/authorize`` route with one that sets a per-request binding cookie
+  on the SDK's 302, and only a request carrying it can answer (see
+  ``get_routes``).
 - **Tokens** are opaque and stored hashed: access ``libmcp_at_…`` (1 h),
   refresh ``libmcp_rt_…`` (30 d, rotated on every use; replaying a rotated one
   revokes its whole family). An access token is bound to ``resource_url`` and
@@ -27,8 +31,9 @@ rebuilt in the current event loop.
 
 import logging
 from collections.abc import Sequence
+from contextvars import ContextVar
 from datetime import datetime
-from typing import Any
+from typing import Any, NamedTuple
 from urllib.parse import urlencode, urlsplit
 from uuid import uuid4
 
@@ -46,12 +51,16 @@ from mcp.server.auth.provider import (
     RegistrationError,
     TokenError,
 )
-from mcp.shared.auth import OAuthClientInformationFull
+from mcp.server.auth.routes import AUTHORIZATION_PATH
+from mcp.shared.auth import InvalidRedirectUriError, OAuthClientInformationFull
 from mcp.shared.auth import OAuthToken as OAuthTokenResponse
-from pydantic import AnyHttpUrl, AnyUrl
+from pydantic import AnyHttpUrl, AnyUrl, PrivateAttr
 from sqlalchemy import delete, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
+from starlette.requests import Request
+from starlette.responses import Response
+from starlette.routing import Route
 
 from library.auth.oauth_service import (
     ACCESS_TOKEN_PREFIX,
@@ -59,6 +68,7 @@ from library.auth.oauth_service import (
     AUTHORIZATION_REQUEST_TTL,
     REFRESH_TOKEN_PREFIX,
     REFRESH_TOKEN_TTL,
+    binding_cookie_name,
     delete_expired,
     new_secret,
     now,
@@ -121,20 +131,37 @@ def redirect_uri_allowed(uri: AnyUrl, allowlist: Sequence[str]) -> bool:
 
 
 class LibraryOAuthClient(OAuthClientInformationFull):
-    """A registered client whose loopback redirects match on any port.
+    """A registered client whose loopback redirects match on any port, and
+    whose redirects must still be on the server's *current* allow-list.
 
     Claude Code registers ``http://localhost:<port>/callback`` once and then
     listens on a fresh port per login, so an exact match would fail the next
     sign-in. Only the port may differ; everything else is the SDK's exact check.
+
+    The allow-list is checked again here, not only at registration, so
+    narrowing ``LIBRARY_OAUTH_REDIRECT_ALLOWLIST`` also cuts off clients that
+    registered under the broader list. The SDK's ``/authorize`` calls this
+    before anything else and answers a refusal with a direct 400, never a
+    redirect to the refused URI. ``get_client`` sets the list; ``None`` (a
+    client built elsewhere) skips the check.
     """
+
+    _redirect_allowlist: tuple[str, ...] | None = PrivateAttr(default=None)
 
     def validate_redirect_uri(self, redirect_uri: AnyUrl | None) -> AnyUrl:
         if redirect_uri is not None and any(
             _is_loopback_port_variant(registered, redirect_uri)
             for registered in self.redirect_uris or []
         ):
-            return redirect_uri
-        return super().validate_redirect_uri(redirect_uri)
+            resolved = redirect_uri
+        else:
+            resolved = super().validate_redirect_uri(redirect_uri)
+        allowlist = self._redirect_allowlist
+        if allowlist is not None and not redirect_uri_allowed(resolved, allowlist):
+            raise InvalidRedirectUriError(
+                f"Redirect URI '{resolved}' is no longer allowed by this server"
+            )
+        return resolved
 
 
 # ------------------------------------------------------------ SDK model types
@@ -158,6 +185,23 @@ class LibraryRefreshToken(RefreshToken):
 
 def _timestamp(moment: datetime) -> int:
     return int(moment.timestamp())
+
+
+class IssuedAuthorization(NamedTuple):
+    """A request ``authorize`` parked: where to send the browser, the request
+    id in that URL, and the binding secret the browser gets as a cookie."""
+
+    consent_url: str
+    request_id: str
+    binding: str
+
+
+#: Set by the wrapped ``/authorize`` route for the duration of one call; the
+#: provider appends what it parked so the route can set the binding cookie on
+#: the 302 the SDK builds from ``authorize``'s return value.
+_issued_authorizations: ContextVar[list[IssuedAuthorization] | None] = ContextVar(
+    "library_oauth_issued_authorizations", default=None
+)
 
 
 class LibraryOAuthProvider(OAuthProvider):
@@ -219,13 +263,15 @@ class LibraryOAuthProvider(OAuthProvider):
             client = await session.get(OAuthClient, client_id)
         if client is None:
             return None
-        return LibraryOAuthClient.model_validate(
+        info = LibraryOAuthClient.model_validate(
             {
                 **client.client_info,
                 "client_id": client.client_id,
                 "client_secret": client.client_secret,
             }
         )
+        info._redirect_allowlist = self.redirect_allowlist
+        return info
 
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         if client_info.client_id is None:
@@ -270,6 +316,25 @@ class LibraryOAuthProvider(OAuthProvider):
     async def authorize(
         self, client: OAuthClientInformationFull, params: AuthorizationParams
     ) -> str:
+        """The SDK's hook: park the request (``authorize_bound``) and return
+        the consent URL; the binding goes to the wrapping route's cookie.
+
+        Outside that route there is nowhere to put the cookie, and a request
+        nobody can bind could never be answered, so it refuses instead.
+        """
+        issued = _issued_authorizations.get()
+        if issued is None:
+            raise AuthorizeError(
+                "server_error", "authorization requests must arrive through /authorize"
+            )
+        pending = await self.authorize_bound(client, params)
+        issued.append(pending)
+        return pending.consent_url
+
+    async def authorize_bound(
+        self, client: OAuthClientInformationFull, params: AuthorizationParams
+    ) -> IssuedAuthorization:
+        """Park an authorization request bound to a fresh browser secret."""
         resource = self._canonical_resource(params.resource)
         if resource is not None and resource != self.resource_url:
             # RFC 8707 says invalid_target; the SDK only allows these codes.
@@ -280,6 +345,7 @@ class LibraryOAuthProvider(OAuthProvider):
             raise AuthorizeError("unauthorized_client", "client_id is required")
 
         request_id = new_secret()
+        binding = new_secret()
         stored = params.model_dump(mode="json")
         stored["resource"] = resource
         async with self._session() as session:
@@ -287,13 +353,18 @@ class LibraryOAuthProvider(OAuthProvider):
             session.add(
                 OAuthAuthorizationRequest(
                     id_hash=sha256_hex(request_id),
+                    binding_hash=sha256_hex(binding),
                     client_id=client.client_id,
                     params=stored,
                     expires_at=now() + AUTHORIZATION_REQUEST_TTL,
                 )
             )
             await session.commit()
-        return f"{self.consent_url}?{urlencode({'request': request_id})}"
+        return IssuedAuthorization(
+            consent_url=f"{self.consent_url}?{urlencode({'request': request_id})}",
+            request_id=request_id,
+            binding=binding,
+        )
 
     async def load_authorization_code(
         self, client: OAuthClientInformationFull, authorization_code: str
@@ -358,7 +429,13 @@ class LibraryOAuthProvider(OAuthProvider):
             ):
                 await session.commit()  # the code stays consumed
                 raise TokenError("invalid_grant", "authorization code is no longer valid")
-            response = self._issue(session, grant, family_id=uuid4().hex, scopes=list(scopes))
+            response = self._issue(
+                session,
+                grant,
+                family_id=uuid4().hex,
+                access_scopes=list(scopes),
+                refresh_scopes=list(scopes),
+            )
             grant.last_used_at = now()
             await delete_expired(session)
             await session.commit()
@@ -446,7 +523,15 @@ class LibraryOAuthProvider(OAuthProvider):
             if grant is None:
                 await session.commit()
                 raise TokenError("invalid_grant", "the grant behind this token was revoked")
-            response = self._issue(session, grant, family_id=family_id, scopes=scopes)
+            # RFC 6749 §6: a narrower request narrows the access token only;
+            # the new refresh token keeps what the old one carried.
+            response = self._issue(
+                session,
+                grant,
+                family_id=family_id,
+                access_scopes=scopes,
+                refresh_scopes=list(refresh_token.scopes),
+            )
             grant.last_used_at = now()
             await session.commit()
         return response
@@ -508,6 +593,49 @@ class LibraryOAuthProvider(OAuthProvider):
             await revoke_family(session, family_id)
             await session.commit()
 
+    # --------------------------------------------------------------- routes
+
+    def get_routes(self, mcp_path: str | None = None) -> list[Route]:
+        """FastMCP's OAuth routes, with ``/authorize`` wrapped to bind the request.
+
+        The SDK's handler builds its 302 from the URL ``authorize`` returns and
+        offers no hook for headers, so the route is replaced — as FastMCP
+        itself replaces ``/token`` — by one that runs the same handler and
+        then sets each parked request's binding cookie on its response.
+        """
+        return [
+            self._binding_authorize_route(route) if route.path == AUTHORIZATION_PATH else route
+            for route in super().get_routes(mcp_path)
+        ]
+
+    def _binding_authorize_route(self, route: Route) -> Route:
+        sdk_handle = route.endpoint
+        secure = urlsplit(self.issuer).scheme == "https"
+        max_age = int(AUTHORIZATION_REQUEST_TTL.total_seconds())
+
+        async def handle(request: Request) -> Response:
+            issued: list[IssuedAuthorization] = []
+            reset = _issued_authorizations.set(issued)
+            try:
+                response: Response = await sdk_handle(request)
+            finally:
+                _issued_authorizations.reset(reset)
+            for pending in issued:
+                # Lax: sent on the top-level navigation into the SPA and on its
+                # same-origin API calls; never on cross-site subrequests.
+                response.set_cookie(
+                    binding_cookie_name(pending.request_id),
+                    pending.binding,
+                    max_age=max_age,
+                    path="/",
+                    secure=secure,
+                    httponly=True,
+                    samesite="lax",
+                )
+            return response
+
+        return Route(route.path, endpoint=handle, methods=route.methods, name=route.name)
+
     # -------------------------------------------------------------- helpers
 
     async def _live_grant(
@@ -529,15 +657,22 @@ class LibraryOAuthProvider(OAuthProvider):
         return grant if user.is_active else None
 
     def _issue(
-        self, session: AsyncSession, grant: OAuthGrant, *, family_id: str, scopes: list[str]
+        self,
+        session: AsyncSession,
+        grant: OAuthGrant,
+        *,
+        family_id: str,
+        access_scopes: list[str],
+        refresh_scopes: list[str],
     ) -> OAuthTokenResponse:
-        """Add a fresh access + refresh pair to the session; return the SDK response."""
+        """Add a fresh access + refresh pair to the session; return the SDK
+        response, whose ``scope`` is the access token's (RFC 6749 §5.1)."""
         access = new_secret(ACCESS_TOKEN_PREFIX)
         refresh = new_secret(REFRESH_TOKEN_PREFIX)
         moment = now()
-        for kind, raw, ttl in (
-            ("access", access, ACCESS_TOKEN_TTL),
-            ("refresh", refresh, REFRESH_TOKEN_TTL),
+        for kind, raw, ttl, scopes in (
+            ("access", access, ACCESS_TOKEN_TTL, access_scopes),
+            ("refresh", refresh, REFRESH_TOKEN_TTL, refresh_scopes),
         ):
             session.add(
                 OAuthToken(
@@ -553,6 +688,6 @@ class LibraryOAuthProvider(OAuthProvider):
         return OAuthTokenResponse(
             access_token=access,
             expires_in=int(ACCESS_TOKEN_TTL.total_seconds()),
-            scope=" ".join(scopes) if scopes else None,
+            scope=" ".join(access_scopes) if access_scopes else None,
             refresh_token=refresh,
         )

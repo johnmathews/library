@@ -8,8 +8,9 @@ and the app keeps OAuth off for one (``test_http_public_base_url_keeps_oauth_off
 
 Requests go in-process through ``httpx.ASGITransport``. Two clients play the
 two parties of an OAuth flow: ``machine`` (the MCP client: no cookies) and
-``browser`` (the signed-in user on the consent page: session cookie + CSRF
-header). As in tests/test_mcp.py, the app lifespan and the clients are
+``browser`` (the user: it follows the client's ``/mcp/authorize`` link, which
+sets the request's binding cookie, and answers on the consent page with its
+session cookie + CSRF header). As in tests/test_mcp.py, the app lifespan and the clients are
 entered inside each test body, because anyio cancel scopes must be exited in
 the task that entered them.
 """
@@ -39,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from library.auth.deps import CSRF_COOKIE, CSRF_HEADER
+from library.auth.oauth_service import binding_cookie_name
 from library.config import get_settings
 from library.jobs import job_app, procrastinate_conninfo
 from tests.conftest import AuthUser, _fetch_all, build_test_app, create_user
@@ -135,15 +137,15 @@ async def register(machine: httpx.AsyncClient, **metadata: Any) -> str:
     return client_id
 
 
-async def start_authorization(
-    machine: httpx.AsyncClient,
+async def authorize(
+    browser: httpx.AsyncClient,
     client_id: str,
     challenge: str,
     *,
     state: str = "client-state",
     scope: str | None = None,
-) -> str:
-    """GET /mcp/authorize; the consent request id it redirects the browser to."""
+) -> httpx.Response:
+    """The browser follows the client's ``/mcp/authorize`` link; the raw 302."""
     params = {
         "response_type": "code",
         "client_id": client_id,
@@ -155,7 +157,23 @@ async def start_authorization(
     }
     if scope is not None:
         params["scope"] = scope
-    response = await machine.get("/mcp/authorize", params=params)
+    return await browser.get("/mcp/authorize", params=params)
+
+
+async def start_authorization(
+    browser: httpx.AsyncClient,
+    client_id: str,
+    challenge: str,
+    *,
+    state: str = "client-state",
+    scope: str | None = None,
+) -> str:
+    """GET /mcp/authorize in ``browser``; the consent request id it redirects to.
+
+    The redirect also sets the request's binding cookie in ``browser``, so
+    only that browser can answer the request.
+    """
+    response = await authorize(browser, client_id, challenge, state=state, scope=scope)
     assert response.status_code == 302, response.text
     location = response.headers["location"]
     assert location.startswith(f"{BASE}/oauth/consent?"), location
@@ -194,7 +212,7 @@ async def connect(
     """
     client_id = await register(machine)
     verifier, challenge = pkce_pair()
-    request_id = await start_authorization(machine, client_id, challenge, scope=scope)
+    request_id = await start_authorization(browser, client_id, challenge, scope=scope)
     approved = await browser.post(f"/api/oauth/requests/{request_id}/approve")
     assert approved.status_code == 200, approved.text
     code = query_of(approved.json()["redirect_to"])["code"]
@@ -448,7 +466,9 @@ async def test_approve_requires_cookie_session(
     ):
         client_id = await register(machine)
         _, challenge = pkce_pair()
-        request_id = await start_authorization(machine, client_id, challenge)
+        request_id = await start_authorization(browser, client_id, challenge)
+        # The script even holds the request's binding cookie: the token alone decides.
+        script.cookies.update(browser.cookies)
 
         by_token = await script.post(f"/api/oauth/requests/{request_id}/approve")
         denied_by_token = await script.post(f"/api/oauth/requests/{request_id}/deny")
@@ -480,7 +500,7 @@ async def test_deny_redirects_access_denied(
         await log_in(browser, auth_user)
         client_id = await register(machine)
         _, challenge = pkce_pair()
-        request_id = await start_authorization(machine, client_id, challenge, state="s-123")
+        request_id = await start_authorization(browser, client_id, challenge, state="s-123")
         denied = await browser.post(f"/api/oauth/requests/{request_id}/deny")
         again = await browser.post(f"/api/oauth/requests/{request_id}/deny")
         approve_after = await browser.post(f"/api/oauth/requests/{request_id}/approve")
@@ -510,7 +530,7 @@ async def test_redirect_contains_iss(
         metadata = (await machine.get("/.well-known/oauth-authorization-server/mcp")).json()
         client_id = await register(machine)
         _, challenge = pkce_pair()
-        request_id = await start_authorization(machine, client_id, challenge, state="s-456")
+        request_id = await start_authorization(browser, client_id, challenge, state="s-456")
         approved = await browser.post(f"/api/oauth/requests/{request_id}/approve")
 
     assert approved.status_code == 200, approved.text
@@ -520,6 +540,74 @@ async def test_redirect_contains_iss(
     assert set(params) == {"code", "state", "iss"}
     assert params["state"] == "s-456"
     assert params["iss"] == metadata["issuer"] == ISSUER
+
+
+async def test_authorize_sets_a_per_request_binding_cookie(
+    oauth_app: FastAPI, api_database_url: str, auth_user: AuthUser
+) -> None:
+    """``/mcp/authorize`` binds the parked request to the browser that followed
+    it: an HttpOnly, SameSite=Lax, Secure (https issuer), ``Path=/`` cookie
+    named for that request and living as long as it. Two flows in one browser
+    each get their own and both work; answering one clears its cookie."""
+    async with (
+        running(oauth_app, api_database_url),
+        asgi_client(oauth_app) as machine,
+        asgi_client(oauth_app) as browser,
+    ):
+        await log_in(browser, auth_user)
+        client_id = await register(machine)
+        first = await authorize(browser, client_id, pkce_pair()[1])
+        second_id = await start_authorization(browser, client_id, pkce_pair()[1])
+        first_id = query_of(first.headers["location"])["request"]
+        approved = await browser.post(f"/api/oauth/requests/{first_id}/approve")
+        denied = await browser.post(f"/api/oauth/requests/{second_id}/deny")
+
+    assert first.status_code == 302, first.text
+    [set_cookie] = first.headers.get_list("set-cookie")
+    name, _, rest = set_cookie.partition("=")
+    assert name == binding_cookie_name(first_id) != binding_cookie_name(second_id)
+    attributes = {part.strip().lower() for part in rest.split(";")[1:]}
+    assert {"httponly", "secure", "samesite=lax", "path=/", "max-age=600"} <= attributes
+    assert approved.status_code == 200, approved.text
+    assert denied.status_code == 200, denied.text
+    for response, request_id in ((approved, first_id), (denied, second_id)):
+        [cleared] = response.headers.get_list("set-cookie")
+        assert cleared.startswith(f"{binding_cookie_name(request_id)}=")
+        assert "max-age=0" in cleared.lower()
+    assert not [name for name in browser.cookies if name.startswith("library_oauth_request_")]
+
+
+async def test_forwarded_consent_link_is_refused(
+    oauth_app: FastAPI, api_database_url: str, auth_user: AuthUser, other_user: AuthUser
+) -> None:
+    """Consent phishing: someone starts connecting their own app and sends the
+    consent link to a family member. The member is signed in, but their
+    browser never followed ``/mcp/authorize``, so reading, approving and
+    denying all answer 404 telling them to start from their app — and the
+    request is still there for the browser that started it."""
+    async with (
+        running(oauth_app, api_database_url),
+        asgi_client(oauth_app) as machine,
+        asgi_client(oauth_app) as attacker,
+        asgi_client(oauth_app) as victim,
+    ):
+        await log_in(victim, auth_user)
+        client_id = await register(machine)
+        request_id = await start_authorization(attacker, client_id, pkce_pair()[1])
+
+        read = await victim.get(f"/api/oauth/requests/{request_id}")
+        approved = await victim.post(f"/api/oauth/requests/{request_id}/approve")
+        denied = await victim.post(f"/api/oauth/requests/{request_id}/deny")
+        victim_grants = (await victim.get("/api/oauth/grants")).json()
+
+        await log_in(attacker, other_user)
+        own = await attacker.post(f"/api/oauth/requests/{request_id}/approve")
+
+    for refused in (read, approved, denied):
+        assert refused.status_code == 404, refused.text
+        assert "start connecting again" in refused.json()["detail"]
+    assert victim_grants == []
+    assert own.status_code == 200, own.text
 
 
 async def test_expired_request_reads_expired_and_approve_is_410(
@@ -533,7 +621,7 @@ async def test_expired_request_reads_expired_and_approve_is_410(
         await log_in(browser, auth_user)
         client_id = await register(machine)
         _, challenge = pkce_pair()
-        request_id = await start_authorization(machine, client_id, challenge)
+        request_id = await start_authorization(browser, client_id, challenge)
         await _expire_requests(api_database_url, client_id)
         info = await browser.get(f"/api/oauth/requests/{request_id}")
         approved = await browser.post(f"/api/oauth/requests/{request_id}/approve")

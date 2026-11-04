@@ -12,11 +12,18 @@ and denying additionally refuse bearer tokens: consent is a person clicking a
 button in a browser, and a ``library_…`` token in a script must not be able
 to mint OAuth codes for itself. When OAuth is off (``public_base_url`` unset
 or not HTTPS) every route here answers 404.
+
+The request routes also need the request's **binding cookie**, which
+``/mcp/authorize`` set on the browser that started the flow
+(``library.auth.oauth_service.binding_cookie_name``). Without it — a consent
+link forwarded to someone else — they answer the same 404 as an unknown
+request, telling the user to start again from their app. Approving or denying
+clears the cookie.
 """
 
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Path, Request, Response, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from library.auth.deps import _bearer_token, current_user
@@ -25,6 +32,7 @@ from library.auth.oauth_service import (
     AuthorizationRequestExpired,
     AuthorizationRequestNotFound,
     approve_authorization_request,
+    binding_cookie_name,
     deny_authorization_request,
     get_authorization_request,
     list_grants,
@@ -44,7 +52,10 @@ RequestId = Annotated[
     Path(min_length=1, max_length=128, description="The `request` query value of the consent URL."),
 ]
 
-_NOT_FOUND = "unknown or already answered authorization request"
+_NOT_FOUND = (
+    "unknown or already answered authorization request, or one started in another browser; "
+    "start connecting again from the app that sent you here"
+)
 _EXPIRED = (
     "this authorization request expired; start connecting again from the app that sent you here"
 )
@@ -67,7 +78,17 @@ def browser_session_only(request: Request) -> None:
         )
 
 
+def request_binding(request: Request, request_id: RequestId) -> str | None:
+    """The binding cookie for ``request_id``, if this browser has one."""
+    return request.cookies.get(binding_cookie_name(request_id))
+
+
+def _clear_binding(response: Response, request_id: str) -> None:
+    response.delete_cookie(binding_cookie_name(request_id), path="/", httponly=True, samesite="lax")
+
+
 Provider = Annotated[LibraryOAuthProvider, Depends(oauth_provider)]
+Binding = Annotated[str | None, Depends(request_binding)]
 Session = Annotated[AsyncSession, Depends(get_session)]
 CurrentUser = Annotated[User, Depends(current_user)]
 
@@ -76,15 +97,22 @@ CurrentUser = Annotated[User, Depends(current_user)]
     "/oauth/requests/{request_id}",
     response_model=OAuthRequestOut,
     summary="A pending OAuth authorization request",
-    responses={404: {"description": "Unknown or already answered request, or OAuth is off"}},
+    responses={
+        404: {
+            "description": "Unknown or already answered request, no matching binding cookie "
+            "(started in another browser), or OAuth is off"
+        }
+    },
 )
-async def get_request(request_id: RequestId, db: Session, _provider: Provider) -> OAuthRequestOut:
+async def get_request(
+    request_id: RequestId, db: Session, binding: Binding, _provider: Provider
+) -> OAuthRequestOut:
     """What the consent page shows: which app asks, and where the answer goes.
 
     An expired request still answers 200 with ``expired: true``, so the page
     can say so; approving it then answers 410.
     """
-    info = await get_authorization_request(db, request_id)
+    info = await get_authorization_request(db, request_id, binding=binding)
     if info is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND)
     return OAuthRequestOut(
@@ -105,12 +133,20 @@ async def get_request(request_id: RequestId, db: Session, _provider: Provider) -
     dependencies=[Depends(oauth_provider), Depends(browser_session_only)],
     responses={
         403: {"description": "Bearer-token request, or missing CSRF header"},
-        404: {"description": "Unknown or already answered request, or OAuth is off"},
+        404: {
+            "description": "Unknown or already answered request, no matching binding cookie, "
+            "or OAuth is off"
+        },
         410: {"description": "The request expired; the client must start again"},
     },
 )
 async def approve(
-    request_id: RequestId, db: Session, user: CurrentUser, provider: Provider
+    request_id: RequestId,
+    db: Session,
+    user: CurrentUser,
+    binding: Binding,
+    provider: Provider,
+    response: Response,
 ) -> OAuthRedirectOut:
     """Connect the app to the signed-in user's account.
 
@@ -120,12 +156,13 @@ async def approve(
     """
     try:
         redirect_to = await approve_authorization_request(
-            db, user=user, request_id=request_id, issuer=provider.issuer
+            db, user=user, request_id=request_id, binding=binding, issuer=provider.issuer
         )
     except AuthorizationRequestExpired:
         raise HTTPException(status_code=status.HTTP_410_GONE, detail=_EXPIRED) from None
     except AuthorizationRequestNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND) from None
+    _clear_binding(response, request_id)
     return OAuthRedirectOut(redirect_to=redirect_to)
 
 
@@ -136,19 +173,25 @@ async def approve(
     dependencies=[Depends(oauth_provider), Depends(browser_session_only)],
     responses={
         403: {"description": "Bearer-token request, or missing CSRF header"},
-        404: {"description": "Unknown or already answered request, or OAuth is off"},
+        404: {
+            "description": "Unknown or already answered request, no matching binding cookie, "
+            "or OAuth is off"
+        },
     },
 )
-async def deny(request_id: RequestId, db: Session, provider: Provider) -> OAuthRedirectOut:
+async def deny(
+    request_id: RequestId, db: Session, binding: Binding, provider: Provider, response: Response
+) -> OAuthRedirectOut:
     """Refuse: the client's redirect URL with ``error=access_denied``, ``state``
     and ``iss``. An expired request is denied the same way, so the client
     always gets an answer."""
     try:
         redirect_to = await deny_authorization_request(
-            db, request_id=request_id, issuer=provider.issuer
+            db, request_id=request_id, binding=binding, issuer=provider.issuer
         )
     except AuthorizationRequestNotFound:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=_NOT_FOUND) from None
+    _clear_binding(response, request_id)
     return OAuthRedirectOut(redirect_to=redirect_to)
 
 

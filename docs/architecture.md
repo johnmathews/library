@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.3 Auth: the five OAuth tables behind MCP connectors; §1.6 `auth/` row names the OAuth provider and consent service). Earlier: 2026-11-04 (`app.py` row: engine disposal, slashless `/mcp`).
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.3 Auth and the §1.6 `auth/` row, read against `migrations/versions/0040_oauth.py`, the `OAuth*` models in `src/library/models.py` and `src/library/auth/`; `tests/test_oauth_provider.py` and the migration cycle test green. Other rows carry forward their earlier verifications.
+**Status:** active. **Last updated:** 2026-11-04 (§1.4 MCP row and §1.5 Authentication: MCP accepts static tokens and, with an https `LIBRARY_PUBLIC_BASE_URL`, OAuth access tokens from Library's own authorization server; consent needs a signed-in browser).
+**Last verified:** 2026-11-04 — method: partial, scoped to the §1.4 MCP row and §1.5, read against `build_mcp_auth`/`oauth_base_url` in `src/library/mcp_server.py` and `src/library/api/oauth.py`; `tests/test_mcp_oauth.py` green. Other sections carry forward their earlier verifications.
 
 Library is a self-hosted personal/family document archive. This document
 describes the system design. The original decision record (with research and
@@ -301,8 +301,10 @@ are stored as SHA-256 digests only:
   ingestion, in-app **note authoring** (`/api/notes` — create / edit-in-place /
   version history / restore, see [api.md §1.17](api.md)), job status, and
   natural-language **Ask** (`POST /api/ask`, see [ask.md](ask.md)).
-- **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens.
-  Tools for searching, reading, and ingesting documents from LLM clients.
+- **MCP server** (`/mcp`) — FastMCP over streamable HTTP, bearer tokens:
+  static `library_…` tokens, and OAuth access tokens from Library's own
+  authorization server when OAuth is on (see §1.5). Tools for searching,
+  reading, and ingesting documents from LLM clients. See [mcp.md](mcp.md).
 - **Web app** — Vue 3 SPA using the **Mosaic** (Cruip) theme: violet accent,
   soft rounded-xl cards, dark mode, Inter loaded from Google Fonts. Content-first,
   responsive 320px-up, accessible. (Reskinned from GOV.UK — see
@@ -333,7 +335,13 @@ WebSocket. See [api.md](api.md) §1.8.5 and
 Named family accounts over one shared library. Browser: Argon2 password
 hashing (pwdlib), Postgres-backed sessions in an httpOnly cookie.
 Automation (REST/MCP): per-integration opaque bearer tokens, stored
-hashed, individually revocable.
+hashed, individually revocable. MCP additionally accepts OAuth access
+tokens when `LIBRARY_PUBLIC_BASE_URL` is `https` (or `http` on
+`localhost`/`127.0.0.1`): Library is then its own OAuth 2.1 authorization
+server for claude.ai, ChatGPT and Claude Code, and a client is connected
+by a user approving it from a signed-in browser session — the session
+that started the flow. See [mcp.md](mcp.md) and
+[api.md §1.9.4](api.md).
 
 A single boolean **admin** role (`users.is_admin`) layers on top: admins
 gate global project mutations and an admin-only views surface

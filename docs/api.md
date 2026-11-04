@@ -1,7 +1,7 @@
 # REST API
 
-**Status:** active. **Last updated:** 2026-11-04 (§1.9.4: the OAuth consent and connected-apps endpoints, `/api/oauth/requests/{id}[/approve|/deny]` and `/api/oauth/grants[/{id}]`, which answer 404 while OAuth is off; summary rows in §1.1). Earlier entries are in this file's history.
-**Last verified:** 2026-11-04 — method: partial, scoped to §1.9.4 and its §1.1 rows. Read `src/library/api/oauth.py` and the `OAuth*Out` models in `schemas.py`; every status code and shape stated there is asserted by `tests/test_mcp_oauth.py`, each test observed red first. The rest of the document carries its 2026-10-22 verification (scoped to §1.10.8 and §1.11) and earlier ones forward unchanged.
+**Status:** active. **Last updated:** 2026-11-04 (§1.9.4: the consent request routes need the binding cookie `/mcp/authorize` set, and answer `404` without it; approving or denying clears it and consumes the request atomically; the consent page is not shipped yet). Earlier entries are in this file's history.
+**Last verified:** 2026-11-04 — method: partial, scoped to §1.9.4. Read `src/library/api/oauth.py` and `src/library/auth/oauth_service.py`; the binding-cookie rules, the `404` detail and the cookie clearing are asserted by `tests/test_mcp_oauth.py` (each new test seen red first), green. The rest carries its earlier verifications forward.
 
 The REST API is a first-class product surface: everything the web app can
 do is available to scripts, shortcuts, and other tools over plain HTTP.
@@ -713,14 +713,16 @@ When `LIBRARY_PUBLIC_BASE_URL` is set, the MCP server is also an OAuth
 authorization server for clients such as claude.ai, ChatGPT and Claude
 Code ([mcp.md §1.2, §1.5](mcp.md)). A client's `/mcp/authorize` sends the
 browser to `/oauth/consent?request=<request_id>`; these endpoints are what
-that page and the connected-apps settings use. When OAuth is off, **every
+that page and the connected-apps settings use. **The consent page itself
+is not shipped yet** ([mcp.md §1.2](mcp.md)): the endpoints below are in
+place, but nothing in the web app calls them. When OAuth is off, **every
 route here answers `404`** (`{"detail": "OAuth is not enabled"}`) to an
 authenticated caller. Like the rest of `/api`, anonymous requests get `401`
 first.
 
 | Method | Path | Success | Errors |
 |--------|------|---------|--------|
-| GET | `/api/oauth/requests/{request_id}` | `200` `{client_id, client_name, redirect_uri, redirect_host, scopes, expires_at, expired}` | `404` unknown, already answered, or cleaned up |
+| GET | `/api/oauth/requests/{request_id}` | `200` `{client_id, client_name, redirect_uri, redirect_host, scopes, expires_at, expired}` | `404` unknown, already answered, cleaned up, or no binding cookie for it |
 | POST | `/api/oauth/requests/{request_id}/approve` | `200` `{redirect_to}` | `403` bearer-token request or missing CSRF header; `404` as above; `410` expired |
 | POST | `/api/oauth/requests/{request_id}/deny` | `200` `{redirect_to}` | `403`, `404` as above |
 | GET | `/api/oauth/grants` | `200` `[{id, client_id, client_name, created_at, last_used_at}, …]`, newest first | — |
@@ -728,7 +730,19 @@ first.
 
 - **Request id.** The `request` query value of the consent URL: an opaque
   secret, valid for 10 minutes and single-use — approving or denying
-  consumes it.
+  consumes it, atomically: of two concurrent approvals one gets the
+  redirect and the other `404`.
+- **Binding cookie.** The three request routes also need the cookie
+  `/mcp/authorize` set on the browser that started the flow,
+  `library_oauth_request_<16 hex>` (`HttpOnly`, `SameSite=Lax`, `Path=/`,
+  10 minutes). The SPA sends it automatically; it cannot read it. Without
+  it — a consent link opened in another browser, or forwarded to another
+  person — every request route answers the same `404` as an unknown
+  request, `{"detail": "unknown or already answered authorization
+  request, or one started in another browser; start connecting again
+  from the app that sent you here"}`, and the request stays pending for
+  the browser that has the cookie. A successful approve or deny clears
+  the cookie (`Set-Cookie` with `Max-Age=0`).
 - **`expired`.** An expired request still reads `200` with
   `expired: true`, so the page can explain; approving it answers `410`
   (`{"detail": "this authorization request expired; start connecting

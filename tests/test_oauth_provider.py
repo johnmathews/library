@@ -15,6 +15,7 @@ token family that must survive the first one's revocation, expired rows, a
 revoked grant, and redirect URIs that differ from an allowed one by one part.
 """
 
+import asyncio
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
 from datetime import timedelta
@@ -22,6 +23,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 from uuid import uuid4
 
+import httpx
 import pytest
 from mcp.server.auth.provider import (
     AuthorizationParams,
@@ -33,12 +35,14 @@ from mcp.shared.auth import InvalidRedirectUriError, OAuthClientInformationFull
 from mcp.shared.auth import OAuthToken as OAuthTokenResponse
 from pydantic import AnyUrl, ValidationError
 from sqlalchemy import func, select, text, update
+from starlette.applications import Starlette
 
 from library.auth.oauth_provider import LibraryOAuthClient, LibraryOAuthProvider
 from library.auth.oauth_service import (
     AuthorizationRequestExpired,
     AuthorizationRequestNotFound,
     approve_authorization_request,
+    binding_cookie_name,
     deny_authorization_request,
     get_authorization_request,
     list_grants,
@@ -77,12 +81,18 @@ async def provider(
     get_settings.cache_clear()
 
 
-def _provider(resource_url: str = RESOURCE) -> LibraryOAuthProvider:
+def _provider(
+    resource_url: str = RESOURCE, redirect_allowlist: list[str] | None = None
+) -> LibraryOAuthProvider:
     return LibraryOAuthProvider(
         base_url=f"{BASE}/mcp",
         resource_url=resource_url,
         consent_url=CONSENT,
-        redirect_allowlist=get_settings().oauth_redirect_allowlist,
+        redirect_allowlist=(
+            get_settings().oauth_redirect_allowlist
+            if redirect_allowlist is None
+            else redirect_allowlist
+        ),
     )
 
 
@@ -134,21 +144,39 @@ def _params(
     )
 
 
+@dataclass(frozen=True)
+class Pending:
+    """A parked authorization request: its id and the browser-binding secret
+    the /authorize route would have set as a cookie."""
+
+    id: str
+    binding: str
+
+
 async def _authorize(
     provider: LibraryOAuthProvider,
     client: OAuthClientInformationFull,
     params: AuthorizationParams | None = None,
+) -> Pending:
+    """Run /authorize's provider half; the request id from the consent URL and its binding."""
+    issued = await provider.authorize_bound(client, params or _params())
+    assert issued.consent_url.startswith(f"{CONSENT}?request=")
+    request_id = parse_qs(urlsplit(issued.consent_url).query)["request"][0]
+    assert request_id == issued.request_id
+    return Pending(request_id, issued.binding)
+
+
+async def _approve(
+    provider: LibraryOAuthProvider, user: User, pending: Pending, *, binding: str | None = None
 ) -> str:
-    """Run /authorize; returns the raw request id from the consent URL."""
-    url = await provider.authorize(client, params or _params())
-    assert url.startswith(f"{CONSENT}?request=")
-    return parse_qs(urlsplit(url).query)["request"][0]
-
-
-async def _approve(provider: LibraryOAuthProvider, user: User, request_id: str) -> str:
+    """Approve as ``user`` from the browser holding ``pending``'s binding (or ``binding``)."""
     async with get_sessionmaker()() as session:
         return await approve_authorization_request(
-            session, user=user, request_id=request_id, issuer=provider.issuer
+            session,
+            user=user,
+            request_id=pending.id,
+            binding=pending.binding if binding is None else binding,
+            issuer=provider.issuer,
         )
 
 
@@ -160,7 +188,7 @@ def _query(url: str) -> dict[str, list[str]]:
 class Flow:
     client: OAuthClientInformationFull
     user: User
-    request_id: str
+    request: Pending
     code: str
     tokens: OAuthTokenResponse
 
@@ -170,10 +198,10 @@ async def _code(
     client: OAuthClientInformationFull,
     user: User,
     params: AuthorizationParams | None = None,
-) -> tuple[str, str]:
-    request_id = await _authorize(provider, client, params)
-    redirect = await _approve(provider, user, request_id)
-    return request_id, _query(redirect)["code"][0]
+) -> tuple[Pending, str]:
+    pending = await _authorize(provider, client, params)
+    redirect = await _approve(provider, user, pending)
+    return pending, _query(redirect)["code"][0]
 
 
 async def _flow(
@@ -184,11 +212,11 @@ async def _flow(
     """register → authorize → approve → token, as the SDK handlers would."""
     client = client or await _register(provider)
     user = user or await _user()
-    request_id, code = await _code(provider, client, user)
+    pending, code = await _code(provider, client, user)
     loaded = await provider.load_authorization_code(client, code)
     assert loaded is not None
     tokens = await provider.exchange_authorization_code(client, loaded)
-    return Flow(client, user, request_id, code, tokens)
+    return Flow(client, user, pending, code, tokens)
 
 
 async def _refresh(
@@ -316,7 +344,7 @@ async def test_authorize_rejects_foreign_resource(provider: LibraryOAuthProvider
     before = await _count(OAuthAuthorizationRequest)
     for foreign in ("https://other.example/mcp", f"{BASE}/api", f"{RESOURCE}/extra"):
         with pytest.raises(AuthorizeError) as raised:
-            await provider.authorize(client, _params(resource=foreign))
+            await provider.authorize_bound(client, _params(resource=foreign))
         assert raised.value.error == "invalid_request"
     assert await _count(OAuthAuthorizationRequest) == before
 
@@ -324,6 +352,61 @@ async def test_authorize_rejects_foreign_resource(provider: LibraryOAuthProvider
     for accepted in (RESOURCE, f"{RESOURCE}/", None):
         await _authorize(provider, client, _params(resource=accepted))
     assert await _count(OAuthAuthorizationRequest) == before + 3
+
+
+async def test_authorize_outside_the_route_fails_closed(provider: LibraryOAuthProvider) -> None:
+    """``authorize()`` called anywhere but the wrapped ``/authorize`` route has
+    nowhere to put the binding cookie, so it refuses rather than parking a
+    request no browser could ever answer."""
+    client = await _register(provider)
+    before = await _count(OAuthAuthorizationRequest)
+    with pytest.raises(AuthorizeError) as raised:
+        await provider.authorize(client, _params())
+    assert raised.value.error == "server_error"
+    assert await _count(OAuthAuthorizationRequest) == before
+
+
+def _authorize_query(client: OAuthClientInformationFull, redirect_uri: str) -> dict[str, str]:
+    assert client.client_id is not None
+    return {
+        "response_type": "code",
+        "client_id": client.client_id,
+        "redirect_uri": redirect_uri,
+        "state": "st",
+        "code_challenge": "challenge-" + uuid4().hex,
+        "code_challenge_method": "S256",
+        "resource": RESOURCE,
+    }
+
+
+async def test_narrowed_allowlist_cuts_off_registered_redirects(
+    provider: LibraryOAuthProvider,
+) -> None:
+    """Narrowing ``LIBRARY_OAUTH_REDIRECT_ALLOWLIST`` also cuts off clients
+    registered under the broader list: ``/authorize`` to a redirect that is no
+    longer allowed answers 400 directly (never a redirect to that URI), while
+    a still-allowed redirect of the same client works."""
+    client = await _register(provider, [CLAUDE_CALLBACK, CHATGPT_CALLBACK])
+    narrowed = _provider(redirect_allowlist=[CHATGPT_CALLBACK])
+    app = Starlette(routes=narrowed.get_routes("/mcp"))
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url=BASE, follow_redirects=False
+    ) as http:
+        cut = await http.get("/authorize", params=_authorize_query(client, CLAUDE_CALLBACK))
+        kept = await http.get("/authorize", params=_authorize_query(client, CHATGPT_CALLBACK))
+
+    assert cut.status_code == 400, cut.text
+    assert "location" not in cut.headers
+    assert cut.json()["error"] == "invalid_request"
+    assert kept.status_code == 302, kept.text
+    assert kept.headers["location"].startswith(f"{CONSENT}?request=")
+    assert client.client_id is not None
+    reloaded = await narrowed.get_client(client.client_id)
+    assert reloaded is not None
+    with pytest.raises(InvalidRedirectUriError):
+        reloaded.validate_redirect_uri(AnyUrl(CLAUDE_CALLBACK))
+    # The broad provider (the list it was registered under) still accepts it.
+    assert client.validate_redirect_uri(AnyUrl(CLAUDE_CALLBACK)) == AnyUrl(CLAUDE_CALLBACK)
 
 
 async def test_code_is_single_use(provider: LibraryOAuthProvider) -> None:
@@ -435,6 +518,39 @@ async def test_refresh_race_second_exchange_revokes_family(
     assert await provider.load_access_token(winner.access_token) is None
 
 
+async def test_refresh_with_narrower_scope_keeps_the_refresh_token_whole(
+    provider: LibraryOAuthProvider,
+) -> None:
+    """RFC 6749 §6: a refresh asking for fewer scopes narrows the new access
+    token only; the new refresh token keeps the original grant's scopes, so a
+    later refresh can ask for all of them again."""
+    info = _client_info([CLAUDE_CALLBACK])
+    info.scope = "library extra"
+    await provider.register_client(info)
+    assert info.client_id is not None
+    client = await provider.get_client(info.client_id)
+    assert client is not None
+    params = _params().model_copy(update={"scopes": ["library", "extra"]})
+    _, code = await _code(provider, client, await _user(), params)
+    loaded_code = await provider.load_authorization_code(client, code)
+    assert loaded_code is not None
+    tokens = await provider.exchange_authorization_code(client, loaded_code)
+    assert tokens.refresh_token is not None
+
+    original = await provider.load_refresh_token(client, tokens.refresh_token)
+    assert original is not None and original.scopes == ["library", "extra"]
+    narrowed = await provider.exchange_refresh_token(client, original, ["library"])
+
+    assert narrowed.scope == "library"
+    access = await provider.load_access_token(narrowed.access_token)
+    assert access is not None and access.scopes == ["library"]
+    assert narrowed.refresh_token is not None
+    refresh = await provider.load_refresh_token(client, narrowed.refresh_token)
+    assert refresh is not None and refresh.scopes == ["library", "extra"]
+    widened_again = await provider.exchange_refresh_token(client, refresh, ["library", "extra"])
+    assert widened_again.scope == "library extra"
+
+
 async def test_refresh_token_bound_to_its_client(provider: LibraryOAuthProvider) -> None:
     flow = await _flow(provider)
     other = await _register(provider)
@@ -495,11 +611,13 @@ async def test_tokens_stored_hashed(provider: LibraryOAuthProvider) -> None:
     pending_request = await _authorize(provider, flow.client)
     _, pending_code = await _code(provider, flow.client, flow.user)
     secrets_ = [
-        flow.request_id,
+        flow.request.id,
+        flow.request.binding,
         flow.code,
         flow.tokens.access_token,
         flow.tokens.refresh_token,
-        pending_request,
+        pending_request.id,
+        pending_request.binding,
         pending_code,
     ]
     async with get_sessionmaker()() as session:
@@ -528,7 +646,7 @@ async def test_tokens_stored_hashed(provider: LibraryOAuthProvider) -> None:
     assert {sha256_hex(flow.tokens.access_token), sha256_hex(flow.tokens.refresh_token)} <= (
         token_hashes
     )
-    assert sha256_hex(pending_request) in request_hashes
+    assert sha256_hex(pending_request.id) in request_hashes
     assert sha256_hex(pending_code) in code_hashes
 
 
@@ -599,7 +717,7 @@ async def test_expired_rows_cleaned_up_opportunistically(provider: LibraryOAuthP
             (await session.execute(select(OAuthAuthorizationRequest.id_hash))).scalars()
         )
     assert sha256_hex(stale.tokens.access_token) not in live_hashes
-    assert sha256_hex(stale_request) not in request_hashes
+    assert sha256_hex(stale_request.id) not in request_hashes
     assert len(live_hashes) == 2  # only the fresh pair
 
 
@@ -610,10 +728,13 @@ async def test_get_authorization_request_for_consent_page(
     provider: LibraryOAuthProvider,
 ) -> None:
     client = await _register(provider)
-    request_id = await _authorize(provider, client)
+    pending = await _authorize(provider, client)
     async with get_sessionmaker()() as session:
-        info = await get_authorization_request(session, request_id)
-        assert await get_authorization_request(session, "not-a-request") is None
+        info = await get_authorization_request(session, pending.id, binding=pending.binding)
+        assert (
+            await get_authorization_request(session, "not-a-request", binding=pending.binding)
+            is None
+        )
     assert info is not None
     assert info.client_id == client.client_id
     assert info.client_name == client.client_name
@@ -628,9 +749,9 @@ async def test_approve_redirect_has_code_state_iss_and_keeps_query(
     redirect_uri = "https://chatgpt.com/connector/oauth/cb?tenant=a&blank="
     client = await _register(provider, [redirect_uri])
     user = await _user()
-    request_id = await _authorize(provider, client, _params(redirect_uri, state="xyz"))
+    pending = await _authorize(provider, client, _params(redirect_uri, state="xyz"))
 
-    redirect = await _approve(provider, user, request_id)
+    redirect = await _approve(provider, user, pending)
 
     assert redirect.startswith("https://chatgpt.com/connector/oauth/cb?")
     query = _query(redirect)
@@ -641,7 +762,7 @@ async def test_approve_redirect_has_code_state_iss_and_keeps_query(
     assert len(query["code"]) == 1
     # The request is consumed: it cannot be approved twice.
     with pytest.raises(AuthorizationRequestNotFound):
-        await _approve(provider, user, request_id)
+        await _approve(provider, user, pending)
     # And the code is bound to this user.
     loaded = await provider.load_authorization_code(client, query["code"][0])
     assert loaded is not None and loaded.subject == str(user.id)
@@ -649,42 +770,133 @@ async def test_approve_redirect_has_code_state_iss_and_keeps_query(
 
 async def test_approve_without_state_omits_it(provider: LibraryOAuthProvider) -> None:
     client = await _register(provider)
-    request_id = await _authorize(provider, client, _params(state=None))
-    query = _query(await _approve(provider, await _user(), request_id))
+    pending = await _authorize(provider, client, _params(state=None))
+    query = _query(await _approve(provider, await _user(), pending))
     assert "state" not in query
     assert "code" in query and "iss" in query
 
 
 async def test_expired_request_cannot_be_approved(provider: LibraryOAuthProvider) -> None:
     client = await _register(provider)
-    request_id = await _authorize(provider, client)
+    pending = await _authorize(provider, client)
     await _execute(
         update(OAuthAuthorizationRequest)
-        .where(OAuthAuthorizationRequest.id_hash == sha256_hex(request_id))
+        .where(OAuthAuthorizationRequest.id_hash == sha256_hex(pending.id))
         .values(expires_at=now() - timedelta(seconds=1))
     )
     async with get_sessionmaker()() as session:
-        info = await get_authorization_request(session, request_id)
+        info = await get_authorization_request(session, pending.id, binding=pending.binding)
     assert info is not None and info.expired is True
     with pytest.raises(AuthorizationRequestExpired):
-        await _approve(provider, await _user(), request_id)
+        await _approve(provider, await _user(), pending)
     assert await _count(OAuthAuthorizationCode) == 0
 
 
 async def test_deny_redirects_access_denied(provider: LibraryOAuthProvider) -> None:
     client = await _register(provider)
-    request_id = await _authorize(provider, client, _params(state="s1"))
+    pending = await _authorize(provider, client, _params(state="s1"))
     async with get_sessionmaker()() as session:
         redirect = await deny_authorization_request(
-            session, request_id=request_id, issuer=provider.issuer
+            session, request_id=pending.id, binding=pending.binding, issuer=provider.issuer
         )
         with pytest.raises(AuthorizationRequestNotFound):
-            await deny_authorization_request(session, request_id=request_id, issuer="x")
+            await deny_authorization_request(
+                session, request_id=pending.id, binding=pending.binding, issuer="x"
+            )
     assert redirect.startswith(CLAUDE_CALLBACK + "?")
     query = _query(redirect)
     assert query == {"error": ["access_denied"], "state": ["s1"], "iss": [RESOURCE]}
     assert await _count(OAuthGrant) == 0
     assert await _count(OAuthAuthorizationCode) == 0
+
+
+async def test_request_answerable_only_from_the_browser_that_started_it(
+    provider: LibraryOAuthProvider,
+) -> None:
+    """Consent phishing: someone starts a flow in their own claude.ai and sends
+    the consent link to a family member. The member's browser lacks the
+    request's binding cookie, so reading, approving and denying all look like
+    an unknown request — and none of those attempts consumes it."""
+    client = await _register(provider)
+    pending = await _authorize(provider, client)
+    other_flow = await _authorize(provider, client)  # same client, another browser
+    victim = await _user()
+    for binding in ("", "forged", other_flow.binding, pending.binding.upper()):
+        async with get_sessionmaker()() as session:
+            assert await get_authorization_request(session, pending.id, binding=binding) is None
+            with pytest.raises(AuthorizationRequestNotFound):
+                await approve_authorization_request(
+                    session,
+                    user=victim,
+                    request_id=pending.id,
+                    binding=binding,
+                    issuer=provider.issuer,
+                )
+            with pytest.raises(AuthorizationRequestNotFound):
+                await deny_authorization_request(
+                    session, request_id=pending.id, binding=binding, issuer=provider.issuer
+                )
+    async with get_sessionmaker()() as session:
+        assert await get_authorization_request(session, pending.id, binding=None) is None
+    assert await _count(OAuthAuthorizationCode) == 0
+    assert await _count(OAuthGrant) == 0
+
+    # The browser that started it still can.
+    assert "code" in _query(await _approve(provider, victim, pending))
+    assert "code" in _query(await _approve(provider, victim, other_flow))
+
+
+def test_binding_cookie_name_is_per_request_and_hides_the_id() -> None:
+    first, second = binding_cookie_name("request-a"), binding_cookie_name("request-b")
+    assert first != second
+    assert first.startswith("library_oauth_request_")
+    assert "request-a" not in first
+    assert first == binding_cookie_name("request-a")
+
+
+async def test_concurrent_approvals_mint_one_code(provider: LibraryOAuthProvider) -> None:
+    """Two approvals of one request racing (a double click, two tabs): the
+    request is consumed atomically, so exactly one gets a redirect and one
+    code exists.
+
+    The race is forced rather than hoped for: a third transaction holds the
+    request row's lock while both approvals start, so both get as far as
+    consuming it and wait there; only then is the lock released."""
+    flow = await _flow(provider)  # the grant exists, so only the request is contended
+    codes_before = await _count(OAuthAuthorizationCode)
+    pending = await _authorize(provider, flow.client)
+
+    async with get_sessionmaker()() as holder:
+        await holder.execute(
+            select(OAuthAuthorizationRequest.id)
+            .where(OAuthAuthorizationRequest.id_hash == sha256_hex(pending.id))
+            .with_for_update()
+        )
+        racers = [asyncio.ensure_future(_approve(provider, flow.user, pending)) for _ in range(2)]
+        await _wait_for_lock_waiters(2)
+        await holder.commit()
+        results = await asyncio.gather(*racers, return_exceptions=True)
+
+    redirects = [result for result in results if isinstance(result, str)]
+    assert len(redirects) == 1, results
+    assert [type(result) for result in results if not isinstance(result, str)] == [
+        AuthorizationRequestNotFound
+    ]
+    assert await _count(OAuthAuthorizationCode) == codes_before + 1
+
+
+async def _wait_for_lock_waiters(count: int) -> None:
+    """Until ``count`` backends in this database are blocked on a lock."""
+    query = text(
+        "SELECT count(*) FROM pg_stat_activity "
+        "WHERE datname = current_database() AND wait_event_type = 'Lock'"
+    )
+    for _ in range(200):
+        async with get_sessionmaker()() as session:
+            if (await session.execute(query)).scalar_one() >= count:
+                return
+        await asyncio.sleep(0.025)
+    raise AssertionError(f"expected {count} backends waiting on a lock")
 
 
 async def test_grant_revocation_scoped_to_owner(provider: LibraryOAuthProvider) -> None:

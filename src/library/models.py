@@ -341,13 +341,17 @@ class OAuthAuthorizationRequest(Base):
     """A pending ``/authorize`` call waiting for the user on the consent page.
 
     ``params`` holds the SDK's ``AuthorizationParams`` (state, scopes, PKCE
-    challenge, redirect_uri, resource) as JSON. Lives 10 minutes.
+    challenge, redirect_uri, resource) as JSON. ``binding_hash`` is the
+    SHA-256 of the cookie ``/mcp/authorize`` set on the browser that started
+    the flow; only a request carrying that cookie can read or answer this
+    one. Lives 10 minutes.
     """
 
     __tablename__ = "oauth_authorization_requests"
 
     id: Mapped[int] = mapped_column(primary_key=True)
     id_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    binding_hash: Mapped[str] = mapped_column(String(64))
     client_id: Mapped[str] = mapped_column(
         ForeignKey("oauth_clients.client_id", ondelete="CASCADE"), index=True
     )

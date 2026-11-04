@@ -6,17 +6,26 @@ look at a pending authorization request, approve or deny it, list the apps they
 connected and revoke one. Both halves share the constants and helpers here so
 the code minted on approval is exactly what the token endpoint consumes.
 
-Every secret handed to a client (request id, code, token) is stored only as its
-SHA-256 hex digest (``library.auth.service.sha256_hex``), as API tokens are.
-Functions that change state commit, like the rest of ``library.auth``.
+Every secret handed to a client (request id, code, token) or to the browser
+(the request's binding cookie) is stored only as its SHA-256 hex digest
+(``library.auth.service.sha256_hex``), as API tokens are. Functions that
+change state commit, like the rest of ``library.auth``.
+
+A pending request is **bound to the browser that started it**: ``/mcp/authorize``
+sets a per-request cookie (``binding_cookie_name``) and stores its hash on the
+request, and every function here takes that cookie's value as ``binding``. A
+missing or different binding reads exactly like an unknown request, so a
+consent link forwarded to someone else — who is signed in, but whose browser
+never followed ``/authorize`` — cannot be approved by them (consent phishing).
 """
 
 import secrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import ColumnElement, delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import joinedload
 
@@ -38,6 +47,11 @@ ACCESS_TOKEN_TTL: timedelta = timedelta(hours=1)
 REFRESH_TOKEN_TTL: timedelta = timedelta(days=30)
 _SECRET_BYTES: int = 32  # 256-bit secrets, above the SDK's 160-bit SHOULD
 
+#: Prefix of the cookie that binds a pending authorization request to the
+#: browser that followed ``/mcp/authorize`` (see ``binding_cookie_name``).
+BINDING_COOKIE_PREFIX: str = "library_oauth_request_"
+_BINDING_COOKIE_ID_CHARS: int = 16
+
 
 def now() -> datetime:
     """The current time, timezone-aware (UTC)."""
@@ -47,6 +61,16 @@ def now() -> datetime:
 def new_secret(prefix: str = "") -> str:
     """A fresh URL-safe random secret, optionally prefixed."""
     return prefix + secrets.token_urlsafe(_SECRET_BYTES)
+
+
+def binding_cookie_name(request_id: str) -> str:
+    """The binding cookie's name for one authorization request.
+
+    One cookie per request, so a browser can have several flows in progress
+    (two apps connecting at once) without them sharing or overwriting a value.
+    The name carries a prefix of the request id's SHA-256, not the id itself.
+    """
+    return BINDING_COOKIE_PREFIX + sha256_hex(request_id)[:_BINDING_COOKIE_ID_CHARS]
 
 
 def with_query(uri: str, **params: str | None) -> str:
@@ -94,7 +118,8 @@ class AuthorizationRequestError(Exception):
 
 
 class AuthorizationRequestNotFound(AuthorizationRequestError):
-    """Unknown, already used, or cleaned up after expiry."""
+    """Unknown, already used, cleaned up after expiry, or started in another
+    browser (no matching binding cookie) — deliberately indistinguishable."""
 
 
 class AuthorizationRequestExpired(AuthorizationRequestError):
@@ -114,24 +139,61 @@ class AuthorizationRequestInfo:
     expired: bool
 
 
+def _request_matches(request_id: str, binding: str) -> list[ColumnElement[bool]]:
+    """WHERE clauses for the request ``request_id`` as seen by the browser
+    holding the binding cookie ``binding``."""
+    return [
+        OAuthAuthorizationRequest.id_hash == sha256_hex(request_id),
+        OAuthAuthorizationRequest.binding_hash == sha256_hex(binding),
+    ]
+
+
 async def _load_request(
-    session: AsyncSession, request_id: str
+    session: AsyncSession, request_id: str, binding: str | None
 ) -> tuple[OAuthAuthorizationRequest, OAuthClient] | None:
+    if not binding:
+        return None
     row = (
         await session.execute(
             select(OAuthAuthorizationRequest, OAuthClient)
             .join(OAuthClient, OAuthClient.client_id == OAuthAuthorizationRequest.client_id)
-            .where(OAuthAuthorizationRequest.id_hash == sha256_hex(request_id))
+            .where(*_request_matches(request_id, binding))
         )
     ).one_or_none()
     return None if row is None else (row[0], row[1])
 
 
+async def _consume_request(
+    session: AsyncSession, request_id: str, binding: str | None
+) -> tuple[str, dict[str, Any], datetime] | None:
+    """Delete the request in one statement; ``(client_id, params, expires_at)``,
+    or None when there was nothing (left) to consume.
+
+    Like a code exchange: of two concurrent answers to one request, whichever
+    DELETE runs second matches no row, so only one ever mints a code.
+    """
+    if not binding:
+        return None
+    row = (
+        await session.execute(
+            delete(OAuthAuthorizationRequest)
+            .where(*_request_matches(request_id, binding))
+            .returning(
+                OAuthAuthorizationRequest.client_id,
+                OAuthAuthorizationRequest.params,
+                OAuthAuthorizationRequest.expires_at,
+            )
+        )
+    ).one_or_none()
+    return None if row is None else (row[0], dict(row[1]), row[2])
+
+
 async def get_authorization_request(
-    session: AsyncSession, request_id: str
+    session: AsyncSession, request_id: str, *, binding: str | None
 ) -> AuthorizationRequestInfo | None:
-    """The pending request behind ``/oauth/consent?request=<id>``, or None."""
-    loaded = await _load_request(session, request_id)
+    """The pending request behind ``/oauth/consent?request=<id>``, or None
+    (also when ``binding`` is not this request's cookie)."""
+    loaded = await _load_request(session, request_id, binding)
     if loaded is None:
         return None
     request, client = loaded
@@ -148,31 +210,32 @@ async def get_authorization_request(
 
 
 async def approve_authorization_request(
-    session: AsyncSession, *, user: User, request_id: str, issuer: str
+    session: AsyncSession, *, user: User, request_id: str, binding: str | None, issuer: str
 ) -> str:
     """Approve as ``user``: mint a single-use code and return the client redirect.
 
     Creates the user-and-client grant (or reuses a live one; a revoked one is
     replaced, so tokens from before the revocation stay dead). The request is
-    consumed. The returned URL is the client's redirect_uri with ``code``,
+    consumed atomically (one DELETE … RETURNING), so concurrent approvals of
+    one request mint one code. The returned URL is the client's redirect_uri with ``code``,
     ``state`` (when the client sent one) and ``iss`` (RFC 9207) appended.
 
-    Raises ``AuthorizationRequestNotFound`` / ``AuthorizationRequestExpired``.
+    Raises ``AuthorizationRequestNotFound`` (also for a ``binding`` that is
+    not this request's cookie) / ``AuthorizationRequestExpired``.
     """
-    loaded = await _load_request(session, request_id)
-    if loaded is None:
+    consumed = await _consume_request(session, request_id, binding)
+    if consumed is None:
+        await session.rollback()
         raise AuthorizationRequestNotFound(request_id)
-    request, client = loaded
-    params = dict(request.params)
-    await session.delete(request)
-    if request.expires_at <= now():
-        await session.commit()
+    client_id, params, expires_at = consumed
+    if expires_at <= now():
+        await session.commit()  # the request stays consumed
         raise AuthorizationRequestExpired(request_id)
 
     grant = (
         await session.execute(
             select(OAuthGrant).where(
-                OAuthGrant.user_id == user.id, OAuthGrant.client_id == client.client_id
+                OAuthGrant.user_id == user.id, OAuthGrant.client_id == client_id
             )
         )
     ).scalar_one_or_none()
@@ -181,7 +244,7 @@ async def approve_authorization_request(
         await session.flush()
         grant = None
     if grant is None:
-        grant = OAuthGrant(user_id=user.id, client_id=client.client_id)
+        grant = OAuthGrant(user_id=user.id, client_id=client_id)
         session.add(grant)
         await session.flush()
 
@@ -202,18 +265,20 @@ async def approve_authorization_request(
     return with_query(params["redirect_uri"], code=code, state=params.get("state"), iss=issuer)
 
 
-async def deny_authorization_request(session: AsyncSession, *, request_id: str, issuer: str) -> str:
+async def deny_authorization_request(
+    session: AsyncSession, *, request_id: str, binding: str | None, issuer: str
+) -> str:
     """Deny: consume the request and return the redirect with ``error=access_denied``.
 
     An expired request is still answered with ``access_denied`` — the client
-    gets a definite answer either way. Raises ``AuthorizationRequestNotFound``.
+    gets a definite answer either way. Raises ``AuthorizationRequestNotFound``
+    (also for a ``binding`` that is not this request's cookie).
     """
-    loaded = await _load_request(session, request_id)
-    if loaded is None:
+    consumed = await _consume_request(session, request_id, binding)
+    if consumed is None:
+        await session.rollback()
         raise AuthorizationRequestNotFound(request_id)
-    request, _client = loaded
-    params = dict(request.params)
-    await session.delete(request)
+    _client_id, params, _expires_at = consumed
     await session.commit()
     return with_query(
         params["redirect_uri"], error="access_denied", state=params.get("state"), iss=issuer
