@@ -5,11 +5,15 @@
 > Dated entries recording decisions, progress and context — why things are
 > the way they are. Newest first.
 
-201 entries.
+202 entries.
 
 **This file is generated** by `scripts/build_journal_index.py` from each
 entry's H1. Do not edit it by hand — add your entry and re-run the script.
 CI checks it is current.
+
+## November 2026
+
+- **2026-11-04** — [MCP hardening foundation](261104-mcp-hardening-foundation.md)
 
 ## October 2026
 

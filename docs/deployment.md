@@ -1,7 +1,7 @@
 # Deployment
 
-**Status:** active. **Last updated:** 2026-10-22 (the live LXC is `documents` now, not `paperless` (renamed 2026-10-11 by home-server PR #197), so every `ssh paperless` and the deploy script's default host were stale; §1.7.2 renamed). Earlier: 2026-08-31 (dropped "plus Smart Group auto-membership" from the without-the-embedder loss list — Smart Groups was deleted with the legacy series stack, so the only things a missing embedder costs are semantic search and the semantic half of Ask retrieval. **Fix round 1:** this stamp's evidence sentence claimed a whole-file grep for the phrase returned nothing, which its own `Last updated` line falsifies; scoped to the body.) Earlier: 2026-08-12 (documentation verification sweep: removed a stale `LIBRARY_PDF_UNLOCK_PASSWORDS` default that republished a withdrawn password; `node:26-slim`, not `node:22-slim`; corrected the `compose-smoke` scope and reconciled the RAM guidance). Earlier: 2026-06-11.
-**Last verified:** 2026-10-22 — method: partial, scoped to the host name. The LXC was renamed `paperless` → `documents` on 2026-10-11 (home-server PR #197); `LIBRARY_DEPLOY_HOST=documents scripts/deploy.sh` deployed `00a33c0` on 2026-10-22 and `/healthz` returned that sha, which is the run behind the new default. Earlier: 2026-08-31 — method: partial, scoped to the one edited sentence. Confirmed the phrase is gone from this document's body — `sed -n '6,$p' docs/deployment.md | grep -icE 'smart.?group'` returns `0`, the range starting below the stamp because the `Last updated` line above necessarily names what it removed — and that no series job remains in `src/library/jobs.py` to depend on the embedder; the compose file, image tags, memory limits and `/healthz` payloads were not re-checked this pass. Earlier (2026-08-28) — method: partial, scoped to §1.4. Added §1.4.2 (`status: "degraded"`) and refreshed the two `/healthz` payload examples, each checked against the endpoint in `src/library/app.py` and the vendored-weights check in `src/library/ocr/weights.py`; the deploy-script behaviour described there was read against the new block in `scripts/deploy.sh`. Nothing else was re-checked this pass; the rest carries forward the 2026-08-12 verification below unchanged, whose method was: method: checked every service name, image tag, memory limit, volume, healthcheck, build arg, env var, CLI command and API path against `docker-compose.yml`, `Dockerfile`, `Makefile`, `.env.example`, `config.py`, `app.py`, `cli.py` and `api/`; §1.7.2's deploy path was additionally exercised for real (`make deploy` to the live `paperless` LXC). The §1.2 Proxmox walkthrough, §1.5 reverse proxy and §1.6 backup commands were read, not executed.
+**Status:** active. **Last updated:** 2026-11-04 (§1.3: the never-shadowed path list gains `/.well-known` and `/metrics`). Earlier: 2026-10-22 (the live LXC is `documents`, not `paperless`).
+**Last verified:** 2026-11-04 — method: partial, scoped to the §1.3 path list, read against `_BACKEND_PREFIXES` in `src/library/app.py` and exercised by `tests/test_spa.py` (green). The rest carries forward the 2026-10-22 check (a real `make deploy` to `documents`, `/healthz` returning the deployed sha) and the 2026-08-12 full sweep.
 
 How to run Library in production: a single `docker compose up` on any
 Docker host. The walkthrough targets the intended home — a Debian LXC on
@@ -177,8 +177,9 @@ The Docker image builds the Vue SPA in a `node:26-slim` stage and bakes
 - Any other non-backend path — the real file if one exists (manifest,
   icons), else `index.html` with `Cache-Control: no-cache`, so deep
   links like `/documents/42` work and deploys take effect on reload.
-- `/api`, `/mcp`, `/healthz`, `/docs`, `/openapi.json`, `/redoc` are
-  never shadowed; an unknown `/api/...` path still returns a JSON 404.
+- `/api`, `/mcp`, `/.well-known`, `/healthz`, `/metrics`, `/docs`,
+  `/openapi.json`, `/redoc` are never shadowed; an unknown `/api/...`
+  or `/.well-known/...` path returns a JSON 404.
 
 In **development** none of this applies: run `make dev` (API on :8000)
 and `npm run dev` (Vite on :5173, proxying `/api` — see

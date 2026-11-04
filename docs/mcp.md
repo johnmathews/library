@@ -1,22 +1,24 @@
 # MCP server
 
-**Status:** active. **Last updated:** 2026-08-13 (no prose change: re-stamped because `SERVER_INSTRUCTIONS` in the covered `mcp_server.py` was corrected to mention `list_matters`, which this document already described; earlier, 2026-08-12: documentation verification sweep: added the undocumented `list_matters` tool and the `matter` search filter, completed the two result shapes, and noted that a `source_note` is only stored when the ingest was not a duplicate).
-**Last verified:** 2026-08-13 — method: partial re-verification, triggered by a change to the covered `mcp_server.py` (the `SERVER_INSTRUCTIONS` string gained `list_matters`): mechanically confirmed the §1.3 table still names exactly the 11 registered `@mcp.tool` functions, and confirmed the document makes no claim about the instructions string itself, so nothing else here is affected. The rest of the document carries forward the 2026-08-12 verification, which read `src/library/mcp_server.py` in full and compared all 11 registered `@mcp.tool` functions' names, parameters, defaults and return keys against the §1.3 table, then checked the mount point, CLI entry point, token constants and taxonomy result shapes in `app.py`, `pyproject.toml`, `auth/service.py`, `api/auth.py`, `taxonomy.py`, `projects.py` and `matters.py`.
-**Covers:** src/library/mcp_server.py, src/library/auth/service.py
+**Status:** active. **Last updated:** 2026-11-04 (slashless `/mcp`, tool titles and annotations, masked errors, id bounds, shared DB pool; error text no longer points at the REST API).
+**Last verified:** 2026-11-04 — method: read `mcp_server.py` in full, the `/mcp` wiring in `app.py`, the pool in `db.py`, `taxonomy.list_senders`, the status enum in `models.py` and the MIME list in `ingest.py` against every section; ran `tests/test_mcp.py` and `tests/test_spa.py` (green), which assert the annotations, errors and slashless URL.
+**Covers:** src/library/mcp_server.py, src/library/auth/service.py, src/library/db.py, src/library/app.py
 
 Library exposes a [Model Context Protocol](https://modelcontextprotocol.io)
 server so LLM clients (Claude Code, Claude Desktop, the Anthropic API MCP
 connector, or any MCP-capable agent) can search the archive, read
 documents, fetch files, and ingest new documents.
 
-- **Endpoint:** `https://<your-host>/mcp/` (Streamable HTTP transport,
-  stateless, JSON responses). It is part of the main API process — no
-  extra container or port.
+- **Endpoint:** `https://<your-host>/mcp` (Streamable HTTP transport,
+  stateless, JSON responses). `/mcp/` with a trailing slash is the same
+  endpoint: `/mcp` is rewritten onto it before routing, for every method,
+  so no client has to follow a redirect. It is part of the main API
+  process — no extra container or port.
 - **Auth:** the same opaque bearer API tokens as the REST API
   (`Authorization: Bearer library_…`). Every request without a valid,
-  unrevoked token gets `401`. There is no OAuth flow — Library is a
-  family-scale, LAN/reverse-proxy deployment; tokens are created by
-  logged-in users and revoked individually (see [api.md §1.9.3](api.md)).
+  unrevoked token gets `401`. There is no OAuth flow yet; tokens are
+  created by logged-in users and revoked individually (see
+  [api.md §1.9.3](api.md)).
 - **Implementation:** [FastMCP 3.x](https://gofastmcp.com) mounted into
   the FastAPI app at `/mcp` with a shared lifespan
   (`src/library/mcp_server.py`, wired in `src/library/app.py`).
@@ -47,7 +49,7 @@ created with the `library user` CLI (`library user add anna`).
 ### Claude Code
 
 ```console
-claude mcp add --transport http library https://library.example.org/mcp/ \
+claude mcp add --transport http library https://library.example.org/mcp \
   --header "Authorization: Bearer library_3q2…"
 ```
 
@@ -58,7 +60,7 @@ Pass the server in the `mcp_servers` block of a Messages API call:
 ```json
 {
   "type": "url",
-  "url": "https://library.example.org/mcp/",
+  "url": "https://library.example.org/mcp",
   "name": "library",
   "authorization_token": "library_3q2…"
 }
@@ -67,42 +69,60 @@ Pass the server in the `mcp_servers` block of a Messages API call:
 ### claude.ai / Claude Desktop custom connectors
 
 Custom connectors in the claude.ai UI authenticate with OAuth, which
-Library deliberately does not implement (decision 1.1.4 of the build
-plan: hand-rolled token auth, no IdP). Use Claude Code or the API
-connector, or front Library with an OAuth-terminating proxy if you need
-claude.ai web specifically.
+Library does not implement yet, so they cannot connect. Use Claude Code
+or the API connector.
 
 ### Generic MCP clients
 
 Any client supporting **Streamable HTTP** works: point it at
-`https://<host>/mcp/` and send the `Authorization: Bearer library_…`
+`https://<host>/mcp` and send the `Authorization: Bearer library_…`
 header on every request. The server is stateless (no session affinity
 required) and responds with plain JSON. SSE-only (deprecated transport)
 clients are not supported.
 
 ## 1.3 Tools
 
-All tools require auth. Errors (unknown document, oversized file,
-unsupported type) come back as MCP tool errors with a human-readable
-explanation.
+All tools require auth.
+
+**Errors.** Expected failures (unknown or deleted document, oversized
+file, unsupported type) come back as MCP tool errors whose text is
+written for the model and never points at the REST API, which an LLM
+connector cannot call; where the user has to act, the text says to open
+the document in the Library web app. Invalid arguments (a `document_id`
+below 1 or above the Postgres `BIGINT` maximum, a `limit` above 50) are
+argument-validation errors naming the bound. Anything unexpected (a bug,
+a database failure) is masked to `Error calling tool '<name>'`, so SQL
+and schema details never reach a client; the full error goes to the
+server log.
+
+**Titles and annotations.** Every tool declares a human-readable `title`
+and behaviour hints in `tools/list`. All tools except `ingest_document`
+are `readOnlyHint: true`, `openWorldHint: false` (clients such as
+ChatGPT ask the user to confirm any tool without `readOnlyHint`).
+`ingest_document` is `readOnlyHint: false`, `destructiveHint: false`
+(it only adds), `idempotentHint: true` (the same bytes again return the
+existing document) and `openWorldHint: false`.
 
 | Tool | Parameters | Returns |
 |------|------------|---------|
 | `search_documents` | `query?` (websearch syntax, Dutch+English stemming), `kind?` (slug), `sender?` (case-insensitive substring of sender name), `recipient?` (case-insensitive substring of recipient name), `tag?` (slug), `project?` (slug — see `list_projects`), `matter?` (slug — see `list_matters`), `language?` (`nld`/`eng`/`mixed`/`unknown`), `date_from?`, `date_to?` (ISO dates, inclusive, on `document_date`), `limit` (default 10, max 50) | `{results: [{id, title, summary, kind, sender, recipient, tags, topics, projects, matters, document_date, language, status, mime_type, page_count, created_at, updated_at, snippet, rank}], total}` — ranked when `query` is given, newest-first otherwise. Snippets carry `<b>…</b>` match markers. |
 | `get_document` | `document_id` | Every field of a search result (above) plus amount, provenance, `has_searchable_pdf`, OCR text (truncated at 20 000 characters with an explanatory note and `ocr_text_truncated: true`) and the audit-trail events `[{event, created_at}]`. `topics` are read-only auto-extracted. |
-| `get_document_file` | `document_id`, `variant` = `"original"` (default) or `"searchable_pdf"` | `{filename, mime_type, size_bytes, content_base64}`. Files over 10 MB are refused with an error pointing at the REST download endpoints. |
-| `ingest_document` | `filename`, `content_base64`, `source_note?` | `{id, sha256, status, duplicate}`. Runs the same ingestion service as uploads (dedup by SHA-256, OCR + extraction queued); `source` is recorded as `mcp` and the calling token's user as uploader. A `source_note` is stored on the audit trail — but only when the ingest was not a duplicate, since a duplicate creates no new document to attach it to. |
+| `get_document_file` | `document_id`, `variant` = `"original"` (default) or `"searchable_pdf"` | `{filename, mime_type, size_bytes, content_base64}`. Files over 10 MB are refused with an error telling the user to download the file from the web app. A variant that was never produced is an error. |
+| `ingest_document` | `filename`, `content_base64` (PDF, JPEG, PNG, HEIC/HEIF, TIFF, plain text, Markdown, DOCX), `source_note?` | `{id, sha256, status, duplicate}`. Runs the same ingestion service as uploads (dedup by SHA-256, OCR + extraction queued); `source` is recorded as `mcp` and the calling token's user as uploader. A `source_note` is stored on the audit trail — but only when the ingest was not a duplicate, since a duplicate creates no new document to attach it to. Content matching a document in the trash is refused until it is restored or purged. |
 | `list_kinds` | — | `{kinds: [{slug, name, document_count}]}` |
-| `list_senders` | — | `{senders: [{id, name, document_count}]}` |
+| `list_senders` | — | `{senders: [{id, name, document_count, colour}]}` — every sender, including those with no documents; `colour` is a chart colour or `null`. |
 | `list_recipients` | — | `{recipients: [{id, name, document_count}]}` |
 | `list_tags` | — | `{tags: [{slug, name, document_count}]}` |
 | `list_projects` | — | `{projects: [{id, slug, name, description, document_count}]}` — archived projects are omitted. Use the slugs as the `project` filter of `search_documents`. |
 | `list_matters` | — | `{matters: [{id, slug, name, hint, document_count}]}` — archived matters are omitted. Use the slugs as the `matter` filter of `search_documents`. |
-| `library_stats` | — | `{total_documents, by_status, by_kind, ingested_last_7_days, oldest_document_date, newest_document_date}` |
+| `library_stats` | — | `{total_documents, by_status, by_kind, ingested_last_7_days, oldest_document_date, newest_document_date}`. `by_status` counts the lifecycle states that have documents (`received`, `ocr`, `extract`, `markdown`, `embed`, `indexed`, `failed`); soft-deleted documents are excluded from every figure. |
 
-Search behaviour is identical to `GET /api/documents` — both run the same
-query builder (`src/library/search.py`); see [api.md §1.3.3](api.md) for
-the full search semantics.
+`search_documents` shares its query builder (`src/library/search.py`)
+with `GET /api/documents`, so full-text matching, stemming and ranking are
+the same; see [api.md §1.3.3](api.md) for those semantics. It exposes a
+subset of the REST filters (one tag, project or matter per call; sender
+and recipient by name substring; no facet, status or review filters, no
+`offset`) and returns at most 50 results per call.
 
 ## 1.4 Security notes
 
@@ -124,3 +144,7 @@ the full search semantics.
 - **Size caps:** ingest respects `LIBRARY_MAX_UPLOAD_BYTES` (default
   100 MB, before base64 expansion); file retrieval is capped at 10 MB to
   keep tool results inside LLM context budgets.
+- **Database connections:** tools and the token check take sessions
+  from the process-wide pool the REST API uses (5 connections plus 10
+  overflow). A client fanning out many parallel calls queues on that
+  pool instead of exhausting Postgres connections.

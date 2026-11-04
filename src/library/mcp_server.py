@@ -16,16 +16,25 @@ id rides along in the access token claims for attribution.
 Database sessions
 -----------------
 Tools and the verifier run outside FastAPI's dependency injection, so
-they open a short-lived NullPool engine per call (same pattern as the
-CLI): no loop-bound pooled connections, which matters because test
-clients and production servers run the app in different event loops.
-At family scale the per-call connection cost is irrelevant.
+they take sessions straight from the process-wide pool
+(``library.db.get_sessionmaker``) that REST requests use too. The pool is
+bounded and queues when busy, so a client fanning out many parallel tool
+calls waits its turn instead of exhausting Postgres connections. asyncpg
+connections are bound to an event loop; ``create_app``'s lifespan disposes
+the engine on the way out (``db.dispose_engine``), so each app run (and
+each test client's loop) starts with a fresh pool.
+
+Errors
+------
+``ToolError`` messages are written for the model and reach it verbatim.
+Anything else a tool raises is masked (``mask_error_details=True``) to a
+generic "Error calling tool …", so database errors never leak SQL or
+schema to a client. Error text never points at Library's REST API: an
+LLM connector cannot call it.
 """
 
 import base64
 import binascii
-from collections.abc import AsyncIterator
-from contextlib import asynccontextmanager
 from dataclasses import asdict
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
@@ -36,15 +45,16 @@ from fastmcp.exceptions import ToolError
 from fastmcp.server.auth import AccessToken, TokenVerifier
 from fastmcp.server.dependencies import get_access_token
 from fastmcp.server.http import StarletteWithLifespan
+from mcp.types import ToolAnnotations
 from pydantic import Field
 from sqlalchemy import func, select
-from sqlalchemy.ext.asyncio import AsyncSession, create_async_engine
-from sqlalchemy.pool import NullPool
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import library
 from library import matters, projects, taxonomy
 from library.auth.service import validate_api_token
 from library.config import get_settings
+from library.db import get_sessionmaker
 from library.ingest import DeletedDuplicateError, UnsupportedMimeTypeError, ingest_file
 from library.models import (
     Document,
@@ -60,6 +70,19 @@ from library.storage import derived_path, path_for
 OCR_TEXT_LIMIT: int = 20_000
 MAX_FILE_BYTES: int = 10 * 1024 * 1024
 SEARCH_LIMIT_MAX: int = 50
+#: The largest value a Postgres BIGINT (``documents.id``) holds. Bounding the
+#: argument makes an out-of-range id a validation error, not a SQL error.
+MAX_DOCUMENT_ID: int = 2**63 - 1
+
+#: Hints for every tool that only reads the archive. ``openWorldHint=False``:
+#: no tool reaches anything outside Library. ChatGPT asks the user to confirm
+#: any tool that does not declare ``readOnlyHint``.
+READ_ONLY = ToolAnnotations(readOnlyHint=True, openWorldHint=False)
+
+DocumentId = Annotated[
+    int,
+    Field(ge=1, le=MAX_DOCUMENT_ID, description="Document id, e.g. from search_documents."),
+]
 
 SERVER_INSTRUCTIONS = """\
 Library is a self-hosted family document archive: scanned letters,
@@ -76,15 +99,9 @@ actual file, and `ingest_document` to add a new document to the archive.
 """
 
 
-@asynccontextmanager
-async def _session() -> AsyncIterator[AsyncSession]:
-    """One database session on a fresh NullPool engine (see module docstring)."""
-    engine = create_async_engine(get_settings().database_url, poolclass=NullPool)
-    try:
-        async with AsyncSession(engine, expire_on_commit=False) as session:
-            yield session
-    finally:
-        await engine.dispose()
+def _session() -> AsyncSession:
+    """One database session from the shared pool (see module docstring)."""
+    return get_sessionmaker()()
 
 
 class LibraryTokenVerifier(TokenVerifier):
@@ -108,6 +125,7 @@ mcp: FastMCP = FastMCP(
     version=library.__version__,
     instructions=SERVER_INSTRUCTIONS,
     auth=LibraryTokenVerifier(),
+    mask_error_details=True,
 )
 
 
@@ -181,7 +199,7 @@ def _document_summary(document: Document) -> dict[str, Any]:
 # -------------------------------------------------------------------- tools
 
 
-@mcp.tool
+@mcp.tool(title="Search documents", annotations=READ_ONLY)
 async def search_documents(
     query: Annotated[
         str | None,
@@ -284,9 +302,9 @@ async def search_documents(
     return {"results": results, "total": total}
 
 
-@mcp.tool
+@mcp.tool(title="Get document", annotations=READ_ONLY)
 async def get_document(
-    document_id: Annotated[int, Field(description="Document id, e.g. from search_documents.")],
+    document_id: DocumentId,
 ) -> dict[str, Any]:
     """Fetch one document's full metadata, OCR text, and processing history.
 
@@ -295,8 +313,8 @@ async def get_document(
     original_filename, sha256, ocr_confidence), the audit-trail events,
     and the full OCR text. OCR text longer than 20,000 characters is
     truncated with an explanatory note and `ocr_text_truncated: true`;
-    fetch the file via get_document_file or the REST API if you need all
-    of it. Errors if the document id is unknown or deleted.
+    get_document_file returns the original file if you need all of it.
+    Errors if the document id is unknown or deleted.
     """
     async with _session() as session:
         document = await _get_document(session, document_id)
@@ -305,7 +323,8 @@ async def get_document(
         if ocr_text is not None and len(ocr_text) > OCR_TEXT_LIMIT:
             note = (
                 f"\n[... truncated: the full text is {len(ocr_text)} characters; "
-                "use the REST API (GET /api/documents/{id}) for all of it]"
+                "get_document_file returns the original file, or open the "
+                "document in the Library web app]"
             )
             ocr_text = ocr_text[:OCR_TEXT_LIMIT] + note
             truncated = True
@@ -331,9 +350,9 @@ async def get_document(
         }
 
 
-@mcp.tool
+@mcp.tool(title="Get document file", annotations=READ_ONLY)
 async def get_document_file(
-    document_id: Annotated[int, Field(description="Document id, e.g. from search_documents.")],
+    document_id: DocumentId,
     variant: Annotated[
         Literal["original", "searchable_pdf"],
         Field(
@@ -348,8 +367,9 @@ async def get_document_file(
     """Retrieve a document's file as base64 (for reading or re-saving it).
 
     Returns filename, mime_type, size_bytes, and content_base64. Files
-    larger than 10 MB are refused — download those over the REST API
-    (GET /api/documents/{id}/original or /searchable.pdf) instead.
+    larger than 10 MB are refused; the user can download those by opening
+    the document in the Library web app. Errors if the document id is
+    unknown or deleted, or the requested variant was never produced.
     """
     async with _session() as session:
         document = await _get_document(session, document_id)
@@ -373,9 +393,8 @@ async def get_document_file(
     size = path.stat().st_size
     if size > MAX_FILE_BYTES:
         raise ToolError(
-            f"file is {size} bytes, over the 10 MB MCP limit; download it via the "
-            f"REST API instead (GET /api/documents/{document_id}/"
-            f"{'original' if variant == 'original' else 'searchable.pdf'})"
+            f"file is {size} bytes, over the 10 MB MCP limit; open document "
+            f"{document_id} in the Library web app to download it"
         )
     return {
         "filename": filename,
@@ -385,7 +404,14 @@ async def get_document_file(
     }
 
 
-@mcp.tool
+@mcp.tool(
+    title="Ingest document",
+    # Adds a document and never changes or removes one; the same bytes sent
+    # again return the existing document rather than a second copy.
+    annotations=ToolAnnotations(
+        readOnlyHint=False, destructiveHint=False, idempotentHint=True, openWorldHint=False
+    ),
+)
 async def ingest_document(
     filename: Annotated[
         str, Field(description="Original filename, including extension, e.g. 'invoice.pdf'.")
@@ -395,7 +421,7 @@ async def ingest_document(
         Field(
             description=(
                 "The file content, base64-encoded. Supported types: PDF, JPEG, "
-                "PNG, HEIC/HEIF, TIFF, plain text."
+                "PNG, HEIC/HEIF, TIFF, plain text, Markdown, and Word (DOCX)."
             )
         ),
     ],
@@ -435,7 +461,8 @@ async def ingest_document(
             raise ToolError(str(exc)) from exc
         except DeletedDuplicateError as exc:
             raise ToolError(
-                f"{exc} — restore or purge it before re-ingesting this content"
+                f"{exc}; restore it from the trash in the Library web app (or "
+                "purge it there) before ingesting this content again"
             ) from exc
         if source_note and not result.duplicate:
             session.add(
@@ -454,7 +481,7 @@ async def ingest_document(
         }
 
 
-@mcp.tool
+@mcp.tool(title="List document kinds", annotations=READ_ONLY)
 async def list_kinds() -> dict[str, Any]:
     """List all document kinds (categories) with per-kind document counts.
 
@@ -465,19 +492,22 @@ async def list_kinds() -> dict[str, Any]:
     return {"kinds": [asdict(kind) for kind in kinds]}
 
 
-@mcp.tool
+@mcp.tool(title="List senders", annotations=READ_ONLY)
 async def list_senders() -> dict[str, Any]:
     """List all known senders (correspondents) with per-sender document counts.
 
-    Use the returned names with the `sender` filter of search_documents
-    (case-insensitive substring match).
+    Returns {senders: [{id, name, document_count, colour}]}, ordered by
+    name. Every sender is listed, including those with no (non-deleted)
+    documents; `colour` is a chart colour and may be null. Use the names
+    with the `sender` filter of search_documents (case-insensitive
+    substring match).
     """
     async with _session() as session:
         senders = await taxonomy.list_senders(session)
     return {"senders": [asdict(sender) for sender in senders]}
 
 
-@mcp.tool
+@mcp.tool(title="List recipients", annotations=READ_ONLY)
 async def list_recipients() -> dict[str, Any]:
     """List all known recipients (addressees) with per-recipient document counts.
 
@@ -489,7 +519,7 @@ async def list_recipients() -> dict[str, Any]:
     return {"recipients": [asdict(recipient) for recipient in recipients]}
 
 
-@mcp.tool
+@mcp.tool(title="List tags", annotations=READ_ONLY)
 async def list_tags() -> dict[str, Any]:
     """List all tags with per-tag document counts.
 
@@ -500,7 +530,7 @@ async def list_tags() -> dict[str, Any]:
     return {"tags": [asdict(tag) for tag in tags]}
 
 
-@mcp.tool
+@mcp.tool(title="List projects", annotations=READ_ONLY)
 async def list_projects() -> dict[str, Any]:
     """List all projects (document collections) with per-project document counts.
 
@@ -512,7 +542,7 @@ async def list_projects() -> dict[str, Any]:
     return {"projects": [asdict(item) for item in items]}
 
 
-@mcp.tool
+@mcp.tool(title="List matters", annotations=READ_ONLY)
 async def list_matters() -> dict[str, Any]:
     """List all business matters (subject categories) with per-matter document counts.
 
@@ -524,12 +554,13 @@ async def list_matters() -> dict[str, Any]:
     return {"matters": [asdict(item) for item in items]}
 
 
-@mcp.tool
+@mcp.tool(title="Library statistics", annotations=READ_ONLY)
 async def library_stats() -> dict[str, Any]:
     """Overview statistics of the archive: sizes, processing state, date range.
 
     Returns total_documents, by_status (processing lifecycle counts:
-    received/ocr/extract/indexed/failed), by_kind (counts per kind slug,
+    received/ocr/extract/markdown/embed/indexed/failed; a status with no
+    documents is omitted), by_kind (counts per kind slug,
     'unclassified' for documents without a kind), ingested_last_7_days,
     and the oldest/newest document_date (ISO dates or null). Deleted
     documents are excluded everywhere.
